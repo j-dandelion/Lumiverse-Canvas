@@ -991,7 +991,7 @@ function isMobile(): boolean {
 }
 
 function createResizeHandle(
-  side: 'left' | 'right',
+  direction: 'left' | 'right',
   onResize: (startWidth: number, deltaPx: number) => void,
   onResizeEnd: () => void
 ): HTMLElement {
@@ -1000,12 +1000,20 @@ function createResizeHandle(
   handle.style.cssText = `
     position: absolute;
     top: 0; bottom: 0;
-    width: 6px;
+    width: 8px;
     cursor: col-resize;
     z-index: 99999;
     touch-action: none;
-    ${side === 'left' ? 'left: -3px' : 'right: -3px'};
+    background: transparent;
+    transition: background 0.15s ease;
   `
+  // Hover feedback
+  handle.addEventListener('mouseenter', () => {
+    handle.style.background = 'var(--lumiverse-primary-015, rgba(255, 255, 255, 0.06))'
+  })
+  handle.addEventListener('mouseleave', () => {
+    if (!_resizeDragging) handle.style.background = 'transparent'
+  })
 
   let startX = 0
   let startWidth = 0
@@ -1015,9 +1023,12 @@ function createResizeHandle(
     e.stopPropagation()
     startX = e.clientX
     startWidth = handle.parentElement?.getBoundingClientRect().width || 420
+    _resizeDragging = true
+    handle.style.background = 'var(--lumiverse-primary-020, rgba(255, 255, 255, 0.1))'
 
     const onMove = (e: PointerEvent) => {
-      const delta = side === 'left' ? startX - e.clientX : e.clientX - startX
+      // Direction-based delta: 'right' = expand on rightward drag, 'left' = expand on leftward drag
+      const delta = direction === 'right' ? e.clientX - startX : startX - e.clientX
       onResize(startWidth, delta)
     }
 
@@ -1026,6 +1037,8 @@ function createResizeHandle(
       document.removeEventListener('pointerup', onUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      _resizeDragging = false
+      handle.style.background = 'transparent'
       onResizeEnd()
     }
 
@@ -1038,29 +1051,21 @@ function createResizeHandle(
   return handle
 }
 
+let _resizeDragging = false
+
 function mountResizeHandles() {
   if (isMobile()) return // Skip resize handles on mobile
 
-  // Main sidebar resize handle — use a wrapper div, don't set position:relative on the panel
-  const mainPanel = getMainPanel()
-  if (mainPanel && !mainPanel.querySelector('.sidebar-ux-resize-handle')) {
-    const handleWrapper = document.createElement('div')
-    handleWrapper.className = 'sidebar-ux-resize-handle-wrapper'
-    handleWrapper.style.cssText = `
-      position: absolute;
-      top: 0; bottom: 0;
-      width: 0;
-      pointer-events: none;
-    `
+  // Main sidebar resize handle — insert into the drawer (not panel, to avoid overflow: hidden clipping)
+  const mainDrawer = getMainDrawer()
+  if (mainDrawer && !mainDrawer.querySelector('.sidebar-ux-resize-handle')) {
     const mainSide = getMainDrawerSide()
-    if (mainSide === 'left') {
-      handleWrapper.style.left = '0'
-    } else {
-      handleWrapper.style.right = '0'
-    }
+    // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
+    //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
+    const mainDirection = mainSide === 'left' ? 'right' : 'left'
 
     const handle = createResizeHandle(
-      mainSide,
+      mainDirection,
       (startWidth, delta) => {
         const newWidth = Math.max(200, Math.min(window.innerWidth * 0.8, startWidth + delta))
         const drawer = getMainDrawer()
@@ -1076,33 +1081,27 @@ function mountResizeHandles() {
         persistMainWidth(vw)
       }
     )
-    handleWrapper.appendChild(handle)
 
-    // Insert handle wrapper as first child so it overlays the panel edge
-    mainPanel.insertBefore(handleWrapper, mainPanel.firstChild)
+    // Position at the drawer's inner edge (facing content area)
+    // Uses CSS variable so handle tracks the correct edge if tab strip position changes
+    handle.style.cssText += `
+      ${mainSide === 'left'
+        ? `left: calc(var(--drawer-panel-w, 420px) - 4px);`
+        : `right: calc(var(--drawer-panel-w, 420px) - 4px);`}
+    `
+
+    // Insert handle as sibling of panel inside the drawer
+    mainDrawer.appendChild(handle)
   }
 
-  // Secondary sidebar resize handle
+  // Secondary sidebar resize handle — insert into the secondary drawer
   if (_secondaryWrapper) {
-    const secondaryPanel = _secondaryWrapper.querySelector('.sidebar-ux-panel') as HTMLElement
-    if (secondaryPanel && !secondaryPanel.querySelector('.sidebar-ux-resize-handle')) {
-      const handleWrapper = document.createElement('div')
-      handleWrapper.className = 'sidebar-ux-resize-handle-wrapper'
-      handleWrapper.style.cssText = `
-        position: absolute;
-        top: 0; bottom: 0;
-        width: 0;
-        pointer-events: none;
-      `
-      const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
-      if (secondarySide === 'left') {
-        handleWrapper.style.left = '0'
-      } else {
-        handleWrapper.style.right = '0'
-      }
+    const secondaryDrawer = _secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement
+    if (secondaryDrawer && !secondaryDrawer.querySelector('.sidebar-ux-resize-handle')) {
+      const secondaryDirection = 'left' // Secondary sidebar handle is at inner (left) edge — drag left to expand toward content
 
       const handle = createResizeHandle(
-        secondarySide,
+        secondaryDirection,
         (startWidth, delta) => {
           const newWidth = Math.max(200, Math.min(window.innerWidth * 0.8, startWidth + delta))
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)
@@ -1116,8 +1115,14 @@ function mountResizeHandles() {
           persistSecondaryWidth(vw)
         }
       )
-      handleWrapper.appendChild(handle)
-      secondaryPanel.insertBefore(handleWrapper, secondaryPanel.firstChild)
+
+      // Position at the drawer's inner edge (facing content area)
+      // Uses CSS variable so handle tracks the correct edge if tab strip position changes
+      handle.style.cssText += `
+        right: calc(var(${SECONDARY_WIDTH_VAR}, 420px) - 4px);
+      `
+
+      secondaryDrawer.appendChild(handle)
     }
   }
 }
