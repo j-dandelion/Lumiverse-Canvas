@@ -834,6 +834,7 @@ function addSecondaryTabButton(tab: { id: string; title: string; shortName?: str
   const tabList = _secondaryWrapper?.querySelector('.sidebar-ux-tab-list')
   if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
   const showLabels = isShowTabLabels()
+  console.log(`[SidebarUX] addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
 
   const btn = document.createElement('button')
   btn.setAttribute('data-tab-id', tab.id)
@@ -897,13 +898,22 @@ function addSecondaryTabButton(tab: { id: string; title: string; shortName?: str
   btn.addEventListener('mouseenter', () => {
     btn.style.background = 'var(--lumiverse-primary-015)'
     btn.style.color = 'var(--lumiverse-text)'
+    console.log(`[SidebarUX] mouseenter: tab=${tab.id} btn.style.color=var(--lumiverse-text)`)
   })
   btn.addEventListener('mouseleave', () => {
-    btn.style.background = ''
     // Restore label color (label has its own color rule, unaffected by parent hover)
     const isActive = btn.classList.contains('sidebar-ux-tab-active')
+    btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
     btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
     labelSpan.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
+    // Restore active box-shadow/border-radius if needed
+    if (isActive) {
+      const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
+      const indicatorOnRight = secondarySide === 'left'
+      btn.style.boxShadow = `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary)`
+      btn.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
+    }
+    console.log(`[SidebarUX] mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`)
   })
   btn.addEventListener('click', () => {
     if (!_secondarySidebarOpen) openSecondarySidebar()
@@ -955,6 +965,8 @@ function showSecondaryTab(tabId: string) {
   }
 
   // Update active state on tab buttons
+  const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
+  const indicatorOnRight = secondarySide === 'left' // indicator faces content
   const allBtns = _secondaryWrapper?.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]') as NodeListOf<HTMLElement>
   if (allBtns) {
     for (const btn of allBtns) {
@@ -962,11 +974,20 @@ function showSecondaryTab(tabId: string) {
       btn.classList.toggle('sidebar-ux-tab-active', isActive)
       // Icon color: active = primary, default = muted
       btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
+      // Background + border indicator (matches .tabBtnActive from ViewportDrawer.module.css)
+      btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
+      btn.style.boxShadow = isActive
+        ? `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary)`
+        : 'none'
+      btn.style.borderRadius = isActive
+        ? (indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0')
+        : ''
       // Label color: active = primary, default = dim
       const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
       if (label) {
         label.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
       }
+      console.log(`[SidebarUX] showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
     }
   }
 }
