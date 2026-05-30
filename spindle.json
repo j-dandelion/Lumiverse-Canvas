@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "name": "Sidebar UX",
+  "identifier": "sidebar_ux",
+  "author": "j-dandelion",
+  "github": "https://github.com/j-dandelion/sidebar-ux-ext",
+  "homepage": "https://github.com/j-dandelion/sidebar-ux-ext",
+  "description": "Adds a second sidebar for organizing extension tabs, with chat reflow and drag-to-resize.",
+  "permissions": [],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "0.1.0"
+}
