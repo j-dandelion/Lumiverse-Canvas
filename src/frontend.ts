@@ -1218,9 +1218,13 @@ function mountResizeHandles() {
       (startWidth, delta) => {
         const newWidth = Math.max(200, Math.min(window.innerWidth * 0.8, startWidth + delta))
         const drawer = getMainDrawer()
+        const wrapper = getMainWrapper()
         if (drawer) {
           drawer.style.width = `${newWidth}px`
-          drawer.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
+        }
+        // Set --drawer-panel-w on the WRAPPER (React sets it there for the close transform)
+        if (wrapper) {
+          wrapper.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
         }
         scheduleReflow()
       },
@@ -1228,7 +1232,8 @@ function mountResizeHandles() {
         const width = getMainDrawerWidth()
         const vw = Math.round((width / window.innerWidth) * 100)
         persistMainWidth(vw)
-      }
+      },
+      () => isMainDrawerOpen()
     )
 
     // Position at the drawer's inner edge (facing content area)
