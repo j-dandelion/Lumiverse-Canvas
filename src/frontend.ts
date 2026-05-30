@@ -57,7 +57,7 @@ function getMainDrawerWidth(): number {
 
 // The Zustand store is NOT reachable by walking UP from the sidebar.
 // Strategy: walk UP to root ancestor, then scan DOWN to find drawerTabs array.
-let _drawerTabsCache: Array<{ id: string; extensionId: string; title: string; root: HTMLElement }> | null = null
+let _drawerTabsCache: Array<{ id: string; extensionId: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }> | null = null
 let _storeSnapshotCache: Record<string, unknown> | null = null
 let _cacheTimestamp = 0
 const CACHE_TTL_MS = 3000 // Re-walk fiber tree every 3 seconds max
@@ -129,7 +129,7 @@ function findStoreData(force = false) {
   }
 }
 
-function getDrawerTabs(): Array<{ id: string; extensionId: string; title: string; root: HTMLElement }> {
+function getDrawerTabs(): Array<{ id: string; extensionId: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }> {
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
   console.warn('[SidebarUX] Could not find drawerTabs in fiber tree')
@@ -186,9 +186,83 @@ function injectReflowStyles() {
   document.head.appendChild(style)
 }
 
+function injectDrawerTabStyles() {
+  if (document.getElementById('sidebar-ux-drawer-tab-styles')) return
+  const style = document.createElement('style')
+  style.id = 'sidebar-ux-drawer-tab-styles'
+  style.textContent = `
+    .sidebar-ux-drawer-tab {
+      flex-shrink: 0;
+      align-self: flex-start;
+      width: 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px 8px 20px;
+      background: var(--lcs-glass-bg, var(--lumiverse-bg));
+      border: 1px solid var(--lumiverse-border-hover);
+      color: var(--lumiverse-text-muted);
+      cursor: pointer;
+      pointer-events: auto;
+      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .sidebar-ux-drawer-tab:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--compact {
+      width: 32px;
+      padding: 8px 6px;
+      gap: 0;
+    }
+    .sidebar-ux-drawer-tab-icon {
+      color: var(--lumiverse-primary);
+    }
+  `
+  document.head.appendChild(style)
+}
+
 // --- Secondary Sidebar ---
 
 const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
+
+// Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
+const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
+
+/** Read showTabLabels from the store snapshot or main sidebar DOM. */
+function isShowTabLabels(): boolean {
+  // Try store snapshot first
+  const store = getStoreSnapshot()
+  if (store && typeof (store as any).drawerSettings === 'object' && (store as any).drawerSettings !== null) {
+    return !!(store as any).drawerSettings.showTabLabels
+  }
+  // Fallback: check if main sidebar buttons have the labeled class
+  const sidebar = getMainSidebar()
+  if (sidebar) {
+    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]')
+    if (labeledBtn) return true
+  }
+  return false
+}
+
+/** Derive shortName matching Lumiverse's adaptExtensionTabs logic. */
+function deriveShortName(title: string, shortName?: string): string {
+  if (shortName) return shortName
+  return title.length > 8 ? title.slice(0, 7) + '\u2026' : title
+}
 
 // Boolean flag for secondary sidebar open state (replaces style transform check)
 let _secondarySidebarOpen = false
@@ -215,40 +289,24 @@ function createSecondarySidebar(): HTMLElement {
       : `right: 0; flex-direction: row;`};
   `
 
+  // Inject CSS rules for drawer tab (default, hover, active, compact states)
+  injectDrawerTabStyles()
+
   // Drawer tab — flex child of wrapper, NOT position: fixed.
   // When the wrapper translates, the drawerTab moves with it as a unit.
+  // Visual state managed via CSS classes (sidebar-ux-drawer-tab--active, --compact).
+  // Only layout properties (width, padding, gap, marginTop) use inline styles.
   const drawerTab = document.createElement('button')
   drawerTab.className = 'sidebar-ux-drawer-tab'
   drawerTab.style.cssText = `
-    flex-shrink: 0;
-    align-self: flex-start;
-    width: 48px;
     display: none;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 16px 8px 20px;
-    background: var(--lcs-glass-bg, var(--lumiverse-bg));
-    border: 1px solid var(--lumiverse-border-hover);
-    color: var(--lumiverse-text-muted);
-    cursor: pointer;
-    pointer-events: auto;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
     border-${side === 'left' ? 'left' : 'right'}: none;
     border-radius: ${side === 'left' ? '0 12px 12px 0' : '12px 0 0 12px'};
   `
-  drawerTab.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`
-  drawerTab.addEventListener('mouseenter', () => {
-    drawerTab.style.background = 'var(--lumiverse-bg-hover, var(--lumiverse-bg))'
-    drawerTab.style.borderColor = 'var(--lumiverse-primary-050)'
-    drawerTab.style.color = 'var(--lumiverse-text)'
-  })
-  drawerTab.addEventListener('mouseleave', () => {
-    drawerTab.style.background = ''
-    drawerTab.style.borderColor = ''
-    drawerTab.style.color = ''
-  })
+  const iconWrapper = document.createElement('div')
+  iconWrapper.className = 'sidebar-ux-drawer-tab-icon'
+  iconWrapper.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`
+  drawerTab.appendChild(iconWrapper)
   drawerTab.addEventListener('click', () => {
     if (_secondarySidebarOpen) closeSecondarySidebar()
     else openSecondarySidebar()
@@ -772,16 +830,17 @@ function findMainTabButton(tabId: string): Element | null {
   return null
 }
 
-function addSecondaryTabButton(tab: { id: string; title: string; root: HTMLElement }) {
+function addSecondaryTabButton(tab: { id: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }) {
   const tabList = _secondaryWrapper?.querySelector('.sidebar-ux-tab-list')
   if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
+  const showLabels = isShowTabLabels()
 
   const btn = document.createElement('button')
   btn.setAttribute('data-tab-id', tab.id)
   btn.setAttribute('title', tab.title)
   btn.style.cssText = `
     width: 100%;
-    height: 48px;
+    height: ${showLabels ? '56px' : '48px'};
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -795,14 +854,56 @@ function addSecondaryTabButton(tab: { id: string; title: string; root: HTMLEleme
     cursor: pointer;
     transition: all 0.2s ease;
   `
-  btn.textContent = tab.title.charAt(0).toUpperCase()
+
+  // Render icon from store data (matches ViewportDrawer.tsx rendering)
+  const iconWrap = document.createElement('span')
+  iconWrap.style.cssText = 'display: flex; align-items: center; justify-content: center; flex-shrink: 0;'
+  if (tab.iconSvg) {
+    iconWrap.innerHTML = tab.iconSvg
+  } else if (tab.iconUrl) {
+    const img = document.createElement('img')
+    img.src = tab.iconUrl
+    img.alt = ''
+    img.width = 20
+    img.height = 20
+    img.style.borderRadius = '2px'
+    iconWrap.appendChild(img)
+  } else {
+    iconWrap.innerHTML = PUZZLE_ICON_SVG
+  }
+  btn.appendChild(iconWrap)
+
+  // Render label
+  const labelSpan = document.createElement('span')
+  labelSpan.className = 'sidebar-ux-tab-label'
+  labelSpan.textContent = deriveShortName(tab.title, tab.shortName)
+  labelSpan.style.cssText = `
+    font-size: calc(9px * var(--lumiverse-font-scale, 1));
+    font-weight: 500;
+    line-height: 1;
+    color: var(--lumiverse-text-dim);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 48px;
+    opacity: ${showLabels ? '1' : '0'};
+    height: ${showLabels ? 'auto' : '0'};
+    margin-top: ${showLabels ? '1px' : '0'};
+    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
+  `
+  btn.appendChild(labelSpan)
+
   btn.addEventListener('mouseenter', () => {
     btn.style.background = 'var(--lumiverse-primary-015)'
     btn.style.color = 'var(--lumiverse-text)'
   })
   btn.addEventListener('mouseleave', () => {
     btn.style.background = ''
-    btn.style.color = ''
+    // Restore label color (label has its own color rule, unaffected by parent hover)
+    const isActive = btn.classList.contains('sidebar-ux-tab-active')
+    btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
+    labelSpan.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
   })
   btn.addEventListener('click', () => {
     if (!_secondarySidebarOpen) openSecondarySidebar()
@@ -851,6 +952,22 @@ function showSecondaryTab(tabId: string) {
   if (tab) {
     const title = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
     if (title) title.textContent = tab.title
+  }
+
+  // Update active state on tab buttons
+  const allBtns = _secondaryWrapper?.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]') as NodeListOf<HTMLElement>
+  if (allBtns) {
+    for (const btn of allBtns) {
+      const isActive = btn.getAttribute('data-tab-id') === tabId
+      btn.classList.toggle('sidebar-ux-tab-active', isActive)
+      // Icon color: active = primary, default = muted
+      btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
+      // Label color: active = primary, default = dim
+      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
+      if (label) {
+        label.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
+      }
+    }
   }
 }
 
@@ -1253,6 +1370,8 @@ function cleanupAll() {
   // Remove injected styles
   const reflowStyle = document.getElementById('sidebar-ux-reflow')
   if (reflowStyle) reflowStyle.remove()
+  const drawerTabStyle = document.getElementById('sidebar-ux-drawer-tab-styles')
+  if (drawerTabStyle) drawerTabStyle.remove()
 
   // Remove chat margin variables
   const chat = getChatColumn()
@@ -1292,10 +1411,9 @@ function syncDrawerTabSettings() {
   const mainMarginStyle = mainDrawerTab.style.marginTop
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0
 
+  // Sync compact state via CSS class (width/padding/gap handled by CSS rules)
   if (_lastKnownCompact !== isCompact) {
-    drawerTab.style.width = isCompact ? '32px' : '48px'
-    drawerTab.style.padding = isCompact ? '8px 6px' : '16px 8px 20px'
-    drawerTab.style.gap = isCompact ? '0' : '8px'
+    drawerTab.classList.toggle('sidebar-ux-drawer-tab--compact', isCompact)
     _lastKnownCompact = isCompact
   }
 
@@ -1304,16 +1422,22 @@ function syncDrawerTabSettings() {
     _lastKnownVerticalPos = posVh
   }
 
-  // Sync active state
-  const isActive = _secondarySidebarOpen
-  if (isActive) {
-    drawerTab.style.background = 'var(--lumiverse-bg-hover, var(--lumiverse-bg))'
-    drawerTab.style.borderColor = 'var(--lumiverse-primary-050)'
-    drawerTab.style.color = 'var(--lumiverse-text)'
-  } else {
-    drawerTab.style.background = ''
-    drawerTab.style.borderColor = ''
-    drawerTab.style.color = ''
+  // Sync active state via CSS class (background/border/color handled by CSS rules)
+  drawerTab.classList.toggle('sidebar-ux-drawer-tab--active', _secondarySidebarOpen)
+
+  // Sync tab labels with showTabLabels setting
+  syncSecondaryTabLabels()
+}
+
+/** Update all secondary tab buttons' label visibility to match showTabLabels. */
+function syncSecondaryTabLabels() {
+  const showLabels = isShowTabLabels()
+  const labels = _secondaryWrapper?.querySelectorAll('.sidebar-ux-tab-label') as NodeListOf<HTMLElement>
+  if (!labels) return
+  for (const label of labels) {
+    label.style.opacity = showLabels ? '1' : '0'
+    label.style.height = showLabels ? 'auto' : '0'
+    label.style.marginTop = showLabels ? '1px' : '0'
   }
 }
 
