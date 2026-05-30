@@ -279,7 +279,7 @@ function createSecondarySidebar(): HTMLElement {
   wrapper.style.cssText = `
     position: fixed;
     top: 0; bottom: 0;
-    z-index: 99990;
+    z-index: 9990;
     display: flex;
     align-items: stretch;
     pointer-events: none;
