@@ -726,8 +726,11 @@ function repositionTabToSecondary(tabId: string) {
     (tab.root as any).__sidebarUxOriginalParent = tab.root.parentElement
   }
 
-  // Append to secondary sidebar content area
-  secondaryContent.appendChild(tab.root)
+  // Append to secondary sidebar content area (appendChild implicitly removes from previous parent)
+  // Skip if already in the correct location
+  if (tab.root.parentElement !== secondaryContent) {
+    secondaryContent.appendChild(tab.root)
+  }
   tab.root.style.setProperty('width', '100%', 'important')
   tab.root.style.setProperty('height', '100%', 'important')
   tab.root.style.setProperty('display', '', 'important')
@@ -756,9 +759,15 @@ function restoreTabToPrimary(tabId: string) {
     _savedStyles.delete(tab.root)
   }
 
+  // Explicitly remove from secondary panel content if still attached there
+  // (prevents ghost elements when restore to original parent fails or is stale)
+  if (tab.root.parentElement) {
+    tab.root.parentElement.removeChild(tab.root)
+  }
+
   // Restore to original parent
   const originalParent = (tab.root as any).__sidebarUxOriginalParent as HTMLElement | null
-  if (originalParent && tab.root.parentElement !== originalParent) {
+  if (originalParent && originalParent.isConnected) {
     originalParent.appendChild(tab.root)
   }
   delete (tab.root as any).__sidebarUxOriginalParent
