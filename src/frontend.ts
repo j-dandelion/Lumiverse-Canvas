@@ -273,7 +273,7 @@ function createSecondarySidebar(): HTMLElement {
   // The WRAPPER translates — drawerTab and drawer are both children, moving as one unit.
   const wrapper = document.createElement('div')
   wrapper.className = 'sidebar-ux-secondary-wrapper'
-  const initWidth = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+  const initWidth = Math.ceil(parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420)
   // Closed state: translate by drawer width so drawer is off-screen, drawerTab stays at viewport edge
   const initWrapperTransform = `translateX(${initWidth}px)`
   wrapper.style.cssText = `
@@ -516,7 +516,7 @@ function openSecondarySidebar() {
 function closeSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   const side = getMainDrawerSide() === 'left' ? 'right' : 'left'
-  const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+  const width = Math.ceil(parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420)
   // Animate wrapper back to translateX(width) — both drawerTab and drawer slide out as one unit
   animateWrapper(width)
   _secondarySidebarOpen = false
