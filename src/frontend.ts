@@ -1131,7 +1131,8 @@ function isMobile(): boolean {
 function createResizeHandle(
   direction: 'left' | 'right',
   onResize: (startWidth: number, deltaPx: number) => void,
-  onResizeEnd: () => void
+  onResizeEnd: () => void,
+  enabled?: () => boolean
 ): HTMLElement {
   const handle = document.createElement('div')
   handle.className = 'sidebar-ux-resize-handle'
@@ -1157,6 +1158,7 @@ function createResizeHandle(
   let startWidth = 0
 
   handle.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (enabled && !enabled()) return
     e.preventDefault()
     e.stopPropagation()
     startX = e.clientX
@@ -1251,7 +1253,8 @@ function mountResizeHandles() {
           const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
           const vw = Math.round((width / window.innerWidth) * 100)
           persistSecondaryWidth(vw)
-        }
+        },
+        () => _secondarySidebarOpen
       )
 
       // Position at the drawer's inner edge (facing content area)
