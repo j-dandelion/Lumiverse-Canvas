@@ -1473,6 +1473,17 @@ function applyLayout(layout: any) {
   // Restore secondary sidebar width
   if (layout.secondary?.width) {
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${layout.secondary.width}px`)
+    // Sync wrapper transform to the new width — fixes hard-refresh bleed when
+    // createSecondarySidebar was called before applyLayout (CSS var was empty at
+    // wrapper creation, so the wrapper got the 420 fallback transform and the
+    // drawer's tab list column was visible at the right edge of the viewport).
+    // Guard: only sync if the secondary is currently closed (open state keeps
+    // translateX(0), which is correct). _secondaryWrapper may be null in a race
+    // with the backend response; createSecondarySidebar will use the correct
+    // width on its own init.
+    if (_secondaryWrapper && !_secondarySidebarOpen) {
+      animateWrapper(layout.secondary.width)
+    }
   }
 
   // Restore tab assignments
