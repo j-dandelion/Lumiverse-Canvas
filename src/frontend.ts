@@ -511,6 +511,7 @@ function openSecondarySidebar() {
   syncDrawerTabSettings()
   updateChatReflow()
   repositionAssignedTabs()
+  saveLayout()
 }
 
 function closeSecondarySidebar() {
@@ -747,37 +748,24 @@ function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
   }
   updateDrawerTabVisibility()
 
-  // Open secondary sidebar if assigning to it
-  if (sidebar === 'secondary' && !_secondarySidebarOpen) {
-    // Defer open to next animation frame.
-    // updateDrawerTabVisibility() just set display: none → flex. The wrapper's initial
-    // transform must be painted before we start animating it, otherwise the browser
-    // renders the FINAL state without transitioning from the initial position.
-    requestAnimationFrame(() => {
-      openSecondarySidebar()
-      setTimeout(() => {
-        // METHODICAL-FIX C: if the moved tab was the active tab in the main
-        // drawer, switch main to a built-in fallback BEFORE repositioning.
-        // Otherwise ExtensionTabContent's useEffect dep [tab] is unchanged,
-        // the container is emptied by the DOM move, and the main panel
-        // renders a header with an empty body. Two RAFs lets React unmount
-        // the old ExtensionTabContent (detaching tab.root) before we move it.
-        if (isTabActiveInMainDrawer(tabId)) {
-          switchMainDrawerToFallback(tabId, () => {
-            repositionAssignedTabs()
-            showSecondaryTab(tabId)
-          })
-        } else {
-          repositionAssignedTabs()
-          showSecondaryTab(tabId)
-        }
-      }, 400)
-    })
-  } else if (sidebar === 'secondary') {
-    // Secondary already open — reposition immediately
+  // Move the tab into the secondary sidebar. The drawer itself is NOT
+  // auto-opened here — that's the user's job. Previously this branch called
+  // openSecondarySidebar() (deferred via RAF + 400ms setTimeout) which caused
+  // two problems:
+  //   1. On layout restore, the saved open/closed state was ignored — the
+  //      first assignTab would unconditionally open the drawer.
+  //   2. On a user-initiated "Move to Second Sidebar" from the context menu,
+  //      the drawer would auto-open, which the user found surprising.
+  // Now: assignTab just moves the tab into the (possibly hidden) secondary
+  // panel content and updates the tab list button. The user clicks the drawer
+  // tab to reveal it.
+  if (sidebar === 'secondary') {
     if (isTabActiveInMainDrawer(tabId)) {
-      // METHODICAL-FIX C: same two-step pattern as the deferred branch above.
-      // Switch main drawer first, wait for React to unmount, then move node.
+      // METHODICAL-FIX C: switch the main drawer to a built-in fallback
+      // BEFORE repositioning. Otherwise ExtensionTabContent's useEffect dep
+      // [tab] is unchanged, the container is emptied by the DOM move, and
+      // the main panel renders a header with an empty body. switchMainDrawerToFallback
+      // waits two RAFs internally to let React unmount the old ExtensionTabContent.
       switchMainDrawerToFallback(tabId, () => {
         repositionTabToSecondary(tabId)
         showSecondaryTab(tabId)
@@ -1504,8 +1492,15 @@ function applyLayout(layout: any) {
       }
       if (attempts > 20 || layout.detachedTabs.every((dt: any) => _tabAssignments.has(dt.tabId))) {
         clearInterval(interval)
-        // assignTab() already calls openSecondarySidebar() when sidebar is closed.
-        // No redundant call here — it caused the drawerTab to desync on auto-open.
+        // After all tabs are restored, apply the saved open/closed state.
+        // assignTab no longer auto-opens the drawer (Solution C: open is the
+        // user's job). If the user had the drawer open when they last closed
+        // the browser, restore that state here.
+        if (layout.secondary?.open && !_secondarySidebarOpen) {
+          openSecondarySidebar()
+        } else if (layout.secondary && layout.secondary.open === false && _secondarySidebarOpen) {
+          closeSecondarySidebar()
+        }
       }
     }, 500)
   }
