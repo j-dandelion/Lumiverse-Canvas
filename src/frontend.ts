@@ -603,6 +603,129 @@ function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
 }
 
+/**
+ * Detect whether `tabId` is the currently-active tab in the main drawer.
+ *
+ * The store's `drawerTab` value is the source of truth, but the Zustand store
+ * is not always reachable via fiber walk (the spinner race or the way the
+ * store is referenced from the active component tree). Fall back to a
+ * DOM-based check: find the main sidebar button with the `tabBtnActive` class
+ * and compare its `title` attribute to the moved tab's title.
+ *
+ * For extension tabs, the title is the extension tab's `title` from the store
+ * (e.g. "LumiBooks"), NOT the internal `tabId`. For built-in tabs, the title
+ * is the translated `tabName` (also discoverable via the store).
+ */
+function isTabActiveInMainDrawer(tabId: string): boolean {
+  // Primary: store snapshot
+  findStoreData(true)
+  const store = _storeSnapshotCache as { drawerTab?: string | null; drawerOpen?: boolean } | null
+  if (store && typeof store.drawerOpen === 'boolean') {
+    if (!store.drawerOpen) return false
+    if (store.drawerTab === tabId) return true
+    // Don't fall through to DOM check if the store explicitly disagrees
+    // (the store is the source of truth when it's reachable)
+    if (store.drawerTab !== null && store.drawerTab !== undefined) return false
+  }
+
+  // Fallback: DOM-based check
+  const sidebar = getMainSidebar()
+  if (!sidebar) return false
+  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
+  if (!activeBtn) return false
+  const activeTitle = activeBtn.getAttribute('title') || ''
+  if (!activeTitle) return false
+
+  // Resolve `tabId` to the title the button would have
+  const tabs = _drawerTabsCache || []
+  const tab = tabs.find((t: any) => t.id === tabId)
+  if (tab && typeof tab.title === 'string') {
+    return tab.title === activeTitle
+  }
+  // Last resort: assume yes if the tabId is non-empty and active button is an extension tab
+  const activeIsExtension = activeBtn.className.includes('tabBtnExtension')
+  return activeIsExtension && tabId.length > 0
+}
+
+/**
+ * Switch the main drawer to a fallback tab before moving the active extension
+ * tab to the secondary sidebar. Without this, the previous ExtensionTabContent
+ * stays mounted with an empty container (its useEffect dep [tab] is unchanged
+ * after a DOM-move, so it doesn't re-fire), and the main panel renders a
+ * stale header + empty body.
+ *
+ * Strategy: find the button immediately before the moved tab's button in the
+ * main sidebar DOM, and click it. This is the user's expected behavior —
+ * "the next panel whose tab was above or beneath" — and triggers Lumiverse's
+ * real onClick → setDrawerTab + openDrawer flow.
+ *
+ * If the moved tab is the FIRST tab in the sidebar, fall back to the button
+ * immediately after. If no neighbor exists (degenerate case), fall back to
+ * the first built-in tab button. If even that fails, proceed without
+ * switching (preserves the original buggy behavior rather than dead-locking).
+ */
+function switchMainDrawerToFallback(tabId: string, then: () => void): void {
+  const sidebar = getMainSidebar()
+  if (!sidebar) {
+    console.warn('[SidebarUX] switchMainDrawerToFallback: no main sidebar found')
+    then()
+    return
+  }
+
+  // Find the moved tab's button by title (extension tabs match by tab.title)
+  const tabs = _drawerTabsCache || []
+  const movedTab = tabs.find((t: any) => t.id === tabId)
+  const movedTitle = movedTab?.title
+  if (!movedTitle) {
+    console.warn(`[SidebarUX] switchMainDrawerToFallback: no title for tabId=${tabId}, proceeding without switching`)
+    then()
+    return
+  }
+
+  // Collect all main sidebar buttons in document order
+  const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]')) as HTMLElement[]
+  const movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('title') === movedTitle)
+  if (movedBtnIdx === -1) {
+    console.warn(`[SidebarUX] switchMainDrawerToFallback: no button with title="${movedTitle}" found, proceeding without switching`)
+    then()
+    return
+  }
+
+  // Prefer the previous button (the one rendered immediately above LumiBooks in the tab list).
+  // If LumiBooks is the first tab, use the next button instead.
+  let fallbackBtn: HTMLElement | undefined = allButtons[movedBtnIdx - 1]
+  if (!fallbackBtn || fallbackBtn.style.display === 'none') {
+    fallbackBtn = allButtons[movedBtnIdx + 1]
+  }
+  if (!fallbackBtn || fallbackBtn.style.display === 'none') {
+    // Last resort: first visible built-in tab
+    fallbackBtn = allButtons.find(
+      (b) => b.style.display !== 'none' && b.className.includes('tabBtn') && !b.className.includes('tabBtnExtension')
+    )
+  }
+  if (!fallbackBtn) {
+    console.warn('[SidebarUX] switchMainDrawerToFallback: no fallback button found, proceeding without switching')
+    then()
+    return
+  }
+
+  fallbackBtn.click()
+
+  // Wait two animation frames before performing the move. The first RAF lets
+  // React commit the setState (drawerTab change). The second RAF lets the
+  // ExtensionTabContent unmount complete and detach tab.root from the DOM.
+  // In rare cases React's commit is batched/deferred — if the node is still
+  // attached to the main panel after two RAFs, the repositionTabToSecondary
+  // call will see parentElement !== secondaryContent and appendChild will
+  // still move it (appendChild implicitly removes from previous parent).
+  // The triple guard is what prevents the old container from reclaiming it.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      then()
+    })
+  })
+}
+
 function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
   console.log(`[SidebarUX] assignTab: ${tabId} → ${sidebar}`)
   _tabAssignments.set(tabId, sidebar)
@@ -633,14 +756,36 @@ function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
     requestAnimationFrame(() => {
       openSecondarySidebar()
       setTimeout(() => {
-        repositionAssignedTabs()
-        showSecondaryTab(tabId)
+        // METHODICAL-FIX C: if the moved tab was the active tab in the main
+        // drawer, switch main to a built-in fallback BEFORE repositioning.
+        // Otherwise ExtensionTabContent's useEffect dep [tab] is unchanged,
+        // the container is emptied by the DOM move, and the main panel
+        // renders a header with an empty body. Two RAFs lets React unmount
+        // the old ExtensionTabContent (detaching tab.root) before we move it.
+        if (isTabActiveInMainDrawer(tabId)) {
+          switchMainDrawerToFallback(tabId, () => {
+            repositionAssignedTabs()
+            showSecondaryTab(tabId)
+          })
+        } else {
+          repositionAssignedTabs()
+          showSecondaryTab(tabId)
+        }
       }, 400)
     })
   } else if (sidebar === 'secondary') {
     // Secondary already open — reposition immediately
-    repositionTabToSecondary(tabId)
-    showSecondaryTab(tabId)
+    if (isTabActiveInMainDrawer(tabId)) {
+      // METHODICAL-FIX C: same two-step pattern as the deferred branch above.
+      // Switch main drawer first, wait for React to unmount, then move node.
+      switchMainDrawerToFallback(tabId, () => {
+        repositionTabToSecondary(tabId)
+        showSecondaryTab(tabId)
+      })
+    } else {
+      repositionTabToSecondary(tabId)
+      showSecondaryTab(tabId)
+    }
   } else {
     // Moving back to primary — restore immediately
     restoreTabToPrimary(tabId)
