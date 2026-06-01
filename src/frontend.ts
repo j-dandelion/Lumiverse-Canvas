@@ -201,15 +201,25 @@ function isMainDrawerOpen(): boolean {
 }
 
 function getMainDrawerSide(): 'left' | 'right' {
-  // Try store snapshot first
+  // DOM first: the wrapper's className updates synchronously when the user
+  // changes drawer side in Lumiverse settings. The Zustand store snapshot is
+  // cached with a 3-second TTL (see getStoreSnapshot), so for up to 3s after
+  // a side change the store can return the OLD value while the DOM already
+  // shows the new side. The startSideChangeWatcher (2s poll) and
+  // createSecondarySidebar (which reads getMainDrawerSide on first mount)
+  // both depend on this function returning the up-to-date value, so we
+  // prefer the live DOM class. The store is kept as a fallback for code
+  // paths that run before getMainWrapper() can resolve (e.g. very early
+  // during bundle init).
+  const wrapper = getMainWrapper()
+  if (wrapper) {
+    return wrapper.classList.toString().includes('wrapperLeft') ? 'left' : 'right'
+  }
   const store = getStoreSnapshot()
   if (store && (store as any).drawerSettings) {
     return (store as any).drawerSettings.side || 'right'
   }
-  // Fallback to CSS class check
-  const wrapper = getMainWrapper()
-  if (!wrapper) return 'right'
-  return wrapper.classList.toString().includes('wrapperLeft') ? 'left' : 'right'
+  return 'right'
 }
 
 function setChatMargin(side: 'left' | 'right', px: number) {
@@ -278,6 +288,17 @@ function injectDrawerTabStyles() {
     .sidebar-ux-drawer-tab-icon {
       color: var(--lumiverse-primary);
     }
+    /* Force a 20×20 size on the tab-list SVG icons. Extensions that
+       provide iconSvg without intrinsic width/height attributes (e.g. Hone)
+       render at 0×0 by default — Lumiverse's main sidebar gets around this
+       via its own CSS, but Canvas's tab list doesn't inherit that rule.
+       Sizing via CSS catches all current and future extensions, and matches
+       the existing CSS-injection pattern. */
+    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
   `
   document.head.appendChild(style)
 }
@@ -329,9 +350,16 @@ function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?:
       : (isFinite(cssVarWidth) ? cssVarWidth : 420)
   )
   // Phase 3: if the saved layout says open, translate to 0 so the drawer is
-  // visible from the very first frame. Otherwise stay off-screen.
+  // visible from the very first frame. Otherwise stay off-screen. The
+  // closed transform's sign is direction-aware (see getClosedTransformPx):
+  // +width when the secondary is anchored on the right (main on left), and
+  // -width when anchored on the left (main on right).
   const initialOpen = options?.initialOpen === true
-  const initWrapperTransform = initialOpen ? 'translateX(0)' : `translateX(${initWidth}px)`
+  const initWrapperTransform = initialOpen
+    ? 'translateX(0)'
+    : `translateX(${
+        getMainDrawerSide() === 'right' ? -initWidth : initWidth
+      }px)`
   wrapper.style.cssText = `
     position: fixed;
     top: 0; bottom: 0;
@@ -372,9 +400,18 @@ function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?:
   const drawer = document.createElement('div')
   drawer.className = 'sidebar-ux-drawer'
   // No initial transform — the wrapper handles all positioning via translateX.
+  // `position: relative` makes the drawer a positioning context so the
+  // resize handle (inserted by mountResizeHandles) offsets from the
+  // drawer itself rather than from the wrapper. Without this, the handle's
+  // position is computed relative to the wrapper's full translated width,
+  // which corrupts the position when the drawerTab sibling's visibility
+  // changes (e.g. when no tabs are assigned). The wrapper is at 100%
+  // viewport height via top:0/bottom:0; the drawer's height is 100% of
+  // that.
   drawer.style.cssText = `
     width: var(${SECONDARY_WIDTH_VAR}, 420px);
     height: 100%;
+    position: relative;
     display: flex;
     background: var(--lumiverse-bg-deep);
     box-shadow: var(--lumiverse-shadow-xl);
@@ -579,10 +616,10 @@ function openSecondarySidebar() {
 
 function closeSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
-  const side = getMainDrawerSide() === 'left' ? 'right' : 'left'
-  const width = Math.ceil(parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420)
-  // Animate wrapper back to translateX(width) — both drawerTab and drawer slide out as one unit
-  animateWrapper(width)
+  // Animate wrapper back to its closed transform — direction-aware via
+  // getClosedTransformPx: secondary on the right closes at +width, on the
+  // left at -width.
+  animateWrapper(getClosedTransformPx())
   _secondarySidebarOpen = false
   syncDrawerTabSettings()
   updateChatReflow()
@@ -598,6 +635,38 @@ function closeSecondarySidebar() {
   persistOpenState()
 }
 
+/**
+ * Return the wrapper's `translateX` value (in px) that fully hides the
+ * secondary sidebar, accounting for which edge it's anchored to.
+ *
+ * The secondary wrapper is anchored to one edge of the viewport (the edge
+ * opposite the main drawer). Closing the sidebar slides the wrapper off
+ * its anchor edge so only the drawerTab remains visible. The sign of the
+ * translation depends on which edge the wrapper is anchored to:
+ *   - main on the LEFT, secondary on the RIGHT (anchored at `right: 0`)
+ *     → close transform is +width (pushes wrapper right, off the right edge)
+ *   - main on the RIGHT, secondary on the LEFT (anchored at `left: 0`)
+ *     → close transform is -width (pushes wrapper left, off the left edge)
+ *
+ * Centralizing this in one helper avoids the sign-inversion bug that
+ * recurred when the close transform was hardcoded at multiple call sites
+ * (the open-source repo was developed with the main on the left, so
+ * `+width` worked by accident for the dev case but flipped the wrong way
+ * when the user moved the main to the right).
+ */
+function getClosedTransformPx(): number {
+  const w = Math.ceil(
+    parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+  )
+  // `getMainDrawerSide()` returns the MAIN drawer's side. The secondary
+  // lives on the opposite side. When the main is on the LEFT, the
+  // secondary is on the RIGHT (anchored at `right: 0`) → close transform
+  // is +w (pushes wrapper right, off the right edge). When the main is
+  // on the RIGHT, the secondary is on the LEFT (anchored at `left: 0`)
+  // → close transform is -w (pushes wrapper left, off the left edge).
+  return getMainDrawerSide() === 'right' ? -w : w
+}
+
 function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }) {
   if (_secondaryWrapper) return
   _secondaryWrapper = createSecondarySidebar(options)
@@ -609,6 +678,13 @@ function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: 
     _secondarySidebarOpen = true
   }
   syncDrawerTabSettings()
+  // Mount the resize handles. The main handle is short-circuited by its
+  // own querySelector check inside mountResizeHandles, so this is safe to
+  // call from both the initial setup path (which already calls it once via
+  // setup()) and from checkSideChanged()'s wrapper-remount path. Without
+  // this, the secondary handle disappears for the rest of the session
+  // whenever the wrapper is recreated (e.g. after a drawer-side flip).
+  mountResizeHandles()
 }
 
 // --- Chat Reflow ---
@@ -1716,11 +1792,21 @@ function mountResizeHandles() {
     mainDrawer.appendChild(handle)
   }
 
-  // Secondary sidebar resize handle — insert into the secondary drawer
+  // Secondary sidebar resize handle — insert into the secondary drawer.
+  // Direction and position are side-aware: the handle always lives on the
+  // drawer's inner edge (the edge facing the content area), and dragging
+  // expands the drawer toward the content. This mirrors the main sidebar's
+  // handle.
   if (_secondaryWrapper) {
     const secondaryDrawer = _secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement
     if (secondaryDrawer && !secondaryDrawer.querySelector('.sidebar-ux-resize-handle')) {
-      const secondaryDirection = 'left' // Secondary sidebar handle is at inner (left) edge — drag left to expand toward content
+      // The secondary lives on the opposite side of the main.
+      const mainSide = getMainDrawerSide()
+      const secondarySide = mainSide === 'left' ? 'right' : 'left'
+      // Direction follows from the secondary's position: a drawer on the
+      // right has its handle on the left edge (drag left to expand toward
+      // content), and vice versa.
+      const secondaryDirection = secondarySide === 'right' ? 'left' : 'right'
 
       const handle = createResizeHandle(
         secondaryDirection,
@@ -1739,10 +1825,15 @@ function mountResizeHandles() {
         () => _secondarySidebarOpen
       )
 
-      // Position at the drawer's inner edge (facing content area)
-      // Uses CSS variable so handle tracks the correct edge if tab strip position changes
+      // Position the handle on the secondary drawer's inner edge.
+      // The drawer is the offset parent (see createSecondarySidebar's
+      // `position: relative` on the drawer), so a fixed offset from the
+      // inner edge is stable regardless of width or sibling presence.
+      // The 4px overhang is intentional — a portion of the handle sits
+      // inside the drawer so the cursor lands on it reliably, and the rest
+      // bleeds onto the content edge for a visual grab affordance.
       handle.style.cssText += `
-        right: calc(var(${SECONDARY_WIDTH_VAR}, 420px) - 4px);
+        ${secondarySide === 'left' ? 'right' : 'left'}: -4px;
       `
 
       secondaryDrawer.appendChild(handle)
@@ -1870,8 +1961,17 @@ function applyLayout(layout: any) {
     // "reload layout" debug action that runs after setup).
     if (_secondaryWrapper && !_secondarySidebarOpen) {
       const currentTransform = _secondaryWrapper.style.transform?.match(/-?[\d.]+/)?.[0]
-      if (currentTransform !== String(layout.secondary.width)) {
-        animateWrapper(layout.secondary.width)
+      // Compare against the sign-aware closed transform. The saved width is
+      // always positive, but the rendered transform carries a sign
+      // (+width when sec is on the right, -width when sec is on the left),
+      // so a direct string match against the saved width would always
+      // differ when the secondary is on the left. Use the same sign logic
+      // as getClosedTransformPx to compute the desired closed value.
+      const desiredClosed = getMainDrawerSide() === 'right'
+        ? -layout.secondary.width
+        : layout.secondary.width
+      if (currentTransform !== String(desiredClosed)) {
+        animateWrapper(desiredClosed)
       }
     }
   }
@@ -2114,10 +2214,36 @@ function checkSideChanged() {
     }
     _secondarySidebarOpen = false
     mountSecondarySidebar()
+    // Restore tab buttons for every tab still assigned to secondary. The
+    // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
+    // only builds the chrome), so without this the tab list is blank until
+    // the user re-drags every tab. _tabAssignments is the source of truth
+    // for what's been moved; the actual store data (iconSvg, root, etc.)
+    // comes from getDrawerTabs() inside addSecondaryTabButton.
+    restoreSecondaryTabButtons()
     repositionAssignedTabs()
   }
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
+}
+
+/**
+ * Re-create secondary tab buttons for every tab currently assigned to the
+ * secondary sidebar. Used after the wrapper is recreated (e.g. on a
+ * drawer-side flip) so the tab list is restored from the persisted
+ * `_tabAssignments` map without requiring the user to re-drag tabs.
+ *
+ * Mirrors the per-tab button creation in `applyAssignment` → `secondary`,
+ * but in a single pass over the assignments map.
+ */
+function restoreSecondaryTabButtons() {
+  const tabs = getDrawerTabs()
+  if (!tabs || tabs.length === 0) return
+  for (const [tabId, sidebar] of _tabAssignments) {
+    if (sidebar !== 'secondary') continue
+    const tab = tabs.find(t => t.id === tabId)
+    if (tab) addSecondaryTabButton(tab)
+  }
 }
 
 let _sideCheckInterval: ReturnType<typeof setInterval> | null = null

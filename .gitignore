@@ -1,0 +1,19 @@
+# Build artifacts
+dist/
+*.js.map
+
+# Development scaffolding (not part of the shipping extension)
+AGENTS.md
+DEVLOG.md
+.hermes/
+docs/plans/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Bun / Node
+node_modules/
+bun.lockb

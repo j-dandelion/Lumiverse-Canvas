@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUNTIME_DIR="$HOME/Lumiverse/data/extensions/sidebar_ux/repo"
+RUNTIME_DIR="$HOME/Lumiverse/data/extensions/canvas/repo"
 
 cd "$SCRIPT_DIR"
 bun build src/frontend.ts --outfile dist/frontend.js --target browser --format esm
