@@ -1,3 +1,35 @@
+// --- Debug Logging ---
+// Background-event logs go through dlog()/dwarn(), which are no-ops when
+// DEBUG is false. To enable verbose logging in the running extension:
+//
+//   localStorage.setItem('sidebarUxDebug', '1');   // then hard-refresh
+//   localStorage.removeItem('sidebarUxDebug');     // to turn it off
+//
+// Note: in some sandboxed/iframe contexts, `localStorage` access throws a
+// SecurityError. The try/catch below treats that as "DEBUG off" — the safe
+// default. The user-invoked `window.__sidebarUxDebug()` escape hatch
+// (defined in setup()) intentionally uses console.log directly; it's a
+// deliberate console escape hatch, not background noise.
+const DEBUG: boolean = (() => {
+  try {
+    return localStorage.getItem('sidebarUxDebug') === '1'
+  } catch {
+    return false
+  }
+})()
+
+function dlog(...args: unknown[]): void {
+  if (!DEBUG) return
+  // eslint-disable-next-line no-console
+  console.log('[SidebarUX]', ...args)
+}
+
+function dwarn(...args: unknown[]): void {
+  if (!DEBUG) return
+  // eslint-disable-next-line no-console
+  console.warn('[SidebarUX]', ...args)
+}
+
 // --- DOM Helpers ---
 
 function getMainSidebar(): HTMLElement | null {
@@ -62,7 +94,7 @@ let _storeSnapshotCache: Record<string, unknown> | null = null
 let _cacheTimestamp = 0
 const CACHE_TTL_MS = 3000 // Re-walk fiber tree every 3 seconds max
 
-function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>): void {
+function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>, force: boolean): void {
   if (!fiber || depth > maxDepth || visited.has(fiber)) return
   visited.add(fiber)
 
@@ -71,8 +103,12 @@ function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: 
   while (hook && hookIdx < 30) {
     const state = hook.memoizedState
 
-    // Check for drawerTabs array (array of objects with id+title+root)
-    if (!_drawerTabsCache && Array.isArray(state) && state.length > 0 && state[0] && typeof state[0] === 'object') {
+    // Check for drawerTabs array (array of objects with id+title+root).
+    // When force=true (called from tagMainSidebarButtons to re-tag missed
+    // buttons), we overwrite the cache with a fresh result even if the
+    // cache was non-null. Without this, a stale partial snapshot from the
+    // first call (e.g., 1 of 3 tabs visible) would persist indefinitely.
+    if ((force || !_drawerTabsCache) && Array.isArray(state) && state.length > 0 && state[0] && typeof state[0] === 'object') {
       const firstKeys = Object.keys(state[0])
       if (firstKeys.includes('id') && firstKeys.includes('title') && firstKeys.includes('root')) {
         _drawerTabsCache = state as any
@@ -80,14 +116,14 @@ function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: 
     }
 
     // Check for objects with drawerOpen (full store snapshot)
-    if (!_storeSnapshotCache && state && typeof state === 'object' && !Array.isArray(state)) {
+    if ((force || !_storeSnapshotCache) && state && typeof state === 'object' && !Array.isArray(state)) {
       const keys = Object.keys(state)
       if (keys.includes('drawerOpen') || keys.includes('drawerTabs')) {
         _storeSnapshotCache = state as Record<string, unknown>
       }
     }
 
-    if (_drawerTabsCache && _storeSnapshotCache) {
+    if (!force && _drawerTabsCache && _storeSnapshotCache) {
       _cacheTimestamp = Date.now()
       return // found both, stop early
     }
@@ -96,8 +132,8 @@ function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: 
     hookIdx++
   }
 
-  scanForStoreData(fiber.child, depth + 1, maxDepth, visited)
-  scanForStoreData(fiber.sibling, depth, maxDepth, visited)
+  scanForStoreData(fiber.child, depth + 1, maxDepth, visited, force)
+  scanForStoreData(fiber.sibling, depth, maxDepth, visited, force)
 }
 
 function findStoreData(force = false) {
@@ -118,10 +154,21 @@ function findStoreData(force = false) {
     fiber = fiber.return
   }
 
+  // When forcing, we want a complete walk (not an early-out) so the cache
+  // is fully refreshed. Pass force through to the recursive walker.
+  if (force) {
+    const visited = new Set<any>()
+    for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 5); i--) {
+      scanForStoreData(ancestors[i], 0, 30, visited, true)
+    }
+    _cacheTimestamp = Date.now()
+    return
+  }
+
   // Scan DOWN from the top ancestors (the root covers the whole tree)
   const visited = new Set<any>()
   for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 5); i--) {
-    scanForStoreData(ancestors[i], 0, 30, visited)
+    scanForStoreData(ancestors[i], 0, 30, visited, false)
     if (_drawerTabsCache && _storeSnapshotCache) {
       _cacheTimestamp = Date.now()
       break
@@ -132,7 +179,7 @@ function findStoreData(force = false) {
 function getDrawerTabs(): Array<{ id: string; extensionId: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }> {
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
-  console.warn('[SidebarUX] Could not find drawerTabs in fiber tree')
+  dwarn('Could not find drawerTabs in fiber tree')
   return []
 }
 
@@ -266,16 +313,25 @@ function deriveShortName(title: string, shortName?: string): string {
 
 // Boolean flag for secondary sidebar open state (replaces style transform check)
 let _secondarySidebarOpen = false
-function createSecondarySidebar(): HTMLElement {
+function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }): HTMLElement {
   const side = getMainDrawerSide() === 'left' ? 'right' : 'left'
 
   // Wrapper: mirrors main sidebar .wrapper exactly
   // The WRAPPER translates — drawerTab and drawer are both children, moving as one unit.
   const wrapper = document.createElement('div')
   wrapper.className = 'sidebar-ux-secondary-wrapper'
-  const initWidth = Math.ceil(parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420)
-  // Closed state: translate by drawer width so drawer is off-screen, drawerTab stays at viewport edge
-  const initWrapperTransform = `translateX(${initWidth}px)`
+  // Phase 3 (finding #13): prefer the layout-supplied width on first mount so the
+  // initial paint matches the saved state — no 420px fallback flash.
+  const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR))
+  const initWidth = Math.ceil(
+    options?.initialWidth && options.initialWidth > 0
+      ? options.initialWidth
+      : (isFinite(cssVarWidth) ? cssVarWidth : 420)
+  )
+  // Phase 3: if the saved layout says open, translate to 0 so the drawer is
+  // visible from the very first frame. Otherwise stay off-screen.
+  const initialOpen = options?.initialOpen === true
+  const initWrapperTransform = initialOpen ? 'translateX(0)' : `translateX(${initWidth}px)`
   wrapper.style.cssText = `
     position: fixed;
     top: 0; bottom: 0;
@@ -459,6 +515,13 @@ function restoreOverflow(element: HTMLElement) {
 let _secondaryWrapper: HTMLElement | null = null
 let _secondaryDrawer: HTMLElement | null = null
 
+// Phase 4 (finding #2): centralized WeakMap tracking each tab's original
+// parent in the main sidebar, replacing the per-node __sidebarUxOriginalParent
+// property. WeakMap auto-cleans when the tab root is GC'd, and isolates the
+// extension's metadata from any future extension that also wants to track
+// its own per-node state.
+const _originalParents: WeakMap<HTMLElement, HTMLElement> = new WeakMap()
+
 // --- JS-based animation (replaces CSS transitions for drawer + drawerTab sync) ---
 // The WRAPPER translates — both drawer and drawerTab are children, so they move as one unit.
 // No counter-translate. No position: fixed on drawerTab. Just a single translateX on the wrapper.
@@ -511,7 +574,7 @@ function openSecondarySidebar() {
   syncDrawerTabSettings()
   updateChatReflow()
   repositionAssignedTabs()
-  saveLayout()
+  persistOpenState()
 }
 
 function closeSecondarySidebar() {
@@ -532,13 +595,19 @@ function closeSecondarySidebar() {
     }
   }
 
-  saveLayout()
+  persistOpenState()
 }
 
-function mountSecondarySidebar() {
+function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }) {
   if (_secondaryWrapper) return
-  _secondaryWrapper = createSecondarySidebar()
+  _secondaryWrapper = createSecondarySidebar(options)
   document.body.appendChild(_secondaryWrapper)
+  // Phase 3: sync the in-flight state to the initial layout so a hard-refresh
+  // with secondary open doesn't trip the "no transition needed" check inside
+  // openSecondarySidebar() on the first user click.
+  if (options?.initialOpen === true) {
+    _secondarySidebarOpen = true
+  }
   syncDrawerTabSettings()
 }
 
@@ -589,7 +658,75 @@ function startReflowObserver() {
   }
   waitForWrapper()
 
-  return () => observer.disconnect()
+  // Separate observer on the main sidebar for child-list changes. When a tab
+  // is added or replaced (e.g., after a Spindle extension reloads), we need
+  // to re-tag its button with data-tab-id so the id-based match in
+  // findMainTabButton / switchMainDrawerToFallback works. Without this, we'd
+  // fall back to title-matching, which is the bug class Finding #7 fixes.
+  const sidebarObserver = new MutationObserver(() => scheduleTagMainSidebarButtons())
+  const waitForSidebar = () => {
+    const sidebar = getMainSidebar()
+    if (sidebar) {
+      sidebarObserver.observe(sidebar, { childList: true, subtree: true })
+      // Initial tag pass — sidebar exists, but buttons may already be rendered.
+      tagMainSidebarButtons()
+      return
+    }
+    requestAnimationFrame(waitForSidebar)
+  }
+  waitForSidebar()
+
+  return () => {
+    observer.disconnect()
+    sidebarObserver.disconnect()
+  }
+}
+
+let _tagMainSidebarButtonsRaf: number | null = null
+function scheduleTagMainSidebarButtons() {
+  if (_tagMainSidebarButtonsRaf !== null) return
+  _tagMainSidebarButtonsRaf = requestAnimationFrame(() => {
+    _tagMainSidebarButtonsRaf = null
+    tagMainSidebarButtons()
+  })
+}
+
+/**
+ * Tag every extension tab button in the main sidebar with a `data-tab-id`
+ * attribute. Walks the store's drawerTabs and matches each by title.
+ * Idempotent — skips buttons that are already tagged.
+ *
+ * Returns the number of buttons tagged in this pass.
+ */
+function tagMainSidebarButtons(): number {
+  const sidebar = getMainSidebar()
+  if (!sidebar) return 0
+
+  // Force a fresh fiber walk — the cached snapshot may predate the latest
+  // tab registration (e.g., LumiBooks registers after Prompt Viewer). The
+  // cache TTL is 3s, but sidebar mutations can fire well inside that window
+  // with an incomplete view of the store.
+  findStoreData(true)
+  const tabs = getDrawerTabs()
+  if (tabs.length === 0) return 0
+
+  let tagged = 0
+  // Iterate buttons, not tabs, because the title-match is the *initial*
+  // identity. A button's title is set by Lumiverse and is what the user sees.
+  const buttons = sidebar.querySelectorAll('button[title]')
+  for (const btn of buttons) {
+    const existing = btn.getAttribute('data-tab-id')
+    if (existing) continue  // already tagged
+    const btnTitle = btn.getAttribute('title')
+    if (!btnTitle) continue
+    const tab = tabs.find(t => t.title === btnTitle)
+    if (tab) {
+      btn.setAttribute('data-tab-id', tab.id)
+      tagged++
+    }
+  }
+  if (tagged > 0) dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`)
+  return tagged
 }
 
 // --- Tab Assignment System (CSS Transform Approach) ---
@@ -617,35 +754,61 @@ function getTabSidebar(tabId: string): 'primary' | 'secondary' {
  * (e.g. "LumiBooks"), NOT the internal `tabId`. For built-in tabs, the title
  * is the translated `tabName` (also discoverable via the store).
  */
-function isTabActiveInMainDrawer(tabId: string): boolean {
+/**
+ * Discriminated union describing the active-tab state of the main drawer.
+ * Replaces the 3-deep nested-if + DOM-fallthrough of the old `isTabActiveInMainDrawer`.
+ *
+ * - `closed`   — drawer is not open
+ * - `active`   — drawer is open, and the active tab is `id`
+ * - `other`    — drawer is open, but a different tab (`id`) is active
+ * - `unknown`  — store is unreachable AND DOM is unreachable (defensive)
+ */
+type ActiveTabState =
+  | { state: 'closed' }
+  | { state: 'active'; id: string }
+  | { state: 'other'; id: string }
+  | { state: 'unknown' }
+
+function getActiveTabId(): ActiveTabState {
   // Primary: store snapshot
   findStoreData(true)
   const store = _storeSnapshotCache as { drawerTab?: string | null; drawerOpen?: boolean } | null
   if (store && typeof store.drawerOpen === 'boolean') {
-    if (!store.drawerOpen) return false
-    if (store.drawerTab === tabId) return true
-    // Don't fall through to DOM check if the store explicitly disagrees
-    // (the store is the source of truth when it's reachable)
-    if (store.drawerTab !== null && store.drawerTab !== undefined) return false
+    if (!store.drawerOpen) return { state: 'closed' }
+    if (typeof store.drawerTab === 'string') {
+      return { state: 'active', id: store.drawerTab }
+    }
+    // drawerOpen is true but drawerTab is null/undefined — store is in a
+    // transitional state. Fall through to the DOM check rather than
+    // reporting "unknown" prematurely; DOM is usually in sync here.
   }
 
   // Fallback: DOM-based check
   const sidebar = getMainSidebar()
-  if (!sidebar) return false
+  if (!sidebar) return { state: 'unknown' }
   const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
-  if (!activeBtn) return false
+  if (!activeBtn) return { state: 'unknown' }
   const activeTitle = activeBtn.getAttribute('title') || ''
-  if (!activeTitle) return false
+  if (!activeTitle) return { state: 'unknown' }
 
-  // Resolve `tabId` to the title the button would have
+  // Resolve the title back to a tabId via the store
   const tabs = _drawerTabsCache || []
-  const tab = tabs.find((t: any) => t.id === tabId)
-  if (tab && typeof tab.title === 'string') {
-    return tab.title === activeTitle
-  }
-  // Last resort: assume yes if the tabId is non-empty and active button is an extension tab
-  const activeIsExtension = activeBtn.className.includes('tabBtnExtension')
-  return activeIsExtension && tabId.length > 0
+  const tab = tabs.find((t: any) => t.title === activeTitle)
+  if (tab) return { state: 'active', id: tab.id }
+  // Active button is a built-in (no matching extension tab). Report the title
+  // as the active id so callers can compare against built-in tab keys if needed.
+  return { state: 'active', id: activeTitle }
+}
+
+/**
+ * Thin boolean wrapper over getActiveTabId() for callers that only need
+ * a yes/no. Prefer getActiveTabId() for new code — the sentinel shape is
+ * the authoritative contract.
+ */
+function isTabActiveInMainDrawer(tabId: string): boolean {
+  const active = getActiveTabId()
+  if (active.state === 'active') return active.id === tabId
+  return false
 }
 
 /**
@@ -665,47 +828,66 @@ function isTabActiveInMainDrawer(tabId: string): boolean {
  * the first built-in tab button. If even that fails, proceed without
  * switching (preserves the original buggy behavior rather than dead-locking).
  */
-function switchMainDrawerToFallback(tabId: string, then: () => void): void {
+/**
+ * Phase 4 (finding #10): unified drawer-fallback switcher. Replaces the
+ * separate `switchMainDrawerToFallback` and the (as-yet-unwritten) secondary
+ * counterpart. The two-RAF wait is only needed for `'main'` because React
+ * unmounts the old `ExtensionTabContent` asynchronously there. For `'secondary'`
+ * the call is synchronous — the moved tab's node guard and the panel's
+ * synchronous state update are enough to detach the node.
+ */
+function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string, then: () => void): void {
+  if (side === 'secondary') {
+    // Phase 4 (finding #2): when the moved tab is the active secondary tab,
+    // there is no fallback drawer to switch — restoreTabToPrimary already
+    // handles the neighbor-tab fall-through via _activeSecondaryTabId.
+    // Just invoke then() synchronously.
+    then()
+    return
+  }
+  // side === 'main' — legacy logic, preserved verbatim from the previous
+  // switchMainDrawerToFallback implementation.
   const sidebar = getMainSidebar()
   if (!sidebar) {
-    console.warn('[SidebarUX] switchMainDrawerToFallback: no main sidebar found')
+    dwarn('switchDrawerToFallback(main): no main sidebar found')
     then()
     return
   }
 
-  // Find the moved tab's button by title (extension tabs match by tab.title)
-  const tabs = _drawerTabsCache || []
-  const movedTab = tabs.find((t: any) => t.id === tabId)
-  const movedTitle = movedTab?.title
-  if (!movedTitle) {
-    console.warn(`[SidebarUX] switchMainDrawerToFallback: no title for tabId=${tabId}, proceeding without switching`)
-    then()
-    return
-  }
-
-  // Collect all main sidebar buttons in document order
   const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]')) as HTMLElement[]
-  const movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('title') === movedTitle)
+
+  let movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('data-tab-id') === tabId)
   if (movedBtnIdx === -1) {
-    console.warn(`[SidebarUX] switchMainDrawerToFallback: no button with title="${movedTitle}" found, proceeding without switching`)
-    then()
-    return
+    const movedTab = (_drawerTabsCache || []).find((t: any) => t.id === tabId)
+    const movedTitle = movedTab?.title
+    if (movedTitle) {
+      movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('title') === movedTitle)
+      if (movedBtnIdx === -1) {
+        dwarn(`switchDrawerToFallback(main): no button for id="${tabId}" (title="${movedTitle}") found, proceeding without switching`)
+        then()
+        return
+      }
+      dwarn(`switchDrawerToFallback(main): id-match missed for ${tabId}, fell back to title-match — tagMainSidebarButtons may not have run yet`)
+    } else {
+      dwarn(`switchDrawerToFallback(main): no tab in store for id=${tabId}, proceeding without switching`)
+      then()
+      return
+    }
   }
 
-  // Prefer the previous button (the one rendered immediately above LumiBooks in the tab list).
-  // If LumiBooks is the first tab, use the next button instead.
+  // Prefer the previous button (the one rendered immediately above the moved
+  // tab in the tab list). If the moved tab is the first, use the next button.
   let fallbackBtn: HTMLElement | undefined = allButtons[movedBtnIdx - 1]
   if (!fallbackBtn || fallbackBtn.style.display === 'none') {
     fallbackBtn = allButtons[movedBtnIdx + 1]
   }
   if (!fallbackBtn || fallbackBtn.style.display === 'none') {
-    // Last resort: first visible built-in tab
     fallbackBtn = allButtons.find(
       (b) => b.style.display !== 'none' && b.className.includes('tabBtn') && !b.className.includes('tabBtnExtension')
     )
   }
   if (!fallbackBtn) {
-    console.warn('[SidebarUX] switchMainDrawerToFallback: no fallback button found, proceeding without switching')
+    dwarn('switchDrawerToFallback(main): no fallback button found, proceeding without switching')
     then()
     return
   }
@@ -716,10 +898,10 @@ function switchMainDrawerToFallback(tabId: string, then: () => void): void {
   // React commit the setState (drawerTab change). The second RAF lets the
   // ExtensionTabContent unmount complete and detach tab.root from the DOM.
   // In rare cases React's commit is batched/deferred — if the node is still
-  // attached to the main panel after two RAFs, the repositionTabToSecondary
-  // call will see parentElement !== secondaryContent and appendChild will
-  // still move it (appendChild implicitly removes from previous parent).
-  // The triple guard is what prevents the old container from reclaiming it.
+  // attached to the main panel after two RAFs, the repositionTab call will
+  // see parentElement !== secondaryContent and appendChild will still move
+  // it (appendChild implicitly removes from previous parent). The triple
+  // guard is what prevents the old container from reclaiming it.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       then()
@@ -727,65 +909,105 @@ function switchMainDrawerToFallback(tabId: string, then: () => void): void {
   })
 }
 
-function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
-  console.log(`[SidebarUX] assignTab: ${tabId} → ${sidebar}`)
-  _tabAssignments.set(tabId, sidebar)
+/**
+ * @deprecated Use switchDrawerToFallback('main', tabId, then) instead.
+ * Thin alias kept so any out-of-tree caller (or future debug code) still works.
+ */
+function switchMainDrawerToFallback(tabId: string, then: () => void): void {
+  switchDrawerToFallback('main', tabId, then)
+}
 
-  // Hide/show main sidebar tab buttons
-  if (sidebar === 'secondary') {
+/**
+ * Phase 4 (finding #1): the policy layer for tab assignment. Wraps the pure
+ * DOM move (repositionTab) with state updates, button affordances, optional
+ * drawer open/close, optional active-tab switching, and optional save.
+ *
+ * Defaults are tuned for the context-menu call site (user-initiated move):
+ *   open: true, switchActive: true, save: true
+ * applyLayout uses different defaults (open: false, switchActive: false, save: false)
+ * to avoid double-animating the drawer or rewriting a layout we just loaded.
+ */
+function applyAssignment(tabId: string, target: 'primary' | 'secondary', options: {
+  open?: boolean
+  switchActive?: boolean
+  save?: boolean
+} = {}): void {
+  const opts = { open: true, switchActive: true, save: true, ...options }
+  dlog(`applyAssignment: ${tabId} → ${target} (open=${opts.open}, switchActive=${opts.switchActive}, save=${opts.save})`)
+
+  // 1. State: record the assignment
+  _tabAssignments.set(tabId, target)
+
+  // 2. Button affordances: hide in main / show in secondary
+  if (target === 'secondary') {
     hideMainTabButton(tabId)
-  } else {
-    showMainTabButton(tabId)
-  }
-
-  // Manage secondary sidebar tab buttons
-  if (sidebar === 'secondary') {
     const tabs = getDrawerTabs()
     const tab = tabs.find(t => t.id === tabId)
     if (tab) addSecondaryTabButton(tab)
   } else {
+    showMainTabButton(tabId)
     removeSecondaryTabButton(tabId)
   }
   updateDrawerTabVisibility()
 
-  // Move the tab into the secondary sidebar. The drawer itself is NOT
-  // auto-opened here — that's the user's job. Previously this branch called
-  // openSecondarySidebar() (deferred via RAF + 400ms setTimeout) which caused
-  // two problems:
-  //   1. On layout restore, the saved open/closed state was ignored — the
-  //      first assignTab would unconditionally open the drawer.
-  //   2. On a user-initiated "Move to Second Sidebar" from the context menu,
-  //      the drawer would auto-open, which the user found surprising.
-  // Now: assignTab just moves the tab into the (possibly hidden) secondary
-  // panel content and updates the tab list button. The user clicks the drawer
-  // tab to reveal it.
-  if (sidebar === 'secondary') {
-    if (isTabActiveInMainDrawer(tabId)) {
-      // METHODICAL-FIX C: switch the main drawer to a built-in fallback
-      // BEFORE repositioning. Otherwise ExtensionTabContent's useEffect dep
-      // [tab] is unchanged, the container is emptied by the DOM move, and
-      // the main panel renders a header with an empty body. switchMainDrawerToFallback
-      // waits two RAFs internally to let React unmount the old ExtensionTabContent.
-      switchMainDrawerToFallback(tabId, () => {
-        repositionTabToSecondary(tabId)
+  // 3. The main-drawer-fallback trick: if we're moving a tab that's
+  // currently rendered in the main drawer, switch the drawer to a
+  // neighboring tab first (after two RAFs) so React unmounts the old
+  // ExtensionTabContent and tab.root detaches from the main panel.
+  // Otherwise the main panel would render a header with the moved tab's
+  // name and an empty body (the bug Solution C fixed).
+  const doMove = () => {
+    repositionTab(tabId, target)
+    if (target === 'secondary') {
+      if (opts.switchActive) {
         showSecondaryTab(tabId)
-      })
-    } else {
-      repositionTabToSecondary(tabId)
-      showSecondaryTab(tabId)
+      }
     }
-  } else {
-    // Moving back to primary — restore immediately
-    restoreTabToPrimary(tabId)
+    // For target === 'primary', restoreTabToPrimary handles the neighbor
+    // fall-through via _activeSecondaryTabId.
+  }
 
-    // If no more tabs assigned to secondary, close it
+  if (target === 'secondary' && opts.switchActive && isTabActiveInMainDrawer(tabId)) {
+    switchDrawerToFallback('main', tabId, doMove)
+  } else if (target === 'primary' && opts.switchActive) {
+    // For 'primary', the chain is: reposition → if was active, neighbor
+    // fall-through happens in restoreTabToPrimary.
+    restoreTabToPrimary(tabId)
+    // If no more tabs in secondary, close it
     const hasRemaining = [..._tabAssignments.values()].some(v => v === 'secondary')
     if (!hasRemaining && _secondarySidebarOpen) {
       closeSecondarySidebar()
     }
+  } else {
+    // Direct call: no active-tab dance needed. For primary, still need
+    // restoreTabToPrimary to clean up saved styles + overflow.
+    if (target === 'primary') {
+      restoreTabToPrimary(tabId)
+    } else {
+      doMove()
+    }
   }
 
-  saveLayout()
+  // 4. Open the drawer if requested. Skip if the drawer is already open
+  // or the user is closing it.
+  if (target === 'secondary' && opts.open && !_secondarySidebarOpen) {
+    openSecondarySidebar()
+  }
+
+  // 5. Save (debounced via persistLayout).
+  if (opts.save) {
+    persistLayout()
+  }
+}
+
+/**
+ * Phase 4 (finding #1): one-line wrapper around applyAssignment with the
+ * defaults for a user-initiated context-menu move. Kept as a stable public
+ * API — any caller (current or future) that just wants "move this tab to
+ * that sidebar" doesn't need to know about the options.
+ */
+function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
+  return applyAssignment(tabId, sidebar, { open: true, switchActive: true, save: true })
 }
 
 // Guard against React reclaiming moved tab nodes.
@@ -831,43 +1053,81 @@ function installNodeGuard(container: Node) {
 }
 
 /**
- * Move a tab's root element into the secondary sidebar's content area.
- * The removeChild guard blocks React from reclaiming the node.
+ * Phase 4 (finding #1): pure DOM move — moves a tab's root element between
+ * sidebars WITHOUT touching state, buttons, save, or open/close. The policy
+ * layer (applyAssignment) wraps this with the side effects.
+ *
+ * Returns true on success, false if the tab or target container is missing.
+ * The original parent is tracked in the centralized _originalParents
+ * WeakMap (replacing the per-node __sidebarUxOriginalParent property).
  */
-function repositionTabToSecondary(tabId: string) {
+function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean {
   const tabs = getDrawerTabs()
   const tab = tabs.find(t => t.id === tabId)
-  if (!tab || !tab.root) {
-    console.warn(`[SidebarUX] repositionTabToSecondary: tab not found for id=${tabId}`)
-    return
+  if (!tab?.root) {
+    dwarn(`repositionTab: tab not found for id=${tabId}`)
+    return false
   }
 
-  const secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
-  if (!secondaryContent) {
-    console.warn('[SidebarUX] repositionTabToSecondary: no secondary content area')
-    return
+  if (target === 'secondary') {
+    const secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
+    if (!secondaryContent) {
+      dwarn('repositionTab: no secondary content area')
+      return false
+    }
+    // Install the React node guard on the main panel content so React can't
+    // reclaim the moved node. installNodeGuard is idempotent.
+    const mainContent = getMainPanelContent()
+    if (mainContent) installNodeGuard(mainContent)
+    // Save the original parent in the WeakMap (only if not already recorded
+    // — a tab moved twice should keep its first original parent so the
+    // second restore still finds the right target).
+    if (!_originalParents.has(tab.root)) {
+      _originalParents.set(tab.root, tab.root.parentElement as HTMLElement)
+    }
+    if (tab.root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(tab.root)
+    }
+    tab.root.style.setProperty('width', '100%', 'important')
+    tab.root.style.setProperty('height', '100%', 'important')
+    tab.root.style.setProperty('display', '', 'important')
+    return true
+  } else {
+    // target === 'primary' — restore from secondary back to the original
+    // parent in the main sidebar. If the recorded parent has been detached
+    // (React re-mounted the tab while it was in secondary), fall back to
+    // the current main panel content so the tab is still reachable.
+    const orig = _originalParents.get(tab.root)
+    const targetEl = (orig && orig.isConnected) ? orig : getMainPanelContent()
+    if (!targetEl) {
+      dlog(`repositionTab: no original parent and no main panel content for tabId=${tabId} — tab will be detached`)
+      return false
+    }
+    if (tab.root.parentElement !== targetEl) {
+      targetEl.appendChild(tab.root)
+    }
+    // Clear the WeakMap entry — the tab is back home, no need to remember
+    // the original parent. The next move-to-secondary will record the
+    // (possibly new) parent again.
+    _originalParents.delete(tab.root)
+    return true
   }
-
-  // Install node guards on the original container so React can't reclaim this node
-  const mainContent = getMainPanelContent()
-  if (mainContent) {
-    installNodeGuard(mainContent)
-  }
-
-  // Save original parent for restoration
-  if (!(tab.root as any).__sidebarUxOriginalParent) {
-    (tab.root as any).__sidebarUxOriginalParent = tab.root.parentElement
-  }
-
-  // Append to secondary sidebar content area (appendChild implicitly removes from previous parent)
-  // Skip if already in the correct location
-  if (tab.root.parentElement !== secondaryContent) {
-    secondaryContent.appendChild(tab.root)
-  }
-  tab.root.style.setProperty('width', '100%', 'important')
-  tab.root.style.setProperty('height', '100%', 'important')
-  tab.root.style.setProperty('display', '', 'important')
 }
+
+/**
+ * @deprecated Use repositionTab(tabId, 'secondary') instead. Kept as a
+ * thin wrapper for callers that haven't been migrated yet.
+ */
+function repositionTabToSecondary(tabId: string) {
+  repositionTab(tabId, 'secondary')
+}
+
+// Phase 4 (finding #2): state tracking which secondary tab is currently
+// visible in the secondary panel content area. Updated by showSecondaryTab.
+// Used by restoreTabToPrimary to fall through to a neighbor tab when the
+// active secondary tab is moved back to primary, preventing the "ghost tab"
+// (header still showing the moved tab's name with an empty body).
+let _activeSecondaryTabId: string | null = null
 
 /**
  * Restore a tab's root element to its original parent in the primary sidebar.
@@ -892,21 +1152,68 @@ function restoreTabToPrimary(tabId: string) {
     _savedStyles.delete(tab.root)
   }
 
-  // Explicitly remove from secondary panel content if still attached there
-  // (prevents ghost elements when restore to original parent fails or is stale)
-  if (tab.root.parentElement) {
-    tab.root.parentElement.removeChild(tab.root)
-  }
+  // Phase 4 (finding #2): use the centralized repositionTab which now also
+  // handles the WeakMap-based original parent tracking. Falls back to
+  // getMainPanelContent() if the original parent was detached.
+  repositionTab(tabId, 'primary')
 
-  // Restore to original parent
-  const originalParent = (tab.root as any).__sidebarUxOriginalParent as HTMLElement | null
-  if (originalParent && originalParent.isConnected) {
-    originalParent.appendChild(tab.root)
+  // Phase 4 (finding #2): if the restored tab was the active secondary tab,
+  // fall through to a neighbor so the secondary panel doesn't end up
+  // showing the moved tab's name in an empty content area.
+  if (_activeSecondaryTabId === tabId) {
+    // Find the next visible secondary tab in the assignment list, skipping
+    // the one we just moved. Iterate _tabAssignments in insertion order to
+    // keep a stable "next" pick.
+    let neighborId: string | null = null
+    for (const [tid, side] of _tabAssignments) {
+      if (side === 'secondary' && tid !== tabId) {
+        neighborId = tid
+        break
+      }
+    }
+    if (neighborId) {
+      dlog(`restoreTabToPrimary: falling through to neighbor tab ${neighborId}`)
+      showSecondaryTab(neighborId)
+    } else {
+      dlog('restoreTabToPrimary: no neighbor tab in secondary; clearing panel header')
+      clearSecondaryTab()
+    }
   }
-  delete (tab.root as any).__sidebarUxOriginalParent
 
   // Restore overflow on ancestors
   restoreOverflow(tab.root)
+}
+
+/**
+ * Phase 4 (finding #2): hide the secondary panel header and content when
+ * no tab is assigned. Used by restoreTabToPrimary when the last secondary
+ * tab is moved out. Mirrors the empty-state behavior of Lumiverse's
+ * main drawer when no tab is active.
+ */
+function clearSecondaryTab() {
+  const title = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
+  if (title) title.textContent = ''
+  const allBtns = _secondaryWrapper?.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]') as NodeListOf<HTMLElement>
+  if (allBtns) {
+    for (const btn of allBtns) {
+      btn.classList.remove('sidebar-ux-tab-active')
+      btn.style.color = ''
+      btn.style.background = ''
+      btn.style.boxShadow = ''
+      btn.style.borderRadius = ''
+      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
+      if (label) label.style.color = ''
+    }
+  }
+  // Hide all tab roots in the panel content
+  for (const [, sidebar] of _tabAssignments) {
+    if (sidebar !== 'secondary') continue
+    const tabs = getDrawerTabs()
+    for (const t of tabs) {
+      if (t.root) t.root.style.setProperty('display', 'none', 'important')
+    }
+  }
+  _activeSecondaryTabId = null
 }
 
 /**
@@ -950,33 +1257,56 @@ function showMainTabButton(tabId: string) {
 function findMainTabButton(tabId: string): Element | null {
   const sidebar = getMainSidebar()
   if (!sidebar) {
-    console.warn('[SidebarUX] findMainTabButton: no sidebar found')
-    return null
-  }
-  // Tab buttons after .tabDivider are extension tabs
-  // Match by title from the store (dt.title), not tabId
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  const title = tab?.title
-  if (!title) {
-    console.warn(`[SidebarUX] findMainTabButton: no tab found for id="${tabId}", tabs=`, tabs.map(t => ({ id: t.id, title: t.title })))
+    dwarn('findMainTabButton: no sidebar found')
     return null
   }
 
-  const buttons = sidebar.querySelectorAll('button')
-  for (const btn of buttons) {
-    const btnTitle = btn.getAttribute('title')
-    if (btnTitle === title) return btn
+  // Fast path: id-based match via data-tab-id (set by tagMainSidebarButtons).
+  // This is the canonical match — stable across title changes, translations,
+  // and version-suffix drift. Skips the store lookup entirely.
+  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`)
+  if (byId) return byId
+
+  // Fallback: title-based match via the store. Used only when the button
+  // hasn't been tagged yet (very brief window after mount) or when a stale
+  // tabId is being looked up.
+  const tabs = getDrawerTabs()
+  const tab = tabs.find(t => t.id === tabId)
+  if (!tab) {
+    dwarn(`findMainTabButton: no tab in store for id="${tabId}", known tabs=`, tabs.map(t => ({ id: t.id, title: t.title })))
+    return null
   }
-  console.warn(`[SidebarUX] findMainTabButton: no button with title="${title}" found among ${buttons.length} buttons`)
+
+  const buttons = sidebar.querySelectorAll('button[title]')
+  for (const btn of buttons) {
+    if (btn.getAttribute('title') === tab.title) {
+      // Backfill data-tab-id so future lookups hit the fast path.
+      btn.setAttribute('data-tab-id', tab.id)
+      return btn
+    }
+  }
+  dwarn(`findMainTabButton: no button for id="${tabId}" (title="${tab.title}") found among ${buttons.length} buttons`)
   return null
+}
+
+/**
+ * Escape a string for safe inclusion inside a CSS attribute selector value.
+ * CSS.escape() exists in all modern browsers but the type isn't always
+ * available in TS lib.dom depending on target. This is a minimal escape for
+ * the characters that can actually appear in our tabIds.
+ */
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return value.replace(/(["\\])/g, '\\$1')
 }
 
 function addSecondaryTabButton(tab: { id: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }) {
   const tabList = _secondaryWrapper?.querySelector('.sidebar-ux-tab-list')
   if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
   const showLabels = isShowTabLabels()
-  console.log(`[SidebarUX] addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
+  dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
 
   const btn = document.createElement('button')
   btn.setAttribute('data-tab-id', tab.id)
@@ -1040,7 +1370,7 @@ function addSecondaryTabButton(tab: { id: string; title: string; shortName?: str
   btn.addEventListener('mouseenter', () => {
     btn.style.background = 'var(--lumiverse-primary-015)'
     btn.style.color = 'var(--lumiverse-text)'
-    console.log(`[SidebarUX] mouseenter: tab=${tab.id} btn.style.color=var(--lumiverse-text)`)
+    dlog(`mouseenter: tab=${tab.id} btn.style.color=var(--lumiverse-text)`)
   })
   btn.addEventListener('mouseleave', () => {
     // Restore label color (label has its own color rule, unaffected by parent hover)
@@ -1055,7 +1385,7 @@ function addSecondaryTabButton(tab: { id: string; title: string; shortName?: str
       btn.style.boxShadow = `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary)`
       btn.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
     }
-    console.log(`[SidebarUX] mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`)
+    dlog(`mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`)
   })
   btn.addEventListener('click', () => {
     if (!_secondarySidebarOpen) openSecondarySidebar()
@@ -1083,6 +1413,11 @@ function updateDrawerTabVisibility() {
 }
 
 function showSecondaryTab(tabId: string) {
+  // Phase 4 (finding #2): record which tab is now the active secondary tab.
+  // restoreTabToPrimary reads this to decide whether to fall through to a
+  // neighbor when the active tab is moved out.
+  _activeSecondaryTabId = tabId
+
   const secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
   // Show the requested tab, hide others
   for (const [tid, sidebar] of _tabAssignments) {
@@ -1129,7 +1464,7 @@ function showSecondaryTab(tabId: string) {
       if (label) {
         label.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
       }
-      console.log(`[SidebarUX] showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
+      dlog(`showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
     }
   }
 }
@@ -1418,53 +1753,106 @@ function mountResizeHandles() {
 function persistMainWidth(vw: number) {
   // The Zustand store snapshot doesn't expose setSetting (that's on the store API).
   // Persist via our own layout storage instead.
-  saveLayout()
+  persistLayout()
 }
 
 function persistSecondaryWidth(vw: number) {
-  saveLayout()
+  persistLayout()
 }
 
 // --- Backend Persistence ---
 
 let _backendCtx: any = null
 
-// Debounce timer for saveLayout
+// Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
 
-function saveLayout() {
-  if (!_backendCtx) return
+/**
+ * Build the current layout snapshot from in-memory state. Pure — no side effects.
+ */
+function snapshotLayout(): any {
+  return {
+    primary: {
+      open: isMainDrawerOpen(),
+      width: getMainDrawerWidth(),
+    },
+    secondary: {
+      open: _secondarySidebarOpen,
+      width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
+    },
+    detachedTabs: Array.from(_tabAssignments.entries())
+      .filter(([_, side]) => side === 'secondary')
+      .map(([tabId, side]) => {
+        const tabs = getDrawerTabs()
+        const tab = tabs.find(t => t.id === tabId)
+        return { tabId, tabTitle: tab?.title || tabId, sidebar: side }
+      }),
+  }
+}
 
-  // Debounce: wait 500ms after last change before persisting
+/**
+ * Persist the drawer's open/closed state + width synchronously. No debounce —
+ * called from openSecondarySidebar / closeSecondarySidebar / the resize handle,
+ * so a user opening then immediately closing the drawer (within the 500ms
+ * debounce window of persistLayout) still records the final state. The
+ * verification case from the plan: "open, immediately close within 100ms —
+ * final state on hard-refresh is closed."
+ */
+function persistOpenState(): void {
+  if (!_backendCtx) return
+  if (_saveLayoutTimer !== null) {
+    // A debounced persistLayout is in flight; cancel it so we don't double-write.
+    clearTimeout(_saveLayoutTimer)
+    _saveLayoutTimer = null
+  }
+  _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
+}
+
+/**
+ * Persist the tab-assignment list + drawer width, debounced 500ms. Called
+ * from assignTab and from the resize handle (the width change is frequent
+ * during drag; the debounce coalesces to a single write at drag end).
+ */
+function persistLayout(): void {
+  if (!_backendCtx) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
-    const layout = {
-      primary: {
-        open: isMainDrawerOpen(),
-        width: getMainDrawerWidth(),
-      },
-      secondary: {
-        open: _secondarySidebarOpen,
-        width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
-      },
-      detachedTabs: Array.from(_tabAssignments.entries())
-        .filter(([_, side]) => side === 'secondary')
-        .map(([tabId, side]) => {
-          const tabs = getDrawerTabs()
-          const tab = tabs.find(t => t.id === tabId)
-          return { tabId, tabTitle: tab?.title || tabId, sidebar: side }
-        }),
-    }
-    _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+    _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
   }, 500)
 }
 
-function loadSavedLayout() {
-  if (!_backendCtx) return
-  _backendCtx.sendToBackend({ type: 'LOAD_LAYOUT' })
+/**
+ * @deprecated Use persistOpenState() for open/close events and persistLayout()
+ * for tab-assignment / width changes. Kept as a single-call alias for any
+ * code path that genuinely needs to save the whole layout synchronously.
+ */
+function saveLayout() {
+  persistLayout()
+}
+
+function loadSavedLayout(): Promise<any> {
+  if (!_backendCtx) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    // Phase 3 (finding #13): register a one-shot handler that resolves the
+    // promise when LAYOUT_DATA arrives. The handler is replaced by the
+    // permanent ctx.onBackendMessage listener in setup() before any other
+    // LAYOUT_DATA could come through.
+    const handler = (payload: any) => {
+      if (payload.type === 'LAYOUT_DATA') {
+        resolve(payload.layout)
+      }
+    }
+    _backendCtx.onBackendMessage(handler)
+    _backendCtx.sendToBackend({ type: 'LOAD_LAYOUT' })
+    // Safety timeout: if the backend never responds (e.g. corrupt storage),
+    // resolve with null so the mount proceeds with defaults rather than
+    // hanging the extension. 2s is enough for the file I/O round-trip on
+    // a warm cache; longer waits mask real bugs.
+    setTimeout(() => resolve(null), 2000)
+  })
 }
 
 function applyLayout(layout: any) {
@@ -1473,43 +1861,129 @@ function applyLayout(layout: any) {
   // Restore secondary sidebar width
   if (layout.secondary?.width) {
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${layout.secondary.width}px`)
-    // Sync wrapper transform to the new width — fixes hard-refresh bleed when
-    // createSecondarySidebar was called before applyLayout (CSS var was empty at
-    // wrapper creation, so the wrapper got the 420 fallback transform and the
-    // drawer's tab list column was visible at the right edge of the viewport).
-    // Guard: only sync if the secondary is currently closed (open state keeps
-    // translateX(0), which is correct). _secondaryWrapper may be null in a race
-    // with the backend response; createSecondarySidebar will use the correct
-    // width on its own init.
+    // Phase 3 (finding #13): createSecondarySidebar already initialized the
+    // wrapper transform with the right width on mount (see the options
+    // parameter). No animateWrapper call needed here — that would re-trigger
+    // the close animation and cause a flicker. The conditional animateWrapper
+    // below is kept as a safety net for the case where applyLayout is called
+    // without a prior mountSecondarySidebar(layout) (e.g. from a future
+    // "reload layout" debug action that runs after setup).
     if (_secondaryWrapper && !_secondarySidebarOpen) {
-      animateWrapper(layout.secondary.width)
+      const currentTransform = _secondaryWrapper.style.transform?.match(/-?[\d.]+/)?.[0]
+      if (currentTransform !== String(layout.secondary.width)) {
+        animateWrapper(layout.secondary.width)
+      }
     }
   }
 
   // Restore tab assignments
   if (layout.detachedTabs?.length) {
-    // Wait for extension tabs to register, then restore
+    // Wait for extension tabs to register, then restore.
+    // Phase 2: match by stable tabId only. Title fallback was removed because
+    // tabTitle can drift across sessions (e.g. "LumiBooks" → "LumiBooks v2")
+    // and was the source of the "Hone / Prompt Inspector unreliable" symptom.
+    // If a stored tabId is no longer in the store (extension uninstalled or
+    // id schema changed), we warn and skip — the user can clean up via the
+    // future "reset layout" action.
+    //
+    // Phase 3 (finding #5): polling loop now calls the lighter restore path
+    // (set state + update buttons + DOM move) directly, NOT assignTab. This
+    // avoids the policy-layer side effects: assignTab would call
+    // switchMainDrawerToFallback (which manipulates the main drawer that's
+    // already in its saved state) and persistLayout (we just LOADED this
+    // layout, no need to write it back).
+    //
+    // Phase 4.0 (suffix-drift fallback): Lumiverse assigns a session-variant
+    // suffix (`:1`, `:2`, `:3`) to extension tab ids in the order they're
+    // registered. The suffix in the live DOM is NOT the same as the one in
+    // layout.json after a session restart — e.g. layout says
+    // `prompt-viewer:2` but live is `prompt-viewer:1`. An exact-match-only
+    // restore leaves the user with empty secondary panels after a restart.
+    // Fix: if an exact match fails, strip the last `:N` from both the stored
+    // id and each live id, and match by the stripped prefix. If exactly one
+    // live id matches, use it AND rewrite the stored id in the in-memory
+    // layout (so the next persistLayout write self-heals). If multiple live
+    // ids match, the stripped prefix is too coarse — warn and skip.
+    const stripSuffix = (id: string): string => {
+      const lastColon = id.lastIndexOf(':')
+      if (lastColon <= 0) return id
+      const tail = id.slice(lastColon + 1)
+      return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
+    }
     let attempts = 0
     const interval = setInterval(() => {
       attempts++
       const tabs = getDrawerTabs()
-      for (const dt of layout.detachedTabs) {
+      for (let i = 0; i < layout.detachedTabs.length; i++) {
+        const dt = layout.detachedTabs[i]
         if (_tabAssignments.has(dt.tabId)) continue
-        // Match by tabId first, then fall back to title from store
-        const tab = tabs.find(t => t.id === dt.tabId || t.title === dt.tabTitle)
+        // Try exact match first
+        let tab = tabs.find(t => t.id === dt.tabId)
+        let usedFallback = false
+        if (!tab) {
+          // Exact match missed — try stripped-suffix match
+          const storedPrefix = stripSuffix(dt.tabId)
+          const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
+          if (candidates.length === 1) {
+            tab = candidates[0]
+            usedFallback = true
+            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`)
+            // Self-heal: rewrite the in-memory layout so the next persistLayout
+            // call stores the live id. No additional save here — the rewrite
+            // only takes effect when the user makes another change that
+            // triggers persistLayout (open/close, move another tab, etc.).
+            layout.detachedTabs[i] = { ...dt, tabId: tab.id }
+          } else if (candidates.length > 1) {
+            // Ambiguous — multiple live tabs share this stripped prefix.
+            // This shouldn't happen in practice (the prefix includes the
+            // extension uuid), but log defensively.
+            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`)
+          }
+        }
         if (tab) {
-          assignTab(tab.id, 'secondary')
+          // Lightweight restore: state + button affordances + DOM move.
+          // No save (we just loaded). No open/close cascade (mount handled it).
+          _tabAssignments.set(tab.id, 'secondary')
+          hideMainTabButton(tab.id)
+          addSecondaryTabButton(tab)
+          updateDrawerTabVisibility()
+          repositionTabToSecondary(tab.id)
+        } else if (!usedFallback) {
+          // Once we've tried a few times and the id is still missing, surface
+          // a visible warning. The first few attempts may simply be racing
+          // the store's tab registration.
+          if (attempts === 5) {
+            const knownIds = tabs.map(t => t.id)
+            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store (and no suffix-drift match). Known ids: ${knownIds.join(', ')}. Layout may be stale.`)
+          }
         }
       }
       if (attempts > 20 || layout.detachedTabs.every((dt: any) => _tabAssignments.has(dt.tabId))) {
         clearInterval(interval)
-        // After all tabs are restored, apply the saved open/closed state.
-        // assignTab no longer auto-opens the drawer (Solution C: open is the
-        // user's job). If the user had the drawer open when they last closed
-        // the browser, restore that state here.
-        if (layout.secondary?.open && !_secondarySidebarOpen) {
+        // Phase 4 (finding #2): if at least one tab was restored, pick the
+        // first one as the active secondary tab. Without this, the
+        // secondary panel header stays empty when the user opens the
+        // drawer (showSecondaryTab was never called from the lightweight
+        // restore path to avoid double-animating the active tab).
+        // The first-tab pick is a reasonable default — the user can click
+        // any tab button to switch. Future work: persist the active
+        // secondary tab id in layout.json so we restore the exact one.
+        const restored = layout.detachedTabs.find((dt: any) => _tabAssignments.has(dt.tabId))
+        if (restored) {
+          showSecondaryTab(restored.tabId)
+        }
+        // Phase 3 (finding #5): the end-of-interval open/close block is gone.
+        // The drawer's open/closed state was set at mount time via the
+        // initialOpen option on createSecondarySidebar, so by the time we get
+        // here the wrapper is already in the correct position. This is the
+        // "fully open from the first paint" requirement.
+        //
+        // Safety net kept for the case where applyLayout is called WITHOUT a
+        // prior mountSecondarySidebar(layout) — e.g. a future "reload layout"
+        // debug action that re-applies after a session tweak.
+        if (layout.secondary?.open === true && !_secondarySidebarOpen) {
           openSecondarySidebar()
-        } else if (layout.secondary && layout.secondary.open === false && _secondarySidebarOpen) {
+        } else if (layout.secondary?.open === false && _secondarySidebarOpen) {
           closeSecondarySidebar()
         }
       }
@@ -1664,16 +2138,23 @@ function startTabRegistrationWatcher() {
   let previousTabIds = new Set<string>()
 
   const check = () => {
+    // Re-tag any main sidebar buttons that weren't tagged on the first pass.
+    // This catches the case where the store's drawerTabs array was still
+    // being populated when tagMainSidebarButtons() first ran from the
+    // MutationObserver — the watcher's 3s poll gives the store time to
+    // settle.
+    tagMainSidebarButtons()
+
     const currentTabs = getDrawerTabs()
     const currentIds = new Set(currentTabs.map(t => t.id))
 
     // Check for removed tabs
     for (const oldId of previousTabIds) {
       if (!currentIds.has(oldId) && _tabAssignments.has(oldId)) {
-        console.log(`[SidebarUX] Extension tab ${oldId} was removed, cleaning up`)
+        dlog(`Extension tab ${oldId} was removed, cleaning up`)
         _tabAssignments.delete(oldId)
         removeSecondaryTabButton(oldId)
-        saveLayout()
+        persistLayout()
       }
     }
 
@@ -1753,23 +2234,45 @@ export function setup(ctx: any) {
     console.log('Done')
   }
 
-  // Mount secondary sidebar
-  mountSecondarySidebar()
+  // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
+  // secondary sidebar so its initial position matches the saved state on the
+  // first paint — no 68px sliver, no 500ms flicker. The previous order
+  // (mount first, then load + applyLayout) caused a race where the wrapper
+  // was at translateX(420px) for one frame before applyLayout re-animated it.
+  loadSavedLayout().then((layout) => {
+    const initialWidth = layout?.secondary?.width
+    const initialOpen = layout?.secondary?.open === true
 
-  // Start features
-  startReflowObserver()
-  mountResizeHandles()
-  startContextMenuListener()
-  startSideChangeWatcher()
-  startTabRegistrationWatcher()
+    // Mount with the saved initial state. If layout is null (corrupt storage,
+    // safety timeout fired, first-ever run), mount with defaults.
+    mountSecondarySidebar({ initialWidth, initialOpen })
 
-  // Load persisted layout
-  ctx.onBackendMessage((payload: any) => {
-    if (payload.type === 'LAYOUT_DATA') {
-      applyLayout(payload.layout)
+    // Start features — observers, listeners, watchers
+    startReflowObserver()
+    mountResizeHandles()
+    startContextMenuListener()
+    startSideChangeWatcher()
+    startTabRegistrationWatcher()
+
+    // Apply the rest of the layout (tab assignments + width delta if any).
+    // applyLayout is now safe to call after mount: it won't double-animate
+    // the wrapper (the width-restore guard checks currentTransform), and
+    // the polling loop uses the lightweight restore path (state + buttons
+    // + DOM move) instead of assignTab.
+    if (layout) {
+      applyLayout(layout)
     }
   })
-  loadSavedLayout()
+
+  // Register the permanent backend message handler for any future LAYOUT_DATA
+  // (the one-shot handler in loadSavedLayout resolved and detached, but
+  // ctx.onBackendMessage implementations typically accumulate handlers, so
+  // this is just a no-op safety belt).
+  ctx.onBackendMessage((payload: any) => {
+    if (payload.type === 'LAYOUT_DATA') {
+      dlog('setup: late LAYOUT_DATA received after initial load — ignoring (already applied)')
+    }
+  })
 
   // Return teardown — called when extension is disabled
   return cleanupAll
