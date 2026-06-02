@@ -2291,10 +2291,20 @@ function startTabRegistrationWatcher() {
   registerCleanup(() => clearInterval(interval))
 }
 
+// --- Slash Runtime ---
+
+import { attachSlashRuntime } from './slash/runtime'
+
 // --- Setup ---
 
 export function setup(ctx: any) {
   _backendCtx = ctx
+
+  // Slash runtime — wired into the canvas cleanup chain so the intercept
+  // listeners are detached when the extension is disabled. Full parsing,
+  // dispatch, and toast surface land in later Phase 2 tasks.
+  const detachSlash = attachSlashRuntime(ctx)
+  registerCleanup(detachSlash)
 
   // Global debug function — call from browser console: window.__sidebarUxDebug()
   ;(window as any).__sidebarUxDebug = function() {
