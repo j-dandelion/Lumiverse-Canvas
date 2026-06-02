@@ -1,4 +1,3 @@
-// In-memory command registry. Single Canvas instance.
 import type { SlashCommandDef } from './types'
 
 export class CommandRegistry {
@@ -6,7 +5,13 @@ export class CommandRegistry {
 
   register(command: SlashCommandDef): () => void {
     this.commands.set(command.name, command)
-    return () => this.commands.delete(command.name)
+    return () => {
+      // Only unregister if the current entry is the one we registered.
+      // Avoids race where a newer registration is silently removed.
+      if (this.commands.get(command.name) === command) {
+        this.commands.delete(command.name)
+      }
+    }
   }
 
   lookup(name: string): SlashCommandDef | undefined {
@@ -17,5 +22,9 @@ export class CommandRegistry {
     return Array.from(this.commands.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     )
+  }
+
+  clear(): void {
+    this.commands.clear()
   }
 }
