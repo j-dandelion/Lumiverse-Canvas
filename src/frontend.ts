@@ -1,16 +1,12 @@
+import { mergeCanvasSettings, type CanvasSettings } from './types'
+
 // --- Debug Logging ---
 // Background-event logs go through dlog()/dwarn(), which are no-ops when
-// DEBUG is false. To enable verbose logging in the running extension:
-//
-//   localStorage.setItem('sidebarUxDebug', '1');   // then hard-refresh
-//   localStorage.removeItem('sidebarUxDebug');     // to turn it off
-//
-// Note: in some sandboxed/iframe contexts, `localStorage` access throws a
-// SecurityError. The try/catch below treats that as "DEBUG off" — the safe
-// default. The user-invoked `window.__sidebarUxDebug()` escape hatch
-// (defined in setup()) intentionally uses console.log directly; it's a
-// deliberate console escape hatch, not background noise.
-const DEBUG: boolean = (() => {
+// DEBUG is false. The flag is now driven by the user-facing settings panel
+// (`CanvasSettings.debugMode`); the legacy `localStorage.sidebarUxDebug`
+// shim is kept as a read-only fallback so an old tab without a hydrated
+// settings state still respects the previous escape hatch.
+let DEBUG: boolean = (() => {
   try {
     return localStorage.getItem('sidebarUxDebug') === '1'
   } catch {
@@ -21,13 +17,212 @@ const DEBUG: boolean = (() => {
 function dlog(...args: unknown[]): void {
   if (!DEBUG) return
   // eslint-disable-next-line no-console
-  console.log('[SidebarUX]', ...args)
+  console.log('[Canvas]', ...args)
 }
 
 function dwarn(...args: unknown[]): void {
   if (!DEBUG) return
   // eslint-disable-next-line no-console
-  console.warn('[SidebarUX]', ...args)
+  console.warn('[Canvas]', ...args)
+}
+
+// --- Settings (Canvas user preferences) ---
+//
+// Every user-togglable Canvas behavior reads from `_settings` instead of a
+// hard-coded constant. `_settings` is hydrated in `setup()` from the layout
+// blob (with defaults filled in by `mergeCanvasSettings`), and updated at
+// runtime via `setSettings()` from the settings panel. `applySettings()`
+// is the single live-update entry point — it diffs the previous and next
+// state and mounts/unmounts the relevant features.
+type FullCanvasSettings = Required<CanvasSettings>
+let _settings: FullCanvasSettings = mergeCanvasSettings(null)
+// Reference to the most recently loaded layout snapshot, used by
+// applySettings to re-apply tab assignments after a master toggle re-creates
+// the secondary wrapper.
+let _lastLoadedLayout: any = null
+// Persist debounce timer (separate from _saveLayoutTimer so a settings flip
+// doesn't race with an in-flight open/close save).
+let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Update one or more settings, persist the new state, and live-apply the diff.
+ * Safe to call from the settings panel on every toggle change.
+ */
+function setSettings(patch: Partial<CanvasSettings>): void {
+  const prev = _settings
+  const next: FullCanvasSettings = { ...prev }
+  for (const key of Object.keys(patch) as Array<keyof CanvasSettings>) {
+    const v = patch[key]
+    if (v !== undefined) (next as any)[key] = v
+  }
+  _settings = next
+  // Update the in-memory DEBUG flag immediately — applySettings also does
+  // this, but we want dlog() calls inside the same tick to see the new value.
+  DEBUG = next.debugMode
+  applySettings(prev, next)
+  refreshSettingsPanel()
+  persistSettings()
+}
+
+/**
+ * Diff previous and next settings, applying live effects for any that
+ * changed. Idempotent: calling with prev === next is a no-op.
+ */
+function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void {
+  // 1. Debug mode — flip the global flag and install/uninstall the escape hatch.
+  if (prev.debugMode !== next.debugMode) {
+    DEBUG = next.debugMode
+    if (next.debugMode) {
+      installDebugEscapeHatch()
+    } else {
+      delete (window as any).__canvasDebug
+    }
+  }
+
+  // 2. Chat reflow — toggle the injected style block + recompute margins.
+  if (prev.chatReflow !== next.chatReflow) {
+    if (next.chatReflow) {
+      injectReflowStyles()
+      updateChatReflow()
+    } else {
+      const el = document.getElementById('sidebar-ux-reflow')
+      if (el) el.remove()
+      // Clear any leftover chat margins so columns stop being pushed.
+      const chat = getChatColumn()
+      if (chat) {
+        chat.style.removeProperty('--sidebar-ux-chat-ml')
+        chat.style.removeProperty('--sidebar-ux-chat-mr')
+      }
+    }
+  }
+
+  // 3. Second Sidebar master — mount/unmount the wrapper + restore layout.
+  if (prev.secondSidebarEnabled !== next.secondSidebarEnabled) {
+    if (next.secondSidebarEnabled) {
+      if (!_secondaryWrapper) {
+        const initialWidth = _lastLoadedLayout?.secondary?.width
+        const initialOpen = _lastLoadedLayout?.secondary?.open === true
+        mountSecondarySidebar({ initialWidth, initialOpen })
+        if (_lastLoadedLayout) applyLayout(_lastLoadedLayout)
+      }
+    } else {
+      tearDownSecondarySidebar()
+    }
+  }
+
+  // 4. Resize handles — both drawers, single toggle.
+  if (prev.resizeSidebars !== next.resizeSidebars) {
+    refreshResizeHandles()
+  }
+
+  // 5. Auto-mirror on side swap — start/stop the side watcher.
+  if (prev.autoMirrorOnSideSwap !== next.autoMirrorOnSideSwap) {
+    if (next.autoMirrorOnSideSwap) {
+      startSideChangeWatcher()
+    } else {
+      stopSideChangeWatcher()
+    }
+  }
+
+  // 6. Mirror compact position — re-sync after a flip.
+  if (prev.mirrorCompactPosition !== next.mirrorCompactPosition) {
+    if (next.mirrorCompactPosition) {
+      syncDrawerTabSettings()
+    } else {
+      const drawerTab = _secondaryWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
+      if (drawerTab) {
+        drawerTab.style.marginTop = ''
+        _lastKnownVerticalPos = null
+        _lastKnownCompact = null
+      }
+    }
+  }
+
+  // 7. Tab labels — re-sync secondary tab button labels.
+  if (prev.showTabLabels !== next.showTabLabels) {
+    syncSecondaryTabLabels()
+  }
+
+  // 8. Consistent icon size — toggle the CSS rule.
+  if (prev.consistentIconSize !== next.consistentIconSize) {
+    if (!next.consistentIconSize) {
+      const el = document.getElementById('sidebar-ux-drawer-tab-styles')
+      if (el) el.remove()
+    } else {
+      injectDrawerTabStyles()
+    }
+  }
+
+  // 9. Smooth transitions — toggle the chat-column transition rule.
+  if (prev.smoothTransitions !== next.smoothTransitions) {
+    const reflow = document.getElementById('sidebar-ux-reflow')
+    if (reflow) {
+      reflow.textContent = next.smoothTransitions
+        ? `
+          [class*="_chatColumn_"] {
+            margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
+            margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
+            transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+          }
+        `
+        : `
+          [class*="_chatColumn_"] {
+            margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
+            margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
+            transition: none !important;
+          }
+        `
+    }
+  }
+
+  // 10. Settings that don't need live effects (apply on next reload):
+  //   - layoutPersistence: read by persistLayout/persistOpenState
+  //   - autoCleanupOnUninstall: read by startTabRegistrationWatcher's check
+  // The settings panel re-renders to reflect the new value, and the next
+  // mount/load cycle reads the updated value from _settings.
+}
+
+/** Debounced persistence of the current settings (merged into the layout blob). */
+function persistSettings(): void {
+  if (!_backendCtx) return
+  if (_saveSettingsTimer !== null) {
+    clearTimeout(_saveSettingsTimer)
+  }
+  _saveSettingsTimer = setTimeout(() => {
+    _saveSettingsTimer = null
+    // Persist via the same SAVE_LAYOUT IPC; the settings field rides on the
+    // existing layout blob. The other layout fields (primary, secondary,
+    // detachedTabs) come from snapshotLayout() so we don't drop them.
+    const layout = { ...snapshotLayout(), settings: _settings }
+    _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+  }, 300)
+}
+
+/**
+ * Tear down the secondary sidebar wrapper, restoring every assigned tab to
+ * the primary drawer first so we don't leak DOM nodes. Used by the master
+ * toggle's "off" path. Does NOT touch the layout blob — that's a separate
+ * decision (the user may flip the master back on and want the layout back).
+ */
+function tearDownSecondarySidebar(): void {
+  if (_secondaryWrapper) {
+    for (const [tabId] of Array.from(_tabAssignments)) {
+      restoreTabToPrimary(tabId)
+      showMainTabButton(tabId)
+    }
+    _secondaryWrapper.remove()
+    _secondaryWrapper = null
+  }
+  _secondarySidebarOpen = false
+  // Drop any in-flight resize handle bound to the wrapper, so a re-mount
+  // creates a fresh one.
+  const handles = document.querySelectorAll('.sidebar-ux-resize-handle')
+  for (const h of Array.from(handles)) {
+    if (h.parentElement && h.parentElement.classList.contains('sidebar-ux-drawer')) {
+      h.remove()
+    }
+  }
+  updateChatReflow()
 }
 
 // --- DOM Helpers ---
@@ -310,9 +505,12 @@ const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
 const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
 
-/** Read showTabLabels from the store snapshot or main sidebar DOM. */
+/** Read showTabLabels, honoring the user's Canvas override. */
 function isShowTabLabels(): boolean {
-  // Try store snapshot first
+  const mode = _settings.showTabLabels
+  if (mode === 'show') return true
+  if (mode === 'hide') return false
+  // 'follow' (default) — read from the store snapshot or main sidebar DOM.
   const store = getStoreSnapshot()
   if (store && typeof (store as any).drawerSettings === 'object' && (store as any).drawerSettings !== null) {
     return !!(store as any).drawerSettings.showTabLabels
@@ -1732,12 +1930,25 @@ function hideContextMenu() {
   }
 }
 
+// Context menu listener state — tracked for idempotent start/stop.
+let _contextMenuListenersActive = false
+let _contextMenuHandlers: {
+  sidebarCtx: ((e: Event) => void) | null
+  sidebarEl: HTMLElement | null
+  docCtxCapture: ((e: Event) => void) | null
+  docClick: ((e: Event) => void) | null
+  docScroll: ((e: Event) => void) | null
+  docKey: ((e: KeyboardEvent) => void) | null
+} = { sidebarCtx: null, sidebarEl: null, docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
+
 function startContextMenuListener() {
+  if (_contextMenuListenersActive) return
   const sidebar = getMainSidebar()
   if (!sidebar) return
 
-  sidebar.addEventListener('contextmenu', (e) => {
-    const target = e.target as HTMLElement
+  const sidebarCtx = (e: Event) => {
+    const evt = e as MouseEvent
+    const target = evt.target as HTMLElement
     const tabBtn = target.closest('button[title]') as HTMLElement
     if (!tabBtn) return
 
@@ -1756,29 +1967,44 @@ function startContextMenuListener() {
     const matchedTab = tabs.find(t => t.title === title)
     const tabId = matchedTab?.id || title
 
-    showAssignmentMenu(e.clientX, e.clientY, tabId, title)
-  })
-
+    showAssignmentMenu(evt.clientX, evt.clientY, tabId, title)
+  }
   // Capture-phase contextmenu listener: when ANY new contextmenu fires
   // (Lumiverse's shared ContextMenu opening on a built-in tab, canvas's
   // own sidebar handler opening on a different extension tab, or the
   // browser's default menu on empty space), close the canvas menu first.
   // This enforces the same single-menu invariant that Lumiverse's
-  // shared ContextMenu enforces via its module-level openMenus registry
-  // (~/Lumiverse/frontend/src/components/shared/ContextMenu.tsx:52,
-  // 68-78). Canvas doesn't have access to that registry from outside,
-  // so it uses a capture-phase document listener as a proxy. The new
-  // menu is created in the bubble phase (or by Lumiverse's handler),
-  // after the canvas menu is removed — no overlap.
-  document.addEventListener('contextmenu', () => {
+  // shared ContextMenu enforces via its module-level openMenus registry.
+  const docCtxCapture = () => {
     if (_contextMenu) hideContextMenu()
-  }, true)
-
-  document.addEventListener('click', hideContextMenu)
-  document.addEventListener('scroll', hideContextMenu, true)
-  document.addEventListener('keydown', (e) => {
+  }
+  const docClick = () => hideContextMenu()
+  const docScroll = () => hideContextMenu()
+  const docKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') hideContextMenu()
-  })
+  }
+
+  sidebar.addEventListener('contextmenu', sidebarCtx)
+  document.addEventListener('contextmenu', docCtxCapture, true)
+  document.addEventListener('click', docClick)
+  document.addEventListener('scroll', docScroll, true)
+  document.addEventListener('keydown', docKey)
+
+  _contextMenuHandlers = { sidebarCtx, sidebarEl: sidebar, docCtxCapture, docClick, docScroll, docKey }
+  _contextMenuListenersActive = true
+}
+
+function stopContextMenuListener() {
+  if (!_contextMenuListenersActive) return
+  const h = _contextMenuHandlers
+  if (h.sidebarEl && h.sidebarCtx) h.sidebarEl.removeEventListener('contextmenu', h.sidebarCtx)
+  if (h.docCtxCapture) document.removeEventListener('contextmenu', h.docCtxCapture, true)
+  if (h.docClick) document.removeEventListener('click', h.docClick)
+  if (h.docScroll) document.removeEventListener('scroll', h.docScroll, true)
+  if (h.docKey) document.removeEventListener('keydown', h.docKey)
+  _contextMenuHandlers = { sidebarCtx: null, sidebarEl: null, docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
+  _contextMenuListenersActive = false
+  hideContextMenu()
 }
 
 // --- Drag-to-Resize ---
@@ -1957,6 +2183,47 @@ function persistSecondaryWidth(vw: number) {
   persistLayout()
 }
 
+/**
+ * Re-evaluate resize handles against the current `resizeSidebars` setting.
+ * Mounts both handles (main + secondary) when on, removes both when off.
+ * Idempotent — re-mounts skip if the handle is already present, removes are
+ * a no-op if the handle is gone.
+ *
+ * Called from applySettings when `resizeSidebars` changes. Initial mount in
+ * setup() goes through the same path so the live update and the cold-start
+ * path produce identical DOM.
+ */
+function refreshResizeHandles() {
+  if (isMobile()) return // mobile never gets handles
+
+  // Main handle
+  const mainDrawer = getMainDrawer()
+  const existingMain = mainDrawer?.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null
+  if (_settings.resizeSidebars) {
+    if (mainDrawer && !existingMain) {
+      mountResizeHandles() // idempotent on the main handle
+    }
+  } else {
+    if (existingMain) existingMain.remove()
+  }
+
+  // Secondary handle
+  const secondaryDrawer = _secondaryWrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
+  const existingSecondary = secondaryDrawer?.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null
+  if (_settings.resizeSidebars) {
+    if (secondaryDrawer && !existingSecondary) {
+      mountResizeHandles() // idempotent on the secondary handle
+    }
+  } else {
+    if (existingSecondary) existingSecondary.remove()
+  }
+}
+
+/** Gate: returns true when the user wants layout persistence. */
+function isPersistenceEnabled(): boolean {
+  return _settings.layoutPersistence
+}
+
 // --- Backend Persistence ---
 
 let _backendCtx: any = null
@@ -1997,6 +2264,7 @@ function snapshotLayout(): any {
  */
 function persistOpenState(): void {
   if (!_backendCtx) return
+  if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
@@ -2012,6 +2280,7 @@ function persistOpenState(): void {
  */
 function persistLayout(): void {
   if (!_backendCtx) return
+  if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
@@ -2355,19 +2624,25 @@ function restoreSecondaryTabButtons() {
 let _sideCheckInterval: ReturnType<typeof setInterval> | null = null
 
 function startSideChangeWatcher() {
+  if (_sideCheckInterval !== null) return // already running
   _lastKnownSide = getMainDrawerSide()
   _sideCheckInterval = setInterval(checkSideChanged, 2000)
-  registerCleanup(() => {
-    if (_sideCheckInterval !== null) {
-      clearInterval(_sideCheckInterval)
-      _sideCheckInterval = null
-    }
-  })
+  registerCleanup(() => stopSideChangeWatcher())
+}
+
+function stopSideChangeWatcher() {
+  if (_sideCheckInterval === null) return
+  clearInterval(_sideCheckInterval)
+  _sideCheckInterval = null
 }
 
 // Tab registration watcher (handles extension unregistration)
+let _tabRegInterval: ReturnType<typeof setInterval> | null = null
+let _tabRegPrevIds: Set<string> = new Set()
+
 function startTabRegistrationWatcher() {
-  let previousTabIds = new Set<string>()
+  if (_tabRegInterval !== null) return // already running
+  _tabRegPrevIds = new Set<string>()
 
   const check = () => {
     // Re-tag any main sidebar buttons that weren't tagged on the first pass.
@@ -2380,41 +2655,511 @@ function startTabRegistrationWatcher() {
     const currentTabs = getDrawerTabs()
     const currentIds = new Set(currentTabs.map(t => t.id))
 
-    // Check for removed tabs
-    for (const oldId of previousTabIds) {
-      if (!currentIds.has(oldId) && _tabAssignments.has(oldId)) {
-        dlog(`Extension tab ${oldId} was removed, cleaning up`)
-        _tabAssignments.delete(oldId)
-        removeSecondaryTabButton(oldId)
-        persistLayout()
+    // Check for removed tabs (only when auto-cleanup is enabled).
+    if (_settings.autoCleanupOnUninstall) {
+      for (const oldId of _tabRegPrevIds) {
+        if (!currentIds.has(oldId) && _tabAssignments.has(oldId)) {
+          dlog(`Extension tab ${oldId} was removed, cleaning up`)
+          _tabAssignments.delete(oldId)
+          removeSecondaryTabButton(oldId)
+          persistLayout()
+        }
       }
     }
 
-    previousTabIds = currentIds
+    _tabRegPrevIds = currentIds
   }
 
-  const interval = setInterval(check, 3000)
-  registerCleanup(() => clearInterval(interval))
+  _tabRegInterval = setInterval(check, 3000)
+  registerCleanup(() => stopTabRegistrationWatcher())
+}
+
+function stopTabRegistrationWatcher() {
+  if (_tabRegInterval === null) return
+  clearInterval(_tabRegInterval)
+  _tabRegInterval = null
 }
 
 // --- Slash Runtime ---
 
 import { attachSlashRuntime } from './slash/runtime'
 
-// --- Setup ---
+// --- Settings Panel ---
 
-export function setup(ctx: any) {
-  _backendCtx = ctx
+// CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
+// Lumiverse's own CSS modules. The class definitions are injected once
+// when the panel is first built.
+const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
+function injectPanelStyles() {
+  if (document.getElementById(PANEL_STYLE_ID)) return
+  const style = document.createElement('style')
+  style.id = PANEL_STYLE_ID
+  style.textContent = `
+    .sidebar-ux-panel-root {
+      font-family: var(--lumiverse-font-family, sans-serif);
+      color: var(--lumiverse-text);
+      padding: 4px 0 24px;
+    }
+    .sidebar-ux-panel-header {
+      padding: 4px 0 12px;
+      margin: 0;
+    }
+    .sidebar-ux-panel-header-title {
+      margin: 0;
+      font-size: calc(18px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-panel-section {
+      margin-top: 18px;
+    }
+    .sidebar-ux-panel-section-title {
+      margin: 0 0 8px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--lumiverse-text-muted);
+    }
+    .sidebar-ux-panel-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 8px;
+      background: var(--lumiverse-bg-050);
+      margin-bottom: 6px;
+      transition: opacity 0.15s ease;
+    }
+    .sidebar-ux-panel-row-disabled {
+      opacity: 0.45;
+    }
+    .sidebar-ux-panel-row-text { flex: 1; min-width: 0; }
+    .sidebar-ux-panel-row-label {
+      font-size: calc(13px * var(--lumiverse-font-scale, 1));
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-panel-row-hint {
+      margin-top: 2px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.35;
+      color: var(--lumiverse-text-muted);
+    }
+    .sidebar-ux-panel-toggle {
+      flex-shrink: 0;
+      position: relative;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--lumiverse-fill-strong, rgba(0,0,0,0.3));
+      border: 1px solid var(--lumiverse-border);
+      cursor: pointer;
+      padding: 0;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .sidebar-ux-panel-toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--lumiverse-text);
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .sidebar-ux-panel-toggle-on {
+      background: var(--lumiverse-primary);
+      border-color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-toggle-on .sidebar-ux-panel-toggle-knob {
+      transform: translateX(16px);
+      background: white;
+    }
+    .sidebar-ux-panel-toggle:focus-visible {
+      outline: 2px solid var(--lumiverse-primary);
+      outline-offset: 2px;
+    }
+    .sidebar-ux-panel-segmented {
+      display: inline-flex;
+      flex-shrink: 0;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--lumiverse-fill, rgba(0,0,0,0.15));
+    }
+    .sidebar-ux-panel-segmented-btn {
+      padding: 4px 10px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      font-family: inherit;
+      color: var(--lumiverse-text-muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .sidebar-ux-panel-segmented-btn:not(:last-child) {
+      border-right: 1px solid var(--lumiverse-border);
+    }
+    .sidebar-ux-panel-segmented-btn-active {
+      background: var(--lumiverse-primary);
+      color: white;
+    }
+    .sidebar-ux-panel-footer {
+      margin-top: 18px;
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      color: var(--lumiverse-text-dim);
+      text-align: center;
+    }
+  `
+  document.head.appendChild(style)
+}
 
-  // Slash runtime — wired into the canvas cleanup chain so the intercept
-  // listeners are detached when the extension is disabled. Full parsing,
-  // dispatch, and toast surface land in later Phase 2 tasks.
-  const detachSlash = attachSlashRuntime(ctx)
-  registerCleanup(detachSlash)
+/**
+ * Render a single setting row. `control` is the right-hand element
+ * (toggle button, segmented control, etc.) — caller builds it.
+ */
+function buildSettingRow(args: {
+  label: string
+  hint?: string
+  control: HTMLElement
+  disabled?: boolean
+}): HTMLElement {
+  const row = document.createElement('div')
+  row.className = 'sidebar-ux-panel-row'
+  if (args.disabled) row.classList.add('sidebar-ux-panel-row-disabled')
 
-  // Global debug function — call from browser console: window.__sidebarUxDebug()
-  ;(window as any).__sidebarUxDebug = function() {
-    console.log('=== SidebarUX Fiber Scan ===')
+  const text = document.createElement('div')
+  text.className = 'sidebar-ux-panel-row-text'
+  const label = document.createElement('div')
+  label.className = 'sidebar-ux-panel-row-label'
+  label.textContent = args.label
+  text.appendChild(label)
+  if (args.hint) {
+    const hint = document.createElement('div')
+    hint.className = 'sidebar-ux-panel-row-hint'
+    hint.textContent = args.hint
+    text.appendChild(hint)
+  }
+
+  row.appendChild(text)
+  row.appendChild(args.control)
+  return row
+}
+
+/** Build a CSS-only toggle switch matching Lumiverse's Toggle.Switch look. */
+function buildToggleControl(value: boolean, onChange: (next: boolean) => void, disabled?: () => boolean): HTMLElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'sidebar-ux-panel-toggle' + (value ? ' sidebar-ux-panel-toggle-on' : '')
+  btn.setAttribute('role', 'switch')
+  btn.setAttribute('aria-checked', String(value))
+  const knob = document.createElement('span')
+  knob.className = 'sidebar-ux-panel-toggle-knob'
+  btn.appendChild(knob)
+  btn.addEventListener('click', () => {
+    if (disabled && disabled()) return
+    onChange(!value)
+  })
+  return btn
+}
+
+/** Build a 3-button segmented control (Follow / Show / Hide). */
+function buildShowLabelsControl(value: 'follow' | 'show' | 'hide', onChange: (next: 'follow' | 'show' | 'hide') => void): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'sidebar-ux-panel-segmented'
+  const opts: Array<{ value: 'follow' | 'show' | 'hide'; label: string }> = [
+    { value: 'follow', label: 'Follow' },
+    { value: 'show', label: 'Show' },
+    { value: 'hide', label: 'Hide' },
+  ]
+  for (const o of opts) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'sidebar-ux-panel-segmented-btn' + (value === o.value ? ' sidebar-ux-panel-segmented-btn-active' : '')
+    btn.textContent = o.label
+    btn.addEventListener('click', () => onChange(o.value))
+    wrap.appendChild(btn)
+  }
+  return wrap
+}
+
+/**
+ * Build the Canvas settings panel DOM. Pure — caller appends to a host.
+ * The panel re-renders its visual state in-place via `refreshPanel` after
+ * each `setSettings` call, so the toggles always reflect the current
+ * `_settings` value.
+ */
+function buildSettingsPanelDOM(): HTMLElement {
+  injectPanelStyles()
+
+  const root = document.createElement('div')
+  root.className = 'sidebar-ux-panel-root'
+
+  // --- Header ---
+  const header = document.createElement('div')
+  header.className = 'sidebar-ux-panel-header'
+  const headerTitle = document.createElement('h2')
+  headerTitle.className = 'sidebar-ux-panel-header-title'
+  headerTitle.textContent = 'Canvas - Enhanced UI'
+  header.appendChild(headerTitle)
+  root.appendChild(header)
+
+  // Each toggle is a small object that knows how to refresh its own visual
+  // state. The buildToggleControl factory returns a button; the caller
+  // wraps it in this helper to track it for re-rendering.
+  const makeToggle = (
+    getValue: () => boolean,
+    setValue: (next: boolean) => void,
+    opts: { disabled?: () => boolean } = {}
+  ): { btn: HTMLButtonElement; refresh: () => void } => {
+    const btn = buildToggleControl(getValue(), (next) => setValue(next), opts.disabled)
+    const refresh = () => {
+      const v = getValue()
+      btn.classList.toggle('sidebar-ux-panel-toggle-on', v)
+      btn.setAttribute('aria-checked', String(v))
+    }
+    return { btn, refresh }
+  }
+
+  // Section helper
+  const section = (title: string) => {
+    const sec = document.createElement('div')
+    sec.className = 'sidebar-ux-panel-section'
+    const h = document.createElement('h4')
+    h.className = 'sidebar-ux-panel-section-title'
+    h.textContent = title
+    sec.appendChild(h)
+    return sec
+  }
+
+  // --- Section: Chat & Layout (now at the top) ---
+  const sec1 = section('Chat & Layout')
+
+  const chat = makeToggle(
+    () => _settings.chatReflow,
+    (v) => setSettings({ chatReflow: v })
+  )
+  sec1.appendChild(buildSettingRow({
+    label: 'Center the chat in the visible area',
+    hint: 'Shifts the chat column by the open-drawer widths so neither sidebar covers it.',
+    control: chat.btn,
+  }))
+
+  const persist = makeToggle(
+    () => _settings.layoutPersistence,
+    (v) => setSettings({ layoutPersistence: v })
+  )
+  sec1.appendChild(buildSettingRow({
+    label: 'Remember layout across sessions',
+    hint: 'Persists open/closed state, widths, and tab assignments to layout.json.',
+    control: persist.btn,
+  }))
+
+  const smooth = makeToggle(
+    () => _settings.smoothTransitions,
+    (v) => setSettings({ smoothTransitions: v })
+  )
+  sec1.appendChild(buildSettingRow({
+    label: 'Smooth transitions',
+    hint: 'Animates drawer open/close and the chat margin transition.',
+    control: smooth.btn,
+  }))
+
+  // --- Section: Second Sidebar ---
+  const sec2 = section('Second Sidebar')
+
+  const master = makeToggle(
+    () => _settings.secondSidebarEnabled,
+    (v) => setSettings({ secondSidebarEnabled: v })
+  )
+  sec2.appendChild(buildSettingRow({
+    label: 'Enable Second Sidebar',
+    hint: 'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.',
+    control: master.btn,
+  }))
+
+  const resizeSidebars = makeToggle(
+    () => _settings.resizeSidebars,
+    (v) => setSettings({ resizeSidebars: v }),
+    { disabled: () => !_settings.secondSidebarEnabled }
+  )
+  sec2.appendChild(buildSettingRow({
+    label: 'Drag to resize sidebars',
+    hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
+    control: resizeSidebars.btn,
+    disabled: !_settings.secondSidebarEnabled,
+  }))
+
+  const mirror = makeToggle(
+    () => _settings.autoMirrorOnSideSwap,
+    (v) => setSettings({ autoMirrorOnSideSwap: v }),
+    { disabled: () => !_settings.secondSidebarEnabled }
+  )
+  sec2.appendChild(buildSettingRow({
+    label: 'Auto-mirror when the main sidebar switches side',
+    hint: 'Rebuilds the secondary drawer on the opposite edge when the user moves the main one.',
+    control: mirror.btn,
+    disabled: !_settings.secondSidebarEnabled,
+  }))
+
+  const compact = makeToggle(
+    () => _settings.mirrorCompactPosition,
+    (v) => setSettings({ mirrorCompactPosition: v }),
+    { disabled: () => !_settings.secondSidebarEnabled }
+  )
+  sec2.appendChild(buildSettingRow({
+    label: 'Mirror compact mode + vertical position',
+    hint: "Matches the main drawer's compact/vertical tab position on the secondary drawer.",
+    control: compact.btn,
+    disabled: !_settings.secondSidebarEnabled,
+  }))
+
+  // Tab labels — tri-state segmented control. We keep a reference so refresh
+  // can rebuild the inner buttons (a segmented control needs DOM
+  // replacement when the active value changes, since each button carries
+  // its own click handler bound to the current value).
+  let showLabelsWrap: HTMLElement
+  let showLabelsRow: HTMLElement
+  const buildShowLabelsSeg = () => buildShowLabelsControl(
+    _settings.showTabLabels,
+    (v) => setSettings({ showTabLabels: v })
+  )
+  showLabelsWrap = buildShowLabelsSeg()
+  showLabelsRow = buildSettingRow({
+    label: 'Tab labels in the second sidebar',
+    hint: "\"Follow\" mirrors Lumiverse's main sidebar setting. \"Show\" / \"Hide\" override it.",
+    control: showLabelsWrap,
+    disabled: !_settings.secondSidebarEnabled,
+  })
+  sec2.appendChild(showLabelsRow)
+
+  const iconSize = makeToggle(
+    () => _settings.consistentIconSize,
+    (v) => setSettings({ consistentIconSize: v })
+  )
+  sec2.appendChild(buildSettingRow({
+    label: 'Force 20×20 icon size on tab buttons',
+    hint: 'Fixes tabs that ship icons without intrinsic dimensions (some extensions render at 0×0 by default).',
+    control: iconSize.btn,
+  }))
+
+  // --- Section: Behavior ---
+  const sec3 = section('Behavior')
+
+  const cleanup = makeToggle(
+    () => _settings.autoCleanupOnUninstall,
+    (v) => setSettings({ autoCleanupOnUninstall: v })
+  )
+  sec3.appendChild(buildSettingRow({
+    label: 'Auto-cleanup when an extension is uninstalled',
+    hint: 'Removes the tab from the secondary sidebar if its source extension disappears.',
+    control: cleanup.btn,
+  }))
+
+  // --- Section: Debug ---
+  const sec4 = section('Debug')
+
+  const debugMode = makeToggle(
+    () => _settings.debugMode,
+    (v) => setSettings({ debugMode: v })
+  )
+  sec4.appendChild(buildSettingRow({
+    label: 'Debug mode',
+    hint: 'Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.',
+    control: debugMode.btn,
+  }))
+
+  // Footer
+  const footer = document.createElement('div')
+  footer.className = 'sidebar-ux-panel-footer'
+  footer.textContent = 'Canvas settings persist to layout.json (300ms debounce).'
+
+  root.appendChild(sec1)
+  root.appendChild(sec2)
+  root.appendChild(sec3)
+  root.appendChild(sec4)
+  root.appendChild(footer)
+
+  // Live-update wiring: setSettings calls this via the module-level
+  // __canvasPanelRefresh hook so we don't have to thread the refresh
+  // closure through every toggle's onChange.
+  ;(window as any).__canvasPanelRefresh = () => {
+    master.refresh()
+    resizeSidebars.refresh()
+    mirror.refresh()
+    compact.refresh()
+    iconSize.refresh()
+    chat.refresh()
+    persist.refresh()
+    smooth.refresh()
+    cleanup.refresh()
+    debugMode.refresh()
+    // Update disabled visual state for sub-features gated by the master toggle.
+    for (const row of [resizeSidebars, mirror, compact]) {
+      const d = !_settings.secondSidebarEnabled
+      row.btn.disabled = d
+      row.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      ;(row.btn.parentElement as HTMLElement)?.classList.toggle('sidebar-ux-panel-row-disabled', d)
+    }
+    showLabelsRow.classList.toggle('sidebar-ux-panel-row-disabled', !_settings.secondSidebarEnabled)
+    // Rebuild the showTabLabels segmented control (each button captures the
+    // current value in its handler).
+    const newSeg = buildShowLabelsSeg()
+    showLabelsWrap.replaceWith(newSeg)
+    showLabelsWrap = newSeg
+  }
+
+  return root
+}
+
+/**
+ * Mount the Canvas settings panel into Lumiverse's per-extension settings
+ * host (`[data-spindle-mount="settings_extensions"]`). Called from setup()
+ * once the ctx is available. The host is managed by the Spindle loader's
+ * mount API; we just append our DOM to the root it returns.
+ */
+function mountSettingsPanel(ctx: any) {
+  try {
+    if (!ctx?.ui?.mount) {
+      dwarn('mountSettingsPanel: ctx.ui.mount unavailable; settings panel will not be registered')
+      return
+    }
+    const host = ctx.ui.mount('settings_extensions')
+    if (!host) return
+    // Clear any previous render so a re-mount (e.g. after extension reload)
+    // doesn't stack panels.
+    host.replaceChildren()
+    host.appendChild(buildSettingsPanelDOM())
+    dlog('Settings panel mounted into data-spindle-mount="settings_extensions"')
+  } catch (err) {
+    console.error('[Canvas] mountSettingsPanel failed:', err)
+  }
+}
+
+/**
+ * Refresh the settings panel UI in-place after a settings change. Public so
+ * setSettings can call it via the __canvasPanelRefresh window hook.
+ */
+function refreshSettingsPanel() {
+  const fn = (window as any).__canvasPanelRefresh
+  if (typeof fn === 'function') fn()
+}
+
+/**
+ * Install `window.__canvasDebug()` — a console-invokable function that
+ * scans the React fiber tree from the main sidebar to find the Zustand
+ * store's drawerTabs / drawerOpen state. Pure debug aid; intentionally
+ * unminified and console.log-heavy. The user can toggle it from the
+ * Canvas settings panel.
+ */
+function installDebugEscapeHatch() {
+  ;(window as any).__canvasDebug = function() {
+    console.log('=== Canvas Fiber Scan ===')
 
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]')
     if (!sidebar) { console.log('No sidebar found'); return }
@@ -2475,33 +3220,71 @@ export function setup(ctx: any) {
     }
     console.log('Done')
   }
+}
+
+// --- Setup ---
+
+export function setup(ctx: any) {
+  _backendCtx = ctx
+
+  // Mount the settings panel immediately. The host may not be in the DOM yet
+  // (the user hasn't opened Settings → Extensions), but ctx.ui.mount sets up
+  // a MutationObserver that reparents the host as soon as it appears.
+  mountSettingsPanel(ctx)
+
+  // Slash runtime — wired into the canvas cleanup chain so the intercept
+  // listeners are detached when the extension is disabled.
+  const detachSlash = attachSlashRuntime(ctx)
+  registerCleanup(detachSlash)
 
   // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
   // secondary sidebar so its initial position matches the saved state on the
-  // first paint — no 68px sliver, no 500ms flicker. The previous order
-  // (mount first, then load + applyLayout) caused a race where the wrapper
-  // was at translateX(420px) for one frame before applyLayout re-animated it.
+  // first paint — no 68px sliver, no 500ms flicker. We also hydrate the
+  // settings from the same blob so every feature mount downstream sees the
+  // correct gate.
   loadSavedLayout().then((layout) => {
+    // Hydrate settings from the loaded layout (defaults filled by mergeCanvasSettings).
+    _settings = mergeCanvasSettings(layout?.settings)
+    DEBUG = _settings.debugMode
+    _lastLoadedLayout = layout
+
+    if (_settings.debugMode) installDebugEscapeHatch()
+
     const initialWidth = layout?.secondary?.width
     const initialOpen = layout?.secondary?.open === true
 
-    // Mount with the saved initial state. If layout is null (corrupt storage,
-    // safety timeout fired, first-ever run), mount with defaults.
-    mountSecondarySidebar({ initialWidth, initialOpen })
-
-    // Start features — observers, listeners, watchers
-    startReflowObserver()
-    mountResizeHandles()
+    // Mount features gated by settings. The master toggle is the only one
+    // that gates other mounts; sub-features are gated at their own mount
+    // sites so a future change to add a non-master-gated sub-feature is
+    // a one-liner.
+    if (_settings.secondSidebarEnabled) {
+      mountSecondarySidebar({ initialWidth, initialOpen })
+    }
+    if (_settings.chatReflow) {
+      startReflowObserver()
+    }
+    if (_settings.resizeSidebars) {
+      mountResizeHandles()
+    }
+    if (_settings.autoMirrorOnSideSwap) {
+      startSideChangeWatcher()
+    }
+    if (_settings.autoCleanupOnUninstall) {
+      startTabRegistrationWatcher()
+    }
+    // Context menu is always on for now (no panel toggle). Could become a
+    // setting later if requested.
     startContextMenuListener()
-    startSideChangeWatcher()
-    startTabRegistrationWatcher()
+
+    // Always inject the consistent-icon-size CSS if it's enabled — it
+    // doesn't need a wrapper to apply.
+    if (_settings.consistentIconSize) {
+      injectDrawerTabStyles()
+    }
 
     // Apply the rest of the layout (tab assignments + width delta if any).
-    // applyLayout is now safe to call after mount: it won't double-animate
-    // the wrapper (the width-restore guard checks currentTransform), and
-    // the polling loop uses the lightweight restore path (state + buttons
-    // + DOM move) instead of assignTab.
-    if (layout) {
+    // Safe to call after mount: it won't double-animate the wrapper.
+    if (layout && _settings.secondSidebarEnabled) {
       applyLayout(layout)
     }
   })

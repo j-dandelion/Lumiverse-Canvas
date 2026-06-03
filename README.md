@@ -22,7 +22,6 @@ __Work in progress.__ Current focus: easier multitasking and more convenient con
 - Advanced theme options (exposes controls for custom sizing/layout of chat message elements and a bunch of other CSS variables) with presets
 - Tweaks for mobile UI (help me think of some!)
 
-
 ## Screenshots
 <img width="1919" height="929" alt="Screenshot From 2026-06-01 03-06-37" src="https://github.com/user-attachments/assets/69822f12-3c55-453e-8538-2bf502477202" />
 <img width="1919" height="929" alt="Screenshot From 2026-06-01 03-07-18" src="https://github.com/user-attachments/assets/78fd76a9-6b8f-4a8e-bff5-dd2886656b5f" />

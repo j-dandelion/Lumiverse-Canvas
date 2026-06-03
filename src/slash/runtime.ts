@@ -2,7 +2,7 @@ import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { CommandRegistry } from './registry'
 import { installIntercept } from './intercept'
 import { makeHelpCommand } from './builtin-help'
-import { makeSelectCommand } from './commands/select'
+import { makeSelectCommands } from './commands/select'
 import { showSuggest, hideSuggest } from './suggest'
 import { dispatchCommand } from './dispatch'
 import { mountToastSurface } from './toast'
@@ -30,7 +30,9 @@ function isSlashCommandDef(x: unknown): x is SlashCommandDef {
 export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   const registry = new CommandRegistry()
   registry.register(makeHelpCommand(registry))
-  registry.register(makeSelectCommand())
+  for (const cmd of makeSelectCommands()) {
+    registry.register(cmd)
+  }
 
   // Track cleanup functions returned by registry.register so we can invoke
   // them on `canvas:slash-unregister` (mid-session command removal). Map

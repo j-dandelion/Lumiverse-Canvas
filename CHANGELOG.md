@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.0 — 2026-06-03
+
+### Added
+- Per-feature settings panel. Every user-togglable behavior in Canvas is
+  now exposed as a switch in a dedicated panel mounted into Lumiverse's
+  per-extension settings host (`[data-spindle-mount="settings_extensions"]`).
+  10 features are individually toggleable; the second-sidebar master
+  switch gates 4 sub-features visually.
+- `CanvasSettings` interface and `mergeCanvasSettings` helper in
+  `src/types.ts`. Settings ride on the existing `LayoutState` blob and
+  persist via the same `SAVE_LAYOUT` IPC — no new storage key, no
+  new permissions on `spindle.json`.
+- Live update path: every setting has a corresponding handler in
+  `applySettings()` so changes apply without a reload. The most visible
+  one — the second-sidebar master toggle — mounts/unmounts the wrapper
+  in place and restores the saved tab assignments.
+- Debug-mode toggle consolidates the old `localStorage.sidebarUxDebug`
+  hack and the `window.__sidebarUxDebug()` escape hatch into a single
+  panel switch. Window function renamed to `window.__canvasDebug()` and
+  console prefix to `[Canvas]`.
+
+### Changed
+- `dist/frontend.js` is 77.7 KB → 74.5 KB after field consolidation
+  (combined the per-drawer resize toggles and the debug toggles into
+  single switches).
+- Panel header is now a flat inline title — no bordered box.
+
 ## v1.3.0 — 2026-06-03
 
 ### Fixed
