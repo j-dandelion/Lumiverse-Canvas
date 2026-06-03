@@ -1,4 +1,3 @@
-import { mergeCanvasSettings, type CanvasSettings } from './types'
 import {
   getMainSidebar,
   getMainDrawer,
@@ -22,63 +21,29 @@ import {
 } from './sidebar/secondary'
 import { isMobile, createResizeHandle, mountResizeHandles, refreshResizeHandles, persistMainWidth, persistSecondaryWidth } from './resize/handles'
 import { isShowTabLabels, syncDrawerTabSettings, syncSecondaryTabLabels, checkSideChanged, restoreSecondaryTabButtons, startSideChangeWatcher, stopSideChangeWatcher, startTabRegistrationWatcher, stopTabRegistrationWatcher, clearDrawerTabLayoutCache } from './sidebar/polish'
+import { getSettings, setSettings, setLastLoadedLayout, getLastLoadedLayout, setPanelRefresh, refreshSettingsPanel, hydrateSettings, type FullCanvasSettings } from './settings/state'
 
 // --- Debug Logging ---
 // See src/debug/log.ts for the dlog/dwarn/DEBUG implementation.
 // This section is intentionally a stub after Step 2 of the decomposition.
 
 // --- Settings (Canvas user preferences) ---
-//
-// Every user-togglable Canvas behavior reads from `_settings` instead of a
-// hard-coded constant. `_settings` is hydrated in `setup()` from the layout
-// blob (with defaults filled in by `mergeCanvasSettings`), and updated at
-// runtime via `setSettings()` from the settings panel. `applySettings()`
-// is the single live-update entry point — it diffs the previous and next
-// state and mounts/unmounts the relevant features.
-type FullCanvasSettings = Required<CanvasSettings>
-let _settings: FullCanvasSettings = mergeCanvasSettings(null)
-// Reference to the most recently loaded layout snapshot, used by
-// applySettings to re-apply tab assignments after a master toggle re-creates
-// the secondary wrapper.
-let _lastLoadedLayout: any = null
-// Persist debounce timer (separate from _saveLayoutTimer so a settings flip
-// doesn't race with an in-flight open/close save).
-let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
 
-/**
- * Update one or more settings, persist the new state, and live-apply the diff.
- * Safe to call from the settings panel on every toggle change.
- */
-function setSettings(patch: Partial<CanvasSettings>): void {
-  const prev = _settings
-  const next: FullCanvasSettings = { ...prev }
-  for (const key of Object.keys(patch) as Array<keyof CanvasSettings>) {
-    const v = patch[key]
-    if (v !== undefined) (next as any)[key] = v
-  }
-  _settings = next
-  // Update the in-memory DEBUG flag immediately — applySettings also does
-  // this, but we want dlog() calls inside the same tick to see the new value.
-  setDebug(next.debugMode)
-  applySettings(prev, next)
-  refreshSettingsPanel()
-  persistSettings()
-}
-
-// Accessors (Step 0) — to be exported when settings/state.ts is extracted.
-export function getSettings(): FullCanvasSettings { return _settings }
-export function setLastLoadedLayout(layout: any): void { _lastLoadedLayout = layout }
-export function getLastLoadedLayout(): any { return _lastLoadedLayout }
-
-// Panel refresh registry (Step 0) — replaces window.__canvasPanelRefresh indirection.
-let _panelRefresh: (() => void) | null = null
-export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh = fn }
+// All settings state + accessors + setSettings + persistSettings +
+// hydrateSettings live in src/settings/state.ts (Step 1 of the decomposition).
+// This section is intentionally empty after Step 1. The setSettings transient
+// re-exports (getSettings, setLastLoadedLayout, getLastLoadedLayout,
+// setPanelRefresh) are imported at the top of this file. applySettings
+// (the diff/live-apply dispatcher) stays here until Task #2 extracts the
+// settings panel.
 
 /**
  * Diff previous and next settings, applying live effects for any that
  * changed. Idempotent: calling with prev === next is a no-op.
  */
-function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void {
+// FIXME-decomp(step 2): applySettings will live in settings/panel.ts. Until
+// then, settings/state.ts imports it as a transient.
+export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void {
   // 1. Debug mode — flip the global flag and install/uninstall the escape hatch.
   if (prev.debugMode !== next.debugMode) {
     setDebug(next.debugMode)
@@ -188,24 +153,7 @@ function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void
   //   - layoutPersistence: read by persistLayout/persistOpenState
   //   - autoCleanupOnUninstall: read by startTabRegistrationWatcher's check
   // The settings panel re-renders to reflect the new value, and the next
-  // mount/load cycle reads the updated value from _settings.
-}
-
-/** Debounced persistence of the current settings (merged into the layout blob). */
-function persistSettings(): void {
-  const backendCtx = getBackendCtx()
-  if (!backendCtx) return
-  if (_saveSettingsTimer !== null) {
-    clearTimeout(_saveSettingsTimer)
-  }
-  _saveSettingsTimer = setTimeout(() => {
-    _saveSettingsTimer = null
-    // Persist via the same SAVE_LAYOUT IPC; the settings field rides on the
-    // existing layout blob. The other layout fields (primary, secondary,
-    // detachedTabs) come from snapshotLayout() so we don't drop them.
-    const layout = { ...snapshotLayout(), settings: _settings }
-    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
-  }, 300)
+  // mount/load cycle reads the updated value from getSettings().
 }
 
 // --- DOM Helpers ---
@@ -549,7 +497,9 @@ export function cancelLayoutSave(): void {
 /**
  * Build the current layout snapshot from in-memory state. Pure — no side effects.
  */
-function snapshotLayout(): any {
+// FIXME-decomp(step 4): snapshotLayout will live in layout/persist.ts. Until
+// then, settings/state.ts imports it as a transient.
+export function snapshotLayout(): any {
   return {
     primary: {
       open: isMainDrawerOpen(),
@@ -1075,7 +1025,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   const sec1 = section('Chat & Layout')
 
   const chat = makeToggle(
-    () => _settings.chatReflow,
+    () => getSettings().chatReflow,
     (v) => setSettings({ chatReflow: v })
   )
   sec1.appendChild(buildSettingRow({
@@ -1085,7 +1035,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   }))
 
   const persist = makeToggle(
-    () => _settings.layoutPersistence,
+    () => getSettings().layoutPersistence,
     (v) => setSettings({ layoutPersistence: v })
   )
   sec1.appendChild(buildSettingRow({
@@ -1095,7 +1045,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   }))
 
   const smooth = makeToggle(
-    () => _settings.smoothTransitions,
+    () => getSettings().smoothTransitions,
     (v) => setSettings({ smoothTransitions: v })
   )
   sec1.appendChild(buildSettingRow({
@@ -1108,7 +1058,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   const sec2 = section('Second Sidebar')
 
   const master = makeToggle(
-    () => _settings.secondSidebarEnabled,
+    () => getSettings().secondSidebarEnabled,
     (v) => setSettings({ secondSidebarEnabled: v })
   )
   sec2.appendChild(buildSettingRow({
@@ -1118,39 +1068,39 @@ function buildSettingsPanelDOM(): HTMLElement {
   }))
 
   const resizeSidebars = makeToggle(
-    () => _settings.resizeSidebars,
+    () => getSettings().resizeSidebars,
     (v) => setSettings({ resizeSidebars: v }),
-    { disabled: () => !_settings.secondSidebarEnabled }
+    { disabled: () => !getSettings().secondSidebarEnabled }
   )
   sec2.appendChild(buildSettingRow({
     label: 'Drag to resize sidebars',
     hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
     control: resizeSidebars.btn,
-    disabled: !_settings.secondSidebarEnabled,
+    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const mirror = makeToggle(
-    () => _settings.autoMirrorOnSideSwap,
+    () => getSettings().autoMirrorOnSideSwap,
     (v) => setSettings({ autoMirrorOnSideSwap: v }),
-    { disabled: () => !_settings.secondSidebarEnabled }
+    { disabled: () => !getSettings().secondSidebarEnabled }
   )
   sec2.appendChild(buildSettingRow({
     label: 'Auto-mirror when the main sidebar switches side',
     hint: 'Rebuilds the secondary drawer on the opposite edge when the user moves the main one.',
     control: mirror.btn,
-    disabled: !_settings.secondSidebarEnabled,
+    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const compact = makeToggle(
-    () => _settings.mirrorCompactPosition,
+    () => getSettings().mirrorCompactPosition,
     (v) => setSettings({ mirrorCompactPosition: v }),
-    { disabled: () => !_settings.secondSidebarEnabled }
+    { disabled: () => !getSettings().secondSidebarEnabled }
   )
   sec2.appendChild(buildSettingRow({
     label: 'Mirror compact mode + vertical position',
     hint: "Matches the main drawer's compact/vertical tab position on the secondary drawer.",
     control: compact.btn,
-    disabled: !_settings.secondSidebarEnabled,
+    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   // Tab labels — tri-state segmented control. We keep a reference so refresh
@@ -1160,7 +1110,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   let showLabelsWrap: HTMLElement
   let showLabelsRow: HTMLElement
   const buildShowLabelsSeg = () => buildShowLabelsControl(
-    _settings.showTabLabels,
+    getSettings().showTabLabels,
     (v) => setSettings({ showTabLabels: v })
   )
   showLabelsWrap = buildShowLabelsSeg()
@@ -1168,12 +1118,12 @@ function buildSettingsPanelDOM(): HTMLElement {
     label: 'Tab labels in the second sidebar',
     hint: "\"Follow\" mirrors Lumiverse's main sidebar setting. \"Show\" / \"Hide\" override it.",
     control: showLabelsWrap,
-    disabled: !_settings.secondSidebarEnabled,
+    disabled: !getSettings().secondSidebarEnabled,
   })
   sec2.appendChild(showLabelsRow)
 
   const iconSize = makeToggle(
-    () => _settings.consistentIconSize,
+    () => getSettings().consistentIconSize,
     (v) => setSettings({ consistentIconSize: v })
   )
   sec2.appendChild(buildSettingRow({
@@ -1186,7 +1136,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   const sec3 = section('Behavior')
 
   const cleanup = makeToggle(
-    () => _settings.autoCleanupOnUninstall,
+    () => getSettings().autoCleanupOnUninstall,
     (v) => setSettings({ autoCleanupOnUninstall: v })
   )
   sec3.appendChild(buildSettingRow({
@@ -1199,7 +1149,7 @@ function buildSettingsPanelDOM(): HTMLElement {
   const sec4 = section('Debug')
 
   const debugMode = makeToggle(
-    () => _settings.debugMode,
+    () => getSettings().debugMode,
     (v) => setSettings({ debugMode: v })
   )
   sec4.appendChild(buildSettingRow({
@@ -1235,12 +1185,12 @@ function buildSettingsPanelDOM(): HTMLElement {
     debugMode.refresh()
     // Update disabled visual state for sub-features gated by the master toggle.
     for (const row of [resizeSidebars, mirror, compact]) {
-      const d = !_settings.secondSidebarEnabled
+      const d = !getSettings().secondSidebarEnabled
       row.btn.disabled = d
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       ;(row.btn.parentElement as HTMLElement)?.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    showLabelsRow.classList.toggle('sidebar-ux-panel-row-disabled', !_settings.secondSidebarEnabled)
+    showLabelsRow.classList.toggle('sidebar-ux-panel-row-disabled', !getSettings().secondSidebarEnabled)
     // Rebuild the showTabLabels segmented control (each button captures the
     // current value in its handler).
     const newSeg = buildShowLabelsSeg()
@@ -1277,14 +1227,6 @@ function mountSettingsPanel(ctx: any) {
   } catch (err) {
     console.error('[Canvas] mountSettingsPanel failed:', err)
   }
-}
-
-/**
- * Refresh the settings panel UI in-place after a settings change. Public so
- * setSettings can call it via the registered panel refresh closure.
- */
-function refreshSettingsPanel() {
-  if (_panelRefresh) _panelRefresh()
 }
 
 /**
@@ -1380,17 +1322,19 @@ export function setup(ctx: any) {
   // settings from the same blob so every feature mount downstream sees the
   // correct gate.
   loadSavedLayout().then((layout) => {
-    // Hydrate settings from the loaded layout (defaults filled by mergeCanvasSettings).
-    _settings = mergeCanvasSettings(layout?.settings)
-    setDebug(_settings.debugMode)
+    // Hydrate settings from the loaded layout (defaults filled by
+    // mergeCanvasSettings inside hydrateSettings).
+    hydrateSettings(layout?.settings)
+    setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
     // The settings panel was mounted earlier in setup() with the default
-    // _settings. Now that we've hydrated from the saved layout, re-render
+    // getSettings(). Now that we've hydrated from the saved layout, re-render
     // the panel so the toggles reflect the loaded values rather than the
-    // defaults baked in at mount time.
+    // defaults baked in at mount time. refreshSettingsPanel (in
+    // settings/state.ts) fires the closure registered by mountSettingsPanel.
     refreshSettingsPanel()
 
-    if (_settings.debugMode) installDebugEscapeHatch()
+    if (getSettings().debugMode) installDebugEscapeHatch()
 
     const initialWidth = layout?.secondary?.width
     const initialOpen = layout?.secondary?.open === true
@@ -1399,19 +1343,19 @@ export function setup(ctx: any) {
     // that gates other mounts; sub-features are gated at their own mount
     // sites so a future change to add a non-master-gated sub-feature is
     // a one-liner.
-    if (_settings.secondSidebarEnabled) {
+    if (getSettings().secondSidebarEnabled) {
       mountSecondarySidebar({ initialWidth, initialOpen })
     }
-    if (_settings.chatReflow) {
+    if (getSettings().chatReflow) {
       startReflowObserver()
     }
-    if (_settings.resizeSidebars) {
+    if (getSettings().resizeSidebars) {
       mountResizeHandles()
     }
-    if (_settings.autoMirrorOnSideSwap) {
+    if (getSettings().autoMirrorOnSideSwap) {
       startSideChangeWatcher()
     }
-    if (_settings.autoCleanupOnUninstall) {
+    if (getSettings().autoCleanupOnUninstall) {
       startTabRegistrationWatcher()
     }
     // Context menu is always on for now (no panel toggle). Could become a
@@ -1420,13 +1364,13 @@ export function setup(ctx: any) {
 
     // Always inject the consistent-icon-size CSS if it's enabled — it
     // doesn't need a wrapper to apply.
-    if (_settings.consistentIconSize) {
+    if (getSettings().consistentIconSize) {
       injectDrawerTabStyles()
     }
 
     // Apply the rest of the layout (tab assignments + width delta if any).
     // Safe to call after mount: it won't double-animate the wrapper.
-    if (layout && _settings.secondSidebarEnabled) {
+    if (layout && getSettings().secondSidebarEnabled) {
       applyLayout(layout)
     }
   })

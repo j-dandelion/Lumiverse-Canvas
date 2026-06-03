@@ -26,8 +26,8 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from
 import { repositionAssignedTabs } from '../tabs/assignment'
 // FIXME-decomp(step 12): persistLayout will live in layout/persist.ts.
 import { persistLayout } from '../frontend'  // re-point to '../layout/persist'
-// FIXME-decomp(step 15): getSettings will live in settings/state.ts.
-import { getSettings } from '../frontend'  // re-point to '../settings/state'
+// Step 1 complete: getSettings now lives in settings/state.ts.
+import { getSettings } from '../settings/state'
 
 export function isMobile(): boolean {
   return window.matchMedia('(pointer: coarse)').matches
