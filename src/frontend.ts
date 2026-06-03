@@ -11,7 +11,8 @@ import {
 } from './dom/lumiverse'
 import { dlog, dwarn, getDebug, setDebug } from './debug/log'
 import { findStoreData, getDrawerTabs, getStoreSnapshot, isMainDrawerOpen, getMainDrawerSide, clearStoreCache } from './store'
-import { setChatMargin, injectReflowStyles, updateChatReflow, scheduleReflow, startReflowObserver, tagMainSidebarButtons, scheduleTagMainSidebarButtons } from './chat/reflow'
+import { setChatMargin, injectReflowStyles, updateChatReflow, scheduleReflow, startReflowObserver } from './chat/reflow'
+import { tagMainSidebarButtons, scheduleTagMainSidebarButtons } from './chat/tag-buttons'
 
 // --- Debug Logging ---
 // See src/debug/log.ts for the dlog/dwarn/DEBUG implementation.
