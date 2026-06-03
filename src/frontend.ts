@@ -9,37 +9,11 @@ import {
   getChatColumn,
   getMainDrawerWidth,
 } from './dom/lumiverse'
+import { dlog, dwarn, getDebug, setDebug } from './debug/log'
 
 // --- Debug Logging ---
-// Background-event logs go through dlog()/dwarn(), which are no-ops when
-// DEBUG is false. The flag is now driven by the user-facing settings panel
-// (`CanvasSettings.debugMode`); the legacy `localStorage.sidebarUxDebug`
-// shim is kept as a read-only fallback so an old tab without a hydrated
-// settings state still respects the previous escape hatch.
-let DEBUG: boolean = (() => {
-  try {
-    return localStorage.getItem('sidebarUxDebug') === '1'
-  } catch {
-    return false
-  }
-})()
-
-function dlog(...args: unknown[]): void {
-  if (!DEBUG) return
-  // eslint-disable-next-line no-console
-  console.log('[Canvas]', ...args)
-}
-
-function dwarn(...args: unknown[]): void {
-  if (!DEBUG) return
-  // eslint-disable-next-line no-console
-  console.warn('[Canvas]', ...args)
-}
-
-// --- Accessors (Step 0) ---
-// getDebug/setDebug are exported for use by settings/state after M1 extraction.
-export function getDebug(): boolean { return DEBUG }
-export function setDebug(value: boolean): void { DEBUG = value }
+// See src/debug/log.ts for the dlog/dwarn/DEBUG implementation.
+// This section is intentionally a stub after Step 2 of the decomposition.
 
 // --- Settings (Canvas user preferences) ---
 //
