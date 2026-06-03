@@ -21,8 +21,8 @@ import { isShowTabLabels } from '../sidebar/polish'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 // FIXME-decomp(step 10): getTabAssignments, getActiveSecondaryTabId will live in tabs/assignment.ts.
 import { getTabAssignments, getActiveSecondaryTabId } from '../tabs/assignment'
-// FIXME-decomp(step 11): showAssignmentMenu will live in context-menu/index.ts.
-import { showAssignmentMenu } from '../frontend'  // re-point to '../context-menu'
+// Step 11 complete: showAssignmentMenu now lives in context-menu/index.ts.
+import { showAssignmentMenu } from '../context-menu'
 // FIXME-decomp(step 15): getSettings will live in settings/state.ts.
 // (Currently unused directly here, but referenced for future per-button gating.)
 
