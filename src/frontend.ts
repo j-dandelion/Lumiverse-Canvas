@@ -1548,19 +1548,58 @@ function showSecondaryTab(tabId: string) {
 // --- Context Menu ---
 
 function createContextMenu(): HTMLElement {
+  injectContextMenuStyles()
   const menu = document.createElement('div')
+  menu.className = 'canvas-tab-context-menu'
+  // Mirrors ~/Lumiverse/frontend/src/components/shared/ContextMenu.module.css:1-13
+  // exactly. Differences from this Lumiverse baseline are visible as "this
+  // menu doesn't match the others" — the z-index, shadow, and entrance
+  // animation need to track Lumiverse precisely.
+  // - z-index 11000 = Lumiverse's topmost tier (see variables.css's z-index
+  //   landscape; 11000 is reserved for the topmost system surfaces).
+  // - box-shadow: hardcoded 12px/32px elevation + a 1px white-tinted inner
+  //   ring (not primary-tinted). The white ring is the Lumiverse default.
+  // - animation + transform-origin: same as Lumiverse's contextMenuIn.
+  // The keyframe itself is defined in injectContextMenuStyles() (can't be
+  // declared inline). The glass variant also lives there, gated on
+  // body[data-glass] to match the Lumiverse pattern.
   menu.style.cssText = `
     position: fixed;
-    z-index: 999999;
+    z-index: 11000;
     min-width: 180px;
     padding: 4px;
     background: var(--lumiverse-bg-deep);
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    animation: contextMenuIn 120ms ease-out;
+    transform-origin: top left;
     display: none;
   `
   return menu
+}
+
+/**
+ * Idempotent: creates <style id="canvas-ux-context-menu-styles"> in <head>
+ * exactly once. Holds the `contextMenuIn` keyframe (which can't be declared
+ * inline) and the body[data-glass] glass variant. The variant matches
+ * ~/Lumiverse/frontend/src/components/shared/ContextMenu.module.css:15-18.
+ */
+function injectContextMenuStyles(): void {
+  if (document.getElementById('canvas-ux-context-menu-styles')) return
+  const style = document.createElement('style')
+  style.id = 'canvas-ux-context-menu-styles'
+  style.textContent = `
+    @keyframes contextMenuIn {
+      from { opacity: 0; transform: scale(0.92); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    body[data-glass] .canvas-tab-context-menu {
+      background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
+      backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+    }
+  `
+  document.head.appendChild(style)
 }
 
 function createContextMenuItem(label: string, onClick: () => void, opts?: { danger?: boolean }): HTMLElement {
@@ -1638,7 +1677,17 @@ function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle: strin
 }
 
 function hideContextMenu() {
-  if (_contextMenu) _contextMenu.style.display = 'none'
+  if (_contextMenu) {
+    // Remove the element from the DOM (don't just hide it). Two reasons:
+    //   1. The next showAssignmentMenu creates a brand-new element, which
+    //      guarantees the `contextMenuIn` animation re-runs cleanly on
+    //      every open — a reused display:none → display:block element may
+    //      not re-trigger the animation in some browsers.
+    //   2. Keeps only one menu in the DOM at a time, matching Lumiverse's
+    //      openMenus registry invariant (ContextMenu.tsx:52, 68-78).
+    _contextMenu.remove()
+    _contextMenu = null
+  }
 }
 
 function startContextMenuListener() {
@@ -1667,6 +1716,21 @@ function startContextMenuListener() {
 
     showAssignmentMenu(e.clientX, e.clientY, tabId, title)
   })
+
+  // Capture-phase contextmenu listener: when ANY new contextmenu fires
+  // (Lumiverse's shared ContextMenu opening on a built-in tab, canvas's
+  // own sidebar handler opening on a different extension tab, or the
+  // browser's default menu on empty space), close the canvas menu first.
+  // This enforces the same single-menu invariant that Lumiverse's
+  // shared ContextMenu enforces via its module-level openMenus registry
+  // (~/Lumiverse/frontend/src/components/shared/ContextMenu.tsx:52,
+  // 68-78). Canvas doesn't have access to that registry from outside,
+  // so it uses a capture-phase document listener as a proxy. The new
+  // menu is created in the bubble phase (or by Lumiverse's handler),
+  // after the canvas menu is removed — no overlap.
+  document.addEventListener('contextmenu', () => {
+    if (_contextMenu) hideContextMenu()
+  }, true)
 
   document.addEventListener('click', hideContextMenu)
   document.addEventListener('scroll', hideContextMenu, true)
