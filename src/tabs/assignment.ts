@@ -25,8 +25,8 @@ import {
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
   cssEscape,
 } from '../tabs/buttons'
-// FIXME-decomp(step 12): persistLayout will be in layout/persist.ts.
-import { persistLayout } from '../frontend'  // re-point to '../layout/persist'
+// Step 12 complete: persistLayout now lives in layout/persist.ts.
+import { persistLayout } from '../layout/persist'
 
 // (clearOriginalParents is now defined locally in this file; sidebar/cleanup
 // re-imports it in Step 14.)

@@ -21,8 +21,8 @@
 import { mergeCanvasSettings, type CanvasSettings } from '../types'
 import { setDebug } from '../debug/log'
 // FIXME-decomp(step 2): applySettings will live in settings/panel.ts.
-// FIXME-decomp(step 4): getBackendCtx + snapshotLayout will live in layout/persist.ts.
-import { applySettings, getBackendCtx, snapshotLayout } from '../frontend'
+import { applySettings } from '../frontend'
+import { getBackendCtx, snapshotLayout } from '../layout/persist'
 
 type FullCanvasSettings = Required<CanvasSettings>
 export type { FullCanvasSettings }

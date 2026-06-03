@@ -23,8 +23,8 @@ import { repositionAssignedTabs, restoreTabToPrimary } from '../tabs/assignment'
 import { showMainTabButton } from '../tabs/buttons'
 // FIXME-decomp(step 7): getTabAssignments is already in tabs/assignment via
 // the re-export chain; persistence stays in layout/persist until Step 12.
-// FIXME-decomp(step 12): persistOpenState will live in layout/persist.ts.
-import { persistOpenState } from '../frontend'  // re-point to '../layout/persist'
+// Step 12 complete: persistOpenState now lives in layout/persist.ts.
+import { persistOpenState } from '../layout/persist'
 
 // CSS variable holding the saved width in pixels. The drawer reads it
 // via `width: var(SECONDARY_WIDTH_VAR, 420px)` and snapshotLayout reads
