@@ -5,11 +5,14 @@
     "": {
       "name": "canvas",
       "dependencies": {
+        "lumiverse-spindle-types": "^0.5.17",
         "preact": "^10.29.2",
       },
     },
   },
   "packages": {
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.5.18", "", {}, "sha512-5yaGliO7KOrOminD27QvzKkE6X3h7+nyfGDv1QLmRr/W7BS8I6K3Jq8psc3+ssJnnZvy07XopuHyF8Lcm90Kkg=="],
+
     "preact": ["preact@10.29.2", "", {}, "sha512-7tNmwg/7mzzAoB/8kSg6Hl37JraAZw3Z3A0JSY7VXlZwo82Xn0G7wKbNNs2qoF4ZEEsQGTwDAroNdqKs1ofJxQ=="],
   }
 }

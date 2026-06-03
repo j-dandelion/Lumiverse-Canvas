@@ -6,6 +6,7 @@
     "deploy": "bash build.sh"
   },
   "dependencies": {
+    "lumiverse-spindle-types": "^0.5.17",
     "preact": "^10.29.2"
   }
 }
