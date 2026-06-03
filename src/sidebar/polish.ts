@@ -28,8 +28,8 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } fr
 import { getTabAssignments, repositionAssignedTabs } from '../tabs/assignment'
 // FIXME-decomp(step 12): persistLayout will live in layout/persist.ts.
 import { persistLayout } from '../frontend'  // re-point to '../layout/persist'
-// FIXME-decomp(step 14): registerCleanup will live in sidebar/cleanup.ts.
-import { registerCleanup } from '../frontend'  // re-point to '../sidebar/cleanup'
+// Step 12 complete: registerCleanup now lives in sidebar/cleanup.ts.
+import { registerCleanup } from '../sidebar/cleanup'
 // Step 1 complete: getSettings now lives in settings/state.ts.
 import { getSettings } from '../settings/state'
 // FIXME-decomp(step 5): tagMainSidebarButtons lives in chat/tag-buttons.ts.

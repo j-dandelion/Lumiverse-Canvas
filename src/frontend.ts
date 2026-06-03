@@ -21,6 +21,7 @@ import {
 } from './sidebar/secondary'
 import { isMobile, createResizeHandle, mountResizeHandles, refreshResizeHandles, persistMainWidth, persistSecondaryWidth } from './resize/handles'
 import { isShowTabLabels, syncDrawerTabSettings, syncSecondaryTabLabels, checkSideChanged, restoreSecondaryTabButtons, startSideChangeWatcher, stopSideChangeWatcher, startTabRegistrationWatcher, stopTabRegistrationWatcher, clearDrawerTabLayoutCache } from './sidebar/polish'
+import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { getSettings, setSettings, setLastLoadedLayout, getLastLoadedLayout, setPanelRefresh, refreshSettingsPanel, hydrateSettings, type FullCanvasSettings } from './settings/state'
 
 // --- Debug Logging ---
@@ -742,22 +743,6 @@ function applyLayout(layout: any) {
 // checkSideChanged, side/registration watchers) lives in
 // src/sidebar/polish.ts (Step 8 of the decomposition). The cleanup
 // registry and cleanupAll live in src/sidebar/cleanup.ts (Step 14).
-// Until Step 14, registerCleanup/cleanupAll are re-exported below as
-// transient exports so sidebar/polish.ts can register watch teardowns.
-
-// Cleanup registry — transient (Step 14 will move to src/sidebar/cleanup.ts).
-const _cleanupFns: Array<() => void> = []
-export function registerCleanup(fn: () => void) { _cleanupFns.push(fn) }
-export function cleanupAll() {
-  for (const fn of _cleanupFns) {
-    try { fn() } catch (err: unknown) {
-      console.error('[SidebarUX] Cleanup error:', err)
-    }
-  }
-  _cleanupFns.length = 0
-  // (cleanupAll in the final module will also reset state; for now
-  // this matches the v1.4.2 behavior of the registered teardowns.)
-}
 
 // --- Slash Runtime ---
 
