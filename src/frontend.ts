@@ -991,7 +991,12 @@ function buildToggleControl(value: boolean, onChange: (next: boolean) => void, d
   btn.appendChild(knob)
   btn.addEventListener('click', () => {
     if (disabled && disabled()) return
-    onChange(!value)
+    // Read current state from the DOM rather than the closure-captured `value`
+    // parameter. `value` is the build-time initial; refresh() updates
+    // aria-checked whenever setSettings runs, so the DOM is the live source
+    // of truth and the toggle can always flip both directions.
+    const current = btn.getAttribute('aria-checked') === 'true'
+    onChange(!current)
   })
   return btn
 }
