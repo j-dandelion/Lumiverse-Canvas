@@ -18,7 +18,7 @@ import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
 // FIXME-decomp(step 10): repositionAssignedTabs, restoreTabToPrimary will
 // live in tabs/assignment.ts after Step 10.
-import { repositionAssignedTabs, restoreTabToPrimary } from '../frontend'  // re-point to '../tabs/assignment'
+import { repositionAssignedTabs, restoreTabToPrimary } from '../tabs/assignment'
 // FIXME-decomp(step 6): showMainTabButton will live in tabs/buttons.ts.
 import { showMainTabButton } from '../tabs/buttons'
 // FIXME-decomp(step 7): getTabAssignments is already in tabs/assignment via
@@ -412,7 +412,7 @@ export function closeSecondarySidebar() {
 // Transient local accessor for the tabAssignments map. Re-imported from
 // the entry file until tabs/assignment.ts (Step 10) owns it. Removed in
 // Step 10 by re-pointing to '../tabs/assignment'.
-import { getTabAssignments as getTabAssignmentsTransient } from '../frontend'  // re-point to '../tabs/assignment'
+import { getTabAssignments as getTabAssignmentsTransient } from '../tabs/assignment'
 
 /**
  * Return the wrapper's `translateX` value (in px) that fully hides the

@@ -23,7 +23,7 @@ import { scheduleReflow } from '../chat/reflow'
 // them. Until then, import via the still-large entry.
 import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 // FIXME-decomp(step 10): repositionAssignedTabs will live in tabs/assignment.ts.
-import { repositionAssignedTabs } from '../frontend'  // re-point to '../tabs/assignment'
+import { repositionAssignedTabs } from '../tabs/assignment'
 // FIXME-decomp(step 12): persistLayout will live in layout/persist.ts.
 import { persistLayout } from '../frontend'  // re-point to '../layout/persist'
 // FIXME-decomp(step 15): getSettings will live in settings/state.ts.

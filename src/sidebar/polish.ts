@@ -25,7 +25,7 @@ import { dlog } from '../debug/log'
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../sidebar/secondary'
 // FIXME-decomp(step 10): getTabAssignments, repositionAssignedTabs will
 // live in tabs/assignment.ts after Step 10.
-import { getTabAssignments, repositionAssignedTabs } from '../frontend'  // re-point to '../tabs/assignment'
+import { getTabAssignments, repositionAssignedTabs } from '../tabs/assignment'
 // FIXME-decomp(step 12): persistLayout will live in layout/persist.ts.
 import { persistLayout } from '../frontend'  // re-point to '../layout/persist'
 // FIXME-decomp(step 14): registerCleanup will live in sidebar/cleanup.ts.
