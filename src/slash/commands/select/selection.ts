@@ -162,10 +162,10 @@ export function selectByVisualIndices(indices: Set<number>): SelectionResult {
         const after = row.className
         const changed = before !== after
         console.log('[select-debug] row click idx=' + idx,
-          'before-selected:', before.includes('selectMode') || before.includes('selected'),
-          'after-selected:', after.includes('selectMode') || after.includes('selected'),
+          'before [selectMode=' + before.includes('selectMode') + ', selected=' + before.includes('selected') + ']',
+          'after [selectMode=' + after.includes('selectMode') + ', selected=' + after.includes('selected') + ']',
           'classChanged:', changed,
-          'attrs:', row.getAttributeNames().filter((n) => n.startsWith('aria-') || n.startsWith('data-')))
+          'full className:', after)
       })
       matched++
       matchedIndices.add(idx)
