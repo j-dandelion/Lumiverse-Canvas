@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.3 — 2026-06-03
+
+### Fixed
+- Settings panel toggles can now be flipped in both directions. The
+  click handler on each CSS toggle button previously closed over the
+  build-time initial value, so a setting that started ON could be
+  turned OFF but never back ON (and vice versa). The handler now
+  reads the live state from the button's `aria-checked` attribute,
+  which `refresh()` keeps in sync with `_settings`. Affects all 10
+  toggles in the panel.
+
 ## v1.4.2 — 2026-06-03
 
 ### Changed
