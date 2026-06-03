@@ -33,7 +33,7 @@ function position(el: HTMLElement, anchor: HTMLElement): void {
   // Sit just above the textarea (the standard "autocomplete" position).
   // If there's not enough room above, sit below.
   const spaceAbove = rect.top
-  const elHeight = 200  // matches maxHeight
+  const elHeight = el.offsetHeight  // actual rendered height, not maxHeight
   const top = spaceAbove > elHeight + 8 ? rect.top - elHeight - 4 : rect.bottom + 4
   el.style.top = `${top}px`
   el.style.left = `${rect.left}px`
