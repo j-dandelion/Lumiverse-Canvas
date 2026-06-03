@@ -67,7 +67,7 @@ export function makeSelectCommand(): SlashCommandDef {
   }
 }
 
-function handleAll(ctx: SlashContext): void {
+async function handleAll(ctx: SlashContext): Promise<void> {
   const indices = new Set<number>()
   const rows = document.querySelectorAll<HTMLElement>(SELECTOR_MESSAGE_ROW)
   for (const row of Array.from(rows)) {
@@ -80,7 +80,7 @@ function handleAll(ctx: SlashContext): void {
   }
   // Replace any existing selection.
   if (isSelectModeActive()) clearSelection()
-  const result = selectByVisualIndices(indices)
+  const result = await selectByVisualIndices(indices)
   toastResult(ctx, result, 'Selected all loaded messages')
 }
 
@@ -94,14 +94,14 @@ function handleClear(ctx: SlashContext): void {
   ctx.toast('info', 'Selection cleared')
 }
 
-function handleRange(ctx: SlashContext, indices: Set<number>): void {
+async function handleRange(ctx: SlashContext, indices: Set<number>): Promise<void> {
   if (indices.size === 0) {
     ctx.toast('error', 'Empty range')
     return
   }
   // Replace any existing selection: clear first, then dispatch fresh clicks.
   if (isSelectModeActive()) clearSelection()
-  const result = selectByVisualIndices(indices)
+  const result = await selectByVisualIndices(indices)
   toastResult(ctx, result, null)
 }
 
