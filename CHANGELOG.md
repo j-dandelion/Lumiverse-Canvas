@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.5.0 — 2026-06-03
+
+### Fixed
+- Settings panel toggles and segmented control actually respond to
+  taps. The previous build silently threw `ReferenceError` on every
+  tap because `frontend.ts` referenced module-level variables
+  (`DEBUG`, `_secondarySidebarOpen`, `_secondaryWrapper`,
+  `_tabAssignments`) by their bare names without importing the
+  accessor functions that wrap them. Each tap ran the handler, hit
+  one of the bare references, threw, the handler's `try/catch`
+  swallowed it, and the toggle never flipped. The bug was equally
+  present on desktop — it just hadn't been observed because nothing
+  exercised the tap path until the mobile test. All bare references
+  are now routed through `getDebug()` / `setDebug()`,
+  `isSecondarySidebarOpen()` / `getSecondaryWrapper()`, and
+  `getTabAssignments()` / `hasTabAssignment()`.
+- Settings panel now re-renders after the saved layout is loaded.
+  `mountSettingsPanel` ran before `loadSavedLayout` resolved, so
+  the panel was built with default values and never refreshed when
+  the loaded settings arrived. The panel now shows the saved state
+  on every page load.
+- `getTabAssignments()` return type widened from `ReadonlyMap` to
+  `Map` so callers can mutate the assignment registry (one caller
+  in `applyLayout`'s restore path needs `.set()`).
+
 ## v1.4.3 — 2026-06-03
 
 ### Fixed

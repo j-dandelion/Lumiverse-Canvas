@@ -36,7 +36,7 @@ const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 
 // Accessors used by other modules (sidebar/secondary, sidebar/polish,
 // context-menu, layout/persist).
-export function getTabAssignments(): ReadonlyMap<string, 'primary' | 'secondary'> { return _tabAssignments }
+export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { return _tabAssignments }
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
 export function clearTabAssignments(): void { _tabAssignments.clear() }
 

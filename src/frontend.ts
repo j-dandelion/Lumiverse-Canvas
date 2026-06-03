@@ -14,6 +14,7 @@ import { findStoreData, getDrawerTabs, getStoreSnapshot, isMainDrawerOpen, getMa
 import { setChatMargin, injectReflowStyles, updateChatReflow, scheduleReflow, startReflowObserver } from './chat/reflow'
 import { tagMainSidebarButtons, scheduleTagMainSidebarButtons } from './chat/tag-buttons'
 import { hideMainTabButton, showMainTabButton, findMainTabButton, cssEscape, addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab, deriveShortName } from './tabs/buttons'
+import { getTabAssignments, hasTabAssignment } from './tabs/assignment'
 import {
   createSecondarySidebar, mountSecondarySidebar, tearDownSecondarySidebar, openSecondarySidebar, closeSecondarySidebar,
   getSecondaryWrapper, isSecondarySidebarOpen, setSecondarySidebarOpen, unmountSecondarySidebar,
@@ -58,7 +59,7 @@ function setSettings(patch: Partial<CanvasSettings>): void {
   _settings = next
   // Update the in-memory DEBUG flag immediately — applySettings also does
   // this, but we want dlog() calls inside the same tick to see the new value.
-  DEBUG = next.debugMode
+  setDebug(next.debugMode)
   applySettings(prev, next)
   refreshSettingsPanel()
   persistSettings()
@@ -403,10 +404,10 @@ export function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle
   const currentSidebar = getTabSidebar(tabId)
   let label: string
   let targetSidebar: 'primary' | 'secondary'
-  if (currentSidebar === 'secondary' && _secondarySidebarOpen) {
+  if (currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
     label = 'Move to Main Sidebar'
     targetSidebar = 'primary'
-  } else if (currentSidebar === 'secondary' && !_secondarySidebarOpen) {
+  } else if (currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
     label = 'Open in Second Sidebar'
     targetSidebar = 'secondary'
   } else {
@@ -555,10 +556,10 @@ function snapshotLayout(): any {
       width: getMainDrawerWidth(),
     },
     secondary: {
-      open: _secondarySidebarOpen,
+      open: isSecondarySidebarOpen(),
       width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
     },
-    detachedTabs: Array.from(_tabAssignments.entries())
+    detachedTabs: Array.from(getTabAssignments().entries())
       .filter(([_, side]) => side === 'secondary')
       .map(([tabId, side]) => {
         const tabs = getDrawerTabs()
@@ -653,8 +654,8 @@ function applyLayout(layout: any) {
     // below is kept as a safety net for the case where applyLayout is called
     // without a prior mountSecondarySidebar(layout) (e.g. from a future
     // "reload layout" debug action that runs after setup).
-    if (_secondaryWrapper && !_secondarySidebarOpen) {
-      const currentTransform = _secondaryWrapper.style.transform?.match(/-?[\d.]+/)?.[0]
+    if (getSecondaryWrapper() && !isSecondarySidebarOpen()) {
+      const currentTransform = getSecondaryWrapper()!.style.transform?.match(/-?[\d.]+/)?.[0]
       // Compare against the sign-aware closed transform. The saved width is
       // always positive, but the rendered transform carries a sign
       // (+width when sec is on the right, -width when sec is on the left),
@@ -710,7 +711,7 @@ function applyLayout(layout: any) {
       const tabs = getDrawerTabs()
       for (let i = 0; i < layout.detachedTabs.length; i++) {
         const dt = layout.detachedTabs[i]
-        if (_tabAssignments.has(dt.tabId)) continue
+        if (hasTabAssignment(dt.tabId)) continue
         // Try exact match first
         let tab = tabs.find(t => t.id === dt.tabId)
         let usedFallback = false
@@ -737,7 +738,7 @@ function applyLayout(layout: any) {
         if (tab) {
           // Lightweight restore: state + button affordances + DOM move.
           // No save (we just loaded). No open/close cascade (mount handled it).
-          _tabAssignments.set(tab.id, 'secondary')
+          getTabAssignments().set(tab.id, 'secondary')
           hideMainTabButton(tab.id)
           addSecondaryTabButton(tab)
           updateDrawerTabVisibility()
@@ -752,7 +753,7 @@ function applyLayout(layout: any) {
           }
         }
       }
-      if (attempts > 20 || layout.detachedTabs.every((dt: any) => _tabAssignments.has(dt.tabId))) {
+      if (attempts > 20 || layout.detachedTabs.every((dt: any) => hasTabAssignment(dt.tabId))) {
         clearInterval(interval)
         // Phase 4 (finding #2): if at least one tab was restored, pick the
         // first one as the active secondary tab. Without this, the
@@ -762,7 +763,7 @@ function applyLayout(layout: any) {
         // The first-tab pick is a reasonable default — the user can click
         // any tab button to switch. Future work: persist the active
         // secondary tab id in layout.json so we restore the exact one.
-        const restored = layout.detachedTabs.find((dt: any) => _tabAssignments.has(dt.tabId))
+        const restored = layout.detachedTabs.find((dt: any) => hasTabAssignment(dt.tabId))
         if (restored) {
           showSecondaryTab(restored.tabId)
         }
@@ -775,9 +776,9 @@ function applyLayout(layout: any) {
         // Safety net kept for the case where applyLayout is called WITHOUT a
         // prior mountSecondarySidebar(layout) — e.g. a future "reload layout"
         // debug action that re-applies after a session tweak.
-        if (layout.secondary?.open === true && !_secondarySidebarOpen) {
+        if (layout.secondary?.open === true && !isSecondarySidebarOpen()) {
           openSecondarySidebar()
-        } else if (layout.secondary?.open === false && _secondarySidebarOpen) {
+        } else if (layout.secondary?.open === false && isSecondarySidebarOpen()) {
           closeSecondarySidebar()
         }
       }
@@ -1381,8 +1382,13 @@ export function setup(ctx: any) {
   loadSavedLayout().then((layout) => {
     // Hydrate settings from the loaded layout (defaults filled by mergeCanvasSettings).
     _settings = mergeCanvasSettings(layout?.settings)
-    DEBUG = _settings.debugMode
+    setDebug(_settings.debugMode)
     setLastLoadedLayout(layout)
+    // The settings panel was mounted earlier in setup() with the default
+    // _settings. Now that we've hydrated from the saved layout, re-render
+    // the panel so the toggles reflect the loaded values rather than the
+    // defaults baked in at mount time.
+    refreshSettingsPanel()
 
     if (_settings.debugMode) installDebugEscapeHatch()
 
