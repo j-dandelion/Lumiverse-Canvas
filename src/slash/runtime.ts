@@ -4,6 +4,7 @@ import { installIntercept } from './intercept'
 import { makeHelpCommand } from './builtin-help'
 import { showSuggest, hideSuggest } from './suggest'
 import { dispatchCommand } from './dispatch'
+import { mountToastSurface } from './toast'
 import type { SlashContext } from './types'
 
 export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
@@ -22,7 +23,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
       ta.dispatchEvent(new Event('input', { bubbles: true }))
     },
     toast: (kind, text) => {
-      // CustomEvent — Task 2.7 wires the real toast surface. For now, log.
+      // Dispatch CustomEvent; the toast surface (toast.tsx) listens and renders.
       window.dispatchEvent(new CustomEvent('canvas:slash-toast', { detail: { kind, text } }))
     },
   }
@@ -45,17 +46,14 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     },
   })
 
-  // Listen for toast events — Task 2.7 wires the real surface. For now, log.
-  const toastListener = (e: Event) => {
-    const detail = (e as CustomEvent).detail
-    console.log(`[canvas-slash toast ${detail.kind}]`, detail.text)
-  }
-  window.addEventListener('canvas:slash-toast', toastListener)
+  // Mount the toast surface. The toast.tsx module registers a CustomEvent
+  // listener for 'canvas:slash-toast' on import; mountToastSurface mounts
+  // the Preact render.
+  mountToastSurface()
 
   // And in teardown:
   return () => {
     detachIntercept()
-    window.removeEventListener('canvas:slash-toast', toastListener)
     registry.clear()
   }
 }
