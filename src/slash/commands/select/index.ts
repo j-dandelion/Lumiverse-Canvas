@@ -32,39 +32,57 @@ import {
 
 const SELECTOR_MESSAGE_ROW = '[data-component="BubbleMessage"]'
 
-export function makeSelectCommand(): SlashCommandDef {
-  return {
-    name: 'select',
-    description: 'Select a range of messages, all loaded, or clear the current selection',
-    usage: '/select <range> | /select all | /select clear',
-    owner: 'canvas',
-    category: 'select',
-    handler: async (args, ctx) => {
-      const raw = args._raw ?? ''
-      const parsed = parseSelectArgs(raw)
+export function makeSelectCommands(): SlashCommandDef[] {
+  return [
+    {
+      name: 'select',
+      description: 'Select a range of messages (Example: /select 15-30)',
+      usage: '/select',
+      owner: 'canvas',
+      category: 'select',
+      handler: async (args, ctx) => {
+        const raw = args._raw ?? ''
+        const parsed = parseSelectArgs(raw)
 
-      if (!parsed) {
-        ctx.toast('error', 'Usage: /select <range>, /select all, /select clear')
-        return
-      }
+        if (!parsed) {
+          ctx.toast('error', 'Usage: /select <range>')
+          return
+        }
 
-      if (parsed.kind === 'error') {
-        ctx.toast('error', `Invalid /select args: ${parsed.reason}`)
-        return
-      }
+        if (parsed.kind === 'error') {
+          ctx.toast('error', `Invalid /select args: ${parsed.reason}`)
+          return
+        }
 
-      switch (parsed.kind) {
-        case 'all':
-          return handleAll(ctx)
+        switch (parsed.kind) {
+          case 'all':
+            return handleAll(ctx)
 
-        case 'clear':
-          return handleClear(ctx)
+          case 'clear':
+            return handleClear(ctx)
 
-        case 'range':
-          return handleRange(ctx, parsed.indices)
-      }
+          case 'range':
+            return handleRange(ctx, parsed.indices)
+        }
+      },
     },
-  }
+    {
+      name: 'select-all',
+      description: 'Select all loaded messages',
+      usage: '/select all',
+      owner: 'canvas',
+      category: 'select',
+      handler: async (_args, ctx) => handleAll(ctx),
+    },
+    {
+      name: 'select-clear',
+      description: 'Clear the current selection',
+      usage: '/select clear',
+      owner: 'canvas',
+      category: 'select',
+      handler: async (_args, ctx) => handleClear(ctx),
+    },
+  ]
 }
 
 async function handleAll(ctx: SlashContext): Promise<void> {
@@ -117,7 +135,7 @@ function toastResult(
     if (missingIndices.length > 0) {
       ctx.toast(
         'info',
-        `None of the ${missingIndices.length} requested messages are loaded — scroll to load them.`,
+        `None of the ${missingIndices.length} requested messages are loaded.`,
       )
     } else if (unreadable > 0) {
       ctx.toast('error', `Could not read an index from ${unreadable} row(s)`)
@@ -129,7 +147,7 @@ function toastResult(
   if (missingIndices.length > 0) {
     ctx.toast(
       'info',
-      `Selected ${matched} messages. ${missingIndices.length} out of range — scroll to load.`,
+      `Selected ${matched} messages. ${missingIndices.length} out of range.`,
     )
   } else {
     ctx.toast('success', fallback ?? `Selected ${matched} messages`)

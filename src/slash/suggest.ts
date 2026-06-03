@@ -101,6 +101,36 @@ export function showSuggest(
       .join('')
     el.querySelectorAll<HTMLElement>('.canvas-slash-opt').forEach((row, i) => {
       row.addEventListener('mouseenter', () => setActiveIndex(i))
+      row.addEventListener('click', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!currentAnchor) return
+        const cmd = currentOptions[i]
+        if (!cmd) return
+        // If the textarea already starts with the same command name
+        // (e.g. `/select 1-3` and the user clicks the `/select` row),
+        // the click is a no-op for the value — just dismiss the popup
+        // and focus. The user has a complete command; overwriting it
+        // with the bare usage would wipe the user's args. This mirrors
+        // the intercept.ts Enter fix: never erase a complete command
+        // the user has already typed.
+        const typedName = currentAnchor.value.split(/\s/, 1)[0].slice(1).toLowerCase()
+        if (typedName === cmd.name.toLowerCase()) {
+          hideSuggest()
+          currentAnchor.focus()
+          return
+        }
+        // Mirror the Tab-commit pattern in intercept.ts:105-116 — same label
+        // resolution, same input event, same hideSuggest. Click just adds a
+        // focus() at the end so the user can immediately type or press Enter.
+        const label = cmd.usage ?? `/${cmd.name}`
+        const alreadyHasArgs = currentAnchor.value.includes(' ')
+        const replacement = alreadyHasArgs ? label : `${label} `
+        currentAnchor.value = replacement
+        currentAnchor.dispatchEvent(new Event('input', { bubbles: true }))
+        hideSuggest()
+        currentAnchor.focus()
+      })
     })
     updateActiveDom()
   }
@@ -133,8 +163,9 @@ export function showSuggest(
   renderRows()
   position(el, textarea)
 
-  // Register viewport listeners (idempotent — see attachViewportListeners).
+  // Register viewport + outside-dismiss listeners (both idempotent).
   attachViewportListeners()
+  attachOutsideDismiss()
 
   // Promote to module-level so the intercept's `isSuggestVisible()` works.
   _currentController = {
@@ -152,6 +183,7 @@ export function hideSuggest(): void {
   const el = document.getElementById(SUGGEST_ID)
   if (el) el.remove()
   detachViewportListeners()
+  detachOutsideDismiss()
   currentAnchor = null
   currentEl = null
   _currentController = null
@@ -176,7 +208,8 @@ let _currentController: SuggestController | null = null
 let visualViewportListener: (() => void) | null = null
 let scrollListener: (() => void) | null = null
 let resizeListener: (() => void) | null = null
-let currentAnchor: HTMLElement | null = null
+let outsideDismissListener: ((e: Event) => void) | null = null
+let currentAnchor: HTMLTextAreaElement | null = null
 let currentEl: HTMLElement | null = null
 
 function makeNoopController(): SuggestController {
@@ -199,15 +232,23 @@ function getOrCreate(): HTMLDivElement {
   return el
 }
 
+const VIEWPORT_MARGIN = 8  // keep the popup this many px from the viewport edge
+
 function position(el: HTMLElement, anchor: HTMLElement): void {
   const rect = anchor.getBoundingClientRect()
   // Sit just above the textarea (the standard "autocomplete" position).
   // If there's not enough room above, sit below.
   const spaceAbove = rect.top
   const elHeight = el.offsetHeight
-  const top = spaceAbove > elHeight + 8 ? rect.top - elHeight - 4 : rect.bottom + 4
+  const top = spaceAbove > elHeight + VIEWPORT_MARGIN ? rect.top - elHeight - 4 : rect.bottom + 4
   el.style.top = `${top}px`
-  el.style.left = `${rect.left}px`
+  // Clamp the left edge so the popup never clips off the right side of the
+  // viewport (or off the left, in case the textarea is near x=0). The popup
+  // width is bounded by CSS `max-width: min(420px, calc(100vw - 16px))` so
+  // `el.offsetWidth` is a safe upper bound for what we need to fit.
+  const elWidth = el.offsetWidth
+  const maxLeft = window.innerWidth - elWidth - VIEWPORT_MARGIN
+  el.style.left = `${Math.max(VIEWPORT_MARGIN, Math.min(rect.left, maxLeft))}px`
   el.style.minWidth = `${rect.width}px`
 }
 
@@ -245,6 +286,47 @@ function detachViewportListeners(): void {
     window.removeEventListener('resize', resizeListener)
     resizeListener = null
   }
+}
+
+/**
+ * Outside-input dismiss. Closes the popup when the user taps/clicks/right-
+ * clicks anywhere outside the popup element itself.
+ *
+ * Why these three event types:
+ *   - `mousedown` covers desktop click AND touch tap (touch fires mousedown
+ *     as a compatibility mouse event) AND pen tap. It's the broadest input
+ *     signal with universal browser support.
+ *   - `pointerdown` is the W3C unified pointer event. It fires slightly
+ *     earlier than mousedown on touch devices, so the dismiss feels
+ *     snappier. Redundant with mousedown on most paths, but `hideSuggest`
+ *     is idempotent so the double-fire is harmless.
+ *   - `contextmenu` covers right-click on all platforms.
+ *
+ * The row's own click handler calls `e.stopPropagation()`, so row clicks
+ * never reach this listener. We also short-circuit on the `contains` check
+ * for any other event whose target happens to be inside the popup (e.g.
+ * right-click on the popup's padding).
+ */
+function attachOutsideDismiss(): void {
+  if (outsideDismissListener) return
+  outsideDismissListener = (e: Event) => {
+    if (!_currentController) return
+    const target = e.target
+    if (!(target instanceof Node)) return
+    if (currentEl?.contains(target)) return
+    hideSuggest()
+  }
+  document.addEventListener('mousedown', outsideDismissListener)
+  document.addEventListener('pointerdown', outsideDismissListener)
+  document.addEventListener('contextmenu', outsideDismissListener)
+}
+
+function detachOutsideDismiss(): void {
+  if (!outsideDismissListener) return
+  document.removeEventListener('mousedown', outsideDismissListener)
+  document.removeEventListener('pointerdown', outsideDismissListener)
+  document.removeEventListener('contextmenu', outsideDismissListener)
+  outsideDismissListener = null
 }
 
 // --- ARIA ---
@@ -288,6 +370,7 @@ function injectSuggestStyles(): void {
       flex-direction: column;
       gap: 2px;
       min-width: 200px;
+      max-width: min(420px, calc(100vw - 16px));
       max-height: min(240px, calc(35vh / var(--lumiverse-ui-scale, 1)));
       overflow-y: auto;
       font-family: var(--lumiverse-font-family);

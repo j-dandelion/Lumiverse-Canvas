@@ -2,7 +2,9 @@
 // Exported: installIntercept(ctx, callbacks: InterceptCallbacks): () => void
 //
 // Slash key surface:
-//   Enter         — dispatch (active row wins over parsed name when popup is up)
+//   Enter         — popup visible: insert the active row's usage into the
+//                   textarea, hide the popup, and focus (matches Tab/click).
+//                   popup hidden: dispatch the typed slash command (legacy).
 //   Tab           — autocomplete the active row's usage into the textarea
 //   ArrowUp/Down  — move the active row when popup is visible
 //   Escape        — dismiss the popup (without clearing the textarea)
@@ -116,31 +118,61 @@ export function installIntercept(
       return
     }
 
-    // Enter: dispatch. Active row wins over parsed name when popup is up.
+    // Enter: dispatch a complete slash command if one is parseable. Only
+    // treat Enter as autocomplete when the typed value is a *partial*
+    // prefix — the "Tab/click" semantic. The old logic dispatched the
+    // active row's usage into the textarea on Enter whenever the popup
+    // was visible, which wiped user-typed args (e.g. `/select 1-3` →
+    // `/select `) and stranded the cursor mid-line. A user with a
+    // complete command in the textarea means "send it" — full stop.
     if (e.key === 'Enter' && !e.shiftKey) {
       const parsed = parseCommand(ta.value)
-      if (!parsed) return
+      if (parsed) {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
 
-      e.preventDefault()
-      e.stopPropagation()
-      e.stopImmediatePropagation()
+        // Clear the textarea on the next frame (rAF fires after the current paint).
+        // The textarea is a React controlled component — useState for `text` won't
+        // re-render without a synthetic `input` event. Dispatching it manually
+        // after rAF is the load-bearing pattern. (Chronicle skill pitfall #5)
+        requestAnimationFrame(() => {
+          ta.value = ''
+          ta.dispatchEvent(new Event('input', { bubbles: true }))
+        })
 
-      const activeCmd = ctrl?.getActiveCommand() ?? null
-      const effectiveParsed = activeCmd
-        ? { name: activeCmd.name, args: parsed.args }
-        : parsed
+        hideSuggest()
+        callbacks.onParsed(parsed, ta)
+        return
+      }
 
-      // Clear the textarea on the next frame (rAF fires after the current paint).
-      // The textarea is a React controlled component — useState for `text` won't
-      // re-render without a synthetic `input` event. Dispatching it manually
-      // after rAF is the load-bearing pattern. (Chronicle skill pitfall #5)
-      requestAnimationFrame(() => {
-        ta.value = ''
+      // No parseable command in the textarea. If the popup is visible,
+      // treat Enter as Tab/click — autocomplete the active row's usage
+      // into the textarea so the user can finish typing before sending.
+      if (popupVisible) {
+        const activeCmd = ctrl?.getActiveCommand() ?? null
+        if (!activeCmd) {
+          // Popup visible but no active row — hide and let Enter fall through
+          // to the textarea's natural newline behavior.
+          hideSuggest()
+          return
+        }
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        const label = activeCmd.usage ?? `/${activeCmd.name}`
+        // Match Tab/click: preserve user-typed args if a space is present,
+        // otherwise add a trailing space so the cursor is ready for input.
+        const alreadyHasArgs = ta.value.includes(' ')
+        const replacement = alreadyHasArgs ? label : `${label} `
+        // Flag the input handler to skip re-showing the popup for the
+        // synthetic input event we dispatch below.
+        _skipNextTextChange = true
+        ta.value = replacement
         ta.dispatchEvent(new Event('input', { bubbles: true }))
-      })
-
-      hideSuggest()
-      callbacks.onParsed(effectiveParsed, ta)
+        hideSuggest()
+        ta.focus()
+      }
     }
   }
 

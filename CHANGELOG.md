@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.4.2 — 2026-06-03
+
+### Changed
+- `/select` toast messages no longer include the "scroll to load" suffix.
+  The actionable counts (matched/missing) are still reported; the
+  imperative "scroll to load" instruction is dropped. The Lumiverse
+  chat surface already makes the scroll affordance obvious.
+
+## v1.4.1 — 2026-06-03
+
+### Fixed
+- Pressing Enter on a complete slash command no longer wipes the typed
+  args. The intercept handler now checks `parseCommand(ta.value)` first
+  and dispatches when the textarea already holds a valid command, even
+  if the suggest popup is visible. Previously `/select 1-3` + Enter would
+  overwrite the value to `/select ` (the active row's `usage`), drop the
+  user's `1-3`, and leave the popup hidden — the user had to retype the
+  args and press Enter a second time.
+- The same protection applies to the suggest-popup row click handler.
+  Clicking the row for a command the user has already typed (e.g.
+  clicking `/select` while the textarea is `/select 1-3`) no longer
+  overwrites the typed args — it dismisses the popup and focuses the
+  textarea.
+
 ## v1.4.0 — 2026-06-03
 
 ### Added
