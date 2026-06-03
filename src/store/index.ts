@@ -1,0 +1,161 @@
+// Lumiverse's Zustand store is NOT reachable by walking UP from the sidebar
+// (the host element has no direct fiber reference to the store). Strategy:
+// walk UP to the root ancestor, then scan DOWN to find the `drawerTabs`
+// array and the full store snapshot. Caches the result for 3s.
+//
+// Caches are module-private. The public API is findStoreData (force-walk),
+// getDrawerTabs (array of {id, title, root, ...}), getStoreSnapshot (raw
+// store), isMainDrawerOpen / getMainDrawerSide (the two fields most code
+// paths need).
+import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
+import { dwarn } from '../debug/log'
+
+let _drawerTabsCache: DrawerTab[] | null = null
+let _storeSnapshotCache: Record<string, unknown> | null = null
+let _cacheTimestamp = 0
+const CACHE_TTL_MS = 3000 // Re-walk fiber tree every 3 seconds max
+
+export interface DrawerTab {
+  id: string
+  extensionId: string
+  title: string
+  shortName?: string
+  iconSvg?: string
+  iconUrl?: string
+  root: HTMLElement
+}
+
+function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>, force: boolean): void {
+  if (!fiber || depth > maxDepth || visited.has(fiber)) return
+  visited.add(fiber)
+
+  let hook = fiber.memoizedState
+  let hookIdx = 0
+  while (hook && hookIdx < 30) {
+    const state = hook.memoizedState
+
+    // Check for drawerTabs array (array of objects with id+title+root).
+    // When force=true (called from tagMainSidebarButtons to re-tag missed
+    // buttons), we overwrite the cache with a fresh result even if the
+    // cache was non-null. Without this, a stale partial snapshot from the
+    // first call (e.g., 1 of 3 tabs visible) would persist indefinitely.
+    if ((force || !_drawerTabsCache) && Array.isArray(state) && state.length > 0 && state[0] && typeof state[0] === 'object') {
+      const firstKeys = Object.keys(state[0])
+      if (firstKeys.includes('id') && firstKeys.includes('title') && firstKeys.includes('root')) {
+        _drawerTabsCache = state as DrawerTab[]
+      }
+    }
+
+    // Check for objects with drawerOpen (full store snapshot)
+    if ((force || !_storeSnapshotCache) && state && typeof state === 'object' && !Array.isArray(state)) {
+      const keys = Object.keys(state)
+      if (keys.includes('drawerOpen') || keys.includes('drawerTabs')) {
+        _storeSnapshotCache = state as Record<string, unknown>
+      }
+    }
+
+    if (!force && _drawerTabsCache && _storeSnapshotCache) {
+      _cacheTimestamp = Date.now()
+      return // found both, stop early
+    }
+
+    hook = hook.next
+    hookIdx++
+  }
+
+  scanForStoreData(fiber.child, depth + 1, maxDepth, visited, force)
+  scanForStoreData(fiber.sibling, depth, maxDepth, visited, force)
+}
+
+export function findStoreData(force = false): void {
+  const now = Date.now()
+  if (!force && _drawerTabsCache && _storeSnapshotCache && (now - _cacheTimestamp) < CACHE_TTL_MS) return // cached and fresh
+
+  const sidebar = getMainSidebar()
+  if (!sidebar) return
+
+  const fiberKey = Object.keys(sidebar).find(k => k.startsWith('__reactFiber$'))
+  if (!fiberKey) return
+
+  // Walk UP to root ancestor
+  let fiber: any = (sidebar as any)[fiberKey]
+  const ancestors: any[] = []
+  while (fiber) {
+    ancestors.push(fiber)
+    fiber = fiber.return
+  }
+
+  // When forcing, we want a complete walk (not an early-out) so the cache
+  // is fully refreshed. Pass force through to the recursive walker.
+  if (force) {
+    const visited = new Set<any>()
+    for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 5); i--) {
+      scanForStoreData(ancestors[i], 0, 30, visited, true)
+    }
+    _cacheTimestamp = Date.now()
+    return
+  }
+
+  // Scan DOWN from the top ancestors (the root covers the whole tree)
+  const visited = new Set<any>()
+  for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 5); i--) {
+    scanForStoreData(ancestors[i], 0, 30, visited, false)
+    if (_drawerTabsCache && _storeSnapshotCache) {
+      _cacheTimestamp = Date.now()
+      break
+    }
+  }
+}
+
+// Drop all cached state. Called by sidebar/cleanup.cleanupAll on teardown.
+export function clearStoreCache(): void {
+  _drawerTabsCache = null
+  _storeSnapshotCache = null
+  _cacheTimestamp = 0
+}
+
+export function getDrawerTabs(): DrawerTab[] {
+  findStoreData()
+  if (_drawerTabsCache) return _drawerTabsCache
+  dwarn('Could not find drawerTabs in fiber tree')
+  return []
+}
+
+export function getStoreSnapshot(): Record<string, unknown> | null {
+  findStoreData()
+  return _storeSnapshotCache
+}
+
+export function isMainDrawerOpen(): boolean {
+  // Try store snapshot first
+  const store = getStoreSnapshot()
+  if (store && typeof (store as any).drawerOpen === 'boolean') {
+    return (store as any).drawerOpen
+  }
+  // Fallback to CSS class check
+  const wrapper = getMainWrapper()
+  if (!wrapper) return false
+  return wrapper.classList.toString().includes('wrapperOpen')
+}
+
+export function getMainDrawerSide(): 'left' | 'right' {
+  // DOM first: the wrapper's className updates synchronously when the user
+  // changes drawer side in Lumiverse settings. The Zustand store snapshot is
+  // cached with a 3-second TTL (see getStoreSnapshot), so for up to 3s after
+  // a side change the store can return the OLD value while the DOM already
+  // shows the new side. The startSideChangeWatcher (2s poll) and
+  // createSecondarySidebar (which reads getMainDrawerSide on first mount)
+  // both depend on this function returning the up-to-date value, so we
+  // prefer the live DOM class. The store is kept as a fallback for code
+  // paths that run before getMainWrapper() can resolve (e.g. very early
+  // during bundle init).
+  const wrapper = getMainWrapper()
+  if (wrapper) {
+    return wrapper.classList.toString().includes('wrapperLeft') ? 'left' : 'right'
+  }
+  const store = getStoreSnapshot()
+  if (store && (store as any).drawerSettings) {
+    return (store as any).drawerSettings.side || 'right'
+  }
+  return 'right'
+}
