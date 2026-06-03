@@ -14,8 +14,8 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { dlog, dwarn } from '../debug/log'
-// FIXME-decomp(step 8): isShowTabLabels will live in sidebar/polish.ts.
-import { isShowTabLabels } from '../frontend'  // re-point to '../sidebar/polish'
+// Step 8 complete: isShowTabLabels now lives in sidebar/polish.ts.
+import { isShowTabLabels } from '../sidebar/polish'
 // FIXME-decomp(step 9): getSecondaryWrapper, isSecondarySidebarOpen,
 // openSecondarySidebar, PUZZLE_ICON_SVG will live in sidebar/secondary.tsx.
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../frontend'  // re-point to '../sidebar/secondary'
