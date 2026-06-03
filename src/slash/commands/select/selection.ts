@@ -67,20 +67,33 @@ export function isSelectModeActive(): boolean {
  * access — we drive Lumiverse via the DOM regardless.
  */
 export function ensureSelectMode(): void {
-  if (isSelectModeActive()) return
+  if (isSelectModeActive()) {
+    console.log('[select-debug] ensureSelectMode: already active, skip')
+    return
+  }
 
   const candidates = document.querySelectorAll<HTMLButtonElement>(SELECTOR_SELECT_TOGGLE)
+  console.log('[select-debug] ensureSelectMode: candidates =', candidates.length)
   if (candidates.length === 0) return
 
   // Prefer the toggle that's inside a `data-select-mode` wrapper
   // (the toolbar root). Fall back to the first match.
   for (const btn of Array.from(candidates)) {
     if (btn.closest(`[${SELECT_MODE_ATTR}]`)) {
+      console.log('[select-debug] ensureSelectMode: clicking toolbarBtn', {
+        title: btn.getAttribute('title'),
+        className: btn.className,
+      })
       btn.click()
+      console.log('[select-debug] ensureSelectMode: data-select-mode after click =',
+        document.querySelector(`[${SELECT_MODE_ATTR}="true"]`) ? 'true' : 'absent/false')
       return
     }
   }
+  console.log('[select-debug] ensureSelectMode: fallback to first candidate')
   candidates[0].click()
+  console.log('[select-debug] ensureSelectMode: data-select-mode after click =',
+    document.querySelector(`[${SELECT_MODE_ATTR}="true"]`) ? 'true' : 'absent/false')
 }
 
 /**
@@ -125,6 +138,13 @@ export function selectByVisualIndices(indices: Set<number>): SelectionResult {
   let unreadable = 0
   const matchedIndices = new Set<number>()
   const rows = document.querySelectorAll<HTMLElement>(SELECTOR_MESSAGE_ROW)
+  console.log('[select-debug] selectByVisualIndices: row count =', rows.length, 'target set =', Array.from(indices).sort((a, b) => a - b))
+
+  // Snapshot class list before clicks so we can detect a state change.
+  const beforeClasses = new Map<HTMLElement, string>()
+  for (const row of Array.from(rows)) {
+    beforeClasses.set(row, row.className)
+  }
 
   for (const row of Array.from(rows)) {
     const idx = readIndexInChat(row)
@@ -133,9 +153,20 @@ export function selectByVisualIndices(indices: Set<number>): SelectionResult {
       continue
     }
     if (indices.has(idx)) {
+      const before = beforeClasses.get(row) ?? ''
       row.dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
       )
+      // Read the className on the next microtask to allow React to flush.
+      queueMicrotask(() => {
+        const after = row.className
+        const changed = before !== after
+        console.log('[select-debug] row click idx=' + idx,
+          'before-selected:', before.includes('selectMode') || before.includes('selected'),
+          'after-selected:', after.includes('selectMode') || after.includes('selected'),
+          'classChanged:', changed,
+          'attrs:', row.getAttributeNames().filter((n) => n.startsWith('aria-') || n.startsWith('data-')))
+      })
       matched++
       matchedIndices.add(idx)
     }
