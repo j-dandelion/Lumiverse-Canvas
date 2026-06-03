@@ -1,14 +1,13 @@
-// Salvaged from Chronicle v1.1.0, 2026-06-01 (commit 329f137).
+// Salvaged from Chronicle v1.1.0, 2026-06-01 (commit 329f13748c2270de41b67be27ebc920c6725fd43).
 // Extracted from git history after Chronicle was reverted to v1.0.4 in Phase 1.2
-// (commit 93fd172, which removed this file from the working tree).
+// (commit 93fd172b57859cc31e242c07cc77a2e46694db02, which removed this file from the working tree).
 // Original: ~/chronicle_ext/src/select-range-parser.ts
 // Original test: ~/chronicle_ext/src/__tests__/select-range-parser.test.ts (35 cases; available in git history at 329f137).
 //
 // Adaptations for Canvas:
 //   - No code changes; the file is pure logic, no DOM, no Chronicle state.
-//   - Stripped "Chronicle" prefix in header comment (becomes Canvas).
-//
-// --- original source follows ---
+//   - Replaced "Chronicle" with "Canvas" in the docblock header.
+//   - No imports / type references to rewrite.
 
 /**
  * Canvas — `/select` command argument parser

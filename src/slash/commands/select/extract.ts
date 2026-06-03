@@ -1,14 +1,13 @@
-// Salvaged from Chronicle v1.1.0, 2026-06-01 (commit ff585f1).
+// Salvaged from Chronicle v1.1.0, 2026-06-01 (commit ff585f1f4654844ad26d44d83786dda7b048889c).
 // Extracted from git history after Chronicle was reverted to v1.0.4 in Phase 1.2
-// (commit 93fd172, which removed this file from the working tree).
+// (commit 93fd172b57859cc31e242c07cc77a2e46694db02, which removed this file from the working tree).
 // Original: ~/chronicle_ext/src/select-range-extract.ts
 // Original test: ~/chronicle_ext/src/__tests__/select-range-extract.test.ts (22 cases; available in git history at ff585f1).
 //
 // Adaptations for Canvas:
 //   - No code changes; the file is pure logic, no DOM, no Chronicle state.
-//   - Stripped "Chronicle" prefix in header comment (becomes Canvas).
-//
-// --- original source follows ---
+//   - Replaced "Chronicle" with "Canvas" in the docblock header.
+//   - No imports / type references to rewrite.
 
 /**
  * Canvas — `index_in_chat` extractor
