@@ -1,9 +1,23 @@
 // Capture-phase keydown + send-button click intercept.
 // Exported: installIntercept(ctx, callbacks: InterceptCallbacks): () => void
+//
+// Slash key surface:
+//   Enter         — dispatch (active row wins over parsed name when popup is up)
+//   Tab           — autocomplete the active row's usage into the textarea
+//   ArrowUp/Down  — move the active row when popup is visible
+//   Escape        — dismiss the popup (without clearing the textarea)
+//
+// All other keys fall through to Lumiverse's bubble-phase handlers. The
+// capture-phase wiring is the same pattern Chronicle uses for its /select
+// mobile send-button work (see references/chronicle-select-mobile-send-button.ts).
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { ParsedCommand } from './parse'
 import { parseCommand } from './parse'
-import { hideSuggest } from './suggest'
+import {
+  hideSuggest,
+  isSuggestVisible,
+  getSuggestController,
+} from './suggest'
 
 // CSS-module class is hashed. The prefix `sendBtn` is stable across builds.
 const SELECTOR_SEND_BTN = 'button[class*="sendBtn"]'
@@ -14,40 +28,146 @@ export interface InterceptCallbacks {
   onTextChange: (text: string) => void
 }
 
+// Set by the Tab handler right before dispatching the synthetic `input`
+// event. The inputHandler reads + clears it so the runtime's onTextChange
+// doesn't re-show the popup with options that match the freshly-completed
+// command. Without this, Tab committing `/se` → `/select ` would
+// immediately re-open the popup with the full command list.
+let _skipNextTextChange = false
+
+// Toggled by `compositionstart` / `compositionend` capture-phase listeners.
+// During CJK IME input the textarea's value can briefly start with `/` mid-
+// composition, which would cause the suggest popup to flicker as
+// showSuggest / hideSuggest cycle. The inputHandler short-circuits when
+// this flag is true. Mirrors the `isComposingRef` pattern in
+// ~/Lumiverse/frontend/src/components/chat/InputArea.tsx:200-205, 1879-1889
+// and ~/Lumiverse/frontend/src/components/modals/CommandPalette.tsx:47.
+let _isComposing = false
+
 export function installIntercept(
   _ctx: SpindleFrontendContext,
   callbacks: InterceptCallbacks,
 ): () => void {
   // ── Keydown: capture phase so we run BEFORE Lumiverse's bubble-phase handler
   const keydownHandler = (e: KeyboardEvent) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
     const target = e.target as HTMLElement | null
     if (!target || target.tagName !== 'TEXTAREA') return
     if (target.getAttribute('name') !== 'chat-message') return
 
     const ta = target as HTMLTextAreaElement
-    const parsed = parseCommand(ta.value)
-    if (!parsed) return
+    const popupVisible = isSuggestVisible()
 
-    // Slash command matched. Bypass Lumiverse's handleSend entirely.
-    e.preventDefault()
-    e.stopPropagation()
-    e.stopImmediatePropagation()
+    // Escape: hide popup if visible. Never interfere with IME composition
+    // (some IMEs use Escape to cancel composition, and we should let them).
+    if (e.key === 'Escape') {
+      if (popupVisible) {
+        e.preventDefault()
+        e.stopPropagation()
+        hideSuggest()
+      }
+      return
+    }
 
-    // Clear the textarea on the next frame (rAF fires after the current paint).
-    // The textarea is a React controlled component — useState for `text` won't
-    // re-render without a synthetic `input` event. Dispatching it manually
-    // after rAF is the load-bearing pattern. (Chronicle skill pitfall #5)
-    requestAnimationFrame(() => {
-      ta.value = ''
+    // All other slash keys below are gated on !isComposing to avoid
+    // stealing key events from the IME during CJK / accent input.
+    if (e.isComposing) return
+
+    const ctrl = popupVisible ? getSuggestController() : null
+
+    // ArrowDown / ArrowUp: move active row when popup is visible.
+    // When the popup is hidden, the textarea's default cursor-movement
+    // behavior takes over.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!ctrl) return
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      ctrl.setActiveIndex(
+        e.key === 'ArrowDown' ? ctrl.getActiveIndex() + 1 : ctrl.getActiveIndex() - 1,
+      )
+      return
+    }
+
+    // Tab: autocomplete the active row's usage into the textarea. We do NOT
+    // dispatch — Tab is for "insert this command name, let me keep editing."
+    if (e.key === 'Tab') {
+      if (!ctrl) return
+      const activeCmd = ctrl.getActiveCommand()
+      if (!activeCmd) {
+        // No active row (e.g. empty options) — just dismiss the popup and
+        // let the browser move focus normally.
+        hideSuggest()
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      const label = activeCmd.usage ?? `/${activeCmd.name}`
+      // If the user has already typed args (a space is present), don't
+      // re-add a trailing space — preserve whatever they typed.
+      const alreadyHasArgs = ta.value.includes(' ')
+      const replacement = alreadyHasArgs ? label : `${label} `
+      // Flag the input handler to skip re-showing the popup for the
+      // synthetic input event we dispatch below.
+      _skipNextTextChange = true
+      ta.value = replacement
       ta.dispatchEvent(new Event('input', { bubbles: true }))
-    })
+      hideSuggest()
+      return
+    }
 
-    hideSuggest()
-    callbacks.onParsed(parsed, ta)
+    // Enter: dispatch. Active row wins over parsed name when popup is up.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const parsed = parseCommand(ta.value)
+      if (!parsed) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+
+      const activeCmd = ctrl?.getActiveCommand() ?? null
+      const effectiveParsed = activeCmd
+        ? { name: activeCmd.name, args: parsed.args }
+        : parsed
+
+      // Clear the textarea on the next frame (rAF fires after the current paint).
+      // The textarea is a React controlled component — useState for `text` won't
+      // re-render without a synthetic `input` event. Dispatching it manually
+      // after rAF is the load-bearing pattern. (Chronicle skill pitfall #5)
+      requestAnimationFrame(() => {
+        ta.value = ''
+        ta.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+
+      hideSuggest()
+      callbacks.onParsed(effectiveParsed, ta)
+    }
   }
 
   document.addEventListener('keydown', keydownHandler, true)
+
+  // ── IME composition: capture-phase so we set the flag before any
+  //    textarea `input` event fires mid-composition. Some Android IMEs
+  //    (Gboard swipe, Samsung Keyboard) commit via composition without
+  //    firing a trailing `input` event, so compositionend also re-runs
+  //    detection explicitly.
+  const compositionStartHandler = (): void => {
+    _isComposing = true
+  }
+  const compositionEndHandler = (e: Event): void => {
+    _isComposing = false
+    const target = e.target as HTMLElement | null
+    if (!target || target.tagName !== 'TEXTAREA') return
+    if (target.getAttribute('name') !== 'chat-message') return
+    const ta = target as HTMLTextAreaElement
+    // Defer one microtask so any trailing `input` event (browsers that
+    // fire input after compositionend) has a chance to land first; the
+    // second onTextChange is idempotent and ensures the popup reflects
+    // the committed value even on IMEs that don't fire input at all.
+    queueMicrotask(() => callbacks.onTextChange(ta.value))
+  }
+  document.addEventListener('compositionstart', compositionStartHandler, true)
+  document.addEventListener('compositionend', compositionEndHandler, true)
 
   // ── Send button: capture-phase click (works for both mouse and touch,
   //    since mobile browsers fire click after touchend).
@@ -77,20 +197,26 @@ export function installIntercept(
 
   document.addEventListener('click', clickHandler, true)
 
-  // ── Suggest overlay: update on every input event in the chat textarea
+  // ── Suggest overlay: forward textarea input to the runtime, which decides
+  //    whether to show or hide the popup. The inputHandler is a thin relay.
   const inputHandler = (e: Event) => {
     const target = e.target as HTMLElement | null
     if (!target || target.tagName !== 'TEXTAREA') return
     if (target.getAttribute('name') !== 'chat-message') return
 
-    const ta = target as HTMLTextAreaElement
-    if (ta.value.startsWith('/')) {
-      // Show suggestion overlay — implementation in Task 2.5
-      // (placeholder for now)
-    } else {
-      hideSuggest()
+    // IME composition in progress — defer to compositionend, which will
+    // re-run detection with the committed value.
+    if (_isComposing) return
+
+    // Tab commit set this flag — see keydownHandler. Clear and skip the
+    // runtime callback so the popup doesn't re-open with the typed
+    // command already in the textarea.
+    if (_skipNextTextChange) {
+      _skipNextTextChange = false
+      return
     }
-    callbacks.onTextChange(ta.value)
+
+    callbacks.onTextChange((target as HTMLTextAreaElement).value)
   }
 
   document.addEventListener('input', inputHandler, true)
@@ -99,6 +225,10 @@ export function installIntercept(
     document.removeEventListener('keydown', keydownHandler, true)
     document.removeEventListener('click', clickHandler, true)
     document.removeEventListener('input', inputHandler, true)
+    document.removeEventListener('compositionstart', compositionStartHandler, true)
+    document.removeEventListener('compositionend', compositionEndHandler, true)
+    _isComposing = false
+    _skipNextTextChange = false
     hideSuggest()
   }
 }

@@ -63,9 +63,11 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     onTextChange: (text) => {
       if (text.startsWith('/')) {
         const prefix = text.split(/\s/)[0].slice(1).toLowerCase()  // "/select 25" → "select"
+        // Pass the full SlashCommandDef so the popup can show usage/name and
+        // return the active def for dispatch (the intercept's active-row-wins
+        // path in intercept.ts reads `getActiveCommand().name`).
         const matches = registry.list()
           .filter((c) => c.name.toLowerCase().startsWith(prefix))
-          .map((c) => c.usage ?? '/' + c.name)
         const ta = document.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')
         if (ta) showSuggest(ta, matches)
       } else {

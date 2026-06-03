@@ -1,5 +1,78 @@
 # Slash Runtime — Recon (2026-06-02)
 
+## Suggest popup: visuals + keyboard nav (v1.1.x follow-up)
+
+**Status:** implemented. Replaces the v1.1.0 plain-DOM `Object.assign(el.style, {...})` with an injected style block tied to the canonical `--lumiverse-*` variable set, and adds keyboard navigation that the v1.1.0 popup lacked.
+
+### Style block (`canvas_ext/src/slash/suggest.ts`)
+
+`injectSuggestStyles()` is idempotent (mirrors `injectDrawerTabStyles` in `canvas_ext/src/frontend.ts:246-303`) — creates `<style id="canvas-slash-suggest-styles">` in `<head>` exactly once. The block uses only variables guaranteed by `~/Lumiverse/frontend/src/theme/variables.css:1-148`:
+
+| Property | Variable |
+|---|---|
+| `background` | `var(--lumiverse-bg-elevated)` |
+| `border` | `var(--lumiverse-border)` |
+| `border-radius` | `var(--lumiverse-radius-md)` |
+| `box-shadow` | `var(--lumiverse-shadow-md)` |
+| `color` | `var(--lumiverse-text)` |
+| `font-family` | `var(--lumiverse-font-family)` |
+| `font-size` | `calc(13px * var(--lumiverse-font-scale, 1))` |
+| `max-height` | `min(240px, calc(35vh / var(--lumiverse-ui-scale, 1)))` |
+| row hover background | `var(--lumiverse-fill-subtle)` |
+| **active** row background | `var(--lumiverse-primary-020)` |
+| `z-index` | `10005` (above Lumiverse modals at 10001-10003) |
+
+No hex literals, no `--lumiverse-bg-surface` (undefined — was a v1.1.0 typo), no `--lumiverse-font` (typo — corrected to `--lumiverse-font-family`).
+
+**Active row treatment** mirrors `~/Lumiverse/frontend/src/components/modals/CommandPalette.module.css:163-165` (the Ctrl+K command menu): primary-tinted background fill via `--lumiverse-primary-020`, with a fade-in keyframe animation (`canvas-slash-suggest-fade`, 160ms cubic-bezier).
+
+### SuggestController API (new in `suggest.ts`)
+
+```ts
+export interface SuggestController {
+  setActiveIndex(i: number): void
+  getActiveIndex(): number
+  getActiveCommand(): SlashCommandDef | null
+  scrollActiveIntoView(): void
+  isVisible(): boolean
+}
+
+export function showSuggest(
+  textarea: HTMLTextAreaElement,
+  options: SlashCommandDef[],   // CHANGED from string[] in v1.1.0
+): SuggestController
+```
+
+The controller is held in module scope; `getSuggestController()` and `isSuggestVisible()` expose it to `intercept.ts`. `hideSuggest()` clears it. `mouseenter` on each row syncs the index so keyboard and mouse stay in lockstep (mirrors `~/Lumiverse/frontend/src/components/modals/CommandPalette.tsx:142-189`).
+
+### Keyboard nav (`canvas_ext/src/slash/intercept.ts`)
+
+The capture-phase `keydownHandler` now handles, in addition to `Enter`:
+
+| Key | Action | Notes |
+|---|---|---|
+| `Enter` | Dispatch | Active row wins over parsed name (when popup is visible) |
+| `Tab` | Autocomplete | Writes active command's `usage ?? '/' + name` to the textarea; does NOT dispatch |
+| `ArrowDown` | Active row +1 | Clamped; no wrap |
+| `ArrowUp` | Active row -1 | Clamped; no wrap |
+| `Escape` | Dismiss popup | Does NOT clear the textarea |
+
+All five keys are gated on `!e.isComposing` (except `Escape`, which the IME may also use to cancel composition). When the popup is hidden, `ArrowUp`/`ArrowDown`/`Tab` fall through to the textarea's native behavior — cursor movement and focus-shifting are preserved.
+
+The Tab handler sets a module-level `_skipNextTextChange` flag before dispatching the synthetic `input` event, so the input handler suppresses the runtime's re-show for the freshly-completed command. Without this, committing `/se` → `/select ` would re-open the popup with the full command list.
+
+### ARIA (`canvas_ext/src/slash/suggest.ts`)
+
+The textarea is tagged with `role="combobox"`, `aria-autocomplete="list"`, `aria-haspopup="listbox"`, `aria-controls="canvas-slash-suggest"` once via `applyTextareaAriaBaseline()` (idempotent). Per-show, `aria-expanded` and `aria-activedescendant` (set to `canvas-slash-opt-${i}` for the active row) are updated by `updateActiveDom()`. The container has `role="listbox"`; each row has `role="option"`, `aria-selected="true|false"`, `data-active="true|false"`, and a stable `id`.
+
+Mirrors `~/Lumiverse/frontend/src/components/dream-weaver/components/chat/Composer.tsx:141-209` — Lumiverse's own slash-suggest ARIA shape.
+
+### Toast z-index drop (`canvas_ext/src/slash/toast.tsx`)
+
+`z-index: 10000` → `9980`. Toasts now sit in the floating-UI tier (alongside Lumiverse's `ExpressionDisplay` at 9970), below the suggest popup (10005) and below all Lumiverse modals (10001+). A 4-second toast can no longer occlude the user's active input. Audited: Chronicle's UI does not anchor against the toast surface; no other consumer.
+
+---
+
 ## Bulk-hide/delete API
 
 - **Path (hide):** `POST /api/v1/chats/{chatId}/messages/bulk-hide`
