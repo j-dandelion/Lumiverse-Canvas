@@ -13,6 +13,7 @@ import { dlog, dwarn, getDebug, setDebug } from './debug/log'
 import { findStoreData, getDrawerTabs, getStoreSnapshot, isMainDrawerOpen, getMainDrawerSide, clearStoreCache } from './store'
 import { setChatMargin, injectReflowStyles, updateChatReflow, scheduleReflow, startReflowObserver } from './chat/reflow'
 import { tagMainSidebarButtons, scheduleTagMainSidebarButtons } from './chat/tag-buttons'
+import { hideMainTabButton, showMainTabButton, findMainTabButton, cssEscape, addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab, deriveShortName } from './tabs/buttons'
 
 // --- Debug Logging ---
 // See src/debug/log.ts for the dlog/dwarn/DEBUG implementation.
@@ -214,8 +215,12 @@ function persistSettings(): void {
 // own SECONDARY_WIDTH_VAR after Step 9, and chat/reflow.ts will re-point.
 export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
+// FIXME-decomp(step 9): this export is transient — sidebar/secondary.tsx will
+// own PUZZLE_ICON_SVG after Step 9, and tabs/buttons.ts will re-point.
+export const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a 1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
+
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
-const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
+// FIXME-decomp(step 9): the const moved above as an export.
 
 // Boolean flag for secondary sidebar open state (replaces style transform check)
 let _secondarySidebarOpen = false
@@ -502,7 +507,9 @@ function animateWrapper(targetPx: number) {
   _animRaf = requestAnimationFrame(animFrame)
 }
 
-function openSecondarySidebar() {
+// FIXME-decomp(step 9): transient export — sidebar/secondary.tsx will own
+// this after Step 9; callers re-point.
+export function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   if (_secondarySidebarOpen) return
   // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
@@ -1244,235 +1251,8 @@ function repositionAssignedTabs() {
 
 // --- Tab Button Management ---
 
-function hideMainTabButton(tabId: string) {
-  const btn = findMainTabButton(tabId)
-  if (btn) (btn as HTMLElement).style.display = 'none'
-}
-
-function showMainTabButton(tabId: string) {
-  const btn = findMainTabButton(tabId)
-  if (btn) (btn as HTMLElement).style.display = ''
-}
-
-function findMainTabButton(tabId: string): Element | null {
-  const sidebar = getMainSidebar()
-  if (!sidebar) {
-    dwarn('findMainTabButton: no sidebar found')
-    return null
-  }
-
-  // Fast path: id-based match via data-tab-id (set by tagMainSidebarButtons).
-  // This is the canonical match — stable across title changes, translations,
-  // and version-suffix drift. Skips the store lookup entirely.
-  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`)
-  if (byId) return byId
-
-  // Fallback: title-based match via the store. Used only when the button
-  // hasn't been tagged yet (very brief window after mount) or when a stale
-  // tabId is being looked up.
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  if (!tab) {
-    dwarn(`findMainTabButton: no tab in store for id="${tabId}", known tabs=`, tabs.map(t => ({ id: t.id, title: t.title })))
-    return null
-  }
-
-  const buttons = sidebar.querySelectorAll('button[title]')
-  for (const btn of buttons) {
-    if (btn.getAttribute('title') === tab.title) {
-      // Backfill data-tab-id so future lookups hit the fast path.
-      btn.setAttribute('data-tab-id', tab.id)
-      return btn
-    }
-  }
-  dwarn(`findMainTabButton: no button for id="${tabId}" (title="${tab.title}") found among ${buttons.length} buttons`)
-  return null
-}
-
-/**
- * Escape a string for safe inclusion inside a CSS attribute selector value.
- * CSS.escape() exists in all modern browsers but the type isn't always
- * available in TS lib.dom depending on target. This is a minimal escape for
- * the characters that can actually appear in our tabIds.
- */
-function cssEscape(value: string): string {
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-    return CSS.escape(value)
-  }
-  return value.replace(/(["\\])/g, '\\$1')
-}
-
-// MOVED FROM sidebar/secondary (Step 0) — will live in tabs/buttons.ts after extraction.
-// Derive shortName matching Lumiverse's adaptExtensionTabs logic.
-function deriveShortName(title: string, shortName?: string): string {
-  if (shortName) return shortName
-  return title.length > 8 ? title.slice(0, 7) + '…' : title
-}
-
-function addSecondaryTabButton(tab: { id: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }) {
-  if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
-  const showLabels = isShowTabLabels()
-  dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
-
-  const btn = document.createElement('button')
-  btn.setAttribute('data-tab-id', tab.id)
-  btn.setAttribute('title', tab.title)
-  btn.style.cssText = `
-    width: 100%;
-    height: ${showLabels ? '56px' : '48px'};
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
-    border-radius: 8px;
-    background: transparent;
-    border: none;
-    color: var(--lumiverse-text-muted);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  `
-
-  // Render icon from store data (matches ViewportDrawer.tsx rendering)
-  const iconWrap = document.createElement('span')
-  iconWrap.style.cssText = 'display: flex; align-items: center; justify-content: center; flex-shrink: 0;'
-  if (tab.iconSvg) {
-    iconWrap.innerHTML = tab.iconSvg
-  } else if (tab.iconUrl) {
-    const img = document.createElement('img')
-    img.src = tab.iconUrl
-    img.alt = ''
-    img.width = 20
-    img.height = 20
-    img.style.borderRadius = '2px'
-    iconWrap.appendChild(img)
-  } else {
-    iconWrap.innerHTML = PUZZLE_ICON_SVG
-  }
-  btn.appendChild(iconWrap)
-
-  // Render label
-  const labelSpan = document.createElement('span')
-  labelSpan.className = 'sidebar-ux-tab-label'
-  labelSpan.textContent = deriveShortName(tab.title, tab.shortName)
-  labelSpan.style.cssText = `
-    font-size: calc(9px * var(--lumiverse-font-scale, 1));
-    font-weight: 500;
-    line-height: 1;
-    color: var(--lumiverse-text-dim);
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 48px;
-    opacity: ${showLabels ? '1' : '0'};
-    height: ${showLabels ? 'auto' : '0'};
-    margin-top: ${showLabels ? '1px' : '0'};
-    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
-  `
-  btn.appendChild(labelSpan)
-
-  btn.addEventListener('mouseenter', () => {
-    btn.style.background = 'var(--lumiverse-primary-015)'
-    btn.style.color = 'var(--lumiverse-text)'
-    dlog(`mouseenter: tab=${tab.id} btn.style.color=var(--lumiverse-text)`)
-  })
-  btn.addEventListener('mouseleave', () => {
-    // Restore label color (label has its own color rule, unaffected by parent hover)
-    const isActive = btn.classList.contains('sidebar-ux-tab-active')
-    btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
-    btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
-    labelSpan.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
-    // Restore active box-shadow/border-radius if needed
-    if (isActive) {
-      const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
-      const indicatorOnRight = secondarySide === 'left'
-      btn.style.boxShadow = `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary)`
-      btn.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
-    }
-    dlog(`mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`)
-  })
-  btn.addEventListener('click', () => {
-    if (!_secondarySidebarOpen) openSecondarySidebar()
-    showSecondaryTab(tab.id)
-  })
-  btn.addEventListener('contextmenu', (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title)
-  })
-
-  tabList.appendChild(btn)
-}
-
-function removeSecondaryTabButton(tabId: string) {
-  const btn = _secondaryWrapper?.querySelector(`[data-tab-id="${tabId}"]`)
-  btn?.remove()
-}
-
-function updateDrawerTabVisibility() {
-  const drawerTab = _secondaryWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-  if (!drawerTab) return
-  const hasSecondaryTabs = [..._tabAssignments].some(([, s]) => s === 'secondary')
-  drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
-}
-
-function showSecondaryTab(tabId: string) {
-  // Phase 4 (finding #2): record which tab is now the active secondary tab.
-  // restoreTabToPrimary reads this to decide whether to fall through to a
-  // neighbor when the active tab is moved out.
-  _activeSecondaryTabId = tabId
-
-  // Show the requested tab, hide others
-  for (const [tid, sidebar] of _tabAssignments) {
-    if (sidebar !== 'secondary') continue
-    const tabs = getDrawerTabs()
-    const tab = tabs.find(t => t.id === tid)
-    if (!tab || !tab.root) continue
-
-    if (tid === tabId) {
-      tab.root.style.setProperty('display', '', 'important')
-    } else {
-      tab.root.style.setProperty('display', 'none', 'important')
-    }
-  }
-
-  // Update header title
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  if (tab) {
-    const title = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-    if (title) title.textContent = tab.title
-  }
-
-  // Update active state on tab buttons
-  const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
-  const indicatorOnRight = secondarySide === 'left' // indicator faces content
-  const allBtns = _secondaryWrapper?.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]') as NodeListOf<HTMLElement>
-  if (allBtns) {
-    for (const btn of allBtns) {
-      const isActive = btn.getAttribute('data-tab-id') === tabId
-      btn.classList.toggle('sidebar-ux-tab-active', isActive)
-      // Icon color: active = primary, default = muted
-      btn.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-muted)'
-      // Background + border indicator (matches .tabBtnActive from ViewportDrawer.module.css)
-      btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
-      btn.style.boxShadow = isActive
-        ? `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary)`
-        : 'none'
-      btn.style.borderRadius = isActive
-        ? (indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0')
-        : ''
-      // Label color: active = primary, default = dim
-      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
-      if (label) {
-        label.style.color = isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)'
-      }
-      dlog(`showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
-    }
-  }
-}
+// All tab button management code lives in src/tabs/buttons.ts (Step 6 of
+// the decomposition). This section is intentionally empty.
 
 // --- Context Menu ---
 
@@ -1574,7 +1354,9 @@ export function disposeContextMenu(): void {
   }
 }
 
-function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle: string) {
+// FIXME-decomp(step 11): transient export — context-menu/index.ts will own
+// this after Step 11; callers re-point.
+export function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle: string) {
   if (!_contextMenu) {
     _contextMenu = createContextMenu()
     document.body.appendChild(_contextMenu)
@@ -2287,7 +2069,9 @@ function syncSecondaryTabLabels() {
 
 // MOVED FROM sidebar/secondary (Step 0) — will live in sidebar/polish.ts after extraction.
 // Read showTabLabels, honoring the user's Canvas override.
-function isShowTabLabels(): boolean {
+// FIXME-decomp(step 8): transient export — sidebar/polish.ts will own this
+// after Step 8; callers re-point.
+export function isShowTabLabels(): boolean {
   const mode = _settings.showTabLabels
   if (mode === 'show') return true
   if (mode === 'hide') return false
