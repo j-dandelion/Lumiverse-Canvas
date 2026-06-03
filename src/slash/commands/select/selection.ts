@@ -4,9 +4,11 @@
 // selection by:
 //   1. Ensuring select mode is active (toolbar toggle, NOT the store
 //      action — see pitfall #10).
-//   2. Reading each message row's `index_in_chat` via DOM scrape
+//   2. Waiting for React to re-render with select mode on, so the
+//      row's onClick prop is `onToggleSelect` (not `undefined`).
+//   3. Reading each message row's `index_in_chat` via DOM scrape
 //      (with a React/Preact fiber fallback).
-//   3. Dispatching a bubble-phase click on the row if its index is in
+//   4. Dispatching a bubble-phase click on the row if its index is in
 //      the target set.
 //
 // Pitfalls preserved from Chronicle skill (verified 2026-06-02):
@@ -21,13 +23,18 @@
 // 4. Deleted messages create gaps. Out-of-range indices in the
 //    target set simply don't match any row — surfaced as `missing`
 //    in the result so the orchestrator can toast a warning.
+// 5. rAF-before-row-clicks: React batches state updates; if we
+//    dispatch row clicks synchronously after the toolbar toggle
+//    click, the row's onClick prop is still `undefined` (the
+//    `data-select-mode` attribute hasn't been re-rendered yet, so
+//    `isSelectMode` in the row is still false). We must wait one
+//    rAF for React to commit before dispatching row clicks.
 //
 // Adaptations for Canvas:
 //   - Consumes `readIndexInChat` from the salvaged `./extract` module
 //     instead of duplicating the metaPill-scrape + fiber-walk logic.
-//   - Reuses the same Lumiverse DOM contract Chronicle used
-//     (`data-select-mode` on a wrapper element) but tightens the
-//     selectors that were too broad in the Chronicle-era contract:
+//   - Tightened selectors that were too broad in the Chronicle-era
+//     contract:
 //       * Toolbar toggle: `button[class*="toolbarBtn"]` (was
 //         `button[title*="select" i]`, which also matched
 //         MessageSelectBar's "Select all" button).
@@ -67,33 +74,18 @@ export function isSelectModeActive(): boolean {
  * access — we drive Lumiverse via the DOM regardless.
  */
 export function ensureSelectMode(): void {
-  if (isSelectModeActive()) {
-    console.log('[select-debug] ensureSelectMode: already active, skip')
-    return
-  }
+  if (isSelectModeActive()) return
 
   const candidates = document.querySelectorAll<HTMLButtonElement>(SELECTOR_SELECT_TOGGLE)
-  console.log('[select-debug] ensureSelectMode: candidates =', candidates.length)
   if (candidates.length === 0) return
 
-  // Prefer the toggle that's inside a `data-select-mode` wrapper
-  // (the toolbar root). Fall back to the first match.
   for (const btn of Array.from(candidates)) {
     if (btn.closest(`[${SELECT_MODE_ATTR}]`)) {
-      console.log('[select-debug] ensureSelectMode: clicking toolbarBtn', {
-        title: btn.getAttribute('title'),
-        className: btn.className,
-      })
       btn.click()
-      console.log('[select-debug] ensureSelectMode: data-select-mode after click =',
-        document.querySelector(`[${SELECT_MODE_ATTR}="true"]`) ? 'true' : 'absent/false')
       return
     }
   }
-  console.log('[select-debug] ensureSelectMode: fallback to first candidate')
   candidates[0].click()
-  console.log('[select-debug] ensureSelectMode: data-select-mode after click =',
-    document.querySelector(`[${SELECT_MODE_ATTR}="true"]`) ? 'true' : 'absent/false')
 }
 
 /**
@@ -116,35 +108,63 @@ export function clearSelection(): void {
 }
 
 /**
+ * Wait until `data-select-mode="true"` is on the wrapper, or
+ * `timeoutMs` elapses. Returns true if select mode is active.
+ *
+ * Used after `ensureSelectMode()` to let React commit the state
+ * update and re-render the rows with `onClick={onToggleSelect}`.
+ * Without this wait, the dispatched row clicks are no-ops (onClick
+ * prop is still `undefined`).
+ */
+function waitForSelectModeActive(timeoutMs = 200): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now()
+    const tick = () => {
+      if (isSelectModeActive()) {
+        resolve(true)
+        return
+      }
+      if (Date.now() - start > timeoutMs) {
+        resolve(false)
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    tick()
+  })
+}
+
+/**
  * Select every message whose visual `index_in_chat` is in `indices`.
  *
- * The orchestrator (Task 3.4) calls this after `parseSelectArgs` +
- * `extractIndices` have produced a normalized set.
+ * Async: returns a Promise that resolves AFTER the row clicks have
+ * been dispatched and React has had a chance to process them. The
+ * orchestrator (Task 3.4) awaits this before reading the result.
  *
- * Note: this dispatches one click per matching row. Lumiverse's
- * bubble-phase handler toggles that row's selection. If the row
- * was already selected, this will DESELECT it. The orchestrator
- * should call `clearSelection()` first when the user wants a
- * fresh selection.
+ * The orchestrator should call `clearSelection()` first when the
+ * user wants a fresh selection.
  */
-export function selectByVisualIndices(indices: Set<number>): SelectionResult {
+export async function selectByVisualIndices(
+  indices: Set<number>,
+): Promise<SelectionResult> {
   if (indices.size === 0) {
     return { matched: 0, unreadable: 0, missingIndices: [] }
   }
 
   ensureSelectMode()
 
-  let matched = 0
-  let unreadable = 0
-  const matchedIndices = new Set<number>()
-  const rows = document.querySelectorAll<HTMLElement>(SELECTOR_MESSAGE_ROW)
-  console.log('[select-debug] selectByVisualIndices: row count =', rows.length, 'target set =', Array.from(indices).sort((a, b) => a - b))
-
-  // Snapshot class list before clicks so we can detect a state change.
-  const beforeClasses = new Map<HTMLElement, string>()
-  for (const row of Array.from(rows)) {
-    beforeClasses.set(row, row.className)
+  // Wait for React to commit the select-mode state change and
+  // re-render the rows with `onClick={onToggleSelect}` before
+  // dispatching row clicks. Without this, the clicks are no-ops.
+  const ready = await waitForSelectModeActive()
+  if (!ready) {
+    console.warn('[canvas-slash] selectByVisualIndices: select mode did not activate within timeout')
+    return { matched: 0, unreadable: 0, missingIndices: Array.from(indices) }
   }
+
+  const matchedIndices = new Set<number>()
+  let unreadable = 0
+  const rows = document.querySelectorAll<HTMLElement>(SELECTOR_MESSAGE_ROW)
 
   for (const row of Array.from(rows)) {
     const idx = readIndexInChat(row)
@@ -153,21 +173,9 @@ export function selectByVisualIndices(indices: Set<number>): SelectionResult {
       continue
     }
     if (indices.has(idx)) {
-      const before = beforeClasses.get(row) ?? ''
       row.dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
       )
-      // Read the className on the next microtask to allow React to flush.
-      queueMicrotask(() => {
-        const after = row.className
-        const changed = before !== after
-        console.log('[select-debug] row click idx=' + idx,
-          'before [selectMode=' + before.includes('selectMode') + ', selected=' + before.includes('selected') + ']',
-          'after [selectMode=' + after.includes('selectMode') + ', selected=' + after.includes('selected') + ']',
-          'classChanged:', changed,
-          'full className:', after)
-      })
-      matched++
       matchedIndices.add(idx)
     }
   }
@@ -177,5 +185,5 @@ export function selectByVisualIndices(indices: Set<number>): SelectionResult {
     if (!matchedIndices.has(i)) missingIndices.push(i)
   }
 
-  return { matched, unreadable, missingIndices }
+  return { matched: matchedIndices.size, unreadable, missingIndices }
 }
