@@ -11,6 +11,7 @@ import {
 } from './dom/lumiverse'
 import { dlog, dwarn, getDebug, setDebug } from './debug/log'
 import { findStoreData, getDrawerTabs, getStoreSnapshot, isMainDrawerOpen, getMainDrawerSide, clearStoreCache } from './store'
+import { setChatMargin, injectReflowStyles, updateChatReflow, scheduleReflow, startReflowObserver, tagMainSidebarButtons, scheduleTagMainSidebarButtons } from './chat/reflow'
 
 // --- Debug Logging ---
 // See src/debug/log.ts for the dlog/dwarn/DEBUG implementation.
@@ -208,7 +209,9 @@ function persistSettings(): void {
 
 // --- Secondary Sidebar ---
 
-const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
+// FIXME-decomp(step 9): this export is transient — sidebar/secondary.tsx will
+// own SECONDARY_WIDTH_VAR after Step 9, and chat/reflow.ts will re-point.
+export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
 const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
@@ -611,29 +614,10 @@ function tearDownSecondarySidebar(): void {
 
 // --- Chat Reflow ---
 
-// MOVED FROM "Store Access" section (Step 0) — setChatMargin and injectReflowStyles
-// will live in chat/reflow.ts after Step 4; injectDrawerTabStyles will move to
-// sidebar/secondary.tsx after Step 9.
-function setChatMargin(side: 'left' | 'right', px: number) {
-  const chat = getChatColumn()
-  if (!chat) return
-  const varName = side === 'left' ? '--sidebar-ux-chat-ml' : '--sidebar-ux-chat-mr'
-  chat.style.setProperty(varName, `${px}px`)
-}
-
-function injectReflowStyles() {
-  if (document.getElementById('sidebar-ux-reflow')) return
-  const style = document.createElement('style')
-  style.id = 'sidebar-ux-reflow'
-  style.textContent = `
-    [class*="_chatColumn_"] {
-      margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
-      margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
-      transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    }
-  `
-  document.head.appendChild(style)
-}
+// All chat reflow + main-sidebar button tagging code lives in
+// src/chat/reflow.ts (Step 4 of the decomposition).
+// injectDrawerTabStyles is still defined here and will move to
+// sidebar/secondary.tsx in Step 9.
 
 function injectDrawerTabStyles() {
   if (document.getElementById('sidebar-ux-drawer-tab-styles')) return
@@ -693,122 +677,6 @@ function injectDrawerTabStyles() {
     }
   `
   document.head.appendChild(style)
-}
-
-let _reflowRaf: number | null = null
-
-function scheduleReflow() {
-  if (_reflowRaf !== null) return
-  _reflowRaf = requestAnimationFrame(() => {
-    _reflowRaf = null
-    updateChatReflow()
-  })
-}
-
-function updateChatReflow() {
-  const mainSide = getMainDrawerSide()
-  const mainOpen = isMainDrawerOpen()
-  const mainWidth = mainOpen ? getMainDrawerWidth() : 0
-
-  // Secondary sidebar is on the opposite side
-  const secondaryWidth = _secondarySidebarOpen
-    ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-    : 0
-
-  // Set CSS variables for chat column margins (centering)
-  if (mainSide === 'left') {
-    setChatMargin('left', mainWidth)
-    setChatMargin('right', secondaryWidth)
-  } else {
-    setChatMargin('right', mainWidth)
-    setChatMargin('left', secondaryWidth)
-  }
-}
-
-function startReflowObserver() {
-  injectReflowStyles()
-
-  const observer = new MutationObserver(() => scheduleReflow())
-  const waitForWrapper = () => {
-    const wrapper = getMainWrapper()
-    if (wrapper) {
-      observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
-      updateChatReflow()
-      return
-    }
-    requestAnimationFrame(waitForWrapper)
-  }
-  waitForWrapper()
-
-  // Separate observer on the main sidebar for child-list changes. When a tab
-  // is added or replaced (e.g., after a Spindle extension reloads), we need
-  // to re-tag its button with data-tab-id so the id-based match in
-  // findMainTabButton / switchMainDrawerToFallback works. Without this, we'd
-  // fall back to title-matching, which is the bug class Finding #7 fixes.
-  const sidebarObserver = new MutationObserver(() => scheduleTagMainSidebarButtons())
-  const waitForSidebar = () => {
-    const sidebar = getMainSidebar()
-    if (sidebar) {
-      sidebarObserver.observe(sidebar, { childList: true, subtree: true })
-      // Initial tag pass — sidebar exists, but buttons may already be rendered.
-      tagMainSidebarButtons()
-      return
-    }
-    requestAnimationFrame(waitForSidebar)
-  }
-  waitForSidebar()
-
-  return () => {
-    observer.disconnect()
-    sidebarObserver.disconnect()
-  }
-}
-
-let _tagMainSidebarButtonsRaf: number | null = null
-function scheduleTagMainSidebarButtons() {
-  if (_tagMainSidebarButtonsRaf !== null) return
-  _tagMainSidebarButtonsRaf = requestAnimationFrame(() => {
-    _tagMainSidebarButtonsRaf = null
-    tagMainSidebarButtons()
-  })
-}
-
-/**
- * Tag every extension tab button in the main sidebar with a `data-tab-id`
- * attribute. Walks the store's drawerTabs and matches each by title.
- * Idempotent — skips buttons that are already tagged.
- *
- * Returns the number of buttons tagged in this pass.
- */
-function tagMainSidebarButtons(): number {
-  const sidebar = getMainSidebar()
-  if (!sidebar) return 0
-
-  // Force a fresh fiber walk — the cached snapshot may predate the latest
-  // tab registration (e.g., LumiBooks registers after Prompt Viewer). The
-  // cache TTL is 3s, but sidebar mutations can fire well inside that window
-  // with an incomplete view of the store.
-  findStoreData(true)
-  const tabs = getDrawerTabs()
-  if (tabs.length === 0) return 0
-
-  let tagged = 0
-  // Iterate buttons, not tabs, because the title-match is the *initial*
-  // identity. A button's title is set by Lumiverse and is what the user sees.
-  const buttons = sidebar.querySelectorAll('button[title]')
-  for (const btn of buttons) {
-    const existing = btn.getAttribute('data-tab-id')
-    if (existing) continue  // already tagged
-    const btnTitle = btn.getAttribute('title')
-    if (!btnTitle) continue
-    const tab = tabs.find(t => t.title === btnTitle)
-    if (tab) {
-      btn.setAttribute('data-tab-id', tab.id)
-      tagged++
-    }
-  }
-  if (tagged > 0) dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`)
-  return tagged
 }
 
 // --- Tab Assignment System (CSS Transform Approach) ---
