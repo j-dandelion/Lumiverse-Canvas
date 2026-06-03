@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.3.0 — 2026-06-03
+
+### Fixed
+- Tab move no longer desyncs when React re-mounts the active tab's
+  `ExtensionTabContent`. Identification pivoted from DOM-Node identity to
+  stable `tabId`. The Node-keyed guard (`isTabMovedToSecondary`) is
+  replaced with a tabId-keyed check (`isMovedTabId` + `isMovedTabNode`)
+  that re-derives the current Node from a forced-fresh store cache on
+  every call, closing the 3-second TTL timing window.
+- The "panel appears in both sidebars" symptom is closed. `repositionTab`
+  now sweeps the destination container for any prior copy of the tabId
+  (tagged with `data-canvas-moved`) and removes it before appending the
+  current `tab.root`. The moved Node is tagged on every move so the next
+  move can find the orphan.
+- The "panel does not appear" symptom is closed. The main panel content
+  container is now re-guarded on every move via `ensureNodeGuard`, so a
+  React-driven container swap does not leave the moved tab reclaimable
+  by the unguarded new container.
+- `_originalParents` is now a `tabId`-keyed `Map` (was a `Node`-keyed
+  `WeakMap`). Stable across re-mounts; the original parent is a logical
+  fact about the tab, not about a specific DOM Node.
+
+### Removed
+- `hideRepositionedTabs` function — never called; the equivalent logic is
+  inlined in `closeSecondarySidebar`.
+- `_savedStyles` Map — declared, get/delete/clear, never set. Dead.
+- `__sidebarUxResizeHandler` / `__sidebarUxPositionUpdate` properties —
+  read/deleted but never assigned; no `window.addEventListener('resize', …)`
+  ever attached them. Dead.
+- Unused `secondaryContent` local in `showSecondaryTab` — assigned, never
+  read.
+- Permanent `ctx.onBackendMessage` no-op in `setup()` — the
+  `loadSavedLayout` one-shot handler resolves on the only LAYOUT_DATA the
+  backend sends. The permanent listener never fired; it added no value.
+
 ## v1.2.0 — 2026-06-02
 
 ### Changed

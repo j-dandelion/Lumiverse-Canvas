@@ -552,12 +552,12 @@ function restoreOverflow(element: HTMLElement) {
 let _secondaryWrapper: HTMLElement | null = null
 let _secondaryDrawer: HTMLElement | null = null
 
-// Phase 4 (finding #2): centralized WeakMap tracking each tab's original
-// parent in the main sidebar, replacing the per-node __sidebarUxOriginalParent
-// property. WeakMap auto-cleans when the tab root is GC'd, and isolates the
-// extension's metadata from any future extension that also wants to track
-// its own per-node state.
-const _originalParents: WeakMap<HTMLElement, HTMLElement> = new WeakMap()
+// v1.3.0: tabId-keyed Map tracking each tab's original parent in the main
+// sidebar, replacing the previous Node-keyed WeakMap. The tabId is stable
+// across React re-mounts of ExtensionTabContent; the DOM Node is not. Keying
+// on tabId means a re-mount that gives the tab a new `tab.root` still finds
+// the recorded original parent on restore.
+const _originalParents: Map<string, HTMLElement> = new Map()
 
 // --- JS-based animation (replaces CSS transitions for drawer + drawerTab sync) ---
 // The WRAPPER translates — both drawer and drawerTab are children, so they move as one unit.
@@ -810,9 +810,6 @@ function tagMainSidebarButtons(): number {
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 
-// Saved original styles for repositioned elements (for restoration)
-const _savedStyles = new Map<HTMLElement, { cssText: string; overflow: string }>()
-
 function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
 }
@@ -1039,8 +1036,6 @@ function applyAssignment(tabId: string, target: 'primary' | 'secondary', options
         showSecondaryTab(tabId)
       }
     }
-    // For target === 'primary', restoreTabToPrimary handles the neighbor
-    // fall-through via _activeSecondaryTabId.
   }
 
   if (target === 'secondary' && opts.switchActive && isTabActiveInMainDrawer(tabId)) {
@@ -1086,19 +1081,63 @@ function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
   return applyAssignment(tabId, sidebar, { open: true, switchActive: true, save: true })
 }
 
-// Guard against React reclaiming moved tab nodes.
-// ExtensionTabContent.useEffect calls containerRef.replaceChildren(tab.root) when
-// it detects the node is missing. We intercept removeChild + replaceChildren on
-// the original parent to block this.
-function isTabMovedToSecondary(node: Node): boolean {
-  for (const [tabId, sidebar] of _tabAssignments) {
-    if (sidebar === 'secondary') {
-      const tabs = _drawerTabsCache || []
-      const tab = tabs.find((t: any) => t.id === tabId)
-      if (tab && tab.root === node) return true
-    }
-  }
-  return false
+// v1.3.0: tabId-keyed identification replaces the previous Node-keyed
+// guard. The old `isTabMovedToSecondary(node)` compared a Node reference
+// against the cached `tab.root` field — and the cache has a 3s TTL, so a
+// React re-mount that produced a new `tab.root` would land in the gap and
+// the guard would let React reclaim the new Node. The new layer:
+//
+//   1. `isMovedTabId(tabId)` — pure: returns true iff this tabId is currently
+//      assigned to the secondary sidebar. No DOM lookup, no cache dependency.
+//   2. `isMovedTabNode(node)` — what the wrapped container methods call.
+//      Forces a fresh store read (findStoreData(true)) and reverse-resolves
+//      the Node to a tabId via the live store's `tab.root`. Then delegates
+//      to `isMovedTabId`. The forced refresh closes the 3s TTL window.
+//
+// The reverse-resolution still goes through `_drawerTabsCache` because React
+// hands us a Node and we have no other way to ask "which tab is this?".
+// But the *authoritative* key in `_tabAssignments` is the stable tabId, so
+// the timing window is bounded to a single forced fiber walk (~1-2ms), not
+// the 3s TTL.
+
+function isMovedTabId(tabId: string): boolean {
+  return _tabAssignments.get(tabId) === 'secondary'
+}
+
+function isMovedTabNode(node: Node): boolean {
+  // Force a fresh store read so the Node → tabId mapping is current.
+  // Guards fire on React DOM mutations, which can happen many times per
+  // re-render but only briefly during a move — total overhead is small.
+  findStoreData(true)
+  const tabs = _drawerTabsCache || []
+  const tab = tabs.find((t: any) => t.root === node)
+  if (!tab) return false
+  return isMovedTabId(tab.id)
+}
+
+// Tracks which container currently has the guard installed. If React
+// replaces the main panel content element (e.g. on a drawer re-render), the
+// guard's `__sidebarUxGuarded` marker is on the old (detached) container
+// and the new container is unguarded. `ensureNodeGuard` detects this and
+// re-installs the guard on the current container.
+let _guardedContainer: HTMLElement | null = null
+
+/**
+ * Install (or re-install) the React-reclaim guard on the current main panel
+ * content container. Idempotent: no-op if the guard is already on the
+ * current container. Re-installs (and forgets the old container) if the
+ * container has been replaced since the last install.
+ */
+function ensureNodeGuard(): void {
+  const mainContent = getMainPanelContent()
+  if (!mainContent) return
+  if (mainContent === _guardedContainer) return
+  // Container changed (or first install). The old container (if any) is
+  // detached and will be GC'd along with its guard methods. We don't
+  // attempt to restore the originals — the container is gone.
+  _guardedContainer = null
+  installNodeGuard(mainContent)
+  _guardedContainer = mainContent
 }
 
 function installNodeGuard(container: Node) {
@@ -1107,7 +1146,7 @@ function installNodeGuard(container: Node) {
 
   const origRemoveChild = container.removeChild.bind(container)
   container.removeChild = function(child: Node) {
-    if (isTabMovedToSecondary(child)) return child as any
+    if (isMovedTabNode(child)) return child as any
     return origRemoveChild(child)
   } as any
 
@@ -1115,7 +1154,7 @@ function installNodeGuard(container: Node) {
   const origReplaceChildren = (container as any).replaceChildren?.bind(container)
   if (origReplaceChildren) {
     ;(container as any).replaceChildren = function(...nodes: Node[]) {
-      const filtered = nodes.filter(n => !isTabMovedToSecondary(n))
+      const filtered = nodes.filter(n => !isMovedTabNode(n))
       return origReplaceChildren(...filtered)
     }
   }
@@ -1123,21 +1162,37 @@ function installNodeGuard(container: Node) {
   // Guard appendChild — React may also use this to re-add nodes
   const origAppendChild = container.appendChild.bind(container)
   container.appendChild = function(child: Node) {
-    if (isTabMovedToSecondary(child)) return child
+    if (isMovedTabNode(child)) return child
     return origAppendChild(child)
   } as any
 }
 
 /**
- * Phase 4 (finding #1): pure DOM move — moves a tab's root element between
- * sidebars WITHOUT touching state, buttons, save, or open/close. The policy
- * layer (applyAssignment) wraps this with the side effects.
+ * Phase 4 (finding #1) + v1.3.0: pure DOM move — moves a tab's root element
+ * between sidebars WITHOUT touching state, buttons, save, or open/close.
+ * The policy layer (applyAssignment) wraps this with the side effects.
+ *
+ * v1.3.0 changes:
+ *   - Forces a fresh store read at the top so we operate on the current
+ *     `tab.root`, not a cached reference from a re-mount in flight.
+ *   - Re-installs the React-reclaim guard on the main panel content
+ *     container if it has been replaced since the last move.
+ *   - Sweeps the destination container for any prior copy of this tabId
+ *     (tagged with `data-canvas-moved`) and removes it, closing the
+ *     "two copies" symptom when a stale orphan exists.
+ *   - Tags the moved Node with `data-canvas-moved="${tabId}"` so the next
+ *     move can find and remove it. The attribute is preserved by React's
+ *     reconciler (Lumiverse's `ExtensionTabContent` does not manage it).
+ *   - `_originalParents` is keyed on `tabId` (stable across re-mounts),
+ *     not on `tab.root`.
  *
  * Returns true on success, false if the tab or target container is missing.
- * The original parent is tracked in the centralized _originalParents
- * WeakMap (replacing the per-node __sidebarUxOriginalParent property).
  */
 function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean {
+  // Force a fresh store read so we operate on the current `tab.root`, not
+  // a stale cached reference from a re-mount in flight. This is the
+  // single change that closes the 3s-TTL timing window.
+  findStoreData(true)
   const tabs = getDrawerTabs()
   const tab = tabs.find(t => t.id === tabId)
   if (!tab?.root) {
@@ -1151,18 +1206,25 @@ function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean 
       dwarn('repositionTab: no secondary content area')
       return false
     }
-    // Install the React node guard on the main panel content so React can't
-    // reclaim the moved node. installNodeGuard is idempotent.
-    const mainContent = getMainPanelContent()
-    if (mainContent) installNodeGuard(mainContent)
-    // Save the original parent in the WeakMap (only if not already recorded
-    // — a tab moved twice should keep its first original parent so the
-    // second restore still finds the right target).
-    if (!_originalParents.has(tab.root)) {
-      _originalParents.set(tab.root, tab.root.parentElement as HTMLElement)
+    // Re-install the React-reclaim guard if the main panel content
+    // container has been replaced. installNodeGuard itself is idempotent;
+    // ensureNodeGuard adds the container-swap detection on top.
+    ensureNodeGuard()
+    // Record the original parent by tabId. If a prior entry exists (e.g.
+    // tab was moved away, restored, moved again), keep the first
+    // recording so the next restore still finds the right target.
+    if (!_originalParents.has(tabId)) {
+      _originalParents.set(tabId, tab.root.parentElement as HTMLElement)
     }
     if (tab.root.parentElement !== secondaryContent) {
+      // Sweep: remove any prior copy of this tabId that is already in the
+      // secondary content area. The `data-canvas-moved` attribute is set
+      // by an earlier move and is preserved by React's reconciler. If
+      // there is no prior copy, this is a no-op query.
+      secondaryContent.querySelectorAll(`[data-canvas-moved="${cssEscape(tabId)}"]`)
+        .forEach(n => n.remove())
       secondaryContent.appendChild(tab.root)
+      tab.root.setAttribute('data-canvas-moved', tabId)
     }
     tab.root.style.setProperty('width', '100%', 'important')
     tab.root.style.setProperty('height', '100%', 'important')
@@ -1173,7 +1235,7 @@ function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean 
     // parent in the main sidebar. If the recorded parent has been detached
     // (React re-mounted the tab while it was in secondary), fall back to
     // the current main panel content so the tab is still reachable.
-    const orig = _originalParents.get(tab.root)
+    const orig = _originalParents.get(tabId)
     const targetEl = (orig && orig.isConnected) ? orig : getMainPanelContent()
     if (!targetEl) {
       dlog(`repositionTab: no original parent and no main panel content for tabId=${tabId} — tab will be detached`)
@@ -1182,10 +1244,14 @@ function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean 
     if (tab.root.parentElement !== targetEl) {
       targetEl.appendChild(tab.root)
     }
-    // Clear the WeakMap entry — the tab is back home, no need to remember
-    // the original parent. The next move-to-secondary will record the
-    // (possibly new) parent again.
-    _originalParents.delete(tab.root)
+    // Clear the tabId-keyed entry — the tab is back home, no need to
+    // remember the original parent. The next move-to-secondary will
+    // record the (possibly new) parent again.
+    _originalParents.delete(tabId)
+    // Remove the move tag — the tab is back in primary and should not
+    // participate in future secondary sweeps. If a re-mount later
+    // produces a new Node, the next move will re-tag it.
+    tab.root.removeAttribute('data-canvas-moved')
     return true
   }
 }
@@ -1213,24 +1279,16 @@ function restoreTabToPrimary(tabId: string) {
   const tab = tabs.find(t => t.id === tabId)
   if (!tab || !tab.root) return
 
-  // Remove resize handler
-  const resizeHandler = (tab.root as any).__sidebarUxResizeHandler
-  if (resizeHandler) {
-    window.removeEventListener('resize', resizeHandler)
-    delete (tab.root as any).__sidebarUxResizeHandler
-  }
-  delete (tab.root as any).__sidebarUxPositionUpdate
-
-  // Restore original styles
-  const saved = _savedStyles.get(tab.root)
-  if (saved) {
-    tab.root.style.cssText = saved.cssText
-    _savedStyles.delete(tab.root)
-  }
+  // v1.3.0: previously this function cleared `__sidebarUxResizeHandler` and
+  // `__sidebarUxPositionUpdate` properties hung off `tab.root`, plus read
+  // from an always-empty `_savedStyles` Map. Both paths were dead code
+  // (the properties were never assigned, the Map was never populated) and
+  // are removed. Original styles on the moved Node are now cleared by
+  // `repositionTab` via `removeAttribute('data-canvas-moved')`.
 
   // Phase 4 (finding #2): use the centralized repositionTab which now also
-  // handles the WeakMap-based original parent tracking. Falls back to
-  // getMainPanelContent() if the original parent was detached.
+  // handles the tabId-keyed original parent tracking. Falls back to
+  // getMainPanelContent() if the recorded parent was detached.
   repositionTab(tabId, 'primary')
 
   // Phase 4 (finding #2): if the restored tab was the active secondary tab,
@@ -1299,21 +1357,6 @@ function repositionAssignedTabs() {
   for (const [tabId, sidebar] of _tabAssignments) {
     if (sidebar === 'secondary') {
       repositionTabToSecondary(tabId)
-    }
-  }
-}
-
-/**
- * Hide all repositioned tabs (called when secondary sidebar closes).
- */
-function hideRepositionedTabs() {
-  for (const [tabId, sidebar] of _tabAssignments) {
-    if (sidebar === 'secondary') {
-      const tabs = getDrawerTabs()
-      const tab = tabs.find(t => t.id === tabId)
-      if (tab && tab.root) {
-        tab.root.style.setProperty('display', 'none', 'important')
-      }
     }
   }
 }
@@ -1494,7 +1537,6 @@ function showSecondaryTab(tabId: string) {
   // neighbor when the active tab is moved out.
   _activeSecondaryTabId = tabId
 
-  const secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
   // Show the requested tab, hide others
   for (const [tid, sidebar] of _tabAssignments) {
     if (sidebar !== 'secondary') continue
@@ -2179,7 +2221,7 @@ function cleanupAll() {
     showMainTabButton(tabId)
   }
   _tabAssignments.clear()
-  _savedStyles.clear()
+  _originalParents.clear()
 
   // Remove secondary sidebar DOM
   if (_secondaryWrapper) {
@@ -2464,15 +2506,12 @@ export function setup(ctx: any) {
     }
   })
 
-  // Register the permanent backend message handler for any future LAYOUT_DATA
-  // (the one-shot handler in loadSavedLayout resolved and detached, but
-  // ctx.onBackendMessage implementations typically accumulate handlers, so
-  // this is just a no-op safety belt).
-  ctx.onBackendMessage((payload: any) => {
-    if (payload.type === 'LAYOUT_DATA') {
-      dlog('setup: late LAYOUT_DATA received after initial load — ignoring (already applied)')
-    }
-  })
+  // v1.3.0: removed the permanent ctx.onBackendMessage no-op. The previous
+  // comment noted it was a "safety belt" for late LAYOUT_DATA, but the
+  // one-shot handler in loadSavedLayout resolves on the first LAYOUT_DATA
+  // and that is the only one the backend ever sends. Carrying a permanent
+  // listener that never fires adds no value and would only mask a real bug
+  // (a duplicate LAYOUT_DATA send) if the backend ever started sending one.
 
   // Return teardown — called when extension is disabled
   return cleanupAll
