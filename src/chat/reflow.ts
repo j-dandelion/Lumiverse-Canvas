@@ -20,7 +20,7 @@
 // reflow state.
 import { getChatColumn, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
-import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../frontend'  // FIXME-decomp(step 9): re-point to '../sidebar/secondary'
+import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
@@ -78,7 +78,7 @@ export function updateChatReflow(): void {
 // sidebar/secondary.tsx after Step 9. Until then, frontend.ts owns it and
 // the callers reference it via the still-large entry. Re-exported from
 // chat/reflow for setup()'s convenience; the canonical home is M10.
-export { injectDrawerTabStyles } from '../frontend'  // FIXME-decomp(step 9)
+export { injectDrawerTabStyles } from '../sidebar/secondary'
 
 export function startReflowObserver(): () => void {
   injectReflowStyles()

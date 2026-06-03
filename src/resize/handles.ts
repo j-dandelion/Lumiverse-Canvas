@@ -21,7 +21,7 @@ import { scheduleReflow } from '../chat/reflow'
 // SECONDARY_WIDTH_VAR, repositionAssignedTabs will live in their respective
 // modules after Step 9. mountResizeHandles's secondary-handle branch needs
 // them. Until then, import via the still-large entry.
-import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../frontend'  // re-point to '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 // FIXME-decomp(step 10): repositionAssignedTabs will live in tabs/assignment.ts.
 import { repositionAssignedTabs } from '../frontend'  // re-point to '../tabs/assignment'
 // FIXME-decomp(step 12): persistLayout will live in layout/persist.ts.

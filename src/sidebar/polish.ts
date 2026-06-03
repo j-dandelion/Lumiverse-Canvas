@@ -22,7 +22,7 @@ import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot } from '../store'
 import { dlog } from '../debug/log'
 // FIXME-decomp(step 9): getSecondaryWrapper, isSecondarySidebarOpen,
 // mountSecondarySidebar will live in sidebar/secondary.tsx after Step 9.
-import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../frontend'  // re-point to '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../sidebar/secondary'
 // FIXME-decomp(step 10): getTabAssignments, repositionAssignedTabs will
 // live in tabs/assignment.ts after Step 10.
 import { getTabAssignments, repositionAssignedTabs } from '../frontend'  // re-point to '../tabs/assignment'
@@ -138,7 +138,7 @@ export function checkSideChanged(): void {
 // The unmountSecondarySidebar call in checkSideChanged needs to be in scope.
 // Re-import from the transient entry — sidebar/secondary.tsx owns it
 // after Step 9; the import statement will be a direct one by then.
-import { unmountSecondarySidebar } from '../frontend'  // re-point to '../sidebar/secondary'
+import { unmountSecondarySidebar } from '../sidebar/secondary'
 
 /**
  * Re-create secondary tab buttons for every tab currently assigned to the

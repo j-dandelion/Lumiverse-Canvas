@@ -18,7 +18,7 @@ import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/polish'
 // FIXME-decomp(step 9): getSecondaryWrapper, isSecondarySidebarOpen,
 // openSecondarySidebar, PUZZLE_ICON_SVG will live in sidebar/secondary.tsx.
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../frontend'  // re-point to '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 // FIXME-decomp(step 10): getTabAssignments, getActiveSecondaryTabId will live in tabs/assignment.ts.
 import { getTabAssignments, getActiveSecondaryTabId } from '../frontend'  // re-point to '../tabs/assignment'
 // FIXME-decomp(step 11): showAssignmentMenu will live in context-menu/index.ts.
