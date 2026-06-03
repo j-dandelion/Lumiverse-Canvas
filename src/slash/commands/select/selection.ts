@@ -26,14 +26,20 @@
 //   - Consumes `readIndexInChat` from the salvaged `./extract` module
 //     instead of duplicating the metaPill-scrape + fiber-walk logic.
 //   - Reuses the same Lumiverse DOM contract Chronicle used
-//     (`[data-message-id]` rows, `button[title*="select" i]` toggle,
-//     `data-select-mode` on a wrapper element). No selectors needed
-//     adapting.
+//     (`data-select-mode` on a wrapper element) but tightens the
+//     selectors that were too broad in the Chronicle-era contract:
+//       * Toolbar toggle: `button[class*="toolbarBtn"]` (was
+//         `button[title*="select" i]`, which also matched
+//         MessageSelectBar's "Select all" button).
+//       * Message row: `[data-component="BubbleMessage"]` (was
+//         `[data-message-id]`, which also matched the virtualRow
+//         wrapper — 2 elements per message, only the bubble has
+//         the metaPill the index scrape reads).
 
 import { readIndexInChat } from './extract'
 
-const SELECTOR_SELECT_TOGGLE = 'button[title*="select" i]'
-const SELECTOR_MESSAGE_ROW = '[data-message-id]'
+const SELECTOR_SELECT_TOGGLE = 'button[class*="toolbarBtn"]'
+const SELECTOR_MESSAGE_ROW = '[data-component="BubbleMessage"]'
 const SELECT_MODE_ATTR = 'data-select-mode'
 
 /** Result of a `selectByVisualIndices` call. */

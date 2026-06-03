@@ -30,7 +30,7 @@ import {
   type SelectionResult,
 } from './selection'
 
-const SELECTOR_MESSAGE_ROW = '[data-message-id]'
+const SELECTOR_MESSAGE_ROW = '[data-component="BubbleMessage"]'
 
 export function makeSelectCommand(): SlashCommandDef {
   return {
