@@ -78,8 +78,9 @@ async function handleAll(ctx: SlashContext): Promise<void> {
     ctx.toast('info', 'No loaded messages to select')
     return
   }
-  // Replace any existing selection.
-  if (isSelectModeActive()) clearSelection()
+  // selectByVisualIndices uses REPLACE-by-delta: it leaves select mode
+  // on and clicks only the rows whose state needs to change. No need
+  // to clearSelection() first.
   const result = await selectByVisualIndices(indices)
   toastResult(ctx, result, 'Selected all loaded messages')
 }
@@ -99,8 +100,9 @@ async function handleRange(ctx: SlashContext, indices: Set<number>): Promise<voi
     ctx.toast('error', 'Empty range')
     return
   }
-  // Replace any existing selection: clear first, then dispatch fresh clicks.
-  if (isSelectModeActive()) clearSelection()
+  // REPLACE-by-delta: selectByVisualIndices leaves select mode on
+  // and clicks only the rows whose state needs to change. No need
+  // to clearSelection() first.
   const result = await selectByVisualIndices(indices)
   toastResult(ctx, result, null)
 }

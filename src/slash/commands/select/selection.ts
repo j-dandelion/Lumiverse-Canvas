@@ -6,10 +6,13 @@
 //      action — see pitfall #10).
 //   2. Waiting for React to re-render with select mode on, so the
 //      row's onClick prop is `onToggleSelect` (not `undefined`).
-//   3. Reading each message row's `index_in_chat` via DOM scrape
-//      (with a React/Preact fiber fallback).
-//   4. Dispatching a bubble-phase click on the row if its index is in
-//      the target set.
+//   3. Reading each message row's `index_in_chat` and current
+//      `selected` state from the DOM (with a fiber fallback).
+//   4. Dispatching a click on rows whose state needs to change.
+//      This is the REPLACE-by-delta approach: each row click toggles
+//      Lumiverse's `selectedMessageIds`, so we click rows that need
+//      to be flipped (select them if they should be in the target
+//      set, deselect them if they shouldn't).
 //
 // Pitfalls preserved from Chronicle skill (verified 2026-06-02):
 // 1. `setMessageSelectMode(true)` ALWAYS clears `selectedMessageIds`.
@@ -29,6 +32,13 @@
 //    `data-select-mode` attribute hasn't been re-rendered yet, so
 //    `isSelectMode` in the row is still false). We must wait one
 //    rAF for React to commit before dispatching row clicks.
+// 6. REPLACE-by-delta, not REPLACE-by-clear-then-set: clearing
+//    selection by toggling select mode off, then back on, creates
+//    a state-update race where the row-click batch collides with
+//    the toolbar toggle batch. Instead, we leave select mode on
+//    and just click the rows that need state change. Lumiverse's
+//    `onToggleSelect` is a toggle, so a single click on a row
+//    whose current state matches the target is a no-op (skip it).
 //
 // Adaptations for Canvas:
 //   - Consumes `readIndexInChat` from the salvaged `./extract` module
@@ -51,7 +61,7 @@ const SELECT_MODE_ATTR = 'data-select-mode'
 
 /** Result of a `selectByVisualIndices` call. */
 export type SelectionResult = {
-  /** Rows whose click was dispatched (index matched AND was in the target set). */
+  /** Number of target indices that ended up in the selection (matched or already-selected). */
   matched: number
   /** Rows we could not read an index from (e.g. transient render state). */
   unreadable: number
@@ -135,19 +145,21 @@ function waitForSelectModeActive(timeoutMs = 200): Promise<boolean> {
 }
 
 /**
- * Select every message whose visual `index_in_chat` is in `indices`.
+ * Select every message whose visual `index_in_chat` is in `indices`,
+ * deselect every message whose index is NOT in `indices` (REPLACE
+ * semantics). Leaves select mode on throughout — we just click the
+ * rows whose state needs to change.
  *
  * Async: returns a Promise that resolves AFTER the row clicks have
- * been dispatched and React has had a chance to process them. The
- * orchestrator (Task 3.4) awaits this before reading the result.
- *
- * The orchestrator should call `clearSelection()` first when the
- * user wants a fresh selection.
+ * been dispatched. The orchestrator (Task 3.4) awaits this before
+ * reading the result.
  */
 export async function selectByVisualIndices(
   indices: Set<number>,
 ): Promise<SelectionResult> {
   if (indices.size === 0) {
+    // Empty target: deselect everything currently in select mode.
+    clearSelection()
     return { matched: 0, unreadable: 0, missingIndices: [] }
   }
 
@@ -164,6 +176,7 @@ export async function selectByVisualIndices(
 
   const matchedIndices = new Set<number>()
   let unreadable = 0
+  let clicked = 0
   const rows = document.querySelectorAll<HTMLElement>(SELECTOR_MESSAGE_ROW)
 
   for (const row of Array.from(rows)) {
@@ -172,12 +185,23 @@ export async function selectByVisualIndices(
       unreadable++
       continue
     }
-    if (indices.has(idx)) {
-      row.dispatchEvent(
-        new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
-      )
-      matchedIndices.add(idx)
+    const shouldBeSelected = indices.has(idx)
+    // Lumiverse applies the `selected` className (CSS module hash like
+    // `_selected_xxx`) when a row is in the selection. The exact hash
+    // is build-dependent, but the prefix `selected` is stable.
+    const isCurrentlySelected = row.className.includes('selected')
+    if (shouldBeSelected === isCurrentlySelected) {
+      // State already matches the target — count as matched if target.
+      if (shouldBeSelected) matchedIndices.add(idx)
+      continue
     }
+    // State needs to flip. Dispatch a click; Lumiverse's onToggleSelect
+    // toggles `selectedMessageIds` for this row.
+    row.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+    )
+    clicked++
+    if (shouldBeSelected) matchedIndices.add(idx)
   }
 
   const missingIndices: number[] = []
