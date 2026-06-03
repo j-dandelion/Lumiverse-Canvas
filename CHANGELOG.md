@@ -1,5 +1,66 @@
 # Changelog
 
+## v1.2.0 — 2026-06-02
+
+### Changed
+- Slash-suggest popup uses an injected CSS style block tied to the
+  canonical `--lumiverse-*` variable set (was inline styles with hex
+  fallbacks). Active row uses `--lumiverse-primary-020` background
+  fill, matching `~/Lumiverse/frontend/src/components/modals/CommandPalette.module.css:163-165`.
+- Toast surface refactored to the same injected style block pattern.
+  `error` kind uses `--lumiverse-danger`, `success` uses
+  `--lumiverse-success`, `info` preserves the existing
+  `var(--lumiverse-info, #42a5f5)` pattern to match core modals
+  (`InputArea.tsx:2705`, `RegexEditorModal.module.css`).
+- Context menu (right-click on extension tabs) now matches Lumiverse's
+  shared `ContextMenu` style exactly: `z-index: 11000`, the same
+  shadow, the same `contextMenuIn 120ms ease-out` entrance animation,
+  and the `body[data-glass]` glass variant. Mirrors
+  `~/Lumiverse/frontend/src/components/shared/ContextMenu.module.css:1-18`.
+- Two undefined variables replaced with canonical ones:
+  `--lumiverse-bg-surface` → `--lumiverse-bg-elevated` (suggest popup,
+  toast surface) and `--lumiverse-font` → `--lumiverse-font-family`
+  (suggest popup, typo fix).
+
+### Added
+- Full keyboard nav for the slash-suggest popup: `Enter` (dispatch,
+  active row wins over parsed name), `Tab` (autocomplete active row's
+  `usage` into the textarea; does not dispatch), `ArrowUp` / `ArrowDown`
+  (move active row, clamped), `Escape` (dismiss popup, preserves typed
+  text). The new `SuggestController` API exposes `setActiveIndex` /
+  `getActiveIndex` / `getActiveCommand` / `scrollActiveIntoView` /
+  `isVisible`.
+- Suggest popup rows now show the command's description (second line,
+  muted) and a right-aligned source badge chip (e.g. `[canvas]`,
+  `[chronicle]`) — see `CommandPalette.module.css:144-214` precedent.
+- ARIA combobox / listbox / option attributes on the textarea and rows.
+  `aria-activedescendant` follows the active row. Mirrors
+  `~/Lumiverse/frontend/src/components/dream-weaver/components/chat/Composer.tsx:141-209`.
+- IME composition guard: the input handler no longer fires
+  `onTextChange` while the user is composing a CJK character,
+  preventing popup flicker. `compositionend` re-runs detection on the
+  next microtask so the popup reflects the committed value, even on
+  IMEs that don't fire a trailing `input` event (Gboard swipe, Samsung
+  Keyboard). Mirrors the `isComposingRef` pattern in
+  `InputArea.tsx:200-205, 1879-1889` and `CommandPalette.tsx:47`.
+- Single-menu invariant: canvas's tab context menu and Lumiverse's
+  shared `ContextMenu` no longer overlap when right-clicking between
+  tabs of different kinds. A capture-phase `contextmenu` document
+  listener closes canvas's menu before any other handler opens a new
+  one — mirrors the `openMenus` registry in
+  `~/Lumiverse/frontend/src/components/shared/ContextMenu.tsx:52, 68-78`.
+
+### Fixed
+- Context menu's hardcoded `box-shadow` (rgba literals) replaced with
+  the Lumiverse shared-context-menu values, so the canvas extension's
+  tab right-click menu now looks identical to the menus on built-in
+  tabs.
+- Toast `z-index: 10000` → `9980`: toasts no longer occlude the
+  suggest popup (which is at `z-index: 10005`).
+- Hide-on-close now removes the context menu element from the DOM
+  (was `display: none`) so the `contextMenuIn` animation re-runs
+  cleanly on every open.
+
 ## v1.1.0 — 2026-06-02
 
 ### Added
