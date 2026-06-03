@@ -26,6 +26,11 @@ function dwarn(...args: unknown[]): void {
   console.warn('[Canvas]', ...args)
 }
 
+// --- Accessors (Step 0) ---
+// getDebug/setDebug are exported for use by settings/state after M1 extraction.
+export function getDebug(): boolean { return DEBUG }
+export function setDebug(value: boolean): void { DEBUG = value }
+
 // --- Settings (Canvas user preferences) ---
 //
 // Every user-togglable Canvas behavior reads from `_settings` instead of a
@@ -64,6 +69,15 @@ function setSettings(patch: Partial<CanvasSettings>): void {
   persistSettings()
 }
 
+// Accessors (Step 0) — to be exported when settings/state.ts is extracted.
+export function getSettings(): FullCanvasSettings { return _settings }
+export function setLastLoadedLayout(layout: any): void { _lastLoadedLayout = layout }
+export function getLastLoadedLayout(): any { return _lastLoadedLayout }
+
+// Panel refresh registry (Step 0) — replaces window.__canvasPanelRefresh indirection.
+let _panelRefresh: (() => void) | null = null
+export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh = fn }
+
 /**
  * Diff previous and next settings, applying live effects for any that
  * changed. Idempotent: calling with prev === next is a no-op.
@@ -71,7 +85,7 @@ function setSettings(patch: Partial<CanvasSettings>): void {
 function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void {
   // 1. Debug mode — flip the global flag and install/uninstall the escape hatch.
   if (prev.debugMode !== next.debugMode) {
-    DEBUG = next.debugMode
+    setDebug(next.debugMode)
     if (next.debugMode) {
       installDebugEscapeHatch()
     } else {
@@ -99,11 +113,11 @@ function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void
   // 3. Second Sidebar master — mount/unmount the wrapper + restore layout.
   if (prev.secondSidebarEnabled !== next.secondSidebarEnabled) {
     if (next.secondSidebarEnabled) {
-      if (!_secondaryWrapper) {
-        const initialWidth = _lastLoadedLayout?.secondary?.width
-        const initialOpen = _lastLoadedLayout?.secondary?.open === true
+      if (!getSecondaryWrapper()) {
+        const initialWidth = getLastLoadedLayout()?.secondary?.width
+        const initialOpen = getLastLoadedLayout()?.secondary?.open === true
         mountSecondarySidebar({ initialWidth, initialOpen })
-        if (_lastLoadedLayout) applyLayout(_lastLoadedLayout)
+        if (getLastLoadedLayout()) applyLayout(getLastLoadedLayout())
       }
     } else {
       tearDownSecondarySidebar()
@@ -129,11 +143,10 @@ function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void
     if (next.mirrorCompactPosition) {
       syncDrawerTabSettings()
     } else {
-      const drawerTab = _secondaryWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
+      const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
       if (drawerTab) {
         drawerTab.style.marginTop = ''
-        _lastKnownVerticalPos = null
-        _lastKnownCompact = null
+        clearDrawerTabLayoutCache()
       }
     }
   }
@@ -184,7 +197,8 @@ function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void
 
 /** Debounced persistence of the current settings (merged into the layout blob). */
 function persistSettings(): void {
-  if (!_backendCtx) return
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }
@@ -194,35 +208,8 @@ function persistSettings(): void {
     // existing layout blob. The other layout fields (primary, secondary,
     // detachedTabs) come from snapshotLayout() so we don't drop them.
     const layout = { ...snapshotLayout(), settings: _settings }
-    _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 300)
-}
-
-/**
- * Tear down the secondary sidebar wrapper, restoring every assigned tab to
- * the primary drawer first so we don't leak DOM nodes. Used by the master
- * toggle's "off" path. Does NOT touch the layout blob — that's a separate
- * decision (the user may flip the master back on and want the layout back).
- */
-function tearDownSecondarySidebar(): void {
-  if (_secondaryWrapper) {
-    for (const [tabId] of Array.from(_tabAssignments)) {
-      restoreTabToPrimary(tabId)
-      showMainTabButton(tabId)
-    }
-    _secondaryWrapper.remove()
-    _secondaryWrapper = null
-  }
-  _secondarySidebarOpen = false
-  // Drop any in-flight resize handle bound to the wrapper, so a re-mount
-  // creates a fresh one.
-  const handles = document.querySelectorAll('.sidebar-ux-resize-handle')
-  for (const h of Array.from(handles)) {
-    if (h.parentElement && h.parentElement.classList.contains('sidebar-ux-drawer')) {
-      h.remove()
-    }
-  }
-  updateChatReflow()
 }
 
 // --- DOM Helpers ---
@@ -371,6 +358,14 @@ function findStoreData(force = false) {
   }
 }
 
+// Accessor (Step 0) — to be exported when store/index.ts is extracted.
+// Called by sidebar/cleanup.cleanupAll on teardown.
+export function clearStoreCache(): void {
+  _drawerTabsCache = null
+  _storeSnapshotCache = null
+  _cacheTimestamp = 0
+}
+
 function getDrawerTabs(): Array<{ id: string; extensionId: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }> {
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
@@ -417,118 +412,12 @@ function getMainDrawerSide(): 'left' | 'right' {
   return 'right'
 }
 
-function setChatMargin(side: 'left' | 'right', px: number) {
-  const chat = getChatColumn()
-  if (!chat) return
-  const varName = side === 'left' ? '--sidebar-ux-chat-ml' : '--sidebar-ux-chat-mr'
-  chat.style.setProperty(varName, `${px}px`)
-}
-
-function injectReflowStyles() {
-  if (document.getElementById('sidebar-ux-reflow')) return
-  const style = document.createElement('style')
-  style.id = 'sidebar-ux-reflow'
-  style.textContent = `
-    [class*="_chatColumn_"] {
-      margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
-      margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
-      transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    }
-  `
-  document.head.appendChild(style)
-}
-
-function injectDrawerTabStyles() {
-  if (document.getElementById('sidebar-ux-drawer-tab-styles')) return
-  const style = document.createElement('style')
-  style.id = 'sidebar-ux-drawer-tab-styles'
-  style.textContent = `
-    .sidebar-ux-drawer-tab {
-      flex-shrink: 0;
-      align-self: flex-start;
-      width: 48px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 16px 8px 20px;
-      background: var(--lcs-glass-bg, var(--lumiverse-bg));
-      border: 1px solid var(--lumiverse-border-hover);
-      color: var(--lumiverse-text-muted);
-      cursor: pointer;
-      pointer-events: auto;
-      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-    }
-    .sidebar-ux-drawer-tab:hover {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab--active {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab--active:hover {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab--compact {
-      width: 32px;
-      padding: 8px 6px;
-      gap: 0;
-    }
-    .sidebar-ux-drawer-tab-icon {
-      color: var(--lumiverse-primary);
-    }
-    /* Force a 20×20 size on the tab-list SVG icons. Extensions that
-       provide iconSvg without intrinsic width/height attributes (e.g. Hone)
-       render at 0×0 by default — Lumiverse's main sidebar gets around this
-       via its own CSS, but Canvas's tab list doesn't inherit that rule.
-       Sizing via CSS catches all current and future extensions, and matches
-       the existing CSS-injection pattern. */
-    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
-      width: 20px;
-      height: 20px;
-      flex-shrink: 0;
-    }
-  `
-  document.head.appendChild(style)
-}
-
 // --- Secondary Sidebar ---
 
 const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
 const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
-
-/** Read showTabLabels, honoring the user's Canvas override. */
-function isShowTabLabels(): boolean {
-  const mode = _settings.showTabLabels
-  if (mode === 'show') return true
-  if (mode === 'hide') return false
-  // 'follow' (default) — read from the store snapshot or main sidebar DOM.
-  const store = getStoreSnapshot()
-  if (store && typeof (store as any).drawerSettings === 'object' && (store as any).drawerSettings !== null) {
-    return !!(store as any).drawerSettings.showTabLabels
-  }
-  // Fallback: check if main sidebar buttons have the labeled class
-  const sidebar = getMainSidebar()
-  if (sidebar) {
-    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]')
-    if (labeledBtn) return true
-  }
-  return false
-}
-
-/** Derive shortName matching Lumiverse's adaptExtensionTabs logic. */
-function deriveShortName(title: string, shortName?: string): string {
-  if (shortName) return shortName
-  return title.length > 8 ? title.slice(0, 7) + '\u2026' : title
-}
 
 // Boolean flag for secondary sidebar open state (replaces style transform check)
 let _secondarySidebarOpen = false
@@ -749,6 +638,19 @@ function restoreOverflow(element: HTMLElement) {
 
 let _secondaryWrapper: HTMLElement | null = null
 let _secondaryDrawer: HTMLElement | null = null
+// Accessors (Step 0) — to be exported when sidebar/secondary.tsx is extracted.
+export function getSecondaryWrapper(): HTMLElement | null { return _secondaryWrapper }
+export function isSecondarySidebarOpen(): boolean { return _secondarySidebarOpen }
+export function setSecondarySidebarOpen(open: boolean): void { _secondarySidebarOpen = open }
+// Consolidates the "remove + null + maybe-resize-handle-cleanup" pattern that
+// appears in 3+ places (tearDownSecondarySidebar, checkSideChanged, cleanupAll).
+export function unmountSecondarySidebar(): void {
+  if (_secondaryWrapper) {
+    _secondaryWrapper.remove()
+    _secondaryWrapper = null
+  }
+  _secondarySidebarOpen = false
+}
 
 // v1.3.0: tabId-keyed Map tracking each tab's original parent in the main
 // sidebar, replacing the previous Node-keyed WeakMap. The tabId is stable
@@ -756,6 +658,8 @@ let _secondaryDrawer: HTMLElement | null = null
 // on tabId means a re-mount that gives the tab a new `tab.root` still finds
 // the recorded original parent on restore.
 const _originalParents: Map<string, HTMLElement> = new Map()
+// Accessor (Step 0) — to be exported when tabs/assignment.ts is extracted.
+export function clearOriginalParents(): void { _originalParents.clear() }
 
 // --- JS-based animation (replaces CSS transitions for drawer + drawerTab sync) ---
 // The WRAPPER translates — both drawer and drawerTab are children, so they move as one unit.
@@ -885,7 +789,117 @@ function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: 
   mountResizeHandles()
 }
 
+// MOVED FROM settings/state (Step 0) — will live in sidebar/secondary.tsx after extraction.
+// Tear down the secondary sidebar wrapper, restoring every assigned tab to
+// the primary drawer first so we don't leak DOM nodes. Used by the master
+// toggle's "off" path. Does NOT touch the layout blob — that's a separate
+// decision (the user may flip the master back on and want the layout back).
+function tearDownSecondarySidebar(): void {
+  if (_secondaryWrapper) {
+    for (const [tabId] of Array.from(_tabAssignments)) {
+      restoreTabToPrimary(tabId)
+      showMainTabButton(tabId)
+    }
+    _secondaryWrapper.remove()
+    _secondaryWrapper = null
+  }
+  _secondarySidebarOpen = false
+  // Drop any in-flight resize handle bound to the wrapper, so a re-mount
+  // creates a fresh one.
+  const handles = document.querySelectorAll('.sidebar-ux-resize-handle')
+  for (const h of Array.from(handles)) {
+    if (h.parentElement && h.parentElement.classList.contains('sidebar-ux-drawer')) {
+      h.remove()
+    }
+  }
+  updateChatReflow()
+}
+
 // --- Chat Reflow ---
+
+// MOVED FROM "Store Access" section (Step 0) — setChatMargin and injectReflowStyles
+// will live in chat/reflow.ts after Step 4; injectDrawerTabStyles will move to
+// sidebar/secondary.tsx after Step 9.
+function setChatMargin(side: 'left' | 'right', px: number) {
+  const chat = getChatColumn()
+  if (!chat) return
+  const varName = side === 'left' ? '--sidebar-ux-chat-ml' : '--sidebar-ux-chat-mr'
+  chat.style.setProperty(varName, `${px}px`)
+}
+
+function injectReflowStyles() {
+  if (document.getElementById('sidebar-ux-reflow')) return
+  const style = document.createElement('style')
+  style.id = 'sidebar-ux-reflow'
+  style.textContent = `
+    [class*="_chatColumn_"] {
+      margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
+      margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
+      transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+  `
+  document.head.appendChild(style)
+}
+
+function injectDrawerTabStyles() {
+  if (document.getElementById('sidebar-ux-drawer-tab-styles')) return
+  const style = document.createElement('style')
+  style.id = 'sidebar-ux-drawer-tab-styles'
+  style.textContent = `
+    .sidebar-ux-drawer-tab {
+      flex-shrink: 0;
+      align-self: flex-start;
+      width: 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px 8px 20px;
+      background: var(--lcs-glass-bg, var(--lumiverse-bg));
+      border: 1px solid var(--lumiverse-border-hover);
+      color: var(--lumiverse-text-muted);
+      cursor: pointer;
+      pointer-events: auto;
+      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .sidebar-ux-drawer-tab:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--compact {
+      width: 32px;
+      padding: 8px 6px;
+      gap: 0;
+    }
+    .sidebar-ux-drawer-tab-icon {
+      color: var(--lumiverse-primary);
+    }
+    /* Force a 20×20 size on the tab-list SVG icons. Extensions that
+       provide iconSvg without intrinsic width/height attributes (e.g. Hone)
+       render at 0×0 by default — Lumiverse's main sidebar gets around this
+       via its own CSS, but Canvas's tab list doesn't inherit that rule.
+       Sizing via CSS catches all current and future extensions, and matches
+       the existing CSS-injection pattern. */
+    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+  `
+  document.head.appendChild(style)
+}
 
 let _reflowRaf: number | null = null
 
@@ -1007,6 +1021,10 @@ function tagMainSidebarButtons(): number {
 
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
+// Accessors (Step 0) — to be exported when tabs/assignment.ts is extracted.
+export function getTabAssignments(): ReadonlyMap<string, 'primary' | 'secondary'> { return _tabAssignments }
+export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
+export function clearTabAssignments(): void { _tabAssignments.clear() }
 
 function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
@@ -1043,7 +1061,7 @@ type ActiveTabState =
 function getActiveTabId(): ActiveTabState {
   // Primary: store snapshot
   findStoreData(true)
-  const store = _storeSnapshotCache as { drawerTab?: string | null; drawerOpen?: boolean } | null
+  const store = getStoreSnapshot() as { drawerTab?: string | null; drawerOpen?: boolean } | null
   if (store && typeof store.drawerOpen === 'boolean') {
     if (!store.drawerOpen) return { state: 'closed' }
     if (typeof store.drawerTab === 'string') {
@@ -1063,7 +1081,7 @@ function getActiveTabId(): ActiveTabState {
   if (!activeTitle) return { state: 'unknown' }
 
   // Resolve the title back to a tabId via the store
-  const tabs = _drawerTabsCache || []
+  const tabs = getDrawerTabs()
   const tab = tabs.find((t: any) => t.title === activeTitle)
   if (tab) return { state: 'active', id: tab.id }
   // Active button is a built-in (no matching extension tab). Report the title
@@ -1129,7 +1147,7 @@ function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string, then:
 
   let movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('data-tab-id') === tabId)
   if (movedBtnIdx === -1) {
-    const movedTab = (_drawerTabsCache || []).find((t: any) => t.id === tabId)
+    const movedTab = getDrawerTabs().find((t: any) => t.id === tabId)
     const movedTitle = movedTab?.title
     if (movedTitle) {
       movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('title') === movedTitle)
@@ -1243,8 +1261,8 @@ function applyAssignment(tabId: string, target: 'primary' | 'secondary', options
     // fall-through happens in restoreTabToPrimary.
     restoreTabToPrimary(tabId)
     // If no more tabs in secondary, close it
-    const hasRemaining = [..._tabAssignments.values()].some(v => v === 'secondary')
-    if (!hasRemaining && _secondarySidebarOpen) {
+    const hasRemaining = [...getTabAssignments().values()].some(v => v === 'secondary')
+    if (!hasRemaining && isSecondarySidebarOpen()) {
       closeSecondarySidebar()
     }
   } else {
@@ -1307,7 +1325,7 @@ function isMovedTabNode(node: Node): boolean {
   // Guards fire on React DOM mutations, which can happen many times per
   // re-render but only briefly during a move — total overhead is small.
   findStoreData(true)
-  const tabs = _drawerTabsCache || []
+  const tabs = getDrawerTabs()
   const tab = tabs.find((t: any) => t.root === node)
   if (!tab) return false
   return isMovedTabId(tab.id)
@@ -1468,6 +1486,8 @@ function repositionTabToSecondary(tabId: string) {
 // active secondary tab is moved back to primary, preventing the "ghost tab"
 // (header still showing the moved tab's name with an empty body).
 let _activeSecondaryTabId: string | null = null
+// Accessor (Step 0) — to be exported when tabs/assignment.ts is extracted.
+export function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
 
 /**
  * Restore a tab's root element to its original parent in the primary sidebar.
@@ -1619,8 +1639,14 @@ function cssEscape(value: string): string {
   return value.replace(/(["\\])/g, '\\$1')
 }
 
+// MOVED FROM sidebar/secondary (Step 0) — will live in tabs/buttons.ts after extraction.
+// Derive shortName matching Lumiverse's adaptExtensionTabs logic.
+function deriveShortName(title: string, shortName?: string): string {
+  if (shortName) return shortName
+  return title.length > 8 ? title.slice(0, 7) + '…' : title
+}
+
 function addSecondaryTabButton(tab: { id: string; title: string; shortName?: string; iconSvg?: string; iconUrl?: string; root: HTMLElement }) {
-  const tabList = _secondaryWrapper?.querySelector('.sidebar-ux-tab-list')
   if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
   const showLabels = isShowTabLabels()
   dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
@@ -1876,6 +1902,14 @@ function createContextMenuItem(label: string, onClick: () => void, opts?: { dang
 }
 
 let _contextMenu: HTMLElement | null = null
+// Accessor (Step 0) — to be exported when context-menu/index.ts is extracted.
+// Called by sidebar/cleanup.cleanupAll on teardown.
+export function disposeContextMenu(): void {
+  if (_contextMenu) {
+    _contextMenu.remove()
+    _contextMenu = null
+  }
+}
 
 function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle: string) {
   if (!_contextMenu) {
@@ -2227,9 +2261,19 @@ function isPersistenceEnabled(): boolean {
 // --- Backend Persistence ---
 
 let _backendCtx: any = null
+// Accessors (Step 0) — to be exported when layout/persist.ts is extracted.
+export function getBackendCtx(): any { return _backendCtx }
+export function setBackendCtx(ctx: any): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
+// Accessor (Step 0) — called by sidebar/cleanup.cleanupAll after M14 extraction.
+export function cancelLayoutSave(): void {
+  if (_saveLayoutTimer !== null) {
+    clearTimeout(_saveLayoutTimer)
+    _saveLayoutTimer = null
+  }
+}
 
 /**
  * Build the current layout snapshot from in-memory state. Pure — no side effects.
@@ -2263,14 +2307,15 @@ function snapshotLayout(): any {
  * final state on hard-refresh is closed."
  */
 function persistOpenState(): void {
-  if (!_backendCtx) return
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return
   if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
   }
-  _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
+  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
 }
 
 /**
@@ -2279,14 +2324,15 @@ function persistOpenState(): void {
  * during drag; the debounce coalesces to a single write at drag end).
  */
 function persistLayout(): void {
-  if (!_backendCtx) return
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return
   if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
-    _backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
+    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
   }, 500)
 }
 
@@ -2300,7 +2346,8 @@ function saveLayout() {
 }
 
 function loadSavedLayout(): Promise<any> {
-  if (!_backendCtx) return Promise.resolve(null)
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return Promise.resolve(null)
   return new Promise((resolve) => {
     // Phase 3 (finding #13): register a one-shot handler that resolves the
     // promise when LAYOUT_DATA arrives. The handler is replaced by the
@@ -2311,8 +2358,8 @@ function loadSavedLayout(): Promise<any> {
         resolve(payload.layout)
       }
     }
-    _backendCtx.onBackendMessage(handler)
-    _backendCtx.sendToBackend({ type: 'LOAD_LAYOUT' })
+    backendCtx.onBackendMessage(handler)
+    backendCtx.sendToBackend({ type: 'LOAD_LAYOUT' })
     // Safety timeout: if the backend never responds (e.g. corrupt storage),
     // resolve with null so the mount proceeds with defaults rather than
     // hanging the extension. 2s is enough for the file I/O round-trip on
@@ -2485,25 +2532,18 @@ function cleanupAll() {
   _cleanupFns.length = 0
 
   // Restore all repositioned tabs to primary
-  for (const [tabId] of Array.from(_tabAssignments)) {
+  for (const [tabId] of Array.from(getTabAssignments())) {
     restoreTabToPrimary(tabId)
     showMainTabButton(tabId)
   }
-  _tabAssignments.clear()
-  _originalParents.clear()
+  clearTabAssignments()
+  clearOriginalParents()
 
-  // Remove secondary sidebar DOM
-  if (_secondaryWrapper) {
-    _secondaryWrapper.remove()
-    _secondaryWrapper = null
-  }
-  _secondarySidebarOpen = false
+  // Remove secondary sidebar DOM (consolidated: remove + null + open=false).
+  unmountSecondarySidebar()
 
   // Remove context menu
-  if (_contextMenu) {
-    _contextMenu.remove()
-    _contextMenu = null
-  }
+  disposeContextMenu()
 
   // Remove injected styles
   const reflowStyle = document.getElementById('sidebar-ux-reflow')
@@ -2519,16 +2559,19 @@ function cleanupAll() {
   }
 
   // Clear save debounce timer
-  if (_saveLayoutTimer !== null) {
-    clearTimeout(_saveLayoutTimer)
-    _saveLayoutTimer = null
-  }
+  cancelLayoutSave()
 }
 
 // Side change watcher
 let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownCompact: boolean | null = null
 let _lastKnownVerticalPos: number | null = null
+// Accessor (Step 0) — to be exported when sidebar/polish.ts is extracted.
+// Called by applySettings's mirrorCompactPosition-off path.
+export function clearDrawerTabLayoutCache(): void {
+  _lastKnownCompact = null
+  _lastKnownVerticalPos = null
+}
 
 function syncDrawerTabSettings() {
   const drawerTab = _secondaryWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
@@ -2579,15 +2622,31 @@ function syncSecondaryTabLabels() {
   }
 }
 
+// MOVED FROM sidebar/secondary (Step 0) — will live in sidebar/polish.ts after extraction.
+// Read showTabLabels, honoring the user's Canvas override.
+function isShowTabLabels(): boolean {
+  const mode = _settings.showTabLabels
+  if (mode === 'show') return true
+  if (mode === 'hide') return false
+  // 'follow' (default) — read from the store snapshot or main sidebar DOM.
+  const store = getStoreSnapshot()
+  if (store && typeof (store as any).drawerSettings === 'object' && (store as any).drawerSettings !== null) {
+    return !!(store as any).drawerSettings.showTabLabels
+  }
+  // Fallback: check if main sidebar buttons have the labeled class
+  const sidebar = getMainSidebar()
+  if (sidebar) {
+    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]')
+    if (labeledBtn) return true
+  }
+  return false
+}
+
 function checkSideChanged() {
   const currentSide = getMainDrawerSide()
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
     // Side changed — need to recreate secondary sidebar
-    if (_secondaryWrapper) {
-      _secondaryWrapper.remove()
-      _secondaryWrapper = null
-    }
-    _secondarySidebarOpen = false
+    unmountSecondarySidebar()
     mountSecondarySidebar()
     // Restore tab buttons for every tab still assigned to secondary. The
     // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
@@ -3085,10 +3144,10 @@ function buildSettingsPanelDOM(): HTMLElement {
   root.appendChild(sec4)
   root.appendChild(footer)
 
-  // Live-update wiring: setSettings calls this via the module-level
-  // __canvasPanelRefresh hook so we don't have to thread the refresh
-  // closure through every toggle's onChange.
-  ;(window as any).__canvasPanelRefresh = () => {
+  // Live-update wiring: setSettings calls this via the registered panel
+  // refresh closure (setPanelRefresh in settings/state) so we don't have to
+  // thread the refresh closure through every toggle's onChange.
+  const refresh = () => {
     master.refresh()
     resizeSidebars.refresh()
     mirror.refresh()
@@ -3114,7 +3173,7 @@ function buildSettingsPanelDOM(): HTMLElement {
     showLabelsWrap = newSeg
   }
 
-  return root
+  return { root, refresh }
 }
 
 /**
@@ -3134,7 +3193,11 @@ function mountSettingsPanel(ctx: any) {
     // Clear any previous render so a re-mount (e.g. after extension reload)
     // doesn't stack panels.
     host.replaceChildren()
-    host.appendChild(buildSettingsPanelDOM())
+    const { root, refresh } = buildSettingsPanelDOM()
+    host.appendChild(root)
+    // Wire the panel's refresh closure so setSettings can drive in-place
+    // re-rendering. Replaces the legacy window.__canvasPanelRefresh hook.
+    setPanelRefresh(refresh)
     dlog('Settings panel mounted into data-spindle-mount="settings_extensions"')
   } catch (err) {
     console.error('[Canvas] mountSettingsPanel failed:', err)
@@ -3143,11 +3206,10 @@ function mountSettingsPanel(ctx: any) {
 
 /**
  * Refresh the settings panel UI in-place after a settings change. Public so
- * setSettings can call it via the __canvasPanelRefresh window hook.
+ * setSettings can call it via the registered panel refresh closure.
  */
 function refreshSettingsPanel() {
-  const fn = (window as any).__canvasPanelRefresh
-  if (typeof fn === 'function') fn()
+  if (_panelRefresh) _panelRefresh()
 }
 
 /**
@@ -3225,7 +3287,7 @@ function installDebugEscapeHatch() {
 // --- Setup ---
 
 export function setup(ctx: any) {
-  _backendCtx = ctx
+  setBackendCtx(ctx)
 
   // Mount the settings panel immediately. The host may not be in the DOM yet
   // (the user hasn't opened Settings → Extensions), but ctx.ui.mount sets up
@@ -3246,7 +3308,7 @@ export function setup(ctx: any) {
     // Hydrate settings from the loaded layout (defaults filled by mergeCanvasSettings).
     _settings = mergeCanvasSettings(layout?.settings)
     DEBUG = _settings.debugMode
-    _lastLoadedLayout = layout
+    setLastLoadedLayout(layout)
 
     if (_settings.debugMode) installDebugEscapeHatch()
 
