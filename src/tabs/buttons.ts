@@ -20,7 +20,7 @@ import { isShowTabLabels } from '../sidebar/polish'
 // openSecondarySidebar, PUZZLE_ICON_SVG will live in sidebar/secondary.tsx.
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 // FIXME-decomp(step 10): getTabAssignments, getActiveSecondaryTabId will live in tabs/assignment.ts.
-import { getTabAssignments, getActiveSecondaryTabId } from '../tabs/assignment'
+import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 // Step 11 complete: showAssignmentMenu now lives in context-menu/index.ts.
 import { showAssignmentMenu } from '../context-menu'
 // FIXME-decomp(step 15): getSettings will live in settings/state.ts.
@@ -210,12 +210,9 @@ export function updateDrawerTabVisibility(): void {
 }
 
 export function showSecondaryTab(tabId: string): void {
-  // Phase 4 (finding #2): record which tab is now the active secondary tab.
-  // restoreTabToPrimary reads this to decide whether to fall through to a
-  // neighbor when the active tab is moved out.
-  // (Handled by tabs/assignment.showSecondaryTab after Step 10; for now we
-  // read the same _activeSecondaryTabId field that lives in frontend.ts.)
-  const _activeSecondaryTabId = getActiveSecondaryTabId()
+  // Record which tab is now active so restoreTabToPrimary can fall through
+  // to a neighbor when the active tab is moved out.
+  setActiveSecondaryTabId(tabId)
 
   // Show the requested tab, hide others
   for (const [tid, sidebar] of getTabAssignments()) {

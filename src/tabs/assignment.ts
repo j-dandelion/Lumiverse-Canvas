@@ -13,7 +13,7 @@
 // active-tab switching, and optional save. `assignTab` is the stable
 // public API for "move this tab to that sidebar" with default options.
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
-import { findStoreData, getDrawerTabs } from '../store'
+import { findStoreData, getDrawerTabs, getStoreSnapshot } from '../store'
 import { dlog, dwarn } from '../debug/log'
 // FIXME-decomp(step 9): getSecondaryWrapper will be in sidebar/secondary.tsx.
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, restoreOverflow } from '../sidebar/secondary'
@@ -21,7 +21,7 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, clos
 // addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility,
 // showSecondaryTab, cssEscape live in tabs/buttons.ts.
 import {
-  hideMainTabButton, showMainTabButton,
+  hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
   cssEscape,
 } from '../tabs/buttons'
@@ -495,6 +495,7 @@ export function repositionTabToSecondary(tabId: string) {
 // (header still showing the moved tab's name with an empty body).
 let _activeSecondaryTabId: string | null = null
 export function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
+export function setActiveSecondaryTabId(tabId: string | null): void { _activeSecondaryTabId = tabId }
 
 export function restoreTabToPrimary(tabId: string) {
   const tabs = getDrawerTabs()
@@ -512,6 +513,13 @@ export function restoreTabToPrimary(tabId: string) {
   // handles the tabId-keyed original parent tracking. Falls back to
   // getMainPanelContent() if the recorded parent was detached.
   repositionTab(tabId, 'primary')
+
+  // Activate the restored tab in the main drawer. Without this, the panel
+  // content is empty because Lumiverse's React state still points at whatever
+  // tab was active before the move. Clicking the button triggers the normal
+  // setDrawerTab + openDrawer flow.
+  const btn = findMainTabButton(tabId)
+  if (btn) (btn as HTMLElement).click()
 
   // Phase 4 (finding #2): if the restored tab was the active secondary tab,
   // fall through to a neighbor so the secondary panel doesn't end up
