@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.5.3 — 2026-06-04
+
+### Fixed
+- Settings now persist across Lumi restarts. Five overlapping layers were
+  closing the door on user toggles: the backend write was non-atomic
+  (a process kill mid-write left a truncated `layout.json` that loaded
+  as defaults), the 300 ms settings debounce and the 500 ms layout
+  debounce could each clobber the other with an out-of-date snapshot,
+  there was no flush on page unload (a toggle made <300 ms before the
+  tab closed was silently dropped), debounced saves could survive
+  teardown and fire after the IPC was gone, and the async
+  `loadSavedLayout` could overwrite a toggle the user made during the
+  load window. The atomic write now routes through
+  `spindle.storage.move` (which is `renameSync` on the host, atomic on
+  POSIX and NTFS, and resolves against the host's per-extension
+  per-user storage root, not `process.cwd()`); the settings debounce
+  drops to 100 ms; `cancelSettingsSave` drains the settings timer
+  before every layout write and every flush; `flushPendingSaves` posts
+  a single merged save; `pagehide` / `beforeunload` /
+  `visibilitychange` listeners arm a flush before unload; and a
+  `_userHasTouchedSettings` flag makes `hydrateSettings` a no-op once
+  the user has toggled anything.
+
+### Changed
+- Disable and re-enable no longer doubles event handlers. The
+  context-menu listeners, the reflow `MutationObserver`, the
+  secondary sidebar wrapper DOM, the resize-handle DOM, and the
+  two injected `<style>` elements are now registered with the
+  cleanup chain so they are torn down when the extension is
+  disabled.
+- A stale frontend bundle surfaces a visible console warning
+  instead of silently misbehaving. The saved `layout.json` now
+  carries a `version` field, and `setup()` warns when the saved
+  version does not match the running `CANVAS_VERSION`, prompting
+  the user to hard-refresh (Ctrl+F5).
+
 ## v1.5.2 — 2026-06-03
 
 ### Fixed
