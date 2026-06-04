@@ -32,7 +32,7 @@ import {
   addSecondaryTabButton, hideMainTabButton, showSecondaryTab, updateDrawerTabVisibility,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
-import { getSettings } from '../settings/state'
+import { getSettings, cancelSettingsSave } from '../settings/state'
 
 // Module-private state. The backend ctx is owned by the orchestrator
 // (setup in frontend.ts) and passed in via setBackendCtx.
@@ -49,6 +49,34 @@ export function cancelLayoutSave(): void {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
   }
+}
+
+/**
+ * Drain both the layout-debounce and the settings-debounce timers, then post
+ * a single, fully-merged SAVE_LAYOUT carrying the current layout snapshot AND
+ * the current settings. Used by the teardown path (setup/cleanup) on page
+ * unload to guarantee the latest state lands on disk before the page goes
+ * away — debounce windows are irrelevant on shutdown.
+ *
+ * Safe to call when no timer is in flight (one cheap IPC; we WANT the
+ * freshest state on disk before unload). Safe to call before the backend
+ * ctx is wired (returns early). Safe to call when persistence is disabled
+ * (returns early).
+ */
+export function flushPendingSaves(): void {
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return
+  if (!isPersistenceEnabled()) return
+  if (_saveLayoutTimer !== null) {
+    clearTimeout(_saveLayoutTimer)
+    _saveLayoutTimer = null
+  }
+  // Cancel the settings timer (not flush) — we post a single merged save
+  // below, and a second post from the settings callback would be a duplicate
+  // write that could race the one we're about to send.
+  cancelSettingsSave()
+  const layout = { ...snapshotLayout(), settings: getSettings() }
+  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
 /**
@@ -95,7 +123,12 @@ export function persistOpenState(): void {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
   }
-  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
+  // Drain any pending settings save too: the synchronous layout write below
+  // will carry the latest settings, so the older settings-bearing snapshot
+  // must not be allowed to clobber it.
+  cancelSettingsSave()
+  const layout = { ...snapshotLayout(), settings: getSettings() }
+  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
 /**
@@ -110,9 +143,14 @@ export function persistLayout(): void {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
+  // Drain any pending settings save: the debounced layout write below will
+  // carry the latest settings, so the older settings-bearing snapshot must
+  // not be allowed to clobber it.
+  cancelSettingsSave()
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
-    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout: snapshotLayout() })
+    const layout = { ...snapshotLayout(), settings: getSettings() }
+    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 500)
 }
 

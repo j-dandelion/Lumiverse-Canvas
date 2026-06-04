@@ -35,6 +35,11 @@ let _lastLoadedLayout: any = null
 // doesn't race with an in-flight open/close save).
 let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
 
+// Set to true the first time setSettings runs. After that, hydrateSettings
+// becomes a no-op so a late-arriving loadSavedLayout() cannot clobber a
+// setting the user toggled during the load window.
+let _userHasTouchedSettings = false
+
 // Panel refresh registry — set by settings/panel.ts on mount, called by
 // setSettings so the panel re-renders to reflect the new value. Replaces
 // the legacy window.__canvasPanelRefresh indirection.
@@ -52,6 +57,7 @@ export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh =
  * the caller is the orchestrator and will do all of those itself.
  */
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
+  if (_userHasTouchedSettings) return
   _settings = mergeCanvasSettings(raw ?? null)
 }
 
@@ -60,6 +66,7 @@ export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined)
  * Safe to call from the settings panel on every toggle change.
  */
 export function setSettings(patch: Partial<CanvasSettings>): void {
+  _userHasTouchedSettings = true
   const prev = _settings
   const next: FullCanvasSettings = { ...prev }
   for (const key of Object.keys(patch) as Array<keyof CanvasSettings>) {
@@ -99,5 +106,13 @@ export function persistSettings(): void {
     // detachedTabs) come from snapshotLayout() so we don't drop them.
     const layout = { ...snapshotLayout(), settings: _settings }
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
-  }, 300)
+  }, 100)
+}
+
+// Cancel a pending settings save (used by teardown to flush or drop in-flight debounces).
+export function cancelSettingsSave(): void {
+  if (_saveSettingsTimer !== null) {
+    clearTimeout(_saveSettingsTimer)
+    _saveSettingsTimer = null
+  }
 }

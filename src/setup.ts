@@ -31,7 +31,7 @@ import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startContextMenuListener } from './context-menu'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyLayout, loadSavedLayout } from './layout/persist'
+import { setBackendCtx, applyLayout, loadSavedLayout, flushPendingSaves } from './layout/persist'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
@@ -39,6 +39,27 @@ import { dlog, setDebug } from './debug/log'
 
 export function setup(ctx: any) {
   setBackendCtx(ctx)
+
+  // Force-flush any pending debounced save before the page unloads.
+  // Without these, a settings change made <100ms before close is lost.
+  // Listeners are registered immediately (before the async loadSavedLayout
+  // window) so a close-during-hydration still forces a flush of whatever
+  // debounced timer is armed at that moment.
+  const flushOnUnload = () => {
+    try { flushPendingSaves() } catch (err) { console.error('[SidebarUX] flushPendingSaves on unload failed:', err) }
+  }
+  window.addEventListener('pagehide', flushOnUnload)
+  window.addEventListener('beforeunload', flushOnUnload)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushOnUnload()
+  })
+  registerCleanup(() => {
+    window.removeEventListener('pagehide', flushOnUnload)
+    window.removeEventListener('beforeunload', flushOnUnload)
+    // visibilitychange can't be removed without a reference to the inline
+    // handler; the listener will be GC'd when the page unloads, and we
+    // re-add on every setup().
+  })
 
   // Mount the settings panel immediately. The host may not be in the DOM yet
   // (the user hasn't opened Settings → Extensions), but ctx.ui.mount sets up
