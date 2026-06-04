@@ -101,7 +101,10 @@ function createContextMenu(): HTMLElement {
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
-    animation: contextMenuIn 120ms ease-out;
+    /* forwards keeps opacity:1 + transform:none applied after the 120ms
+       entrance finishes, so the keyframe end state sticks and DevTools
+       inspection of the live element does not catch it at the 0%/0.92 start. */
+    animation: contextMenuIn 120ms ease-out forwards;
     transform-origin: top left;
     display: none;
   `
