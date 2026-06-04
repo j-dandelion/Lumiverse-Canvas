@@ -22,19 +22,20 @@
 // their own mount sites rather than via the master toggle, so adding a
 // non-master-gated sub-feature later is a one-liner.
 
-import { mountSecondarySidebar, injectDrawerTabStyles } from './sidebar/secondary'
+import { mountSecondarySidebar, unmountSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from './sidebar/secondary'
 import { startReflowObserver } from './chat/reflow'
 import { mountResizeHandles } from './resize/handles'
 import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
 import { attachSlashRuntime } from './slash/runtime'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
-import { startContextMenuListener } from './context-menu'
+import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyLayout, loadSavedLayout, flushPendingSaves } from './layout/persist'
+import { setBackendCtx, applyLayout, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
+import { getMainDrawer } from './dom/lumiverse'
 import { dlog, setDebug } from './debug/log'
 
 export function setup(ctx: any) {
@@ -61,6 +62,13 @@ export function setup(ctx: any) {
     // re-add on every setup().
   })
 
+  // Clean up injected <style> elements on teardown. Without this,
+  // the styles persist in <head> after disable — orphaned but inert.
+  registerCleanup(() => {
+    document.getElementById('canvas-ux-context-menu-styles')?.remove()
+    document.getElementById('sidebar-ux-reflow')?.remove()
+  })
+
   // Mount the settings panel immediately. The host may not be in the DOM yet
   // (the user hasn't opened Settings → Extensions), but ctx.ui.mount sets up
   // a MutationObserver that reparents the host as soon as it appears.
@@ -77,6 +85,15 @@ export function setup(ctx: any) {
   // settings from the same blob so every feature mount downstream sees the
   // correct gate.
   loadSavedLayout().then((layout) => {
+    // Version check: if the layout was saved by a different Canvas version,
+    // the user is running a stale frontend bundle. Log a warning so they
+    // know to hard-refresh. This is a visibility mechanism, not auto-reload.
+    if (layout?.version && layout.version !== CANVAS_VERSION) {
+      console.warn(
+        `[Canvas] Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` +
+        `Hard-refresh (Ctrl+F5) to load the updated extension.`
+      )
+    }
     // Hydrate settings from the loaded layout (defaults filled by
     // mergeCanvasSettings inside hydrateSettings).
     hydrateSettings(layout?.settings)
@@ -100,12 +117,21 @@ export function setup(ctx: any) {
     // a one-liner.
     if (getSettings().secondSidebarEnabled) {
       mountSecondarySidebar({ initialWidth, initialOpen })
+      registerCleanup(unmountSecondarySidebar)
     }
     if (getSettings().chatReflow) {
-      startReflowObserver()
+      const detachReflow = startReflowObserver()
+      registerCleanup(detachReflow)
     }
     if (getSettings().resizeSidebars) {
       mountResizeHandles()
+      registerCleanup(() => {
+        const mainDrawer = getMainDrawer()
+        mainDrawer?.querySelector('.sidebar-ux-resize-handle')?.remove()
+        const secondaryWrapper = getSecondaryWrapper()
+        const secondaryDrawer = secondaryWrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
+        secondaryDrawer?.querySelector('.sidebar-ux-resize-handle')?.remove()
+      })
     }
     if (getSettings().autoMirrorOnSideSwap) {
       startSideChangeWatcher()
@@ -116,6 +142,7 @@ export function setup(ctx: any) {
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     startContextMenuListener()
+    registerCleanup(stopContextMenuListener)
 
     // Always inject the consistent-icon-size CSS if it's enabled — it
     // doesn't need a wrapper to apply.

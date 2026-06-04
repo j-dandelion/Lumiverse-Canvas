@@ -34,7 +34,10 @@ import {
 import { dlog, dwarn } from '../debug/log'
 import { getSettings, cancelSettingsSave } from '../settings/state'
 
-// Module-private state. The backend ctx is owned by the orchestrator
+// Must match spindle.json version. Updated on each release.
+export const CANVAS_VERSION = '1.5.3'
+
+// Module-private state.
 // (setup in frontend.ts) and passed in via setBackendCtx.
 let _backendCtx: any = null
 
@@ -84,6 +87,7 @@ export function flushPendingSaves(): void {
  */
 export function snapshotLayout(): any {
   return {
+    version: CANVAS_VERSION,
     primary: {
       open: isMainDrawerOpen(),
       width: getMainDrawerWidth(),
