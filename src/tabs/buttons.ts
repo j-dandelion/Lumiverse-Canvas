@@ -191,7 +191,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     e.stopPropagation()
-    showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title)
+    showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn)
   })
 
   tabList.appendChild(btn)

@@ -27,15 +27,26 @@ import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 
 let _contextMenu: HTMLElement | null = null
+// Tracks the element that originated the currently-open menu (the button
+// the user right-clicked / long-pressed). Used by the document-level
+// `click` listener to ignore the synthesized `click` that browsers
+// dispatch at the end of a long-press — when that click lands on the
+// same element that opened the menu, it would otherwise immediately
+// close the menu and break the mobile long-press flow.
+let _lastContextMenuTarget: HTMLElement | null = null
 // Called by sidebar/cleanup.cleanupAll on teardown.
 export function disposeContextMenu(): void {
   if (_contextMenu) {
     _contextMenu.remove()
     _contextMenu = null
   }
+  _lastContextMenuTarget = null
 }
 
-export function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle: string) {
+export function showAssignmentMenu(
+  x: number, y: number, tabId: string, tabTitle: string,
+  originatingTarget?: HTMLElement | null,
+) {
   if (!_contextMenu) {
     _contextMenu = createContextMenu()
     document.body.appendChild(_contextMenu)
@@ -61,6 +72,7 @@ export function showAssignmentMenu(x: number, y: number, tabId: string, tabTitle
   _contextMenu.style.left = `${x}px`
   _contextMenu.style.top = `${y}px`
   _contextMenu.style.display = 'block'
+  _lastContextMenuTarget = originatingTarget ?? null
 
   // Adjust if off-screen
   requestAnimationFrame(() => {
@@ -86,6 +98,7 @@ function hideContextMenu() {
     _contextMenu.remove()
     _contextMenu = null
   }
+  _lastContextMenuTarget = null
 }
 
 function createContextMenu(): HTMLElement {
@@ -126,9 +139,11 @@ function injectContextMenuStyles(): void {
       from { opacity: 0; transform: scale(0.92); }
       to   { opacity: 1; transform: scale(1); }
     }
-    body[data-glass] .canvas-tab-context-menu {
-      background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
-      backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+    @media not (pointer: coarse) {
+      body[data-glass] .canvas-tab-context-menu {
+        background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
+        backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+      }
     }
   `
   document.head.appendChild(style)
@@ -204,7 +219,7 @@ export function startContextMenuListener() {
     const matchedTab = tabs.find(t => t.title === title)
     const tabId = matchedTab?.id || title
 
-    showAssignmentMenu(evt.clientX, evt.clientY, tabId, title)
+    showAssignmentMenu(evt.clientX, evt.clientY, tabId, title, tabBtn)
   }
   // Capture-phase contextmenu listener: when ANY new contextmenu fires
   // (Lumiverse's shared ContextMenu opening on a built-in tab, canvas's
@@ -215,7 +230,17 @@ export function startContextMenuListener() {
   const docCtxCapture = () => {
     if (_contextMenu) hideContextMenu()
   }
-  const docClick = () => hideContextMenu()
+  const docClick = (e: Event) => {
+    // Ignore the synthesized `click` browsers dispatch at the end of a
+    // long-press (which on mobile is what triggers `contextmenu`). If
+    // that click lands on the same element that opened the menu, the
+    // user has just long-pressed to open the menu — do NOT close it.
+    const t = _lastContextMenuTarget
+    if (t && e.target && (e.target === t || t.contains(e.target as Node))) {
+      return
+    }
+    hideContextMenu()
+  }
   const docScroll = () => hideContextMenu()
   const docKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') hideContextMenu()
