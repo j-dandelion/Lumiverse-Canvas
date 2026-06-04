@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.5.2 — 2026-06-03
+
+### Fixed
+- Tab context menu on mobile: long-press now keeps the menu open
+  (the synthesized `click` that browsers dispatch at the end of a
+  long-press is no longer treated as an outside-click when it lands
+  on the same element that opened the menu), and the glass-mode
+  `backdrop-filter` is gated to non-touch devices via
+  `@media not (pointer: coarse)` so the menu no longer reads as a
+  "very large, opaque shadow" on busy mobile backgrounds. Desktop
+  right-click flow and the desktop glass look are unchanged.
+
 ## v1.5.1 — 2026-06-03
 
 ### Fixed
