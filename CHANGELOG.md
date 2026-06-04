@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5.1 — 2026-06-03
+
+### Fixed
+- Context menu entrance animation now uses `animation-fill-mode:
+  forwards` so the `contextMenuIn` keyframe's end state (opacity:1,
+  transform:none) sticks after the 120ms entrance finishes. With the
+  default `none` fill-mode, a post-animation DevTools inspection of
+  the live element reverted to the un-animated base style and showed
+  the keyframe's start values (opacity:0, transform:scale(0.92)),
+  making the element look like it had never finished animating. No
+  user-visible behavior change; this is a diagnostic-time
+  correctness fix for the next time someone debugs the menu.
+
 ## v1.5.0 — 2026-06-03
 
 ### Fixed
