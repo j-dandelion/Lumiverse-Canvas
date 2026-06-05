@@ -11,17 +11,13 @@
 // is anchored at `right: 0` (close transform is +width). When the main
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
-import { getMainSidebar, getMainDrawer } from '../dom/lumiverse'
+import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
 import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer } from '../tabs/assignment'
-// FIXME-decomp(step 6): showMainTabButton will live in tabs/buttons.ts.
 import { showMainTabButton } from '../tabs/buttons'
-// FIXME-decomp(step 7): getTabAssignments is already in tabs/assignment via
-// the re-export chain; persistence stays in layout/persist until Step 12.
-// Step 12 complete: persistOpenState now lives in layout/persist.ts.
 import { persistOpenState } from '../layout/persist'
 
 // CSS variable holding the saved width in pixels. The drawer reads it
@@ -392,10 +388,6 @@ export function closeSecondarySidebar() {
   syncDrawerTabSettings()
   updateChatReflow()
 
-  // FIXME-decomp(step 10): getTabAssignments is in tabs/assignment.ts after
-  // Step 10. For now, import via the transient entry.
-  // (The Map iteration pattern is preserved verbatim — see tabs/assignment
-  //  for the canonical accessor pattern.)
   for (const [tabId, sidebar] of getTabAssignmentsTransient()) {
     if (sidebar === 'secondary') {
       const tabs = getDrawerTabs()

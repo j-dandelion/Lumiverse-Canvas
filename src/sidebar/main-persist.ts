@@ -43,7 +43,7 @@
 // them to the first tab. Acceptable degradation: at least the
 // drawer reopens.
 
-import { getMainDrawer, getMainDrawerWidth } from '../dom/lumiverse'
+import { getMainDrawer } from '../dom/lumiverse'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { dlog } from '../debug/log'
 

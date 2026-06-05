@@ -15,21 +15,13 @@
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs, getStoreSnapshot } from '../store'
 import { dlog, dwarn } from '../debug/log'
-// FIXME-decomp(step 9): getSecondaryWrapper will be in sidebar/secondary.tsx.
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, restoreOverflow } from '../sidebar/secondary'
-// FIXME-decomp(step 6): hideMainTabButton, showMainTabButton,
-// addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility,
-// showSecondaryTab, cssEscape live in tabs/buttons.ts.
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
   cssEscape,
 } from '../tabs/buttons'
-// Step 12 complete: persistLayout now lives in layout/persist.ts.
 import { persistLayout } from '../layout/persist'
-
-// (clearOriginalParents is now defined locally in this file; sidebar/cleanup
-// re-imports it in Step 14.)
 
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()

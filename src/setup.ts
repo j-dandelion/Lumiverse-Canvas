@@ -37,7 +37,7 @@ import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
 import { getMainDrawer } from './dom/lumiverse'
-import { dlog, setDebug } from './debug/log'
+import { setDebug } from './debug/log'
 
 export function setup(ctx: any) {
   setBackendCtx(ctx)

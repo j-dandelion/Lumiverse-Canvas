@@ -20,22 +20,12 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot } from '../store'
 import { dlog } from '../debug/log'
-// FIXME-decomp(step 9): getSecondaryWrapper, isSecondarySidebarOpen,
-// mountSecondarySidebar will live in sidebar/secondary.tsx after Step 9.
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../sidebar/secondary'
-// FIXME-decomp(step 10): getTabAssignments, repositionAssignedTabs will
-// live in tabs/assignment.ts after Step 10.
 import { getTabAssignments, repositionAssignedTabs } from '../tabs/assignment'
-// Step 12 complete: persistLayout now lives in layout/persist.ts.
 import { persistLayout } from '../layout/persist'
-// Step 12 complete: registerCleanup now lives in sidebar/cleanup.ts.
 import { registerCleanup } from '../sidebar/cleanup'
-// Step 1 complete: getSettings now lives in settings/state.ts.
 import { getSettings } from '../settings/state'
-// FIXME-decomp(step 5): tagMainSidebarButtons lives in chat/tag-buttons.ts.
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-// FIXME-decomp(step 6): addSecondaryTabButton, removeSecondaryTabButton
-// live in tabs/buttons.ts.
 import { addSecondaryTabButton, removeSecondaryTabButton } from '../tabs/buttons'
 
 let _lastKnownSide: 'left' | 'right' | null = null

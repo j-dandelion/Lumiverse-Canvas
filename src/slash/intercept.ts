@@ -10,8 +10,8 @@
 //   Escape        — dismiss the popup (without clearing the textarea)
 //
 // All other keys fall through to Lumiverse's bubble-phase handlers. The
-// capture-phase wiring is the same pattern Chronicle uses for its /select
-// mobile send-button work (see references/chronicle-select-mobile-send-button.ts).
+// capture-phase wiring mirrors the mobile send-button intercept pattern
+// Chronicle's /select command uses for its keydown + touchend dual paths.
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { ParsedCommand } from './parse'
 import { parseCommand } from './parse'

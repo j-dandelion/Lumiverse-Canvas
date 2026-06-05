@@ -37,12 +37,6 @@ import { getSettings, cancelSettingsSave } from '../settings/state'
 // Must match spindle.json version. Updated on each release.
 export const CANVAS_VERSION = '1.5.6'
 
-// When true, logs every IPC send for debugging layout persistence.
-const DEBUG_LAYOUT_PERSIST = false
-function diagFrontend(...args: any[]) {
-  if (DEBUG_LAYOUT_PERSIST) console.log('[Canvas-DIAG]', ...args)
-}
-
 let _backendCtx: any = null
 
 export function getBackendCtx(): any { return _backendCtx }
@@ -72,8 +66,8 @@ export function cancelLayoutSave(): void {
  */
 export function flushPendingSaves(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) { diagFrontend('flushPendingSaves: no backendCtx, skipping'); return }
-  if (!isPersistenceEnabled()) { diagFrontend('flushPendingSaves: persistence disabled, skipping'); return }
+  if (!backendCtx) return
+  if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
@@ -83,7 +77,6 @@ export function flushPendingSaves(): void {
   // write that could race the one we're about to send.
   cancelSettingsSave()
   const layout = { ...snapshotLayout(), settings: getSettings() }
-  diagFrontend('flushPendingSaves: posting SAVE_LAYOUT')
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
@@ -118,7 +111,6 @@ let _mainDrawerTabId: string | null = null
 export function setMainDrawerState(open: boolean, tabId: string | null): void {
   _mainDrawerOpen = open
   _mainDrawerTabId = tabId
-  if (DEBUG_LAYOUT_PERSIST) console.log(`[Canvas-DIAG] setMainDrawerState(open=${open}, tabId=${tabId})`)
 }
 
 /**
@@ -164,8 +156,8 @@ function isPersistenceEnabled(): boolean {
  */
 export function persistOpenState(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) { diagFrontend('persistOpenState: no backendCtx, skipping'); return }
-  if (!isPersistenceEnabled()) { diagFrontend('persistOpenState: persistence disabled, skipping'); return }
+  if (!backendCtx) return
+  if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
@@ -176,7 +168,6 @@ export function persistOpenState(): void {
   // must not be allowed to clobber it.
   cancelSettingsSave()
   const layout = { ...snapshotLayout(), settings: getSettings() }
-  diagFrontend(`persistOpenState: posting SAVE_LAYOUT (secondary.open=${layout.secondary.open}, width=${layout.secondary.width})`)
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
@@ -187,8 +178,8 @@ export function persistOpenState(): void {
  */
 export function persistLayout(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) { diagFrontend('persistLayout: no backendCtx, skipping'); return }
-  if (!isPersistenceEnabled()) { diagFrontend('persistLayout: persistence disabled, skipping'); return }
+  if (!backendCtx) return
+  if (!isPersistenceEnabled()) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
@@ -199,7 +190,6 @@ export function persistLayout(): void {
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
     const layout = { ...snapshotLayout(), settings: getSettings() }
-    diagFrontend(`persistLayout: debounced save firing (secondary.width=${layout.secondary.width}, detachedTabs=${layout.detachedTabs.length})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 500)
 }
@@ -215,8 +205,7 @@ function saveLayout() {
 
 export function loadSavedLayout(): Promise<any> {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) { diagFrontend('loadSavedLayout: no backendCtx, returning null'); return Promise.resolve(null) }
-  diagFrontend('loadSavedLayout: posting LOAD_LAYOUT')
+  if (!backendCtx) return Promise.resolve(null)
   return new Promise((resolve) => {
     // Phase 3 (finding #13): register a one-shot handler that resolves the
     // promise when LAYOUT_DATA arrives. The handler is replaced by the
@@ -224,7 +213,6 @@ export function loadSavedLayout(): Promise<any> {
     // LAYOUT_DATA could come through.
     const handler = (payload: any) => {
       if (payload.type === 'LAYOUT_DATA') {
-        diagFrontend(`loadSavedLayout: LAYOUT_DATA received, layout=${payload.layout ? 'present' : 'null'}`)
         resolve(payload.layout)
       }
     }
@@ -234,7 +222,7 @@ export function loadSavedLayout(): Promise<any> {
     // resolve with null so the mount proceeds with defaults rather than
     // hanging the extension. 2s is enough for the file I/O round-trip on
     // a warm cache; longer waits mask real bugs.
-    setTimeout(() => { diagFrontend('loadSavedLayout: 2s timeout reached, returning null'); resolve(null) }, 2000)
+    setTimeout(() => { resolve(null) }, 2000)
   })
 }
 
@@ -251,10 +239,8 @@ export function loadSavedLayout(): Promise<any> {
  */
 export function applyMainDrawer(layout: any): void {
   if (!layout || !layout.primary) {
-    diagFrontend('applyMainDrawer: no layout.primary, skipping')
     return
   }
-  diagFrontend(`applyMainDrawer: layout.primary=${JSON.stringify(layout.primary)}`)
 
   // Delegate to the watcher module's DOM-driven restore.
   // We import lazily to avoid circular deps (main-persist imports

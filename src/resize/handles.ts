@@ -17,16 +17,9 @@
 import { getMainDrawer, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { scheduleReflow } from '../chat/reflow'
-// FIXME-decomp(step 9): getSecondaryWrapper, isSecondarySidebarOpen,
-// SECONDARY_WIDTH_VAR, repositionAssignedTabs will live in their respective
-// modules after Step 9. mountResizeHandles's secondary-handle branch needs
-// them. Until then, import via the still-large entry.
 import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
-// FIXME-decomp(step 10): repositionAssignedTabs will live in tabs/assignment.ts.
 import { repositionAssignedTabs } from '../tabs/assignment'
-// Step 12 complete: persistLayout now lives in layout/persist.ts.
 import { persistLayout } from '../layout/persist'
-// Step 1 complete: getSettings now lives in settings/state.ts.
 import { getSettings } from '../settings/state'
 
 export function isMobile(): boolean {

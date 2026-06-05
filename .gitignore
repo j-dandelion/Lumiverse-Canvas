@@ -20,3 +20,6 @@ bun.lockb
 
 # AI working notes (ephemeral planning docs)
 .hermes-*.md
+
+# Release-notes drafts (uncommitted release notes; release history lives in CHANGELOG.md + git tags)
+.release-notes-*.md
