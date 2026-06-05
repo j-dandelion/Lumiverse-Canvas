@@ -17,3 +17,6 @@ Thumbs.db
 # Bun / Node
 node_modules/
 bun.lockb
+
+# AI working notes (ephemeral planning docs)
+.hermes-*.md
