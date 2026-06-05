@@ -131,31 +131,8 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
     }
   }
 
-  // 9. Smooth transitions — toggle the chat-column transition rule.
-  if (prev.smoothTransitions !== next.smoothTransitions) {
-    const reflow = document.getElementById('sidebar-ux-reflow')
-    if (reflow) {
-      reflow.textContent = next.smoothTransitions
-        ? `
-          [class*="_chatColumn_"] {
-            margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
-            margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
-            transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
-          }
-        `
-        : `
-          [class*="_chatColumn_"] {
-            margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
-            margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
-            transition: none !important;
-          }
-        `
-    }
-  }
-
-  // 10. Settings that don't need live effects (apply on next reload):
+  // 9. Settings that don't need live effects (apply on next reload):
   //   - layoutPersistence: read by persistLayout/persistOpenState
-  //   - autoCleanupOnUninstall: read by startTabRegistrationWatcher's check
   // The settings panel re-renders to reflect the new value, and the next
   // mount/load cycle reads the updated value from getSettings().
 }

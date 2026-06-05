@@ -25,6 +25,7 @@ import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
+import { getSettings } from '../settings/state'
 
 let _contextMenu: HTMLElement | null = null
 // Tracks the element that originated the currently-open menu (the button
@@ -208,7 +209,9 @@ export function startContextMenuListener() {
     const isExtension = tabBtn.classList.toString().includes('Extension')
       || tabBtn.previousElementSibling?.classList.toString().includes('Divider')
     if (!isExtension) return
-
+    // Don't show the move menu when the second sidebar is disabled — there's
+    // nothing to move to.
+    if (!getSettings().secondSidebarEnabled) return
     e.preventDefault()
     e.stopPropagation()
 

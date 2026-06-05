@@ -9,9 +9,8 @@
 // full re-mount.
 //
 // Section structure:
-//   - Chat & Layout (chatReflow, layoutPersistence, smoothTransitions)
+//   - Chat & Layout (chatReflow, layoutPersistence)
 //   - Second Sidebar (master + 5 sub-features gated by the master)
-//   - Behavior (autoCleanupOnUninstall)
 //   - Debug (debugMode)
 //
 // All toggles call setSettings({ field: value }) from settings/state.ts.
@@ -300,16 +299,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: persist.btn,
   }))
 
-  const smooth = makeToggle(
-    () => getSettings().smoothTransitions,
-    (v) => setSettings({ smoothTransitions: v })
-  )
-  sec1.appendChild(buildSettingRow({
-    label: 'Smooth transitions',
-    hint: 'Animates drawer open/close and the chat margin transition.',
-    control: smooth.btn,
-  }))
-
   // --- Section: Second Sidebar ---
   const sec2 = section('Second Sidebar')
 
@@ -388,19 +377,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: iconSize.btn,
   }))
 
-  // --- Section: Behavior ---
-  const sec3 = section('Behavior')
-
-  const cleanup = makeToggle(
-    () => getSettings().autoCleanupOnUninstall,
-    (v) => setSettings({ autoCleanupOnUninstall: v })
-  )
-  sec3.appendChild(buildSettingRow({
-    label: 'Auto-cleanup when an extension is uninstalled',
-    hint: 'Removes the tab from the secondary sidebar if its source extension disappears.',
-    control: cleanup.btn,
-  }))
-
   // --- Section: Debug ---
   const sec4 = section('Debug')
 
@@ -421,7 +397,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
 
   root.appendChild(sec1)
   root.appendChild(sec2)
-  root.appendChild(sec3)
   root.appendChild(sec4)
   root.appendChild(footer)
 
@@ -436,8 +411,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     iconSize.refresh()
     chat.refresh()
     persist.refresh()
-    smooth.refresh()
-    cleanup.refresh()
     debugMode.refresh()
     // Update disabled visual state for sub-features gated by the master toggle.
     for (const row of [resizeSidebars, mirror, compact]) {

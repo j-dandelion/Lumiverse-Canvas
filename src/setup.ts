@@ -22,7 +22,7 @@
 // their own mount sites rather than via the master toggle, so adding a
 // non-master-gated sub-feature later is a one-liner.
 
-import { mountSecondarySidebar, unmountSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from './sidebar/secondary'
+import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from './sidebar/secondary'
 import { startReflowObserver } from './chat/reflow'
 import { mountResizeHandles } from './resize/handles'
 import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
@@ -117,7 +117,7 @@ export function setup(ctx: any) {
     // a one-liner.
     if (getSettings().secondSidebarEnabled) {
       mountSecondarySidebar({ initialWidth, initialOpen })
-      registerCleanup(unmountSecondarySidebar)
+      registerCleanup(tearDownSecondarySidebar)
     }
     if (getSettings().chatReflow) {
       const detachReflow = startReflowObserver()
@@ -136,9 +136,7 @@ export function setup(ctx: any) {
     if (getSettings().autoMirrorOnSideSwap) {
       startSideChangeWatcher()
     }
-    if (getSettings().autoCleanupOnUninstall) {
-      startTabRegistrationWatcher()
-    }
+    startTabRegistrationWatcher()
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     startContextMenuListener()

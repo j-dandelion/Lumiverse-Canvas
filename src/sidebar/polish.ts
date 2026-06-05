@@ -193,15 +193,13 @@ export function startTabRegistrationWatcher(): void {
     const currentTabs = getDrawerTabs()
     const currentIds = new Set(currentTabs.map(t => t.id))
 
-    // Check for removed tabs (only when auto-cleanup is enabled).
-    if (getSettings().autoCleanupOnUninstall) {
-      for (const oldId of _tabRegPrevIds) {
-        if (!currentIds.has(oldId) && getTabAssignments().has(oldId)) {
-          dlog(`Extension tab ${oldId} was removed, cleaning up`)
-          ;(getTabAssignments() as Map<string, 'primary' | 'secondary'>).delete(oldId)
-          removeSecondaryTabButton(oldId)
-          persistLayout()
-        }
+    // Clean up stale assignments when an extension is unregistered.
+    for (const oldId of _tabRegPrevIds) {
+      if (!currentIds.has(oldId) && getTabAssignments().has(oldId)) {
+        dlog(`Extension tab ${oldId} was removed, cleaning up`)
+        ;(getTabAssignments() as Map<string, 'primary' | 'secondary'>).delete(oldId)
+        removeSecondaryTabButton(oldId)
+        persistLayout()
       }
     }
 
