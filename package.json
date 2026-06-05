@@ -1,6 +1,6 @@
 {
   "name": "canvas",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "scripts": {
     "build": "bun build src/frontend.ts --outfile dist/frontend.js --target browser --format esm && bun build src/backend.ts --outfile dist/backend.js --target bun --format esm",
     "deploy": "bash build.sh"
