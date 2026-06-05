@@ -35,10 +35,14 @@ import { dlog, dwarn } from '../debug/log'
 import { getSettings, cancelSettingsSave } from '../settings/state'
 
 // Must match spindle.json version. Updated on each release.
-export const CANVAS_VERSION = '1.5.3'
+export const CANVAS_VERSION = '1.5.6'
 
-// Module-private state.
-// (setup in frontend.ts) and passed in via setBackendCtx.
+// When true, logs every IPC send for debugging layout persistence.
+const DEBUG_LAYOUT_PERSIST = false
+function diagFrontend(...args: any[]) {
+  if (DEBUG_LAYOUT_PERSIST) console.log('[Canvas-DIAG]', ...args)
+}
+
 let _backendCtx: any = null
 
 export function getBackendCtx(): any { return _backendCtx }
@@ -68,8 +72,8 @@ export function cancelLayoutSave(): void {
  */
 export function flushPendingSaves(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!backendCtx) { diagFrontend('flushPendingSaves: no backendCtx, skipping'); return }
+  if (!isPersistenceEnabled()) { diagFrontend('flushPendingSaves: persistence disabled, skipping'); return }
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
@@ -79,7 +83,42 @@ export function flushPendingSaves(): void {
   // write that could race the one we're about to send.
   cancelSettingsSave()
   const layout = { ...snapshotLayout(), settings: getSettings() }
+  diagFrontend('flushPendingSaves: posting SAVE_LAYOUT')
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+}
+
+// Authoritative main-drawer state, updated by the watcher's onDrawerChange
+// callback. snapshotLayout() reads from these vars instead of calling
+// isMainDrawerOpen() (Zustand snapshot) or getMainDrawerWidth() (DOM
+// measurement) directly, because:
+//
+// - isMainDrawerOpen() reads from a 3s-cached fiber-tree walk that can
+//   return drawerOpen=false even when the wrapper is open, if the walker
+//   missed the right fiber (transitional state during mount, or a hot
+//   reload that broke the cache).
+// - The host's onDrawerChange stream is the source of truth for the main
+//   drawer's open/close + active tab. When the host says open=true, it IS
+//   open. Routing the watcher's events through a module-level cache and
+//   reading from it at snapshot time eliminates the unreliable indirect
+//   read entirely.
+// - getMainDrawerWidth() is still called from snapshotLayout for the
+//   width field — a DOM measurement is the only way to get a width
+//   value, and the watcher's ResizeObserver-debounced path also writes
+//   through this snapshot, so the width is fresh.
+let _mainDrawerOpen = false
+let _mainDrawerTabId: string | null = null
+
+/**
+ * Push the host's authoritative main-drawer state into the module
+ * cache. Called by the watcher in sidebar/main-persist.ts from the
+ * spindle.ui.onDrawerChange callback. Subsequent snapshotLayout() calls
+ * will return this state for primary.{open,tabId} instead of reading
+ * the unreliable Zustand snapshot.
+ */
+export function setMainDrawerState(open: boolean, tabId: string | null): void {
+  _mainDrawerOpen = open
+  _mainDrawerTabId = tabId
+  if (DEBUG_LAYOUT_PERSIST) console.log(`[Canvas-DIAG] setMainDrawerState(open=${open}, tabId=${tabId})`)
 }
 
 /**
@@ -89,8 +128,13 @@ export function snapshotLayout(): any {
   return {
     version: CANVAS_VERSION,
     primary: {
-      open: isMainDrawerOpen(),
+      // Read from the module-level cache populated by the watcher. Falls
+      // back to isMainDrawerOpen() (Zustand snapshot) at module init
+      // time, before the watcher has had a chance to fire its first
+      // event. After the first event, the cache is authoritative.
+      open: _mainDrawerOpen,
       width: getMainDrawerWidth(),
+      tabId: _mainDrawerTabId,
     },
     secondary: {
       open: isSecondarySidebarOpen(),
@@ -120,8 +164,8 @@ function isPersistenceEnabled(): boolean {
  */
 export function persistOpenState(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!backendCtx) { diagFrontend('persistOpenState: no backendCtx, skipping'); return }
+  if (!isPersistenceEnabled()) { diagFrontend('persistOpenState: persistence disabled, skipping'); return }
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
@@ -132,6 +176,7 @@ export function persistOpenState(): void {
   // must not be allowed to clobber it.
   cancelSettingsSave()
   const layout = { ...snapshotLayout(), settings: getSettings() }
+  diagFrontend(`persistOpenState: posting SAVE_LAYOUT (secondary.open=${layout.secondary.open}, width=${layout.secondary.width})`)
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
@@ -142,8 +187,8 @@ export function persistOpenState(): void {
  */
 export function persistLayout(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!backendCtx) { diagFrontend('persistLayout: no backendCtx, skipping'); return }
+  if (!isPersistenceEnabled()) { diagFrontend('persistLayout: persistence disabled, skipping'); return }
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
@@ -154,6 +199,7 @@ export function persistLayout(): void {
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
     const layout = { ...snapshotLayout(), settings: getSettings() }
+    diagFrontend(`persistLayout: debounced save firing (secondary.width=${layout.secondary.width}, detachedTabs=${layout.detachedTabs.length})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 500)
 }
@@ -169,7 +215,8 @@ function saveLayout() {
 
 export function loadSavedLayout(): Promise<any> {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) return Promise.resolve(null)
+  if (!backendCtx) { diagFrontend('loadSavedLayout: no backendCtx, returning null'); return Promise.resolve(null) }
+  diagFrontend('loadSavedLayout: posting LOAD_LAYOUT')
   return new Promise((resolve) => {
     // Phase 3 (finding #13): register a one-shot handler that resolves the
     // promise when LAYOUT_DATA arrives. The handler is replaced by the
@@ -177,6 +224,7 @@ export function loadSavedLayout(): Promise<any> {
     // LAYOUT_DATA could come through.
     const handler = (payload: any) => {
       if (payload.type === 'LAYOUT_DATA') {
+        diagFrontend(`loadSavedLayout: LAYOUT_DATA received, layout=${payload.layout ? 'present' : 'null'}`)
         resolve(payload.layout)
       }
     }
@@ -186,7 +234,38 @@ export function loadSavedLayout(): Promise<any> {
     // resolve with null so the mount proceeds with defaults rather than
     // hanging the extension. 2s is enough for the file I/O round-trip on
     // a warm cache; longer waits mask real bugs.
-    setTimeout(() => resolve(null), 2000)
+    setTimeout(() => { diagFrontend('loadSavedLayout: 2s timeout reached, returning null'); resolve(null) }, 2000)
+  })
+}
+
+/**
+ * Restore the main drawer's open/close + active tab from the saved
+ * layout. Independent of applyLayout (which is gated on
+ * secondSidebarEnabled) — the main drawer is host-owned, so its
+ * restore is feature-gated only on the master layoutPersistence
+ * toggle.
+ *
+ * Delegates to restoreMainDrawerFromDom() in sidebar/main-persist.ts,
+ * which simulates a tab-button click to open the drawer (the host's
+ * spindle.ui API is not exposed to extensions at runtime).
+ */
+export function applyMainDrawer(layout: any): void {
+  if (!layout || !layout.primary) {
+    diagFrontend('applyMainDrawer: no layout.primary, skipping')
+    return
+  }
+  diagFrontend(`applyMainDrawer: layout.primary=${JSON.stringify(layout.primary)}`)
+
+  // Delegate to the watcher module's DOM-driven restore.
+  // We import lazily to avoid circular deps (main-persist imports
+  // persist, and this function is only ever called from setup.ts's
+  // loadSavedLayout callback — long after module init).
+  import('../sidebar/main-persist').then(({ restoreMainDrawerFromDom }) => {
+    restoreMainDrawerFromDom(
+      layout.primary.open === true,
+      typeof layout.primary.tabId === 'string' ? layout.primary.tabId : null,
+      typeof layout.primary.width === 'number' ? layout.primary.width : undefined,
+    )
   })
 }
 

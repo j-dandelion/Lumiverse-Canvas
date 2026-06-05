@@ -19,7 +19,7 @@
 // layout/persist (Task #4) respectively.
 
 import { mergeCanvasSettings, type CanvasSettings } from '../types'
-import { setDebug } from '../debug/log'
+import { setDebug, dlog } from '../debug/log'
 // FIXME-decomp(step 2): applySettings will live in settings/panel.ts.
 import { applySettings } from '../frontend'
 import { getBackendCtx, snapshotLayout } from '../layout/persist'
@@ -95,7 +95,7 @@ export function refreshSettingsPanel() {
 /** Debounced persistence of the current settings (merged into the layout blob). */
 export function persistSettings(): void {
   const backendCtx = getBackendCtx()
-  if (!backendCtx) return
+  if (!backendCtx) { dlog('persistSettings: no backendCtx, skipping'); return }
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }
@@ -103,8 +103,17 @@ export function persistSettings(): void {
     _saveSettingsTimer = null
     // Persist via the same SAVE_LAYOUT IPC; the settings field rides on the
     // existing layout blob. The other layout fields (primary, secondary,
-    // detachedTabs) come from snapshotLayout() so we don't drop them.
-    const layout = { ...snapshotLayout(), settings: _settings }
+    // detachedTabs) come from snapshotLayout() so we don't drop them —
+    // UNLESS the user has the layoutPersistence toggle OFF, in which case
+    // we record a clean snapshot (everything closed, no detached tabs).
+    // The toggle's "off" state means "don't capture current layout" — so
+    // a reload after toggling off starts from defaults, not from "what
+    // was on screen when the user turned the toggle off."
+    const layoutSnapshot = _settings.layoutPersistence
+      ? snapshotLayout()
+      : { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] }
+    const layout = { ...layoutSnapshot, settings: _settings }
+    dlog(`persistSettings: debounced firing (layoutPersistence=${_settings.layoutPersistence}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 100)
 }

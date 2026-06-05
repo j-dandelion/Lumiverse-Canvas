@@ -23,7 +23,7 @@ import { isMobile, createResizeHandle, mountResizeHandles, refreshResizeHandles,
 import { isShowTabLabels, syncDrawerTabSettings, syncSecondaryTabLabels, checkSideChanged, restoreSecondaryTabButtons, startSideChangeWatcher, stopSideChangeWatcher, startTabRegistrationWatcher, stopTabRegistrationWatcher, clearDrawerTabLayoutCache } from './sidebar/polish'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startContextMenuListener } from './context-menu'
-import { setBackendCtx, applyLayout, loadSavedLayout } from './layout/persist'
+import { setBackendCtx, applyLayout, loadSavedLayout, cancelLayoutSave } from './layout/persist'
 import { mountSettingsPanel } from './settings/panel'
 import { getSettings, setSettings, setLastLoadedLayout, getLastLoadedLayout, setPanelRefresh, refreshSettingsPanel, hydrateSettings, type FullCanvasSettings } from './settings/state'
 
@@ -131,10 +131,16 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
     }
   }
 
-  // 9. Settings that don't need live effects (apply on next reload):
-  //   - layoutPersistence: read by persistLayout/persistOpenState
-  // The settings panel re-renders to reflect the new value, and the next
-  // mount/load cycle reads the updated value from getSettings().
+  // 9. layoutPersistence — when the user turns the toggle off, cancel any
+  // in-flight debounced layout save so a queued mutation doesn't sneak
+  // the current drawer state onto disk under the new "off" settings. The
+  // subsequent settings save (in setSettings) will use a clean snapshot,
+  // so a reload after toggling off starts from defaults rather than from
+  // "what was on screen when the user turned the toggle off." When
+  // turning it on, no action — the next mutation will save normally.
+  if (prev.layoutPersistence === true && next.layoutPersistence === false) {
+    cancelLayoutSave()
+  }
 }
 
 // --- DOM Helpers ---

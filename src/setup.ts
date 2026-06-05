@@ -26,12 +26,13 @@ import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, i
 import { startReflowObserver } from './chat/reflow'
 import { mountResizeHandles } from './resize/handles'
 import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
+import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
 import { attachSlashRuntime } from './slash/runtime'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyLayout, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
+import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
@@ -136,6 +137,12 @@ export function setup(ctx: any) {
     if (getSettings().autoMirrorOnSideSwap) {
       startSideChangeWatcher()
     }
+    // Main-drawer persistence runs whenever the master toggle is on,
+    // independent of resizeSidebars — the open/close watcher (via
+    // spindle.ui.onDrawerChange) captures state even when Canvas isn't
+    // mounting its own resize handle. Stops on teardown.
+    startMainDrawerPersistence()
+    registerCleanup(stopMainDrawerPersistence)
     startTabRegistrationWatcher()
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
@@ -147,6 +154,15 @@ export function setup(ctx: any) {
     if (getSettings().consistentIconSize) {
       injectDrawerTabStyles()
     }
+
+    // Main-drawer restore — independent of secondSidebarEnabled. The
+    // main drawer is host-owned and its open/close state is captured
+    // by snapshotLayout() on every save, so a user who has the
+    // secondary sidebar disabled but layoutPersistence on still
+    // expects the main drawer to reopen. applyLayout (below) is
+    // gated on secondSidebarEnabled because it touches the secondary
+    // wrapper; applyMainDrawer has no such dependency.
+    applyMainDrawer(layout)
 
     // Apply the rest of the layout (tab assignments + width delta if any).
     // Safe to call after mount: it won't double-animate the wrapper.
