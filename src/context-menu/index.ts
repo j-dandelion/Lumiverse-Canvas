@@ -1,7 +1,7 @@
 // Canvas tab context menu — injection into Lumiverse's built-in menu.
 //
 // Instead of maintaining a separate DOM menu for extension tabs in the
-// main sidebar, we inject a "Move to Second Sidebar" / "Move to Main
+// main sidebar, we inject a "Move to second sidebar" / "Move to Main"
 // Sidebar" item into Lumiverse's own ContextMenu (rendered via React
 // portal to document.body).
 //
@@ -25,6 +25,26 @@ import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/buttons'
+
+/**
+ * Re-clamp the Lumiverse context menu position after Canvas has injected
+ * additional items that increased its height. Mirrors the clamping logic
+ * in Lumiverse's ContextMenu.tsx useLayoutEffect (lines 152-167).
+ */
+function clampMenuToViewport(menu: HTMLElement): void {
+  const uiScale = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale'),
+  ) || 1
+  const rect = menu.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  if (rect.right > vw - 8) {
+    menu.style.left = `${(vw - rect.width - 8) / uiScale}px`
+  }
+  if (rect.bottom > vh - 8) {
+    menu.style.top = `${(vh - rect.height - 8) / uiScale}px`
+  }
+}
 
 // --- Main sidebar injection state ---
 
@@ -90,10 +110,10 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
     label = 'Move to Main Sidebar'
     targetSidebar = 'primary'
   } else if (info.currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in Second Sidebar'
+    label = 'Open in second sidebar'
     targetSidebar = 'secondary'
   } else {
-    label = 'Move to Second Sidebar'
+    label = 'Move to second sidebar'
     targetSidebar = 'secondary'
   }
 
@@ -150,6 +170,11 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   })
 
   menu.appendChild(btn)
+
+  // Re-clamp after injection: the added items may have pushed the menu
+  // below the viewport. Lumiverse's initial clamp ran before we injected.
+  // No rAF needed — getBoundingClientRect() forces synchronous layout.
+  clampMenuToViewport(menu)
 }
 
 // --- Document-level listeners ---

@@ -295,10 +295,10 @@ export function showAssignmentMenu(
     label = 'Move to Main Sidebar'
     targetSidebar = 'primary'
   } else if (currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in Second Sidebar'
+    label = 'Open in second sidebar'
     targetSidebar = 'secondary'
   } else {
-    label = 'Move to Second Sidebar'
+    label = 'Move to second sidebar'
     targetSidebar = 'secondary'
   }
 
