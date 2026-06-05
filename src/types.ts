@@ -58,13 +58,6 @@ export interface CanvasSettings {
   /** Persist open/closed state, widths, and tab assignments to layout.json. */
   layoutPersistence?: boolean
 
-  /** Animate drawer open/close and the chat margin transition. */
-  smoothTransitions?: boolean
-
-  // --- Behavior ---
-  /** When an extension tab is unregistered, clean up its secondary assignment. */
-  autoCleanupOnUninstall?: boolean
-
   // --- Debug ---
   /** Master debug switch — enables [Canvas] console output AND installs
    *  `window.__canvasDebug()` for in-browser fiber tree inspection. */
@@ -88,9 +81,6 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   // Chat & Layout
   chatReflow: true,
   layoutPersistence: true,
-  smoothTransitions: true,
-  // Behavior
-  autoCleanupOnUninstall: true,
   // Debug
   debugMode: false,
 }

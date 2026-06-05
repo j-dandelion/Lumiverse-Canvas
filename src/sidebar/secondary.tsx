@@ -11,14 +11,12 @@
 // is anchored at `right: 0` (close transform is +width). When the main
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
-import { getMainDrawer } from '../dom/lumiverse'
+import { getMainSidebar, getMainDrawer } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
-// FIXME-decomp(step 10): repositionAssignedTabs, restoreTabToPrimary will
-// live in tabs/assignment.ts after Step 10.
-import { repositionAssignedTabs, restoreTabToPrimary } from '../tabs/assignment'
+import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer } from '../tabs/assignment'
 // FIXME-decomp(step 6): showMainTabButton will live in tabs/buttons.ts.
 import { showMainTabButton } from '../tabs/buttons'
 // FIXME-decomp(step 7): getTabAssignments is already in tabs/assignment via
@@ -474,8 +472,30 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
  */
 export function tearDownSecondarySidebar(): void {
   if (_secondaryWrapper) {
+    // If the main drawer is currently showing a tab that lives in the
+    // secondary sidebar, switch to a built-in fallback first. Otherwise
+    // restoreTabToPrimary's click() won't re-render React (the DOM node
+    // was physically in the secondary sidebar and React never unmounted it).
+    const sidebar = getMainSidebar()
+    if (sidebar) {
+      const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]')) as HTMLElement[]
+      const fallbackBtn = allButtons.find(
+        b => b.style.display !== 'none' && b.className.includes('tabBtn') && !b.className.includes('tabBtnExtension')
+      )
+      if (fallbackBtn) {
+        // Check if any secondary tab is currently active in the main drawer.
+        for (const [tabId, side] of getTabAssignmentsTransient()) {
+          if (side === 'secondary' && isTabActiveInMainDrawer(tabId)) {
+            fallbackBtn.click()
+            break
+          }
+        }
+      }
+    }
+    // Restore all secondary tabs to primary — just reposition the DOM
+    // nodes back, don't activate them (the fallback above handles that).
     for (const [tabId] of Array.from(getTabAssignmentsTransient())) {
-      restoreTabToPrimary(tabId)
+      repositionTab(tabId, 'primary')
       showMainTabButton(tabId)
     }
     _secondaryWrapper.remove()
