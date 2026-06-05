@@ -229,11 +229,10 @@ function injectDrawerTabStyles() {
 
 // --- Context Menu ---
 
-// All context menu code (createContextMenu, injectContextMenuStyles,
-// createContextMenuItem, _contextMenu, disposeContextMenu,
-// showAssignmentMenu, hideContextMenu, startContextMenuListener,
-// stopContextMenuListener) lives in src/context-menu/index.ts (Step 11 of
-// the decomposition). This section is intentionally empty.
+// Main sidebar: context-menu/index.ts injects a "Move to Second Sidebar"
+// item into Lumiverse's built-in ContextMenu via MutationObserver.
+// Secondary sidebar: showAssignmentMenu / hideAssignmentMenu in
+// tabs/buttons.ts own a Canvas DOM menu for right-click on secondary tabs.
 
 // --- Drag-to-Resize ---
 

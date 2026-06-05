@@ -1,66 +1,95 @@
-// Canvas tab context menu.
+// Canvas tab context menu — injection into Lumiverse's built-in menu.
 //
-// A single shared context menu element for right-clicks on extension tabs
-// in the main sidebar. Listens for contextmenu events on the main sidebar
-// (gated to extension-tab buttons) and shows a "Move to Second Sidebar" /
-// "Open in Second Sidebar" / "Move to Main Sidebar" entry that drives
-// assignTab from tabs/assignment.
+// Instead of maintaining a separate DOM menu for extension tabs in the
+// main sidebar, we inject a "Move to Second Sidebar" / "Move to Main
+// Sidebar" item into Lumiverse's own ContextMenu (rendered via React
+// portal to document.body).
 //
-// CSS mirrors ~/Lumiverse/frontend/src/components/shared/ContextMenu.module.css
-// exactly — z-index 11000, 12px/32px shadow, 1px white-tinted inner ring,
-// contextMenuIn entrance animation. The keyframe and body[data-glass] glass
-// variant live in injectContextMenuStyles() (can't be declared inline).
+// The secondary sidebar keeps its own Canvas-owned context menu
+// (showAssignmentMenu in tabs/buttons.ts) since Lumiverse doesn't
+// render tabs there.
 //
-// Invariants:
-//   - At most one menu in the DOM at a time. hideContextMenu removes the
-//     element (not just hides it) so the next showAssignmentMenu creates a
-//     fresh element and the contextMenuIn animation re-runs cleanly.
-//     Matches Lumiverse's openMenus registry invariant
-//     (ContextMenu.tsx:52, 68-78).
-//   - Any new contextmenu (Lumiverse's shared menu, canvas's own handler on
-//     a different tab, or the browser's default) closes the canvas menu
-//     first. Enforced by a capture-phase document-level contextmenu listener.
+// Event flow:
+//   1. User right-clicks extension tab → contextmenu event fires
+//   2. docCtxCapture (capture phase) detects the extension tab, sets
+//      _pendingTabInfo. Does NOT call stopPropagation() — Lumiverse's
+//      handler fires normally.
+//   3. Lumiverse renders ContextMenu portal to document.body
+//   4. MutationObserver detects the new menu element
+//   5. requestAnimationFrame (ensures React committed the DOM)
+//   6. Canvas appends divider + move button into the menu
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
+import { hideAssignmentMenu } from '../tabs/buttons'
 
-let _contextMenu: HTMLElement | null = null
-// Tracks the element that originated the currently-open menu (the button
-// the user right-clicked / long-pressed). Used by the document-level
-// `click` listener to ignore the synthesized `click` that browsers
-// dispatch at the end of a long-press — when that click lands on the
-// same element that opened the menu, it would otherwise immediately
-// close the menu and break the mobile long-press flow.
-let _lastContextMenuTarget: HTMLElement | null = null
-// Called by sidebar/cleanup.cleanupAll on teardown.
-export function disposeContextMenu(): void {
-  if (_contextMenu) {
-    _contextMenu.remove()
-    _contextMenu = null
-  }
-  _lastContextMenuTarget = null
+// --- Main sidebar injection state ---
+
+interface PendingTabInfo {
+  tabId: string
+  currentSidebar: 'primary' | 'secondary'
+  btn: HTMLElement
 }
 
-export function showAssignmentMenu(
-  x: number, y: number, tabId: string, tabTitle: string,
-  originatingTarget?: HTMLElement | null,
-) {
-  if (!_contextMenu) {
-    _contextMenu = createContextMenu()
-    document.body.appendChild(_contextMenu)
-  }
+let _pendingTabInfo: PendingTabInfo | null = null
+let _injected = false
+let _observer: MutationObserver | null = null
 
-  _contextMenu.innerHTML = ''
-  const currentSidebar = getTabSidebar(tabId)
+// --- MutationObserver: detect Lumiverse's ContextMenu portal ---
+
+function findLumiverseContextMenu(): HTMLElement | null {
+  // Lumiverse's ContextMenu component portals to document.body.
+  // It's a div with position:fixed and z-index:11000 (ContextMenu.module.css).
+  // The class name is CSS-module-hashed in production, so we match by
+  // DOM position (last child of body) + computed style.
+  const last = document.body.lastElementChild as HTMLElement | null
+  if (!last || last.tagName !== 'DIV') return null
+  const style = getComputedStyle(last)
+  if (style.position !== 'fixed') return null
+  if (style.zIndex !== '11000') return null
+  // Sanity: must contain at least one button (Lumiverse's menu items)
+  if (!last.querySelector('button')) return null
+  return last
+}
+
+function startObserver(): void {
+  if (_observer) return
+  _observer = new MutationObserver(() => {
+    if (_injected || !_pendingTabInfo) return
+    // Give React one frame to commit the DOM after state update.
+    requestAnimationFrame(() => {
+      if (_injected || !_pendingTabInfo) return
+      const menu = findLumiverseContextMenu()
+      if (!menu) return
+      injectCanvasItem(menu, _pendingTabInfo)
+      _injected = true
+      _pendingTabInfo = null
+      stopObserver()
+    })
+  })
+  _observer.observe(document.body, { childList: true })
+}
+
+function stopObserver(): void {
+  if (_observer) {
+    _observer.disconnect()
+    _observer = null
+  }
+}
+
+// --- Injection: append Canvas item into Lumiverse's rendered menu ---
+
+function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
+  // Derive the move label from the tab's current sidebar position.
   let label: string
   let targetSidebar: 'primary' | 'secondary'
-  if (currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
+  if (info.currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
     label = 'Move to Main Sidebar'
     targetSidebar = 'primary'
-  } else if (currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
+  } else if (info.currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
     label = 'Open in Second Sidebar'
     targetSidebar = 'secondary'
   } else {
@@ -68,206 +97,138 @@ export function showAssignmentMenu(
     targetSidebar = 'secondary'
   }
 
-  const item = createContextMenuItem(label, () => assignTab(tabId, targetSidebar))
-  _contextMenu.appendChild(item)
-  _contextMenu.style.left = `${x}px`
-  _contextMenu.style.top = `${y}px`
-  _contextMenu.style.display = 'block'
-  _lastContextMenuTarget = originatingTarget ?? null
+  // Don't show the move option when the second sidebar is disabled —
+  // there's nothing to move to.
+  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) return
 
-  // Adjust if off-screen
-  requestAnimationFrame(() => {
-    const rect = _contextMenu!.getBoundingClientRect()
-    if (rect.right > window.innerWidth) {
-      _contextMenu!.style.left = `${window.innerWidth - rect.width - 8}px`
-    }
-    if (rect.bottom > window.innerHeight) {
-      _contextMenu!.style.top = `${window.innerHeight - rect.height - 8}px`
-    }
-  })
-}
+  // Divider — matches Lumiverse's ContextMenu.module.css .divider
+  const divider = document.createElement('div')
+  divider.style.cssText = 'height:1px;margin:4px 8px;background:var(--lumiverse-border)'
+  menu.appendChild(divider)
 
-function hideContextMenu() {
-  if (_contextMenu) {
-    // Remove the element from the DOM (don't just hide it). Two reasons:
-    //   1. The next showAssignmentMenu creates a brand-new element, which
-    //      guarantees the `contextMenuIn` animation re-runs cleanly on
-    //      every open — a reused display:none → display:block element may
-    //      not re-trigger the animation in some browsers.
-    //   2. Keeps only one menu in the DOM at a time, matching Lumiverse's
-    //      openMenus registry invariant (ContextMenu.tsx:52, 68-78).
-    _contextMenu.remove()
-    _contextMenu = null
+  // Button — copy styles from Lumiverse's first existing menu button
+  // to ensure visual consistency across themes and UI scales.
+  const refBtn = menu.querySelector('button') as HTMLElement | null
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.textContent = label
+
+  if (refBtn) {
+    // Copy computed styles from an existing Lumiverse menu item.
+    const rs = getComputedStyle(refBtn)
+    btn.style.cssText = [
+      'display', 'alignItems', 'gap', 'width', 'padding',
+      'border', 'borderRadius', 'background', 'fontFamily',
+      'cursor', 'transition', 'textAlign',
+    ].map(p => `${p.replace(/([A-Z])/g, '-$1').toLowerCase()}:${rs.getPropertyValue(p.replace(/([A-Z])/g, '-$1').toLowerCase())}`).join(';')
+    // Override color and font-size to match .item (not .itemDanger / .itemActive)
+    btn.style.color = 'var(--lumiverse-text)'
+    btn.style.fontSize = 'calc(12.5px * var(--lumiverse-font-scale, 1))'
+  } else {
+    // Fallback if no reference button found (shouldn't happen).
+    btn.style.cssText = `
+      display:flex;align-items:center;gap:8px;width:100%;
+      padding:8px 12px;border:none;border-radius:6px;background:none;
+      color:var(--lumiverse-text);
+      font-size:calc(12.5px * var(--lumiverse-font-scale, 1));
+      font-family:inherit;cursor:pointer;transition:background 120ms ease;
+      text-align:left;
+    `
   }
-  _lastContextMenuTarget = null
-}
 
-function createContextMenu(): HTMLElement {
-  injectContextMenuStyles()
-  const menu = document.createElement('div')
-  menu.className = 'canvas-tab-context-menu'
-  menu.style.cssText = `
-    position: fixed;
-    z-index: 11000;
-    min-width: 180px;
-    padding: 4px;
-    background: var(--lumiverse-bg-deep);
-    border: 1px solid var(--lumiverse-border);
-    border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
-    /* forwards keeps opacity:1 + transform:none applied after the 120ms
-       entrance finishes, so the keyframe end state sticks and DevTools
-       inspection of the live element does not catch it at the 0%/0.92 start. */
-    animation: contextMenuIn 120ms ease-out forwards;
-    transform-origin: top left;
-    display: none;
-  `
-  return menu
-}
-
-/**
- * Idempotent: creates <style id="canvas-ux-context-menu-styles"> in <head>
- * exactly once. Holds the `contextMenuIn` keyframe (which can't be declared
- * inline) and the body[data-glass] glass variant. The variant matches
- * ~/Lumiverse/frontend/src/components/shared/ContextMenu.module.css:15-18.
- */
-function injectContextMenuStyles(): void {
-  if (document.getElementById('canvas-ux-context-menu-styles')) return
-  const style = document.createElement('style')
-  style.id = 'canvas-ux-context-menu-styles'
-  style.textContent = `
-    @keyframes contextMenuIn {
-      from { opacity: 0; transform: scale(0.92); }
-      to   { opacity: 1; transform: scale(1); }
-    }
-    @media not (pointer: coarse) {
-      body[data-glass] .canvas-tab-context-menu {
-        background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
-        backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-      }
-    }
-  `
-  document.head.appendChild(style)
-}
-
-function createContextMenuItem(label: string, onClick: () => void, opts?: { danger?: boolean }): HTMLElement {
-  const item = document.createElement('button')
-  item.style.cssText = `
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 12px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: ${opts?.danger ? 'var(--lumiverse-error, #e54545)' : 'var(--lumiverse-text)'};
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 120ms ease;
-    text-align: left;
-  `
-  item.textContent = label
-  item.addEventListener('mouseenter', () => {
-    item.style.background = opts?.danger ? 'var(--lumiverse-danger-015)' : 'var(--lumiverse-fill, rgba(255, 255, 255, 0.06))'
+  btn.addEventListener('mouseenter', () => {
+    btn.style.background = 'var(--lumiverse-fill, rgba(255, 255, 255, 0.06))'
   })
-  item.addEventListener('mouseleave', () => {
-    item.style.background = 'none'
+  btn.addEventListener('mouseleave', () => {
+    btn.style.background = 'none'
   })
-  item.addEventListener('click', (e) => {
+  btn.addEventListener('click', (e) => {
     e.stopPropagation()
-    onClick()
-    hideContextMenu()
+    assignTab(info.tabId, targetSidebar)
+    // Close Lumiverse's context menu — click its backdrop or trigger Escape.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   })
-  return item
+
+  menu.appendChild(btn)
 }
 
-// Context menu listener state — tracked for idempotent start/stop.
+// --- Document-level listeners ---
+
 let _contextMenuListenersActive = false
-let _contextMenuHandlers: {
-  sidebarCtx: ((e: Event) => void) | null
-  sidebarEl: HTMLElement | null
+let _handlers: {
   docCtxCapture: ((e: Event) => void) | null
   docClick: ((e: Event) => void) | null
   docScroll: ((e: Event) => void) | null
   docKey: ((e: KeyboardEvent) => void) | null
-} = { sidebarCtx: null, sidebarEl: null, docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
+} = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
 
-export function startContextMenuListener() {
+export function startContextMenuListener(): void {
   if (_contextMenuListenersActive) return
-  const sidebar = getMainSidebar()
-  if (!sidebar) return
 
-  const sidebarCtx = (e: Event) => {
+  const docCtxCapture = (e: Event) => {
     const evt = e as MouseEvent
+
+    // Close any open Canvas context menu (from secondary sidebar).
+    hideAssignmentMenu()
+
+    // Capture _pendingTabInfo for main sidebar injection.
+    // Must run in capture phase because Lumiverse's useLongPress.onContextMenu
+    // calls stopPropagation() in the bubble phase, preventing bubble-phase
+    // document listeners from firing.
     const target = evt.target as HTMLElement
-    const tabBtn = target.closest('button[title]') as HTMLElement
-    if (!tabBtn) return
+    const tabBtn = target?.closest?.('button[title]') as HTMLElement | null
+    if (!tabBtn) { _pendingTabInfo = null; return }
 
     // Only for extension tabs (after .tabDivider)
     const isExtension = tabBtn.classList.toString().includes('Extension')
       || tabBtn.previousElementSibling?.classList.toString().includes('Divider')
-    if (!isExtension) return
-    // Don't show the move menu when the second sidebar is disabled — there's
-    // nothing to move to.
-    if (!getSettings().secondSidebarEnabled) return
-    e.preventDefault()
-    e.stopPropagation()
+    if (!isExtension) { _pendingTabInfo = null; return }
+
+    // Only for main sidebar — findStoreData + getDrawerTabs resolves the tab.
+    const sidebar = getMainSidebar()
+    if (!sidebar || !sidebar.contains(tabBtn)) { _pendingTabInfo = null; return }
 
     const title = tabBtn.getAttribute('title') || ''
-    // Force fresh fiber walk — cache may be stale from Zustand state changes
     findStoreData(true)
     const tabs = getDrawerTabs()
     const matchedTab = tabs.find(t => t.title === title)
     const tabId = matchedTab?.id || title
+    const currentSidebar = getTabSidebar(tabId)
 
-    showAssignmentMenu(evt.clientX, evt.clientY, tabId, title, tabBtn)
+    _pendingTabInfo = { tabId, currentSidebar, btn: tabBtn }
+    _injected = false
+    startObserver()
   }
-  // Capture-phase contextmenu listener: when ANY new contextmenu fires
-  // (Lumiverse's shared ContextMenu opening on a built-in tab, canvas's
-  // own sidebar handler opening on a different extension tab, or the
-  // browser's default menu on empty space), close the canvas menu first.
-  // This enforces the same single-menu invariant that Lumiverse's
-  // shared ContextMenu enforces via its module-level openMenus registry.
-  const docCtxCapture = () => {
-    if (_contextMenu) hideContextMenu()
-  }
+
   const docClick = (e: Event) => {
-    // Ignore the synthesized `click` browsers dispatch at the end of a
-    // long-press (which on mobile is what triggers `contextmenu`). If
-    // that click lands on the same element that opened the menu, the
-    // user has just long-pressed to open the menu — do NOT close it.
-    const t = _lastContextMenuTarget
-    if (t && e.target && (e.target === t || t.contains(e.target as Node))) {
-      return
-    }
-    hideContextMenu()
+    // Close Canvas menu (secondary sidebar) on outside click.
+    hideAssignmentMenu()
   }
-  const docScroll = () => hideContextMenu()
+  const docScroll = () => hideAssignmentMenu()
   const docKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') hideContextMenu()
+    if (e.key === 'Escape') hideAssignmentMenu()
   }
 
-  sidebar.addEventListener('contextmenu', sidebarCtx)
   document.addEventListener('contextmenu', docCtxCapture, true)
   document.addEventListener('click', docClick)
   document.addEventListener('scroll', docScroll, true)
   document.addEventListener('keydown', docKey)
 
-  _contextMenuHandlers = { sidebarCtx, sidebarEl: sidebar, docCtxCapture, docClick, docScroll, docKey }
+  _handlers = { docCtxCapture, docClick, docScroll, docKey }
   _contextMenuListenersActive = true
 }
 
-export function stopContextMenuListener() {
+export function stopContextMenuListener(): void {
   if (!_contextMenuListenersActive) return
-  const h = _contextMenuHandlers
-  if (h.sidebarEl && h.sidebarCtx) h.sidebarEl.removeEventListener('contextmenu', h.sidebarCtx)
+  const h = _handlers
   if (h.docCtxCapture) document.removeEventListener('contextmenu', h.docCtxCapture, true)
   if (h.docClick) document.removeEventListener('click', h.docClick)
   if (h.docScroll) document.removeEventListener('scroll', h.docScroll, true)
   if (h.docKey) document.removeEventListener('keydown', h.docKey)
-  _contextMenuHandlers = { sidebarCtx: null, sidebarEl: null, docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
+  _handlers = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null }
   _contextMenuListenersActive = false
-  hideContextMenu()
+  stopObserver()
+  _pendingTabInfo = null
+  _injected = false
+  hideAssignmentMenu()
 }
