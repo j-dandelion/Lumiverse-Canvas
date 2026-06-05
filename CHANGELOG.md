@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.5.8 — 2026-06-05
+
+### Fixed
+- The version-stamp stale-bundle warning stopped firing spuriously.
+  `CANVAS_VERSION` in `src/layout/persist.ts` was stuck at `1.5.6`
+  while `spindle.json` was at `1.5.7`, so the mismatch check warned on
+  every load since v1.5.6. The three version strings now agree.
+
+### Changed
+- Internal quality. Post-v1.5.7 cleanup of decomp breadcrumbs and dead
+  code: net -1152 lines, no user-visible behavior changes.
+  - Dropped 16 `FIXME-decomp` + 8 "Step N complete" comments
+  - Removed the `DEBUG_LAYOUT_PERSIST` flag in `backend.ts` and the
+    `diagFrontend` helper plus its 15 call sites in `layout/persist.ts`
+  - Deleted the 60-line duplicate `injectDrawerTabStyles` shadowed by
+    the import in `frontend.ts`
+  - Trimmed 25 unused imports; the orchestrator `frontend.ts` is now
+    4 lines (was 285)
+  - Moved `applySettings` from `frontend.ts` to `settings/panel.ts`,
+    closing the transient import the decomp never finished
+  - Removed three stale `.release-notes-v*` drafts, the 630-line
+    salvaged Chronicle reference never imported, and
+    `src/slash/RECON.md`; added `.release-notes-*.md` to `.gitignore`
+
 ## v1.5.3 — 2026-06-04
 
 ### Fixed
