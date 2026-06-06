@@ -1,5 +1,6 @@
 import { render, h } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
+import { injectStyles } from '../debug/styles'
 
 interface ToastEntry {
   id: number
@@ -73,11 +74,7 @@ window.addEventListener('canvas:slash-toast', (e) => {
  * to preserve that pattern here for consistency.
  */
 function injectToastStyles(): void {
-  if (document.getElementById(STYLE_ID)) return
-
-  const style = document.createElement('style')
-  style.id = STYLE_ID
-  style.textContent = `
+  injectStyles(STYLE_ID, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -109,6 +106,5 @@ function injectToastStyles(): void {
        (InputArea.tsx:2705, RegexEditorModal.module.css, etc.). Preserved
        here for consistency; the var is not defined in variables.css. */
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
-  `
-  document.head.appendChild(style)
+  `)
 }

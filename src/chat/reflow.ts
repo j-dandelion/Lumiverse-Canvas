@@ -22,6 +22,7 @@ import { getChatColumn, getMainWrapper, getMainDrawerWidth } from '../dom/lumive
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
+import { injectStyles } from '../debug/styles'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -31,17 +32,13 @@ export function setChatMargin(side: 'left' | 'right', px: number): void {
 }
 
 export function injectReflowStyles(): void {
-  if (document.getElementById('sidebar-ux-reflow')) return
-  const style = document.createElement('style')
-  style.id = 'sidebar-ux-reflow'
-  style.textContent = `
+  injectStyles('sidebar-ux-reflow', `
     [class*="_chatColumn_"] {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
-  `
-  document.head.appendChild(style)
+  `)
 }
 
 let _reflowRaf: number | null = null
@@ -75,7 +72,7 @@ export function updateChatReflow(): void {
 }
 
 // injectDrawerTabStyles (sidebar-ux-drawer-tab CSS) lives in
-// sidebar/secondary.tsx after Step 9. Until then, frontend.ts owns it and
+// sidebar/secondary.tsx. Until then, frontend.ts owns it and
 // the callers reference it via the still-large entry. Re-exported from
 // chat/reflow for setup()'s convenience; the canonical home is M10.
 export { injectDrawerTabStyles } from '../sidebar/secondary'
@@ -98,7 +95,7 @@ export function startReflowObserver(): () => void {
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle
   // (gated on CanvasSettings.chatReflow) is preserved. The tagger is exported
   // as its own startTagObserver() in chat/tag-buttons.ts and can be wired
-  // independently when setup() is decomposed in Step 15.
+  // independently when setup() is decomposed.
   const stopTagObserver = startTagObserver()
 
   return () => {

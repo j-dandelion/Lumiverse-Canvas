@@ -16,7 +16,7 @@
 //
 // applyLayout restores the saved state. The 90-line polling loop (the
 // suffix-drift fallback for tabId suffix drift across sessions) is moved
-// here as-is; the rewrite into a MutationObserver callback is Step 5 work.
+// here as-is; the rewrite into a MutationObserver callback is TODO.
 
 import { getMainDrawerWidth } from '../dom/lumiverse'
 import { getDrawerTabs, isMainDrawerOpen, getMainDrawerSide } from '../store'
@@ -192,15 +192,6 @@ export function persistLayout(): void {
     const layout = { ...snapshotLayout(), settings: getSettings() }
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 500)
-}
-
-/**
- * @deprecated Use persistOpenState() for open/close events and persistLayout()
- * for tab-assignment / width changes. Kept as a single-call alias for any
- * code path that genuinely needs to save the whole layout synchronously.
- */
-function saveLayout() {
-  persistLayout()
 }
 
 export function loadSavedLayout(): Promise<any> {

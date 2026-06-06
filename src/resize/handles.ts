@@ -120,7 +120,7 @@ export function mountResizeHandles(): void {
       () => {
         const width = getMainDrawerWidth()
         const vw = Math.round((width / window.innerWidth) * 100)
-        persistMainWidth(vw)
+        persistLayout()
       },
       () => isMainDrawerOpen()
     )
@@ -166,7 +166,7 @@ export function mountResizeHandles(): void {
         () => {
           const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
           const vw = Math.round((width / window.innerWidth) * 100)
-          persistSecondaryWidth(vw)
+          persistLayout()
         },
         () => isSecondarySidebarOpen()
       )
@@ -185,16 +185,6 @@ export function mountResizeHandles(): void {
       secondaryDrawer.appendChild(handle)
     }
   }
-}
-
-export function persistMainWidth(_vw: number): void {
-  // The Zustand store snapshot doesn't expose setSetting (that's on the store API).
-  // Persist via our own layout storage instead.
-  persistLayout()
-}
-
-export function persistSecondaryWidth(_vw: number): void {
-  persistLayout()
 }
 
 /**

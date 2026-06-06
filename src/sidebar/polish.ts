@@ -127,7 +127,7 @@ export function checkSideChanged(): void {
 
 // The unmountSecondarySidebar call in checkSideChanged needs to be in scope.
 // Re-import from the transient entry — sidebar/secondary.tsx owns it
-// after Step 9; the import statement will be a direct one by then.
+// the import statement will be a direct one by then.
 import { unmountSecondarySidebar } from '../sidebar/secondary'
 
 /**

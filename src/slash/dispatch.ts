@@ -2,6 +2,7 @@ import type { ParsedCommand } from './parse'
 import type { CommandRegistry } from './registry'
 import type { SlashContext } from './types'
 import { defer } from './microtask'
+import { dwarn } from '../debug/log'
 
 export async function dispatchCommand(
   parsed: ParsedCommand,
@@ -24,7 +25,7 @@ export async function dispatchCommand(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     ctx.toast('error', `/${cmd.name} failed: ${msg}`)
-    console.error('[canvas-slash]', cmd.name, e)
+    dwarn(`${cmd.name} failed:`, e)
   }
 }
 

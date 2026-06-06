@@ -90,8 +90,8 @@ export function setup(ctx: any) {
     // the user is running a stale frontend bundle. Log a warning so they
     // know to hard-refresh. This is a visibility mechanism, not auto-reload.
     if (layout?.version && layout.version !== CANVAS_VERSION) {
-      console.warn(
-        `[Canvas] Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` +
+      dwarn(
+        `Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` +
         `Hard-refresh (Ctrl+F5) to load the updated extension.`
       )
     }

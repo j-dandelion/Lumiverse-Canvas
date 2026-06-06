@@ -16,8 +16,8 @@ import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/polish'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
-import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
-import { getTabSidebar } from '../tabs/assignment'
+import { getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
+import { injectStyles } from '../debug/styles'
 
 export function hideMainTabButton(tabId: string): void {
   const btn = findMainTabButton(tabId)
@@ -350,10 +350,7 @@ function createAssignmentContextMenu(): HTMLElement {
  * inline) and the body[data-glass] glass variant.
  */
 function injectAssignmentContextMenuStyles(): void {
-  if (document.getElementById('canvas-ux-context-menu-styles')) return
-  const style = document.createElement('style')
-  style.id = 'canvas-ux-context-menu-styles'
-  style.textContent = `
+  injectStyles('canvas-ux-context-menu-styles', `
     @keyframes contextMenuIn {
       from { opacity: 0; transform: scale(0.92); }
       to   { opacity: 1; transform: scale(1); }
@@ -364,8 +361,7 @@ function injectAssignmentContextMenuStyles(): void {
         backdrop-filter: blur(var(--lcs-glass-blur, 8px));
       }
     }
-  `
-  document.head.appendChild(style)
+  `)
 }
 
 function createAssignmentContextMenuItem(label: string, onClick: () => void, opts?: { danger?: boolean }): HTMLElement {

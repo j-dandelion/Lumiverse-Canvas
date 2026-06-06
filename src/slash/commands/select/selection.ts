@@ -54,6 +54,7 @@
 //         the metaPill the index scrape reads).
 
 import { readIndexInChat } from './extract'
+import { dwarn } from '../../../debug/log'
 
 const SELECTOR_SELECT_TOGGLE = 'button[class*="toolbarBtn"]'
 const SELECTOR_MESSAGE_ROW = '[data-component="BubbleMessage"]'
@@ -170,7 +171,7 @@ export async function selectByVisualIndices(
   // dispatching row clicks. Without this, the clicks are no-ops.
   const ready = await waitForSelectModeActive()
   if (!ready) {
-    console.warn('[canvas-slash] selectByVisualIndices: select mode did not activate within timeout')
+    dwarn('selectByVisualIndices: select mode did not activate within timeout')
     return { matched: 0, unreadable: 0, missingIndices: Array.from(indices) }
   }
 

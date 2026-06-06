@@ -14,7 +14,7 @@ export function getMainDrawer(): HTMLElement | null {
   return sidebar?.parentElement as HTMLElement | null
 }
 
-export function getMainPanel(): HTMLElement | null {
+function getMainPanel(): HTMLElement | null {
   const sidebar = getMainSidebar()
   return sidebar?.parentElement?.querySelector('[class*="_panel_"]') as HTMLElement | null
 }
@@ -29,7 +29,7 @@ export function getMainWrapper(): HTMLElement | null {
   return sidebar?.closest('[class*="_wrapper_"]') as HTMLElement | null
 }
 
-export function getAppElement(): HTMLElement | null {
+function getAppElement(): HTMLElement | null {
   return document.querySelector('.app') || document.querySelector('[class*="app"]')
 }
 

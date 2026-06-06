@@ -8,7 +8,7 @@
 // Note: this walker re-implements the production walker's logic in
 // store/index.ts. The two have to stay in sync if the "is this a
 // drawerTabs array?" heuristic changes. The dedup-with-production-walker
-// fix is Step 5 work (review Finding #11) — __canvasDebug will call
+// fix is TODO (review Finding #11) — __canvasDebug will call
 // findStoreData(true) and format-and-log the resulting caches.
 
 export function installDebugEscapeHatch() {

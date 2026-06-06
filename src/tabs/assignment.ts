@@ -30,7 +30,7 @@ const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 // context-menu, layout/persist).
 export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { return _tabAssignments }
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
-export function clearTabAssignments(): void { _tabAssignments.clear() }
+function clearTabAssignments(): void { _tabAssignments.clear() }
 
 export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
@@ -40,7 +40,7 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
 // sidebar, replacing the previous Node-keyed WeakMap. The tabId is stable
 // across React re-mounts of ExtensionTabContent; the DOM Node is not.
 const _originalParents: Map<string, HTMLElement> = new Map()
-export function clearOriginalParents(): void { _originalParents.clear() }
+function clearOriginalParents(): void { _originalParents.clear() }
 
 /**
  * Discriminated union describing the active-tab state of the main drawer.
@@ -57,7 +57,7 @@ export type ActiveTabState =
   | { state: 'other'; id: string }
   | { state: 'unknown' }
 
-export function getActiveTabId(): ActiveTabState {
+function getActiveTabId(): ActiveTabState {
   // Primary: store snapshot
   findStoreData(true)
   const store = getStoreSnapshot() as { drawerTab?: string | null; drawerOpen?: boolean } | null
@@ -198,14 +198,6 @@ export function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string
 }
 
 /**
- * @deprecated Use switchDrawerToFallback('main', tabId, then) instead.
- * Thin alias kept so any out-of-tree caller (or future debug code) still works.
- */
-export function switchMainDrawerToFallback(tabId: string, then: () => void): void {
-  switchDrawerToFallback('main', tabId, then)
-}
-
-/**
  * Phase 4 (finding #1): the policy layer for tab assignment. Wraps the pure
  * DOM move (repositionTab) with state updates, button affordances, optional
  * drawer open/close, optional active-tab switching, and optional save.
@@ -315,7 +307,7 @@ export function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
 // the timing window is bounded to a single forced fiber walk (~1-2ms), not
 // the 3s TTL.
 
-export function isMovedTabId(tabId: string): boolean {
+function isMovedTabId(tabId: string): boolean {
   return _tabAssignments.get(tabId) === 'secondary'
 }
 
@@ -486,7 +478,7 @@ export function repositionTabToSecondary(tabId: string) {
 // active secondary tab is moved back to primary, preventing the "ghost tab"
 // (header still showing the moved tab's name with an empty body).
 let _activeSecondaryTabId: string | null = null
-export function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
+function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
 export function setActiveSecondaryTabId(tabId: string | null): void { _activeSecondaryTabId = tabId }
 
 export function restoreTabToPrimary(tabId: string) {
@@ -587,4 +579,4 @@ export function repositionAssignedTabs() {
 }
 
 // Re-export of the cleanup accessor for callers that need to reset the
-// _originalParents map. sidebar/cleanup imports it in Step 14.
+// _originalParents map. sidebar/cleanup imports it.

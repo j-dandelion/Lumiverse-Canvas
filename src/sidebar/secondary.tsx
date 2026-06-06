@@ -19,6 +19,7 @@ import { mountResizeHandles } from '../resize/handles'
 import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer } from '../tabs/assignment'
 import { showMainTabButton } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
+import { injectStyles } from '../debug/styles'
 
 // CSS variable holding the saved width in pixels. The drawer reads it
 // via `width: var(SECONDARY_WIDTH_VAR, 420px)` and snapshotLayout reads
@@ -49,10 +50,7 @@ export function unmountSecondarySidebar(): void {
 }
 
 export function injectDrawerTabStyles(): void {
-  if (document.getElementById('sidebar-ux-drawer-tab-styles')) return
-  const style = document.createElement('style')
-  style.id = 'sidebar-ux-drawer-tab-styles'
-  style.textContent = `
+  injectStyles('sidebar-ux-drawer-tab-styles', `
     .sidebar-ux-drawer-tab {
       flex-shrink: 0;
       align-self: flex-start;
@@ -104,8 +102,7 @@ export function injectDrawerTabStyles(): void {
       height: 20px;
       flex-shrink: 0;
     }
-  `
-  document.head.appendChild(style)
+  `)
 }
 
 export function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }): HTMLElement {
@@ -406,8 +403,8 @@ export function closeSecondarySidebar() {
 }
 
 // Transient local accessor for the tabAssignments map. Re-imported from
-// the entry file until tabs/assignment.ts (Step 10) owns it. Removed in
-// Step 10 by re-pointing to '../tabs/assignment'.
+// the entry file until tabs/assignment.ts owns it. Removed in
+// a future refactor by re-pointing to '../tabs/assignment'.
 import { getTabAssignments as getTabAssignmentsTransient } from '../tabs/assignment'
 
 /**

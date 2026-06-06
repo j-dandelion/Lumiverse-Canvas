@@ -20,6 +20,7 @@ import { getSettings, setSettings, setPanelRefresh, getLastLoadedLayout, type Fu
 import { dlog, dwarn, setDebug } from '../debug/log'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, updateChatReflow } from '../chat/reflow'
+import { injectStyles } from '../debug/styles'
 import { getChatColumn } from '../dom/lumiverse'
 import { getSecondaryWrapper, mountSecondarySidebar, tearDownSecondarySidebar, injectDrawerTabStyles } from '../sidebar/secondary'
 import { refreshResizeHandles } from '../resize/handles'
@@ -31,10 +32,7 @@ import { applyLayout, cancelLayoutSave } from '../layout/persist'
 // when the panel is first built.
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
 function injectPanelStyles() {
-  if (document.getElementById(PANEL_STYLE_ID)) return
-  const style = document.createElement('style')
-  style.id = PANEL_STYLE_ID
-  style.textContent = `
+  injectStyles(PANEL_STYLE_ID, `
     .sidebar-ux-panel-root {
       font-family: var(--lumiverse-font-family, sans-serif);
       color: var(--lumiverse-text);
@@ -155,8 +153,7 @@ function injectPanelStyles() {
       color: var(--lumiverse-text-dim);
       text-align: center;
     }
-  `
-  document.head.appendChild(style)
+  `)
 }
 
 /**
@@ -460,7 +457,7 @@ export function mountSettingsPanel(ctx: any) {
     setPanelRefresh(refresh)
     dlog('Settings panel mounted into data-spindle-mount="settings_extensions"')
   } catch (err) {
-    console.error('[Canvas] mountSettingsPanel failed:', err)
+    dwarn('mountSettingsPanel failed:', err)
   }
 }
 

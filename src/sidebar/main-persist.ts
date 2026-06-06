@@ -46,6 +46,7 @@
 import { getMainDrawer } from '../dom/lumiverse'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { dlog } from '../debug/log'
+import { isMobile } from '../resize/handles'
 
 // Debounce window for resize-triggered writes (ms). Mirrors the
 // 300ms debounce in persistLayout so drag-to-resize coalesces to a
@@ -59,6 +60,10 @@ const MOUNT_QUIET_MS = 500
 // Timeout (ms) to unsuppress the wrapper even if restore fails or the
 // async LOAD_LAYOUT never arrives. Prevents a permanently hidden drawer.
 const UNSUPPRESS_TIMEOUT_MS = 3000
+// Maximum time (ms) to wait for the host's drawer DOM to appear on
+// hard refresh. After this, we give up — the extension will work on
+// the next disable+re-enable cycle.
+const DOM_POLL_TIMEOUT_MS = 5000
 
 // module-level cache, populated by the observers and read by
 // snapshotLayout() so every save path (settings-toggle, pagehide
@@ -73,6 +78,8 @@ let _stopped = true
 let _lastSeenOpen: boolean | null = null
 let _lastSeenTabId: string | null = null
 let _unsuppressTimer: ReturnType<typeof setTimeout> | null = null
+let _domPollTimer: ReturnType<typeof setTimeout> | null = null
+let _domPollObserver: MutationObserver | null = null
 
 /**
  * Read the current open state of the main drawer from the wrapper's
@@ -166,15 +173,56 @@ function pushCurrentState() {
   persistOpenState()
 }
 
-export function startMainDrawerPersistence(): void {
-  if (!_stopped) return
-  _stopped = false
+/**
+ * Wait for the host's drawer DOM to appear after a hard refresh.
+ * On hard refresh, the extension runs before React mounts ViewportDrawer,
+ * so getMainDrawer() returns null. We watch for the sidebar mount node
+ * to appear via a MutationObserver on <body>, then initialize normally.
+ * This makes hard-refresh behave identically to disable+re-enable.
+ */
+function _waitForDrawerDOM(): void {
+  // Already polling — don't double up
+  if (_domPollObserver || _domPollTimer) return
 
-  const drawer = getMainDrawer()
-  if (!drawer) {
-    dlog('main-persist: getMainDrawer() returned null; main drawer not in DOM yet, skipping')
-    return
+  const initIfReady = (): boolean => {
+    const drawer = getMainDrawer()
+    if (!drawer || _stopped) return false
+    _cleanupDomPoll()
+    dlog('main-persist: host DOM appeared, initializing observers')
+    _initObservers(drawer)
+    return true
   }
+
+  // Fast path: it might already be there
+  if (initIfReady()) return
+
+  // Watch for the sidebar mount node to appear in the DOM
+  _domPollObserver = new MutationObserver(() => {
+    if (initIfReady()) {
+      _domPollObserver?.disconnect()
+      _domPollObserver = null
+    }
+  })
+  _domPollObserver.observe(document.body, { childList: true, subtree: true })
+
+  // Safety timeout — don't poll forever
+  _domPollTimer = setTimeout(() => {
+    dlog('main-persist: DOM poll timed out; host drawer never appeared')
+    _cleanupDomPoll()
+  }, DOM_POLL_TIMEOUT_MS)
+}
+
+function _cleanupDomPoll(): void {
+  if (_domPollObserver) { _domPollObserver.disconnect(); _domPollObserver = null }
+  if (_domPollTimer) { clearTimeout(_domPollTimer); _domPollTimer = null }
+}
+
+/**
+ * Core initialization: attach all observers, seed state, suppress/restore.
+ * Extracted from startMainDrawerPersistence so it can be called either
+ * immediately (drawer already in DOM) or after _waitForDrawerDOM resolves.
+ */
+function _initObservers(drawer: HTMLElement): void {
   // The wrapper (which carries `wrapperOpen`) is the grandparent of
   // the sidebar mount node, NOT the parent. DOM hierarchy:
   //   div.wrapper[.wrapperOpen]     ← we need this (grandparent)
@@ -275,6 +323,19 @@ export function startMainDrawerPersistence(): void {
   dlog(`main-persist: started (wrapper=${!!wrapper}, sidebar=${!!sidebar})`)
 }
 
+export function startMainDrawerPersistence(): void {
+  if (!_stopped) return
+  _stopped = false
+
+  const drawer = getMainDrawer()
+  if (!drawer) {
+    dlog('main-persist: getMainDrawer() returned null; waiting for host DOM...')
+    _waitForDrawerDOM()
+    return
+  }
+  _initObservers(drawer)
+}
+
 /**
  * Restore the main-drawer open/close state on load by simulating a
  * click on the host's first tab button. Called from layout/persist.ts
@@ -300,12 +361,13 @@ export function restoreMainDrawerFromDom(
 
   // Restore width first (even if the drawer is closed, the width
   // should be applied so it's visible when the user opens it).
-  // NOTE: --drawer-panel-w is only set when the target state is OPEN.
-  // When the drawer is closed, the host manages its own width (typically
-  // a narrow collapsed state ~28px). Setting the variable with !important
-  // while closed overrides the host's collapsed width and causes a visual
-  // "peek" — the drawer element is wider than the collapsed tab, and
-  // part of it is visible even though the wrapper is translated off-screen.
+  // NOTE: --drawer-panel-w is only set when the target state is OPEN
+  // and the viewport is desktop (>600px). On mobile, the host's CSS
+  // (ViewportDrawer.module.css @media max-width:600px) forces
+  // .drawer { width: calc(100vw / var(--lumiverse-ui-scale, 1)) !important }
+  // independently. Setting the variable with !important on mobile
+  // decouples the wrapper transform from the actual drawer width,
+  // causing a ~80px peek when the user closes the sidebar.
   const clampedWidth = (typeof targetWidthPx === 'number' && targetWidthPx > 0)
     ? Math.max(200, Math.min(window.innerWidth * 0.8, targetWidthPx))
     : null
@@ -314,26 +376,34 @@ export function restoreMainDrawerFromDom(
   if (currentOpen === targetOpen) {
     dlog(`main-persist restore: already in target state (open=${targetOpen}), nothing to do`)
     // If the drawer is open, set the width so it's correct on this session.
-    // If closed, clear any stale override so the host's collapsed width takes over.
+    // If closed, leave --drawer-panel-w alone — the host's CSS uses it
+    // for the close animation (translateX). Clearing it breaks the
+    // animation on desktop.
     if (targetOpen && clampedWidth !== null && drawer) {
-      drawer.style.width = `${clampedWidth}px`
-      wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-      dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`)
-    } else if (!targetOpen) {
-      // Clear our override so the host's own closed-state width is used.
-      wrapper.style.removeProperty('--drawer-panel-w')
-      if (drawer) drawer.style.removeProperty('width')
-      dlog('main-persist restore: cleared --drawer-panel-w (closed, let host manage)')
+      if (!isMobile()) {
+        drawer.style.width = `${clampedWidth}px`
+        wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
+        dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`)
+      } else {
+        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`)
+      }
     }
     unsuppressMainDrawer()
     return
   }
   if (targetOpen) {
     // Set width BEFORE opening so the drawer renders at the right size.
+    // On mobile, skip the width override — the host's mobile CSS
+    // handles sizing and setting --drawer-panel-w with !important
+    // causes the close-animation peek.
     if (clampedWidth !== null && drawer) {
-      drawer.style.width = `${clampedWidth}px`
-      wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-      dlog(`main-persist restore: set width=${clampedWidth}px (opening)`)
+      if (!isMobile()) {
+        drawer.style.width = `${clampedWidth}px`
+        wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
+        dlog(`main-persist restore: set width=${clampedWidth}px (opening)`)
+      } else {
+        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`)
+      }
     }
     // Find a tab button to click. The host's first visible built-in
     // tab is a safe default — clicking opens the drawer and switches
@@ -358,11 +428,6 @@ export function restoreMainDrawerFromDom(
     // toggles open/close. Click it to close.
     const toggleBtn = findDrawerToggleButton(wrapper)
     if (toggleBtn) {
-      // Clear our width override BEFORE closing so the host's collapsed
-      // width takes over immediately during the close animation.
-      wrapper.style.removeProperty('--drawer-panel-w')
-      if (drawer) drawer.style.removeProperty('width')
-      dlog('main-persist restore: cleared --drawer-panel-w before close')
       dlog('main-persist restore: clicking drawer toggle to close')
       unsuppressMainDrawer()
       try {
@@ -384,6 +449,7 @@ export function stopMainDrawerPersistence(): void {
   if (_tabObserver) { _tabObserver.disconnect(); _tabObserver = null }
   if (_resizeObserver) { _resizeObserver.disconnect(); _resizeObserver = null }
   if (_resizeDebounce) { clearTimeout(_resizeDebounce); _resizeDebounce = null }
+  _cleanupDomPoll()
   _wrapper = null
   _sidebar = null
   _lastSeenOpen = null

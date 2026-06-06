@@ -4,6 +4,7 @@
 // All colors, sizes, and shadows come from the canonical --lumiverse-* set
 // (see ~/Lumiverse/frontend/src/theme/variables.css:1-148). No hex literals.
 import type { SlashCommandDef } from './types'
+import { injectStyles } from '../debug/styles'
 
 const SUGGEST_ID = 'canvas-slash-suggest'
 const STYLE_ID = 'canvas-slash-suggest-styles'
@@ -354,11 +355,7 @@ function applyTextareaAriaBaseline(textarea: HTMLTextAreaElement): void {
  * that are guaranteed by ~/Lumiverse/frontend/src/theme/variables.css:1-148.
  */
 function injectSuggestStyles(): void {
-  if (document.getElementById(STYLE_ID)) return
-
-  const style = document.createElement('style')
-  style.id = STYLE_ID
-  style.textContent = `
+  injectStyles(STYLE_ID, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (now 9980) */
@@ -441,8 +438,7 @@ function injectSuggestStyles(): void {
       from { opacity: 0; transform: translateY(4px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-  `
-  document.head.appendChild(style)
+  `)
 }
 
 // --- escaping ---
