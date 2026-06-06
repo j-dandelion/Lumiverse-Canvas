@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.5.10 — 2026-06-06
+
+### Fixed
+
+- **Main sidebar peek on mobile after cross-device sync.** `isMobile()` guard skips `--drawer-panel-w` writes on mobile viewports, preventing the CSS cascade mismatch that caused an ~80px peek when closing the sidebar on phone.
+- **Hard refresh broke drawer interactions.** Extension now waits for host DOM via MutationObserver when `getMainDrawer()` returns null, making hard-refresh behave identically to disable+re-enable.
+- **Close animation broken on desktop.** Removed `--drawer-panel-w` clear-on-close path — host CSS uses the variable for `translateX` animation.
+
+### Changed
+
+- Extracted `_initObservers()` from `startMainDrawerPersistence()` for immediate and deferred initialization paths.
+- Deleted dead module `chat/last-chat.ts`, removed 8 dead exports, 2 deprecated aliases.
+- Normalized console calls to debug-gated `dwarn`, extracted shared `injectStyles()` utility.
+
 ## v1.5.9 — 2026-06-05
 
 ### Fixed

@@ -35,7 +35,7 @@ import { dlog, dwarn } from '../debug/log'
 import { getSettings, cancelSettingsSave } from '../settings/state'
 
 // Must match spindle.json version. Updated on each release.
-export const CANVAS_VERSION = '1.5.9'
+export const CANVAS_VERSION = '1.5.10'
 
 let _backendCtx: any = null
 
