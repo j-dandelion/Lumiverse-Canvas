@@ -562,12 +562,14 @@ function clearSecondaryTab() {
       if (label) label.style.color = ''
     }
   }
-  // Hide all tab roots in the panel content
-  for (const [, sidebar] of _tabAssignments) {
-    if (sidebar !== 'secondary') continue
-    const tabs = getDrawerTabs()
-    for (const t of tabs) {
-      if (t.root) t.root.style.setProperty('display', 'none', 'important')
+  // Hide tab roots that are in the secondary content area.
+  // Target the container directly instead of iterating all store tabs —
+  // the previous loop hid every root in the store when only the
+  // secondary-assigned ones needed hiding.
+  const content = secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
+  if (content) {
+    for (const child of Array.from(content.children)) {
+      child.style.setProperty('display', 'none', 'important')
     }
   }
   _activeSecondaryTabId = null
