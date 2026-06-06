@@ -258,9 +258,13 @@ export function applyMainDrawer(layout: any): void {
 export function applyLayout(layout: any) {
   if (!layout) return
 
-  // Restore secondary sidebar width
+  // Restore secondary sidebar width — clamp to viewport so the closed
+  // transform fully hides the sidebar on narrow screens. Mirrors the
+  // clamp in restoreMainDrawerFromDom (main-persist.ts) and the
+  // resize-handle bounds (resize/handles.ts).
   if (layout.secondary?.width) {
-    document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${layout.secondary.width}px`)
+    const clamped = Math.max(200, Math.min(window.innerWidth * 0.8, layout.secondary.width))
+    document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${clamped}px`)
     // Phase 3 (finding #13): createSecondarySidebar already initialized the
     // wrapper transform with the right width on mount (see the options
     // parameter). No animateWrapper call needed here — that would re-trigger
@@ -277,8 +281,8 @@ export function applyLayout(layout: any) {
       // differ when the secondary is on the left. Use the same sign logic
       // as getClosedTransformPx to compute the desired closed value.
       const desiredClosed = getMainDrawerSide() === 'right'
-        ? -layout.secondary.width
-        : layout.secondary.width
+        ? -clamped
+        : clamped
       if (currentTransform !== String(desiredClosed)) {
         animateWrapper(desiredClosed)
       }

@@ -12,6 +12,8 @@
 // later cleanup-pass step. For now this module owns the registry and the
 // iteration; consumers (sidebar/polish.ts) register their own teardowns.
 
+import { dwarn } from '../debug/log'
+
 const _cleanupFns: Array<() => void> = []
 
 export function registerCleanup(fn: () => void) {
@@ -21,7 +23,7 @@ export function registerCleanup(fn: () => void) {
 export function cleanupAll() {
   for (const fn of _cleanupFns) {
     try { fn() } catch (err: unknown) {
-      console.error('[SidebarUX] Cleanup error:', err)
+      dwarn('Cleanup error:', err)
     }
   }
   _cleanupFns.length = 0

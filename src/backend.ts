@@ -10,53 +10,54 @@ const STORAGE_KEY = 'layout.json'
 // reads from, silently reverting settings on every load.
 const STORAGE_TMP_KEY = STORAGE_KEY + '.tmp'
 
+// Debug flag — set via a frontend message when the user toggles
+// CanvasSettings.debugMode. Starts false; real errors always use
+// spindle.log.error (they're rare and important). Verbose DIAG lines
+// are gated behind this flag.
+let DEBUG = false
+
 async function loadLayout(): Promise<any> {
-  spindle.log.info(`[SidebarUX-DIAG] loadLayout: reading ${STORAGE_KEY}`)
   try {
     const data = await spindle.storage.read(STORAGE_KEY)
-    spindle.log.info(`[SidebarUX-DIAG] loadLayout: read returned ${data === null ? 'null' : `${(data as string).length} bytes`}`)
     if (data && typeof data === 'string') {
       return JSON.parse(data)
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    spindle.log.error(`[SidebarUX-DIAG] loadLayout: read threw: ${msg}`)
-    spindle.log.warn(`[SidebarUX] Failed to load layout: ${msg}`)
+    if (DEBUG) spindle.log.warn(`[SidebarUX] Failed to load layout: ${msg}`)
   }
   return null
 }
 
 async function saveLayout(state: any): Promise<void> {
   const json = JSON.stringify(state, null, 2)
-  spindle.log.info(`[SidebarUX-DIAG] saveLayout: writing ${json.length} bytes, settings.layoutPersistence=${state?.settings?.layoutPersistence}, secondary.open=${state?.secondary?.open}, detachedTabs=${state?.detachedTabs?.length ?? 0}`)
   try {
     // Write the full payload to a temp key, then atomically move it over the
     // canonical key. spindle.storage.move() invokes renameSync on the host
     // (worker-host.ts handleStorageMove), so a process kill mid-rename leaves
     // either the old or the new file intact — never a torn half-write.
     await spindle.storage.write(STORAGE_TMP_KEY, json)
-    spindle.log.info(`[SidebarUX-DIAG] saveLayout: write(.tmp) ok`)
     try {
       await spindle.storage.move(STORAGE_TMP_KEY, STORAGE_KEY)
-      spindle.log.info(`[SidebarUX-DIAG] saveLayout: move ok`)
     } catch (moveErr: unknown) {
       // Cross-device or Windows EBUSY — fall back to a direct write so we
       // never lose data. Clean up the leftover temp key best-effort.
       const mmsg = moveErr instanceof Error ? moveErr.message : String(moveErr)
-      spindle.log.error(`[SidebarUX-DIAG] saveLayout: move threw: ${mmsg}`)
-      spindle.log.warn(`[SidebarUX] Atomic move failed, falling back to direct write: ${mmsg}`)
+      if (DEBUG) spindle.log.warn(`[SidebarUX] Atomic move failed, falling back to direct write: ${mmsg}`)
       await spindle.storage.write(STORAGE_KEY, json)
       try { await spindle.storage.delete(STORAGE_TMP_KEY) } catch { /* best-effort */ }
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    spindle.log.error(`[SidebarUX-DIAG] saveLayout: write threw: ${msg}`)
-    spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`)
+    if (DEBUG) spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`)
   }
 }
 
 spindle.onFrontendMessage(async (payload: any) => {
-  spindle.log.info(`[SidebarUX-DIAG] onFrontendMessage: type=${payload?.type}`)
+  if (payload.type === 'SET_DEBUG') {
+    DEBUG = !!payload.debug
+    return
+  }
   if (payload.type === 'SAVE_LAYOUT') {
     await saveLayout(payload.layout)
   } else if (payload.type === 'LOAD_LAYOUT') {
@@ -64,5 +65,3 @@ spindle.onFrontendMessage(async (payload: any) => {
     spindle.sendToFrontend({ type: 'LAYOUT_DATA', layout })
   }
 })
-
-spindle.log.info('[SidebarUX] Backend started')

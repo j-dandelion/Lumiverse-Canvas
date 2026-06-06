@@ -12,7 +12,17 @@ let DEBUG: boolean = (() => {
 })()
 
 export function getDebug(): boolean { return DEBUG }
-export function setDebug(value: boolean): void { DEBUG = value }
+export function setDebug(value: boolean): void {
+  DEBUG = value
+  // Sync to the backend so server-side logs (spindle.log.*) are also gated.
+  // Uses dynamic import to avoid circular deps (log.ts is imported early).
+  import('../layout/persist').then(({ getBackendCtx }) => {
+    const ctx = getBackendCtx()
+    if (ctx?.sendToBackend) {
+      ctx.sendToBackend({ type: 'SET_DEBUG', debug: value })
+    }
+  }).catch(() => { /* backend not ready yet — will sync on first save */ })
+}
 
 export function dlog(...args: unknown[]): void {
   if (!DEBUG) return

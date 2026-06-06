@@ -118,11 +118,17 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // Phase 3 (finding #13): prefer the layout-supplied width on first mount so the
   // initial paint matches the saved state — no 420px fallback flash.
   const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR))
-  const initWidth = Math.ceil(
-    options?.initialWidth && options.initialWidth > 0
-      ? options.initialWidth
-      : (isFinite(cssVarWidth) ? cssVarWidth : 420)
-  )
+  const rawWidth = options?.initialWidth && options.initialWidth > 0
+    ? options.initialWidth
+    : (isFinite(cssVarWidth) ? cssVarWidth : 420)
+  // Clamp to viewport so the closed transform fully hides the sidebar
+  // on narrow screens. Same bounds as resize handles and applyLayout.
+  const initWidth = Math.ceil(Math.max(200, Math.min(window.innerWidth * 0.8, rawWidth)))
+  // Set the CSS var to the clamped value so the drawer's width matches
+  // the wrapper. Without this, the drawer (width: var(SECONDARY_WIDTH_VAR))
+  // is wider than the wrapper's flex container, and the overflow pokes
+  // into the viewport even when the wrapper's transform hides it.
+  document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${initWidth}px`)
   // Phase 3: if the saved layout says open, translate to 0 so the drawer is
   // visible from the very first frame. Otherwise stay off-screen. The
   // closed transform's sign is direction-aware (see getClosedTransformPx):

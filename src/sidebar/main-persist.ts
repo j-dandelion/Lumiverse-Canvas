@@ -300,20 +300,41 @@ export function restoreMainDrawerFromDom(
 
   // Restore width first (even if the drawer is closed, the width
   // should be applied so it's visible when the user opens it).
-  if (typeof targetWidthPx === 'number' && targetWidthPx > 0 && drawer) {
-    const clamped = Math.max(200, Math.min(window.innerWidth * 0.8, targetWidthPx))
-    drawer.style.width = `${clamped}px`
-    wrapper.style.setProperty('--drawer-panel-w', `${clamped}px`, 'important')
-    dlog(`main-persist restore: set width=${clamped}px`)
-  }
+  // NOTE: --drawer-panel-w is only set when the target state is OPEN.
+  // When the drawer is closed, the host manages its own width (typically
+  // a narrow collapsed state ~28px). Setting the variable with !important
+  // while closed overrides the host's collapsed width and causes a visual
+  // "peek" — the drawer element is wider than the collapsed tab, and
+  // part of it is visible even though the wrapper is translated off-screen.
+  const clampedWidth = (typeof targetWidthPx === 'number' && targetWidthPx > 0)
+    ? Math.max(200, Math.min(window.innerWidth * 0.8, targetWidthPx))
+    : null
 
   const currentOpen = readWrapperOpen(wrapper)
   if (currentOpen === targetOpen) {
     dlog(`main-persist restore: already in target state (open=${targetOpen}), nothing to do`)
+    // If the drawer is open, set the width so it's correct on this session.
+    // If closed, clear any stale override so the host's collapsed width takes over.
+    if (targetOpen && clampedWidth !== null && drawer) {
+      drawer.style.width = `${clampedWidth}px`
+      wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
+      dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`)
+    } else if (!targetOpen) {
+      // Clear our override so the host's own closed-state width is used.
+      wrapper.style.removeProperty('--drawer-panel-w')
+      if (drawer) drawer.style.removeProperty('width')
+      dlog('main-persist restore: cleared --drawer-panel-w (closed, let host manage)')
+    }
     unsuppressMainDrawer()
     return
   }
   if (targetOpen) {
+    // Set width BEFORE opening so the drawer renders at the right size.
+    if (clampedWidth !== null && drawer) {
+      drawer.style.width = `${clampedWidth}px`
+      wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
+      dlog(`main-persist restore: set width=${clampedWidth}px (opening)`)
+    }
     // Find a tab button to click. The host's first visible built-in
     // tab is a safe default — clicking opens the drawer and switches
     // to that tab. The user can switch tabs after.
@@ -337,6 +358,11 @@ export function restoreMainDrawerFromDom(
     // toggles open/close. Click it to close.
     const toggleBtn = findDrawerToggleButton(wrapper)
     if (toggleBtn) {
+      // Clear our width override BEFORE closing so the host's collapsed
+      // width takes over immediately during the close animation.
+      wrapper.style.removeProperty('--drawer-panel-w')
+      if (drawer) drawer.style.removeProperty('width')
+      dlog('main-persist restore: cleared --drawer-panel-w before close')
       dlog('main-persist restore: clicking drawer toggle to close')
       unsuppressMainDrawer()
       try {

@@ -37,7 +37,7 @@ import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
 import { getMainDrawer } from './dom/lumiverse'
-import { setDebug } from './debug/log'
+import { setDebug, dwarn } from './debug/log'
 
 export function setup(ctx: any) {
   setBackendCtx(ctx)
@@ -48,7 +48,7 @@ export function setup(ctx: any) {
   // window) so a close-during-hydration still forces a flush of whatever
   // debounced timer is armed at that moment.
   const flushOnUnload = () => {
-    try { flushPendingSaves() } catch (err) { console.error('[SidebarUX] flushPendingSaves on unload failed:', err) }
+    try { flushPendingSaves() } catch (err) { dwarn('flushPendingSaves on unload failed:', err) }
   }
   window.addEventListener('pagehide', flushOnUnload)
   window.addEventListener('beforeunload', flushOnUnload)
