@@ -1,8 +1,18 @@
 # Changelog
 
-## v1.5.8 — 2026-06-05
+## v1.5.9 — 2026-06-05
 
 ### Fixed
+- **Main sidebar peek on mobile.** `restoreMainDrawerFromDom` was setting
+  `--drawer-panel-w` with `!important` even when the drawer was closed,
+  overriding the host's ~28px collapsed width. The drawer element stayed
+  wide and peeked into the viewport. Now only sets the CSS var when the
+  target state is open; clears it when closed.
+- **Secondary sidebar width on narrow viewports.** Clamped `initWidth`
+  and `applyLayout` restore to `max(200, min(innerWidth × 0.8, width))`
+  so the closed transform fully hides the sidebar on small screens.
+- Debug logging (`[SidebarUX]`) now gated behind the Canvas debug
+  setting — server logs are quiet unless debug mode is toggled on.
 - The version-stamp stale-bundle warning stopped firing spuriously.
   `CANVAS_VERSION` in `src/layout/persist.ts` was stuck at `1.5.6`
   while `spindle.json` was at `1.5.7`, so the mismatch check warned on
