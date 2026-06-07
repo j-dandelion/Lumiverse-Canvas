@@ -48,6 +48,7 @@ import { clampSidebarWidth } from '../dom/clamp'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { dlog } from '../debug/log'
 import { isMobile } from '../resize/handles'
+import { enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 
 // Debounce window for resize-triggered writes (ms). Mirrors the
 // 300ms debounce in persistLayout so drag-to-resize coalesces to a
@@ -143,7 +144,7 @@ export function unsuppressMainDrawer(): void {
  *     button.drawerTab   ← this one (toggle open/close)
  *     div.drawer
  */
-function findDrawerToggleButton(wrapper: HTMLElement): HTMLButtonElement | null {
+export function findDrawerToggleButton(wrapper: HTMLElement): HTMLButtonElement | null {
   // Direct-child buttons inside the wrapper
   const buttons = wrapper.querySelectorAll(':scope > button')
   for (const btn of buttons) {
@@ -272,6 +273,12 @@ function _initObservers(drawer: HTMLElement): void {
     for (const m of mutations) {
       if (m.type === 'attributes' && m.attributeName === 'class') {
         pushCurrentState()
+        // Mobile exclusion: detect closed→open transition
+        if (wrapper) {
+          const isOpen = readWrapperOpen(wrapper)
+          enforceExclusionOnOpen('primary')
+          setMobileOpenClass('primary', isOpen)
+        }
         break
       }
     }

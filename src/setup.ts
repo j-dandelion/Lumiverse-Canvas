@@ -27,6 +27,7 @@ import { startReflowObserver } from './chat/reflow'
 import { mountResizeHandles } from './resize/handles'
 import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
 import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
+import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { attachSlashRuntime } from './slash/runtime'
 import { unmountToastSurface } from './slash/toast'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
@@ -68,6 +69,7 @@ export function setup(ctx: any) {
   registerCleanup(() => {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
     document.getElementById('sidebar-ux-reflow')?.remove()
+    document.getElementById('canvas-ux-secondary-mobile')?.remove()
   })
 
   // Mount the settings panel immediately. The host may not be in the DOM yet
@@ -145,6 +147,9 @@ export function setup(ctx: any) {
     // mounting its own resize handle. Stops on teardown.
     startMainDrawerPersistence()
     registerCleanup(stopMainDrawerPersistence)
+    // Mobile exclusion: mutual exclusion + viewport-cross detection
+    const stopMobileExclusion = startMobileExclusion()
+    registerCleanup(stopMobileExclusion)
     startTabRegistrationWatcher()
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.

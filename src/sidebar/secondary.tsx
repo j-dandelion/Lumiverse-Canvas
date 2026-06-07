@@ -21,11 +21,63 @@ import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer } from '
 import { showMainTabButton } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
+import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 
 // CSS variable holding the saved width in pixels. The drawer reads it
 // via `width: var(SECONDARY_WIDTH_VAR, 420px)` and snapshotLayout reads
 // it for persistence.
 export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
+
+// Mobile CSS — scoped to @media (max-width: 600px). Restructures the
+// secondary sidebar to match Lumiverse's main sidebar mobile pattern:
+// full-width drawer, horizontal tab bar, bottom indicator, mutual
+// exclusion via body classes.
+const SECONDARY_MOBILE_CSS = `
+@media (max-width: 600px) {
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
+    flex-direction: column !important;
+  }
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    border-bottom: 1px solid var(--lumiverse-primary-020) !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+  }
+  /* Tab buttons: shrink to content width on mobile horizontal layout.
+     On desktop the buttons have width:100% (fills the vertical column);
+     on mobile the row layout makes that stretch across the screen. */
+  .sidebar-ux-tab-list button[data-tab-id] {
+    width: auto !important;
+    min-width: 32px;
+    padding: 6px 8px !important;
+  }
+  /* Side-aware alignment: single tab sits on the edge the sidebar opens from.
+     With multiple tabs, overflow-x: auto takes over and justify-content
+     is ignored (content overflows), so this only matters for the 1-tab case. */
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
+    justify-content: flex-end !important;
+  }
+  /* Active tab indicator: bottom underline (was left border on desktop) */
+  .sidebar-ux-secondary-wrapper button[class*="tab-active"] {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+  }
+  .sidebar-ux-drawer-tab { width: 32px !important; }
+  /* Hide secondary's drawerTab when primary is open on mobile */
+  body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  /* Hide main's drawerTab when secondary is open on mobile */
+  body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
+    display: none !important;
+    pointer-events: none !important;
+  }
+}
+`
 
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
 export const PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
@@ -104,6 +156,8 @@ export function injectDrawerTabStyles(): void {
       flex-shrink: 0;
     }
   `)
+  // Mobile CSS — scoped to @media (max-width: 600px)
+  injectStyles('canvas-ux-secondary-mobile', SECONDARY_MOBILE_CSS)
 }
 
 export function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }): HTMLElement {
@@ -112,20 +166,23 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // Wrapper: mirrors main sidebar .wrapper exactly
   // The WRAPPER translates — drawerTab and drawer are both children, moving as one unit.
   const wrapper = document.createElement('div')
-  wrapper.className = 'sidebar-ux-secondary-wrapper'
+  // Side class enables mobile CSS to align the tab list to the correct edge
+  wrapper.className = `sidebar-ux-secondary-wrapper sidebar-ux-side-${side}`
   // Phase 3 (finding #13): prefer the layout-supplied width on first mount so the
   // initial paint matches the saved state — no 420px fallback flash.
   const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR))
   const rawWidth = options?.initialWidth && options.initialWidth > 0
     ? options.initialWidth
     : (isFinite(cssVarWidth) ? cssVarWidth : 420)
-  // Clamp to viewport so the closed transform fully hides the sidebar
-  // on narrow screens. Same bounds as resize handles and applyLayout.
-  const initWidth = Math.ceil(clampSidebarWidth(rawWidth))
-  // Set the CSS var to the clamped value so the drawer's width matches
-  // the wrapper. Without this, the drawer (width: var(SECONDARY_WIDTH_VAR))
-  // is wider than the wrapper's flex container, and the overflow pokes
-  // into the viewport even when the wrapper's transform hides it.
+  // On mobile, the drawer is 100vw and the close transform must match.
+  // Use the viewport width directly — clamping a desktop-saved width to
+  // 80% of a mobile viewport would leave a visible peek.
+  const onMobile = isMobileViewport()
+  const initWidth = onMobile
+    ? window.innerWidth
+    : Math.ceil(clampSidebarWidth(rawWidth))
+  // Set the CSS var to match the drawer's actual width so
+  // getClosedTransformPx() stays in sync.
   document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${initWidth}px`)
   // Phase 3: if the saved layout says open, translate to 0 so the drawer is
   // visible from the very first frame. Otherwise stay off-screen. The
@@ -187,7 +244,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // viewport height via top:0/bottom:0; the drawer's height is 100% of
   // that.
   drawer.style.cssText = `
-    width: var(${SECONDARY_WIDTH_VAR}, 420px);
+    width: ${isMobileViewport() ? '100vw' : `var(${SECONDARY_WIDTH_VAR}, 420px)`};
     height: 100%;
     position: relative;
     display: flex;
@@ -378,6 +435,8 @@ export function animateWrapper(targetPx: number) {
 export function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   if (_secondarySidebarOpen) return
+  // On mobile, close the other sidebar first
+  enforceExclusionOnOpen('secondary')
   // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
   animateWrapper(0)
   _secondarySidebarOpen = true
@@ -385,9 +444,10 @@ export function openSecondarySidebar() {
   updateChatReflow()
   repositionAssignedTabs()
   persistOpenState()
+  setMobileOpenClass('secondary', true)
 }
 
-export function closeSecondarySidebar() {
+export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   // Animate wrapper back to its closed transform — direction-aware via
   // getClosedTransformPx: secondary on the right closes at +width, on the
@@ -405,7 +465,10 @@ export function closeSecondarySidebar() {
     }
   }
 
-  persistOpenState()
+  if (!options?.silent) {
+    persistOpenState()
+  }
+  setMobileOpenClass('secondary', false)
 }
 
 // Transient local accessor for the tabAssignments map. Re-imported from
@@ -503,6 +566,7 @@ export function tearDownSecondarySidebar(): void {
     _secondaryWrapper = null
   }
   _secondarySidebarOpen = false
+  setMobileOpenClass('secondary', false)
   // Drop any in-flight resize handle bound to the wrapper, so a re-mount
   // creates a fresh one.
   const handles = document.querySelectorAll('.sidebar-ux-resize-handle')

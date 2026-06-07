@@ -34,9 +34,10 @@ import {
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { getSettings, cancelSettingsSave } from '../settings/state'
+import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
 
 // Must match spindle.json version. Updated on each release.
-export const CANVAS_VERSION = '1.5.10'
+export const CANVAS_VERSION = '1.6.0'
 
 interface BackendCtx {
   sendToBackend(msg: { type: string; [key: string]: unknown }): void
@@ -268,7 +269,12 @@ export function applyLayout(layout: any) {
   // transform fully hides the sidebar on narrow screens. Mirrors the
   // clamp in restoreMainDrawerFromDom (main-persist.ts) and the
   // resize-handle bounds (resize/handles.ts).
-  if (layout.secondary?.width) {
+  //
+  // On mobile (≤600px), skip this entirely: mobile-exclusion.ts manages
+  // the CSS variable to keep it in sync with the 100vw inline width.
+  // If we overwrote it here with the desktop-saved width, getClosedTransformPx()
+  // would produce a short close offset and the drawer would peek.
+  if (layout.secondary?.width && !isMobileViewport()) {
     const clamped = clampSidebarWidth(layout.secondary.width)
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${clamped}px`)
     // Phase 3 (finding #13): createSecondarySidebar already initialized the
@@ -403,7 +409,16 @@ export function applyLayout(layout: any) {
         // Safety net kept for the case where applyLayout is called WITHOUT a
         // prior mountSecondarySidebar(layout) — e.g. a future "reload layout"
         // debug action that re-applies after a session tweak.
-        if (layout.secondary?.open === true && !isSecondarySidebarOpen()) {
+        // Mobile exclusion: on mobile, don't reopen the secondary if the
+        // primary is open — enforceExclusionOnOpen may have closed it
+        // during mount. Without this guard, the polling loop fights the
+        // exclusion logic and creates an open/close toggle every 500ms.
+        const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
+        if (mobileExcluded && isSecondarySidebarOpen()) {
+          // On mobile with primary open, close secondary silently (skip
+          // persistOpenState so the desktop-saved state survives).
+          enforceExclusionOnOpen('primary')
+        } else if (layout.secondary?.open === true && !isSecondarySidebarOpen()) {
           openSecondarySidebar()
         } else if (layout.secondary?.open === false && isSecondarySidebarOpen()) {
           closeSecondarySidebar()

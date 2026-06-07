@@ -62,7 +62,10 @@ export function updateChatReflow(): void {
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
 
-  // Set CSS variables for chat column margins (centering)
+  // Set CSS variables for chat column margins (centering).
+  // On mobile (≤600px), the drawer covers the full viewport width
+  // (100vw), so the chat margin intentionally extends to the full
+  // width — the drawer sits on top of the chat, not beside it.
   if (mainSide === 'left') {
     setChatMargin('left', mainWidth)
     setChatMargin('right', secondaryWidth)
