@@ -28,11 +28,12 @@ import { mountResizeHandles } from './resize/handles'
 import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
 import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
 import { attachSlashRuntime } from './slash/runtime'
+import { unmountToastSurface } from './slash/toast'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
+import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, cancelApplyLayoutInterval } from './layout/persist'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
@@ -52,15 +53,14 @@ export function setup(ctx: any) {
   }
   window.addEventListener('pagehide', flushOnUnload)
   window.addEventListener('beforeunload', flushOnUnload)
-  document.addEventListener('visibilitychange', () => {
+  const onVisibilityChange = () => {
     if (document.visibilityState === 'hidden') flushOnUnload()
-  })
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange)
   registerCleanup(() => {
     window.removeEventListener('pagehide', flushOnUnload)
     window.removeEventListener('beforeunload', flushOnUnload)
-    // visibilitychange can't be removed without a reference to the inline
-    // handler; the listener will be GC'd when the page unloads, and we
-    // re-add on every setup().
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   })
 
   // Clean up injected <style> elements on teardown. Without this,
@@ -79,6 +79,8 @@ export function setup(ctx: any) {
   // listeners are detached when the extension is disabled.
   const detachSlash = attachSlashRuntime(ctx)
   registerCleanup(detachSlash)
+  registerCleanup(unmountToastSurface)
+  registerCleanup(cancelApplyLayoutInterval)
 
   // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
   // secondary sidebar so its initial position matches the saved state on the
@@ -169,6 +171,8 @@ export function setup(ctx: any) {
     if (layout && getSettings().secondSidebarEnabled) {
       applyLayout(layout)
     }
+  }).catch((err) => {
+    dwarn('Canvas: loadSavedLayout failed, mounting with defaults:', err)
   })
 
   // v1.3.0: removed the permanent ctx.onBackendMessage no-op. The previous

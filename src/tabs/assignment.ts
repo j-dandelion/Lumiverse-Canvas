@@ -30,7 +30,7 @@ const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 // context-menu, layout/persist).
 export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { return _tabAssignments }
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
-function clearTabAssignments(): void { _tabAssignments.clear() }
+export function clearTabAssignments(): void { _tabAssignments.clear() }
 
 export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
@@ -40,7 +40,7 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
 // sidebar, replacing the previous Node-keyed WeakMap. The tabId is stable
 // across React re-mounts of ExtensionTabContent; the DOM Node is not.
 const _originalParents: Map<string, HTMLElement> = new Map()
-function clearOriginalParents(): void { _originalParents.clear() }
+export function clearOriginalParents(): void { _originalParents.clear() }
 
 /**
  * Discriminated union describing the active-tab state of the main drawer.

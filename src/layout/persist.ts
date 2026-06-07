@@ -44,11 +44,20 @@ export function setBackendCtx(ctx: any): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
+// Interval handle for applyLayout's tab-restore polling loop.
+let _applyLayoutInterval: ReturnType<typeof setInterval> | null = null
 // Called by sidebar/cleanup.cleanupAll on teardown.
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
+  }
+}
+
+export function cancelApplyLayoutInterval(): void {
+  if (_applyLayoutInterval !== null) {
+    clearInterval(_applyLayoutInterval)
+    _applyLayoutInterval = null
   }
 }
 
@@ -315,7 +324,7 @@ export function applyLayout(layout: any) {
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
     }
     let attempts = 0
-    const interval = setInterval(() => {
+    _applyLayoutInterval = setInterval(() => {
       attempts++
       const tabs = getDrawerTabs()
       for (let i = 0; i < layout.detachedTabs.length; i++) {
@@ -363,7 +372,10 @@ export function applyLayout(layout: any) {
         }
       }
       if (attempts > 20 || layout.detachedTabs.every((dt: any) => hasTabAssignment(dt.tabId))) {
-        clearInterval(interval)
+        if (_applyLayoutInterval !== null) {
+          clearInterval(_applyLayoutInterval)
+          _applyLayoutInterval = null
+        }
         // Phase 4 (finding #2): if at least one tab was restored, pick the
         // first one as the active secondary tab. Without this, the
         // secondary panel header stays empty when the user opens the

@@ -13,15 +13,18 @@ const STYLE_ID = 'canvas-slash-toast-styles'
 let nextId = 0
 const listeners = new Set<(toasts: ToastEntry[]) => void>()
 let toasts: ToastEntry[] = []
+const _toastTimers = new Set<ReturnType<typeof setTimeout>>()
 
 function pushToast(kind: ToastEntry['kind'], text: string) {
   const id = ++nextId
   toasts = [...toasts, { id, kind, text }]
   listeners.forEach((l) => l(toasts))
-  setTimeout(() => {
+  const timer = setTimeout(() => {
+    _toastTimers.delete(timer)
     toasts = toasts.filter((t) => t.id !== id)
     listeners.forEach((l) => l(toasts))
   }, 4000)
+  _toastTimers.add(timer)
 }
 
 function ToastSurface() {
@@ -46,6 +49,8 @@ function ToastSurface() {
 }
 
 let mounted = false
+let _toastListener: ((e: Event) => void) | null = null
+
 export function mountToastSurface() {
   if (mounted) return
   mounted = true
@@ -54,13 +59,23 @@ export function mountToastSurface() {
   host.id = 'canvas-slash-toast-host'
   document.body.appendChild(host)
   render(h(ToastSurface, {}), host)
+
+  _toastListener = (e: Event) => {
+    const { kind, text } = (e as CustomEvent).detail
+    pushToast(kind, text)
+  }
+  window.addEventListener('canvas:slash-toast', _toastListener)
 }
 
-// Public API: anyone in the extension (or registered via CustomEvent) can call this.
-window.addEventListener('canvas:slash-toast', (e) => {
-  const { kind, text } = (e as CustomEvent).detail
-  pushToast(kind, text)
-})
+export function unmountToastSurface() {
+  for (const timer of _toastTimers) clearTimeout(timer)
+  _toastTimers.clear()
+  if (_toastListener) {
+    window.removeEventListener('canvas:slash-toast', _toastListener)
+    _toastListener = null
+  }
+  mounted = false
+}
 
 /**
  * Idempotent: creates <style id="canvas-slash-toast-styles"> in <head>

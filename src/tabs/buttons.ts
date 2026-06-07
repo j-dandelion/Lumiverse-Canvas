@@ -314,12 +314,13 @@ export function showAssignmentMenu(
 
   // Adjust if off-screen
   requestAnimationFrame(() => {
-    const rect = _contextMenu!.getBoundingClientRect()
+    if (!_contextMenu) return
+    const rect = _contextMenu.getBoundingClientRect()
     if (rect.right > window.innerWidth) {
-      _contextMenu!.style.left = `${window.innerWidth - rect.width - 8}px`
+      _contextMenu.style.left = `${window.innerWidth - rect.width - 8}px`
     }
     if (rect.bottom > window.innerHeight) {
-      _contextMenu!.style.top = `${window.innerHeight - rect.height - 8}px`
+      _contextMenu.style.top = `${window.innerHeight - rect.height - 8}px`
     }
   })
 }

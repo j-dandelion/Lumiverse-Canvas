@@ -12,7 +12,7 @@
 // the two become independently gateable when setup() is decomposed.
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
-import { dlog } from '../debug/log'
+import { dlog, dwarn } from '../debug/log'
 
 let _tagMainSidebarButtonsRaf: number | null = null
 
@@ -69,12 +69,17 @@ export function tagMainSidebarButtons(): number {
  */
 export function startTagObserver(): () => void {
   const sidebarObserver = new MutationObserver(() => scheduleTagMainSidebarButtons())
+  let sidebarAttempts = 0
   const waitForSidebar = () => {
     const sidebar = getMainSidebar()
     if (sidebar) {
       sidebarObserver.observe(sidebar, { childList: true, subtree: true })
       // Initial tag pass — sidebar exists, but buttons may already be rendered.
       tagMainSidebarButtons()
+      return
+    }
+    if (++sidebarAttempts > 300) {
+      dwarn('startTagObserver: main sidebar not found after 300 frames (~5s), giving up')
       return
     }
     requestAnimationFrame(waitForSidebar)

@@ -45,7 +45,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   // (verified in Phase 0 recon; high confidence). Fall back to '' if no
   // active chat. v1.1.0 has no userId; v1.2.0 may add it.
   const slashCtx: SlashContext = {
-    chatId: ctx.getActiveChat()?.chatId ?? '',
+    get chatId() { return ctx.getActiveChat()?.chatId ?? '' },
     setText: (text) => {
       const ta = document.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')
       if (!ta) return

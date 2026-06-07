@@ -13,6 +13,8 @@
 // iteration; consumers (sidebar/polish.ts) register their own teardowns.
 
 import { dwarn } from '../debug/log'
+import { clearStoreCache } from '../store'
+import { clearTabAssignments, clearOriginalParents } from '../tabs/assignment'
 
 const _cleanupFns: Array<() => void> = []
 
@@ -27,6 +29,9 @@ export function cleanupAll() {
     }
   }
   _cleanupFns.length = 0
-  // (cleanupAll in the final module will also reset state; for now
-  // this matches the v1.4.2 behavior of the registered teardowns.)
+
+  // Reset module-level caches that don't have their own teardown registration
+  try { clearStoreCache() } catch (err: unknown) { dwarn('clearStoreCache error:', err) }
+  try { clearTabAssignments() } catch (err: unknown) { dwarn('clearTabAssignments error:', err) }
+  try { clearOriginalParents() } catch (err: unknown) { dwarn('clearOriginalParents error:', err) }
 }

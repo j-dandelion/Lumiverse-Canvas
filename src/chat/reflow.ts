@@ -23,6 +23,7 @@ import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
+import { dwarn } from '../debug/log'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -81,11 +82,16 @@ export function startReflowObserver(): () => void {
   injectReflowStyles()
 
   const observer = new MutationObserver(() => scheduleReflow())
+  let wrapperAttempts = 0
   const waitForWrapper = () => {
     const wrapper = getMainWrapper()
     if (wrapper) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
       updateChatReflow()
+      return
+    }
+    if (++wrapperAttempts > 300) {
+      dwarn('startReflowObserver: main wrapper not found after 300 frames (~5s), giving up')
       return
     }
     requestAnimationFrame(waitForWrapper)
