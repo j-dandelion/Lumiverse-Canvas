@@ -44,6 +44,7 @@
 // drawer reopens.
 
 import { getMainDrawer } from '../dom/lumiverse'
+import { clampSidebarWidth } from '../dom/clamp'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { dlog } from '../debug/log'
 import { isMobile } from '../resize/handles'
@@ -369,7 +370,7 @@ export function restoreMainDrawerFromDom(
   // decouples the wrapper transform from the actual drawer width,
   // causing a ~80px peek when the user closes the sidebar.
   const clampedWidth = (typeof targetWidthPx === 'number' && targetWidthPx > 0)
-    ? Math.max(200, Math.min(window.innerWidth * 0.8, targetWidthPx))
+    ? clampSidebarWidth(targetWidthPx)
     : null
 
   const currentOpen = readWrapperOpen(wrapper)

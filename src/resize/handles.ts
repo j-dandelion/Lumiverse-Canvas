@@ -15,6 +15,7 @@
 // presence. The 4px overhang is intentional — see comment in
 // mountResizeHandles' secondary block.
 import { getMainDrawer, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
+import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { scheduleReflow } from '../chat/reflow'
 import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
@@ -105,7 +106,7 @@ export function mountResizeHandles(): void {
     const handle = createResizeHandle(
       mainDirection,
       (startWidth, delta) => {
-        const newWidth = Math.max(200, Math.min(window.innerWidth * 0.8, startWidth + delta))
+        const newWidth = clampSidebarWidth(startWidth + delta)
         const drawer = getMainDrawer()
         const wrapper = getMainWrapper()
         if (drawer) {
@@ -156,7 +157,7 @@ export function mountResizeHandles(): void {
       const handle = createResizeHandle(
         secondaryDirection,
         (startWidth, delta) => {
-          const newWidth = Math.max(200, Math.min(window.innerWidth * 0.8, startWidth + delta))
+          const newWidth = clampSidebarWidth(startWidth + delta)
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)
           scheduleReflow()
           // Reposition tabs after resize

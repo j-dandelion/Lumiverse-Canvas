@@ -12,6 +12,7 @@
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
 import { getMainSidebar } from '../dom/lumiverse'
+import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
@@ -120,7 +121,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     : (isFinite(cssVarWidth) ? cssVarWidth : 420)
   // Clamp to viewport so the closed transform fully hides the sidebar
   // on narrow screens. Same bounds as resize handles and applyLayout.
-  const initWidth = Math.ceil(Math.max(200, Math.min(window.innerWidth * 0.8, rawWidth)))
+  const initWidth = Math.ceil(clampSidebarWidth(rawWidth))
   // Set the CSS var to the clamped value so the drawer's width matches
   // the wrapper. Without this, the drawer (width: var(SECONDARY_WIDTH_VAR))
   // is wider than the wrapper's flex container, and the overflow pokes

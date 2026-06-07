@@ -19,6 +19,7 @@
 // here as-is; the rewrite into a MutationObserver callback is TODO.
 
 import { getMainDrawerWidth } from '../dom/lumiverse'
+import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, isMainDrawerOpen, getMainDrawerSide } from '../store'
 import {
   getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR,
@@ -268,7 +269,7 @@ export function applyLayout(layout: any) {
   // clamp in restoreMainDrawerFromDom (main-persist.ts) and the
   // resize-handle bounds (resize/handles.ts).
   if (layout.secondary?.width) {
-    const clamped = Math.max(200, Math.min(window.innerWidth * 0.8, layout.secondary.width))
+    const clamped = clampSidebarWidth(layout.secondary.width)
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${clamped}px`)
     // Phase 3 (finding #13): createSecondarySidebar already initialized the
     // wrapper transform with the right width on mount (see the options

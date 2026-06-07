@@ -6,6 +6,7 @@ import { makeSelectCommands } from './commands/select'
 import { showSuggest, hideSuggest } from './suggest'
 import { dispatchCommand } from './dispatch'
 import { mountToastSurface } from './toast'
+import { SELECTOR_TEXTAREA } from '../dom/selectors'
 import type { SlashCommandDef, SlashContext } from './types'
 
 // Runtime type guard for the `canvas:slash-register` CustomEvent detail.
@@ -47,7 +48,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   const slashCtx: SlashContext = {
     get chatId() { return ctx.getActiveChat()?.chatId ?? '' },
     setText: (text) => {
-      const ta = document.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')
+      const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
       if (!ta) return
       ta.value = text
       ta.dispatchEvent(new Event('input', { bubbles: true }))
@@ -70,7 +71,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
         // path in intercept.ts reads `getActiveCommand().name`).
         const matches = registry.list()
           .filter((c) => c.name.toLowerCase().startsWith(prefix))
-        const ta = document.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')
+        const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
         if (ta) showSuggest(ta, matches)
       } else {
         hideSuggest()

@@ -41,8 +41,8 @@ export function parseSelectArgs(input: string): SelectArgs {
   if (typeof input !== 'string') return { kind: 'error', reason: 'Input is not a string' }
 
   // Strip leading "/select" prefix. The prefix is "/select" followed by
-  // whitespace, end-of-string, or a digit (so "/select25-30" works as
-  // well as "/select 25-30"). The "/select" must be a standalone token
+  // whitespace, end-of-string, or a digit (so "/select25-100" works as
+  // well as "/select 25-100"). The "/select" must be a standalone token
   // (preceded by start-of-string or whitespace) so it doesn't match
   // "/select" embedded in larger words like "selecting".
   let trimmed = input.trim()
@@ -74,7 +74,7 @@ export function parseSelectArgs(input: string): SelectArgs {
       return { kind: 'error', reason: `Malformed range: "${chunk}"` }
     }
     // Collapse whitespace runs to a single dash (so "25 100" → "25-100"
-    // and "25 - 100" → "25-30"). Trim again to be safe.
+    // and "25 - 100" → "25-100"). Trim again to be safe.
     const normalized = chunk.replace(/\s+/g, '-')
     const parts = normalized.split('-').filter((p) => p !== '')
 

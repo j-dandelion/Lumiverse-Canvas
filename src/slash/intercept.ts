@@ -20,10 +20,7 @@ import {
   isSuggestVisible,
   getSuggestController,
 } from './suggest'
-
-// CSS-module class is hashed. The prefix `sendBtn` is stable across builds.
-const SELECTOR_SEND_BTN = 'button[class*="sendBtn"]'
-const SELECTOR_TEXTAREA = 'textarea[name="chat-message"]'
+import { SELECTOR_SEND_BTN, SELECTOR_TEXTAREA } from '../dom/selectors'
 
 export interface InterceptCallbacks {
   onParsed: (parsed: ParsedCommand, textarea: HTMLTextAreaElement) => void

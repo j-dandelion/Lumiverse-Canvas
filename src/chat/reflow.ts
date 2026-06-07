@@ -23,7 +23,7 @@ import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
-import { dwarn } from '../debug/log'
+import { waitForElement } from '../dom/wait-for'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -82,21 +82,12 @@ export function startReflowObserver(): () => void {
   injectReflowStyles()
 
   const observer = new MutationObserver(() => scheduleReflow())
-  let wrapperAttempts = 0
-  const waitForWrapper = () => {
-    const wrapper = getMainWrapper()
+  waitForElement(getMainWrapper, 'main wrapper').then((wrapper) => {
     if (wrapper) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
       updateChatReflow()
-      return
     }
-    if (++wrapperAttempts > 300) {
-      dwarn('startReflowObserver: main wrapper not found after 300 frames (~5s), giving up')
-      return
-    }
-    requestAnimationFrame(waitForWrapper)
-  }
-  waitForWrapper()
+  })
 
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle
   // (gated on CanvasSettings.chatReflow) is preserved. The tagger is exported
