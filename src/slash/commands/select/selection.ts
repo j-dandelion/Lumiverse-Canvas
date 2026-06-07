@@ -190,7 +190,7 @@ export async function selectByVisualIndices(
     // Lumiverse applies the `selected` className (CSS module hash like
     // `_selected_xxx`) when a row is in the selection. The exact hash
     // is build-dependent, but the prefix `selected` is stable.
-    const isCurrentlySelected = row.className.includes('selected')
+    const isCurrentlySelected = /(?:^|\s|_)selected(?:_|$|\s)/.test(row.className)
     if (shouldBeSelected === isCurrentlySelected) {
       // State already matches the target — count as matched if target.
       if (shouldBeSelected) matchedIndices.add(idx)

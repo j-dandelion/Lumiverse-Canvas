@@ -119,7 +119,6 @@ export function mountResizeHandles(): void {
       },
       () => {
         const width = getMainDrawerWidth()
-        const vw = Math.round((width / window.innerWidth) * 100)
         persistLayout()
       },
       () => isMainDrawerOpen()
@@ -165,7 +164,6 @@ export function mountResizeHandles(): void {
         },
         () => {
           const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-          const vw = Math.round((width / window.innerWidth) * 100)
           persistLayout()
         },
         () => isSecondarySidebarOpen()

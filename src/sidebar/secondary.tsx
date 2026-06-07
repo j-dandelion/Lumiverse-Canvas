@@ -306,24 +306,29 @@ function getAncestorsToOverride(element: HTMLElement): HTMLElement[] {
   return ancestors
 }
 
-// Save original overflow values so we can restore them
-const _savedOverflow = new Map<HTMLElement, string>()
+// Map from element → Map of ancestor → original overflow value
+const _savedOverflow = new Map<HTMLElement, Map<HTMLElement, string>>()
 
 function enableOverflowVisible(element: HTMLElement) {
   const ancestors = getAncestorsToOverride(element)
+  if (ancestors.length === 0) return
+  const saved = new Map<HTMLElement, string>()
   for (const ancestor of ancestors) {
-    if (!_savedOverflow.has(ancestor)) {
-      _savedOverflow.set(ancestor, ancestor.style.overflow || '')
+    if (!saved.has(ancestor)) {
+      saved.set(ancestor, ancestor.style.overflow || '')
     }
     ancestor.style.setProperty('overflow', 'visible', 'important')
   }
+  _savedOverflow.set(element, saved)
 }
 
 export function restoreOverflow(element: HTMLElement) {
-  for (const [ancestor, original] of _savedOverflow) {
+  const saved = _savedOverflow.get(element)
+  if (!saved) return
+  for (const [ancestor, original] of saved) {
     ancestor.style.overflow = original
   }
-  _savedOverflow.clear()
+  _savedOverflow.delete(element)
 }
 
 // --- JS-based animation (replaces CSS transitions for drawer + drawerTab sync) ---

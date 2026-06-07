@@ -26,7 +26,7 @@ import {
   openSecondarySidebar, closeSecondarySidebar,
 } from '../sidebar/secondary'
 import {
-  getTabAssignments, hasTabAssignment, repositionTabToSecondary,
+  getTabAssignments, hasTabAssignment, repositionTab,
 } from '../tabs/assignment'
 import {
   addSecondaryTabButton, hideMainTabButton, showSecondaryTab, updateDrawerTabVisibility,
@@ -37,10 +37,15 @@ import { getSettings, cancelSettingsSave } from '../settings/state'
 // Must match spindle.json version. Updated on each release.
 export const CANVAS_VERSION = '1.5.10'
 
-let _backendCtx: any = null
+interface BackendCtx {
+  sendToBackend(msg: { type: string; [key: string]: unknown }): void
+  onBackendMessage(handler: (payload: { type: string; layout?: any; [key: string]: unknown }) => void): void
+}
 
-export function getBackendCtx(): any { return _backendCtx }
-export function setBackendCtx(ctx: any): void { _backendCtx = ctx }
+let _backendCtx: BackendCtx | null = null
+
+export function getBackendCtx(): BackendCtx | null { return _backendCtx }
+export function setBackendCtx(ctx: BackendCtx): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
@@ -360,7 +365,7 @@ export function applyLayout(layout: any) {
           hideMainTabButton(tab.id)
           addSecondaryTabButton(tab)
           updateDrawerTabVisibility()
-          repositionTabToSecondary(tab.id)
+          repositionTab(tab.id, 'secondary')
         } else if (!usedFallback) {
           // Once we've tried a few times and the id is still missing, surface
           // a visible warning. The first few attempts may simply be racing

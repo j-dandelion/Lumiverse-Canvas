@@ -464,13 +464,6 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
   }
 }
 
-/**
- * @deprecated Use repositionTab(tabId, 'secondary') instead. Kept as a
- * thin wrapper for callers that haven't been migrated yet.
- */
-export function repositionTabToSecondary(tabId: string) {
-  repositionTab(tabId, 'secondary')
-}
 
 // Phase 4 (finding #2): state tracking which secondary tab is currently
 // visible in the secondary panel content area. Updated by showSecondaryTab.
@@ -573,7 +566,7 @@ function clearSecondaryTab() {
 export function repositionAssignedTabs() {
   for (const [tabId, sidebar] of _tabAssignments) {
     if (sidebar === 'secondary') {
-      repositionTabToSecondary(tabId)
+      repositionTab(tabId, 'secondary')
     }
   }
 }
