@@ -106,6 +106,9 @@ export function syncSecondaryTabLabels(): void {
     label.style.opacity = showLabels ? '1' : '0'
     label.style.height = showLabels ? 'auto' : '0'
     label.style.marginTop = showLabels ? '1px' : '0'
+    // Toggle labeled class on the parent button so mobile CSS can size it
+    const btn = label.closest('button[data-tab-id]') as HTMLElement | null
+    if (btn) btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
   }
 }
 
@@ -158,6 +161,9 @@ export function startSideChangeWatcher(): void {
   if (_sideCheckInterval !== null) return // already running
   _lastKnownSide = getMainDrawerSide()
   _sideCheckInterval = setInterval(checkSideChanged, 2000)
+  // Cleanup is registered here (not at call sites) because these functions
+  // are also called from settings/panel.ts which doesn't have its own
+  // cleanup chain.
   registerCleanup(() => stopSideChangeWatcher())
 }
 
@@ -200,6 +206,9 @@ export function startTabRegistrationWatcher(): void {
   }
 
   _tabRegInterval = setInterval(check, 3000)
+  // Cleanup is registered here (not at call sites) because these functions
+  // are also called from settings/panel.ts which doesn't have its own
+  // cleanup chain.
   registerCleanup(() => stopTabRegistrationWatcher())
 }
 

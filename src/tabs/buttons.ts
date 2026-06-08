@@ -102,6 +102,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   const btn = document.createElement('button')
   btn.setAttribute('data-tab-id', tab.id)
   btn.setAttribute('title', tab.title)
+  if (showLabels) btn.classList.add('sidebar-ux-tab-labeled')
   btn.style.cssText = `
     width: 100%;
     height: ${showLabels ? '56px' : '48px'};

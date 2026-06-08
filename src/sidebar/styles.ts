@@ -29,19 +29,29 @@ const SECONDARY_MOBILE_CSS = `
     border-right: none !important;
     padding: 6px 8px !important;
   }
-  /* Tab buttons: shrink to content width on mobile horizontal layout. */
+  /* Tab buttons: match main sidebar's mobile tabBtn/tabBtnLabeled sizes.
+     Main sidebar uses 42×42 (no labels) / 52×48 (with labels).
+     Keep vertical layout (column) — same as main sidebar on mobile. */
   .sidebar-ux-tab-list button[data-tab-id] {
-    width: auto !important;
-    min-width: 32px;
-    padding: 6px 8px !important;
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 0;
+    padding: 6px 4px !important;
+    border-radius: 8px !important;
+  }
+  .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
+    width: 52px !important;
+    height: 48px !important;
   }
   /* Side-aware alignment: single tab sits on the edge the sidebar opens from. */
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     justify-content: flex-end !important;
   }
-  /* Active tab indicator: bottom underline (was left border on desktop) */
+  /* Active tab indicator: bottom underline, matching main sidebar's
+     tabBtnActive mobile style. Top corners rounded, bottom flat. */
   .sidebar-ux-secondary-wrapper button[class*="tab-active"] {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+    border-radius: 8px 8px 0 0 !important;
   }
   .sidebar-ux-drawer-tab { width: 32px !important; }
   /* Hide secondary's drawerTab when primary is open on mobile */
