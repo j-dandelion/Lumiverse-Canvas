@@ -22,6 +22,7 @@
 // their own mount sites rather than via the master toggle, so adding a
 // non-master-gated sub-feature later is a one-liner.
 
+import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from './sidebar/secondary'
 import { startReflowObserver } from './chat/reflow'
 import { mountResizeHandles } from './resize/handles'
@@ -41,7 +42,7 @@ import {
 import { getMainDrawer } from './dom/lumiverse'
 import { setDebug, dwarn } from './debug/log'
 
-export function setup(ctx: any) {
+export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
 
   // Force-flush any pending debounced save before the page unloads.

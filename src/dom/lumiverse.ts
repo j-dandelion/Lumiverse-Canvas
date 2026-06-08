@@ -29,10 +29,6 @@ export function getMainWrapper(): HTMLElement | null {
   return sidebar?.closest('[class*="_wrapper_"]') as HTMLElement | null
 }
 
-function getAppElement(): HTMLElement | null {
-  return document.querySelector('.app') || document.querySelector('[class*="app"]')
-}
-
 export function getChatColumn(): HTMLElement | null {
   // .chatColumn is the flex child of .body that contains .chatColumnInner
   // .body has data-chat-constrained when a max-width is active

@@ -13,7 +13,7 @@
 // active-tab switching, and optional save. `assignTab` is the stable
 // public API for "move this tab to that sidebar" with default options.
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
-import { findStoreData, getDrawerTabs, getStoreSnapshot } from '../store'
+import { findStoreData, getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, restoreOverflow } from '../sidebar/secondary'
 import {
@@ -22,6 +22,23 @@ import {
   cssEscape,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
+import {
+  _setTabAssignmentsGetter,
+  isTabActiveInMainDrawer,
+  getActiveSecondaryTabId,
+  setActiveSecondaryTabId,
+} from './active-tab'
+import { installNodeGuard, ensureNodeGuard } from './node-guard'
+
+// Wire the active-tab getter so isMovedTabId can read the assignments
+// without a circular import.
+_setTabAssignmentsGetter(() => _tabAssignments)
+
+// Re-export for backward compatibility — callers that import from
+// tabs/assignment still get the same symbols.
+export { isTabActiveInMainDrawer, getActiveSecondaryTabId, setActiveSecondaryTabId }
+export { isMovedTabNode, type ActiveTabState } from './active-tab'
+export { installNodeGuard, ensureNodeGuard } from './node-guard'
 
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
@@ -32,6 +49,16 @@ export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { retu
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
 export function clearTabAssignments(): void { _tabAssignments.clear() }
 
+/** Encapsulated mutation: set a tab assignment without exposing the mutable Map. */
+export function setTabAssignment(tabId: string, panelId: 'primary' | 'secondary'): void {
+  _tabAssignments.set(tabId, panelId)
+}
+
+/** Encapsulated mutation: delete a tab assignment without exposing the mutable Map. */
+export function deleteTabAssignment(tabId: string): void {
+  _tabAssignments.delete(tabId)
+}
+
 export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   return _tabAssignments.get(tabId) || 'primary'
 }
@@ -41,63 +68,6 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
 // across React re-mounts of ExtensionTabContent; the DOM Node is not.
 const _originalParents: Map<string, HTMLElement> = new Map()
 export function clearOriginalParents(): void { _originalParents.clear() }
-
-/**
- * Discriminated union describing the active-tab state of the main drawer.
- * Replaces the 3-deep nested-if + DOM-fallthrough of the old `isTabActiveInMainDrawer`.
- *
- * - `closed`   — drawer is not open
- * - `active`   — drawer is open, and the active tab is `id`
- * - `other`    — drawer is open, but a different tab (`id`) is active
- * - `unknown`  — store is unreachable AND DOM is unreachable (defensive)
- */
-export type ActiveTabState =
-  | { state: 'closed' }
-  | { state: 'active'; id: string }
-  | { state: 'other'; id: string }
-  | { state: 'unknown' }
-
-function getActiveTabId(): ActiveTabState {
-  // Primary: store snapshot
-  findStoreData(true)
-  const store = getStoreSnapshot() as { drawerTab?: string | null; drawerOpen?: boolean } | null
-  if (store && typeof store.drawerOpen === 'boolean') {
-    if (!store.drawerOpen) return { state: 'closed' }
-    if (typeof store.drawerTab === 'string') {
-      return { state: 'active', id: store.drawerTab }
-    }
-    // drawerOpen is true but drawerTab is null/undefined — store is in a
-    // transitional state. Fall through to the DOM check rather than
-    // reporting "unknown" prematurely; DOM is usually in sync here.
-  }
-
-  // Fallback: DOM-based check
-  const sidebar = getMainSidebar()
-  if (!sidebar) return { state: 'unknown' }
-  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
-  if (!activeBtn) return { state: 'unknown' }
-  const activeTitle = activeBtn.getAttribute('title') || ''
-  if (!activeTitle) return { state: 'unknown' }
-
-  // Resolve the title back to a tabId via the store
-  const tabs = getDrawerTabs()
-  const tab = tabs.find((t: any) => t.title === activeTitle)
-  if (tab) return { state: 'active', id: tab.id }
-  // Active button is a built-in (no matching extension tab). Report the title
-  // as the active id so callers can compare against built-in tab keys if needed.
-  return { state: 'active', id: activeTitle }
-}
-
-/**
- * Thin boolean wrapper over getActiveTabId() for callers that only need
- * a yes/no. Prefer getActiveTabId() for new code — the sentinel shape is
- * the authoritative contract.
- */
-export function isTabActiveInMainDrawer(tabId: string): boolean {
-  const active = getActiveTabId()
-  if (active.state === 'active') return active.id === tabId
-  return false
-}
 
 /**
  * Switch the main drawer to a fallback tab before moving the active extension
@@ -288,92 +258,6 @@ export function assignTab(tabId: string, sidebar: 'primary' | 'secondary') {
   return applyAssignment(tabId, sidebar, { open: true, switchActive: true, save: true })
 }
 
-// v1.3.0: tabId-keyed identification replaces the previous Node-keyed
-// guard. The old `isTabMovedToSecondary(node)` compared a Node reference
-// against the cached `tab.root` field — and the cache has a 3s TTL, so a
-// React re-mount that produced a new `tab.root` would land in the gap and
-// the guard would let React reclaim the new Node. The new layer:
-//
-//   1. `isMovedTabId(tabId)` — pure: returns true iff this tabId is currently
-//      assigned to the secondary sidebar. No DOM lookup, no cache dependency.
-//   2. `isMovedTabNode(node)` — what the wrapped container methods call.
-//      Forces a fresh store read (findStoreData(true)) and reverse-resolves
-//      the Node to a tabId via the live store's `tab.root`. Then delegates
-//      to `isMovedTabId`. The forced refresh closes the 3s TTL window.
-//
-// The reverse-resolution still goes through `_drawerTabsCache` because React
-// hands us a Node and we have no other way to ask "which tab is this?".
-// But the *authoritative* key in `_tabAssignments` is the stable tabId, so
-// the timing window is bounded to a single forced fiber walk (~1-2ms), not
-// the 3s TTL.
-
-function isMovedTabId(tabId: string): boolean {
-  return _tabAssignments.get(tabId) === 'secondary'
-}
-
-export function isMovedTabNode(node: Node): boolean {
-  // Force a fresh store read so the Node → tabId mapping is current.
-  // Guards fire on React DOM mutations, which can happen many times per
-  // re-render but only briefly during a move — total overhead is small.
-  findStoreData(true)
-  const tabs = getDrawerTabs()
-  const tab = tabs.find((t: any) => t.root === node)
-  if (!tab) return false
-  return isMovedTabId(tab.id)
-}
-
-// Tracks which container currently has the guard installed. If React
-// replaces the main panel content element (e.g. on a drawer re-render), the
-// guard's `__sidebarUxGuarded` marker is on the old (detached) container
-// and the new container is unguarded. `ensureNodeGuard` detects this and
-// re-installs the guard on the current container.
-let _guardedContainer: HTMLElement | null = null
-
-/**
- * Install (or re-install) the React-reclaim guard on the current main panel
- * content container. Idempotent: no-op if the guard is already on the
- * current container. Re-installs (and forgets the old container) if the
- * container has been replaced since the last install.
- */
-function ensureNodeGuard(): void {
-  const mainContent = getMainPanelContent()
-  if (!mainContent) return
-  if (mainContent === _guardedContainer) return
-  // Container changed (or first install). The old container (if any) is
-  // detached and will be GC'd along with its guard methods. We don't
-  // attempt to restore the originals — the container is gone.
-  _guardedContainer = null
-  installNodeGuard(mainContent)
-  _guardedContainer = mainContent
-}
-
-function installNodeGuard(container: Node) {
-  if ((container as any).__sidebarUxGuarded) return
-  ;(container as any).__sidebarUxGuarded = true
-
-  const origRemoveChild = container.removeChild.bind(container)
-  container.removeChild = function(child: Node) {
-    if (isMovedTabNode(child)) return child as any
-    return origRemoveChild(child)
-  } as any
-
-  // Guard replaceChildren — this is what ExtensionTabContent.useEffect calls
-  const origReplaceChildren = (container as any).replaceChildren?.bind(container)
-  if (origReplaceChildren) {
-    ;(container as any).replaceChildren = function(...nodes: Node[]) {
-      const filtered = nodes.filter(n => !isMovedTabNode(n))
-      return origReplaceChildren(...filtered)
-    }
-  }
-
-  // Guard appendChild — React may also use this to re-add nodes
-  const origAppendChild = container.appendChild.bind(container)
-  container.appendChild = function(child: Node) {
-    if (isMovedTabNode(child)) return child
-    return origAppendChild(child)
-  } as any
-}
-
 /**
  * Phase 4 (finding #1) + v1.3.0: pure DOM move — moves a tab's root element
  * between sidebars WITHOUT touching state, buttons, save, or open/close.
@@ -465,15 +349,6 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
 }
 
 
-// Phase 4 (finding #2): state tracking which secondary tab is currently
-// visible in the secondary panel content area. Updated by showSecondaryTab.
-// Used by restoreTabToPrimary to fall through to a neighbor tab when the
-// active secondary tab is moved back to primary, preventing the "ghost tab"
-// (header still showing the moved tab's name with an empty body).
-let _activeSecondaryTabId: string | null = null
-function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
-export function setActiveSecondaryTabId(tabId: string | null): void { _activeSecondaryTabId = tabId }
-
 export function restoreTabToPrimary(tabId: string) {
   const tabs = getDrawerTabs()
   const tab = tabs.find(t => t.id === tabId)
@@ -501,7 +376,7 @@ export function restoreTabToPrimary(tabId: string) {
   // Phase 4 (finding #2): if the restored tab was the active secondary tab,
   // fall through to a neighbor so the secondary panel doesn't end up
   // showing the moved tab's name in an empty content area.
-  if (_activeSecondaryTabId === tabId) {
+  if (getActiveSecondaryTabId() === tabId) {
     // Find the next visible secondary tab in the assignment list, skipping
     // the one we just moved. Iterate _tabAssignments in insertion order to
     // keep a stable "next" pick.
@@ -553,11 +428,11 @@ function clearSecondaryTab() {
   // secondary-assigned ones needed hiding.
   const content = secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
   if (content) {
-    for (const child of Array.from(content.children)) {
+    for (const child of Array.from(content.children) as HTMLElement[]) {
       child.style.setProperty('display', 'none', 'important')
     }
   }
-  _activeSecondaryTabId = null
+  setActiveSecondaryTabId(null)
 }
 
 /**

@@ -5,6 +5,7 @@
 // (see ~/Lumiverse/frontend/src/theme/variables.css:1-148). No hex literals.
 import type { SlashCommandDef } from './types'
 import { injectStyles } from '../debug/styles'
+import { position, attachViewportListeners, detachViewportListeners } from './positioning'
 
 const SUGGEST_ID = 'canvas-slash-suggest'
 const STYLE_ID = 'canvas-slash-suggest-styles'
@@ -165,7 +166,7 @@ export function showSuggest(
   position(el, textarea)
 
   // Register viewport + outside-dismiss listeners (both idempotent).
-  attachViewportListeners()
+  attachViewportListeners(() => currentAnchor, () => currentEl)
   attachOutsideDismiss()
 
   // Promote to module-level so the intercept's `isSuggestVisible()` works.
@@ -206,9 +207,6 @@ export function getSuggestController(): SuggestController | null {
 // --- module state ---
 
 let _currentController: SuggestController | null = null
-let visualViewportListener: (() => void) | null = null
-let scrollListener: (() => void) | null = null
-let resizeListener: (() => void) | null = null
 let outsideDismissListener: ((e: Event) => void) | null = null
 let currentAnchor: HTMLTextAreaElement | null = null
 let currentEl: HTMLElement | null = null
@@ -233,61 +231,7 @@ function getOrCreate(): HTMLDivElement {
   return el
 }
 
-const VIEWPORT_MARGIN = 8  // keep the popup this many px from the viewport edge
 
-function position(el: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect()
-  // Sit just above the textarea (the standard "autocomplete" position).
-  // If there's not enough room above, sit below.
-  const spaceAbove = rect.top
-  const elHeight = el.offsetHeight
-  const top = spaceAbove > elHeight + VIEWPORT_MARGIN ? rect.top - elHeight - 4 : rect.bottom + 4
-  el.style.top = `${top}px`
-  // Clamp the left edge so the popup never clips off the right side of the
-  // viewport (or off the left, in case the textarea is near x=0). The popup
-  // width is bounded by CSS `max-width: min(420px, calc(100vw - 16px))` so
-  // `el.offsetWidth` is a safe upper bound for what we need to fit.
-  const elWidth = el.offsetWidth
-  const maxLeft = window.innerWidth - elWidth - VIEWPORT_MARGIN
-  el.style.left = `${Math.max(VIEWPORT_MARGIN, Math.min(rect.left, maxLeft))}px`
-  el.style.minWidth = `${rect.width}px`
-}
-
-function attachViewportListeners(): void {
-  if (!visualViewportListener) {
-    visualViewportListener = () => {
-      if (currentAnchor && currentEl) position(currentEl, currentAnchor)
-    }
-    window.visualViewport?.addEventListener('resize', visualViewportListener)
-  }
-  if (!scrollListener) {
-    scrollListener = () => {
-      if (currentAnchor && currentEl) position(currentEl, currentAnchor)
-    }
-    window.addEventListener('scroll', scrollListener, true)
-  }
-  if (!resizeListener) {
-    resizeListener = () => {
-      if (currentAnchor && currentEl) position(currentEl, currentAnchor)
-    }
-    window.addEventListener('resize', resizeListener)
-  }
-}
-
-function detachViewportListeners(): void {
-  if (visualViewportListener) {
-    window.visualViewport?.removeEventListener('resize', visualViewportListener)
-    visualViewportListener = null
-  }
-  if (scrollListener) {
-    window.removeEventListener('scroll', scrollListener, true)
-    scrollListener = null
-  }
-  if (resizeListener) {
-    window.removeEventListener('resize', resizeListener)
-    resizeListener = null
-  }
-}
 
 /**
  * Outside-input dismiss. Closes the popup when the user taps/clicks/right-

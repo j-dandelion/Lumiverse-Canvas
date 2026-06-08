@@ -75,12 +75,6 @@ export function updateChatReflow(): void {
   }
 }
 
-// injectDrawerTabStyles (sidebar-ux-drawer-tab CSS) lives in
-// sidebar/secondary.tsx. Until then, frontend.ts owns it and
-// the callers reference it via the still-large entry. Re-exported from
-// chat/reflow for setup()'s convenience; the canonical home is M10.
-export { injectDrawerTabStyles } from '../sidebar/secondary'
-
 export function startReflowObserver(): () => void {
   injectReflowStyles()
 

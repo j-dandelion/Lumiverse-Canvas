@@ -3,10 +3,14 @@
   "version": "1.5.10",
   "scripts": {
     "build": "bun build src/frontend.ts --outfile dist/frontend.js --target browser --format esm && bun build src/backend.ts --outfile dist/backend.js --target bun --format esm",
+    "typecheck": "bunx tsc --noEmit",
     "deploy": "bash build.sh"
   },
   "dependencies": {
     "lumiverse-spindle-types": "^0.5.17",
     "preact": "^10.29.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2"
   }
 }

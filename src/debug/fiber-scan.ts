@@ -11,17 +11,28 @@
 // fix is TODO (review Finding #11) — __canvasDebug will call
 // findStoreData(true) and format-and-log the resulting caches.
 
+import { getFiberFromElement } from '../dom/fiber'
+
+declare global {
+  interface Window {
+    __canvasDebug?: () => void
+  }
+}
+
 export function installDebugEscapeHatch() {
-  ;(window as any).__canvasDebug = function() {
+  window.__canvasDebug = function() {
     console.log('=== Canvas Fiber Scan ===')
 
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]')
     if (!sidebar) { console.log('No sidebar found'); return }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fiberKey = Object.keys(sidebar).find(k => k.startsWith('__reactFiber$'))
     if (!fiberKey) { console.log('No fiber key'); return }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const visited = new Set<any>()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     function scan(fiber: any, depth: number, maxDepth: number): void {
       if (!fiber || depth > maxDepth || visited.has(fiber)) return
       visited.add(fiber)
@@ -36,6 +47,7 @@ export function installDebugEscapeHatch() {
           const firstKeys = Object.keys(state[0])
           if (firstKeys.includes('id') && firstKeys.includes('title') && firstKeys.includes('root')) {
             console.log(`*** FOUND drawerTabs at depth=${depth} hook=${hookIdx}: ${state.length} tabs ***`)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             state.forEach((t: any, i: number) => console.log(`  [${i}] id=${t.id} title=${t.title}`))
           }
         }
@@ -59,7 +71,10 @@ export function installDebugEscapeHatch() {
 
     // Strategy: walk UP from sidebar to find common ancestor, then DOWN into all children
     console.log('Walking UP from sidebar to find ancestors...')
-    let fiber: any = (sidebar as any)[fiberKey]
+    const rootFiber = getFiberFromElement(sidebar)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let fiber: any = rootFiber
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ancestors: any[] = []
     while (fiber) {
       ancestors.push(fiber)

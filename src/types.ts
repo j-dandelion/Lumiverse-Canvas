@@ -95,8 +95,8 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
   const out = { ...DEFAULT_CANVAS_SETTINGS }
   if (saved && typeof saved === 'object') {
     for (const key of Object.keys(out) as Array<keyof CanvasSettings>) {
-      const v = (saved as any)[key]
-      if (v !== undefined) (out as any)[key] = v
+      const v = saved[key]
+      if (v !== undefined) (out as Record<string, unknown>)[key] = v
     }
   }
   return out

@@ -11,7 +11,6 @@ let DEBUG: boolean = (() => {
   }
 })()
 
-function getDebug(): boolean { return DEBUG }
 export function setDebug(value: boolean): void {
   DEBUG = value
   // Sync to the backend so server-side logs (spindle.log.*) are also gated.

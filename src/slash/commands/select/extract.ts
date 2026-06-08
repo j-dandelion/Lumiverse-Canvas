@@ -27,6 +27,8 @@
  * for the DOM contract this code relies on.
  */
 
+import { getFiberFromElement } from '../../../dom/fiber'
+
 const INDEX_RE = /^#(\d+)/
 
 /**
@@ -78,18 +80,15 @@ declare global {
 }
 
 function readIndexInChatFromFiber(row: HTMLElement): number | null {
-  // Find any fiber-related key on the element. React 16/17 uses
-  // `__reactFiber$<random>`; Preact 10 uses `__preactattr_<random>` or
-  // attaches props directly to the DOM node. Be permissive.
-  const fiberKey = Object.keys(row).find(
-    (k) => k.startsWith('__reactFiber') || k.startsWith('__preact')
-  )
-  if (!fiberKey) return null
+  // Use the typed fiber helper to get the fiber object. Supports both
+  // React (__reactFiber$) and Preact (__preact) key patterns.
+  const rootFiber = getFiberFromElement(row)
+  if (!rootFiber) return null
 
   // Walk up the fiber tree looking for a `message` prop with `index_in_chat`.
   // The fiber object has a `.return` pointer to its parent fiber.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let fiber: any = (row as any)[fiberKey]
+  let fiber: any = rootFiber
   let depth = 0
   const MAX_DEPTH = 20
   while (fiber && depth < MAX_DEPTH) {

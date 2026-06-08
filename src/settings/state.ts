@@ -70,7 +70,7 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
   const next: FullCanvasSettings = { ...prev }
   for (const key of Object.keys(patch) as Array<keyof CanvasSettings>) {
     const v = patch[key]
-    if (v !== undefined) (next as any)[key] = v
+    if (v !== undefined) (next as Record<string, unknown>)[key] = v
   }
   _settings = next
   // Update the in-memory DEBUG flag immediately — applySettings also does

@@ -8,6 +8,7 @@
 // store), isMainDrawerOpen / getMainDrawerSide (the two fields most code
 // paths need).
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
+import { getFiberFromElement } from '../dom/fiber'
 import { dwarn } from '../debug/log'
 
 let _drawerTabsCache: DrawerTab[] | null = null
@@ -23,6 +24,30 @@ export interface DrawerTab {
   iconSvg?: string
   iconUrl?: string
   root: HTMLElement
+}
+
+/**
+ * Narrow view of the Lumiverse Zustand store snapshot's drawer-related fields.
+ * The snapshot is typed as Record<string, unknown> because we extract it from
+ * React fiber internals — this interface defines the known fields we read.
+ */
+export interface DrawerStoreSnapshot {
+  drawerOpen?: boolean
+  drawerSettings?: {
+    side?: 'left' | 'right'
+    showTabLabels?: boolean
+  }
+}
+
+/** Cast a raw store snapshot to the narrow DrawerStoreSnapshot view. */
+export function asDrawerStore(store: Record<string, unknown>): DrawerStoreSnapshot {
+  return store as DrawerStoreSnapshot
+}
+
+/** Public accessor: returns a typed DrawerStoreSnapshot from the live store, or null if unreachable. */
+export function getDrawerSnapshot(): DrawerStoreSnapshot | null {
+  const store = getStoreSnapshot()
+  return store ? asDrawerStore(store) : null
 }
 
 function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>, force: boolean): void {
@@ -74,11 +99,13 @@ export function findStoreData(force = false): void {
   const sidebar = getMainSidebar()
   if (!sidebar) return
 
-  const fiberKey = Object.keys(sidebar).find(k => k.startsWith('__reactFiber$'))
-  if (!fiberKey) return
+  const rootFiber = getFiberFromElement(sidebar)
+  if (!rootFiber) return
 
   // Walk UP to root ancestor
-  let fiber: any = (sidebar as any)[fiberKey]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let fiber: any = rootFiber
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ancestors: any[] = []
   while (fiber) {
     ancestors.push(fiber)
@@ -107,13 +134,6 @@ export function findStoreData(force = false): void {
   }
 }
 
-// Drop all cached state. Called by sidebar/cleanup.cleanupAll on teardown.
-export function clearStoreCache(): void {
-  _drawerTabsCache = null
-  _storeSnapshotCache = null
-  _cacheTimestamp = 0
-}
-
 export function getDrawerTabs(): DrawerTab[] {
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
@@ -129,8 +149,11 @@ export function getStoreSnapshot(): Record<string, unknown> | null {
 export function isMainDrawerOpen(): boolean {
   // Try store snapshot first
   const store = getStoreSnapshot()
-  if (store && typeof (store as any).drawerOpen === 'boolean') {
-    return (store as any).drawerOpen
+  if (store) {
+    const snapshot = asDrawerStore(store)
+    if (typeof snapshot.drawerOpen === 'boolean') {
+      return snapshot.drawerOpen
+    }
   }
   // Fallback to CSS class check
   const wrapper = getMainWrapper()
@@ -154,8 +177,11 @@ export function getMainDrawerSide(): 'left' | 'right' {
     return wrapper.classList.toString().includes('wrapperLeft') ? 'left' : 'right'
   }
   const store = getStoreSnapshot()
-  if (store && (store as any).drawerSettings) {
-    return (store as any).drawerSettings.side || 'right'
+  if (store) {
+    const snapshot = asDrawerStore(store)
+    if (snapshot.drawerSettings) {
+      return snapshot.drawerSettings.side || 'right'
+    }
   }
   return 'right'
 }

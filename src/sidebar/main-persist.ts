@@ -47,8 +47,12 @@ import { getMainDrawer } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { dlog } from '../debug/log'
-import { isMobile } from '../resize/handles'
+import { isPointerResizeActive } from '../resize/handles'
 import { enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
+import { waitForDrawerDOM, cleanupDomPoll } from './persist-polling'
+
+// Re-export for back-compat so existing imports keep working.
+export { waitForDrawerDOM, cleanupDomPoll } from './persist-polling'
 
 // Debounce window for resize-triggered writes (ms). Mirrors the
 // 300ms debounce in persistLayout so drag-to-resize coalesces to a
@@ -62,10 +66,6 @@ const MOUNT_QUIET_MS = 500
 // Timeout (ms) to unsuppress the wrapper even if restore fails or the
 // async LOAD_LAYOUT never arrives. Prevents a permanently hidden drawer.
 const UNSUPPRESS_TIMEOUT_MS = 3000
-// Maximum time (ms) to wait for the host's drawer DOM to appear on
-// hard refresh. After this, we give up — the extension will work on
-// the next disable+re-enable cycle.
-const DOM_POLL_TIMEOUT_MS = 5000
 
 // module-level cache, populated by the observers and read by
 // snapshotLayout() so every save path (settings-toggle, pagehide
@@ -80,8 +80,6 @@ let _stopped = true
 let _lastSeenOpen: boolean | null = null
 let _lastSeenTabId: string | null = null
 let _unsuppressTimer: ReturnType<typeof setTimeout> | null = null
-let _domPollTimer: ReturnType<typeof setTimeout> | null = null
-let _domPollObserver: MutationObserver | null = null
 
 /**
  * Read the current open state of the main drawer from the wrapper's
@@ -173,50 +171,6 @@ function pushCurrentState() {
   setMainDrawerState(open, tabId)
   dlog(`main-persist: state change captured (open=${open}, tabId=${tabId})`)
   persistOpenState()
-}
-
-/**
- * Wait for the host's drawer DOM to appear after a hard refresh.
- * On hard refresh, the extension runs before React mounts ViewportDrawer,
- * so getMainDrawer() returns null. We watch for the sidebar mount node
- * to appear via a MutationObserver on <body>, then initialize normally.
- * This makes hard-refresh behave identically to disable+re-enable.
- */
-function _waitForDrawerDOM(): void {
-  // Already polling — don't double up
-  if (_domPollObserver || _domPollTimer) return
-
-  const initIfReady = (): boolean => {
-    const drawer = getMainDrawer()
-    if (!drawer || _stopped) return false
-    _cleanupDomPoll()
-    dlog('main-persist: host DOM appeared, initializing observers')
-    _initObservers(drawer)
-    return true
-  }
-
-  // Fast path: it might already be there
-  if (initIfReady()) return
-
-  // Watch for the sidebar mount node to appear in the DOM
-  _domPollObserver = new MutationObserver(() => {
-    if (initIfReady()) {
-      _domPollObserver?.disconnect()
-      _domPollObserver = null
-    }
-  })
-  _domPollObserver.observe(document.body, { childList: true, subtree: true })
-
-  // Safety timeout — don't poll forever
-  _domPollTimer = setTimeout(() => {
-    dlog('main-persist: DOM poll timed out; host drawer never appeared')
-    _cleanupDomPoll()
-  }, DOM_POLL_TIMEOUT_MS)
-}
-
-function _cleanupDomPoll(): void {
-  if (_domPollObserver) { _domPollObserver.disconnect(); _domPollObserver = null }
-  if (_domPollTimer) { clearTimeout(_domPollTimer); _domPollTimer = null }
 }
 
 /**
@@ -338,7 +292,10 @@ export function startMainDrawerPersistence(): void {
   const drawer = getMainDrawer()
   if (!drawer) {
     dlog('main-persist: getMainDrawer() returned null; waiting for host DOM...')
-    _waitForDrawerDOM()
+    waitForDrawerDOM(
+      { get value() { return _stopped } },
+      _initObservers,
+    )
     return
   }
   _initObservers(drawer)
@@ -388,7 +345,7 @@ export function restoreMainDrawerFromDom(
     // for the close animation (translateX). Clearing it breaks the
     // animation on desktop.
     if (targetOpen && clampedWidth !== null && drawer) {
-      if (!isMobile()) {
+      if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
         dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`)
@@ -405,7 +362,7 @@ export function restoreMainDrawerFromDom(
     // handles sizing and setting --drawer-panel-w with !important
     // causes the close-animation peek.
     if (clampedWidth !== null && drawer) {
-      if (!isMobile()) {
+      if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
         dlog(`main-persist restore: set width=${clampedWidth}px (opening)`)
@@ -457,7 +414,7 @@ export function stopMainDrawerPersistence(): void {
   if (_tabObserver) { _tabObserver.disconnect(); _tabObserver = null }
   if (_resizeObserver) { _resizeObserver.disconnect(); _resizeObserver = null }
   if (_resizeDebounce) { clearTimeout(_resizeDebounce); _resizeDebounce = null }
-  _cleanupDomPoll()
+  cleanupDomPoll()
   _wrapper = null
   _sidebar = null
   _lastSeenOpen = null

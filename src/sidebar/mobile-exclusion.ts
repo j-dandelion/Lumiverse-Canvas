@@ -2,7 +2,7 @@
 //
 // On mobile (≤600px viewport) only one sidebar can be open at a time.
 // This module handles:
-//   - Viewport-based mobile detection (distinct from pointer-based isMobile())
+//   - Viewport-based mobile detection (distinct from pointer-based isPointerResizeActive())
 //   - Mutual exclusion: opening one sidebar silently closes the other
 //   - Body-level CSS classes that hide the inactive sidebar's drawerTab
 //   - Viewport-cross detection: when the user resizes across the 600px boundary
@@ -61,7 +61,7 @@ function syncCssVarToDrawerWidth(): void {
 }
 
 /** Viewport-based mobile detection — ≤600px width. Distinct from the
- *  pointer-based isMobile() in resize/handles.ts (which uses
+ *  pointer-based isPointerResizeActive() in resize/handles.ts (which uses
  *  matchMedia('(pointer: coarse)') and is correct for resize-handle
  *  suppression, not layout decisions). */
 export function isMobileViewport(): boolean {
@@ -157,14 +157,16 @@ export function startMobileExclusion(): () => void {
    }
    // Keep the CSS variable in sync with the actual drawer width
    syncCssVarToDrawerWidth()
-   // Sync the wrapper's translateX to match the updated CSS var.
-   // Without this, a viewport cross changes the CSS var (e.g. 420px →
-   // 480px on mobile) but the wrapper transform stays at the old value,
-   // leaving a visible peek when the sidebar is closed.
-   const closedPx = getClosedTransformPx()
-   wrapper.style.transform = isSecondarySidebarOpen()
-     ? 'translateX(0)'
-     : `translateX(${closedPx}px)`
+    // Sync the wrapper's translateX to match the updated CSS var.
+    // Without this, a viewport cross changes the CSS var (e.g. 420px →
+    // 480px on mobile) but the wrapper transform stays at the old value,
+    // leaving a visible peek when the sidebar is closed.
+    if (wrapper) {
+      const closedPx = getClosedTransformPx()
+      wrapper.style.transform = isSecondarySidebarOpen()
+        ? 'translateX(0)'
+        : `translateX(${closedPx}px)`
+    }
   }
 
   _onMediaChange = (e: MediaQueryListEvent) => {

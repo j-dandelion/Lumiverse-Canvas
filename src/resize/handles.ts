@@ -23,7 +23,7 @@ import { repositionAssignedTabs } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { getSettings } from '../settings/state'
 
-export function isMobile(): boolean {
+export function isPointerResizeActive(): boolean {
   return window.matchMedia('(pointer: coarse)').matches
 }
 
@@ -93,7 +93,7 @@ export function createResizeHandle(
 }
 
 export function mountResizeHandles(): void {
-  if (isMobile()) return // Skip resize handles on mobile
+  if (isPointerResizeActive()) return // Skip resize handles on mobile
 
   // Main sidebar resize handle — insert into the drawer (not panel, to avoid overflow: hidden clipping)
   const mainDrawer = getMainDrawer()
@@ -197,7 +197,7 @@ export function mountResizeHandles(): void {
  * path produce identical DOM.
  */
 export function refreshResizeHandles(): void {
-  if (isMobile()) return // mobile never gets handles
+  if (isPointerResizeActive()) return // mobile never gets handles
 
   // Main handle
   const mainDrawer = getMainDrawer()

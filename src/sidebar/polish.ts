@@ -18,10 +18,10 @@
 // buttons (catches post-MutationObserver registrations) and removes
 // _tabAssignments entries when their source extension unregisters.
 import { getMainSidebar } from '../dom/lumiverse'
-import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot } from '../store'
+import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore } from '../store'
 import { dlog } from '../debug/log'
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../sidebar/secondary'
-import { getTabAssignments, repositionAssignedTabs } from '../tabs/assignment'
+import { getTabAssignments, repositionAssignedTabs, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
@@ -45,8 +45,11 @@ export function isShowTabLabels(): boolean {
   if (mode === 'hide') return false
   // 'follow' (default) — read from the store snapshot or main sidebar DOM.
   const store = getStoreSnapshot()
-  if (store && typeof (store as any).drawerSettings === 'object' && (store as any).drawerSettings !== null) {
-    return !!(store as any).drawerSettings.showTabLabels
+  if (store) {
+    const snapshot = asDrawerStore(store)
+    if (snapshot.drawerSettings) {
+      return !!snapshot.drawerSettings.showTabLabels
+    }
   }
   // Fallback: check if main sidebar buttons have the labeled class
   const sidebar = getMainSidebar()
@@ -187,7 +190,7 @@ export function startTabRegistrationWatcher(): void {
     for (const oldId of _tabRegPrevIds) {
       if (!currentIds.has(oldId) && getTabAssignments().has(oldId)) {
         dlog(`Extension tab ${oldId} was removed, cleaning up`)
-        ;(getTabAssignments() as Map<string, 'primary' | 'secondary'>).delete(oldId)
+        deleteTabAssignment(oldId)
         removeSecondaryTabButton(oldId)
         persistLayout()
       }

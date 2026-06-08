@@ -8,9 +8,9 @@
 // doesn't block the rest.
 //
 // The comment in store/index.ts:110 ("Called by sidebar/cleanup.cleanupAll
-// on teardown") refers to clearStoreCache — wired into this module by a
-// later cleanup-pass step. For now this module owns the registry and the
-// iteration; consumers (sidebar/polish.ts) register their own teardowns.
+// on teardown") referred to clearStoreCache, which has been removed.
+// This module owns the registry and the iteration; consumers
+// (sidebar/polish.ts) register their own teardowns.
 
 import { dwarn } from '../debug/log'
 import { clearStoreCache } from '../store'
