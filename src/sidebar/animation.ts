@@ -32,6 +32,20 @@ function animFrame(wrapper: HTMLElement, now: number) {
   }
 }
 
+/** Cancel any in-flight rAF so it can't overwrite a transform set by
+ *  a viewport breakpoint cross (e.g. _updateDrawerWidth in mobile-exclusion). */
+export function cancelWrapperAnimation(): void {
+  if (_animRaf !== null) {
+    cancelAnimationFrame(_animRaf)
+    _animRaf = null
+    _animStart = null
+  }
+}
+
+export function __getAnimState() {
+  return { animRaf: _animRaf, animStart: _animStart }
+}
+
 export function animateWrapper(wrapper: HTMLElement, targetPx: number) {
   const current = wrapper
     ? (parseFloat(wrapper.style.transform?.match(/-?[\d.]+/)?.[0] || '0'))

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Secondary drawerTab pinned to x=600 when slowly drag-resizing wide → narrow.** The `matchMedia('(max-width: 600px)')` `change` event fires exactly once per boundary crossing, but no `window resize` listener existed to keep `--sidebar-ux-secondary-w` or the wrapper's `translateX` in sync as the viewport continued to narrow. On slow resize the CSS var and the close transform froze at the `window.innerWidth` at the moment of crossing (~600px) while the drawer's `100vw` kept auto-shrinking, so the wrapper overshot and the drawerTab's right edge anchored to that stale x-coordinate — appearing to slide off the right of the screen as the user kept narrowing. A coalesced rAF resize listener inside `startMobileExclusion()` now re-runs `_updateDrawerWidth()` on every frame the user is on mobile, keeping the transform pinned to the actual viewport right edge. Fast resizes and resizes-while-already-mobile were unaffected because the CSS var happened to be set to a value close to the final viewport width (or to the right value to begin with). A separate but real rAF race (a close animation's requestAnimationFrame loop overwriting the corrected transform on a simultaneous breakpoint cross) is also closed: `cancelWrapperAnimation()` is exported from `src/sidebar/animation.ts` and called as the first line of `_updateDrawerWidth()` before the transform write.
+
+### Added
+
+- `[Canvas] mobile-exclusion resize-tick` debug log (gated behind the existing `debugMode` setting, throttled to one entry per 500ms). Reports `innerWidth`, `isMobile`, `sidebarOpen`, the current `cssVar` value, and the wrapper's inline `transform` on each coalesced resize tick. Filter on `mobile-exclusion` in the DevTools console to see the trace while drag-resizing.
+
 ## v1.5.10 — 2026-06-06
 
 ### Fixed

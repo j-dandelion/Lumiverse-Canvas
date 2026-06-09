@@ -13,8 +13,10 @@
 
 import { getMainWrapper } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
+import { dlog } from '../debug/log'
 import { findDrawerToggleButton } from './main-persist'
 import { isSecondarySidebarOpen, closeSecondarySidebar, getSecondaryWrapper, getClosedTransformPx, SECONDARY_WIDTH_VAR } from './secondary'
+import { cancelWrapperAnimation } from './animation'
 
 // Saved desktop value of --sidebar-ux-secondary-w.  On mobile, the CSS
 // variable is overwritten with `window.innerWidth` so the close-transform
@@ -22,6 +24,10 @@ import { isSecondarySidebarOpen, closeSecondarySidebar, getSecondaryWrapper, get
 // desktop reads the mobile value, sets the drawer's inline width to it,
 // and the stale wrapper translateX no longer matches → 30-60px peek.
 let _desktopCssVarValue: number | null = null
+
+// Resize coalescing + diagnostics — see startMobileExclusion()
+let _resizeRafId: number | null = null
+let _lastDiagLog = 0
 
 /**
  * Sync --sidebar-ux-secondary-w to match the drawer's actual rendered width.
@@ -66,6 +72,21 @@ function syncCssVarToDrawerWidth(): void {
  *  suppression, not layout decisions). */
 export function isMobileViewport(): boolean {
   return window.matchMedia('(max-width: 600px)').matches
+}
+
+const DIAG_THROTTLE_MS = 500
+
+function _logDiag(event: string): void {
+  const now = Date.now()
+  if (now - _lastDiagLog < DIAG_THROTTLE_MS) return
+  _lastDiagLog = now
+  dlog(
+    `mobile-exclusion ${event} | innerWidth=${window.innerWidth} ` +
+    `isMobile=${isMobileViewport()} ` +
+    `sidebarOpen=${isSecondarySidebarOpen()} ` +
+    `cssVar=${document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)} ` +
+    `transform=${getSecondaryWrapper()?.style.transform ?? 'null'}`
+  )
 }
 
 // Body-class constants
@@ -143,6 +164,8 @@ export function startMobileExclusion(): () => void {
   *  and updates the wrapper's translateX to match the new CSS var so the
   *  closed transform stays in sync with the drawer's actual width. */
   function _updateDrawerWidth(): void {
+   // Stop any in-flight rAF so it can't overwrite the transform we're about to set
+   cancelWrapperAnimation()
    const wrapper = getSecondaryWrapper()
    const drawer = wrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
    if (!drawer) return
@@ -191,6 +214,22 @@ export function startMobileExclusion(): () => void {
   }
   _mediaQuery.addEventListener('change', _onMediaChange)
 
+  // --- Resize listener: keeps CSS var + wrapper transform in sync on
+  //     mobile when the user drags the viewport. The matchMedia 'change'
+  //     event fires only once per 600px boundary crossing; without a
+  //     resize listener, the CSS var and transform freeze at the
+  //     innerWidth at crossing time.
+  const _onResize = () => {
+    if (!isMobileViewport()) return           // desktop: no work
+    if (_resizeRafId !== null) return          // already coalesced for this frame
+    _resizeRafId = requestAnimationFrame(() => {
+      _resizeRafId = null
+      _logDiag('resize-tick')
+      _updateDrawerWidth()                     // cancelWrapperAnimation + syncCssVar + transform
+    })
+  }
+  window.addEventListener('resize', _onResize)
+
   // One-shot reconciliation on mount: sync drawer width and CSS variable
   // to match the viewport. On mobile, this overwrites the CSS var (which
   // still holds the desktop-saved value from createSecondarySidebar) with
@@ -213,6 +252,12 @@ export function startMobileExclusion(): () => void {
   }
 
   return () => {
+    // Cancel any pending resize rAF
+    if (_resizeRafId !== null) {
+      cancelAnimationFrame(_resizeRafId)
+      _resizeRafId = null
+    }
+    window.removeEventListener('resize', _onResize)
     // Remove matchMedia listener
     if (_mediaQuery && _onMediaChange) {
       _mediaQuery.removeEventListener('change', _onMediaChange)
