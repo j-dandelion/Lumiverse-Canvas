@@ -51,6 +51,13 @@ export interface CanvasSettings {
   /** Force 20×20 icon size in the secondary tab list. */
   consistentIconSize?: boolean
 
+  // --- Sidebars ---
+  /** Show box-shadow on sidebars at min-width: 601px (desktop). */
+  sidebarShadowsDesktop?: boolean
+
+  /** Show box-shadow on sidebars at max-width: 600px (mobile). */
+  sidebarShadowsMobile?: boolean
+
   // --- Chat & Layout ---
   /** Center the chat column in the visible area (set --canvas-chat-ml/mr). */
   chatReflow?: boolean
@@ -78,6 +85,9 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   showTabLabels: 'follow',
   consistentIconSize: true,
+  // Sidebars
+  sidebarShadowsDesktop: true,
+  sidebarShadowsMobile: false,
   // Chat & Layout
   chatReflow: true,
   layoutPersistence: true,

@@ -36,6 +36,23 @@ import { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './r
 export { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
 
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
+
+const SHADOW_DISABLE_DESKTOP_ID = 'sidebar-ux-shadow-disable-desktop'
+const SHADOW_DISABLE_DESKTOP_CSS = `
+  @media (min-width: 601px) {
+    .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
+      box-shadow: none !important;
+    }
+  }
+`
+const SHADOW_DISABLE_MOBILE_ID = 'sidebar-ux-shadow-disable-mobile'
+const SHADOW_DISABLE_MOBILE_CSS = `
+  @media (max-width: 600px) {
+    .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
+      box-shadow: none !important;
+    }
+  }
+`
 function injectPanelStyles() {
   injectStyles(PANEL_STYLE_ID, `
     .sidebar-ux-panel-root {
@@ -233,6 +250,41 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: persist.btn,
   }))
 
+  // --- Section: Sidebars ---
+  const secSidebars = section('Sidebars')
+
+  const resizeSidebars = makeToggle(
+    () => getSettings().resizeSidebars,
+    (v) => setSettings({ resizeSidebars: v }),
+    { disabled: () => !getSettings().secondSidebarEnabled }
+  )
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Drag to resize sidebars',
+    hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
+    control: resizeSidebars.btn,
+    disabled: !getSettings().secondSidebarEnabled,
+  }))
+
+  const shadowsDesktop = makeToggle(
+    () => getSettings().sidebarShadowsDesktop,
+    (v) => setSettings({ sidebarShadowsDesktop: v })
+  )
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Sidebar shadows (desktop)',
+    hint: 'Show box-shadow on sidebars when the viewport is wider than 600px.',
+    control: shadowsDesktop.btn,
+  }))
+
+  const shadowsMobile = makeToggle(
+    () => getSettings().sidebarShadowsMobile,
+    (v) => setSettings({ sidebarShadowsMobile: v })
+  )
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Sidebar shadows (mobile)',
+    hint: 'Show box-shadow on sidebars when the viewport is 600px or narrower.',
+    control: shadowsMobile.btn,
+  }))
+
   // --- Section: Second Sidebar ---
   const sec2 = section('Second Sidebar')
 
@@ -244,18 +296,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     label: 'Enable Second Sidebar',
     hint: 'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.',
     control: master.btn,
-  }))
-
-  const resizeSidebars = makeToggle(
-    () => getSettings().resizeSidebars,
-    (v) => setSettings({ resizeSidebars: v }),
-    { disabled: () => !getSettings().secondSidebarEnabled }
-  )
-  sec2.appendChild(buildSettingRow({
-    label: 'Drag to resize sidebars',
-    hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
-    control: resizeSidebars.btn,
-    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const mirror = makeToggle(
@@ -330,6 +370,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   footer.textContent = 'Canvas settings persist to layout.json (300ms debounce).'
 
   root.appendChild(sec1)
+  root.appendChild(secSidebars)
   root.appendChild(sec2)
   root.appendChild(sec4)
   root.appendChild(footer)
@@ -346,6 +387,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     chat.refresh()
     persist.refresh()
     debugMode.refresh()
+    shadowsDesktop.refresh()
+    shadowsMobile.refresh()
     // Update disabled visual state for sub-features gated by the master toggle.
     for (const row of [resizeSidebars, mirror, compact]) {
       const d = !getSettings().secondSidebarEnabled
@@ -490,5 +533,25 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
   // turning it on, no action — the next mutation will save normally.
   if (prev.layoutPersistence === true && next.layoutPersistence === false) {
     cancelLayoutSave()
+  }
+
+  // 10. Sidebar shadows (desktop) — inject/remove the CSS that disables
+  // box-shadow on sidebars at min-width: 601px.
+  if (prev.sidebarShadowsDesktop !== next.sidebarShadowsDesktop) {
+    if (next.sidebarShadowsDesktop) {
+      document.getElementById(SHADOW_DISABLE_DESKTOP_ID)?.remove()
+    } else {
+      injectStyles(SHADOW_DISABLE_DESKTOP_ID, SHADOW_DISABLE_DESKTOP_CSS)
+    }
+  }
+
+  // 11. Sidebar shadows (mobile) — inject/remove the CSS that disables
+  // box-shadow on sidebars at max-width: 600px.
+  if (prev.sidebarShadowsMobile !== next.sidebarShadowsMobile) {
+    if (next.sidebarShadowsMobile) {
+      document.getElementById(SHADOW_DISABLE_MOBILE_ID)?.remove()
+    } else {
+      injectStyles(SHADOW_DISABLE_MOBILE_ID, SHADOW_DISABLE_MOBILE_CSS)
+    }
   }
 }

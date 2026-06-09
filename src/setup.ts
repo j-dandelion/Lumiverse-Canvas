@@ -41,6 +41,7 @@ import {
 } from './settings/state'
 import { getMainDrawer } from './dom/lumiverse'
 import { setDebug, dwarn } from './debug/log'
+import { injectStyles } from './debug/styles'
 
 export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
@@ -71,6 +72,8 @@ export function setup(ctx: SpindleFrontendContext) {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
     document.getElementById('sidebar-ux-reflow')?.remove()
     document.getElementById('canvas-ux-secondary-mobile')?.remove()
+    document.getElementById('sidebar-ux-shadow-disable-desktop')?.remove()
+    document.getElementById('sidebar-ux-shadow-disable-mobile')?.remove()
   })
 
   // Mount the settings panel immediately. The host may not be in the DOM yet
@@ -161,6 +164,29 @@ export function setup(ctx: SpindleFrontendContext) {
     // doesn't need a wrapper to apply.
     if (getSettings().consistentIconSize) {
       injectDrawerTabStyles()
+    }
+
+    // Initial shadow hydration — inject the disable-CSS if the corresponding
+    // shadow toggle is OFF (i.e. shadows are suppressed).
+    if (!getSettings().sidebarShadowsDesktop) {
+      injectStyles(
+        'sidebar-ux-shadow-disable-desktop',
+        `@media (min-width: 601px) {
+          .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
+            box-shadow: none !important;
+          }
+        }`
+      )
+    }
+    if (!getSettings().sidebarShadowsMobile) {
+      injectStyles(
+        'sidebar-ux-shadow-disable-mobile',
+        `@media (max-width: 600px) {
+          .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
+            box-shadow: none !important;
+          }
+        }`
+      )
     }
 
     // Main-drawer restore — independent of secondSidebarEnabled. The

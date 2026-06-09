@@ -23,11 +23,15 @@ assert(typeof settings.consistentIconSize === 'boolean', 'consistentIconSize is 
 assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
 assert(typeof settings.layoutPersistence === 'boolean', 'layoutPersistence is boolean')
 assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
+assert(typeof settings.sidebarShadowsDesktop === 'boolean', 'sidebarShadowsDesktop is boolean')
+assert(typeof settings.sidebarShadowsMobile === 'boolean', 'sidebarShadowsMobile is boolean')
 
 // Check specific defaults
 assertEqual(settings.secondSidebarEnabled, true, 'secondSidebarEnabled defaults to true')
 assertEqual(settings.debugMode, false, 'debugMode defaults to false')
 assertEqual(settings.showTabLabels, 'follow', 'showTabLabels defaults to follow')
+assertEqual(settings.sidebarShadowsDesktop, true, 'sidebarShadowsDesktop defaults to true')
+assertEqual(settings.sidebarShadowsMobile, false, 'sidebarShadowsMobile defaults to false')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
