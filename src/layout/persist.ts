@@ -28,8 +28,8 @@ import { getSettings, cancelSettingsSave } from '../settings/state'
 
 export { applyLayout } from './apply'
 
-// Must match spindle.json version. Updated on each release.
-export const CANVAS_VERSION = '1.6.0'
+// Stub value — build.sh injects the real version from package.json via sed before bundling.
+export const CANVAS_VERSION = ''
 
 interface BackendCtx {
   sendToBackend(msg: { type: string; [key: string]: unknown }): void
@@ -206,22 +206,33 @@ export function loadSavedLayout(): Promise<any> {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return Promise.resolve(null)
   return new Promise((resolve) => {
+    let settled = false
+
     // Phase 3 (finding #13): register a one-shot handler that resolves the
     // promise when LAYOUT_DATA arrives. The handler is replaced by the
     // permanent ctx.onBackendMessage listener in setup() before any other
     // LAYOUT_DATA could come through.
     const handler = (payload: any) => {
       if (payload.type === 'LAYOUT_DATA') {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutId)
+        if (typeof unsub === 'function') unsub()
         resolve(payload.layout)
       }
     }
-    backendCtx.onBackendMessage(handler)
+    const unsub = backendCtx.onBackendMessage(handler)
     backendCtx.sendToBackend({ type: 'LOAD_LAYOUT' })
     // Safety timeout: if the backend never responds (e.g. corrupt storage),
     // resolve with null so the mount proceeds with defaults rather than
     // hanging the extension. 2s is enough for the file I/O round-trip on
     // a warm cache; longer waits mask real bugs.
-    setTimeout(() => { resolve(null) }, 2000)
+    const timeoutId = setTimeout(() => {
+      if (settled) return
+      settled = true
+      if (typeof unsub === 'function') unsub()
+      resolve(null)
+    }, 2000)
   })
 }
 

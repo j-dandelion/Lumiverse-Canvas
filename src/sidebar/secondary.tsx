@@ -89,7 +89,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
       }px)`
   wrapper.style.cssText = `
     position: fixed;
-    top: 0; bottom: 0;
+    top: env(safe-area-inset-top, 0px); bottom: env(safe-area-inset-bottom, 0px);
     z-index: 9990;
     display: flex;
     align-items: stretch;

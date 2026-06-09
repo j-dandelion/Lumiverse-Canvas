@@ -53,7 +53,6 @@ const SECONDARY_MOBILE_CSS = `
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
     border-radius: 8px 8px 0 0 !important;
   }
-  .sidebar-ux-drawer-tab { width: 32px !important; }
   /* Hide secondary's drawerTab when primary is open on mobile */
   body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
     display: none !important;
@@ -72,15 +71,19 @@ export function injectDrawerTabStyles(): void {
     .sidebar-ux-drawer-tab {
       flex-shrink: 0;
       align-self: flex-start;
-      width: 48px;
+      width: var(--sidebar-ux-drawer-tab-w, 48px);
+      height: var(--sidebar-ux-drawer-tab-h, auto);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 8px;
-      padding: 16px 8px 20px;
+      gap: var(--sidebar-ux-drawer-tab-gap, 8px);
+      padding-top: var(--sidebar-ux-drawer-tab-pt, 16px);
+      padding-right: var(--sidebar-ux-drawer-tab-pr, 8px);
+      padding-bottom: var(--sidebar-ux-drawer-tab-pb, 20px);
+      padding-left: var(--sidebar-ux-drawer-tab-pl, 8px);
+      border: var(--sidebar-ux-drawer-tab-border, 1px solid var(--lumiverse-border-hover));
       background: var(--lcs-glass-bg, var(--lumiverse-bg));
-      border: 1px solid var(--lumiverse-border-hover);
       color: var(--lumiverse-text-muted);
       cursor: pointer;
       pointer-events: auto;
@@ -101,15 +104,17 @@ export function injectDrawerTabStyles(): void {
       border-color: var(--lumiverse-primary-050);
       color: var(--lumiverse-text);
     }
-    .sidebar-ux-drawer-tab--compact {
-      width: 32px;
-      padding: 8px 6px;
-      gap: 0;
-    }
     .sidebar-ux-drawer-tab-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       color: var(--lumiverse-primary);
     }
-    /* Force a 20×20 size on the tab-list SVG icons. */
+  `)
+
+  // Icon-size styles — separate injection so the consistentIconSize toggle
+  // can remove/re-inject without affecting the rest of the drawer tab styles.
+  injectStyles('sidebar-ux-icon-size-styles', `
     .sidebar-ux-tab-list button[data-tab-id] > span > svg {
       width: 20px;
       height: 20px;

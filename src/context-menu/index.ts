@@ -60,6 +60,9 @@ let _observer: MutationObserver | null = null
 
 // --- MutationObserver: detect Lumiverse's ContextMenu portal ---
 
+// Detection uses 5 heuristics (last child of body + DIV + position:fixed +
+// z-index:11000 + contains button). Canvas's own menus are removed synchronously
+// before this observer fires, so false positives are not a practical concern.
 function findLumiverseContextMenu(): HTMLElement | null {
   // Lumiverse's ContextMenu component portals to document.body.
   // It's a div with position:fixed and z-index:11000 (ContextMenu.module.css).

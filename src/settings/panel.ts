@@ -24,7 +24,7 @@ import { injectStyles } from '../debug/styles'
 import { getChatColumn } from '../dom/lumiverse'
 import { getSecondaryWrapper, mountSecondarySidebar, tearDownSecondarySidebar, injectDrawerTabStyles } from '../sidebar/secondary'
 import { refreshResizeHandles } from '../resize/handles'
-import { syncDrawerTabSettings, syncSecondaryTabLabels, startSideChangeWatcher, stopSideChangeWatcher, clearDrawerTabLayoutCache } from '../sidebar/polish'
+import { syncDrawerTabSettings, syncSecondaryTabLabels, startSideChangeWatcher, stopSideChangeWatcher } from '../sidebar/polish'
 import { applyLayout, cancelLayoutSave } from '../layout/persist'
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
@@ -460,7 +460,6 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
       const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
       if (drawerTab) {
         drawerTab.style.marginTop = ''
-        clearDrawerTabLayoutCache()
       }
     }
   }
@@ -470,10 +469,12 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
     syncSecondaryTabLabels()
   }
 
-  // 8. Consistent icon size — toggle the CSS rule.
+  // 8. Consistent icon size — toggle the icon-size CSS rule only.
+  // The icon-size styles are injected separately from the drawer tab
+  // styles so removing them doesn't affect the icon wrapper's flex layout.
   if (prev.consistentIconSize !== next.consistentIconSize) {
     if (!next.consistentIconSize) {
-      const el = document.getElementById('sidebar-ux-drawer-tab-styles')
+      const el = document.getElementById('sidebar-ux-icon-size-styles')
       if (el) el.remove()
     } else {
       injectDrawerTabStyles()

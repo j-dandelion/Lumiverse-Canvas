@@ -29,14 +29,9 @@ import { tagMainSidebarButtons } from '../chat/tag-buttons'
 import { addSecondaryTabButton, removeSecondaryTabButton } from '../tabs/buttons'
 
 let _lastKnownSide: 'left' | 'right' | null = null
-let _lastKnownCompact: boolean | null = null
 let _lastKnownVerticalPos: number | null = null
-
-// Called by applySettings's mirrorCompactPosition-off path (settings/state).
-export function clearDrawerTabLayoutCache(): void {
-  _lastKnownCompact = null
-  _lastKnownVerticalPos = null
-}
+let _mainDrawerTabResizeObserver: ResizeObserver | null = null
+let _mainDrawerTabClassObserver: MutationObserver | null = null
 
 /** Read showTabLabels, honoring the user's Canvas override. */
 export function isShowTabLabels(): boolean {
@@ -66,11 +61,49 @@ export function syncDrawerTabSettings(): void {
 
   // Read settings from the main sidebar's drawer tab DOM directly
   const mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)') as HTMLElement
-  if (!mainDrawerTab) return
+  if (!mainDrawerTab) {
+    // Retry on the next frame — the main sidebar may not be painted yet
+    // (e.g. on first mount or after a side flip).
+    requestAnimationFrame(() => syncDrawerTabSettings())
+    return
+  }
 
-  // Detect compact from main drawer tab width
-  const mainWidth = mainDrawerTab.offsetWidth
-  const isCompact = mainWidth <= 36
+  // Attach ResizeObserver to the main drawer tab so we re-sync whenever
+  // the user resizes it (e.g. drag to resize). Only attach once.
+  if (!_mainDrawerTabResizeObserver) {
+    _mainDrawerTabResizeObserver = new ResizeObserver(() => {
+      syncDrawerTabSettings()
+    })
+    _mainDrawerTabResizeObserver.observe(mainDrawerTab)
+    registerCleanup(stopDrawerTabResizeWatcher)
+  }
+
+  // Mirror the main drawer's computed dimensions into CSS custom properties
+  // on the secondary wrapper, so the secondary tab follows any size change
+  // Lumiverse applies (settings, mobile, resize, etc.).
+  const secondaryWrapper = getSecondaryWrapper()
+  if (secondaryWrapper) {
+    const mainStyle = getComputedStyle(mainDrawerTab)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', `${mainDrawerTab.offsetWidth}px`)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', `${mainDrawerTab.offsetHeight}px`)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', mainStyle.paddingTop)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', mainStyle.paddingRight)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', mainStyle.paddingBottom)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', mainStyle.paddingLeft)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', mainStyle.gap)
+    // Use borderTopWidth as representative (all sides are same for the main tab)
+    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`)
+  }
+
+  // Attach MutationObserver to the main drawer tab so we re-sync whenever
+  // Lumiverse toggles compact mode via a class change. Only attach once.
+  if (!_mainDrawerTabClassObserver) {
+    _mainDrawerTabClassObserver = new MutationObserver(() => {
+      syncDrawerTabSettings()
+    })
+    _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['class'] })
+    registerCleanup(stopDrawerTabClassObserver)
+  }
 
   // Detect vertical position from main drawer tab margin
   const mainParent = mainDrawerTab.parentElement
@@ -78,12 +111,6 @@ export function syncDrawerTabSettings(): void {
   // Use the raw vh value from the style attribute if available
   const mainMarginStyle = mainDrawerTab.style.marginTop
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0
-
-  // Sync compact state via CSS class (width/padding/gap handled by CSS rules)
-  if (_lastKnownCompact !== isCompact) {
-    drawerTab.classList.toggle('sidebar-ux-drawer-tab--compact', isCompact)
-    _lastKnownCompact = isCompact
-  }
 
   if (_lastKnownVerticalPos !== posVh) {
     drawerTab.style.marginTop = `${posVh}vh`
@@ -171,6 +198,20 @@ export function stopSideChangeWatcher(): void {
   if (_sideCheckInterval === null) return
   clearInterval(_sideCheckInterval)
   _sideCheckInterval = null
+}
+
+export function stopDrawerTabResizeWatcher(): void {
+  if (_mainDrawerTabResizeObserver) {
+    _mainDrawerTabResizeObserver.disconnect()
+    _mainDrawerTabResizeObserver = null
+  }
+}
+
+export function stopDrawerTabClassObserver(): void {
+  if (_mainDrawerTabClassObserver) {
+    _mainDrawerTabClassObserver.disconnect()
+    _mainDrawerTabClassObserver = null
+  }
 }
 
 // Tab registration watcher (handles extension unregistration)

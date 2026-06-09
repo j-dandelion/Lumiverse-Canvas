@@ -49,32 +49,41 @@ function ToastSurface() {
 }
 
 let mounted = false
-let _toastListener: ((e: Event) => void) | null = null
+let toastHostEl: HTMLDivElement | null = null
+let toastEventHandler: ((e: Event) => void) | null = null
+
+function handleToastEvent(e: Event) {
+  const { kind, text } = (e as CustomEvent).detail
+  pushToast(kind, text)
+}
 
 export function mountToastSurface() {
-  if (mounted) return
+  if (mounted) return unmountToastSurface
   mounted = true
   injectToastStyles()
-  const host = document.createElement('div')
-  host.id = 'canvas-slash-toast-host'
-  document.body.appendChild(host)
-  render(h(ToastSurface, {}), host)
+  toastHostEl = document.createElement('div')
+  toastHostEl.id = 'canvas-slash-toast-host'
+  document.body.appendChild(toastHostEl)
+  render(h(ToastSurface, {}), toastHostEl)
 
-  _toastListener = (e: Event) => {
-    const { kind, text } = (e as CustomEvent).detail
-    pushToast(kind, text)
-  }
-  window.addEventListener('canvas:slash-toast', _toastListener)
+  // Public API: anyone in the extension (or registered via CustomEvent) can call this.
+  toastEventHandler = handleToastEvent
+  window.addEventListener('canvas:slash-toast', toastEventHandler)
+
+  return unmountToastSurface
 }
 
 export function unmountToastSurface() {
-  for (const timer of _toastTimers) clearTimeout(timer)
-  _toastTimers.clear()
-  if (_toastListener) {
-    window.removeEventListener('canvas:slash-toast', _toastListener)
-    _toastListener = null
+  if (toastHostEl) {
+    toastHostEl.remove()
+    toastHostEl = null
+  }
+  if (toastEventHandler) {
+    window.removeEventListener('canvas:slash-toast', toastEventHandler)
+    toastEventHandler = null
   }
   mounted = false
+  toasts = []
 }
 
 /**

@@ -82,7 +82,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   // Mount the toast surface. The toast.tsx module registers a CustomEvent
   // listener for 'canvas:slash-toast' on import; mountToastSurface mounts
   // the Preact render.
-  mountToastSurface()
+  const unmountToast = mountToastSurface()
 
   // Listen for runtime command registration. Other extensions (or DevTools
   // scripts) can dispatch:
@@ -120,6 +120,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
 
   // And in teardown:
   return () => {
+    unmountToast()
     detachIntercept()
     window.removeEventListener('canvas:slash-register', registerListener)
     window.removeEventListener('canvas:slash-unregister', unregisterListener)
