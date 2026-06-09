@@ -26,6 +26,8 @@ import { getSecondaryWrapper, mountSecondarySidebar, tearDownSecondarySidebar, i
 import { refreshResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings, syncSecondaryTabLabels, startSideChangeWatcher, stopSideChangeWatcher } from '../sidebar/polish'
 import { applyLayout, cancelLayoutSave } from '../layout/persist'
+import { attachSlashRuntime } from '../slash/runtime'
+import { registerCleanup } from '../sidebar/cleanup'
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
 // Lumiverse's own CSS modules. The class definitions are injected once
@@ -34,6 +36,35 @@ import { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './r
 
 // Re-export for back-compat so existing imports keep working.
 export { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
+
+// Holds the active slash-runtime teardown function (or null when the
+// runtime is unmounted). applySettings flips the runtime on/off as the
+// `slashCommandsEnabled` setting changes, mirroring the master-toggle
+// pattern used for secondSidebarEnabled. The initial mount happens
+// inside setup() (so it can be gated on the persisted setting); setup()
+// calls setSlashDetach() with its returned teardown so this module
+// stays the single source of truth for the active runtime lifecycle.
+let _slashDetach: (() => void) | null = null
+
+// Captured SpindleFrontendContext from mountSettingsPanel. applySettings
+// needs it to (re)attach the slash runtime when the user toggles the
+// setting on at runtime. The runtime's intercept listeners attach to
+// `document` (not the panel host), so this capture is the only link
+// between the panel and the runtime.
+let _settingsPanelCtx: any = null
+
+/**
+ * Register the active slash-runtime teardown. Called by setup() after
+ * the initial mount and (internally) by applySettings after a runtime
+ * re-attach. The supplied function is the one that detaches the
+ * intercept listeners, toast surface, and CustomEvent listeners. Pass
+ * null to clear the registration without calling anything (used when
+ * the runtime is being torn down elsewhere and applySettings just needs
+ * to forget the reference).
+ */
+export function setSlashDetach(fn: (() => void) | null): void {
+  _slashDetach = fn
+}
 
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
 
@@ -250,6 +281,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: persist.btn,
   }))
 
+  const slash = makeToggle(
+    () => getSettings().slashCommandsEnabled,
+    (v) => setSettings({ slashCommandsEnabled: v })
+  )
+  sec1.appendChild(buildSettingRow({
+    label: 'Enable slash commands',
+    hint: 'When on, typing / in the chat input opens the slash-command menu. When off, / is treated as plain text and no command parsing runs.',
+    control: slash.btn,
+  }))
+
   // --- Section: Sidebars ---
   const secSidebars = section('Sidebars')
 
@@ -386,6 +427,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     iconSize.refresh()
     chat.refresh()
     persist.refresh()
+    slash.refresh()
     debugMode.refresh()
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
@@ -419,6 +461,7 @@ export function mountSettingsPanel(ctx: any) {
       dwarn('mountSettingsPanel: ctx.ui.mount unavailable; settings panel will not be registered')
       return
     }
+    _settingsPanelCtx = ctx
     const host = ctx.ui.mount('settings_extensions')
     if (!host) return
     // Clear any previous render so a re-mount (e.g. after extension reload)
@@ -552,6 +595,35 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
       document.getElementById(SHADOW_DISABLE_MOBILE_ID)?.remove()
     } else {
       injectStyles(SHADOW_DISABLE_MOBILE_ID, SHADOW_DISABLE_MOBILE_CSS)
+    }
+  }
+
+  // 12. Slash commands — mount or unmount the entire runtime (intercept,
+  // suggest popup, toast surface, command registry). When off, typing /
+  // in the chat textarea is plain text and no command parsing runs.
+  // The runtime owns its own listeners on `document` and its own DOM
+  // nodes (toast surface) — attachSlashRuntime returns a teardown that
+  // removes all of them. setSlashDetach is the single registration
+  // point so the initial setup() mount and the runtime toggle path
+  // share the same lifecycle reference.
+  if (prev.slashCommandsEnabled !== next.slashCommandsEnabled) {
+    if (next.slashCommandsEnabled) {
+      if (!_slashDetach && _settingsPanelCtx) {
+        // Also register the teardown with the global cleanup chain so
+        // the runtime is detached when the extension is disabled. This
+        // mirrors the setup() path, which calls registerCleanup on the
+        // initial attach. Without this, a user who toggles the setting
+        // on at runtime would leak the intercept listeners on disable.
+        const detach = attachSlashRuntime(_settingsPanelCtx)
+        setSlashDetach(detach)
+        registerCleanup(detach)
+      }
+    } else {
+      if (_slashDetach) {
+        const detach = _slashDetach
+        setSlashDetach(null)
+        detach()
+      }
     }
   }
 }

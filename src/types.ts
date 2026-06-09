@@ -65,6 +65,14 @@ export interface CanvasSettings {
   /** Persist open/closed state, widths, and tab assignments to layout.json. */
   layoutPersistence?: boolean
 
+  /** Master switch for the Canvas slash-command system. When off, the
+   *  intercept, suggest popup, toast surface, and runtime command
+   *  registry are all unmounted — typing `/` in the chat textarea is
+   *  treated as plain text. Default on so existing users keep their
+   *  behavior; toggling requires a page reload only if the user wants
+   *  to clear an in-flight popup (the live-apply path hides it). */
+  slashCommandsEnabled?: boolean
+
   // --- Debug ---
   /** Master debug switch — enables [Canvas] console output AND installs
    *  `window.__canvasDebug()` for in-browser fiber tree inspection. */
@@ -91,6 +99,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   // Chat & Layout
   chatReflow: true,
   layoutPersistence: true,
+  slashCommandsEnabled: true,
   // Debug
   debugMode: false,
 }

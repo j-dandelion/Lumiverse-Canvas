@@ -1,18 +1,21 @@
 # Changelog
 
-## Unreleased
+## v1.6.0 — 2026-06-09
 
 ### Added
 
 - **New "Sidebars" settings category.** Houses the existing "Drag to resize sidebars" toggle (moved out of "Second Sidebar") plus two new toggles: "Sidebar shadows (desktop)" and "Sidebar shadows (mobile)". Each shadow toggle injects a `<style>` element with `box-shadow: none !important` scoped to its breakpoint (`min-width: 601px` / `max-width: 600px`) targeting both the extension's own drawer (`.sidebar-ux-drawer`) and the host-owned main drawer (`:has(> [data-spindle-mount="sidebar"])`). The desktop toggle defaults ON; the mobile toggle defaults OFF (shadows suppressed on small viewports by default). Initial hydration runs in `setup.ts` after `hydrateSettings()` so the mobile shadow style is present before the secondary drawer mounts — no flash on first paint. Cleanup chain in `setup.ts` removes the injected `<style>` elements on extension disable.
+- `[Canvas] mobile-exclusion resize-tick` debug log (gated behind the existing `debugMode` setting, throttled to one entry per 500ms). Reports `innerWidth`, `isMobile`, `sidebarOpen`, the current `cssVar` value, and the wrapper's inline `transform` on each coalesced resize tick. Filter on `mobile-exclusion` in the DevTools console to see the trace while drag-resizing.
+- **"Enable slash commands" toggle in the "Chat & Layout" settings section.** New `slashCommandsEnabled` setting (defaults to `true`) gates the entire Canvas slash-command runtime: when off, the keydown/input/click intercept listeners, the suggest popup, the toast surface, and the command registry are all unmounted. Typing `/` in the chat textarea is then plain text — no popup, no parsing, no dispatch. The runtime is mounted/unmounted via the same `applySettings` diff pattern used by the existing master toggles (e.g. `secondSidebarEnabled`); a new `attachSlashRuntime(ctx)` / `_slashDetach()` pair in `settings/panel.ts` keeps the active teardown reference. Setup-time attach in `setup.ts` is also gated on the persisted setting, so a user with the setting off never has the runtime installed.
+
+### Fixed
+
+- **"Enable slash commands" toggle did not actually disable the slash popup.** The initial mount in `setup.ts` and the runtime re-attach in `applySettings` (`settings/panel.ts`) each kept their own reference to the active teardown — the panel's `_slashDetach` stayed `null` after the initial mount, so a user toggling the setting off at runtime hit the `if (_slashDetach)` guard, did nothing, and the intercept listeners kept firing. New exported `setSlashDetach(fn)` in `settings/panel.ts` is the single registration point: `setup.ts` calls it after the initial attach, and `applySettings` calls it after a runtime re-attach. `applySettings` also now `registerCleanup`s the runtime teardown when it mounts at runtime, so a user who toggles the setting on at runtime and then disables the extension still gets a clean teardown (no leaked intercept listeners on `document`).
 
 ### Fixed
 
 - **Secondary drawerTab pinned to x=600 when slowly drag-resizing wide → narrow.** The `matchMedia('(max-width: 600px)')` `change` event fires exactly once per boundary crossing, but no `window resize` listener existed to keep `--sidebar-ux-secondary-w` or the wrapper's `translateX` in sync as the viewport continued to narrow. On slow resize the CSS var and the close transform froze at the `window.innerWidth` at the moment of crossing (~600px) while the drawer's `100vw` kept auto-shrinking, so the wrapper overshot and the drawerTab's right edge anchored to that stale x-coordinate — appearing to slide off the right of the screen as the user kept narrowing. A coalesced rAF resize listener inside `startMobileExclusion()` now re-runs `_updateDrawerWidth()` on every frame the user is on mobile, keeping the transform pinned to the actual viewport right edge. Fast resizes and resizes-while-already-mobile were unaffected because the CSS var happened to be set to a value close to the final viewport width (or to the right value to begin with). A separate but real rAF race (a close animation's requestAnimationFrame loop overwriting the corrected transform on a simultaneous breakpoint cross) is also closed: `cancelWrapperAnimation()` is exported from `src/sidebar/animation.ts` and called as the first line of `_updateDrawerWidth()` before the transform write.
-
-### Added
-
-- `[Canvas] mobile-exclusion resize-tick` debug log (gated behind the existing `debugMode` setting, throttled to one entry per 500ms). Reports `innerWidth`, `isMobile`, `sidebarOpen`, the current `cssVar` value, and the wrapper's inline `transform` on each coalesced resize tick. Filter on `mobile-exclusion` in the DevTools console to see the trace while drag-resizing.
+- **Second sidebar resize handle rendered narrower than the main sidebar's.** Both handles are created by the same `createResizeHandle()` with `width: 8px`, but the secondary drawer's `overflow: hidden` was clipping the handle's intentional 4px overhang on the inner edge, leaving only ~4px visible. Removed the redundant `overflow: hidden` from the secondary drawer; the children (`sidebar`, `panel`, `content`) already handle their own overflow containment.
 
 ## v1.5.10 — 2026-06-06
 

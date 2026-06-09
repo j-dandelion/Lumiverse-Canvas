@@ -34,8 +34,8 @@ import { unmountToastSurface } from './slash/toast'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
-import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, cancelApplyLayoutInterval } from './layout/persist'
+import { mountSettingsPanel, setSlashDetach } from './settings/panel'
+import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
@@ -81,12 +81,11 @@ export function setup(ctx: SpindleFrontendContext) {
   // a MutationObserver that reparents the host as soon as it appears.
   mountSettingsPanel(ctx)
 
-  // Slash runtime — wired into the canvas cleanup chain so the intercept
-  // listeners are detached when the extension is disabled.
-  const detachSlash = attachSlashRuntime(ctx)
-  registerCleanup(detachSlash)
-  registerCleanup(unmountToastSurface)
-  registerCleanup(cancelApplyLayoutInterval)
+  // Slash runtime — gated by the `slashCommandsEnabled` setting. The
+  // attach call is deferred to the loadSavedLayout().then() block below
+  // so we know the persisted preference before deciding whether to
+  // install intercept listeners. The settings panel can also flip this
+  // at runtime via applySettings (settings/panel.ts).
 
   // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
   // secondary sidebar so its initial position matches the saved state on the
@@ -187,6 +186,24 @@ export function setup(ctx: SpindleFrontendContext) {
           }
         }`
       )
+    }
+
+    // Slash runtime — gated by `slashCommandsEnabled`. When the user
+    // has it off in their saved settings, we never install the
+    // intercept listeners, the suggest popup, or the toast surface;
+    // the settings panel can still flip it on at runtime via
+    // applySettings (settings/panel.ts) and the runtime will mount
+    // there.
+    //
+    // We register the teardown with the settings panel (setSlashDetach)
+    // as well as the cleanup chain. The panel needs to know the active
+    // runtime so that toggling the setting off at runtime calls the
+    // same teardown — without this, the panel's _slashDetach stays
+    // null and the runtime keeps running.
+    if (getSettings().slashCommandsEnabled) {
+      const detachSlash = attachSlashRuntime(ctx)
+      setSlashDetach(detachSlash)
+      registerCleanup(detachSlash)
     }
 
     // Main-drawer restore — independent of secondSidebarEnabled. The

@@ -22,6 +22,7 @@ assert(typeof settings.showTabLabels === 'string', 'showTabLabels is string')
 assert(typeof settings.consistentIconSize === 'boolean', 'consistentIconSize is boolean')
 assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
 assert(typeof settings.layoutPersistence === 'boolean', 'layoutPersistence is boolean')
+assert(typeof settings.slashCommandsEnabled === 'boolean', 'slashCommandsEnabled is boolean')
 assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
 assert(typeof settings.sidebarShadowsDesktop === 'boolean', 'sidebarShadowsDesktop is boolean')
 assert(typeof settings.sidebarShadowsMobile === 'boolean', 'sidebarShadowsMobile is boolean')
@@ -32,6 +33,7 @@ assertEqual(settings.debugMode, false, 'debugMode defaults to false')
 assertEqual(settings.showTabLabels, 'follow', 'showTabLabels defaults to follow')
 assertEqual(settings.sidebarShadowsDesktop, true, 'sidebarShadowsDesktop defaults to true')
 assertEqual(settings.sidebarShadowsMobile, false, 'sidebarShadowsMobile defaults to false')
+assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
@@ -54,6 +56,14 @@ assertEqual(withUndefined.debugMode, false, 'mergeCanvasSettings ignores undefin
 // Empty object → all defaults
 const fromEmpty = mergeCanvasSettings({})
 assertEqual(fromEmpty.secondSidebarEnabled, true, 'mergeCanvasSettings({}) keeps all defaults')
+
+// slashCommandsEnabled — must merge with default (true) and accept an explicit false
+const slashDefault = mergeCanvasSettings({})
+assertEqual(slashDefault.slashCommandsEnabled, true, 'mergeCanvasSettings default slashCommandsEnabled=true')
+assert(slashDefault.slashCommandsEnabled === true, 'mergeCanvasSettings default slashCommandsEnabled=true (assert)')
+const slashOff = mergeCanvasSettings({ slashCommandsEnabled: false })
+assertEqual(slashOff.slashCommandsEnabled, false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false')
+assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false (assert)')
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
