@@ -26,7 +26,7 @@ import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton } from '../tabs/buttons'
+import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility } from '../tabs/buttons'
 
 let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownVerticalPos: number | null = null
@@ -142,9 +142,11 @@ export function syncSecondaryTabLabels(): void {
 export function checkSideChanged(): void {
   const currentSide = getMainDrawerSide()
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    // Side changed — need to recreate secondary sidebar
+    // Capture open state BEFORE unmount — unmountSecondarySidebar()
+    // unconditionally sets _secondarySidebarOpen = false.
+    const wasOpen = isSecondarySidebarOpen()
     unmountSecondarySidebar()
-    mountSecondarySidebar()
+    mountSecondarySidebar({ initialOpen: wasOpen })
     // Restore tab buttons for every tab still assigned to secondary. The
     // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
     // only builds the chrome), so without this the tab list is blank until
@@ -153,6 +155,10 @@ export function checkSideChanged(): void {
     // comes from getDrawerTabs() inside addSecondaryTabButton.
     restoreSecondaryTabButtons()
     repositionAssignedTabs()
+    // The drawerTab handle is created with display:none (secondary.tsx:112)
+    // and only becomes visible when this function runs. Without this call,
+    // the clickable edge handle stays hidden after the wrapper is recreated.
+    updateDrawerTabVisibility()
   }
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
