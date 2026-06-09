@@ -143,7 +143,9 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     background: var(--lumiverse-bg-deep);
     box-shadow: var(--lumiverse-shadow-xl);
     pointer-events: auto;
-    overflow: hidden;
+    /* overflow intentionally not set (defaults to visible) so the resize
+       handle's 4px overhang on the inner edge isn't clipped. Children
+       (sidebar, panel, content) handle their own overflow containment. */
     isolation: isolate;
     flex-direction: ${side === 'left' ? 'row-reverse' : 'row'};
   `
