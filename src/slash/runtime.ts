@@ -9,6 +9,7 @@ import { mountToastSurface } from './toast'
 import { SELECTOR_TEXTAREA } from '../dom/selectors'
 import {
   findCompletionCandidateIndex,
+  resolveActiveIndex,
   shouldHideForNonMatchingArgs,
 } from './dom-utils'
 import type { SlashCommandDef, SlashContext } from './types'
@@ -91,31 +92,9 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
           lastActiveIndex = null
           return
         }
-        const ctrl = showSuggest(ta, matches)
-        if (completionIdx >= 0) {
-          // Candidate promotion: the user has typed a non-whitespace arg
-          // char that extends a command's usage. Make that command the
-          // active row and remember it for sticky behavior.
-          ctrl.setActiveIndex(completionIdx)
-          lastActiveIndex = completionIdx
-        } else if (
-          lastActiveIndex != null &&
-          lastActiveIndex < matches.length &&
-          // Sticky only while the arg part is non-whitespace. Once the
-          // user deletes back to a whitespace-only arg, reset to default.
-          text.includes(' ') &&
-          text.slice(text.indexOf(' ') + 1).trim().length > 0
-        ) {
-          // No candidate right now, but the user is mid-typing a non-empty
-          // arg. Sticky: keep the previously-promoted active row (clamped
-          // to the current matches length in case the registry shrunk).
-          ctrl.setActiveIndex(lastActiveIndex)
-        } else {
-          // Whitespace-only arg (or no space), or lastActiveIndex is out of
-          // range. Reset sticky state and let the popup's default active
-          // row (idx 0 = first match) win.
-          lastActiveIndex = null
-        }
+        const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex)
+        lastActiveIndex = nextSticky
+        showSuggest(ta, matches, activeIndex)
       } else {
         hideSuggest()
         lastActiveIndex = null

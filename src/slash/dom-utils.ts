@@ -177,3 +177,51 @@ export function shouldHideForNonMatchingArgs(
   if (argPart.trim().length === 0) return false
   return !hasCompletionCandidate
 }
+
+// --- resolveActiveIndex ---
+
+export interface ActiveIndexResolution {
+  /** Index into matches to pass to showSuggest. Always >= 0. */
+  activeIndex: number
+  /** New value for the runtime's lastActiveIndex closure. null = reset sticky. */
+  nextSticky: number | null
+}
+
+/**
+ * Pure decision: given the typed text, the candidate matches, and the
+ * previous sticky index, return the index that should be highlighted in
+ * the popup AND the next sticky value.
+ *
+ * Rules (must preserve existing behavior):
+ *   1. If a completion candidate exists (findCompletionCandidateIndex >= 0),
+ *      promote it: activeIndex = completionIdx, nextSticky = completionIdx.
+ *   2. Else if lastSticky is in-range, the typed text has a space, AND the
+ *      arg part has at least one non-whitespace char: keep the sticky index.
+ *      (Backspacing/typing within a partial non-whitespace arg must not
+ *      snap back to row 0.)
+ *   3. Else: reset to defaults — activeIndex = 0, nextSticky = null.
+ *
+ * This is the testable core of the runtime's onTextChange active-index
+ * decision. Extracted so we can assert the keystroke sequence in tests
+ * without spinning up a fake DOM.
+ */
+export function resolveActiveIndex(
+  matches: { name: string; usage?: string }[],
+  text: string,
+  lastSticky: number | null,
+): ActiveIndexResolution {
+  const completionIdx = findCompletionCandidateIndex(matches, text)
+  if (completionIdx >= 0) {
+    return { activeIndex: completionIdx, nextSticky: completionIdx }
+  }
+  if (
+    lastSticky != null &&
+    lastSticky >= 0 &&
+    lastSticky < matches.length &&
+    text.includes(' ') &&
+    text.slice(text.indexOf(' ') + 1).trim().length > 0
+  ) {
+    return { activeIndex: lastSticky, nextSticky: lastSticky }
+  }
+  return { activeIndex: 0, nextSticky: null }
+}

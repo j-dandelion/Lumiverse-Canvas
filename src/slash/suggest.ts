@@ -37,6 +37,7 @@ export interface SuggestController {
 export function showSuggest(
   textarea: HTMLTextAreaElement,
   options: SlashCommandDef[],
+  initialActiveIndex: number = 0,
 ): SuggestController {
   // Empty options: hide any existing popup and return a no-op controller.
   if (options.length === 0) {
@@ -56,7 +57,9 @@ export function showSuggest(
 
   // Per-popup state held by the closure.
   let currentOptions: SlashCommandDef[] = options
-  let activeIndex = 0
+  let activeIndex = options.length > 0
+    ? Math.max(0, Math.min(options.length - 1, initialActiveIndex))
+    : 0
   let visible = true
 
   // --- helpers ---

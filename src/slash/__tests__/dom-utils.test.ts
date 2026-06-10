@@ -23,6 +23,7 @@ import {
   consumeSkipNextTextChange,
   findCompletionCandidateIndex,
   isValidSlashContext,
+  resolveActiveIndex,
   resetSkipNextTextChange,
   shouldHideForNonMatchingArgs,
   textareaHasUsage,
@@ -399,6 +400,84 @@ assert(
   shouldHideForNonMatchingArgs('/select', false) === false,
   '/select (no space): show — command-name mode',
 )
+
+// --- resolveActiveIndex ---
+
+const MATCHES = [
+  { name: 'select', usage: '/select' },
+  { name: 'select-all', usage: '/select all' },
+  { name: 'select-clear', usage: '/select clear' },
+]
+
+{
+  // /select (no space, no candidate) → activeIndex 0, sticky null
+  const r = resolveActiveIndex(MATCHES, '/select', null)
+  assert(r.activeIndex === 0, '/select: activeIndex 0')
+  assert(r.nextSticky === null, '/select: sticky null')
+}
+{
+  // /select  (space, whitespace-only arg, no candidate) → activeIndex 0, sticky null
+  const r = resolveActiveIndex(MATCHES, '/select ', null)
+  assert(r.activeIndex === 0, '/select  (whitespace arg): activeIndex 0')
+  assert(r.nextSticky === null, '/select  (whitespace arg): sticky null')
+}
+{
+  // /select a (candidate idx 1 = /select all) → activeIndex 1, sticky 1
+  const r = resolveActiveIndex(MATCHES, '/select a', null)
+  assert(r.activeIndex === 1, '/select a: activeIndex 1')
+  assert(r.nextSticky === 1, '/select a: sticky 1')
+}
+{
+  // /select al (still candidate idx 1) → activeIndex 1, sticky 1
+  const r = resolveActiveIndex(MATCHES, '/select al', null)
+  assert(r.activeIndex === 1, '/select al: activeIndex 1')
+  assert(r.nextSticky === 1, '/select al: sticky 1')
+}
+{
+  // /select all (no candidate, arg non-whitespace, sticky was 1) → keep sticky
+  const r = resolveActiveIndex(MATCHES, '/select all', 1)
+  assert(r.activeIndex === 1, '/select all: activeIndex kept 1')
+  assert(r.nextSticky === 1, '/select all: sticky kept 1')
+}
+{
+  // /select all  (trailing space after completed arg) — arg is non-whitespace
+  // so sticky is preserved. (In the real runtime, shouldHideForNonMatchingArgs
+  // would hide the popup before reaching resolveActiveIndex, but this tests
+  // the pure function's behavior directly.)
+  const r = resolveActiveIndex(MATCHES, '/select all ', 1)
+  assert(r.activeIndex === 1, '/select all  (trailing space): sticky kept (arg non-whitespace)')
+  assert(r.nextSticky === 1, '/select all  (trailing space): sticky 1')
+}
+{
+  // /select (no space, no candidate, lastSticky = 1) → activeIndex 0, sticky null
+  const r = resolveActiveIndex(MATCHES, '/select', 1)
+  assert(r.activeIndex === 0, '/select (backspace): activeIndex 0')
+  assert(r.nextSticky === null, '/select (backspace): sticky null')
+}
+{
+  // Empty matches array → activeIndex 0, sticky null
+  const r = resolveActiveIndex([], '/select a', 1)
+  assert(r.activeIndex === 0, 'empty matches: activeIndex 0')
+  assert(r.nextSticky === null, 'empty matches: sticky null')
+}
+{
+  // lastSticky out of range (e.g., 5, matches.length = 2) → activeIndex 0, sticky null
+  const r = resolveActiveIndex(MATCHES.slice(0, 2), '/select all', 5)
+  assert(r.activeIndex === 0, 'out-of-range sticky: activeIndex 0')
+  assert(r.nextSticky === null, 'out-of-range sticky: sticky null')
+}
+{
+  // Case-insensitive: /SELECT A should still resolve to the candidate
+  const r = resolveActiveIndex(MATCHES, '/SELECT A', null)
+  assert(r.activeIndex === 1, '/SELECT A: activeIndex 1 (case-insensitive)')
+  assert(r.nextSticky === 1, '/SELECT A: sticky 1')
+}
+{
+  // lastSticky = null, text = '/select a' (no prior sticky) → activeIndex 1, sticky 1
+  const r = resolveActiveIndex(MATCHES, '/select a', null)
+  assert(r.activeIndex === 1, '/select a (null sticky): activeIndex 1')
+  assert(r.nextSticky === 1, '/select a (null sticky): sticky 1 (not null)')
+}
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); throw new Error(`${failed} test failures`) }
 console.log(`PASS: ${passed}`)
