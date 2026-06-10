@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.1 — 2026-06-10
+
+- Re-bundled. No behavioral changes since v1.6.0.
+
 ## v1.6.0 — 2026-06-09
 
 ### Added
