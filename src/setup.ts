@@ -14,9 +14,9 @@
 //   3. mountSettingsPanel — must come before applySettings can be called
 //      on a runtime settings change (it captures the ctx for the live-apply
 //      dispatch path).
-//   4. feature init() — registers always-on teardowns (toast surface,
-//      applyLayout polling interval, slash runtime) so they fire on
-//      extension disable regardless of toggle state.
+//   4. feature init() — runs after hydrateSettings, before mount. Injects
+//      disable-CSS for inverted features (e.g. shadows when off) so the
+//      visual state is correct on first paint.
 //   5. loadSavedLayout — single IPC roundtrip. Hydrates settings, installs
 //      the debug escape hatch, and conditionally mounts every gated
 //      feature via feature.mount().
@@ -116,6 +116,14 @@ export function setup(ctx: SpindleFrontendContext) {
     refreshSettingsPanel()
 
     if (getSettings().debugMode) installDebugEscapeHatch()
+
+    // Run feature init() hooks. These run after hydrateSettings so they
+    // can read the persisted toggle state, but before mount() so they
+    // can inject CSS (e.g. shadow-disable) that must be present on the
+    // first paint regardless of the feature's mount gate.
+    for (const feature of FEATURES) {
+      feature.init?.(ctx)
+    }
 
     // Mount every feature whose setting is currently truthy. The feature
     // owns its own mount logic; the orchestrator just runs them in order

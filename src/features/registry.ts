@@ -3,9 +3,9 @@
 // A feature is a settings-gated unit of behavior. The feature owns its own
 // mount/unmount and is the single source of truth for its lifecycle. The
 // orchestrator (setup.ts) iterates FEATURES to:
-//   1. Call init() once at boot — for unconditional cleanup registrations
-//      that should fire on extension disable regardless of toggle state
-//      (e.g. unmountToastSurface, cancelApplyLayoutInterval).
+//   1. Call init() once after hydrateSettings — for one-time setup that
+//      must run before mount regardless of toggle state (e.g. injecting
+//      disable-CSS for inverted features like shadows).
 //   2. Call mount() after loadSavedLayout resolves, gated on the feature's
 //      own setting being truthy. The returned teardown is added to the
 //      global cleanup chain.
@@ -43,7 +43,7 @@ export type Teardown = () => void
 export interface CanvasFeature {
   /** Stable id; matches a key in FullCanvasSettings. */
   id: keyof FullCanvasSettings
-  /** One-time setup before loadSavedLayout resolves. Optional. */
+  /** One-time setup after hydrateSettings, before mount. Optional. */
   init?(ctx: SpindleFrontendContext): void
   /** Mount when the feature's setting is truthy on initial load. Returns a
    *  teardown that the orchestrator adds to the global cleanup chain. */
@@ -229,6 +229,11 @@ const consistentIconSizeFeature: CanvasFeature = {
 /** Sidebar shadows: desktop variant (>=601px). */
 const shadowsDesktopFeature: CanvasFeature = {
   id: 'sidebarShadowsDesktop',
+  init() {
+    if (!getSettings().sidebarShadowsDesktop) {
+      injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
+    }
+  },
   mount() {
     if (!getSettings().sidebarShadowsDesktop) {
       injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
@@ -247,6 +252,11 @@ const shadowsDesktopFeature: CanvasFeature = {
 /** Sidebar shadows: mobile variant (<=600px). */
 const shadowsMobileFeature: CanvasFeature = {
   id: 'sidebarShadowsMobile',
+  init() {
+    if (!getSettings().sidebarShadowsMobile) {
+      injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))
+    }
+  },
   mount() {
     if (!getSettings().sidebarShadowsMobile) {
       injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))
