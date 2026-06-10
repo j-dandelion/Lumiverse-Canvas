@@ -107,6 +107,16 @@ export function showSuggest(
       })
       .join('')
     el.querySelectorAll<HTMLElement>('.canvas-slash-opt').forEach((row, i) => {
+      row.addEventListener('mousedown', (e) => {
+        // Prevent mousedown from blurring the textarea: the row <div> is not
+        // focusable, so without this the browser moves focus to body before
+        // the click handler runs, and React's controlled-component re-render
+        // races with applySuggestion, snapping the value back to the stale
+        // state. Standard autocomplete-popup pattern (VSCode, Chromium
+        // datalist). Touch is covered: touch fires mousedown as a compat
+        // event before the synthesized click.
+        e.preventDefault()
+      })
       row.addEventListener('mouseenter', () => setActiveIndex(i))
       row.addEventListener('click', (e) => {
         e.preventDefault()
@@ -116,33 +126,36 @@ export function showSuggest(
         if (!cmd) return
         // Slash rule: autocomplete is only valid when '/' is at column 0.
         // If the popup is somehow visible with a non-'/' prefix, dismiss
-        // the popup, focus the textarea, and don't modify the value.
+        // the popup and don't modify the value. (The textarea is already
+        // focused — mousedown preventDefault above keeps it that way.)
         if (!isValidSlashContext(currentAnchor)) {
           hideSuggest()
-          currentAnchor.focus()
           return
         }
         // If the textarea already contains the active command's full
         // usage (with possible trailing whitespace), the click is a
-        // no-op for the value — just dismiss the popup and focus. The
-        // user has a complete command; overwriting it with the bare
-        // usage would wipe the user's args. This mirrors the
-        // intercept.ts Enter/Tab fix: never erase a complete command
-        // the user has already typed. Equality (textarea == usage) is
-        // NOT a no-op — autocomplete should add the trailing space.
+        // no-op for the value — just dismiss the popup. The user has
+        // a complete command; overwriting it with the bare usage
+        // would wipe the user's args. This mirrors the intercept.ts
+        // Enter/Tab fix: never erase a complete command the user has
+        // already typed. Equality (textarea == usage) is NOT a no-op
+        // — autocomplete should add the trailing space.
         if (textareaHasUsage(currentAnchor, cmd)) {
           hideSuggest()
-          currentAnchor.focus()
           return
         }
         // Mirror the Tab/Enter contract from intercept.ts: same label
-        // resolution, same applySuggestion helper, same hideSuggest +
-        // focus. The helper handles the trailing space, the synthetic
-        // input event, the skip flag, and cursor placement.
+        // resolution, same applySuggestion helper, same hideSuggest.
+        // No trailing focus() needed — mousedown preventDefault above
+        // keeps the textarea focused throughout, so applySuggestion's
+        // setSelectionRange takes effect immediately and React's
+        // onChange (triggered by the synthetic input event) updates
+        // state from a focused, in-DOM textarea. The helper handles
+        // the trailing space, the synthetic input event, the skip
+        // flag, and cursor placement.
         const label = cmd.usage ?? `/${cmd.name}`
         applySuggestion(currentAnchor, label)
         hideSuggest()
-        currentAnchor.focus()
       })
     })
     updateActiveDom()
