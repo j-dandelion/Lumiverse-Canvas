@@ -21,27 +21,6 @@ import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } fr
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
-import { attachSlashRuntime } from '../slash/runtime'
-import { registerCleanup } from '../sidebar/cleanup'
-
-// Holds the active slash-runtime teardown function (or null when the
-// runtime is unmounted). applySettings flips the runtime on/off as the
-// `slashCommandsEnabled` setting changes. The initial mount happens
-// inside setup(); setup() calls setSlashDetach() with its returned
-// teardown so this module stays the single source of truth for the
-// active runtime lifecycle.
-let _slashDetach: (() => void) | null = null
-
-/**
- * Register the active slash-runtime teardown. Called by setup() after
- * the initial mount and (internally) by applySettings after a runtime
- * re-attach. The supplied function is the one that detaches the
- * intercept listeners, toast surface, and CustomEvent listeners. Pass
- * null to clear the registration without calling anything.
- */
-export function setSlashDetach(fn: (() => void) | null): void {
-  _slashDetach = fn
-}
 
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
@@ -49,33 +28,14 @@ export function setSlashDetach(fn: (() => void) | null): void {
 // when the panel is first built.
 import { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
 
-// Re-export for back-compat so existing imports keep working.
-export { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
-
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
-// ctx to feed feature.apply() — the slash feature re-attaches its
-// runtime on toggle-on, which requires the Spindle context.
+// ctx to feed feature.apply().
 let _settingsPanelCtx: SpindleFrontendContext | null = null
 
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
 
-const SHADOW_DISABLE_DESKTOP_ID = 'sidebar-ux-shadow-disable-desktop'
-const SHADOW_DISABLE_DESKTOP_CSS = `
-  @media (min-width: 601px) {
-    .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
-      box-shadow: none !important;
-    }
-  }
-`
-const SHADOW_DISABLE_MOBILE_ID = 'sidebar-ux-shadow-disable-mobile'
-const SHADOW_DISABLE_MOBILE_CSS = `
-  @media (max-width: 600px) {
-    .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
-      box-shadow: none !important;
-    }
-  }
-`
+
 function injectPanelStyles() {
   injectStyles(PANEL_STYLE_ID, `
     .sidebar-ux-panel-root {
@@ -469,54 +429,5 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
     if (!feature.apply) continue
     if (prev[feature.id] === next[feature.id]) continue
     feature.apply(prev, next, _settingsPanelCtx)
-  }
-
-  // 10. Sidebar shadows (desktop) — inject/remove the CSS that disables
-  // box-shadow on sidebars at min-width: 601px.
-  if (prev.sidebarShadowsDesktop !== next.sidebarShadowsDesktop) {
-    if (next.sidebarShadowsDesktop) {
-      document.getElementById(SHADOW_DISABLE_DESKTOP_ID)?.remove()
-    } else {
-      injectStyles(SHADOW_DISABLE_DESKTOP_ID, SHADOW_DISABLE_DESKTOP_CSS)
-    }
-  }
-
-  // 11. Sidebar shadows (mobile) — inject/remove the CSS that disables
-  // box-shadow on sidebars at max-width: 600px.
-  if (prev.sidebarShadowsMobile !== next.sidebarShadowsMobile) {
-    if (next.sidebarShadowsMobile) {
-      document.getElementById(SHADOW_DISABLE_MOBILE_ID)?.remove()
-    } else {
-      injectStyles(SHADOW_DISABLE_MOBILE_ID, SHADOW_DISABLE_MOBILE_CSS)
-    }
-  }
-
-  // 12. Slash commands — mount or unmount the entire runtime (intercept,
-  // suggest popup, toast surface, command registry). When off, typing /
-  // in the chat textarea is plain text and no command parsing runs.
-  // The runtime owns its own listeners on `document` and its own DOM
-  // nodes (toast surface) — attachSlashRuntime returns a teardown that
-  // removes all of them. setSlashDetach is the single registration
-  // point so the initial setup() mount and the runtime toggle path
-  // share the same lifecycle reference.
-  if (prev.slashCommandsEnabled !== next.slashCommandsEnabled) {
-    if (next.slashCommandsEnabled) {
-      if (!_slashDetach && _settingsPanelCtx) {
-        // Also register the teardown with the global cleanup chain so
-        // the runtime is detached when the extension is disabled. This
-        // mirrors the setup() path, which calls registerCleanup on the
-        // initial attach. Without this, a user who toggles the setting
-        // on at runtime would leak the intercept listeners on disable.
-        const detach = attachSlashRuntime(_settingsPanelCtx)
-        setSlashDetach(detach)
-        registerCleanup(detach)
-      }
-    } else {
-      if (_slashDetach) {
-        const detach = _slashDetach
-        setSlashDetach(null)
-        detach()
-      }
-    }
   }
 }

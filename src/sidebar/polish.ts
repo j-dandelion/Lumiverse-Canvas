@@ -20,7 +20,7 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore } from '../store'
 import { dlog } from '../debug/log'
-import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar } from '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
 import { getTabAssignments, repositionAssignedTabs, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -163,11 +163,6 @@ export function checkSideChanged(): void {
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
 }
-
-// The unmountSecondarySidebar call in checkSideChanged needs to be in scope.
-// Re-import from the transient entry — sidebar/secondary.tsx owns it
-// the import statement will be a direct one by then.
-import { unmountSecondarySidebar } from '../sidebar/secondary'
 
 /**
  * Re-create secondary tab buttons for every tab currently assigned to the

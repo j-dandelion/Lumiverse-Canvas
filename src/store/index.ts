@@ -44,12 +44,6 @@ export function asDrawerStore(store: Record<string, unknown>): DrawerStoreSnapsh
   return store as DrawerStoreSnapshot
 }
 
-/** Public accessor: returns a typed DrawerStoreSnapshot from the live store, or null if unreachable. */
-export function getDrawerSnapshot(): DrawerStoreSnapshot | null {
-  const store = getStoreSnapshot()
-  return store ? asDrawerStore(store) : null
-}
-
 function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>, force: boolean): void {
   if (!fiber || depth > maxDepth || visited.has(fiber)) return
   visited.add(fiber)

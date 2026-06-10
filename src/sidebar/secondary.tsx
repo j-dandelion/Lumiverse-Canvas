@@ -17,7 +17,7 @@ import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
-import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments } from '../tabs/assignment'
+import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
@@ -296,8 +296,6 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   }
   setMobileOpenClass('secondary', false)
 }
-
-import { getTabAssignments } from '../tabs/assignment'
 
 /**
  * Return the wrapper's `translateX` value (in px) that fully hides the

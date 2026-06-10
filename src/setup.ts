@@ -149,8 +149,6 @@ export function setup(ctx: SpindleFrontendContext) {
     startContextMenuListener()
     registerCleanup(stopContextMenuListener)
 
-
-
     // Main-drawer restore — independent of secondSidebarEnabled. The
     // main drawer is host-owned and its open/close state is captured
     // by snapshotLayout() on every save, so a user who has the
