@@ -234,11 +234,6 @@ const shadowsDesktopFeature: CanvasFeature = {
       injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
     }
   },
-  mount() {
-    if (!getSettings().sidebarShadowsDesktop) {
-      injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
-    }
-  },
   apply(prev, next) {
     if (prev.sidebarShadowsDesktop === next.sidebarShadowsDesktop) return
     if (next.sidebarShadowsDesktop) {
@@ -253,11 +248,6 @@ const shadowsDesktopFeature: CanvasFeature = {
 const shadowsMobileFeature: CanvasFeature = {
   id: 'sidebarShadowsMobile',
   init() {
-    if (!getSettings().sidebarShadowsMobile) {
-      injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))
-    }
-  },
-  mount() {
     if (!getSettings().sidebarShadowsMobile) {
       injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))
     }
