@@ -24,7 +24,7 @@ import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
-import { hideAssignmentMenu } from '../tabs/buttons'
+import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 
 /**
  * Re-clamp the Lumiverse context menu position after Canvas has injected

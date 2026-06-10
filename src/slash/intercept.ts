@@ -21,18 +21,21 @@ import {
   getSuggestController,
 } from './suggest'
 import { SELECTOR_SEND_BTN, SELECTOR_TEXTAREA } from '../dom/selectors'
+import {
+  applySuggestion,
+  consumeSkipNextTextChange,
+  isValidSlashContext,
+  resetSkipNextTextChange,
+  textareaHasUsage,
+} from './dom-utils'
 
 export interface InterceptCallbacks {
   onParsed: (parsed: ParsedCommand, textarea: HTMLTextAreaElement) => void
   onTextChange: (text: string) => void
 }
 
-// Set by the Tab handler right before dispatching the synthetic `input`
-// event. The inputHandler reads + clears it so the runtime's onTextChange
-// doesn't re-show the popup with options that match the freshly-completed
-// command. Without this, Tab committing `/se` → `/select ` would
-// immediately re-open the popup with the full command list.
-let _skipNextTextChange = false
+// The skip flag is now owned by dom-utils.ts so intercept.ts and
+// suggest.ts can share it without forming a circular import.
 
 // Toggled by `compositionstart` / `compositionend` capture-phase listeners.
 // During CJK IME input the textarea's value can briefly start with `/` mid-
@@ -98,19 +101,28 @@ export function installIntercept(
         hideSuggest()
         return
       }
+      // Slash rule: autocomplete is only valid when '/' is at column 0.
+      // If the popup is somehow visible with a non-'/' prefix (race or
+      // legacy state), dismiss and let default Tab focus-shift happen.
+      if (!isValidSlashContext(ta)) {
+        hideSuggest()
+        return
+      }
+      // No-op guard: same as Enter. If the textarea already contains
+      // the active command's full usage (with possible trailing
+      // whitespace), just dismiss the popup and let default Tab
+      // focus-shift happen (no preventDefault — the user might be
+      // tabbing away from the textarea). Equality (textarea == usage)
+      // is NOT a no-op — autocomplete should add the trailing space.
+      if (textareaHasUsage(ta, activeCmd)) {
+        hideSuggest()
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
       const label = activeCmd.usage ?? `/${activeCmd.name}`
-      // If the user has already typed args (a space is present), don't
-      // re-add a trailing space — preserve whatever they typed.
-      const alreadyHasArgs = ta.value.includes(' ')
-      const replacement = alreadyHasArgs ? label : `${label} `
-      // Flag the input handler to skip re-showing the popup for the
-      // synthetic input event we dispatch below.
-      _skipNextTextChange = true
-      ta.value = replacement
-      ta.dispatchEvent(new Event('input', { bubbles: true }))
+      applySuggestion(ta, label)
       hideSuggest()
       return
     }
@@ -123,6 +135,74 @@ export function installIntercept(
     // `/select `) and stranded the cursor mid-line. A user with a
     // complete command in the textarea means "send it" — full stop.
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Popup visible → always autocomplete the active row's usage.
+      // This is the contract: "press Enter on a suggestion → menu
+      // closes, suggestion appears with trailing space, cursor lands
+      // after the space; a second Enter then sends." Works regardless
+      // of what's currently in the textarea.
+      if (popupVisible) {
+        if (!ctrl) {
+          // Popup visible but no controller — degenerate case. Hide
+          // the popup and let Enter fall through to natural newline.
+          hideSuggest()
+          return
+        }
+        const activeCmd = ctrl.getActiveCommand()
+        if (!activeCmd) {
+          hideSuggest()
+          return
+        }
+        // Slash rule: autocomplete is only valid when '/' is at column 0.
+        // If the popup is somehow visible with a non-'/' prefix, dismiss
+        // the popup and let Enter fall through to natural newline.
+        if (!isValidSlashContext(ta)) {
+          hideSuggest()
+          return
+        }
+        // No-op guard: if the textarea already contains the active
+        // command's full usage (with possible trailing whitespace),
+        // pressing Enter should just dismiss the popup without
+        // overwriting the user's typed args. We preventDefault to
+        // consume the Enter (no newline inserted); a second Enter
+        // then dispatches the complete command.
+        //
+        // Equality (textarea == usage) is NOT a no-op — autocomplete
+        // should add the trailing space. This is the "first Enter
+        // after the bare command" case: `/select` + Enter → `/select `
+        // (with trailing space), then a second Enter dispatches.
+        //
+        // We must call stopPropagation + stopImmediatePropagation
+        // here too — not just preventDefault — because Lumiverse's
+        // chat-submit handler listens for Enter in bubble phase and
+        // will submit `/select ` to the LLM as a regular chat message
+        // otherwise. preventDefault alone blocks the browser's default
+        // form submit, but doesn't stop Lumiverse's explicit submit.
+        // This is the same set of calls the autocomplete and dispatch
+        // branches make; the no-op branch was missing them and
+        // leaked `/select ` to the LLM in the "popup visible, no-op"
+        // case (textareaHasUsage == true, e.g. `/select ` with
+        // trailing space).
+        if (textareaHasUsage(ta, activeCmd)) {
+          e.preventDefault()
+          e.stopPropagation()
+          e.stopImmediatePropagation()
+          hideSuggest()
+          ta.focus()
+          return
+        }
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        const label = activeCmd.usage ?? `/${activeCmd.name}`
+        applySuggestion(ta, label)
+        hideSuggest()
+        ta.focus()
+        return
+      }
+
+      // Popup hidden: dispatch a complete slash command if parseable.
+      // (See the comment at the previous block for why parseCommand
+      // is intentionally NOT checked when the popup is visible.)
       const parsed = parseCommand(ta.value)
       if (parsed) {
         e.preventDefault()
@@ -141,34 +221,6 @@ export function installIntercept(
         hideSuggest()
         callbacks.onParsed(parsed, ta)
         return
-      }
-
-      // No parseable command in the textarea. If the popup is visible,
-      // treat Enter as Tab/click — autocomplete the active row's usage
-      // into the textarea so the user can finish typing before sending.
-      if (popupVisible) {
-        const activeCmd = ctrl?.getActiveCommand() ?? null
-        if (!activeCmd) {
-          // Popup visible but no active row — hide and let Enter fall through
-          // to the textarea's natural newline behavior.
-          hideSuggest()
-          return
-        }
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        const label = activeCmd.usage ?? `/${activeCmd.name}`
-        // Match Tab/click: preserve user-typed args if a space is present,
-        // otherwise add a trailing space so the cursor is ready for input.
-        const alreadyHasArgs = ta.value.includes(' ')
-        const replacement = alreadyHasArgs ? label : `${label} `
-        // Flag the input handler to skip re-showing the popup for the
-        // synthetic input event we dispatch below.
-        _skipNextTextChange = true
-        ta.value = replacement
-        ta.dispatchEvent(new Event('input', { bubbles: true }))
-        hideSuggest()
-        ta.focus()
       }
     }
   }
@@ -237,11 +289,10 @@ export function installIntercept(
     // re-run detection with the committed value.
     if (_isComposing) return
 
-    // Tab commit set this flag — see keydownHandler. Clear and skip the
-    // runtime callback so the popup doesn't re-open with the typed
-    // command already in the textarea.
-    if (_skipNextTextChange) {
-      _skipNextTextChange = false
+    // Tab/Enter/click commit set this flag — see dom-utils.ts. Consume
+    // (read+clear) and skip the runtime callback so the popup doesn't
+    // re-open with the typed command already in the textarea.
+    if (consumeSkipNextTextChange()) {
       return
     }
 
@@ -257,7 +308,7 @@ export function installIntercept(
     document.removeEventListener('compositionstart', compositionStartHandler, true)
     document.removeEventListener('compositionend', compositionEndHandler, true)
     _isComposing = false
-    _skipNextTextChange = false
+    resetSkipNextTextChange()
     hideSuggest()
   }
 }

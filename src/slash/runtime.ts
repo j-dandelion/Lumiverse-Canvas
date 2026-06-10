@@ -7,6 +7,10 @@ import { showSuggest, hideSuggest } from './suggest'
 import { dispatchCommand } from './dispatch'
 import { mountToastSurface } from './toast'
 import { SELECTOR_TEXTAREA } from '../dom/selectors'
+import {
+  findCompletionCandidateIndex,
+  shouldHideForNonMatchingArgs,
+} from './dom-utils'
 import type { SlashCommandDef, SlashContext } from './types'
 
 // Runtime type guard for the `canvas:slash-register` CustomEvent detail.
@@ -45,6 +49,12 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   // Construct SlashContext. chatId source: ctx.getActiveChat()?.chatId
   // (verified in Phase 0 recon; high confidence). Fall back to '' if no
   // active chat. v1.1.0 has no userId; v1.2.0 may add it.
+  // Sticky last-active-row index. Preserved across keystrokes when the
+  // user has typed a non-whitespace arg char, so backspacing/typing
+  // within a partial arg doesn't snap the highlight back to the default.
+  // Reset to null when the user is back to a whitespace-only (or no) arg.
+  let lastActiveIndex: number | null = null
+
   const slashCtx: SlashContext = {
     get chatId() { return ctx.getActiveChat()?.chatId ?? '' },
     setText: (text) => {
@@ -65,16 +75,50 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     },
     onTextChange: (text) => {
       if (text.startsWith('/')) {
-        const prefix = text.split(/\s/)[0].slice(1).toLowerCase()  // "/select 25" → "select"
-        // Pass the full SlashCommandDef so the popup can show usage/name and
-        // return the active def for dispatch (the intercept's active-row-wins
-        // path in intercept.ts reads `getActiveCommand().name`).
+        const prefix = text.split(/\s/)[0].slice(1).toLowerCase()
         const matches = registry.list()
           .filter((c) => c.name.toLowerCase().startsWith(prefix))
+        if (matches.length === 0) {
+          hideSuggest()
+          lastActiveIndex = null
+          return
+        }
         const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
-        if (ta) showSuggest(ta, matches)
+        if (!ta) return
+        const completionIdx = findCompletionCandidateIndex(matches, text)
+        if (shouldHideForNonMatchingArgs(text, completionIdx >= 0)) {
+          hideSuggest()
+          lastActiveIndex = null
+          return
+        }
+        const ctrl = showSuggest(ta, matches)
+        if (completionIdx >= 0) {
+          // Candidate promotion: the user has typed a non-whitespace arg
+          // char that extends a command's usage. Make that command the
+          // active row and remember it for sticky behavior.
+          ctrl.setActiveIndex(completionIdx)
+          lastActiveIndex = completionIdx
+        } else if (
+          lastActiveIndex != null &&
+          lastActiveIndex < matches.length &&
+          // Sticky only while the arg part is non-whitespace. Once the
+          // user deletes back to a whitespace-only arg, reset to default.
+          text.includes(' ') &&
+          text.slice(text.indexOf(' ') + 1).trim().length > 0
+        ) {
+          // No candidate right now, but the user is mid-typing a non-empty
+          // arg. Sticky: keep the previously-promoted active row (clamped
+          // to the current matches length in case the registry shrunk).
+          ctrl.setActiveIndex(lastActiveIndex)
+        } else {
+          // Whitespace-only arg (or no space), or lastActiveIndex is out of
+          // range. Reset sticky state and let the popup's default active
+          // row (idx 0 = first match) win.
+          lastActiveIndex = null
+        }
       } else {
         hideSuggest()
+        lastActiveIndex = null
       }
     },
   })

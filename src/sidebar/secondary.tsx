@@ -68,7 +68,9 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     : (isFinite(cssVarWidth) ? cssVarWidth : 420)
   // On mobile, the drawer is 100vw and the close transform must match.
   // Use the viewport width directly — clamping a desktop-saved width to
-  // 80% of a mobile viewport would leave a visible peek.
+  // 80% of a mobile viewport would leave a visible peek. The desktop
+  // branch uses the shared clamp helper (PR-C) so resize handles,
+  // applyLayout, and createSecondarySidebar all share the same bounds.
   const onMobile = isMobileViewport()
   const initWidth = onMobile
     ? window.innerWidth
@@ -244,18 +246,17 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   return wrapper
 }
 
-// Save original overflow values so we can restore them
-const _savedOverflow = new Map<HTMLElement, string>()
-
-
-export function restoreOverflow(element: HTMLElement) {
-  const saved = _savedOverflow.get(element)
-  if (!saved) return
-  for (const [ancestor, original] of saved) {
-    ancestor.style.overflow = original
-  }
-  _savedOverflow.delete(element)
-}
+// Collect all ancestor elements that need overflow: visible override.
+// DELETED 2026-06-09 — the per-element overflow-override machinery
+// (_savedOverflow, enableOverflowVisible, restoreOverflow) was never wired
+// to a caller. enableOverflowVisible has zero call sites in the entire
+// repo history; restoreOverflow's call site in tabs/assignment.ts:400
+// short-circuits on the `if (!saved) return` guard because the map is
+// always empty. The "PR-B fix" comment described a real bug in code that
+// was never reachable. If the original intent (allowing tab roots to
+// overflow their ancestor's hidden overflow container) is ever revived,
+// the wiring should start from a fresh design rather than resurrecting
+// this dead machinery.
 
 export function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return

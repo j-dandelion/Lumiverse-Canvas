@@ -33,7 +33,7 @@ export const CANVAS_VERSION = ''
 
 interface BackendCtx {
   sendToBackend(msg: { type: string; [key: string]: unknown }): void
-  onBackendMessage(handler: (payload: { type: string; layout?: any; [key: string]: unknown }) => void): void
+  onBackendMessage(handler: (payload: unknown) => void): () => void
 }
 
 let _backendCtx: BackendCtx | null = null
@@ -43,20 +43,11 @@ export function setBackendCtx(ctx: BackendCtx): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
-// Interval handle for applyLayout's tab-restore polling loop.
-let _applyLayoutInterval: ReturnType<typeof setInterval> | null = null
 // Called by sidebar/cleanup.cleanupAll on teardown.
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
-  }
-}
-
-export function cancelApplyLayoutInterval(): void {
-  if (_applyLayoutInterval !== null) {
-    clearInterval(_applyLayoutInterval)
-    _applyLayoutInterval = null
   }
 }
 
@@ -264,4 +255,6 @@ export function applyMainDrawer(layout: any): void {
     )
   })
 }
+
+
 

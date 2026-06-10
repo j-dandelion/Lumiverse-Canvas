@@ -10,10 +10,11 @@
 // The comment in store/index.ts:110 ("Called by sidebar/cleanup.cleanupAll
 // on teardown") referred to clearStoreCache, which has been removed.
 // This module owns the registry and the iteration; consumers
-// (sidebar/polish.ts) register their own teardowns.
+// (sidebar/polish.ts) register their own teardowns. PR-A wired
+// clearTabAssignments/clearOriginalParents into cleanupAll so a
+// disable→re-enable cycle doesn't see stale state.
 
 import { dwarn } from '../debug/log'
-import { clearStoreCache } from '../store'
 import { clearTabAssignments, clearOriginalParents } from '../tabs/assignment'
 
 const _cleanupFns: Array<() => void> = []
@@ -31,7 +32,6 @@ export function cleanupAll() {
   _cleanupFns.length = 0
 
   // Reset module-level caches that don't have their own teardown registration
-  try { clearStoreCache() } catch (err: unknown) { dwarn('clearStoreCache error:', err) }
   try { clearTabAssignments() } catch (err: unknown) { dwarn('clearTabAssignments error:', err) }
   try { clearOriginalParents() } catch (err: unknown) { dwarn('clearOriginalParents error:', err) }
 }

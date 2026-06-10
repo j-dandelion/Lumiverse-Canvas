@@ -74,6 +74,12 @@ export function mountToastSurface() {
 }
 
 export function unmountToastSurface() {
+  // Cancel any pending dismissal timers so they don't fire after the
+  // surface is gone (PR-C leak fix). Clearing the array means the
+  // setTimeout callbacks become no-ops, and the listener set has no
+  // more entries to call.
+  for (const timer of _toastTimers) clearTimeout(timer)
+  _toastTimers.clear()
   if (toastHostEl) {
     toastHostEl.remove()
     toastHostEl = null

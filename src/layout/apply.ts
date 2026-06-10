@@ -9,13 +9,27 @@ import {
   openSecondarySidebar, closeSecondarySidebar,
 } from '../sidebar/secondary'
 import {
-  hasTabAssignment, repositionTabToSecondary, setTabAssignment,
+  hasTabAssignment, repositionTab, setTabAssignment,
 } from '../tabs/assignment'
 import {
   addSecondaryTabButton, hideMainTabButton, showSecondaryTab, updateDrawerTabVisibility,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
+
+// Polling interval for the suffix-drift fallback tab-restore loop. The
+// producer is applyLayout below; cancelApplyLayoutInterval is exported so
+// setup.ts can register it in the cleanup chain and stop the loop on
+// extension disable (otherwise the interval would keep running on a
+// torn-down store, logging warnings and reading stale tab data).
+let _applyLayoutInterval: ReturnType<typeof setInterval> | null = null
+
+export function cancelApplyLayoutInterval(): void {
+  if (_applyLayoutInterval !== null) {
+    clearInterval(_applyLayoutInterval)
+    _applyLayoutInterval = null
+  }
+}
 
 export function applyLayout(layout: any) {
   if (!layout) return
@@ -91,7 +105,7 @@ export function applyLayout(layout: any) {
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
     }
     let attempts = 0
-    const interval = setInterval(() => {
+    _applyLayoutInterval = setInterval(() => {
       attempts++
       const tabs = getDrawerTabs()
       for (let i = 0; i < layout.detachedTabs.length; i++) {
@@ -127,7 +141,7 @@ export function applyLayout(layout: any) {
           hideMainTabButton(tab.id)
           addSecondaryTabButton(tab)
           updateDrawerTabVisibility()
-          repositionTabToSecondary(tab.id)
+          repositionTab(tab.id, 'secondary')
         } else if (!usedFallback) {
           // Once we've tried a few times and the id is still missing, surface
           // a visible warning. The first few attempts may simply be racing
@@ -139,7 +153,7 @@ export function applyLayout(layout: any) {
         }
       }
       if (attempts > 20 || layout.detachedTabs.every((dt: any) => hasTabAssignment(dt.tabId))) {
-        clearInterval(interval)
+        cancelApplyLayoutInterval()
         // Phase 4 (finding #2): if at least one tab was restored, pick the
         // first one as the active secondary tab. Without this, the
         // secondary panel header stays empty when the user opens the

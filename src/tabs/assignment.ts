@@ -15,7 +15,7 @@
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, restoreOverflow } from '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar } from '../sidebar/secondary'
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
@@ -395,9 +395,6 @@ export function restoreTabToPrimary(tabId: string) {
       clearSecondaryTab()
     }
   }
-
-  // Restore overflow on ancestors
-  restoreOverflow(tab.root)
 }
 
 /**

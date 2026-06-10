@@ -18,7 +18,8 @@ import { isShowTabLabels } from '../sidebar/polish'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
-export { hideAssignmentMenu } from './tab-context-menu'
+
+
 
 export function hideMainTabButton(tabId: string): void {
   const btn = findMainTabButton(tabId)

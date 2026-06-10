@@ -16,18 +16,12 @@
 // All toggles call setSettings({ field: value }) from settings/state.ts.
 // The "live-apply" effect chain runs through applySettings below.
 
-import { getSettings, setSettings, setPanelRefresh, getLastLoadedLayout, type FullCanvasSettings } from '../settings/state'
-import { dlog, dwarn, setDebug } from '../debug/log'
-import { installDebugEscapeHatch } from '../debug/fiber-scan'
-import { injectReflowStyles, updateChatReflow } from '../chat/reflow'
+import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
+import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } from '../settings/state'
+import { dlog, dwarn } from '../debug/log'
+import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
-import { getChatColumn } from '../dom/lumiverse'
-import { getSecondaryWrapper, mountSecondarySidebar, tearDownSecondarySidebar, injectDrawerTabStyles } from '../sidebar/secondary'
-import { refreshResizeHandles } from '../resize/handles'
-import { syncDrawerTabSettings, syncSecondaryTabLabels, startSideChangeWatcher, stopSideChangeWatcher } from '../sidebar/polish'
-import { applyLayout, cancelLayoutSave } from '../layout/persist'
-import { attachSlashRuntime } from '../slash/runtime'
-import { registerCleanup } from '../sidebar/cleanup'
+
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
 // Lumiverse's own CSS modules. The class definitions are injected once
@@ -37,34 +31,11 @@ import { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './r
 // Re-export for back-compat so existing imports keep working.
 export { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
 
-// Holds the active slash-runtime teardown function (or null when the
-// runtime is unmounted). applySettings flips the runtime on/off as the
-// `slashCommandsEnabled` setting changes, mirroring the master-toggle
-// pattern used for secondSidebarEnabled. The initial mount happens
-// inside setup() (so it can be gated on the persisted setting); setup()
-// calls setSlashDetach() with its returned teardown so this module
-// stays the single source of truth for the active runtime lifecycle.
-let _slashDetach: (() => void) | null = null
-
-// Captured SpindleFrontendContext from mountSettingsPanel. applySettings
-// needs it to (re)attach the slash runtime when the user toggles the
-// setting on at runtime. The runtime's intercept listeners attach to
-// `document` (not the panel host), so this capture is the only link
-// between the panel and the runtime.
-let _settingsPanelCtx: any = null
-
-/**
- * Register the active slash-runtime teardown. Called by setup() after
- * the initial mount and (internally) by applySettings after a runtime
- * re-attach. The supplied function is the one that detaches the
- * intercept listeners, toast surface, and CustomEvent listeners. Pass
- * null to clear the registration without calling anything (used when
- * the runtime is being torn down elsewhere and applySettings just needs
- * to forget the reference).
- */
-export function setSlashDetach(fn: (() => void) | null): void {
-  _slashDetach = fn
-}
+// Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
+// dispatch path (settings/state.setSettings → applySettings) needs the
+// ctx to feed feature.apply() — the slash feature re-attaches its
+// runtime on toggle-on, which requires the Spindle context.
+let _settingsPanelCtx: SpindleFrontendContext | null = null
 
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
 
@@ -455,7 +426,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
  * once the ctx is available. The host is managed by the Spindle loader's
  * mount API; we just append our DOM to the root it returns.
  */
-export function mountSettingsPanel(ctx: any) {
+export function mountSettingsPanel(ctx: SpindleFrontendContext) {
   try {
     if (!ctx?.ui?.mount) {
       dwarn('mountSettingsPanel: ctx.ui.mount unavailable; settings panel will not be registered')
@@ -480,102 +451,16 @@ export function mountSettingsPanel(ctx: any) {
 
 /**
  * Diff previous and next settings, applying live effects for any that
- * changed. Idempotent: calling with prev === next is a no-op.
+ * changed. Idempotent: calling with prev === next is a no-op. The actual
+ * per-setting logic lives in features/registry.ts — this function is just
+ * the diff dispatcher.
  */
 export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings): void {
-  // 1. Debug mode — flip the global flag and install/uninstall the escape hatch.
-  if (prev.debugMode !== next.debugMode) {
-    setDebug(next.debugMode)
-    if (next.debugMode) {
-      installDebugEscapeHatch()
-    } else {
-      delete window.__canvasDebug
-    }
-  }
-
-  // 2. Chat reflow — toggle the injected style block + recompute margins.
-  if (prev.chatReflow !== next.chatReflow) {
-    if (next.chatReflow) {
-      injectReflowStyles()
-      updateChatReflow()
-    } else {
-      const el = document.getElementById('sidebar-ux-reflow')
-      if (el) el.remove()
-      // Clear any leftover chat margins so columns stop being pushed.
-      const chat = getChatColumn()
-      if (chat) {
-        chat.style.removeProperty('--sidebar-ux-chat-ml')
-        chat.style.removeProperty('--sidebar-ux-chat-mr')
-      }
-    }
-  }
-
-  // 3. Second Sidebar master — mount/unmount the wrapper + restore layout.
-  if (prev.secondSidebarEnabled !== next.secondSidebarEnabled) {
-    if (next.secondSidebarEnabled) {
-      if (!getSecondaryWrapper()) {
-        const initialWidth = getLastLoadedLayout()?.secondary?.width
-        const initialOpen = getLastLoadedLayout()?.secondary?.open === true
-        mountSecondarySidebar({ initialWidth, initialOpen })
-        if (getLastLoadedLayout()) applyLayout(getLastLoadedLayout())
-      }
-    } else {
-      tearDownSecondarySidebar()
-    }
-  }
-
-  // 4. Resize handles — both drawers, single toggle.
-  if (prev.resizeSidebars !== next.resizeSidebars) {
-    refreshResizeHandles()
-  }
-
-  // 5. Auto-mirror on side swap — start/stop the side watcher.
-  if (prev.autoMirrorOnSideSwap !== next.autoMirrorOnSideSwap) {
-    if (next.autoMirrorOnSideSwap) {
-      startSideChangeWatcher()
-    } else {
-      stopSideChangeWatcher()
-    }
-  }
-
-  // 6. Mirror compact position — re-sync after a flip.
-  if (prev.mirrorCompactPosition !== next.mirrorCompactPosition) {
-    if (next.mirrorCompactPosition) {
-      syncDrawerTabSettings()
-    } else {
-      const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-      if (drawerTab) {
-        drawerTab.style.marginTop = ''
-      }
-    }
-  }
-
-  // 7. Tab labels — re-sync secondary tab button labels.
-  if (prev.showTabLabels !== next.showTabLabels) {
-    syncSecondaryTabLabels()
-  }
-
-  // 8. Consistent icon size — toggle the icon-size CSS rule only.
-  // The icon-size styles are injected separately from the drawer tab
-  // styles so removing them doesn't affect the icon wrapper's flex layout.
-  if (prev.consistentIconSize !== next.consistentIconSize) {
-    if (!next.consistentIconSize) {
-      const el = document.getElementById('sidebar-ux-icon-size-styles')
-      if (el) el.remove()
-    } else {
-      injectDrawerTabStyles()
-    }
-  }
-
-  // 9. layoutPersistence — when the user turns the toggle off, cancel any
-  // in-flight debounced layout save so a queued mutation doesn't sneak
-  // the current drawer state onto disk under the new "off" settings. The
-  // subsequent settings save (in setSettings) will use a clean snapshot,
-  // so a reload after toggling off starts from defaults rather than from
-  // "what was on screen when the user turned the toggle off." When
-  // turning it on, no action — the next mutation will save normally.
-  if (prev.layoutPersistence === true && next.layoutPersistence === false) {
-    cancelLayoutSave()
+  if (!_settingsPanelCtx) return
+  for (const feature of FEATURES) {
+    if (!feature.apply) continue
+    if (prev[feature.id] === next[feature.id]) continue
+    feature.apply(prev, next, _settingsPanelCtx)
   }
 
   // 10. Sidebar shadows (desktop) — inject/remove the CSS that disables

@@ -4,44 +4,43 @@
 // into the host, hydrates the persisted layout, and returns the teardown
 // to run when the extension is disabled.
 //
+// The feature-specific wiring lives in `features/registry.ts`. This file
+// is the orchestrator: it knows the lifecycle (init → load → mount → apply),
+// not the features. Adding a new setting is a one-liner in registry.ts.
+//
 // Order matters here:
 //   1. setBackendCtx — must run before any *Layout call.
-//   2. mountSettingsPanel — mounts the panel host; the panel reads defaults
-//      from getSettings() and re-renders on every setSettings call.
-//   3. Slash runtime — register its teardown in the cleanup chain BEFORE
-//      the persisted layout load (which can be slow on a cold cache).
-//   4. loadSavedLayout — single IPC roundtrip. Hydrates settings, installs
-//      the debug escape hatch, and conditionally mounts every gated feature.
+//   2. Unconditional unload flush + style cleanup registrations.
+//   3. mountSettingsPanel — must come before applySettings can be called
+//      on a runtime settings change (it captures the ctx for the live-apply
+//      dispatch path).
+//   4. feature init() — registers always-on teardowns (toast surface,
+//      applyLayout polling interval, slash runtime) so they fire on
+//      extension disable regardless of toggle state.
+//   5. loadSavedLayout — single IPC roundtrip. Hydrates settings, installs
+//      the debug escape hatch, and conditionally mounts every gated
+//      feature via feature.mount().
+//   6. applyMainDrawer + applyLayout — restore the persisted drawer state.
 //
-// The Phase 3 (finding #13) ordering — load the layout BEFORE mounting
-// the secondary sidebar — is what makes the drawer render at the right
-// width on first paint (no 68px sliver, no 500ms flicker).
-//
-// The sub-feature toggles (resize handles, side-change watcher,
-// tab-registration watcher, consistent-icon-size CSS) are gated at
-// their own mount sites rather than via the master toggle, so adding a
-// non-master-gated sub-feature later is a one-liner.
+// The Phase 3 (finding #13) ordering — load the layout BEFORE mounting the
+// secondary sidebar — is what makes the drawer render at the right width on
+// first paint (no 68px sliver, no 500ms flicker).
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
-import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from './sidebar/secondary'
-import { startReflowObserver } from './chat/reflow'
-import { mountResizeHandles } from './resize/handles'
-import { startSideChangeWatcher, startTabRegistrationWatcher } from './sidebar/polish'
-import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
-import { startMobileExclusion } from './sidebar/mobile-exclusion'
-import { attachSlashRuntime } from './slash/runtime'
-import { unmountToastSurface } from './slash/toast'
-import { registerCleanup, cleanupAll } from './sidebar/cleanup'
-import { startContextMenuListener, stopContextMenuListener } from './context-menu'
-import { installDebugEscapeHatch } from './debug/fiber-scan'
-import { mountSettingsPanel, setSlashDetach } from './settings/panel'
-import { setBackendCtx, applyLayout, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
+import { mountSettingsPanel } from './settings/panel'
+import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
+import { applyLayout } from './layout/apply'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
-import { getMainDrawer } from './dom/lumiverse'
+import { FEATURES, alwaysCleanups } from './features/registry'
+import { registerCleanup, cleanupAll } from './sidebar/cleanup'
+import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
+import { startMobileExclusion } from './sidebar/mobile-exclusion'
+import { startTabRegistrationWatcher } from './sidebar/polish'
+import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dwarn } from './debug/log'
-import { injectStyles } from './debug/styles'
+import { installDebugEscapeHatch } from './debug/fiber-scan'
 
 export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
@@ -81,11 +80,13 @@ export function setup(ctx: SpindleFrontendContext) {
   // a MutationObserver that reparents the host as soon as it appears.
   mountSettingsPanel(ctx)
 
-  // Slash runtime — gated by the `slashCommandsEnabled` setting. The
-  // attach call is deferred to the loadSavedLayout().then() block below
-  // so we know the persisted preference before deciding whether to
-  // install intercept listeners. The settings panel can also flip this
-  // at runtime via applySettings (settings/panel.ts).
+  // Always-on teardowns: toast surface, applyLayout polling interval, and
+  // the slash runtime. These fire on extension disable regardless of the
+  // user's current toggle state (e.g. even if slash was never mounted,
+  // its alwaysCleanup is a no-op, but the toast + interval are real).
+  for (const teardown of alwaysCleanups()) {
+    registerCleanup(teardown)
+  }
 
   // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
   // secondary sidebar so its initial position matches the saved state on the
@@ -116,34 +117,19 @@ export function setup(ctx: SpindleFrontendContext) {
 
     if (getSettings().debugMode) installDebugEscapeHatch()
 
-    const initialWidth = layout?.secondary?.width
-    const initialOpen = layout?.secondary?.open === true
+    // Mount every feature whose setting is currently truthy. The feature
+    // owns its own mount logic; the orchestrator just runs them in order
+    // and collects teardowns. Sub-features (resize handles, side-change
+    // watcher, etc.) are gated at their own mount sites rather than via
+    // the master toggle, so a non-master-gated sub-feature is a one-liner
+    // addition to the registry.
+    for (const feature of FEATURES) {
+      if (!feature.mount) continue
+      if (!getSettings()[feature.id]) continue
+      const teardown = feature.mount(ctx, layout)
+      if (typeof teardown === 'function') registerCleanup(teardown)
+    }
 
-    // Mount features gated by settings. The master toggle is the only one
-    // that gates other mounts; sub-features are gated at their own mount
-    // sites so a future change to add a non-master-gated sub-feature is
-    // a one-liner.
-    if (getSettings().secondSidebarEnabled) {
-      mountSecondarySidebar({ initialWidth, initialOpen })
-      registerCleanup(tearDownSecondarySidebar)
-    }
-    if (getSettings().chatReflow) {
-      const detachReflow = startReflowObserver()
-      registerCleanup(detachReflow)
-    }
-    if (getSettings().resizeSidebars) {
-      mountResizeHandles()
-      registerCleanup(() => {
-        const mainDrawer = getMainDrawer()
-        mainDrawer?.querySelector('.sidebar-ux-resize-handle')?.remove()
-        const secondaryWrapper = getSecondaryWrapper()
-        const secondaryDrawer = secondaryWrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
-        secondaryDrawer?.querySelector('.sidebar-ux-resize-handle')?.remove()
-      })
-    }
-    if (getSettings().autoMirrorOnSideSwap) {
-      startSideChangeWatcher()
-    }
     // Main-drawer persistence runs whenever the master toggle is on,
     // independent of resizeSidebars — the open/close watcher (via
     // spindle.ui.onDrawerChange) captures state even when Canvas isn't
@@ -151,60 +137,14 @@ export function setup(ctx: SpindleFrontendContext) {
     startMainDrawerPersistence()
     registerCleanup(stopMainDrawerPersistence)
     // Mobile exclusion: mutual exclusion + viewport-cross detection
-    const stopMobileExclusion = startMobileExclusion()
-    registerCleanup(stopMobileExclusion)
+    registerCleanup(startMobileExclusion())
     startTabRegistrationWatcher()
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     startContextMenuListener()
     registerCleanup(stopContextMenuListener)
 
-    // Always inject the consistent-icon-size CSS if it's enabled — it
-    // doesn't need a wrapper to apply.
-    if (getSettings().consistentIconSize) {
-      injectDrawerTabStyles()
-    }
 
-    // Initial shadow hydration — inject the disable-CSS if the corresponding
-    // shadow toggle is OFF (i.e. shadows are suppressed).
-    if (!getSettings().sidebarShadowsDesktop) {
-      injectStyles(
-        'sidebar-ux-shadow-disable-desktop',
-        `@media (min-width: 601px) {
-          .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
-            box-shadow: none !important;
-          }
-        }`
-      )
-    }
-    if (!getSettings().sidebarShadowsMobile) {
-      injectStyles(
-        'sidebar-ux-shadow-disable-mobile',
-        `@media (max-width: 600px) {
-          .sidebar-ux-drawer, :has(> [data-spindle-mount="sidebar"]) {
-            box-shadow: none !important;
-          }
-        }`
-      )
-    }
-
-    // Slash runtime — gated by `slashCommandsEnabled`. When the user
-    // has it off in their saved settings, we never install the
-    // intercept listeners, the suggest popup, or the toast surface;
-    // the settings panel can still flip it on at runtime via
-    // applySettings (settings/panel.ts) and the runtime will mount
-    // there.
-    //
-    // We register the teardown with the settings panel (setSlashDetach)
-    // as well as the cleanup chain. The panel needs to know the active
-    // runtime so that toggling the setting off at runtime calls the
-    // same teardown — without this, the panel's _slashDetach stays
-    // null and the runtime keeps running.
-    if (getSettings().slashCommandsEnabled) {
-      const detachSlash = attachSlashRuntime(ctx)
-      setSlashDetach(detachSlash)
-      registerCleanup(detachSlash)
-    }
 
     // Main-drawer restore — independent of secondSidebarEnabled. The
     // main drawer is host-owned and its open/close state is captured

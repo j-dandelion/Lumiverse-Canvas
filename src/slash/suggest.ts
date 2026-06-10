@@ -6,6 +6,8 @@
 import type { SlashCommandDef } from './types'
 import { injectStyles } from '../debug/styles'
 import { position, attachViewportListeners, detachViewportListeners } from './positioning'
+import { applySuggestion, isValidSlashContext, textareaHasUsage } from './dom-utils'
+export { position, attachViewportListeners, detachViewportListeners } from './positioning'
 
 const SUGGEST_ID = 'canvas-slash-suggest'
 const STYLE_ID = 'canvas-slash-suggest-styles'
@@ -109,27 +111,33 @@ export function showSuggest(
         if (!currentAnchor) return
         const cmd = currentOptions[i]
         if (!cmd) return
-        // If the textarea already starts with the same command name
-        // (e.g. `/select 1-3` and the user clicks the `/select` row),
-        // the click is a no-op for the value — just dismiss the popup
-        // and focus. The user has a complete command; overwriting it
-        // with the bare usage would wipe the user's args. This mirrors
-        // the intercept.ts Enter fix: never erase a complete command
-        // the user has already typed.
-        const typedName = currentAnchor.value.split(/\s/, 1)[0].slice(1).toLowerCase()
-        if (typedName === cmd.name.toLowerCase()) {
+        // Slash rule: autocomplete is only valid when '/' is at column 0.
+        // If the popup is somehow visible with a non-'/' prefix, dismiss
+        // the popup, focus the textarea, and don't modify the value.
+        if (!isValidSlashContext(currentAnchor)) {
           hideSuggest()
           currentAnchor.focus()
           return
         }
-        // Mirror the Tab-commit pattern in intercept.ts:105-116 — same label
-        // resolution, same input event, same hideSuggest. Click just adds a
-        // focus() at the end so the user can immediately type or press Enter.
+        // If the textarea already contains the active command's full
+        // usage (with possible trailing whitespace), the click is a
+        // no-op for the value — just dismiss the popup and focus. The
+        // user has a complete command; overwriting it with the bare
+        // usage would wipe the user's args. This mirrors the
+        // intercept.ts Enter/Tab fix: never erase a complete command
+        // the user has already typed. Equality (textarea == usage) is
+        // NOT a no-op — autocomplete should add the trailing space.
+        if (textareaHasUsage(currentAnchor, cmd)) {
+          hideSuggest()
+          currentAnchor.focus()
+          return
+        }
+        // Mirror the Tab/Enter contract from intercept.ts: same label
+        // resolution, same applySuggestion helper, same hideSuggest +
+        // focus. The helper handles the trailing space, the synthetic
+        // input event, the skip flag, and cursor placement.
         const label = cmd.usage ?? `/${cmd.name}`
-        const alreadyHasArgs = currentAnchor.value.includes(' ')
-        const replacement = alreadyHasArgs ? label : `${label} `
-        currentAnchor.value = replacement
-        currentAnchor.dispatchEvent(new Event('input', { bubbles: true }))
+        applySuggestion(currentAnchor, label)
         hideSuggest()
         currentAnchor.focus()
       })
