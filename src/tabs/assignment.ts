@@ -19,7 +19,7 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, clos
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
-  cssEscape,
+  cssEscape, findSafeFallbackButton, isSettingsButton,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
 import {
@@ -133,19 +133,42 @@ export function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string
     }
   }
 
-  // Prefer the previous button (the one rendered immediately above the moved
-  // tab in the tab list). If the moved tab is the first, use the next button.
-  let fallbackBtn: HTMLElement | undefined = allButtons[movedBtnIdx - 1]
-  if (!fallbackBtn || fallbackBtn.style.display === 'none') {
-    fallbackBtn = allButtons[movedBtnIdx + 1]
+  // Pick a safe fallback: prefer the visible built-in tab immediately
+  // adjacent to the moved tab. Skip non-visible buttons, extension tabs,
+  // and the Lumiverse Settings tab. The Settings tab is excluded because
+  // clicking it opens the Settings panel AND fails to swap the drawer's
+  // drawerTab — after the 2-RAF wait, repositionTab physically moves
+  // the tab's DOM node out of the main panel content, leaving a stale
+  // header with an empty body (the "ghost panel" reported when the
+  // only extension tab is moved out while focused).
+  //
+  // First walk backward from the moved tab: the button immediately
+  // before the moved tab is the user's expected "next panel" when
+  // removing a tab. If no safe candidate is found before the start of
+  // the list, walk forward. The final fallback (no neighbor at all)
+  // uses findSafeFallbackButton to pick the first safe built-in tab
+  // anywhere in the sidebar.
+  const isSafeCandidate = (b: HTMLElement | undefined): b is HTMLElement => {
+    if (!b) return false
+    if (b.style.display === 'none') return false
+    if (!b.className.includes('tabBtn')) return false
+    if (b.className.includes('tabBtnExtension')) return false
+    return !isSettingsButton(b)
   }
-  if (!fallbackBtn || fallbackBtn.style.display === 'none') {
-    fallbackBtn = allButtons.find(
-      (b) => b.style.display !== 'none' && b.className.includes('tabBtn') && !b.className.includes('tabBtnExtension')
-    )
+  let fallbackBtn: HTMLElement | null = null
+  for (let offset = -1; offset >= -(movedBtnIdx) && !fallbackBtn; offset--) {
+    fallbackBtn = isSafeCandidate(allButtons[movedBtnIdx + offset]) ? allButtons[movedBtnIdx + offset] : null
   }
   if (!fallbackBtn) {
-    dwarn('switchDrawerToFallback(main): no fallback button found, proceeding without switching')
+    for (let offset = 1; offset < allButtons.length - movedBtnIdx && !fallbackBtn; offset++) {
+      fallbackBtn = isSafeCandidate(allButtons[movedBtnIdx + offset]) ? allButtons[movedBtnIdx + offset] : null
+    }
+  }
+  if (!fallbackBtn) {
+    fallbackBtn = findSafeFallbackButton(sidebar)
+  }
+  if (!fallbackBtn) {
+    dwarn('switchDrawerToFallback(main): no safe fallback button found, proceeding without switching')
     then()
     return
   }

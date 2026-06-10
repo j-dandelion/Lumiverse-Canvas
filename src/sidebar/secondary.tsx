@@ -18,7 +18,7 @@ import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
 import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
-import { showMainTabButton } from '../tabs/buttons'
+import { showMainTabButton, findSafeFallbackButton } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
@@ -361,12 +361,13 @@ export function tearDownSecondarySidebar(): void {
     // secondary sidebar, switch to a built-in fallback first. Otherwise
     // restoreTabToPrimary's click() won't re-render React (the DOM node
     // was physically in the secondary sidebar and React never unmounted it).
+    // Use findSafeFallbackButton so we never click the Lumiverse Settings
+    // tab (which would open the Settings panel and leave a ghost panel
+    // behind — same root cause as the move-to-secondary bug fixed in
+    // tabs/assignment.ts).
     const sidebar = getMainSidebar()
     if (sidebar) {
-      const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]')) as HTMLElement[]
-      const fallbackBtn = allButtons.find(
-        b => b.style.display !== 'none' && b.className.includes('tabBtn') && !b.className.includes('tabBtnExtension')
-      )
+      const fallbackBtn = findSafeFallbackButton(sidebar)
       if (fallbackBtn) {
         // Check if any secondary tab is currently active in the main drawer.
         for (const [tabId, side] of getTabAssignments()) {
