@@ -109,6 +109,11 @@ const chatReflowFeature: CanvasFeature = {
       // Off → on at runtime. mount() was skipped at boot (setting
       // was falsy then), so the observer is not yet attached.
       injectReflowStyles()  // idempotent; re-injects style tag if on→off removed it
+      // Synchronous reflow: populate --sidebar-ux-chat-ml/mr immediately
+      // so the reflow CSS takes effect on the next paint, with no need
+      // to close/reopen the sidebar. The async observer in startReflowObserver
+      // would otherwise only fire on a future DOM mutation.
+      updateChatReflow()
       if (!_chatReflowTeardown) {
         _chatReflowTeardown = startReflowObserver()
         // Runtime-attached teardowns need to be in the cleanup chain
