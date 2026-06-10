@@ -38,9 +38,6 @@ export interface CanvasSettings {
   /** Drag-to-resize handle on both drawers (main + secondary). */
   resizeSidebars?: boolean
 
-  /** Auto-rebuild the secondary wrapper when the main drawer switches side. */
-  autoMirrorOnSideSwap?: boolean
-
   /** Mirror the main drawer's compact mode + vertical position. */
   mirrorCompactPosition?: boolean
 
@@ -89,7 +86,6 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   // Second Sidebar
   secondSidebarEnabled: true,
   resizeSidebars: true,
-  autoMirrorOnSideSwap: true,
   mirrorCompactPosition: true,
   showTabLabels: 'follow',
   consistentIconSize: true,

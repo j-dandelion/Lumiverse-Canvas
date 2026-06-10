@@ -331,18 +331,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: master.btn,
   }))
 
-  const mirror = makeToggle(
-    () => getSettings().autoMirrorOnSideSwap,
-    (v) => setSettings({ autoMirrorOnSideSwap: v }),
-    { disabled: () => !getSettings().secondSidebarEnabled }
-  )
-  sec2.appendChild(buildSettingRow({
-    label: 'Auto-mirror when the main sidebar switches side',
-    hint: 'Rebuilds the secondary drawer on the opposite edge when the user moves the main one.',
-    control: mirror.btn,
-    disabled: !getSettings().secondSidebarEnabled,
-  }))
-
   const compact = makeToggle(
     () => getSettings().mirrorCompactPosition,
     (v) => setSettings({ mirrorCompactPosition: v }),
@@ -414,7 +402,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   const refresh = () => {
     master.refresh()
     resizeSidebars.refresh()
-    mirror.refresh()
     compact.refresh()
     iconSize.refresh()
     chat.refresh()
@@ -424,7 +411,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
     // Update disabled visual state for sub-features gated by the master toggle.
-    for (const row of [resizeSidebars, mirror, compact]) {
+    for (const row of [resizeSidebars, compact]) {
       const d = !getSettings().secondSidebarEnabled
       row.btn.disabled = d
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'

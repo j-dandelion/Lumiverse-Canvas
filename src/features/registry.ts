@@ -30,7 +30,7 @@ import { getChatColumn, getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
-import { startSideChangeWatcher, stopSideChangeWatcher, syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/polish'
+import { syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/polish'
 import { cancelLayoutSave } from '../layout/persist'
 import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
@@ -108,6 +108,7 @@ const chatReflowFeature: CanvasFeature = {
     if (next.chatReflow) {
       // Off → on at runtime. mount() was skipped at boot (setting
       // was falsy then), so the observer is not yet attached.
+      injectReflowStyles()  // idempotent; re-injects style tag if on→off removed it
       if (!_chatReflowTeardown) {
         _chatReflowTeardown = startReflowObserver()
         // Runtime-attached teardowns need to be in the cleanup chain
@@ -176,20 +177,6 @@ const resizeSidebarsFeature: CanvasFeature = {
     // and is the canonical "make the resize state match the current
     // settings" call.
     refreshResizeHandles()
-  },
-}
-
-/** Auto-mirror: rebuild the secondary wrapper when the main drawer switches side. */
-const autoMirrorFeature: CanvasFeature = {
-  id: 'autoMirrorOnSideSwap',
-  mount() {
-    startSideChangeWatcher()
-    return stopSideChangeWatcher
-  },
-  apply(prev, next) {
-    if (prev.autoMirrorOnSideSwap === next.autoMirrorOnSideSwap) return
-    if (next.autoMirrorOnSideSwap) startSideChangeWatcher()
-    else stopSideChangeWatcher()
   },
 }
 
@@ -343,7 +330,6 @@ export const FEATURES: readonly CanvasFeature[] = [
   chatReflowFeature,
   secondSidebarFeature,
   resizeSidebarsFeature,
-  autoMirrorFeature,
   polishFeature,
   consistentIconSizeFeature,
   shadowsDesktopFeature,

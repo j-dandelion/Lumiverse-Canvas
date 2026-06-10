@@ -17,7 +17,7 @@ import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './polish'
 import { mountResizeHandles } from '../resize/handles'
-import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer } from '../tabs/assignment'
+import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments } from '../tabs/assignment'
 import { showMainTabButton } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
@@ -385,6 +385,7 @@ export function tearDownSecondarySidebar(): void {
       repositionTab(tabId, 'primary')
       showMainTabButton(tabId)
     }
+    clearTabAssignments()
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }

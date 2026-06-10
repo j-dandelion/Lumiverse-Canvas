@@ -16,7 +16,6 @@ assert(typeof settings === 'object', 'getSettings returns an object')
 // Verify all default fields exist
 assert(typeof settings.secondSidebarEnabled === 'boolean', 'secondSidebarEnabled is boolean')
 assert(typeof settings.resizeSidebars === 'boolean', 'resizeSidebars is boolean')
-assert(typeof settings.autoMirrorOnSideSwap === 'boolean', 'autoMirrorOnSideSwap is boolean')
 assert(typeof settings.mirrorCompactPosition === 'boolean', 'mirrorCompactPosition is boolean')
 assert(typeof settings.showTabLabels === 'string', 'showTabLabels is string')
 assert(typeof settings.consistentIconSize === 'boolean', 'consistentIconSize is boolean')
