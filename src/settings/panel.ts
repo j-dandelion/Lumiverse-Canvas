@@ -21,6 +21,27 @@ import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } fr
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
+import { attachSlashRuntime } from '../slash/runtime'
+import { registerCleanup } from '../sidebar/cleanup'
+
+// Holds the active slash-runtime teardown function (or null when the
+// runtime is unmounted). applySettings flips the runtime on/off as the
+// `slashCommandsEnabled` setting changes. The initial mount happens
+// inside setup(); setup() calls setSlashDetach() with its returned
+// teardown so this module stays the single source of truth for the
+// active runtime lifecycle.
+let _slashDetach: (() => void) | null = null
+
+/**
+ * Register the active slash-runtime teardown. Called by setup() after
+ * the initial mount and (internally) by applySettings after a runtime
+ * re-attach. The supplied function is the one that detaches the
+ * intercept listeners, toast surface, and CustomEvent listeners. Pass
+ * null to clear the registration without calling anything.
+ */
+export function setSlashDetach(fn: (() => void) | null): void {
+  _slashDetach = fn
+}
 
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
