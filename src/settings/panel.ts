@@ -246,6 +246,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   // --- Section: Sidebars ---
   const secSidebars = section('Sidebars')
 
+  const moveControlsToOuter = makeToggle(
+    () => getSettings().moveControlsToOuterEdge,
+    (v) => setSettings({ moveControlsToOuterEdge: v })
+  )
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Move controls to outer edge',
+    hint: 'Moves the column of tab buttons to the screen-edge side of the secondary sidebar. The purple border stays between the tab list and the panel; the resize handle stays on the chat-facing edge. No effect on mobile.',
+    control: moveControlsToOuter.btn,
+  }))
+
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
     (v) => setSettings({ resizeSidebars: v }),
@@ -361,6 +371,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   // thread the refresh closure through every toggle's onChange.
   const refresh = () => {
     master.refresh()
+    moveControlsToOuter.refresh()
     resizeSidebars.refresh()
     compact.refresh()
     iconSize.refresh()

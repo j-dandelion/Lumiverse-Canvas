@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Canvas: add "Move controls to outer edge" toggle in Sidebars settings.
+
 ## v1.6.2 — 2026-06-11
 
 ### Fixed

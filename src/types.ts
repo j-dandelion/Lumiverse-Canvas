@@ -49,6 +49,12 @@ export interface CanvasSettings {
   consistentIconSize?: boolean
 
   // --- Sidebars ---
+  /** Move the tab-button column to the screen-edge side of the secondary
+   *  sidebar (desktop/tablet only). The border stays between the tab list
+   *  and the panel; the resize handle stays on the chat-facing edge.
+   *  No-op on mobile (mobile CSS forces column layout + bottom border). */
+  moveControlsToOuterEdge?: boolean
+
   /** Show box-shadow on sidebars at min-width: 601px (desktop). */
   sidebarShadowsDesktop?: boolean
 
@@ -90,6 +96,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   showTabLabels: 'follow',
   consistentIconSize: true,
   // Sidebars
+  moveControlsToOuterEdge: false,
   sidebarShadowsDesktop: true,
   sidebarShadowsMobile: false,
   // Chat & Layout

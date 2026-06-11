@@ -24,6 +24,8 @@ import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
 import { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
+import { applyTabListPosition } from './tab-position'
+import { getSettings } from '../settings/state'
 
 // Re-export for backward compatibility
 export { SECONDARY_WIDTH_VAR, injectDrawerTabStyles }
@@ -40,6 +42,23 @@ let _secondaryDrawer: HTMLElement | null = null
 // tabs/buttons, context-menu, layout/persist). All read; setSecondarySidebarOpen
 // and unmountSecondarySidebar mutate.
 export function getSecondaryWrapper(): HTMLElement | null { return _secondaryWrapper }
+export function getSecondaryDrawer(): HTMLElement | null {
+  return _secondaryWrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
+}
+
+export function getSecondaryTabList(): HTMLElement | null {
+  return _secondaryWrapper?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
+}
+
+export function getSecondaryPanel(): HTMLElement | null {
+  return _secondaryWrapper?.querySelector('.sidebar-ux-panel') as HTMLElement | null
+}
+
+/** Test-only: set the cached secondary wrapper so getters can return non-null in unit tests. */
+export function __setSecondaryWrapperForTest(wrapper: HTMLElement | null): void {
+  _secondaryWrapper = wrapper
+}
+
 export function isSecondarySidebarOpen(): boolean { return _secondarySidebarOpen }
 export function setSecondarySidebarOpen(open: boolean): void { _secondarySidebarOpen = open }
 // Consolidates the "remove + null + open=false" pattern used by
@@ -149,7 +168,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
        handle's 4px overhang on the inner edge isn't clipped. Children
        (sidebar, panel, content) handle their own overflow containment. */
     isolation: isolate;
-    flex-direction: ${side === 'left' ? 'row-reverse' : 'row'};
+    flex-direction: ${side === 'left' ? 'row' : 'row-reverse'};
   `
 
   // Sidebar (tab list, matches main sidebar .sidebar exactly)
@@ -164,7 +183,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     gap: 4px;
     overflow-y: auto;
     scrollbar-width: none;
-    border-${side === 'left' ? 'left' : 'right'}: 1px solid var(--lumiverse-primary-020);
+    border-${side === 'left' ? 'right' : 'left'}: 1px solid var(--lumiverse-primary-020);
     background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
   `
 
@@ -333,6 +352,11 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   if (_secondaryWrapper) return
   _secondaryWrapper = createSecondarySidebar(options)
   document.body.appendChild(_secondaryWrapper)
+  applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+    drawer: _secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement,
+    tabList: _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement,
+    handle: _secondaryWrapper.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null,
+  })
   // Phase 3: sync the in-flight state to the initial layout so a hard-refresh
   // with secondary open doesn't trip the "no transition needed" check inside
   // openSecondarySidebar() on the first user click.

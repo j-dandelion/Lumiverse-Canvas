@@ -35,6 +35,7 @@ import { cancelLayoutSave } from '../layout/persist'
 import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
+import { applyTabListPosition } from '../sidebar/tab-position'
 
 /** A teardown returned by mount(). */
 export type Teardown = () => void
@@ -328,6 +329,24 @@ const slashFeature: CanvasFeature = _slashImpl.feature
  *  cleanup chain via alwaysCleanups(). */
 export function slashAlwaysCleanup(): void { _slashImpl.alwaysCleanup() }
 
+/** Tab list position: moves the column of tab buttons to the screen-edge
+ *  side of the secondary sidebar when enabled. No mount needed — the
+ *  effect is applied by createSecondarySidebar / mountSecondarySidebar /
+ *  mountResizeHandles at construction time, and re-applied on toggle
+ *  flip via apply(). */
+const tabPositionFeature: CanvasFeature = {
+  id: 'moveControlsToOuterEdge',
+  init() {
+    // Apply once at boot so the main sidebar gets its initial
+    // flex-direction/border even when the secondary is disabled.
+    applyTabListPosition(getSettings().moveControlsToOuterEdge)
+  },
+  apply(prev, next) {
+    if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge) return
+    applyTabListPosition(next.moveControlsToOuterEdge)
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -341,6 +360,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   shadowsMobileFeature,
   layoutPersistenceFeature,
   slashFeature,
+  tabPositionFeature,
 ]
 
 /** Unconditional cleanup registrations that fire on extension disable

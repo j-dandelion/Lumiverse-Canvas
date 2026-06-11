@@ -14,7 +14,7 @@
 // offset from the inner edge is stable regardless of width or sibling
 // presence. The 4px overhang is intentional — see comment in
 // mountResizeHandles' secondary block.
-import { getMainDrawer, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
+import { getMainDrawer, getMainSidebar, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { scheduleReflow } from '../chat/reflow'
@@ -22,6 +22,7 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from
 import { repositionAssignedTabs } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { getSettings } from '../settings/state'
+import { applyTabListPosition } from '../sidebar/tab-position'
 
 export function isPointerResizeActive(): boolean {
   return window.matchMedia('(pointer: coarse)').matches
@@ -135,6 +136,14 @@ export function mountResizeHandles(): void {
 
     // Insert handle as sibling of panel inside the drawer
     mainDrawer.appendChild(handle)
+
+    // Apply tab list position to the main sidebar (flex-direction + border).
+    // The main handle's own position is invariant (set above) and is NOT
+    // touched here — it lives in handles.ts by design.
+    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+      mainDrawer,
+      mainTabList: getMainSidebar(),
+    })
   }
 
   // Secondary sidebar resize handle — insert into the secondary drawer.
@@ -182,6 +191,11 @@ export function mountResizeHandles(): void {
       `
 
       secondaryDrawer.appendChild(handle)
+      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+        drawer: secondaryDrawer,
+        tabList: secondaryDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement,
+        handle,
+      })
     }
   }
 }
