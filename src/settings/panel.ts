@@ -251,8 +251,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     (v) => setSettings({ moveControlsToOuterEdge: v })
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Move controls to outer edge',
-    hint: 'Moves the column of tab buttons to the screen-edge side of the secondary sidebar. The purple border stays between the tab list and the panel; the resize handle stays on the chat-facing edge. No effect on mobile.',
+    label: 'Move tab controls to outer edge',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area.',
     control: moveControlsToOuter.btn,
   }))
 

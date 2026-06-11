@@ -4,7 +4,7 @@
 
 ### Added
 
-- Canvas: add "Move controls to outer edge" toggle in Sidebars settings.
+- Canvas: add "Move tab controls to outer edge" toggle in Sidebars settings.
 
 ### Fixed
 
