@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.6.2 — 2026-06-11
+
+### Fixed
+
+- **Sidebar shadows (desktop) / (mobile) settings now survive a hard refresh.** The feature mount loop in `setup.ts` skipped features whose setting was falsy, but the shadow features are inverted: they need to inject `box-shadow: none !important` when the user has shadows turned OFF. The result was that shadows always showed on page refresh even with the toggle disabled, on both desktop and mobile. Wired the existing-but-unused `init()` hook on `CanvasFeature`. Both shadow features now implement `init()` to inject the disable-CSS post-hydration but pre-mount, so it fires regardless of the mount gate.
+
+### Removed
+
+- Unreachable `mount()` stubs from `shadowsDesktopFeature` and `shadowsMobileFeature` in `src/features/registry.ts`. The `mount()` methods were dead code: the mount loop in `setup.ts` skips features whose setting is falsy, but the shadow `mount()` bodies only acted when the setting was falsy. With `init()` now handling the boot-time injection and `apply()` handling runtime toggles, the stubs served no purpose. Frontend bundle dropped from 176.1 KB to 175.8 KB.
+
 ## v1.6.1 — 2026-06-10
 
 - Re-bundled. No behavioral changes since v1.6.0.
