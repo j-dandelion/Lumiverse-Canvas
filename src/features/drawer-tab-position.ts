@@ -5,6 +5,15 @@
 // display setting. The drag handler writes to the DOM directly for instant
 // feedback, then persists to Canvas settings on drag-end.
 //
+// Bidirectional mirror: when mirrorCompactPosition is on, dragging the
+// secondary also moves the main. The secondary's drag installer wires an
+// onLiveUpdate callback that writes the new vh to the main's DOM on every
+// pointermove. The style observer on the main (wired in polish.ts) then
+// fires on the next microtask and writes the same value back to the
+// secondary (idempotent). The secondary's onCommit also persists the
+// main's override so the apply path doesn't undo the live update on the
+// next settings diff.
+//
 // This feature does NOT write to the Lumiverse store — the Lumiverse
 // slider won't reflect the drag value live (documented limitation).
 
@@ -77,9 +86,39 @@ export const drawerTabDragFeature: CanvasFeature = {
     const secondaryTab = getSecondaryDrawerTab()
     if (secondaryTab && !_dragInstalled.has(secondaryTab)) {
       _dragInstalled.add(secondaryTab)
-      const teardown = installDrawerTabDrag(secondaryTab, 'secondary', (vh) => {
-        setSettings({ secondaryDrawerTabOverrideVh: vh })
-      })
+      const teardown = installDrawerTabDrag(
+        secondaryTab,
+        'secondary',
+        (vh) => {
+          // Bidirectional mirror: when mirrorCompactPosition is on, a
+          // drag of the secondary also moves the main. Persist BOTH
+          // overrides so the next applyDrawerTabPosition tick (fired
+          // by this same setSettings) writes a consistent state — if
+          // we only wrote the secondary's override, the apply path
+          // would overwrite the main's live-updated DOM with the main's
+          // old override value and undo the drag.
+          const settings = getSettings()
+          if (settings.mirrorCompactPosition) {
+            setSettings({
+              secondaryDrawerTabOverrideVh: vh,
+              mainDrawerTabOverrideVh: vh,
+            })
+          } else {
+            setSettings({ secondaryDrawerTabOverrideVh: vh })
+          }
+        },
+        // Live update: propagate the drag to the main when mirroring is
+        // on. The drag handler only writes to the secondary; we write
+        // the same vh to the main synchronously, then the style
+        // observer on the main fires on the next microtask and writes
+        // the value back to the secondary (idempotent — the drag
+        // handler just wrote it). Both tabs move in lockstep.
+        (vh) => {
+          if (!getSettings().mirrorCompactPosition) return
+          const mainTab = getMainDrawerTab()
+          if (mainTab) mainTab.style.marginTop = `${vh}vh`
+        },
+      )
       registerCleanup(teardown)
     }
 

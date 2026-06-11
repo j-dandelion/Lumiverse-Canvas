@@ -3,7 +3,7 @@
 // Verifies:
 // - pxToClampedVh math (clamp/round)
 // - parseVhFromStyle parsing
-// - installDrawerTabDrag click-vs-drag threshold (4px)
+// - installDrawerTabDrag click-vs-drag threshold (10px)
 // - installDrawerTabDrag multi-move update (regression: subsequent moves
 //   must keep updating the DOM, not just the first threshold-crossing one)
 // - installDrawerTabDrag aria-label updates
@@ -67,17 +67,24 @@ import { pxToClampedVh, parseVhFromStyle, installDrawerTabDrag } from '../drag'
 
 interface RecordedHandler { type: string; fn: (e: any) => void; capture: boolean }
 
-/** Build a fake pointer/click event with the methods the installer calls. */
+/** Build a fake pointer/click event with the methods the installer calls.
+ *  `stopImmediatePropagation` sets a flag on the event that FakeEl.fire
+ *  honors — subsequent listeners of the same type are not invoked.
+ *  This matches the real DOM behavior: capture-phase listeners that
+ *  call stopImmediatePropagation prevent later listeners (on the same
+ *  element, same type) from firing. */
 function fakeEvent(overrides: Partial<{ clientY: number; clientX: number; pointerId: number }> = {}) {
-  return {
+  const e: any = {
     clientY: 0,
     clientX: 0,
     pointerId: 1,
     preventDefault: () => {},
-    stopImmediatePropagation: () => {},
-    stopPropagation: () => {},
+    stopImmediatePropagation: function() { this._stopped = true },
+    stopPropagation: function() { this._stopped = true },
+    _stopped: false,
     ...overrides,
   }
+  return e
 }
 
 class FakeEl {
@@ -97,10 +104,15 @@ class FakeEl {
   setAttribute(k: string, v: string) {
     if (k === 'aria-label') this.ariaLabel = v
   }
-  /** Dispatch all listeners of a given type, in registration order. */
+  /** Dispatch listeners in registration order. Respects
+   *  e._stopped (set by stopImmediatePropagation) so capture-phase
+   *  listeners can prevent later listeners on the same element/type. */
   fire(type: string, e: any) {
     for (const h of this._listeners) {
-      if (h.type === type) h.fn(e)
+      if (h.type === type) {
+        h.fn(e)
+        if (e._stopped) break
+      }
     }
   }
   /** Count listeners of a given type and capture flag. */
@@ -152,7 +164,7 @@ const fakeDoc = new FakeDocument()
 ;(globalThis as any).document = fakeDoc
 
 // ============================================================
-// Drag threshold: < 4px does not start drag
+// Drag threshold: < 10px does not start drag
 // ============================================================
 {
   const el = new FakeEl()
@@ -163,19 +175,19 @@ const fakeDoc = new FakeDocument()
 
   // pointerdown on el
   el.fire('pointerdown', fakeEvent({ clientY: 100 }))
-  // pointermove on document with delta = 3 (below threshold)
-  fakeDoc.fire('pointermove', fakeEvent({ clientY: 103 }))
+  // pointermove on document with delta = 9 (below threshold)
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 109 }))
   // pointerup
   fakeDoc.fire('pointerup', fakeEvent())
 
-  assertEqual(committed, -1, 'threshold-3: onCommit not called for 3px move')
-  assertEqual(el.count('click', true), 0, 'threshold-3: no capture-phase click listener installed')
+  assertEqual(committed, -1, 'threshold-9: onCommit not called for 9px move')
+  assertEqual(el.count('click', true), 0, 'threshold-9: no capture-phase click listener installed')
 
   teardown()
 }
 
 // ============================================================
-// Drag threshold: >= 4px starts drag, commits on pointerup
+// Drag threshold: >= 10px starts drag, commits on pointerup
 // ============================================================
 {
   const el = new FakeEl()
@@ -193,7 +205,13 @@ const fakeDoc = new FakeDocument()
   fakeDoc.fire('pointerup', fakeEvent())
   assertEqual(committed, 25, 'threshold-100: onCommit called with 25')
   assertEqual(el.ariaLabel, 'Drag to reposition', 'threshold-100: aria-label restored on pointerup')
-  assertEqual(el.count('click', true), 0, 'threshold-100: capture-phase click listener removed')
+  // The capture click listener is NOT removed synchronously in cleanup
+  // — it's deferred via setTimeout(0) so the synthesized click event
+  // (which fires synchronously after pointerup) can be suppressed
+  // first. In the test we don't await the setTimeout, so the listener
+  // is still attached here. The teardown below synchronously removes
+  // it (bypassing the setTimeout) so it doesn't leak into the next case.
+  assertEqual(el.count('click', true), 1, 'threshold-100: capture click listener still present after pointerup (deferred removal)')
 
   teardown()
 }
@@ -211,13 +229,13 @@ const fakeDoc = new FakeDocument()
 
   el.style.marginTop = '15vh'
   el.fire('pointerdown', fakeEvent({ clientY: 100 }))
-  // Move 1: 5px down (crosses threshold) → 15 + 0.5 = 15.5vh
-  fakeDoc.fire('pointermove', fakeEvent({ clientY: 105 }))
-  assertEqual(el.style.marginTop, '15.5vh', 'multi-move: after move 1 (5px)')
+  // Move 1: 10px down (crosses threshold) → 15 + 1 = 16vh
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 110 }))
+  assertEqual(el.style.marginTop, '16vh', 'multi-move: after move 1 (10px)')
   // Move 2: 200px down (delta = 200) → 15 + 20 = 35vh  ← would have been
-  // the old bug: second move early-returns, marginTop stays at 15.5vh
+  // the old bug: second move early-returns, marginTop stays at 16vh
   fakeDoc.fire('pointermove', fakeEvent({ clientY: 300 }))
-  assertEqual(el.style.marginTop, '35vh', 'multi-move: after move 2 (200px) — should be 35vh, not stuck at 15.5')
+  assertEqual(el.style.marginTop, '35vh', 'multi-move: after move 2 (200px) — should be 35vh, not stuck at 16')
   // Move 3: 400px down (delta = 400) → 15 + 40 = 55vh
   fakeDoc.fire('pointermove', fakeEvent({ clientY: 500 }))
   assertEqual(el.style.marginTop, '55vh', 'multi-move: after move 3 (400px) — should be 55vh')
@@ -283,7 +301,7 @@ const fakeDoc = new FakeDocument()
   const teardown = installDrawerTabDrag(el as any, 'main', () => {})
 
   el.fire('pointerdown', fakeEvent({ clientY: 100 }))
-  fakeDoc.fire('pointermove', fakeEvent({ clientY: 110 }))  // 10px → drag
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 115 }))  // 15px → crosses 10px threshold → drag
   // Now simulate a click event. The capture-phase listener should
   // call stopImmediatePropagation, preventing any bubble handler.
   // We can't directly observe stopImmediatePropagation in this stub,
@@ -297,17 +315,25 @@ const fakeDoc = new FakeDocument()
   el.fire('click', fakeEvent())
 
   fakeDoc.fire('pointerup', fakeEvent())
-  assertEqual(el.count('click', true), 0, 'capture-click: listener removed after pointerup')
+  // The capture click listener is still present after pointerup — the
+  // removal is deferred via setTimeout(0) so the synthesized click can
+  // be suppressed first. The teardown below synchronously removes it.
+  assertEqual(el.count('click', true), 1, 'capture-click: listener still present after pointerup (deferred removal)')
 
   teardown()
   // Click is the assertion; clickReached may be true or false depending
   // on stopImmediatePropagation stub, which is fine — we just need the
-  // listener to be present during drag and gone after pointerup.
+  // listener to be present during drag and gone after teardown.
+  assertEqual(el.count('click', true), 0, 'capture-click: listener removed by teardown')
   void clickReached
 }
 
 // ============================================================
-// Mobile gate: isPointerResizeActive=true blocks drag
+// Mobile (coarse pointer): drag is enabled with the 10px threshold.
+// Previously the drag was gated off on coarse pointers (mobile gate).
+// Now it's enabled — the 10px threshold filters out tap "settle jitter"
+// and touch-action: none on the element prevents browser scroll during
+// drag. This test verifies a touch-style drag commits normally.
 // ============================================================
 {
   ;(globalThis as any).window = {
@@ -316,16 +342,18 @@ const fakeDoc = new FakeDocument()
   }
 
   const el = new FakeEl()
+  el.style.marginTop = '15vh'
   let committed = -1
   const teardown = installDrawerTabDrag(el as any, 'main', (vh) => { committed = vh })
 
   el.fire('pointerdown', fakeEvent({ clientY: 100 }))
-  // Even a large move should not start drag on mobile
-  fakeDoc.fire('pointermove', fakeEvent({ clientY: 500 }))
-  fakeDoc.fire('pointerup', fakeEvent())
+  // Cross the 10px threshold (50px move)
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 150 }))
+  assertEqual(el.count('click', true), 1, 'mobile: capture listener installed after 50px move')
+  assertEqual(el.style.marginTop, '20vh', 'mobile: style.marginTop updated to 20vh (15 + 5)')
 
-  assertEqual(committed, -1, 'mobile: onCommit never called')
-  assertEqual(el.count('click', true), 0, 'mobile: no capture-phase listener')
+  fakeDoc.fire('pointerup', fakeEvent())
+  assertEqual(committed, 20, 'mobile: onCommit called with 20')
 
   teardown()
 
@@ -378,6 +406,115 @@ const fakeDoc = new FakeDocument()
   fakeDoc.fire('pointermove', fakeEvent({ clientY: 200 }))
   fakeDoc.fire('pointerup', fakeEvent())
   assertEqual(committed, -1, 'teardown: subsequent drag does not commit')
+}
+
+// ============================================================
+// onLiveUpdate: called on every move after threshold, not before
+//   - Used for bidirectional mirror: feature passes an onLiveUpdate
+//     that writes the new vh to the mirror element. Verifies the
+//     callback is fired synchronously on every pointermove after the
+//     4px threshold is crossed, with the latest newVh value.
+// ============================================================
+{
+  const el = new FakeEl()
+  const liveUpdates: number[] = []
+  let committed = -1
+  const teardown = installDrawerTabDrag(
+    el as any,
+    'secondary',
+    (vh) => { committed = vh },
+    (vh) => { liveUpdates.push(vh) },
+  )
+
+  el.fire('pointerdown', fakeEvent({ clientY: 100 }))
+
+  // Below threshold (3px) — onLiveUpdate should NOT fire
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 103 }))
+  assertEqual(liveUpdates.length, 0, 'live: no callback below threshold')
+
+  // Cross threshold (10px) — onLiveUpdate fires with first newVh
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 110 }))
+  assertEqual(liveUpdates.length, 1, 'live: callback fires once on threshold cross')
+  assertEqual(liveUpdates[0], 1, 'live: first newVh = 1.0 (0 + 10/1000*100)')
+
+  // Subsequent moves — onLiveUpdate fires with each newVh
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 130 }))
+  assertEqual(liveUpdates.length, 2, 'live: callback fires on each subsequent move')
+  assertEqual(liveUpdates[1], 3, 'live: second newVh = 3.0')
+
+  // Pointerup commits the final vh
+  fakeDoc.fire('pointerup', fakeEvent())
+  assertEqual(committed, 3, 'live: pointerup commits the last newVh')
+  assertEqual(liveUpdates.length, 2, 'live: no extra callback on pointerup')
+
+  teardown()
+}
+
+// ============================================================
+// onLiveUpdate: omitted → drag handler still works (backward compat)
+// ============================================================
+{
+  const el = new FakeEl()
+  let committed = -1
+  // 3-arg form: no onLiveUpdate. Drag should still commit on pointerup.
+  const teardown = installDrawerTabDrag(el as any, 'main', (vh) => { committed = vh })
+
+  el.fire('pointerdown', fakeEvent({ clientY: 100 }))
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 120 }))
+  fakeDoc.fire('pointerup', fakeEvent())
+  assertEqual(committed, 2, 'live-omitted: drag commits normally without onLiveUpdate')
+
+  teardown()
+}
+
+// ============================================================
+// Deferred click-listener removal: synthesized click after pointerup
+//   is still suppressed (regression for "drag opens/closes the drawer")
+//
+// Before the fix, cleanup() called removeEventListener synchronously on
+// pointerup. The browser then synthesized a click event from the
+// pointerdown+pointerup pair — but the capture-phase listener was
+// already gone, so the click reached Lumiverse's React onClick and
+// opened/closed the drawer.
+//
+// After the fix, cleanup() defers the removal via setTimeout(0). The
+// synthesized click fires synchronously after pointerup (same task),
+// and the capture-phase listener is still attached to suppress it.
+// Verified by checking that the event's _stopped flag is set (the
+// capture listener called e.stopImmediatePropagation). The listener
+// is then removed on the next task.
+//
+// Note: in the real browser, Lumiverse's React onClick is delegated to
+// a root container via React's synthetic event system — not attached
+// directly to the tab. The capture-phase listener on the tab fires
+// first (during the capture phase) and calls stopImmediatePropagation,
+// which stops the bubble-phase dispatch entirely, so React's delegated
+// listener never fires. Our test verifies the capture listener ran
+// (via the _stopped flag), which is the behavior that matters.
+// ============================================================
+{
+  const el = new FakeEl()
+  let committed = -1
+  const teardown = installDrawerTabDrag(el as any, 'main', (vh) => { committed = vh })
+
+  // Full drag sequence
+  el.fire('pointerdown', fakeEvent({ clientY: 100 }))
+  fakeDoc.fire('pointermove', fakeEvent({ clientY: 150 }))
+  assertEqual(el.count('click', true), 1, 'deferred: capture listener installed after threshold cross')
+
+  // Pointerup runs cleanup. The listener is NOT removed yet (deferred).
+  fakeDoc.fire('pointerup', fakeEvent())
+  assertEqual(committed, 5, 'deferred: onCommit called with 5vh')
+  assertEqual(el.count('click', true), 1, 'deferred: capture listener STILL present after pointerup (deferred removal)')
+
+  // Now the browser synthesizes a click from the pointerdown+pointerup
+  // pair. The capture-phase listener should fire and call
+  // stopImmediatePropagation, setting the _stopped flag on the event.
+  const clickEvent = fakeEvent()
+  el.fire('click', clickEvent)
+  assertEqual(clickEvent._stopped, true, 'deferred: capture listener stopped the synthesized click (regression for drawer open/close)')
+
+  teardown()
 }
 
 console.log(`PASS: ${passed}`)

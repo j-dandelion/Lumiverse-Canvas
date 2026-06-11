@@ -13,7 +13,6 @@
 // `localStorage.setItem('sidebarUxDebug', '1')` then refresh.
 
 import { dlog } from '../debug/log'
-import { isPointerResizeActive } from '../resize/handles'
 
 /**
  * Convert a vertical pixel delta to a clamped vh value relative to the
@@ -73,36 +72,57 @@ function readCurrentVh(el: HTMLElement): number {
 /**
  * Install vertical drag on a drawer tab element.
  *
- * @param el        The drawer tab HTMLElement
- * @param role      'main' or 'secondary' (for logging)
- * @param onCommit  Called with the final vh value on drag-end
+ * @param el           The drawer tab HTMLElement
+ * @param role         'main' or 'secondary' (for logging)
+ * @param onCommit     Called with the final vh value on drag-end
+ * @param onLiveUpdate Optional. Called with the new vh value on every
+ *                     pointermove after the threshold is crossed. The
+ *                     caller can use this to propagate the drag to a
+ *                     mirror element — e.g., when the user drags the
+ *                     secondary, the caller writes the same vh to the
+ *                     main so both tabs move in lockstep. The drag
+ *                     handler itself only writes to its own element.
  * @returns Teardown function that removes all listeners
  */
 export function installDrawerTabDrag(
   el: HTMLElement,
   role: 'main' | 'secondary',
   onCommit: (vh: number) => void,
+  onLiveUpdate?: (vh: number) => void,
 ): () => void {
   el.setAttribute('aria-label', 'Drag to reposition')
+  // Prevent the browser from interpreting touch as scroll/pan/zoom on
+  // the tab. Without this, mobile drags would fight the browser's
+  // native scroll handling, and the tab could get hijacked mid-drag.
+  // Mouse pointers ignore this; coarse pointers (touch) honor it.
+  el.style.touchAction = 'none'
 
   let startY = 0
   let currentVh = 0
   let isPointerDown = false
   let hasCrossedThreshold = false
   let dragInstalled = false
+  let pendingClickRemoval: ReturnType<typeof setTimeout> | null = null
 
   /** Capture-phase click listener that suppresses Lumiverse's React onClick. */
   const captureClick = (e: Event) => {
     e.stopImmediatePropagation()
   }
 
-  const onPointerDown = (e: PointerEvent) => {
-    // Mobile gate: tap-only on coarse pointers — skip drag
-    if (isPointerResizeActive()) {
-      dlog(`[drawerTabDrag] ${role} pointerdown blocked: coarse pointer (mobile)`)
-      return
+  /** Synchronously remove the capture click listener. Used by the
+   *  teardown path and the deferred-removal path in cleanup(). */
+  const removeCaptureClickNow = () => {
+    if (dragInstalled) {
+      el.removeEventListener('click', captureClick, true)
+      dragInstalled = false
     }
+    if (pendingClickRemoval !== null) {
+      clearTimeout(pendingClickRemoval)
+      pendingClickRemoval = null
+    }
+  }
 
+  const onPointerDown = (e: PointerEvent) => {
     e.preventDefault()
     isPointerDown = true
     hasCrossedThreshold = false
@@ -117,7 +137,11 @@ export function installDrawerTabDrag(
     if (!isPointerDown) return
     const delta = e.clientY - startY
     if (!hasCrossedThreshold) {
-      if (Math.abs(delta) < 4) return
+      // 10px threshold: high enough to filter out the "settle jitter"
+      // of a finger tap on touch (~5-8px), low enough that real drags
+      // cross it in the first ~30ms of motion. Tunable — see
+      // src/sidebar/__tests__/drag.test.ts for the boundary tests.
+      if (Math.abs(delta) < 10) return
       hasCrossedThreshold = true
       // Install capture-phase click listener on first drag threshold
       if (!dragInstalled) {
@@ -129,13 +153,36 @@ export function installDrawerTabDrag(
     const newVh = pxToClampedVh(delta, window.innerHeight, currentVh)
     el.style.marginTop = `${newVh}vh`
     el.setAttribute('aria-label', `Position: ${newVh}vh`)
+    // Notify the caller of the live update so it can propagate to a
+    // mirror element (bidirectional mirror). The drag handler itself
+    // only writes to its own element; the caller owns cross-element
+    // writes.
+    onLiveUpdate?.(newVh)
     dlog(`[drawerTabDrag] ${role} move clientY=${e.clientY} delta=${delta}px newVh=${newVh}vh`)
   }
 
   const cleanup = () => {
+    // Defer removal of the capture click listener until AFTER the
+    // synthesized click event has had a chance to fire and be
+    // suppressed. The browser dispatches a `click` event as part of
+    // the pointer event's compatibility-mouse-events procedure, which
+    // runs SYNCHRONOUSLY after the pointerup handler returns — in the
+    // same task. A microtask would run too early (before the click
+    // dispatch). setTimeout(0) schedules a macrotask, which runs after
+    // the current task completes, ensuring the click is suppressed.
+    //
+    // If the user dragged far enough that the browser does NOT
+    // synthesize a click, the listener is removed on the next task
+    // anyway — so it doesn't suppress a future genuine click.
     if (dragInstalled) {
-      el.removeEventListener('click', captureClick, true)
-      dragInstalled = false
+      if (pendingClickRemoval !== null) clearTimeout(pendingClickRemoval)
+      pendingClickRemoval = setTimeout(() => {
+        if (dragInstalled) {
+          el.removeEventListener('click', captureClick, true)
+          dragInstalled = false
+        }
+        pendingClickRemoval = null
+      }, 0)
     }
     isPointerDown = false
     hasCrossedThreshold = false
@@ -166,6 +213,10 @@ export function installDrawerTabDrag(
   document.addEventListener('pointercancel', onPointerCancel)
 
   return () => {
+    // Synchronously remove the capture click listener (don't wait for
+    // the deferred-removal setTimeout from cleanup, in case the
+    // extension is being torn down without a clean pointerup).
+    removeCaptureClickNow()
     el.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('pointermove', onPointerMove)
     document.removeEventListener('pointerup', onPointerUp)

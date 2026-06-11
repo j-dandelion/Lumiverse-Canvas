@@ -105,8 +105,27 @@ secondaryWrapper.querySelector = (sel: string): StubElement | null => {
 // Stub ResizeObserver (used by syncDrawerTabSettings to watch main drawer tab)
 ;(globalThis as any).ResizeObserver = class { observe() {} disconnect() {} unobserve() {} }
 
-// Stub MutationObserver (used by syncDrawerTabSettings to watch class changes)
-;(globalThis as any).MutationObserver = class { observe() {} disconnect() {} takeRecords() { return [] } }
+// Stub MutationObserver. Captures every (callback, target, options)
+// triple passed to observe() so tests can fire the callback manually —
+// the real MutationObserver is async and depends on the browser, so
+// we don't get one for free in this test environment. Used by the
+// polish class observer (attributeFilter: ['class']) and the new
+// style observer (attributeFilter: ['style']) in syncDrawerTabSettings.
+interface CapturedMutationObserver {
+  cb: () => void
+  target: any
+  options: MutationObserverInit | undefined
+}
+const _capturedMutationObservers: CapturedMutationObserver[] = []
+;(globalThis as any).MutationObserver = class {
+  private _cb: () => void
+  constructor(cb: () => void) { this._cb = cb }
+  observe(target: any, options?: MutationObserverInit) {
+    _capturedMutationObservers.push({ cb: this._cb, target, options })
+  }
+  disconnect() {}
+  takeRecords() { return [] }
+}
 
 // Stub __setSecondaryWrapperForTest is needed by the secondary module import chain
 // We'll import it after stubbing the secondary wrapper
@@ -150,10 +169,15 @@ import { getSettings } from '../../settings/state'
     secondaryDrawerTabOverrideVh: 25,
   }
 
-  // Step 1: syncDrawerTabSettings reads the main tab's marginTop and mirrors it
+  // Step 1: syncDrawerTabSettings writes the main's value to the
+  // secondary. With mirrorCompactPosition ON, the mirror always wins
+  // — secondaryDrawerTabOverrideVh is ignored while mirror is on.
+  // (The override only takes effect when the mirror is turned off.)
   syncDrawerTabSettings()
-  // At this point, secondary should have the mirrored value from the main tab
-  // (mainDrawerTab.style.marginTop = '12vh' -> posVh = 12)
+  // At this point, secondary should have the mirrored value from the
+  // main tab (12vh), regardless of the override being set.
+  assertEqual(secondaryDrawerTab.style.marginTop, '12vh',
+    'C1.a: secondary = 12vh after mirror sync (override ignored while mirror ON)')
 
   // Step 2: applyDrawerTabPosition applies the Canvas override
   applyDrawerTabPosition(settings, mainDrawerTab as any, secondaryDrawerTab as any)
@@ -211,12 +235,157 @@ import { getSettings } from '../../settings/state'
 
   syncDrawerTabSettings()
 
-  // When mirror is OFF, the polish code clears the secondary's marginTop
-  // But applyDrawerTabPosition then writes the override
+  // With mirror OFF and override set, syncDrawerTabSettings does NOT
+  // touch the secondary's inline style (the override's value is
+  // owned by applyDrawerTabPosition, which re-writes on settings diff).
+  // The secondary retains its previous inline value (10vh) until
+  // applyDrawerTabPosition writes the override below.
   applyDrawerTabPosition(settings, mainDrawerTab as any, secondaryDrawerTab as any)
 
   assertEqual(secondaryDrawerTab.style.marginTop, '30vh',
-    'C3: secondary marginTop = 30vh (override, mirror cleared)')
+    'C3: secondary marginTop = 30vh (mirror off, override restored by apply)')
+}
+
+// ============================================================
+// Case 4: style observer fires → secondary updates in real time
+//   - mirrorCompactPosition ON, no override
+//   - syncDrawerTabSettings attaches a MutationObserver on the main
+//     tab's `style` attribute
+//   - When that observer fires, the secondary should follow the main
+//     immediately (not wait for the 2s checkSideChanged tick)
+//   - Regression for the "teleports every 1-2s" lag during drag
+// ============================================================
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.style.marginTop = '20vh'
+  secondaryDrawerTab.style = new StubStyle()
+  _resetLastKnownVerticalPos()
+
+  // Need mirrorCompactPosition ON (mutate the live settings object)
+  const liveSettings = getSettings() as any
+  const prevMirror = liveSettings.mirrorCompactPosition
+  const prevOverride = liveSettings.secondaryDrawerTabOverrideVh
+  liveSettings.mirrorCompactPosition = true
+  liveSettings.secondaryDrawerTabOverrideVh = undefined
+
+  // First call attaches the observers (class + style) and writes the
+  // current mirror value to the secondary.
+  syncDrawerTabSettings()
+  assertEqual(secondaryDrawerTab.style.marginTop, '20vh',
+    'C4.a: secondary = 20vh after initial sync')
+
+  // Find the style observer wired up by syncDrawerTabSettings. The
+  // class observer was attached first; the style observer has
+  // attributeFilter: ['style'].
+  const styleObs = _capturedMutationObservers.find(
+    (o) => o.options?.attributeFilter?.includes('style'),
+  )
+  assert(styleObs !== undefined, 'C4.b: a style observer was attached to the main tab')
+  if (styleObs) {
+    // Simulate a drag move: main's marginTop changes from 20vh to 25vh.
+    mainDrawerTab.style.marginTop = '25vh'
+    // Fire the captured observer callback (real MutationObserver is
+    // microtask-batched — we don't have one in this test env).
+    styleObs.cb()
+    assertEqual(secondaryDrawerTab.style.marginTop, '25vh',
+      'C4.c: secondary follows main style change immediately on observer fire')
+  }
+
+  // Restore settings
+  liveSettings.mirrorCompactPosition = prevMirror
+  liveSettings.secondaryDrawerTabOverrideVh = prevOverride
+}
+
+// ============================================================
+// Case 5: mirror ON ignores the override — secondary follows main
+//   - mirrorCompactPosition ON, secondaryDrawerTabOverrideVh = 40
+//   - The style observer fires when the main's style changes
+//   - The override is IGNORED (mirror always wins when ON)
+//   - Regression: ensures the design change "mirror wins when ON"
+//     holds across the style observer path
+// ============================================================
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.style.marginTop = '20vh'
+  secondaryDrawerTab.style = new StubStyle()
+  secondaryDrawerTab.style.marginTop = '40vh'  // stale override value in DOM
+  _resetLastKnownVerticalPos()
+
+  const liveSettings = getSettings() as any
+  const prevMirror = liveSettings.mirrorCompactPosition
+  const prevOverride = liveSettings.secondaryDrawerTabOverrideVh
+  liveSettings.mirrorCompactPosition = true
+  liveSettings.secondaryDrawerTabOverrideVh = 40
+
+  // Initial sync: mirror wins. Override is set but ignored.
+  syncDrawerTabSettings()
+  assertEqual(secondaryDrawerTab.style.marginTop, '20vh',
+    'C5.a: secondary = 20vh after initial sync (mirror wins, override 40 ignored)')
+
+  // Style observer fires on a main change.
+  const styleObs = _capturedMutationObservers.find(
+    (o) => o.options?.attributeFilter?.includes('style'),
+  )
+  assert(styleObs !== undefined, 'C5.b: style observer exists')
+  if (styleObs) {
+    mainDrawerTab.style.marginTop = '30vh'
+    styleObs.cb()
+    // Mirror wins again — secondary follows the new main value, not
+    // the override.
+    assertEqual(secondaryDrawerTab.style.marginTop, '30vh',
+      'C5.c: secondary follows new main 30vh (override 40 still ignored while mirror ON)')
+  }
+
+  // Restore settings
+  liveSettings.mirrorCompactPosition = prevMirror
+  liveSettings.secondaryDrawerTabOverrideVh = prevOverride
+}
+
+// ============================================================
+// Case 6: mirror OFF + override set — override is preserved
+//   - mirrorCompactPosition OFF, secondaryDrawerTabOverrideVh = 40
+//   - The style observer fires when the main's style changes
+//   - syncDrawerTabSettings must NOT touch the secondary (the override
+//     is the canonical owner; applyDrawerTabPosition re-writes it on
+//     settings diff)
+//   - Regression: ensures the mirror-off branch does not clobber the
+//     override when the main's style changes
+// ============================================================
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.style.marginTop = '20vh'
+  secondaryDrawerTab.style = new StubStyle()
+  secondaryDrawerTab.style.marginTop = '40vh'  // previous override value
+  _resetLastKnownVerticalPos()
+
+  const liveSettings = getSettings() as any
+  const prevMirror = liveSettings.mirrorCompactPosition
+  const prevOverride = liveSettings.secondaryDrawerTabOverrideVh
+  liveSettings.mirrorCompactPosition = false
+  liveSettings.secondaryDrawerTabOverrideVh = 40
+
+  // Initial sync: mirror is OFF and override is set, so syncDrawerTabSettings
+  // must NOT touch the secondary. The override is preserved.
+  syncDrawerTabSettings()
+  assertEqual(secondaryDrawerTab.style.marginTop, '40vh',
+    'C6.a: secondary retains 40vh (override) after initial sync (mirror OFF)')
+
+  // Style observer fires on a main change. With mirror OFF and override
+  // set, the polish path still must NOT touch the secondary.
+  const styleObs = _capturedMutationObservers.find(
+    (o) => o.options?.attributeFilter?.includes('style'),
+  )
+  assert(styleObs !== undefined, 'C6.b: style observer exists')
+  if (styleObs) {
+    mainDrawerTab.style.marginTop = '25vh'
+    styleObs.cb()
+    assertEqual(secondaryDrawerTab.style.marginTop, '40vh',
+      'C6.c: secondary stays at 40vh (override) when style observer fires (mirror OFF)')
+  }
+
+  // Restore settings
+  liveSettings.mirrorCompactPosition = prevMirror
+  liveSettings.secondaryDrawerTabOverrideVh = prevOverride
 }
 
 // ============================================================

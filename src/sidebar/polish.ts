@@ -4,7 +4,14 @@
 //
 // syncDrawerTabSettings / syncSecondaryTabLabels — mirror the main
 // drawer's compact mode, vertical position, and tab-label visibility on
-// the secondary drawer so the two feel like one surface.
+// the secondary drawer so the two feel like one surface. The vertical
+// position mirror is wired to a MutationObserver on the main tab's
+// `style` attribute, so the secondary follows the primary in real time
+// during a drag (or when the Lumiverse slider moves). The mirror
+// always wins when mirrorCompactPosition is ON, regardless of
+// secondaryDrawerTabOverrideVh — the override is a per-tab
+// independent value that only takes effect when the mirror is OFF
+// (e.g., to set the secondary to a different position than the main).
 //
 // isShowTabLabels — derived from CanvasSettings.showTabLabels (the
 // user's explicit Canvas override) or the live Lumiverse store
@@ -17,6 +24,7 @@
 // startTabRegistrationWatcher — 3s poll that re-tags main sidebar
 // buttons (catches post-MutationObserver registrations) and removes
 // _tabAssignments entries when their source extension unregisters.
+
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore } from '../store'
 import { dlog } from '../debug/log'
@@ -32,6 +40,7 @@ let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownVerticalPos: number | null = null
 let _mainDrawerTabResizeObserver: ResizeObserver | null = null
 let _mainDrawerTabClassObserver: MutationObserver | null = null
+let _mainDrawerTabStyleObserver: MutationObserver | null = null
 
 /** Read showTabLabels, honoring the user's Canvas override. */
 export function isShowTabLabels(): boolean {
@@ -57,7 +66,8 @@ export function isShowTabLabels(): boolean {
 
 export function syncDrawerTabSettings(): void {
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-  if (!drawerTab) return
+  if (!drawerTab) { dlog(`[polish] syncDrawerTabSettings: secondary tab not found`); return }
+  dlog(`[polish] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
 
   // Read settings from the main sidebar's drawer tab DOM directly
   const mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)') as HTMLElement
@@ -105,6 +115,27 @@ export function syncDrawerTabSettings(): void {
     registerCleanup(stopDrawerTabClassObserver)
   }
 
+  // Attach MutationObserver on the main tab's `style` attribute so the
+  // secondary follows the main's inline-style changes in real time. This
+  // covers two sources of vertical-position change:
+  //   1. The drag handler in drawerTabPosition/drag.ts, which writes to
+  //      mainDrawerTab.style.marginTop on every pointermove. Without this
+  //      observer, the secondary only updates on the 2s checkSideChanged
+  //      tick and visibly teleports during a drag.
+  //   2. The Lumiverse slider, which writes the same inline style when
+  //      the user moves it.
+  // MutationObserver is microtask-batched, so 60+ updates/sec coalesce
+  // into one sync call per tick. The work in this function is O(1) —
+  // read main's style, write secondary's style. Only attach once.
+  if (!_mainDrawerTabStyleObserver) {
+    _mainDrawerTabStyleObserver = new MutationObserver(() => {
+      dlog(`[polish] style observer fired`)
+      syncDrawerTabSettings()
+    })
+    _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['style'] })
+    registerCleanup(stopDrawerTabStyleObserver)
+  }
+
   // Detect vertical position from main drawer tab margin
   const mainParent = mainDrawerTab.parentElement
   const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0
@@ -113,11 +144,23 @@ export function syncDrawerTabSettings(): void {
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0
 
   if (_lastKnownVerticalPos !== posVh) {
-    if (getSettings().mirrorCompactPosition) {
+    const settings = getSettings()
+    dlog(`[polish] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`)
+    if (settings.mirrorCompactPosition) {
+      // Mirror always wins when on. The secondaryDrawerTabOverrideVh is
+      // a per-tab independent value, but it only takes effect when the
+      // mirror is off (see below). This means a stale override from a
+      // previous session can't strand the secondary at a wrong position
+      // when the user has mirror on and expects the tabs to follow.
+      dlog(`[polish] writing secondary marginTop=${posVh}vh`)
       drawerTab.style.marginTop = `${posVh}vh`
-    } else {
-      drawerTab.style.marginTop = ''  // clear; secondary's own override (or no-override) takes over
+    } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
+      drawerTab.style.marginTop = ''  // mirror off, no override → clear
     }
+    // else: mirror off, override set → keep the override (do nothing;
+    // applyDrawerTabPosition re-writes the override on every settings
+    // diff, which is the canonical owner of the secondary's value in
+    // this case).
     _lastKnownVerticalPos = posVh
   }
 
@@ -216,6 +259,13 @@ export function stopDrawerTabClassObserver(): void {
   if (_mainDrawerTabClassObserver) {
     _mainDrawerTabClassObserver.disconnect()
     _mainDrawerTabClassObserver = null
+  }
+}
+
+export function stopDrawerTabStyleObserver(): void {
+  if (_mainDrawerTabStyleObserver) {
+    _mainDrawerTabStyleObserver.disconnect()
+    _mainDrawerTabStyleObserver = null
   }
 }
 
