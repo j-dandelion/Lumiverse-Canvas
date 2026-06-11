@@ -468,6 +468,53 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
 }
 
 // ============================================================
+// C13: build default matches applyTabListPosition(false) — idempotency
+// ============================================================
+{
+  // side='right' (secondary on right) ↔ main on left ↔ stubWrapper has 'wrapperLeft'
+  // Build default for side='right': flex-direction: row, border-right set, border-left empty
+  stubWrapper.className = 'wrapperLeft_wrapper'
+  stubWrapper.closest = () => stubWrapper
+  stubDrawer.style = new StubStyle()
+  stubDrawer.style.flexDirection = 'row'
+  stubTabList.style = new StubStyle()
+  stubTabList.style.borderRight = '1px solid var(--lumiverse-primary-020)'
+  stubTabList.style.borderLeft = ''
+  stubHandle.style = new StubStyle()
+  const panel = new StubElement()
+  panel.style = new StubStyle()
+
+  applyTabListPosition(false, secondaryOpts(stubDrawer, stubTabList, stubHandle, panel))
+
+  assertEqual(stubDrawer.style.flexDirection, 'row', 'C13: side=right build default matches apply(false) flex-direction')
+  assertEqual(stubTabList.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C13: side=right build default matches apply(false) borderRight')
+  // apply writes 'none' to the inactive side (explicit clear); build default is empty.
+  // Both are visually equivalent — assert either is acceptable.
+  assert(stubTabList.style.borderLeft === '' || stubTabList.style.borderLeft === 'none',
+    'C13: side=right inactive border is empty or "none"')
+
+  // side='left' (secondary on left) ↔ main on right ↔ stubWrapper has 'wrapperRight'
+  // Build default for side='left': flex-direction: row-reverse, border-left set, border-right empty
+  stubWrapper.className = 'wrapperRight'
+  stubWrapper.closest = () => stubWrapper
+  stubDrawer.style = new StubStyle()
+  stubDrawer.style.flexDirection = 'row-reverse'
+  stubTabList.style = new StubStyle()
+  stubTabList.style.borderLeft = '1px solid var(--lumiverse-primary-020)'
+  stubTabList.style.borderRight = ''
+  stubHandle.style = new StubStyle()
+  const panel2 = new StubElement()
+  panel2.style = new StubStyle()
+
+  applyTabListPosition(false, secondaryOpts(stubDrawer, stubTabList, stubHandle, panel2))
+
+  assertEqual(stubDrawer.style.flexDirection, 'row-reverse', 'C13: side=left build default matches apply(false) flex-direction')
+  assertEqual(stubTabList.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C13: side=left build default matches apply(false) borderLeft')
+  assert(stubTabList.style.borderRight === '' || stubTabList.style.borderRight === 'none',
+    'C13: side=left inactive border is empty or "none"')
+}
+
+// ============================================================
 // getTabListPosition returns empty strings when elements are null
 // ============================================================
 {

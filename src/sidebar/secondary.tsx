@@ -168,7 +168,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
        handle's 4px overhang on the inner edge isn't clipped. Children
        (sidebar, panel, content) handle their own overflow containment. */
     isolation: isolate;
-    flex-direction: ${side === 'left' ? 'row' : 'row-reverse'};
+    flex-direction: ${side === 'right' ? 'row' : 'row-reverse'};
   `
 
   // Sidebar (tab list, matches main sidebar .sidebar exactly)
@@ -183,7 +183,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     gap: 4px;
     overflow-y: auto;
     scrollbar-width: none;
-    border-${side === 'left' ? 'right' : 'left'}: 1px solid var(--lumiverse-primary-020);
+    border-${side === 'right' ? 'right' : 'left'}: 1px solid var(--lumiverse-primary-020);
     background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
   `
 
