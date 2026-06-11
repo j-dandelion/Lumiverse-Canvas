@@ -6,6 +6,21 @@
 
 - Canvas: add "Move controls to outer edge" toggle in Sidebars settings.
 
+### Fixed
+
+- **Chat reflow no longer affects mobile visuals.** The "Center the chat
+  in the visible area" toggle (`chatReflow`) used to shift the chat
+  column on mobile (≤600px) and to leave stale desktop margins in place
+  during a drag-resize across the 600px boundary. The injected reflow
+  `<style>` rule now includes a `max-width: 600px` override that
+  nullifies the margin and the transition; `updateChatReflow()`
+  early-returns on mobile (and clears any stale inline vars); a new
+  `matchMedia('(max-width: 600px)')` change listener registered in
+  `startReflowObserver` clears the inline vars on cross-down and
+  re-runs the reflow on cross-up. Toggling the setting and drag-resizing
+  big ↔ small now transition seamlessly. Covered by
+  `src/chat/__tests__/reflow-mobile.test.ts`.
+
 ## v1.6.2 — 2026-06-11
 
 ### Fixed
