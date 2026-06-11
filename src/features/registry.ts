@@ -36,6 +36,7 @@ import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition } from '../sidebar/tab-position'
+import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
 export type Teardown = () => void
@@ -357,6 +358,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   layoutPersistenceFeature,
   slashFeature,
   tabPositionFeature,
+  drawerTabDragFeature,
 ]
 
 /** Unconditional cleanup registrations that fire on extension disable

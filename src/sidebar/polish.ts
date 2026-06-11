@@ -113,7 +113,11 @@ export function syncDrawerTabSettings(): void {
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0
 
   if (_lastKnownVerticalPos !== posVh) {
-    drawerTab.style.marginTop = `${posVh}vh`
+    if (getSettings().mirrorCompactPosition) {
+      drawerTab.style.marginTop = `${posVh}vh`
+    } else {
+      drawerTab.style.marginTop = ''  // clear; secondary's own override (or no-override) takes over
+    }
     _lastKnownVerticalPos = posVh
   }
 

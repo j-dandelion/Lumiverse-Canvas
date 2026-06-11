@@ -76,6 +76,22 @@ export interface CanvasSettings {
    *  to clear an in-flight popup (the live-apply path hides it). */
   slashCommandsEnabled?: boolean
 
+  // --- Drawer Tab Drag ---
+  /** Enable click/tap-and-drag on sidebar drawer tabs to reposition them
+   *  vertically. The dragged value is a Canvas-side override; the Lumiverse
+   *  slider won't reflect the drag value (documented limitation). */
+  drawerTabDrag?: boolean
+
+  /** Canvas-side override for the main drawer tab's vertical position (vh).
+   *  When defined, takes precedence over the Lumiverse display setting.
+   *  Written by the drag handler; cleared on extension disable. */
+  mainDrawerTabOverrideVh?: number
+
+  /** Canvas-side override for the secondary drawer tab's vertical position (vh).
+   *  When defined, takes precedence over the mirror from the main tab.
+   *  Written by the drag handler; cleared on extension disable. */
+  secondaryDrawerTabOverrideVh?: number
+
   // --- Debug ---
   /** Master debug switch — enables [Canvas] console output AND installs
    *  `window.__canvasDebug()` for in-browser fiber tree inspection. */
@@ -103,6 +119,10 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   chatReflow: true,
   layoutPersistence: true,
   slashCommandsEnabled: true,
+  // Drawer Tab Drag
+  drawerTabDrag: true,
+  mainDrawerTabOverrideVh: undefined as unknown as number,
+  secondaryDrawerTabOverrideVh: undefined as unknown as number,
   // Debug
   debugMode: false,
 }
