@@ -20,6 +20,7 @@
   re-runs the reflow on cross-up. Toggling the setting and drag-resizing
   big ↔ small now transition seamlessly. Covered by
   `src/chat/__tests__/reflow-mobile.test.ts`.
+- **Chat reflow no longer reads a stale `drawerOpen` after rapid tab clicks.** `isMainDrawerOpen()` in `src/store/index.ts` previously preferred the 3s-cached Zustand snapshot and only fell back to the live `wrapper.classList` when the store had no `drawerOpen` field — a leftover asymmetry with its sibling `getMainDrawerSide()`, which already does the opposite and documents the rationale. User repro: open the main drawer, click all 15 visible tab buttons (each click refreshes the cache via the tagger observer's `findStoreData(true)` call inside `tagMainSidebarButtons`), then click the drawer tab to close. The cache was just refreshed while the drawer was open, the DOM correctly drops `wrapperOpen`, and the previous store-first order returned the stale `true` — so `updateChatReflow` left the chat margins as if the drawer were still open until a hard refresh. The fix flips `isMainDrawerOpen` to DOM-first / store-fallback (mirroring `getMainDrawerSide`), so a stale cache is ignored whenever the wrapper is in the DOM. Covered by `src/chat/__tests__/reflow-staleness.test.ts`.
 
 ## v1.6.2 — 2026-06-11
 

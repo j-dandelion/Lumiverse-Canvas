@@ -141,7 +141,27 @@ export function getStoreSnapshot(): Record<string, unknown> | null {
 }
 
 export function isMainDrawerOpen(): boolean {
-  // Try store snapshot first
+  // DOM first: the wrapper's className updates synchronously when the user
+  // closes/opens the drawer, so it's the authoritative "is the drawer
+  // visibly open right now?" source. The Zustand store snapshot is cached
+  // with a 3-second TTL (see getStoreSnapshot), so for up to 3s after an
+  // open/close the store can return the OLD value while the DOM already
+  // shows the new state. The chat-reflow MutationObserver (in
+  // chat/reflow.startReflowObserver) fires on wrapper class changes and
+  // reads this function, so a stale-cache read here would leave the chat
+  // shifted as if the drawer were still open until the cache TTL expires
+  // (or a hard refresh, which clears the module-level cache). The user
+  // repro is: open drawer, click all 15 tab buttons (each click refreshes
+  // the cache via the tagger observer's findStoreData(true) call), click
+  // the drawer tab to close -- the cache is now fresh with drawerOpen:
+  // true, the DOM correctly lacks wrapperOpen, and the previous
+  // store-first order would return the stale true. The store is kept as
+  // a fallback for the very early code path where getMainWrapper() can't
+  // resolve yet (first mount, before the wrapper element is in the DOM).
+  const wrapper = getMainWrapper()
+  if (wrapper) {
+    return wrapper.classList.toString().includes('wrapperOpen')
+  }
   const store = getStoreSnapshot()
   if (store) {
     const snapshot = asDrawerStore(store)
@@ -149,10 +169,7 @@ export function isMainDrawerOpen(): boolean {
       return snapshot.drawerOpen
     }
   }
-  // Fallback to CSS class check
-  const wrapper = getMainWrapper()
-  if (!wrapper) return false
-  return wrapper.classList.toString().includes('wrapperOpen')
+  return false
 }
 
 export function getMainDrawerSide(): 'left' | 'right' {
@@ -178,4 +195,18 @@ export function getMainDrawerSide(): 'left' | 'right' {
     }
   }
   return 'right'
+}
+
+/** Test-only: pre-populate the store snapshot cache to simulate a stale
+ *  cached read. Used by the chat-reflow staleness regression test
+ *  (src/chat/__tests__/reflow-staleness.test.ts). The timestamp defaults
+ *  to now, so subsequent getStoreSnapshot() calls return this snapshot
+ *  for the standard 3s TTL window. Mirrors the __setSecondaryWrapperForTest
+ *  pattern in src/sidebar/secondary.tsx. */
+export function __setStoreSnapshotForTest(
+  snap: Record<string, unknown> | null,
+  timestamp: number = Date.now(),
+): void {
+  _storeSnapshotCache = snap
+  _cacheTimestamp = timestamp
 }
