@@ -143,9 +143,10 @@ function _onMediaChangeImpl(e: MediaQueryListEvent): void {
 export function startReflowObserver(): () => void {
   injectReflowStyles()
 
+  let cancelled = false
   const observer = new MutationObserver(() => scheduleReflow())
   waitForElement(getMainWrapper, 'main wrapper').then((wrapper) => {
-    if (wrapper) {
+    if (wrapper && !cancelled) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
       updateChatReflow()
     }
@@ -167,7 +168,12 @@ export function startReflowObserver(): () => void {
   _mediaQuery.addEventListener('change', _onMediaChange)
 
   return () => {
+    cancelled = true
     observer.disconnect()
+    if (_reflowRaf !== null) {
+      cancelAnimationFrame(_reflowRaf)
+      _reflowRaf = null
+    }
     stopTagObserver()
     if (_mediaQuery && _onMediaChange) {
       _mediaQuery.removeEventListener('change', _onMediaChange)

@@ -171,14 +171,25 @@ const stubDocument: any = {
   querySelector(sel: string) { return stubQuerySelector(sel) },
 }
 
+// --- rAF stub that supports cancellation ---
+let _rafNextId = 0
+const _rafPending = new Map<number, ReturnType<typeof setTimeout>>()
+
 const stubWindow: any = {
   addEventListener(_e: string, _h: any) {},
   removeEventListener(_e: string, _h: any) {},
   get innerWidth() { return _mediaInnerWidth },
   innerHeight: 800,
   matchMedia: stubMatchMedia,
-  requestAnimationFrame: (cb: any) => { setTimeout(cb, 0); return 1 },
-  cancelAnimationFrame: () => {},
+  requestAnimationFrame: (cb: any) => {
+    const id = ++_rafNextId
+    _rafPending.set(id, setTimeout(() => { _rafPending.delete(id); cb() }, 0))
+    return id
+  },
+  cancelAnimationFrame: (id: number) => {
+    const t = _rafPending.get(id)
+    if (t !== undefined) { clearTimeout(t); _rafPending.delete(id) }
+  },
   Promise: (globalThis as any).Promise,
 }
 
@@ -237,11 +248,14 @@ function _resetAll() {
   _resetMedia()
   // Reset MutationObserver instances
   StubObserver.instances = []
+  // Flush pending rAF callbacks
+  for (const t of _rafPending.values()) clearTimeout(t)
+  _rafPending.clear()
 }
 
 // --- Imports under test ---
 
-import { injectReflowStyles, updateChatReflow, clearChatMargins, startReflowObserver } from '../reflow'
+import { injectReflowStyles, updateChatReflow, clearChatMargins, startReflowObserver, scheduleReflow } from '../reflow'
 import { FEATURES } from '../../features/registry'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
@@ -433,6 +447,47 @@ assertEqual(
 // Sanity: the <style> tag IS injected (it's gated on chatReflow being on, not on viewport)
 assert(stubDocument.getElementById('sidebar-ux-reflow') !== null,
   'apply(off->on) injects the reflow <style> tag (gated on setting, not viewport)')
+
+// --- Test R1: teardown cancels observer reconnection ---
+
+;(async () => {
+  _resetAll()
+  // No DOM installed — waitForElement won't find wrapper quickly
+  const teardown = startReflowObserver()
+  // Teardown immediately, before the .then() resolves
+  teardown()
+  // Flush microtask queue so waitForElement's .then() fires
+  await new Promise(r => setTimeout(r, 0))
+  // The observer should never have been attached (cancelled = true)
+  assert(StubObserver.instances.length > 0, 'R1: observer was created')
+  assertEqual(StubObserver.instances[0].observed, null, 'R1: teardown cancels observer reconnection — observed is null')
+})()
+
+// --- Test R2: teardown cancels in-flight rAF ---
+
+;(async () => {
+  _resetAll()
+  const dom = _installDom({ open: true, leftSide: false })
+  _setViewport(false)
+  const teardown = startReflowObserver()
+  // Schedule a reflow (sets _reflowRaf)
+  scheduleReflow()
+  // Teardown immediately — should cancel the rAF
+  teardown()
+  // Let any pending rAF tick fire
+  await new Promise(r => setTimeout(r, 10))
+  // The rAF callback should not have run, so no chat margin vars were set
+  assertEqual(
+    dom.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+    '',
+    'R2: teardown cancels in-flight rAF — --sidebar-ux-chat-ml not set'
+  )
+  assertEqual(
+    dom.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+    '',
+    'R2: teardown cancels in-flight rAF — --sidebar-ux-chat-mr not set'
+  )
+})()
 
 // --- Summary ---
 
