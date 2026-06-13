@@ -514,6 +514,21 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
       tab.root.removeAttribute('data-canvas-moved')
       targetEl.appendChild(tab.root)
     }
+    // Clear styles set while the tab was in secondary so it renders
+    // normally in the main panel. Three styles are set with !important
+    // during the tab's time in secondary:
+    //   - display: none !important (showSecondaryTab for inactive tabs,
+    //     closeSecondarySidebar for all tabs on close)
+    //   - position: absolute !important + inset: 0 !important
+    //     (repositionTab secondary case, to make moved roots overlap
+    //     the secondary content area)
+    // Without clearing these, the restored tab would be invisible
+    // (display:none) and absolutely positioned relative to the wrong
+    // container (position:absolute anchors to panelContent, not the
+    // moved root's actual parent in the main panel).
+    tab.root.style.removeProperty('display')
+    tab.root.style.removeProperty('position')
+    tab.root.style.removeProperty('inset')
     // Clear the tabId-keyed entry — the tab is back home, no need to
     // remember the original parent. The next move-to-secondary will
     // record the (possibly new) parent again.
