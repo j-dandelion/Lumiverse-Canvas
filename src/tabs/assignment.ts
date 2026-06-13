@@ -493,6 +493,34 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
     tab.root.style.setProperty('position', 'absolute', 'important')
     tab.root.style.setProperty('inset', '0', 'important')
 
+    // Display management for close-then-reopen regression fix.
+    //
+    // closeSecondarySidebar sets display:none on ALL moved roots (via
+    // clearSecondaryTab). openSecondarySidebar calls repositionAssignedTabs
+    // → repositionTab for each tab. Without explicit display handling here,
+    // the display:none from close persists because repositionTab only sets
+    // position/inset, and showSecondaryTab's setProperty('display','','important')
+    // is a no-op (empty value is a CSS parse error).
+    //
+    // Three cases:
+    //  1. This tab IS the active secondary tab → remove the display override
+    //     so extension's default CSS (display:block) takes over.
+    //  2. Another tab is active and this one is inactive → hide it.
+    //  3. No active tab yet (first-open / sidebar just opened) → don't set
+    //     display:none to avoid flashing a hidden state; showSecondaryTab
+    //     will set correct per-root displays shortly via the applyLayout
+    //     polling loop end-of-interval block.
+    const activeId = getActiveSecondaryTabId()
+    if (activeId === tabId) {
+      tab.root.style.removeProperty('display')
+    } else if (activeId !== null) {
+      tab.root.style.setProperty('display', 'none', 'important')
+    } else {
+      // First-open case: leave display alone to avoid flash; showSecondaryTab
+      // will set correct displays via the applyLayout polling loop.
+      tab.root.style.removeProperty('display')
+    }
+
     return true
   } else {
     // target === 'primary' — restore from secondary back to the original
