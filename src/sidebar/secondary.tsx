@@ -245,6 +245,13 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // Panel content (where extension tab roots are appended)
   const content = document.createElement('div')
   content.className = 'sidebar-ux-panel-content'
+  // Position moved tab roots absolutely so they overlap. With
+  // position: relative on this container, position: absolute on
+  // children anchors them to this content area instead of the body.
+  // Inactive tabs get display: none in showSecondaryTab, which fully
+  // removes them from the layout — preventing the "active tab below
+  // the fold" symptom where the second tab in a stack is invisible
+  // without scrolling.
   content.style.cssText = `
     flex: 1;
     min-height: 0;
@@ -252,6 +259,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     overflow-x: hidden;
     overscroll-behavior-y: contain;
     padding: 12px 12px 40px;
+    position: relative;
   `
 
   panel.appendChild(header)

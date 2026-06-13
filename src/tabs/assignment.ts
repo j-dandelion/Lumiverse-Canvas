@@ -15,7 +15,7 @@
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar } from '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
@@ -24,6 +24,7 @@ import {
 import { persistLayout } from '../layout/persist'
 import {
   _setTabAssignmentsGetter,
+  getActiveTabId,
   isTabActiveInMainDrawer,
   getActiveSecondaryTabId,
   setActiveSecondaryTabId,
@@ -206,7 +207,16 @@ export function applyAssignment(tabId: string, target: 'primary' | 'secondary', 
   save?: boolean
 } = {}): void {
   const opts = { open: true, switchActive: true, save: true, ...options }
-  dlog(`applyAssignment: ${tabId} → ${target} (open=${opts.open}, switchActive=${opts.switchActive}, save=${opts.save})`)
+  const activeState = getActiveTabId()
+  const originalActiveTabId = activeState.state === 'active' ? activeState.id : null
+  const wasActive = isTabActiveInMainDrawer(tabId)
+  // Capture the restore-target button reference BEFORE any DOM changes.
+  // findMainTabButton reads getMainSidebar() which uses a [data-spindle-mount="sidebar"]
+  // selector; if React is mid-render or the main drawer was temporarily affected by
+  // the move, that selector can return null and the restore click would silently fail.
+  const originalActiveTabButton = (originalActiveTabId && originalActiveTabId !== tabId)
+    ? findMainTabButton(originalActiveTabId)
+    : null
 
   // 1. State: record the assignment
   _tabAssignments.set(tabId, target)
@@ -215,7 +225,36 @@ export function applyAssignment(tabId: string, target: 'primary' | 'secondary', 
   if (target === 'secondary') {
     hideMainTabButton(tabId)
     const tabs = getDrawerTabs()
-    const tab = tabs.find(t => t.id === tabId)
+    let tab = tabs.find(t => t.id === tabId)
+    if (!tab) {
+      // LumiScript interference: store returns only the dock panel. Build a
+      // synthetic descriptor from the button so the secondary button can be added.
+      const btn = findMainTabButton(tabId)
+      if (btn) {
+        // Read the icon from the main button's inner <svg> (Lumiverse renders
+        // the extension's iconSvg there). Fall back to PUZZLE_ICON_SVG if
+        // the button has no inner svg (e.g. icon is a CSS background image
+        // or the tab has no icon).
+        const btnSvg = btn.querySelector('svg')
+        const iconSvg = btnSvg ? btnSvg.outerHTML : PUZZLE_ICON_SVG
+        // Derive shortName from the main button's visible text. When the
+        // extension registered with `shortName: 'Books'`, Lumiverse renders
+        // the short name as the button's visible text and the full title
+        // in the `title` attribute. For tabs without a shortName, the
+        // visible text equals the title, so shortName stays empty and
+        // deriveShortName falls through to the title-truncation rule.
+        const title = btn.getAttribute('title') || ''
+        const btnText = (btn.textContent || '').trim()
+        const shortName = btnText && btnText !== title ? btnText : ''
+        tab = {
+          id: tabId,
+          title,
+          root: null as any,
+          iconSvg,
+          shortName,
+        } as any
+      }
+    }
     if (tab) addSecondaryTabButton(tab)
   } else {
     showMainTabButton(tabId)
@@ -238,8 +277,39 @@ export function applyAssignment(tabId: string, target: 'primary' | 'secondary', 
     }
   }
 
-  if (target === 'secondary' && opts.switchActive && isTabActiveInMainDrawer(tabId)) {
-    switchDrawerToFallback('main', tabId, doMove)
+  if (target === 'secondary' && opts.switchActive) {
+    if (wasActive) {
+      // Active case: doMove first (while content is in the main panel), then click a fallback.
+      doMove()
+      setTimeout(() => switchDrawerToFallback('main', tabId, () => {}), 16)
+    } else {
+      // Non-active case: activate, wait for content to mount, move, then restore original.
+      const btn = findMainTabButton(tabId)
+      if (btn) {
+        ;(btn as HTMLElement).click()
+        // 80ms setTimeout + rAF. 2-RAF alone was too short — React needs more time
+        // to commit the drawerTab state change, render the new ExtensionTabContent,
+        // and have the LumiBooks content fully mount in the main panel. The DOM-walk
+        // fallback in repositionTab needs the new content to be present, otherwise
+        // it finds the empty-state placeholder (_empty_*) and moves that instead.
+        setTimeout(() => {
+          requestAnimationFrame(() => {
+            doMove()
+            if (originalActiveTabButton) {
+              (originalActiveTabButton as HTMLElement).click()
+            } else if (originalActiveTabId && originalActiveTabId !== tabId) {
+              // Fallback: re-resolve the button if the early capture returned null
+              // (e.g., the original active tab was also an extension tab and the
+              // store was broken when we captured the reference).
+              const origBtn = findMainTabButton(originalActiveTabId)
+              if (origBtn) (origBtn as HTMLElement).click()
+            }
+          })
+        }, 80)
+      } else {
+        doMove()
+      }
+    }
   } else if (target === 'primary' && opts.switchActive) {
     // For 'primary', the chain is: reposition → if was active, neighbor
     // fall-through happens in restoreTabToPrimary.
@@ -308,7 +378,54 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
   // single change that closes the 3s-TTL timing window.
   findStoreData(true)
   const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
+  let tab = tabs.find(t => t.id === tabId)
+  // LumiScript interference: getDrawerTabs() returns the dock panel.
+  // Fall back to walking the DOM for the active content. Safe because
+  // applyAssignment activates the tab (non-active case) or moves it while
+  // still active (active case) before reaching this function.
+  if (!tab?.root) {
+    let fallbackRoot: HTMLElement | undefined
+    if (target === 'secondary') {
+      // Forward move: content is in the main panel (we activated the tab
+      // before calling repositionTab). Look there.
+      const mainPanel = getMainPanelContent()
+      if (mainPanel) {
+        // Build a candidate list with diagnostics so we can see what the
+        // main panel contains at decision time. After a round-trip move
+        // (secondary→primary→secondary) the panel has TWO wrappers: an
+        // empty orphan (the moved-back root, emptied by React's
+        // ExtensionTabContent useEffect replaceChildren) and the
+        // React-managed wrapper (which holds tab.root). We must pick the
+        // one with content, never the empty orphan.
+        const allChildren = Array.from(mainPanel.children) as HTMLElement[]
+        const candidates = allChildren.map((c, i) => `i${i}:cls="${c.className.slice(0, 30)}":cc=${c.childElementCount}`).join(', ')
+        // First pass: skip _empty_* placeholders AND empty wrappers.
+        let realContent = allChildren.find(c => !c.className.toLowerCase().includes('_empty_') && c.childElementCount > 0)
+        // Second pass (fallback): if the strict filter rejects everything,
+        // pick ANY child with content (might be an _empty_* wrapper with
+        // children — the original LumiScript-recovery path). NEVER fall
+        // back to children[0] unconditionally — that's the bug that picks
+        // the empty orphan on round-trips.
+        if (!realContent) {
+          realContent = allChildren.find(c => c.childElementCount > 0)
+        }
+        fallbackRoot = realContent
+      }
+    } else {
+      // Reverse move (restore-to-primary): content is in the secondary panel.
+      // Look there by the `data-canvas-moved` attribute set by the forward
+      // move. This works even when getDrawerTabs is broken (LumiScript
+      // interference: store returns only the dock panel).
+      const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
+      if (secondaryContent) {
+        const movedRoot = secondaryContent.querySelector(`[data-canvas-moved="${cssEscape(tabId)}"]`) as HTMLElement | null
+        if (movedRoot) fallbackRoot = movedRoot
+      }
+    }
+    if (fallbackRoot) {
+      tab = { id: tabId, title: '', root: fallbackRoot } as any
+    }
+  }
   if (!tab?.root) {
     dwarn(`repositionTab: tab not found for id=${tabId}`)
     return false
@@ -341,9 +458,19 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
       secondaryContent.appendChild(tab.root)
       tab.root.setAttribute('data-canvas-moved', tabId)
     }
-    tab.root.style.setProperty('width', '100%', 'important')
-    tab.root.style.setProperty('height', '100%', 'important')
+    // Position absolutely so the moved root overlaps the secondary content
+    // area at top:0. With `position: relative` on the secondary content
+    // container (added in sidebar/secondary.tsx), `inset: 0` anchors the
+    // root to the padding box of the container — so the moved root fills
+    // the content area regardless of how many other moved roots exist.
+    // Inactive tabs are hidden via `display: none` in showSecondaryTab,
+    // so only the active one is visible. This prevents the round-trip
+    // bug where the second tab in a stack is positioned below the
+    // visible area and appears empty until the user scrolls.
+    tab.root.style.setProperty('position', 'absolute', 'important')
+    tab.root.style.setProperty('inset', '0', 'important')
     tab.root.style.setProperty('display', '', 'important')
+
     return true
   } else {
     // target === 'primary' — restore from secondary back to the original
@@ -357,6 +484,12 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
       return false
     }
     if (tab.root.parentElement !== targetEl) {
+      // Remove the move marker BEFORE appendChild so installNodeGuard on
+      // panelContent doesn't block this explicit restore. The guard exists
+      // to prevent React's reconciliation from re-attaching a moved tab; an
+      // explicit restore should bypass it. After this move the root is no
+      // longer a "moved tab" so the second removeAttribute is a no-op.
+      tab.root.removeAttribute('data-canvas-moved')
       targetEl.appendChild(tab.root)
     }
     // Clear the tabId-keyed entry — the tab is back home, no need to
@@ -366,16 +499,32 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
     // Remove the move tag — the tab is back in primary and should not
     // participate in future secondary sweeps. If a re-mount later
     // produces a new Node, the next move will re-tag it.
-    tab.root.removeAttribute('data-canvas-moved')
+    tab.root.removeAttribute('data-canvas-moved')  // keep this as a safety no-op
     return true
   }
 }
 
 
 export function restoreTabToPrimary(tabId: string) {
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  if (!tab || !tab.root) return
+  let tabs = getDrawerTabs()
+  let tab = tabs.find(t => t.id === tabId)
+  if (!tab || !tab.root) {
+    // LumiScript interference: getDrawerTabs() returns only the dock panel,
+    // so the store never has extension tabs (LumiBooks, Hone). Build a
+    // synthetic descriptor from the moved root in the secondary content
+    // area (tagged with `data-canvas-moved` by repositionTab on the
+    // forward move). The Canvas-owned attribute is the authoritative
+    // source of truth here, more reliable than the store. If no moved
+    // root is found, the tab is genuinely not in the secondary and we
+    // bail out as before.
+    const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
+    const movedRoot = secondaryContent?.querySelector(`[data-canvas-moved="${cssEscape(tabId)}"]`) as HTMLElement | null
+    if (!movedRoot) {
+      dwarn(`restoreTabToPrimary: tabId=${tabId} not found in store and no moved root in secondary`)
+      return
+    }
+    tab = { id: tabId, title: '', root: movedRoot } as any
+  }
 
   // v1.3.0: previously this function cleared `__sidebarUxResizeHandler` and
   // `__sidebarUxPositionUpdate` properties hung off `tab.root`, plus read
@@ -389,12 +538,18 @@ export function restoreTabToPrimary(tabId: string) {
   // getMainPanelContent() if the recorded parent was detached.
   repositionTab(tabId, 'primary')
 
-  // Activate the restored tab in the main drawer. Without this, the panel
-  // content is empty because Lumiverse's React state still points at whatever
-  // tab was active before the move. Clicking the button triggers the normal
-  // setDrawerTab + openDrawer flow.
-  const btn = findMainTabButton(tabId)
-  if (btn) (btn as HTMLElement).click()
+  // Activate the restored tab in the main drawer with a guaranteed remount.
+  // switchDrawerToFallback first switches to a safe neighbor (or does nothing
+  // if the tab wasn't active), which changes main.drawerTab and forces
+  // ExtensionTabContent to unmount/remount. Then we click the restored tab
+  // to make it the active one. The remount is critical: if the tab was
+  // already active in main (single-tab edge case where switchDrawerToFallback
+  // failed during the forward move), a plain click would be a no-op and
+  // the useEffect that re-attaches the root to containerRef would not run.
+  switchDrawerToFallback('main', tabId, () => {
+    const btn = findMainTabButton(tabId)
+    if (btn) (btn as HTMLElement).click()
+  })
 
   // Phase 4 (finding #2): if the restored tab was the active secondary tab,
   // fall through to a neighbor so the secondary panel doesn't end up

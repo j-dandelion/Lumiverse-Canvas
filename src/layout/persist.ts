@@ -24,6 +24,7 @@ import {
   getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR,
 } from '../sidebar/secondary'
 import { getTabAssignments } from '../tabs/assignment'
+import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getSettings, cancelSettingsSave } from '../settings/state'
 
 export { applyLayout } from './apply'
@@ -130,6 +131,13 @@ export function snapshotLayout(): any {
     secondary: {
       open: isSecondarySidebarOpen(),
       width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
+      // The active secondary tab. Persisted so layout restore brings back
+      // the same tab the user was on before refresh. Old layouts (saved
+      // before this field existed) will have undefined; applyLayout falls
+      // back to the first detached tab in that case. Only persisted when
+      // a tab is actually active; null when the secondary has no active
+      // tab (e.g. all tabs moved back to primary).
+      activeTabId: getActiveSecondaryTabId(),
     },
     detachedTabs: Array.from(getTabAssignments().entries())
       .filter(([_, side]) => side === 'secondary')

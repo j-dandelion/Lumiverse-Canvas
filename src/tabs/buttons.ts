@@ -18,6 +18,7 @@ import { isShowTabLabels } from '../sidebar/drawer-sync'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
+import { persistLayout } from '../layout/persist'
 
 
 
@@ -43,6 +44,21 @@ export function findMainTabButton(tabId: string): Element | null {
   // and version-suffix drift. Skips the store lookup entirely.
   const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`)
   if (byId) return byId
+
+  // LumiScript interference fallback: direct title-based lookup. When the
+  // store is broken (returns only LumiScript's dock panel), tagMainSidebarButtons
+  // can't tag extension tab buttons with data-tab-id, and the store-based
+  // title lookup also fails. But Canvas's context-menu falls back to setting
+  // tabId = title when matchedTab is null, so for extension tabs the
+  // right-clicked button's title literally matches the tabId we're looking up.
+  const byTitle = sidebar.querySelector(`button[title="${cssEscape(tabId)}"]`)
+  if (byTitle) {
+    // Backfill data-tab-id so future lookups hit the fast path. Use the
+    // tabId-as-title as a stable id for this session (we don't know the
+    // real id since the store is broken).
+    byTitle.setAttribute('data-tab-id', tabId)
+    return byTitle
+  }
 
   // Fallback: title-based match via the store. Used only when the button
   // hasn't been tagged yet (very brief window after mount) or when a stale
@@ -161,6 +177,7 @@ interface SecondaryTabDescriptor {
 
 export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   const tabList = getSecondaryWrapper()?.querySelector('.sidebar-ux-tab-list')
+  const alreadyHasButton = !!(tabList && tabList.querySelector(`[data-tab-id="${tab.id}"]`))
   if (!tabList || tabList.querySelector(`[data-tab-id="${tab.id}"]`)) return
   const showLabels = isShowTabLabels()
   dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
@@ -274,27 +291,41 @@ export function showSecondaryTab(tabId: string): void {
   // Record which tab is now active so restoreTabToPrimary can fall through
   // to a neighbor when the active tab is moved out.
   setActiveSecondaryTabId(tabId)
+  // Persist the new active tab so layout restore brings back the same tab.
+  // persistLayout is 500ms debounced; multiple clicks coalesce to one write.
+  persistLayout()
 
-  // Show the requested tab, hide others
-  for (const [tid, sidebar] of getTabAssignments()) {
-    if (sidebar !== 'secondary') continue
-    const tabs = getDrawerTabs()
-    const tab = tabs.find(t => t.id === tid)
-    if (!tab || !tab.root) continue
+  const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 
+  // Source of truth: Canvas-owned `data-canvas-moved` attribute on roots in
+  // the secondary content. Works even when getDrawerTabs is broken
+  // (LumiScript interference). Iterate the moved roots directly; the
+  // original code used getDrawerTabs().find(t => t.id === tid) and
+  // tab.root from the store, which returns undefined for LumiBooks/Hone
+  // when LumiScript is installed, causing the display toggle to no-op.
+  const movedRoots = secondaryContent
+    ? Array.from(secondaryContent.querySelectorAll('[data-canvas-moved]')) as HTMLElement[]
+    : []
+  let activeTitle = ''
+  for (const root of movedRoots) {
+    const tid = root.getAttribute('data-canvas-moved') || ''
     if (tid === tabId) {
-      tab.root.style.setProperty('display', '', 'important')
+      root.style.setProperty('display', '', 'important')
+      // The main tab button is always in the DOM after a move (hidden via
+      // display:none by hideMainTabButton), so findMainTabButton resolves
+      // it. Read the title from the main button — the store's tab.title
+      // is missing when LumiScript is installed.
+      const mainBtn = findMainTabButton(tid)
+      if (mainBtn) activeTitle = mainBtn.getAttribute('title') || ''
     } else {
-      tab.root.style.setProperty('display', 'none', 'important')
+      root.style.setProperty('display', 'none', 'important')
     }
   }
 
   // Update header title
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  if (tab) {
+  if (activeTitle) {
     const title = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-    if (title) title.textContent = tab.title
+    if (title) title.textContent = activeTitle
   }
 
   // Update active state on tab buttons

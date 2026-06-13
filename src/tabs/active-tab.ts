@@ -76,11 +76,18 @@ function isMovedTabId(tabId: string): boolean {
 }
 
 /**
- * What the wrapped container methods call. Forces a fresh store read
- * (findStoreData(true)) and reverse-resolves the Node to a tabId via
- * the live store's `tab.root`. Then delegates to `isMovedTabId`.
+ * What the wrapped container methods call. Primary check is the Canvas-owned
+ * `data-canvas-moved` attribute set by repositionTab — this works even when
+ * getDrawerTabs is broken (LumiScript interference: store returns only the
+ * dock panel, so the store-based reverse-lookup misses extension tabs).
+ * Falls back to the store-based lookup for nodes that are mounted in the
+ * primary but have not been moved (defensive — the attribute is set/removed
+ * symmetrically so this branch should rarely fire).
  */
 export function isMovedTabNode(node: Node): boolean {
+  if (node instanceof Element && node.hasAttribute('data-canvas-moved')) {
+    return true
+  }
   findStoreData(true)
   const tabs = getDrawerTabs()
   const tab = tabs.find((t: any) => t.root === node)

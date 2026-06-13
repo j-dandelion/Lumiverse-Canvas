@@ -34,3 +34,4 @@ export function dwarn(...args: unknown[]): void {
   // eslint-disable-next-line no-console
   console.warn('[Canvas]', ...args)
 }
+

@@ -60,7 +60,13 @@ function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: 
     // first call (e.g., 1 of 3 tabs visible) would persist indefinitely.
     if ((force || !_drawerTabsCache) && Array.isArray(state) && state.length > 0 && state[0] && typeof state[0] === 'object') {
       const firstKeys = Object.keys(state[0])
-      if (firstKeys.includes('id') && firstKeys.includes('title') && firstKeys.includes('root')) {
+      // DrawerTabState is the only spindle-placement slice whose entries
+      // carry a `badge` field. Reject DockPanelState (has 'edge') and
+      // FloatWidgetState (has 'x'/'y') which otherwise share id/title/root
+      // with drawer tabs and would be mis-cached when LumiScript (or any
+      // dock-panel-registering extension) is installed.
+      if (firstKeys.includes('id') && firstKeys.includes('title') && firstKeys.includes('root')
+          && firstKeys.includes('badge') && !firstKeys.includes('edge') && !firstKeys.includes('x')) {
         _drawerTabsCache = state as DrawerTab[]
       }
     }
