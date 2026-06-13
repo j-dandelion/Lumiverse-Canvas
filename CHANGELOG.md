@@ -2,9 +2,21 @@
 
 ## Unreleased
 
+## v1.6.3 — 2026-06-11
+
 ### Added
 
 - Canvas: add "Move tab controls to outer edge" toggle in Sidebars settings.
+- **Vertical drag-to-reposition for drawer tabs.** Drag the main or
+  secondary drawer tab up/down to reposition it vertically. Replaces
+  the Lumiverse tab-position slider with a pointer-based drag handler.
+  New `drawerTabDrag` setting (default on). Drag accuracy fix: computed
+  px values are now converted to vh via `window.innerHeight` instead
+  of being treated as vh directly. Polish sync: secondary drawer tab
+  mirrors the main drawer tab's vertical position in real time via a
+  MutationObserver on the main tab's `style` attribute. Covered by
+  `src/drawerTabPosition/__tests__/drag.test.ts` and
+  `src/sidebar/__tests__/syncDrawerTabSettings.test.ts`.
 
 ### Fixed
 
@@ -21,6 +33,22 @@
   big ↔ small now transition seamlessly. Covered by
   `src/chat/__tests__/reflow-mobile.test.ts`.
 - **Chat reflow no longer reads a stale `drawerOpen` after rapid tab clicks.** `isMainDrawerOpen()` in `src/store/index.ts` previously preferred the 3s-cached Zustand snapshot and only fell back to the live `wrapper.classList` when the store had no `drawerOpen` field — a leftover asymmetry with its sibling `getMainDrawerSide()`, which already does the opposite and documents the rationale. User repro: open the main drawer, click all 15 visible tab buttons (each click refreshes the cache via the tagger observer's `findStoreData(true)` call inside `tagMainSidebarButtons`), then click the drawer tab to close. The cache was just refreshed while the drawer was open, the DOM correctly drops `wrapperOpen`, and the previous store-first order returned the stale `true` — so `updateChatReflow` left the chat margins as if the drawer were still open until a hard refresh. The fix flips `isMainDrawerOpen` to DOM-first / store-fallback (mirroring `getMainDrawerSide`), so a stale cache is ignored whenever the wrapper is in the DOM. Covered by `src/chat/__tests__/reflow-staleness.test.ts`.
+- **Reflow teardown no longer leaks the observer or rAF.** Two race
+  conditions in `startReflowObserver`'s teardown path: (1) if teardown
+  fires before `waitForElement` resolves, the `.then()` callback ran
+  `observer.observe()` after `disconnect()` — reattaching with no
+  subsequent cleanup; (2) pending `requestAnimationFrame` from
+  `scheduleReflow` was not cancelled on teardown, so the callback
+  would write stale margin vars. Both fixed with a `cancelled` flag
+  and `cancelAnimationFrame` in the teardown closure. Covered by
+  tests R1 and R2 in `src/chat/__tests__/reflow-mobile.test.ts`.
+- **Secondary sidebar build default now matches the OFF-case.**
+  `createSecondarySidebar`'s build-default `flex-direction` and
+  tab-list border side were inverted from native Lumiverse CSS and
+  from the values `applyTabListPosition(false)` produces. Currently
+  invisible (overwritten synchronously on mount), but the build
+  default should match the OFF-case so `apply()` is a true no-op
+  when the toggle is off.
 
 ## v1.6.2 — 2026-06-11
 
