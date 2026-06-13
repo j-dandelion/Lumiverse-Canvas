@@ -87,6 +87,18 @@ export function scheduleReflow(): void {
   })
 }
 
+/** Read the LumiScript (Spindle) dock panel widths from the App's inline
+ *  CSS variables. These are set by Lumiverse's App.tsx based on
+ *  `dockInsets` (the max dock panel width per edge). Returns 0 for any
+ *  side where the App element isn't found or the variable isn't set. */
+function getDockInsets(): { left: number; right: number } {
+  const appEl = document.querySelector('[data-app-root]') as HTMLElement | null
+  if (!appEl) return { left: 0, right: 0 }
+  const left = parseFloat(appEl.style.getPropertyValue('--spindle-dock-left')) || 0
+  const right = parseFloat(appEl.style.getPropertyValue('--spindle-dock-right')) || 0
+  return { left, right }
+}
+
 export function updateChatReflow(): void {
   // Mobile: reflow is a complete no-op. The host CSS controls the
   // chat column layout at ≤600px (the drawer overlays the chat),
@@ -107,17 +119,27 @@ export function updateChatReflow(): void {
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
 
-  // Set CSS variables for chat column margins (centering). The
-  // mobile override inside the injected <style> nullifies these at
-  // ≤600px, and the early-return above means we never even reach
-  // this on mobile.
+  // Account for the LumiScript dock panel widths. The dock panel and the
+  // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with
+  // `position: fixed`; the drawer has higher z-index). The App's padding
+  // already pushes the chat by the dock panel's width, so we subtract it
+  // from the drawer's width to avoid double-counting. If the dock panel
+  // is wider than the drawer, the result is clamped to 0.
+  const dockInsets = getDockInsets()
+  let rightMargin: number
+  let leftMargin: number
   if (mainSide === 'left') {
-    setChatMargin('left', mainWidth)
-    setChatMargin('right', secondaryWidth)
+    rightMargin = secondaryWidth
+    leftMargin = mainWidth
   } else {
-    setChatMargin('right', mainWidth)
-    setChatMargin('left', secondaryWidth)
+    rightMargin = mainWidth
+    leftMargin = secondaryWidth
   }
+  rightMargin = Math.max(0, rightMargin - dockInsets.right)
+  leftMargin = Math.max(0, leftMargin - dockInsets.left)
+
+  setChatMargin('right', rightMargin)
+  setChatMargin('left', leftMargin)
 }
 
 /** MatchMedia change handler. On cross-down, drop any stale inline
@@ -151,6 +173,15 @@ export function startReflowObserver(): () => void {
       updateChatReflow()
     }
   })
+
+  // Also observe the App element for style changes — the dock panel
+  // insets (--spindle-dock-{left,right,top,bottom}) are set as inline
+  // style on it by Lumiverse's App.tsx. Without this, adding/removing a
+  // dock panel wouldn't trigger a chat reflow.
+  const appEl = document.querySelector('[data-app-root]') as HTMLElement | null
+  if (appEl && !cancelled) {
+    observer.observe(appEl, { attributes: true, attributeFilter: ['style'] })
+  }
 
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle
   // (gated on CanvasSettings.chatReflow) is preserved. The tagger is exported
