@@ -33,7 +33,8 @@ import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility } from '../tabs/buttons'
+import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility } from '../tabs/buttons'
+import { getActiveSecondaryTabId } from '../tabs/active-tab'
 
 let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownVerticalPos: number | null = null
@@ -205,6 +206,25 @@ export function checkSideChanged(): void {
     // and only becomes visible when this function runs. Without this call,
     // the clickable edge handle stays hidden after the wrapper is recreated.
     updateDrawerTabVisibility()
+    // The new wrapper has a hardcoded title "Second Sidebar" (secondary.tsx:224).
+    // On initial mount, applyLayout (apply.ts:226) calls showSecondaryTab()
+    // to set the title to the active tab's name — but that path is not reached
+    // on a side-change remount. Calling showSecondaryTab here restores the
+    // header text and the active state on tab buttons (sidebar-ux-tab-active
+    // class, box-shadow indicator, icon/label color) which are also lost
+    // because addSecondaryTabButton doesn't set the active class.
+    //
+    // Guard: only call if there's an active tab that's still assigned to
+    // secondary. Without this guard, a stale _activeSecondaryTabId (active
+    // tab was moved out before the side change) would cause showSecondaryTab
+    // to mark a non-existent button as active.
+    const activeTabId = getActiveSecondaryTabId()
+    if (activeTabId !== null) {
+      const assignments = getTabAssignments()
+      if (assignments.get(activeTabId) === 'secondary') {
+        showSecondaryTab(activeTabId)
+      }
+    }
   }
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
