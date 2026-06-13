@@ -14,7 +14,7 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { dlog, dwarn } from '../debug/log'
-import { isShowTabLabels } from '../sidebar/polish'
+import { isShowTabLabels } from '../sidebar/drawer-sync'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'

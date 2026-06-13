@@ -30,7 +30,7 @@ import { getChatColumn, getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
-import { syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/polish'
+import { syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../layout/persist'
 import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
@@ -183,12 +183,12 @@ const resizeSidebarsFeature: CanvasFeature = {
   },
 }
 
-/** Polish bundle: mirror compact position + tab-label visibility. Both
- *  toggles are owned by sidebar/polish.ts, so the feature id is the master
+/** Drawer-sync bundle: mirror compact position + tab-label visibility. Both
+ *  toggles are owned by sidebar/drawer-sync.ts, so the feature id is the master
  *  (mirrorCompactPosition) and the showTabLabels hook rides along in
- *  apply(). The orchestrator still iterates by id, but the polish module
+ *  apply(). The orchestrator still iterates by id, but the drawer-sync module
  *  is the single owner of both effects. */
-const polishFeature: CanvasFeature = {
+const drawerSyncFeature: CanvasFeature = {
   id: 'mirrorCompactPosition',
   mount() {
     if (getSettings().mirrorCompactPosition) syncDrawerTabSettings()
@@ -351,7 +351,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   chatReflowFeature,
   secondSidebarFeature,
   resizeSidebarsFeature,
-  polishFeature,
+  drawerSyncFeature,
   consistentIconSizeFeature,
   shadowsDesktopFeature,
   shadowsMobileFeature,

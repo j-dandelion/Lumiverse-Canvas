@@ -8,7 +8,7 @@
 // on drag-end so this function can re-apply on settings diff.
 //
 // Undefined override fields are intentionally ignored (no inline-style
-// clear) — the polish mirror and side-flip remount paths own their own
+// clear) — the drawer-sync mirror and side-flip remount paths own their own
 // clearing.
 
 import type { FullCanvasSettings } from '../settings/state'

@@ -37,7 +37,7 @@ import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
 import { startMobileExclusion } from './sidebar/mobile-exclusion'
-import { startTabRegistrationWatcher, startSideChangeWatcher } from './sidebar/polish'
+import { startTabRegistrationWatcher, startSideChangeWatcher } from './sidebar/drawer-sync'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
@@ -139,7 +139,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     // Side-change watcher runs unconditionally (no longer gated behind
-    // the autoMirrorOnSideSwap setting). polish.ts:200 already registers
+    // the autoMirrorOnSideSwap setting). drawer-sync.ts:200 already registers
     // stopSideChangeWatcher with the cleanup chain.
     startSideChangeWatcher()
 

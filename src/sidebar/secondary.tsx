@@ -15,7 +15,7 @@ import { getMainSidebar } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
-import { syncDrawerTabSettings } from './polish'
+import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
 import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton, findSafeFallbackButton } from '../tabs/buttons'
@@ -38,7 +38,7 @@ let _secondarySidebarOpen = false
 let _secondaryWrapper: HTMLElement | null = null
 let _secondaryDrawer: HTMLElement | null = null
 
-// Accessors used by other modules (resize/handles, sidebar/polish,
+// Accessors used by other modules (resize/handles, sidebar/drawer-sync,
 // tabs/buttons, context-menu, layout/persist). All read; setSecondarySidebarOpen
 // and unmountSecondarySidebar mutate.
 export function getSecondaryWrapper(): HTMLElement | null { return _secondaryWrapper }

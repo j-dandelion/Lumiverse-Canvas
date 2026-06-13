@@ -43,7 +43,7 @@ export { installNodeGuard, ensureNodeGuard } from './node-guard'
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 
-// Accessors used by other modules (sidebar/secondary, sidebar/polish,
+// Accessors used by other modules (sidebar/secondary, sidebar/drawer-sync,
 // context-menu, layout/persist).
 export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { return _tabAssignments }
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }

@@ -1,6 +1,5 @@
-// Sidebar polish concerns: cross-drawer visual sync and the
-// side/registration watchers that keep the secondary wrapper in step
-// with the main drawer's lifecycle.
+// Cross-drawer visual sync and the side/registration watchers that keep
+// the secondary wrapper in step with the main drawer's lifecycle.
 //
 // syncDrawerTabSettings / syncSecondaryTabLabels — mirror the main
 // drawer's compact mode, vertical position, and tab-label visibility on
@@ -66,8 +65,8 @@ export function isShowTabLabels(): boolean {
 
 export function syncDrawerTabSettings(): void {
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-  if (!drawerTab) { dlog(`[polish] syncDrawerTabSettings: secondary tab not found`); return }
-  dlog(`[polish] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
+  if (!drawerTab) { dlog(`[drawer-sync] syncDrawerTabSettings: secondary tab not found`); return }
+  dlog(`[drawer-sync] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
 
   // Read settings from the main sidebar's drawer tab DOM directly
   const mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)') as HTMLElement
@@ -129,7 +128,7 @@ export function syncDrawerTabSettings(): void {
   // read main's style, write secondary's style. Only attach once.
   if (!_mainDrawerTabStyleObserver) {
     _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      dlog(`[polish] style observer fired`)
+      dlog(`[drawer-sync] style observer fired`)
       syncDrawerTabSettings()
     })
     _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['style'] })
@@ -145,14 +144,14 @@ export function syncDrawerTabSettings(): void {
 
   if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings()
-    dlog(`[polish] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`)
+    dlog(`[drawer-sync] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`)
     if (settings.mirrorCompactPosition) {
       // Mirror always wins when on. The secondaryDrawerTabOverrideVh is
       // a per-tab independent value, but it only takes effect when the
       // mirror is off (see below). This means a stale override from a
       // previous session can't strand the secondary at a wrong position
       // when the user has mirror on and expects the tabs to follow.
-      dlog(`[polish] writing secondary marginTop=${posVh}vh`)
+      dlog(`[drawer-sync] writing secondary marginTop=${posVh}vh`)
       drawerTab.style.marginTop = `${posVh}vh`
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       drawerTab.style.marginTop = ''  // mirror off, no override → clear

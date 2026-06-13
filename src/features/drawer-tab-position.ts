@@ -8,7 +8,7 @@
 // Bidirectional mirror: when mirrorCompactPosition is on, dragging the
 // secondary also moves the main. The secondary's drag installer wires an
 // onLiveUpdate callback that writes the new vh to the main's DOM on every
-// pointermove. The style observer on the main (wired in polish.ts) then
+// pointermove. The style observer on the main (wired in drawer-sync.ts) then
 // fires on the next microtask and writes the same value back to the
 // secondary (idempotent). The secondary's onCommit also persists the
 // main's override so the apply path doesn't undo the live update on the

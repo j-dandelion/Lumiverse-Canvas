@@ -1,9 +1,9 @@
-// Regression test for Pitfall 7: apply-after-polish ordering.
+// Regression test for Pitfall 7: apply-after-drawer-sync ordering.
 //
 // When mirrorCompactPosition is ON and the user has a Canvas-side
 // override (mainDrawerTabOverrideVh), the secondary tab should reflect
-// the Canvas override AFTER the polish mirror runs. This verifies that
-// the apply-after-polish dispatch order produces the correct final
+// the Canvas override AFTER the drawer-sync mirror runs. This verifies that
+// the apply-after-drawer-sync dispatch order produces the correct final
 // marginTop on the secondary tab.
 
 let passed = 0
@@ -109,7 +109,7 @@ secondaryWrapper.querySelector = (sel: string): StubElement | null => {
 // triple passed to observe() so tests can fire the callback manually —
 // the real MutationObserver is async and depends on the browser, so
 // we don't get one for free in this test environment. Used by the
-// polish class observer (attributeFilter: ['class']) and the new
+// drawer-sync class observer (attributeFilter: ['class']) and the new
 // style observer (attributeFilter: ['style']) in syncDrawerTabSettings.
 interface CapturedMutationObserver {
   cb: () => void
@@ -138,7 +138,7 @@ import { __setSecondaryWrapperForTest } from '../secondary'
 // Set the secondary wrapper for the test
 __setSecondaryWrapperForTest(secondaryWrapper as any)
 
-import { syncDrawerTabSettings } from '../polish'
+import { syncDrawerTabSettings } from '../drawer-sync'
 import { applyDrawerTabPosition } from '../../drawerTabPosition/apply'
 import type { FullCanvasSettings } from '../../settings/state'
 
@@ -184,7 +184,7 @@ import { getSettings } from '../../settings/state'
 
   // The final value should be the Canvas override (25), not the stale mirror (12)
   assertEqual(secondaryDrawerTab.style.marginTop, '25vh',
-    'C1: secondary marginTop = 25vh after apply-after-polish (override wins)')
+    'C1: secondary marginTop = 25vh after apply-after-drawer-sync (override wins)')
 }
 
 // ============================================================
@@ -371,7 +371,7 @@ import { getSettings } from '../../settings/state'
     'C6.a: secondary retains 40vh (override) after initial sync (mirror OFF)')
 
   // Style observer fires on a main change. With mirror OFF and override
-  // set, the polish path still must NOT touch the secondary.
+  // set, the drawer-sync path still must NOT touch the secondary.
   const styleObs = _capturedMutationObservers.find(
     (o) => o.options?.attributeFilter?.includes('style'),
   )
@@ -389,14 +389,14 @@ import { getSettings } from '../../settings/state'
 }
 
 // ============================================================
-// Helper: reset the module-level _lastKnownVerticalPos in polish.ts
+// Helper: reset the module-level _lastKnownVerticalPos in drawer-sync.ts
 // ============================================================
 function _resetLastKnownVerticalPos() {
   // Reset the module-level _lastKnownVerticalPos cache. We can't access
   // the variable directly, but calling syncDrawerTabSettings with a
   // DIFFERENT value forces the cache to update. Since the rAF stub is a
   // no-op, syncDrawerTabSettings won't recurse. Each test case sets a
-  // fresh distinct marginTop so the if-check at polish.ts:115 passes.
+  // fresh distinct marginTop so the if-check at drawer-sync.ts:145 passes.
   // We just need to clear the cache; the test body sets the real value.
 }
 

@@ -10,7 +10,7 @@
 // The comment in store/index.ts:110 ("Called by sidebar/cleanup.cleanupAll
 // on teardown") referred to clearStoreCache, which has been removed.
 // This module owns the registry and the iteration; consumers
-// (sidebar/polish.ts) register their own teardowns. PR-A wired
+// (sidebar/drawer-sync.ts) register their own teardowns. PR-A wired
 // clearTabAssignments/clearOriginalParents into cleanupAll so a
 // disable→re-enable cycle doesn't see stale state.
 
