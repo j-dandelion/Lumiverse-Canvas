@@ -283,31 +283,54 @@ export function applyAssignment(tabId: string, target: 'primary' | 'secondary', 
       doMove()
       setTimeout(() => switchDrawerToFallback('main', tabId, () => {}), 16)
     } else {
-      // Non-active case: activate, wait for content to mount, move, then restore original.
-      const btn = findMainTabButton(tabId)
-      if (btn) {
-        ;(btn as HTMLElement).click()
-        // 80ms setTimeout + rAF. 2-RAF alone was too short — React needs more time
-        // to commit the drawerTab state change, render the new ExtensionTabContent,
-        // and have the LumiBooks content fully mount in the main panel. The DOM-walk
-        // fallback in repositionTab needs the new content to be present, otherwise
-        // it finds the empty-state placeholder (_empty_*) and moves that instead.
-        setTimeout(() => {
-          requestAnimationFrame(() => {
-            doMove()
-            if (originalActiveTabButton) {
-              (originalActiveTabButton as HTMLElement).click()
-            } else if (originalActiveTabId && originalActiveTabId !== tabId) {
-              // Fallback: re-resolve the button if the early capture returned null
-              // (e.g., the original active tab was also an extension tab and the
-              // store was broken when we captured the reference).
-              const origBtn = findMainTabButton(originalActiveTabId)
-              if (origBtn) (origBtn as HTMLElement).click()
-            }
-          })
-        }, 80)
-      } else {
+      // Non-active case: try a direct move first. When the tab is not active,
+      // React's ExtensionTabContent has unmounted it, so tab.root is detached
+      // and can be moved directly to secondary without activating the tab
+      // first. This avoids the 80ms flicker of the moved tab's content
+      // appearing in the main panel during the activate-then-move dance.
+      //
+      // Fall back to the dance (with visibility:hidden hard hide) only when
+      // tab.root is not available from the store — e.g., LumiScript edge case
+      // or an extension that doesn't register a `badge` field.
+      const tabs = getDrawerTabs()
+      const tab = tabs.find(t => t.id === tabId)
+      if (tab?.root && !tab.root.isConnected) {
         doMove()
+      } else {
+        // Fallback: dance (activate, wait, move, restore). visibility:hidden
+        // suppresses the flicker during the 80ms wait by hiding the main
+        // panel content for the duration. The tab buttons and header stay
+        // visible; only the content area disappears (no layout collapse).
+        const btn = findMainTabButton(tabId)
+        if (btn) {
+          const mainPanelContent = getMainPanelContent()
+          if (mainPanelContent) {
+            mainPanelContent.style.setProperty('visibility', 'hidden', 'important')
+          }
+          ;(btn as HTMLElement).click()
+          setTimeout(() => {
+            requestAnimationFrame(() => {
+              try {
+                doMove()
+                if (originalActiveTabButton) {
+                  (originalActiveTabButton as HTMLElement).click()
+                } else if (originalActiveTabId && originalActiveTabId !== tabId) {
+                  // Fallback: re-resolve the button if the early capture returned null
+                  const origBtn = findMainTabButton(originalActiveTabId)
+                  if (origBtn) (origBtn as HTMLElement).click()
+                }
+              } finally {
+                // Restore visibility only if the panel content element still
+                // exists (it might have been replaced by a re-render).
+                if (mainPanelContent && mainPanelContent.isConnected) {
+                  mainPanelContent.style.setProperty('visibility', '', 'important')
+                }
+              }
+            })
+          }, 80)
+        } else {
+          doMove()
+        }
       }
     }
   } else if (target === 'primary' && opts.switchActive) {
@@ -469,7 +492,6 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
     // visible area and appears empty until the user scrolls.
     tab.root.style.setProperty('position', 'absolute', 'important')
     tab.root.style.setProperty('inset', '0', 'important')
-    tab.root.style.setProperty('display', '', 'important')
 
     return true
   } else {
