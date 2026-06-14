@@ -11,11 +11,11 @@
 // on teardown") referred to clearStoreCache, which has been removed.
 // This module owns the registry and the iteration; consumers
 // (sidebar/drawer-sync.ts) register their own teardowns. PR-A wired
-// clearTabAssignments/clearOriginalParents into cleanupAll so a
-// disable→re-enable cycle doesn't see stale state.
+// clearTabAssignments into cleanupAll so a disable→re-enable cycle
+// doesn't see stale state.
 
 import { dwarn } from '../debug/log'
-import { clearTabAssignments, clearOriginalParents } from '../tabs/assignment'
+import { clearTabAssignments } from '../tabs/assignment'
 
 const _cleanupFns: Array<() => void> = []
 
@@ -33,5 +33,4 @@ export function cleanupAll() {
 
   // Reset module-level caches that don't have their own teardown registration
   try { clearTabAssignments() } catch (err: unknown) { dwarn('clearTabAssignments error:', err) }
-  try { clearOriginalParents() } catch (err: unknown) { dwarn('clearOriginalParents error:', err) }
 }

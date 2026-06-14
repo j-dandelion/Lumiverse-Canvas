@@ -183,6 +183,14 @@ export function startReflowObserver(): () => void {
     observer.observe(appEl, { attributes: true, attributeFilter: ['style'] })
   }
 
+  // Also watch for the chat column to appear (SPA navigation adds it after
+  // initial load). Without this, clicking the welcome page to load the chat
+  // never triggers updateChatReflow() because the MutationObserver only watches
+  // class/style on the wrapper and app-root — a child append isn't visible to it.
+  waitForElement(getChatColumn, 'chat column').then((chat) => {
+    if (chat && !cancelled) scheduleReflow()
+  })
+
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle
   // (gated on CanvasSettings.chatReflow) is preserved. The tagger is exported
   // as its own startTagObserver() in chat/tag-buttons.ts and can be wired
