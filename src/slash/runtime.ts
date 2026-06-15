@@ -11,6 +11,7 @@ import {
   findCompletionCandidateIndex,
   resolveActiveIndex,
   shouldHideForNonMatchingArgs,
+  setControlledValue,
 } from './dom-utils'
 import type { SlashCommandDef, SlashContext } from './types'
 
@@ -61,8 +62,9 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     setText: (text) => {
       const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
       if (!ta) return
-      ta.value = text
-      ta.dispatchEvent(new Event('input', { bubbles: true }))
+      // Use the React-aware setter so any slash command handler that calls
+      // setText doesn't fall into the same DOM/React clobber race.
+      setControlledValue(ta, text)
     },
     toast: (kind, text) => {
       // Dispatch CustomEvent; the toast surface (toast.tsx) listens and renders.

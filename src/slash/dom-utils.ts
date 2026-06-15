@@ -30,10 +30,34 @@ export function applySuggestion(
   // with '/', and the user contract is "press Enter twice to send,"
   // so the label MUST be parseable on the second Enter.
   const normalized = label.startsWith('/') ? label : `/${label}`
-  ta.value = `${normalized} `
   _skipNextTextChange = true
-  ta.dispatchEvent(new Event('input', { bubbles: true }))
+  setControlledValue(ta, `${normalized} `)
   ta.setSelectionRange(ta.value.length, ta.value.length)
+}
+
+/**
+ * Set a controlled-input value in a way that keeps React's state in sync.
+ * Uses the prototype's native value setter (bypasses any installed setter
+ * for proper _valueTracker behavior), then dispatches a synthetic input
+ * event so React's onChange handler runs.
+ *
+ * This is the standard React 16-18 controlled-input workaround. Without
+ * it, `ta.value = "..."` can leave React's _valueTracker stale, causing
+ * the next render to overwrite the DOM value with the previous React state.
+ *
+ * Use this for ALL canvas-ext writes to the chat textarea — applySuggestion,
+ * the SlashContext.setText helper exposed to slash command handlers, and
+ * any future code that needs to programmatically set the chat input.
+ */
+export function setControlledValue(ta: HTMLTextAreaElement, value: string): void {
+  const proto = Object.getPrototypeOf(ta)
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+  if (desc?.set) {
+    desc.set.call(ta, value)
+  } else {
+    ta.value = value
+  }
+  ta.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 /**

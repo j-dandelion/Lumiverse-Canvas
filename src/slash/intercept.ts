@@ -15,6 +15,7 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { ParsedCommand } from './parse'
 import { parseCommand } from './parse'
+import { getIntent, clearIntent, setIntent, reconcileWithTextarea } from './intent'
 import {
   hideSuggest,
   isSuggestVisible,
@@ -195,6 +196,8 @@ export function installIntercept(
         e.stopImmediatePropagation()
         const label = activeCmd.usage ?? `/${activeCmd.name}`
         applySuggestion(ta, label)
+        const parsed = parseCommand(label)
+        if (parsed) setIntent(parsed, 'enter-popup')
         hideSuggest()
         ta.focus()
         return
@@ -203,6 +206,10 @@ export function installIntercept(
       // Popup hidden: dispatch a complete slash command if parseable.
       // (See the comment at the previous block for why parseCommand
       // is intentionally NOT checked when the popup is visible.)
+      // A user pressing Enter with a complete slash command has a fresh intent:
+      // the typed value IS the source of truth. Clear any prior intent first so
+      // it doesn't bleed into a future send-button tap.
+      clearIntent()
       const parsed = parseCommand(ta.value)
       if (parsed) {
         e.preventDefault()
@@ -260,7 +267,33 @@ export function installIntercept(
     const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
     if (!ta) return
 
-    const parsed = parseCommand(ta.value)
+    // --- Mobile-aware dispatch: prefer the intent (authoritative for slash
+    //     commands) and fall back to DOM parsing. The intent survives DOM/React
+    //     state clobbers that happen between suggestion-tap and send-tap on
+    //     touch devices. The DOM path is the original PC flow.
+    let parsed: ParsedCommand | null = null
+    const intent = getIntent()
+    if (intent) {
+      const cmdPrefix = '/' + intent.command.name
+      if (ta.value.startsWith(cmdPrefix)) {
+        // Textarea still reflects the intent — use its args (the user may have
+        // typed more after the command). Strip the command + space; keep the rest.
+        const args = ta.value.startsWith(cmdPrefix + ' ')
+          ? ta.value.slice(cmdPrefix.length + 1)
+          : intent.command.args
+        parsed = { name: intent.command.name, args }
+      } else if (ta.value.trim() === '' || ta.value === '/') {
+        // React clobbered the value. Use the intent's command directly. This is
+        // the mobile bug-fix path: the user tapped a suggestion, then tapped
+        // send, and React reset the textarea to '/' or '' in between.
+        parsed = intent.command
+      }
+      // Consume the intent (single-shot).
+      clearIntent()
+    }
+    if (!parsed) {
+      parsed = parseCommand(ta.value)
+    }
     if (!parsed) return
 
     e.preventDefault()
@@ -296,7 +329,9 @@ export function installIntercept(
       return
     }
 
-    callbacks.onTextChange((target as HTMLTextAreaElement).value)
+    const value = (target as HTMLTextAreaElement).value
+    reconcileWithTextarea(value)
+    callbacks.onTextChange(value)
   }
 
   document.addEventListener('input', inputHandler, true)
@@ -309,6 +344,7 @@ export function installIntercept(
     document.removeEventListener('compositionend', compositionEndHandler, true)
     _isComposing = false
     resetSkipNextTextChange()
+    clearIntent()
     hideSuggest()
   }
 }

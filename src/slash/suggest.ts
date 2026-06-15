@@ -7,6 +7,8 @@ import type { SlashCommandDef } from './types'
 import { injectStyles } from '../debug/styles'
 import { position, attachViewportListeners, detachViewportListeners } from './positioning'
 import { applySuggestion, isValidSlashContext, textareaHasUsage } from './dom-utils'
+import { setIntent } from './intent'
+import { parseCommand } from './parse'
 export { position, attachViewportListeners, detachViewportListeners } from './positioning'
 
 const SUGGEST_ID = 'canvas-slash-suggest'
@@ -155,6 +157,8 @@ export function showSuggest(
         // flag, and cursor placement.
         const label = cmd.usage ?? `/${cmd.name}`
         applySuggestion(currentAnchor, label)
+        const parsed = parseCommand(label)
+        if (parsed) setIntent(parsed, 'click')
         hideSuggest()
       })
     })
