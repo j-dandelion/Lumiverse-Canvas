@@ -18,4 +18,5 @@ mkdir -p "$RUNTIME_DIR/dist"
 cp -v dist/frontend.js "$RUNTIME_DIR/dist/frontend.js"
 cp -v dist/backend.js "$RUNTIME_DIR/dist/backend.js"
 cp -v spindle.json "$RUNTIME_DIR/spindle.json"
+git add dist/frontend.js dist/backend.js
 echo "Done. Hard-refresh browser (Ctrl+F5)."

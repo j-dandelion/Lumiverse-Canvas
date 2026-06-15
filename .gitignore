@@ -1,6 +1,6 @@
 # Build artifacts
-dist/
 *.js.map
+*.dist
 
 # Development scaffolding (not part of the shipping extension)
 AGENTS.md
