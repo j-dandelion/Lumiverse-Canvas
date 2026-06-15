@@ -2,8 +2,8 @@
 Convenient tweaks and features to enhance your Lumiverse UI! 
 
 - Everything is optional, toggle each behavior
-- Most tweaks are aimed at deeper UI customization and quality-of-life improvements
-- Fits well with your Lumiverse theme (though if you have custom CSS it might need some adjusting) 
+- Most tweaks are aimed at deeper customization and quality-of-life improvements
+- Fits well with Lumiverse theme system (if you have custom CSS it might need some adjusting) 
 
 ## Features included so far
 - Drag sidebar/drawer panel edges to resize them
@@ -14,14 +14,13 @@ Convenient tweaks and features to enhance your Lumiverse UI!
 - Slash commands system (focus on performance, more commands on the way)
 
 ## Coming soon™
-- All tabs/panels (not just extensions) movable between drawers, and can render at the same time (need Spindle update)
-- Turn any panel into a floating window (need Spindle update)
+- All tabs/panels (not just extensions) movable between drawers, and can render at the same time 
+- Turn any panel into a floating window 
 - Change size of tabs easily
-- Drag to reorder tab buttons
+- Drag to reorder tabs
 - Layout system (try different layouts, save and load)
-- Layout mode similar to an operating system 
-(Taskbar on top/bottom, pressing the buttons opens or minimizes floating windows. Drag to screen edges to arrange and resize)
-- Advanced theme options, like controls for custom sizing/layout of chat message elements and a bunch of other CSS variables.
+- Move drawer/tab bar to top or bottom of screen
+- Advanced theme options, like custom sizing/layout of chat message elements and a bunch of other CSS variables.
 - Tweaks for mobile UI (help me think of some!)
 
 ## Screenshots
