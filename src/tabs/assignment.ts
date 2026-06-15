@@ -15,6 +15,7 @@
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
+import { diagnoseMovedTab } from '../debug/moved-tab-diagnostics'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
@@ -512,15 +513,24 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
     //     polling loop end-of-interval block.
     const activeId = getActiveSecondaryTabId()
     if (activeId === tabId) {
-      tab.root.style.removeProperty('display')
+      tab.root.setAttribute('data-canvas-active', '')
     } else if (activeId !== null) {
-      tab.root.style.setProperty('display', 'none', 'important')
+      tab.root.removeAttribute('data-canvas-active')
     } else {
-      // First-open case: leave display alone to avoid flash; showSecondaryTab
-      // will set correct displays via the applyLayout polling loop.
-      tab.root.style.removeProperty('display')
+      // First-open case: set active so CSS rule doesn't hide it.
+      // showSecondaryTab will set correct displays via the applyLayout polling loop.
+      tab.root.setAttribute('data-canvas-active', '')
     }
 
+    diagnoseMovedTab(tabId, tab.root)
+    // Delayed re-snapshot: showSecondaryTab runs AFTER repositionTab and
+    // may clear/change the display override; the steady-state layout is
+    // visible only ~100ms after the move completes. Capture both.
+    setTimeout(() => {
+      try {
+        if (tab.root.isConnected) diagnoseMovedTab(tabId + ' [+1s]', tab.root)
+      } catch { /* tab detached */ }
+    }, 1000)
     return true
   } else {
     // target === 'primary' — restore from secondary back to the original
@@ -554,7 +564,7 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
     // (display:none) and absolutely positioned relative to the wrong
     // container (position:absolute anchors to panelContent, not the
     // moved root's actual parent in the main panel).
-    tab.root.style.removeProperty('display')
+    tab.root.removeAttribute('data-canvas-active')
     tab.root.style.removeProperty('position')
     tab.root.style.removeProperty('inset')
     // Clear the tabId-keyed entry — the tab is back home, no need to

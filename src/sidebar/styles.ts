@@ -123,4 +123,19 @@ export function injectDrawerTabStyles(): void {
   `)
   // Mobile CSS — scoped to @media (max-width: 600px)
   injectStyles('canvas-ux-secondary-mobile', SECONDARY_MOBILE_CSS)
+  // Hide inactive moved tabs via a CSS rule keyed on data attributes, so we
+  // never touch the extension's inline `display` style. Previously Canvas
+  // did `setProperty('display', 'none', 'important')` and `removeProperty('display')`
+  // on moved roots, which OVERWROTE the extension's `display: flex` (or any
+  // other display value the extension set) and left the root as `display: block`
+  // when the active-tab branch ran removeProperty. The visible symptom: a
+  // Creator Notes-like extension that sets `display:flex` on tab.root
+  // collapses to ~150px iframe in the secondary drawer because the inner
+  // flex:1 iframeContainer becomes a non-flex-child and shrinks to its
+  // content's intrinsic height.
+  injectStyles('canvas-moved-active-toggle', `
+    [data-canvas-moved]:not([data-canvas-active]) {
+      display: none !important;
+    }
+  `)
 }

@@ -310,11 +310,7 @@ export function showSecondaryTab(tabId: string): void {
   for (const root of movedRoots) {
     const tid = root.getAttribute('data-canvas-moved') || ''
     if (tid === tabId) {
-      // Use removeProperty instead of setProperty('display', '', 'important')
-      // because setProperty with an empty value is a CSS parse error — the
-      // browser silently ignores it, leaving any prior inline display:none
-      // (set by closeSecondarySidebar or inactive-tab hiding) intact.
-      root.style.removeProperty('display')
+      root.setAttribute('data-canvas-active', '')
       // The main tab button is always in the DOM after a move (hidden via
       // display:none by hideMainTabButton), so findMainTabButton resolves
       // it. Read the title from the main button — the store's tab.title
@@ -322,7 +318,7 @@ export function showSecondaryTab(tabId: string): void {
       const mainBtn = findMainTabButton(tid)
       if (mainBtn) activeTitle = mainBtn.getAttribute('title') || ''
     } else {
-      root.style.setProperty('display', 'none', 'important')
+      root.removeAttribute('data-canvas-active')
     }
   }
 

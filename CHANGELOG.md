@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Extension tabs that set `display: flex` on `tab.root` collapse to ~100-200px when moved to the secondary drawer.** When Canvas moved a tab root to the secondary panel, it stamped `display: none !important` on inactive roots (so only the active one was visible) and called `removeProperty('display')` on activation. The `setProperty` call overwrote any `display` value the extension had set on `tab.root` (e.g. `display: flex`), and `removeProperty` only removes the property — it does not restore the previous value. Result: extensions like Creator Notes HTML Renderer, which set `display:flex; flex-direction:column; height:100%` directly on `tab.root` (`~/Lumiverse/data/extensions/creator_notes_html_renderer/repo/src/frontend.ts:15`), ended up with `display: block` and the inner `flex: 1` container collapsed to the iframe's intrinsic ~150px height. Fix: replaced all inline `display` manipulation on moved roots with a CSS rule `[data-canvas-moved]:not([data-canvas-active]) { display: none !important; }` plus `data-canvas-active` attribute toggling. The extension's inline `display` value is now never touched by Canvas. Files: `src/sidebar/styles.ts` (CSS rule), `src/tabs/assignment.ts` (repositionTab), `src/tabs/buttons.ts` (showSecondaryTab), `src/sidebar/secondary.tsx` (closeSecondarySidebar).
+
 ## v1.6.4 — 2026-06-13
 
 ### Fixed

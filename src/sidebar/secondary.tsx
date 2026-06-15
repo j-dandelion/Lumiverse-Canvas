@@ -314,7 +314,7 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
     if (sidebar === 'secondary') {
       const tabs = getDrawerTabs()
       const tab = tabs.find(t => t.id === tabId)
-      if (tab?.root) tab.root.style.setProperty('display', 'none', 'important')
+      if (tab?.root) tab.root.removeAttribute('data-canvas-active')
     }
   }
 
