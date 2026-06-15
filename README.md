@@ -1,25 +1,27 @@
 # 🖌️ Canvas
-Adds a bunch of tweaks to enhance your Lumiverse UI! 
+Convenient tweaks and features to enhance your Lumiverse UI! 
 
-__Work in progress.__ Current focus: easier multitasking and more convenient controls for desktop and tablet sized screens.
+- Everything is optional, toggle each behavior
+- Most tweaks are aimed at deeper UI customization and quality-of-life improvements
+- Fits well with your Lumiverse theme (though if you have custom CSS it might need some adjusting) 
 
 ## Features included so far
- - Drag sidebar panel edges to resize them
-- Add a second sidebar, move extension tabs between sidebars freely (right click tab, click move)
-- Center the chat in the visible area (prevent sidebars from covering chat)
+- Drag sidebar/drawer panel edges to resize them
+- Center the chat in the visible area (prevent panels from covering chat)
+- Add a second drawer, move extension tabs between drawers freely (right click tab, click move)
+- Move tab buttons to the other side of the drawer panel (along screen edge)
+- Press and drag drawer open/close buttons (drawer tabs) to move them without going into settings
+- Slash commands system (focus on performance, more commands on the way)
 
 ## Coming soon™
-- Bug fixes
-- All tweaks optional
-- All tabs/panels (not just extensions) movable between sidebars, and can render at the same time (need Spindle update)
+- All tabs/panels (not just extensions) movable between drawers, and can render at the same time (need Spindle update)
 - Turn any panel into a floating window (need Spindle update)
-- Move tab buttons to other side of sidebar panel(s)
 - Change size of tabs easily
-- Drag to reorder tabs
+- Drag to reorder tab buttons
 - Layout system (try different layouts, save and load)
 - Layout mode similar to an operating system 
-(Sidebars on top/bottom, pressing the buttons opens or minimizes floating windows. Drag to screen edges to arrange and resize)
-- Advanced theme options (exposes controls for custom sizing/layout of chat message elements and a bunch of other CSS variables) with presets
+(Taskbar on top/bottom, pressing the buttons opens or minimizes floating windows. Drag to screen edges to arrange and resize)
+- Advanced theme options, like controls for custom sizing/layout of chat message elements and a bunch of other CSS variables.
 - Tweaks for mobile UI (help me think of some!)
 
 ## Screenshots
