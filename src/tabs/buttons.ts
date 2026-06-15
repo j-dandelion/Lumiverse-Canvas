@@ -250,15 +250,19 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.addEventListener('mouseleave', () => {
     // Restore label color (label has its own color rule, unaffected by parent hover)
     const isActive = btn.classList.contains('sidebar-ux-tab-active')
-    btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
-    btn.style.color = isActive ? 'var(--lumiverse-primary, #9370db)' : 'var(--lumiverse-text-muted)'
-    labelSpan.style.color = isActive ? 'var(--lumiverse-primary, #9370db)' : 'var(--lumiverse-text-dim)'
-    // Restore active box-shadow/border-radius if needed
     if (isActive) {
+      // Literal hex with !important — see showSecondaryTab for rationale.
+      btn.style.setProperty('background', 'rgba(147, 112, 219, 0.2)', 'important')
+      btn.style.setProperty('color', '#9370db', 'important')
+      labelSpan.style.setProperty('color', '#9370db', 'important')
       const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
       const indicatorOnRight = secondarySide === 'left'
-      btn.style.boxShadow = `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary, #9370db)`
+      btn.style.setProperty('box-shadow', `inset ${indicatorOnRight ? '-' : ''}3px 0 0 #9370db`, 'important')
       btn.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
+    } else {
+      btn.style.background = ''
+      btn.style.color = 'var(--lumiverse-text-muted)'
+      labelSpan.style.color = 'var(--lumiverse-text-dim)'
     }
     dlog(`mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`)
   })
@@ -336,20 +340,34 @@ export function showSecondaryTab(tabId: string): void {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute('data-tab-id') === tabId
       btn.classList.toggle('sidebar-ux-tab-active', isActive)
-      // Icon color: active = primary, default = muted
-      btn.style.color = isActive ? 'var(--lumiverse-primary, #9370db)' : 'var(--lumiverse-text-muted)'
-      // Background + border indicator (matches .tabBtnActive from ViewportDrawer.module.css)
-      btn.style.background = isActive ? 'var(--lumiverse-primary-020)' : ''
-      btn.style.boxShadow = isActive
-        ? `inset ${indicatorOnRight ? '-' : ''}3px 0 0 var(--lumiverse-primary, #9370db)`
-        : 'none'
-      btn.style.borderRadius = isActive
-        ? (indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0')
-        : ''
-      // Label color: active = primary, default = dim
-      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
-      if (label) {
-        label.style.color = isActive ? 'var(--lumiverse-primary, #9370db)' : 'var(--lumiverse-text-dim)'
+      if (isActive) {
+        // Literal hex with !important: --lumiverse-primary in this theme
+        // resolves to white-65% (engine dark-mode formula `hsla(h, s, 75, 0.9)`,
+        // identical to --lumiverse-text-muted), so a `var(--lumiverse-primary,
+        // #9370db)` fallback never fires — the var is set, just to the wrong
+        // value. Writing the literal purple with !important priority forces the
+        // active color regardless of how the theme computes the var. The
+        // inactive case keeps `var(--lumiverse-text-muted)` because that var
+        // resolves to the user-expected text color in this theme.
+        btn.style.setProperty('color', '#9370db', 'important')
+        btn.style.setProperty('background', 'rgba(147, 112, 219, 0.2)', 'important')
+        btn.style.setProperty('box-shadow', `inset ${indicatorOnRight ? '-' : ''}3px 0 0 #9370db`, 'important')
+        btn.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
+        const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
+        if (label) {
+          label.style.setProperty('color', '#9370db', 'important')
+        }
+      } else {
+        // Inactive: text-muted is white-65% in this theme, which is what the
+        // user expects for an inactive tab icon.
+        btn.style.color = 'var(--lumiverse-text-muted)'
+        btn.style.background = ''
+        btn.style.boxShadow = 'none'
+        btn.style.borderRadius = ''
+        const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
+        if (label) {
+          label.style.color = 'var(--lumiverse-text-dim)'
+        }
       }
       dlog(`showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
     }
