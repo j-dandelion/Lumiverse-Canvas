@@ -68,6 +68,27 @@ export function createResizeHandle(
     _resizeDragging = true
     handle.style.background = 'var(--lumiverse-primary-020, rgba(255, 255, 255, 0.1))'
 
+    // Block iframe pointer capture during drag: iframes inside the drawer
+    // (e.g. Creator Notes HTML Renderer) sit in a separate document context
+    // and intercept pointermove events, freezing the resize. A transparent
+    // overlay on top of the content area absorbs all pointer events and
+    // prevents this.
+    let dragOverlay: HTMLElement | null = null
+    const drawer = handle.closest('.sidebar-ux-drawer')
+    const contentArea = drawer?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
+    if (contentArea) {
+      dragOverlay = document.createElement('div')
+      dragOverlay.style.cssText = `
+        position: absolute;
+        inset: 0;
+        z-index: 99999;
+        cursor: col-resize;
+        pointer-events: auto;
+        background: transparent;
+      `
+      contentArea.appendChild(dragOverlay)
+    }
+
     const onMove = (e: PointerEvent) => {
       // Direction-based delta: 'right' = expand on rightward drag, 'left' = expand on leftward drag
       const delta = direction === 'right' ? e.clientX - startX : startX - e.clientX
@@ -81,6 +102,7 @@ export function createResizeHandle(
       document.body.style.userSelect = ''
       _resizeDragging = false
       handle.style.background = 'transparent'
+      dragOverlay?.remove()
       onResizeEnd()
     }
 
