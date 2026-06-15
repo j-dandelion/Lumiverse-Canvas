@@ -42,6 +42,20 @@ let _mainDrawerTabResizeObserver: ResizeObserver | null = null
 let _mainDrawerTabClassObserver: MutationObserver | null = null
 let _mainDrawerTabStyleObserver: MutationObserver | null = null
 
+// Coalescing: when syncDrawerTabSettings is called multiple times in the
+// same tick (from ResizeObserver, 2x MutationObserver, 2s setInterval, and
+// external callers), only one body run per frame. The previous code allowed
+// 12+ redundant calls per tick, each logging 'enter' and re-stamping 8 CSS
+// vars on the secondary wrapper.
+let _syncPending = false
+// Cache the serialized 8-dim value of the secondary wrapper's CSS vars.
+// Skip the 8 setProperty calls when nothing changed (the hot path during
+// a drag — only the actual drag ticks change the values).
+let _lastWrittenDrawerTabVars: string | null = null
+// Cache show/hide for syncSecondaryTabLabels. When showLabels is constant,
+// skip the per-label opacity/height/marginTop re-stamp.
+let _lastWrittenLabelsKey: string | null = null
+
 /** Read showTabLabels, honoring the user's Canvas override. */
 export function isShowTabLabels(): boolean {
   const mode = getSettings().showTabLabels
@@ -65,16 +79,24 @@ export function isShowTabLabels(): boolean {
 }
 
 export function syncDrawerTabSettings(): void {
+  if (_syncPending) return
+  _syncPending = true
+  requestAnimationFrame(() => {
+    _syncPending = false
+    _runSyncDrawerTabSettings()
+  })
+}
+
+function _runSyncDrawerTabSettings(): void {
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
   if (!drawerTab) { dlog(`[drawer-sync] syncDrawerTabSettings: secondary tab not found`); return }
   dlog(`[drawer-sync] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
 
-  // Read settings from the main sidebar's drawer tab DOM directly
   const mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)') as HTMLElement
   if (!mainDrawerTab) {
-    // Retry on the next frame — the main sidebar may not be painted yet
-    // (e.g. on first mount or after a side flip).
-    requestAnimationFrame(() => syncDrawerTabSettings())
+    // Retry on the next frame. Bypass the coalesce gate — the retry must
+    // actually fire even if the wrapper is still mid-coalesce.
+    requestAnimationFrame(() => _runSyncDrawerTabSettings())
     return
   }
 
@@ -86,23 +108,6 @@ export function syncDrawerTabSettings(): void {
     })
     _mainDrawerTabResizeObserver.observe(mainDrawerTab)
     registerCleanup(stopDrawerTabResizeWatcher)
-  }
-
-  // Mirror the main drawer's computed dimensions into CSS custom properties
-  // on the secondary wrapper, so the secondary tab follows any size change
-  // Lumiverse applies (settings, mobile, resize, etc.).
-  const secondaryWrapper = getSecondaryWrapper()
-  if (secondaryWrapper) {
-    const mainStyle = getComputedStyle(mainDrawerTab)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', `${mainDrawerTab.offsetWidth}px`)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', `${mainDrawerTab.offsetHeight}px`)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', mainStyle.paddingTop)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', mainStyle.paddingRight)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', mainStyle.paddingBottom)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', mainStyle.paddingLeft)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', mainStyle.gap)
-    // Use borderTopWidth as representative (all sides are same for the main tab)
-    secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`)
   }
 
   // Attach MutationObserver to the main drawer tab so we re-sync whenever
@@ -136,6 +141,34 @@ export function syncDrawerTabSettings(): void {
     registerCleanup(stopDrawerTabStyleObserver)
   }
 
+  // Mirror dimensions — GUARDED. Cache the 8 values as a serialized string.
+  const secondaryWrapper = getSecondaryWrapper()
+  if (secondaryWrapper) {
+    const mainStyle = getComputedStyle(mainDrawerTab)
+    const newVars = [
+      `${mainDrawerTab.offsetWidth}px`,
+      `${mainDrawerTab.offsetHeight}px`,
+      mainStyle.paddingTop,
+      mainStyle.paddingRight,
+      mainStyle.paddingBottom,
+      mainStyle.paddingLeft,
+      mainStyle.gap,
+      `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`,
+    ].join('|')
+    if (newVars !== _lastWrittenDrawerTabVars) {
+      _lastWrittenDrawerTabVars = newVars
+      const parts = newVars.split('|')
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
+      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
+    }
+  }
+
   // Detect vertical position from main drawer tab margin
   const mainParent = mainDrawerTab.parentElement
   const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0
@@ -147,20 +180,11 @@ export function syncDrawerTabSettings(): void {
     const settings = getSettings()
     dlog(`[drawer-sync] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`)
     if (settings.mirrorCompactPosition) {
-      // Mirror always wins when on. The secondaryDrawerTabOverrideVh is
-      // a per-tab independent value, but it only takes effect when the
-      // mirror is off (see below). This means a stale override from a
-      // previous session can't strand the secondary at a wrong position
-      // when the user has mirror on and expects the tabs to follow.
       dlog(`[drawer-sync] writing secondary marginTop=${posVh}vh`)
       drawerTab.style.marginTop = `${posVh}vh`
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       drawerTab.style.marginTop = ''  // mirror off, no override → clear
     }
-    // else: mirror off, override set → keep the override (do nothing;
-    // applyDrawerTabPosition re-writes the override on every settings
-    // diff, which is the canonical owner of the secondary's value in
-    // this case).
     _lastKnownVerticalPos = posVh
   }
 
@@ -174,13 +198,15 @@ export function syncDrawerTabSettings(): void {
 /** Update all secondary tab buttons' label visibility to match showTabLabels. */
 export function syncSecondaryTabLabels(): void {
   const showLabels = isShowTabLabels()
+  const cacheKey = showLabels ? 'show' : 'hide'
+  if (cacheKey === _lastWrittenLabelsKey) return
+  _lastWrittenLabelsKey = cacheKey
   const labels = getSecondaryWrapper()?.querySelectorAll('.sidebar-ux-tab-label') as NodeListOf<HTMLElement>
   if (!labels) return
   for (const label of labels) {
     label.style.opacity = showLabels ? '1' : '0'
     label.style.height = showLabels ? 'auto' : '0'
     label.style.marginTop = showLabels ? '1px' : '0'
-    // Toggle labeled class on the parent button so mobile CSS can size it
     const btn = label.closest('button[data-tab-id]') as HTMLElement | null
     if (btn) btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
   }
