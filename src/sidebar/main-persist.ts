@@ -226,6 +226,8 @@ function _initObservers(drawer: HTMLElement): void {
     if (_stopped) return
     for (const m of mutations) {
       if (m.type === 'attributes' && m.attributeName === 'class') {
+        const _newClass = wrapper.classList.toString()
+        dlog(`[reflow-trace] main-persist MO: wrapper class changed to "${_newClass}"`)
         pushCurrentState()
         // Mobile exclusion: detect closed→open transition
         if (wrapper) {

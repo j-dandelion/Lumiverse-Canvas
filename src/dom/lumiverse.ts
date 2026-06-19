@@ -24,6 +24,38 @@ export function getMainPanelContent(): HTMLElement | null {
   return panel?.querySelector('[class*="_panelContent_"]') as HTMLElement | null
 }
 
+/**
+ * Find the main drawer's panel header. The panel is a flex column with the
+ * header on top and `[class*="_panelContent_"]` below. The header is what
+ * shows the active tab's title (e.g. "Profile", "Memory") plus a
+ * settings/menu affordance on the right.
+ *
+ * Primary selector: `[class*="_panelHeader_"]` (matches the CSS-module
+ * prefix, stable across Lumiverse hash rebuilds). Falls back to the first
+ * non-content direct child of the panel, in case the host renames the
+ * prefix in a future version.
+ *
+ * Returns `null` if the host hasn't mounted the panel yet, or if the
+ * panel was removed by a transient state. Callers must handle the
+ * `null` case (e.g. via a 48px CSS-default fallback).
+ */
+export function getMainPanelHeader(): HTMLElement | null {
+  const panel = getMainPanel()
+  if (!panel) return null
+  // Primary: class prefix match
+  const byClass = panel.querySelector('[class*="_panelHeader_"]') as HTMLElement | null
+  if (byClass) return byClass
+  // Fallback: first direct child whose class doesn't contain "_panelContent_"
+  // (the content element is the OTHER sibling; we want the header).
+  for (let i = 0; i < panel.children.length; i++) {
+    const child = panel.children[i] as HTMLElement
+    if (!child.className || !String(child.className).includes('_panelContent_')) {
+      return child
+    }
+  }
+  return null
+}
+
 export function getMainWrapper(): HTMLElement | null {
   const sidebar = getMainSidebar()
   return sidebar?.closest('[class*="_wrapper_"]') as HTMLElement | null

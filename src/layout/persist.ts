@@ -117,7 +117,9 @@ export function setMainDrawerState(open: boolean, tabId: string | null): void {
  * Build the current layout snapshot from in-memory state. Pure — no side effects.
  */
 export function snapshotLayout(): any {
-  return {
+  const assignments = Array.from(getTabAssignments().entries())
+  const secondaryAssignments = assignments.filter(([_, side]) => side === 'secondary')
+  const result = {
     version: CANVAS_VERSION,
     primary: {
       // Read from the module-level cache populated by the watcher. Falls
@@ -139,14 +141,14 @@ export function snapshotLayout(): any {
       // tab (e.g. all tabs moved back to primary).
       activeTabId: getActiveSecondaryTabId(),
     },
-    detachedTabs: Array.from(getTabAssignments().entries())
-      .filter(([_, side]) => side === 'secondary')
+    detachedTabs: secondaryAssignments
       .map(([tabId, side]) => {
         const tabs = getDrawerTabs()
         const tab = tabs.find(t => t.id === tabId)
         return { tabId, tabTitle: tab?.title || tabId, sidebar: side }
       }),
   }
+  return result
 }
 
 function isPersistenceEnabled(): boolean {

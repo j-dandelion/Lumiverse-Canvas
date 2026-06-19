@@ -216,3 +216,14 @@ export function __setStoreSnapshotForTest(
   _storeSnapshotCache = snap
   _cacheTimestamp = timestamp
 }
+
+/** Test-only: pre-populate the drawer tabs cache to simulate a store lookup.
+ *  Used by secondary-drawer.test.ts to inject extension tabs without needing
+ *  a real fiber tree. Paired with __setStoreSnapshotForTest so the TTL cache
+ *  check passes cleanly. */
+export function __setDrawerTabsForTest(
+  tabs: DrawerTab[] | null,
+): void {
+  _drawerTabsCache = tabs
+  _cacheTimestamp = Date.now()
+}

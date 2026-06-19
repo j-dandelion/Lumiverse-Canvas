@@ -1,0 +1,558 @@
+// SecondaryDrawer: state machine for secondary drawer lifecycle.
+//
+// Manages tab assignment to the secondary, coordinates with DrawerObserver
+// for DOM-based tab discovery, and owns the showSecondaryTab display-toggle
+// path. Extension tabs are moved via DOM reparenting (appendChild) to
+// preserve state; built-in tabs (Characters, History) use the display-toggle
+// path directly.
+
+import { reExecuteExtension, teardownExtension } from '../tabs/re-executor'
+import { drawerObserver, type ObservedTab } from './drawer-observer'
+import {
+  showSecondaryTab as showSecondaryTabDisplay,
+  addSecondaryTabButton,
+  removeSecondaryTabButton,
+  findMainTabButton,
+  hideMainTabButton,
+  showMainTabButton,
+  updateDrawerTabVisibility,
+} from '../tabs/buttons'
+import { getTabAssignments, setTabAssignment, deleteTabAssignment } from '../tabs/assignment'
+import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
+import { persistLayout } from '../layout/persist'
+import { getSecondaryWrapper, openSecondarySidebar, isSecondarySidebarOpen, closeSecondarySidebar } from './secondary'
+import { findStoreData, getDrawerTabs, type DrawerTab } from '../store'
+import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
+import { dlog, dwarn } from '../debug/log'
+
+export type SecondaryDrawerState = 'closed' | 'mounting' | 'open' | 'tab_active'
+
+let _state: SecondaryDrawerState = 'closed'
+let _activeTabId: string | null = null
+let _ctx: SpindleFrontendContext | null = null
+
+// Guard flag: when true, the onTabUnregistered handlers (in this file and
+// in src/setup.ts) skip ALL their work — assignment deletion, button removal,
+// layout persistence, active-tab reset, and auto-close. The layout restore
+// flow can fire onTabUnregistered spuriously as Lumiverse re-renders the
+// main sidebar (extensions finish loading, React re-commits the button
+// tree, the wrapper's activateFn() flips state). Without this guard:
+//   1. The composite id assignment is wiped mid-restore.
+//   2. The polling loop's next tick sees no assignment and re-runs
+//      assignToSecondary, which calls teardownExtension on the in-flight
+//      re-execution → clearSecondaryTabs destroys ALL wrapper handles →
+//      tabs vanish.
+//   3. Even if teardown doesn't fire, the auto-close would race with the
+//      restore's end-of-interval logic (which already handles final state
+//      based on layout.secondary.open).
+// The restore's end-of-interval logic in src/layout/apply.ts is the
+// authoritative state-setter during restore. setRestoringFromLayout(true)
+// is called before the polling loop; setRestoringFromLayout(false) is
+// called right after cancelApplyLayoutInterval in the end-of-interval
+// block. After the flag is cleared, the handlers resume normal behavior
+// for user-initiated move-back and extension uninstall.
+let _restoringFromLayout = false
+export function setRestoringFromLayout(value: boolean): void {
+  _restoringFromLayout = value
+}
+export function isRestoringFromLayout(): boolean {
+  return _restoringFromLayout
+}
+
+/**
+ * Resolve a tab in Lumiverse's Zustand store by id (canonical) or title
+ * (fallback for when the context-menu's store lookup missed and the
+ * tabId we received is actually the human-readable title). Force-walks
+ * the fiber tree to bypass the 3s store cache, so callers always see
+ * the current state.
+ */
+function findStoreTab(tabIdOrTitle: string): DrawerTab | null {
+  findStoreData(true)
+  const tabs = getDrawerTabs()
+  return tabs.find((t) => t.id === tabIdOrTitle)
+    || tabs.find((t) => t.title === tabIdOrTitle)
+    || null
+}
+
+/**
+ * Initialize the SecondaryDrawer state machine. Wires up DrawerObserver
+ * handlers for tab unregistration cleanup.
+ */
+export function initSecondaryDrawer(ctx: SpindleFrontendContext): void {
+  _ctx = ctx
+  // Watch for tabs being unregistered — if we have an assignment, clean it up.
+  // Note: setup.ts also registers an onTabUnregistered handler; this is the
+  // SecondaryDrawer-specific one that also handles state machine transitions.
+  drawerObserver.onTabUnregistered((tabId) => {
+    if (getTabAssignments().has(tabId)) {
+      // Skip ALL work during layout restore. The restore's end-of-interval
+      // logic in src/layout/apply.ts is the authoritative state-setter; any
+      // mutation here would race with it. See _restoringFromLayout comment
+      // above for the full failure mode this prevents.
+      if (_restoringFromLayout) return
+      deleteTabAssignment(tabId)
+      removeSecondaryTabButton(tabId)
+      persistLayout()
+      if (_activeTabId === tabId) {
+        _activeTabId = null
+        _state = getTabAssignments().size > 0 ? 'open' : 'closed'
+        // Auto-close if the unregistered tab was the last one.
+        // Same rationale as the unassignFromSecondary path above.
+        if (_state === 'closed') {
+          closeSecondarySidebar()
+          updateDrawerTabVisibility()
+        }
+      }
+    }
+  })
+}
+
+/**
+ * Assign a tab to the secondary drawer. Extension tabs are reparented
+ * via DOM appendChild (preserving state); built-in tabs (Characters,
+ * History) use the display-toggle path directly.
+ *
+ * Tab resolution: DrawerObserver first (built-in path), then Lumiverse's
+ * store (extension path). Extension tab buttons in Lumiverse's
+ * ViewportDrawer.tsx:247-273 don't carry `data-tab-id`, so DrawerObserver
+ * can't register them — we fall back to the Zustand store snapshot, which
+ * has all tabs. The store's DrawerTab carries `iconSvg`/`iconUrl` and a
+ * `root` content element directly, so the secondary tab button can use
+ * those without re-querying the DOM.
+ */
+export async function assignToSecondary(tabId: string): Promise<void> {
+  let tab = drawerObserver.getTab(tabId)
+  let iconSvg: string | undefined
+  let iconUrl: string | undefined
+  let shortName: string | undefined
+
+  if (!tab) {
+    const storeTab = findStoreTab(tabId)
+    if (!storeTab) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} not found in DrawerObserver or store`)
+      return
+    }
+    // findMainTabButton resolves by id first, then by title (buttons.ts:35-83).
+    // For extension tabs without data-tab-id, the title-based path is what hits.
+    const button = findMainTabButton(storeTab.title)
+    if (!button) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} found in store but no main sidebar button (title="${storeTab.title}")`)
+      return
+    }
+    tab = {
+      tabId: storeTab.id,
+      button: button as HTMLElement,
+      extensionId: storeTab.extensionId,
+      title: storeTab.title,
+    }
+    iconSvg = storeTab.iconSvg
+    iconUrl = storeTab.iconUrl
+    shortName = storeTab.shortName
+  } else {
+    iconSvg = tab.button.querySelector('svg')?.outerHTML
+  }
+
+  // Use the resolved tabId (real id, not the title fallback) for all
+  // state/button operations so re-execution and persistence are keyed
+  // consistently across move-loops.
+  const resolvedId = tab.tabId
+
+  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
+
+  // Determine if this is an extension tab (has a UUID extensionId) vs a
+  // built-in tab (extensionId is 'unknown' or empty, parsed from composite
+  // id parts[2] when the id has no UUID prefix).
+  const _isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
+
+  if (_isExtensionTab) {
+    // === EXTENSION TAB PATH ===
+    // Set assignment first, then reparent the DOM root. The primary
+    // instance survives with full state — no duplicate instance created.
+    setTabAssignment(resolvedId, 'secondary')
+    hideMainTabButton(resolvedId)
+    if (_state === 'closed' && !isSecondarySidebarOpen()) {
+      await openSecondarySidebar()
+    }
+    _state = 'open'
+
+    // EARLY-GUARD: if the root is already reparented into the secondary
+    // content, the tab is already assigned. Skip re-parenting to avoid
+    // duplicate buttons or state resets. This defends against applyLayout's
+    // polling loop re-calling assignToSecondary for already-assigned tabs.
+    const _secondaryContentEarly = document.querySelector('.sidebar-ux-panel-content')
+    const _bareIdEarly = resolvedId.includes(':')
+      ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
+      : resolvedId
+    const _existingWrapper = _secondaryContentEarly?.querySelector(
+      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`
+    ) ?? _secondaryContentEarly?.querySelector(
+      `[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`
+    )
+    if (_existingWrapper && _isExtensionTab) {
+      // Root already reparented. This typically happens when applyLayout's
+      // polling loop called assignToSecondary and either (a) the secondary
+      // tab list was not fully ready during initial mount, or (b) the
+      // initial addSecondaryTabButton returned early for some other reason
+      // (e.g. a stale alreadyHasButton match), so the reparent completed
+      // but the tab button was never created. Subsequent calls (including
+      // the user's manual right-click) hit this early-guard and would
+      // otherwise skip the primary path forever, leaving the tab button
+      // missing despite the root and header being visible — the symptom
+      // reported on 2026-06-19 for LumiBooks.
+      //
+      // Fix: idempotently create the tab button if it's missing.
+      // addSecondaryTabButton is itself idempotent (it checks alreadyHasButton
+      // by composite AND bare id, returning early on a match), so calling
+      // it from this guard is safe. We also re-set the active state and
+      // header title so the visual state matches a fresh move.
+      const _existingTabList = getSecondaryWrapper()?.querySelector('.sidebar-ux-tab-list')
+      const _buttonExists = !!_existingTabList?.querySelector(
+        `[data-tab-id="${CSS.escape(resolvedId)}"]`
+      )
+      if (_existingTabList && !_buttonExists) {
+        const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+        const _titleForButton = tab.title || _storeTabForButton?.title || resolvedId
+        const _iconSvgForButton = iconSvg
+          || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
+          || _storeTabForButton?.iconSvg
+        addSecondaryTabButton({
+          id: resolvedId,
+          title: _titleForButton,
+          root: _existingWrapper,
+          iconSvg: _iconSvgForButton,
+          shortName: shortName || _storeTabForButton?.shortName,
+        })
+        dlog(`[SecondaryDrawer] assignToSecondary: existing-wrapper guard created missing tab button for ${resolvedId}`)
+      }
+      // Re-activate the tab and refresh the header title so the visual
+      // state matches a fresh move. (idempotent — re-setting attributes
+      // and active tab id to the same value is a no-op.)
+      _activeTabId = resolvedId
+      _state = 'tab_active'
+      setActiveSecondaryTabId(resolvedId)
+      const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
+      if (_headerTitle) {
+        _headerTitle.textContent = tab.title
+          || _existingWrapper.getAttribute('data-tab-title')
+          || resolvedId
+      }
+      // Done — do not fall through to the primary path, which would
+      // re-reparent the root (no-op since parent already matches) and
+      // re-set attributes that are already correct.
+      return
+    }
+
+    // PRIMARY PATH: reparent the extension's primary DOM root into the
+    // secondary drawer. This preserves state, avoids a duplicate instance,
+    // and aligns extension moves with built-in moves. The early guard
+    // above already skips if the root is already reparented.
+    if (!_existingWrapper) {
+      const _secondaryWrapper = getSecondaryWrapper()
+      const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
+      const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+      if (_storeTab?.root && _secondaryContent) {
+        const _root = _storeTab.root
+        if (_root.parentElement !== _secondaryContent) {
+          _secondaryContent.appendChild(_root)
+        }
+        _root.setAttribute('data-canvas-moved', resolvedId)
+        for (const _child of Array.from(_secondaryContent.children)) {
+          if (_child instanceof HTMLElement) {
+            if (_child === _root) {
+              _child.setAttribute('data-canvas-active', '')
+            } else {
+              _child.removeAttribute('data-canvas-active')
+            }
+          }
+        }
+        const _title = tab.title || _storeTab.title || resolvedId
+        const _iconSvg = (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || _storeTab.iconSvg
+        addSecondaryTabButton({
+          id: resolvedId,
+          title: _title,
+          root: _root,
+          iconSvg: _iconSvg,
+          shortName: _storeTab.shortName,
+        })
+        _activeTabId = resolvedId
+        _state = 'tab_active'
+        setActiveSecondaryTabId(resolvedId)
+        const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
+        if (_headerTitle) _headerTitle.textContent = _title
+      }
+    }
+  } else {
+    // === BUILT-IN TAB PATH ===
+    // Try the fallback FIRST. If it fails (store not ready, root not found,
+    // wrapper not ready), return without setting the assignment. The polling
+    // loop's hasTabAssignment check will return false, and the loop will
+    // retry on the next tick when the store is more likely to be loaded.
+    const _secondaryWrapper = getSecondaryWrapper()
+    const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
+    const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+
+    // DOM-based root lookup fallback. The Zustand store may not have loaded
+    // the tab yet (Lumiverse populates the store asynchronously — the main
+    // button is created first, the store entry is added later). Search the
+    // main panel content for the root directly. Match by data-tab-id,
+    // data-tab-title, or text content containing the tab title.
+    //
+    // BUILT-IN TAB LIMITATION: Lumiverse only renders the ACTIVE tab's root
+    // in the main panel content. For built-in tabs (extensionId="unknown"),
+    // the only way to get the root is to make the tab active — which
+    // requires clicking its main button. But clicking is destructive: it
+    // triggers a Lumiverse re-render that destroys the main sidebar, which
+    // cascades into the 2s checkSideChanged watcher re-creating the
+    // secondary on the wrong side. So we do NOT click. Built-in tabs that
+    // are not the currently-active tab CANNOT be restored on hard-refresh;
+    // the user must drag them again. Extension tabs use storeTab.root which
+    // is populated independently of the DOM.
+    let _root: HTMLElement | undefined = _storeTab?.root
+    if (!_root && !_isExtensionTab) {
+      // For built-in tabs, try the DOM as a last resort. This will only
+      // succeed if the tab happens to be the currently-active tab (e.g.,
+      // when the user activates it in main first, then we move it).
+      const _mainContent = document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
+      const _firstChild = _mainContent?.children[0] as HTMLElement | undefined
+      if (_mainContent) {
+        // Match by data attributes (works only for the currently-active tab)
+        for (const _child of Array.from(_mainContent.children)) {
+          if (_child.getAttribute('data-tab-id') === resolvedId ||
+              _child.getAttribute('data-tab-title') === tab.title ||
+              (_child.textContent?.includes(tab.title ?? '') ?? false)) {
+            _root = _child as HTMLElement
+            break
+          }
+        }
+        // If the first child IS the tab we're looking for (rare — only when
+        // the user happened to leave this tab active in main), take it.
+        if (!_root && _mainContent.children.length > 0 &&
+            (_firstChild?.getAttribute('data-tab-id') === resolvedId ||
+             _firstChild?.getAttribute('data-tab-title') === tab.title)) {
+          _root = _firstChild
+        }
+      }
+    }
+
+    const wSpindle = (window as any).spindle;
+    const wSpindleUi = wSpindle?.ui;
+
+    if (!_root || !_secondaryContent) {
+      // For built-in tabs with a host bridge available, attempt a lazy
+      // mount via the host's drawer-tab-registry and then request
+      // placement into the secondary drawer. This mirrors the runtime
+      // move pattern in src/tabs/assignment.ts:273-411.
+      if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+        const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
+        if (!_lazyRoot) {
+          dwarn('[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.', { tabId, resolvedId });
+          return
+        }
+        _root = _lazyRoot;
+        wSpindleUi.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' });
+        dlog(`[tabmove] restore: requestTabLocation CALLED for tabId=${tabId} -> container=canvas-secondary-drawer`)
+      } else {
+        if (!_isExtensionTab) {
+          dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).', {
+            tabId,
+            resolvedId,
+          })
+        }
+        return
+      }
+    }
+
+    // Move root to secondary panel (no-op if already there)
+    if (_root.parentElement !== _secondaryContent) {
+      _secondaryContent.appendChild(_root)
+    }
+    _root.setAttribute('data-canvas-moved', resolvedId)
+
+    // Set this root active, deactivate all other moved roots
+    for (const _child of Array.from(_secondaryContent.children)) {
+      if (_child instanceof HTMLElement) {
+        if (_child === _root) {
+          _child.setAttribute('data-canvas-active', '')
+        } else {
+          _child.removeAttribute('data-canvas-active')
+        }
+      }
+    }
+
+    // Add a secondary tab button
+    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
+    const _iconSvg = tab.button?.querySelector('svg')?.outerHTML || _root?.querySelector('svg')?.outerHTML
+    addSecondaryTabButton({
+      id: resolvedId,
+      title: _title,
+      root: _root,
+      iconSvg: _iconSvg,
+      shortName: _storeTab?.shortName,
+    })
+
+    // No "hide main panel content" or "click another tab" code here.
+    // We don't click anything in the built-in path (clicking is destructive —
+    // it triggers a re-render cascade). The main panel just shows whatever
+    // was already there (usually Profile), which is fine.
+
+    // Set assignment AFTER successful fallback
+    setTabAssignment(resolvedId, 'secondary')
+    hideMainTabButton(resolvedId)
+    if (_state === 'closed' && !isSecondarySidebarOpen()) {
+      await openSecondarySidebar()
+    }
+    _state = 'tab_active'
+    _activeTabId = resolvedId
+    setActiveSecondaryTabId(resolvedId)
+
+    // Update panel header title
+    const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
+    if (_headerTitle) _headerTitle.textContent = _title
+  }
+
+  const _finalPanelB = document.querySelector('.sidebar-ux-panel-content')
+  const _finalTabListB = document.querySelector('.sidebar-ux-tab-list')
+
+  persistLayout()
+}
+
+/**
+ * Remove a tab from the secondary drawer. Reparented roots are moved back
+ * to the main panel. teardownExtension is a no-op for reparented tabs
+ * (no _executions entry exists).
+ *
+ * Built-in tabs have no extensionId (or an empty one), so teardown is a
+ * no-op for them.
+ */
+export async function unassignFromSecondary(tabId: string): Promise<void> {
+  dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`)
+
+  // Tear down any re-executed extension (no-op for reparented tabs since
+  // no _executions entry exists). The store lookup mirrors the one in
+  // assignToSecondary so we get the same extensionId resolution.
+  // Resolve the bare id to the store's composite id. The wrapper button's
+  // data-tab-id is the bare options.id, but the main sidebar button was
+  // hidden with the composite id (assignToSecondary:125 used the store's
+  // resolvedId). Without resolution, findMainTabButton returns null and
+  // the button stays hidden. The segment match works for extensions;
+  // built-ins fall through to findStoreTab.
+  let resolvedShowId = tabId
+  let resolvedExtId: string | undefined
+  findStoreData(true)  // force-walk the fiber tree to bypass 3s store cache
+  const _tabs = getDrawerTabs()
+  const _bySegment = _tabs.find(t => t.id.includes(`:tab:${tabId}:`) || t.id === tabId)
+  if (_bySegment) {
+    resolvedShowId = _bySegment.id
+    resolvedExtId = _bySegment.extensionId
+    dlog(`[SecondaryDrawer] unassign: resolved bare id "${tabId}" -> composite id "${resolvedShowId}", extensionId="${resolvedExtId}"`)
+  } else {
+    const storeTab = findStoreTab(tabId)
+    if (storeTab) {
+      resolvedShowId = storeTab.id
+      resolvedExtId = storeTab.extensionId
+    } else {
+      dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map(t => ({ id: t.id, title: t.title })))
+    }
+  }
+
+  // Move reparented root back to the main panel. The selector
+  // :not([data-canvas-secondary]) excludes wrapper-owned roots (legacy);
+  // reparented extension roots have data-canvas-moved but NOT
+  // data-canvas-secondary, so they match correctly.
+  const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+  if (_secondaryContentForUnassign) {
+    const _movedRoot = _secondaryContentForUnassign.querySelector(
+      `[data-canvas-moved="${CSS.escape(resolvedShowId)}"]:not([data-canvas-secondary])`
+    ) as HTMLElement | null
+    if (_movedRoot) {
+      // Find the main panel content and move the root back
+      const _mainContent = document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
+      if (_mainContent && _movedRoot.parentElement !== _mainContent) {
+        _mainContent.appendChild(_movedRoot)
+      }
+      _movedRoot.removeAttribute('data-canvas-moved')
+      _movedRoot.removeAttribute('data-canvas-active')
+    }
+  }
+
+  // Tear down any re-executed extension (no-op for reparented tabs).
+  if (resolvedExtId) {
+    try {
+      await teardownExtension(resolvedExtId)
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] teardown ${resolvedExtId} failed:`, err)
+    }
+  }
+
+  // Clean up _tabAssignments for both the bare id (registered by the
+  // wrapper) and the composite id (registered by assignToSecondary).
+  deleteTabAssignment(tabId)
+  if (resolvedShowId !== tabId) {
+    deleteTabAssignment(resolvedShowId)
+  }
+  removeSecondaryTabButton(tabId)
+  if (getActiveSecondaryTabId() === tabId) {
+    showSecondaryTabDisplay(null as any)
+  }
+  showMainTabButton(resolvedShowId)
+
+  if (getTabAssignments().size === 0) {
+    _state = 'closed'
+    _activeTabId = null
+    // Auto-close the secondary drawer when the last tab is moved out.
+    // Default behavior (no silent flag) persists the closed state via
+    // persistOpenState() so the next reload starts with the drawer
+    // closed. closeSecondarySidebar is idempotent — safe on already-closed.
+    // Also hide the drawer tab button itself (display:none inline) so
+    // it can't be clicked to reopen an empty drawer.
+    closeSecondarySidebar()
+    updateDrawerTabVisibility()
+  }
+  persistLayout()
+}
+
+/**
+ * Activate a tab in the secondary drawer (display-toggle path).
+ * This is the showSecondaryTab path — all content is pre-mounted.
+ */
+export function activateSecondaryTab(tabId: string): void {
+  _activeTabId = tabId
+  _state = 'tab_active'
+  showSecondaryTabDisplay(tabId)
+}
+
+/**
+ * Get the current active secondary tab ID.
+ */
+export function getActiveSecondaryTab(): string | null {
+  return _activeTabId
+}
+
+/**
+ * Get the current state.
+ */
+export function getSecondaryDrawerState(): SecondaryDrawerState {
+  return _state
+}
+
+/**
+ * Resolve the bundle URL for an extension. The canonical Lumiverse API
+ * path is /api/v1/spindle/{uuid}/frontend — this is the same URL the host
+ * uses in its own spindle/loader.ts:148 to load the initial bundle, and
+ * it works for any installed extension regardless of identifier or
+ * version. The store's DrawerTab.extensionId is the UUID, not the
+ * directory-style identifier, so we use the UUID directly.
+ */
+function getBundleUrl(extensionId: string): string {
+  if (!extensionId) return ''
+  return `/api/v1/spindle/${extensionId}/frontend`
+}
+
+/**
+ * Tear down the secondary drawer state machine. Called on Canvas disable.
+ */
+export function teardownSecondaryDrawer(): void {
+  _state = 'closed'
+  _activeTabId = null
+  _ctx = null
+}

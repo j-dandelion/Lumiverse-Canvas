@@ -28,7 +28,10 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves } from './layout/persist'
+import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout } from './layout/persist'
+import { getTabAssignments, deleteTabAssignment } from './tabs/assignment'
+import { removeSecondaryTabButton } from './tabs/buttons'
+import { tagMainSidebarButtons } from './chat/tag-buttons'
 import { applyLayout } from './layout/apply'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
@@ -37,7 +40,10 @@ import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
 import { startMobileExclusion } from './sidebar/mobile-exclusion'
-import { startTabRegistrationWatcher, startSideChangeWatcher } from './sidebar/drawer-sync'
+import { startSideChangeWatcher } from './sidebar/drawer-sync'
+import { drawerObserver } from './sidebar/drawer-observer'
+import { initSecondaryDrawer, teardownSecondaryDrawer, isRestoringFromLayout } from './sidebar/secondary-drawer'
+import { teardownAllExtensions } from './tabs/re-executor'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
@@ -151,11 +157,40 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(stopMainDrawerPersistence)
     // Mobile exclusion: mutual exclusion + viewport-cross detection
     registerCleanup(startMobileExclusion())
-    startTabRegistrationWatcher()
+    // Wire DrawerObserver to handle tab registration/unregistration
+    drawerObserver.onTabRegistered(() => {
+      tagMainSidebarButtons()
+    })
+    drawerObserver.onTabUnregistered((tabId) => {
+      if (getTabAssignments().has(tabId)) {
+        // Skip during layout restore. The restore's end-of-interval logic
+        // in src/layout/apply.ts is the authoritative state-setter; any
+        // mutation here (especially the assignment delete) would race with
+        // the polling loop and cause a re-execution cascade that hides
+        // the user's tabs. See _restoringFromLayout in src/sidebar/secondary-drawer.ts
+        // for the full failure mode.
+        if (isRestoringFromLayout()) return
+        deleteTabAssignment(tabId)
+        removeSecondaryTabButton(tabId)
+        persistLayout()
+      }
+    })
+    drawerObserver.start()
+    // Initialize the SecondaryDrawer state machine after DrawerObserver is
+    // running. This wires up tab unregistration cleanup and prepares the
+    // state machine for assignToSecondary / unassignFromSecondary calls.
+    initSecondaryDrawer(ctx)
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     startContextMenuListener()
     registerCleanup(stopContextMenuListener)
+
+    // Drawer overhaul cleanup: tear down re-executed extensions and the
+    // SecondaryDrawer state machine on extension disable.
+    registerCleanup(() => {
+      teardownAllExtensions()
+      teardownSecondaryDrawer()
+    })
 
     // Main-drawer restore — independent of secondSidebarEnabled. The
     // main drawer is host-owned and its open/close state is captured

@@ -7,13 +7,14 @@ import {
   getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR,
   animateWrapper, getClosedTransformPx,
   openSecondarySidebar, closeSecondarySidebar,
-  PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import {
-  hasTabAssignment, repositionTab, setTabAssignment, switchDrawerToFallback,
+  hasTabAssignment, setTabAssignment,
 } from '../tabs/assignment'
+import { getActiveSecondaryTabId } from '../tabs/active-tab'
+import { assignToSecondary, setRestoringFromLayout } from '../sidebar/secondary-drawer'
 import {
-  addSecondaryTabButton, hideMainTabButton, showSecondaryTab, updateDrawerTabVisibility, findMainTabButton,
+  hideMainTabButton, showSecondaryTab, findMainTabButton, updateDrawerTabVisibility,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
@@ -32,7 +33,36 @@ export function cancelApplyLayoutInterval(): void {
   }
 }
 
-export function applyLayout(layout: any) {
+/**
+ * Check if a tab is fully restored: assignment is set AND its content root
+ * is in the secondary panel. The original end condition only checked
+ * hasTabAssignment, which is set early in assignToSecondary before the
+ * fallback (move root, add button) runs. If the fallback fails (store
+ * not loaded, root not found), the assignment might be set but the
+ * content is not in the secondary panel. This stricter check ensures
+ * the polling loop continues until the full restore is complete.
+ *
+ * For composite ids (e.g., "spindle:uuid:tab:html_preview:1"), the
+ * wrapper sets data-canvas-moved to the bare id (options.id). So we
+ * check both the full id and a derived bare id.
+ */
+function isTabFullyRestored(tabId: string): boolean {
+  if (!hasTabAssignment(tabId)) return false
+  const _secondaryContent = document.querySelector('.sidebar-ux-panel-content')
+  if (!_secondaryContent) return false
+  // For composite ids, derive the bare id (last segment, stripped of trailing :N)
+  const _bareId = tabId.includes(':')
+    ? (tabId.replace(/:\d+$/, '').split(':').pop() ?? tabId)
+    : tabId
+  const _roots = _secondaryContent.querySelectorAll('[data-canvas-moved]')
+  for (const _r of Array.from(_roots)) {
+    const _moved = _r.getAttribute('data-canvas-moved')
+    if (_moved === tabId || _moved === _bareId) return true
+  }
+  return false
+}
+
+export async function applyLayout(layout: any) {
   if (!layout) return
 
   // Restore secondary sidebar width — clamp to viewport so the closed
@@ -81,12 +111,15 @@ export function applyLayout(layout: any) {
     // id schema changed), we warn and skip — the user can clean up via the
     // future "reset layout" action.
     //
-    // Phase 3 (finding #5): polling loop now calls the lighter restore path
-    // (set state + update buttons + DOM move) directly, NOT assignTab. This
-    // avoids the policy-layer side effects: assignTab would call
-    // switchMainDrawerToFallback (which manipulates the main drawer that's
-    // already in its saved state) and persistLayout (we just LOADED this
-    // layout, no need to write it back).
+    // Phase 3 (finding #5): polling now uses assignToSecondary for both
+    // direct and LumiScript-fallback paths. assignToSecondary handles the
+    // full lifecycle (state, buttons, re-execution for extension tabs,
+    // display-toggle for built-in tabs) without the policy-layer side
+    // effects of assignTab: it does NOT call switchMainDrawerToFallback
+    // (which would manipulate the main drawer that's already in its saved
+    // state) and it does NOT call persistLayout (we just LOADED this
+    // layout, no need to write it back — the internal persistLayout call
+    // in assignToSecondary is idempotent).
     //
     // Phase 4.0 (suffix-drift fallback): Lumiverse assigns a session-variant
     // suffix (`:1`, `:2`, `:3`) to extension tab ids in the order they're
@@ -105,18 +138,19 @@ export function applyLayout(layout: any) {
       const tail = id.slice(lastColon + 1)
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
     }
+    // Guard: prevent the auto-close in secondary-drawer.ts's onTabUnregistered
+    // handler from firing during the restore. The re-execution lifecycle can
+    // spuriously unregister and re-register tabs (see secondary-drawer.ts
+    // flag declaration for full rationale).
+    setRestoringFromLayout(true)
     let attempts = 0
-    // Track tabs whose move is in flight (LumiScript fallback schedules
-    // the move via setTimeout 80ms; the end-of-interval block must wait
-    // for all in-flight moves to complete before running showSecondaryTab,
-    // otherwise showSecondaryTab sees no moved roots and the header
-    // doesn't update).
-    const pendingMoves = new Set<string>()
-    _applyLayoutInterval = setInterval(() => {
+    _applyLayoutInterval = setInterval(async () => {
       attempts++
       for (let i = 0; i < layout.detachedTabs.length; i++) {
         const dt = layout.detachedTabs[i]
-        if (hasTabAssignment(dt.tabId)) continue
+        const _alreadyAssigned = hasTabAssignment(dt.tabId)
+        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false
+        if (_alreadyAssigned && _fullyRestored) continue
         // Try exact match first
         const tabs = getDrawerTabs()
         let tab = tabs.find(t => t.id === dt.tabId)
@@ -142,71 +176,50 @@ export function applyLayout(layout: any) {
           }
         }
         if (tab) {
-          // Lightweight restore: state + button affordances + DOM move.
-          // No save (we just loaded). No open/close cascade (mount handled it).
-          setTabAssignment(tab.id, 'secondary')
-          hideMainTabButton(tab.id)
-          addSecondaryTabButton(tab)
-          updateDrawerTabVisibility()
-          repositionTab(tab.id, 'secondary')
+          // Restore via assignToSecondary: sets state, button affordances,
+          // re-executes extension (extension tabs) or uses display-toggle
+          // (built-in tabs). No persistLayout (we just loaded this layout).
+          try {
+            await assignToSecondary(tab.id)
+          } catch (err) {
+            dwarn(`applyLayout: assignToSecondary(${tab.id}) failed:`, err)
+          }
         } else {
-          // LumiScript interference fallback: getDrawerTabs() returns only
-          // the dock panel, so the store never has extension tabs. Find
-          // the main sidebar button by data-tab-id or title (Canvas-owned
-          // DOM observation, same pattern as the synthetic-descriptor
-          // fallback in applyAssignment). If found, do the activate-then-move
-          // dance so the tab's content is mounted in the main panel before
-          // the move runs.
+          // LumiScript interference: getDrawerTabs() returned nothing, but we
+          // found the button in the DOM. Use assignToSecondary — it handles
+          // the extension re-execution for extension tabs and the display-
+          // toggle for built-in tabs. assignToSecondary sets the assignment
+          // and hides the main button after its fallback succeeds, so we
+          // don't pre-set them here (that would make the polling loop's
+          // end condition true before the fallback completes).
           const mainBtn = findMainTabButton(dt.tabId)
           if (mainBtn) {
             const liveTabId = mainBtn.getAttribute('data-tab-id') || dt.tabId
-            const title = mainBtn.getAttribute('title') || ''
-            const btnText = (mainBtn.textContent || '').trim()
-            const shortName = btnText && btnText !== title ? btnText : ''
-            const btnSvg = mainBtn.querySelector('svg')
-            const iconSvg = btnSvg ? btnSvg.outerHTML : PUZZLE_ICON_SVG
-            setTabAssignment(liveTabId, 'secondary')
-            hideMainTabButton(liveTabId)
-            addSecondaryTabButton({
-              id: liveTabId,
-              title,
-              root: null as any,
-              iconSvg,
-              shortName,
-            } as any)
-            updateDrawerTabVisibility()
-            // Activate the tab so its content mounts in the main panel.
-            // After 80ms (React commit + mount), the setTimeout callback
-            // runs repositionTab (DOM-walk fallback finds the content),
-            // then switchDrawerToFallback (clears the main drawer's
-            // drawerTab so it doesn't show the moved tab's header with
-            // empty content), then showSecondaryTab (updates the
-            // secondary's header and active state from the moved root).
-            // All three must run after the move completes — running
-            // showSecondaryTab before the move means movedRoots is
-            // empty and the header doesn't update.
-            mainBtn.click()
-            pendingMoves.add(liveTabId)
-            setTimeout(() => {
-              repositionTab(liveTabId, 'secondary')
-              switchDrawerToFallback('main', liveTabId, () => {
-                showSecondaryTab(liveTabId)
-              })
-              pendingMoves.delete(liveTabId)
-            }, 80)
-            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}" title="${title}"`)
+            try {
+              await assignToSecondary(liveTabId)
+            } catch (err) {
+              dwarn(`applyLayout: LumiScript fallback assignToSecondary(${liveTabId}) failed:`, err)
+            }
+            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`)
           } else if (!usedFallback && attempts === 5) {
             const knownIds = tabs.map(t => t.id)
             dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(', ')}. Layout may be stale.`)
           }
         }
       }
-      // End condition: either attempts exceeded, or every tab has an
-      // assignment AND every in-flight move has completed. The pendingMoves
-      // gate ensures showSecondaryTab runs only after the LumiScript
-      // fallback's repositionTab has actually moved the content.
-      if (attempts > 20 || (layout.detachedTabs.every((dt: any) => hasTabAssignment(dt.tabId)) && pendingMoves.size === 0)) {
+      // End condition: either attempts exceeded, or every tab is fully
+      // restored (assignment set AND content root in the secondary panel).
+      // isTabFullyRestored is stricter than hasTabAssignment alone — the
+      // latter is set early in assignToSecondary before the fallback (move
+      // root, add button) runs. If the fallback fails (store not loaded,
+      // root not found), the assignment might be set but the content is
+      // not in the secondary panel. The stricter check ensures the loop
+      // continues until the full restore is complete.
+      if (attempts > 20 || layout.detachedTabs.every((dt: any) => isTabFullyRestored(dt.tabId))) {
         cancelApplyLayoutInterval()
+        // Restore complete — release the guard so the auto-close can fire
+        // again for extension-uninstall and user-initiated move-back cases.
+        setRestoringFromLayout(false)
         // Phase 4 (finding #2): if at least one tab was restored, pick the
         // first one as the active secondary tab. Without this, the
         // secondary panel header stays empty when the user opens the
@@ -239,14 +252,30 @@ export function applyLayout(layout: any) {
         // during mount. Without this guard, the polling loop fights the
         // exclusion logic and creates an open/close toggle every 500ms.
         const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
+        // Respect the persisted open/close state. The tabs stay assigned
+        // to the secondary even when the drawer is closed — the user can
+        // reopen it to see them. For old layouts that predate the
+        // secondary.open field, fall back to force-opening when tabs
+        // exist (backward compat — those layouts never recorded a close).
+        const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0
+        const savedOpen = layout.secondary?.open
+        const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs
         if (mobileExcluded && isSecondarySidebarOpen()) {
           // On mobile with primary open, close secondary silently (skip
           // persistOpenState so the desktop-saved state survives).
           enforceExclusionOnOpen('primary')
-        } else if (layout.secondary?.open === true && !isSecondarySidebarOpen()) {
+        } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
           openSecondarySidebar()
-        } else if (layout.secondary?.open === false && isSecondarySidebarOpen()) {
+        } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
           closeSecondarySidebar()
+        }
+        // Ensure the drawer tab button is visible when tabs are assigned,
+        // even if the drawer itself is closed. Without this, the tab button
+        // stays display:none (its initial state from createSecondarySidebar)
+        // because neither closeSecondarySidebar nor the "already closed"
+        // path calls updateDrawerTabVisibility.
+        if (_hasDetachedTabs) {
+          updateDrawerTabVisibility()
         }
       }
     }, 500)

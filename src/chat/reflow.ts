@@ -31,6 +31,7 @@ import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
+import { dlog } from '../debug/log'
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
@@ -69,6 +70,7 @@ export function injectReflowStyles(): void {
 }
 
 let _reflowRaf: number | null = null
+let _reflowTrace: string = ''
 
 // --- Viewport-cross state (mirrors the pattern in mobile-exclusion.ts) ---
 // MatchMedia 'change' fires once per 600px boundary crossing. The
@@ -80,9 +82,17 @@ let _mediaQuery: MediaQueryList | null = null
 let _onMediaChange: ((e: MediaQueryListEvent) => void) | null = null
 
 export function scheduleReflow(): void {
-  if (_reflowRaf !== null) return
+  const _stack = (new Error().stack || '').split('\n').slice(1, 4).join(' | ')
+  dlog(`[reflow-trace] scheduleReflow called from: ${_stack}`)
+  if (_reflowRaf !== null) {
+    dlog(`[reflow-trace] scheduleReflow EARLY RETURN (raf already scheduled, trace=${_reflowTrace})`)
+    return
+  }
+  _reflowTrace = _stack
   _reflowRaf = requestAnimationFrame(() => {
+    dlog(`[reflow-trace] scheduleReflow RAF firing (originally scheduled by: ${_reflowTrace})`)
     _reflowRaf = null
+    _reflowTrace = ''
     updateChatReflow()
   })
 }
@@ -107,6 +117,7 @@ export function updateChatReflow(): void {
   // state, drop it before returning.
   if (isMobileViewport()) {
     clearChatMargins(getChatColumn())
+    dlog(`[reflow-trace] updateChatReflow: mobile viewport, cleared margins`)
     return
   }
 
@@ -138,6 +149,17 @@ export function updateChatReflow(): void {
   rightMargin = Math.max(0, rightMargin - dockInsets.right)
   leftMargin = Math.max(0, leftMargin - dockInsets.left)
 
+  const _chat = getChatColumn()
+  const _prevMl = _chat?.style.getPropertyValue('--sidebar-ux-chat-ml') || ''
+  const _prevMr = _chat?.style.getPropertyValue('--sidebar-ux-chat-mr') || ''
+  dlog(
+    `[reflow-trace] updateChatReflow: mainSide=${mainSide} mainOpen=${mainOpen} mainWidth=${mainWidth} ` +
+    `isSecondaryOpen=${isSecondarySidebarOpen()} secondaryWidth=${secondaryWidth} ` +
+    `dockInsets=${JSON.stringify(dockInsets)} ` +
+    `→ leftMargin=${leftMargin}px (was "${_prevMl}") rightMargin=${rightMargin}px (was "${_prevMr}") ` +
+    `chatFound=${!!_chat}`
+  )
+
   setChatMargin('right', rightMargin)
   setChatMargin('left', leftMargin)
 }
@@ -166,9 +188,17 @@ export function startReflowObserver(): () => void {
   injectReflowStyles()
 
   let cancelled = false
-  const observer = new MutationObserver(() => scheduleReflow())
+  const observer = new MutationObserver((mutations) => {
+    dlog(`[reflow-trace] MutationObserver fired: ${mutations.length} mutation(s) on ${
+      mutations[0]?.target instanceof Element
+        ? `${mutations[0].target.tagName.toLowerCase()}.${(mutations[0].target as Element).className?.toString?.()?.slice(0, 60) || '?'}`
+        : 'unknown'
+    } attrs=${mutations.map(m => m.attributeName).filter(Boolean).join(',')}`)
+    scheduleReflow()
+  })
   waitForElement(getMainWrapper, 'main wrapper').then((wrapper) => {
     if (wrapper && !cancelled) {
+      dlog(`[reflow-trace] startReflowObserver: main wrapper found, attaching MO. wrapperClassName="${wrapper.classList.toString()}"`)
       observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
       updateChatReflow()
     }
@@ -183,13 +213,35 @@ export function startReflowObserver(): () => void {
     observer.observe(appEl, { attributes: true, attributeFilter: ['style'] })
   }
 
-  // Also watch for the chat column to appear (SPA navigation adds it after
-  // initial load). Without this, clicking the welcome page to load the chat
-  // never triggers updateChatReflow() because the MutationObserver only watches
-  // class/style on the wrapper and app-root — a child append isn't visible to it.
-  waitForElement(getChatColumn, 'chat column').then((chat) => {
-    if (chat && !cancelled) scheduleReflow()
-  })
+  // Watch for the chat column to appear (SPA navigation adds it after
+  // initial load). The previous waitForElement approach polled for 5
+  // seconds and gave up, so a user who takes >5s to navigate to a chat
+  // (e.g. clicks drawers first, then a character on the welcome screen)
+  // never got a reflow — the margins stayed at whatever values were set
+  // on the very first mount, which is often stale by the time the chat
+  // actually loads. A MutationObserver on the App element fires
+  // immediately on child add/remove, so the reflow runs the moment the
+  // chat column enters the DOM, regardless of how long the user took.
+  // We also observe the chat column itself for attribute changes (its
+  // style is what the reflow mutates — if the host re-renders and resets
+  // the margins, we re-apply).
+  const _appElForChat = document.querySelector('[data-app-root]') as HTMLElement | null
+  if (_appElForChat && !cancelled) {
+    const _chatObserver = new MutationObserver(() => {
+      const _chat = getChatColumn()
+      if (_chat && !cancelled) {
+        dlog(`[reflow-trace] startReflowObserver: chat column detected via App child MO, triggering scheduleReflow`)
+        scheduleReflow()
+      }
+    })
+    _chatObserver.observe(_appElForChat, { childList: true, subtree: true })
+    // If the chat column is already in the DOM at observer-mount time
+    // (e.g. setup runs after a re-enable), trigger immediately.
+    if (getChatColumn()) {
+      dlog(`[reflow-trace] startReflowObserver: chat column already in DOM at observer-mount, triggering scheduleReflow`)
+      scheduleReflow()
+    }
+  }
 
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle
   // (gated on CanvasSettings.chatReflow) is preserved. The tagger is exported
