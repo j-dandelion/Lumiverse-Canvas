@@ -3269,9 +3269,6 @@ function injectDrawerTabStyles() {
 }
 var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
-  .sidebar-ux-secondary-wrapper {
-    top: 0 !important;
-  }
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
   }
@@ -3318,6 +3315,27 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
   body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
     display: none !important;
     pointer-events: none !important;
+  }
+  /* Backdrop: full-viewport overlay that darkens the screen (including the
+     safe area at the top) when the secondary drawer is open on mobile.
+     Mirrors Lumiverse's main-drawer .backdrop element
+     (ViewportDrawer.module.css:101-109 + ViewportDrawer.tsx:174-184).
+     The secondary wrapper itself stays at top: env(safe-area-inset-top)
+     so the drawer tab aligns vertically with the main drawer tab; the
+     backdrop is a SEPARATE fixed-position layer behind the wrapper that
+     fills the entire viewport (inset:0), so the safe-area-inset-top zone
+     is also darkened. Body class is toggled by setMobileOpenClass() in
+     mobile-exclusion.ts:99-110 (called from openSecondarySidebar /
+     closeSecondarySidebar). pointer-events: none — purely visual, so
+     chat/touch interactions underneath are unaffected (the user closes
+     via the X button in the secondary header). */
+  body.canvas-ux-mobile-secondary-open::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: var(--lumiverse-fill-heavy);
+    z-index: 9989;
+    pointer-events: none;
   }
 }
 `;
@@ -3973,7 +3991,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.0.1", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
