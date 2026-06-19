@@ -16,6 +16,9 @@ export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 // exclusion via body classes.
 const SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
+  .sidebar-ux-secondary-wrapper {
+    top: 0 !important;
+  }
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
   }

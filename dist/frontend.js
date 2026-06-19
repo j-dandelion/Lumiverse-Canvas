@@ -3269,6 +3269,9 @@ function injectDrawerTabStyles() {
 }
 var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
+  .sidebar-ux-secondary-wrapper {
+    top: 0 !important;
+  }
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
   }
@@ -3970,7 +3973,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.0", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
