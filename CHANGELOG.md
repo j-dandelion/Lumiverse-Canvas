@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.0.3 — 2026-06-19
+
+### Fixed
+
+- Removed unnecessary `!important` from all per-tab button CSS rules (active state, hover, mobile indicator). Secondary drawer now uses CSS cascade like the main drawer.
+- Removed `#9370db` and `rgba(147,112,219,0.2)` fallbacks from CSS variables — Lumiverse always provides these vars, matching the main drawer's pattern.
+- Removed inline `color` and `background` from button/label creation so CSS hover and active states work without JS handlers.
+- Added CSS rules for icon container and label typography matching main drawer's `.extIconSvg` and `.tabLabel`.
+- Mobile active tab border-radius now correctly overrides base button style.
+
 ## v1.7.0.2 — 2026-06-19
 
 ### Fixed
