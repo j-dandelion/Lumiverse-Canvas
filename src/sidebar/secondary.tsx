@@ -18,7 +18,7 @@ import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
 import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
-import { showMainTabButton, findSafeFallbackButton } from '../tabs/buttons'
+import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
@@ -358,6 +358,7 @@ export function openSecondarySidebar() {
   animateWrapper(_secondaryWrapper!, 0)
   _secondarySidebarOpen = true
   syncDrawerTabSettings()
+  updateDrawerTabVisibility()
   // Re-sync the panel header in case the main header changed since the
   // secondary was last open (e.g. user toggled compact mode in Lumiverse
   // settings while the secondary was closed). The ResizeObserver attached
@@ -380,6 +381,7 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   animateWrapper(_secondaryWrapper!, getClosedTransformPx())
   _secondarySidebarOpen = false
   syncDrawerTabSettings()
+  updateDrawerTabVisibility()
   // Mirror the open-path sync: in case the main header changed while the
   // drawer is mid-close animation, the variables stay current. Cheap
   // (rAF-coalesced + cache-key skip), so calling on every close is fine.

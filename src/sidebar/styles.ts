@@ -47,10 +47,11 @@ const SECONDARY_MOBILE_CSS = `
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     justify-content: flex-end !important;
   }
-  /* Active tab indicator: bottom underline, matching main sidebar's
-     tabBtnActive mobile style. Top corners rounded, bottom flat. */
-  .sidebar-ux-secondary-wrapper button[class*="tab-active"] {
-    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+  /* Active tab indicator: bottom underline, top corners rounded.
+     Matches main sidebar's mobile .tabBtnActive exactly.
+     Same specificity as the desktop rule so it overrides on mobile. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary, #9370db) !important;
     border-radius: 8px 8px 0 0 !important;
   }
   /* Hide secondary's drawerTab when primary is open on mobile */
@@ -130,6 +131,53 @@ export function injectDrawerTabStyles(): void {
       align-items: center;
       justify-content: center;
       color: var(--lumiverse-primary);
+    }
+    /* Base button color — matches main drawer .tabBtn
+       (ViewportDrawer.module.css:213). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] {
+      color: var(--lumiverse-text-muted);
+    }
+    /* Label color — matches main drawer .tabLabel
+       (ViewportDrawer.module.css:245). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      color: var(--lumiverse-text-dim);
+    }
+    /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
+       (ViewportDrawer.module.css:222-225). Rounded corners. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover {
+      background: var(--lumiverse-primary-015);
+      color: var(--lumiverse-text);
+      border-radius: 8px;
+    }
+    /* Active tab hover: icon turns white, label stays colored.
+       Target the SVG directly so we only change the icon color. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+      color: var(--lumiverse-text) !important;
+    }
+    /* Smooth color transition for SVG icons (matches the tabBtn
+       transition: all 0.2s ease which only covers the button). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg {
+      transition: color 0.2s ease;
+    }
+    /* Smooth color transition for labels. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
+    }
+    /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
+       (ViewportDrawer.module.css:227-237) exactly: box-shadow
+       indicator + directional border-radius. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      background: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2)) !important;
+      color: var(--lumiverse-primary, #9370db) !important;
+      box-shadow: inset 3px 0 0 var(--lumiverse-primary, #9370db) !important;
+      border-radius: 0 8px 8px 0 !important;
+    }
+    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      box-shadow: inset -3px 0 0 var(--lumiverse-primary, #9370db) !important;
+      border-radius: 8px 0 0 8px !important;
+    }
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+      color: var(--lumiverse-primary, #9370db) !important;
     }
   `)
 

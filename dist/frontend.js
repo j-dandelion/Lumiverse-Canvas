@@ -1015,6 +1015,14 @@ function deriveShortName(title, shortName) {
     return shortName;
   return title.length > 8 ? title.slice(0, 7) + "…" : title;
 }
+function readMainButtonShortName(mainBtn) {
+  if (!mainBtn)
+    return;
+  const label = mainBtn.querySelector('span[class*="tabLabel"]');
+  if (label && label.textContent)
+    return label.textContent.trim();
+  return;
+}
 function addSecondaryTabButton(tab) {
   const tabList = getSecondaryWrapper()?.querySelector(".sidebar-ux-tab-list");
   const _bareId = tab.id.includes(":") ? tab.id.replace(/:\d+$/, "").split(":").pop() ?? tab.id : tab.id;
@@ -1040,7 +1048,6 @@ function addSecondaryTabButton(tab) {
     border-radius: 8px;
     background: transparent;
     border: none;
-    color: var(--lumiverse-text-muted);
     cursor: pointer;
     transition: all 0.2s ease;
   `;
@@ -1067,7 +1074,6 @@ function addSecondaryTabButton(tab) {
     font-size: calc(9px * var(--lumiverse-font-scale, 1));
     font-weight: 500;
     line-height: 1;
-    color: var(--lumiverse-text-dim);
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1080,26 +1086,15 @@ function addSecondaryTabButton(tab) {
   `;
   btn.appendChild(labelSpan);
   btn.addEventListener("mouseenter", () => {
-    btn.style.background = "var(--lumiverse-primary-015)";
-    btn.style.color = "var(--lumiverse-text)";
-    dlog(`mouseenter: tab=${tab.id} btn.style.color=var(--lumiverse-text)`);
+    btn.style.background = "";
+    btn.style.color = "";
+    dlog(`mouseenter: tab=${tab.id} btn.style.color cleared`);
   });
   btn.addEventListener("mouseleave", () => {
-    const isActive = btn.classList.contains("sidebar-ux-tab-active");
-    if (isActive) {
-      btn.style.setProperty("background", "rgba(147, 112, 219, 0.2)", "important");
-      btn.style.setProperty("color", "#9370db", "important");
-      labelSpan.style.setProperty("color", "#9370db", "important");
-      const secondarySide = getMainDrawerSide() === "left" ? "right" : "left";
-      const indicatorOnRight = secondarySide === "left";
-      btn.style.setProperty("box-shadow", `inset ${indicatorOnRight ? "-" : ""}3px 0 0 #9370db`, "important");
-      btn.style.borderRadius = indicatorOnRight ? "8px 0 0 8px" : "0 8px 8px 0";
-    } else {
-      btn.style.background = "";
-      btn.style.color = "var(--lumiverse-text-muted)";
-      labelSpan.style.color = "var(--lumiverse-text-dim)";
-    }
-    dlog(`mouseleave: tab=${tab.id} isActive=${isActive} btn.style.color=${btn.style.color}`);
+    btn.style.background = "";
+    btn.style.color = "";
+    labelSpan.style.color = "";
+    dlog(`mouseleave: tab=${tab.id} isActive=${btn.classList.contains("sidebar-ux-tab-active")} btn.style.color=${btn.style.color}`);
   });
   btn.addEventListener("click", () => {
     if (!isSecondarySidebarOpen())
@@ -1170,7 +1165,7 @@ function showSecondaryTab(tabId) {
     if (_wb)
       for (const b of _wb) {
         b.classList.remove("sidebar-ux-tab-active");
-        b.style.color = "var(--lumiverse-text-muted)";
+        b.style.color = "";
         b.style.background = "";
         b.style.boxShadow = "";
         b.style.borderRadius = "";
@@ -1186,29 +1181,18 @@ function showSecondaryTab(tabId) {
       title.textContent = activeTitle;
   }
   const allBtns = getSecondaryWrapper()?.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)");
-  const secondarySide = getMainDrawerSide() === "left" ? "right" : "left";
-  const indicatorOnRight = secondarySide === "left";
   if (allBtns) {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute("data-tab-id") === tabId;
       btn.classList.toggle("sidebar-ux-tab-active", isActive);
-      if (isActive) {
-        btn.style.setProperty("color", "#9370db", "important");
-        btn.style.setProperty("background", "rgba(147, 112, 219, 0.2)", "important");
-        btn.style.setProperty("box-shadow", `inset ${indicatorOnRight ? "-" : ""}3px 0 0 #9370db`, "important");
-        btn.style.borderRadius = indicatorOnRight ? "8px 0 0 8px" : "0 8px 8px 0";
-        const label = btn.querySelector(".sidebar-ux-tab-label");
-        if (label) {
-          label.style.setProperty("color", "#9370db", "important");
-        }
-      } else {
-        btn.style.color = "var(--lumiverse-text-muted)";
+      if (isActive) {} else {
+        btn.style.color = "";
         btn.style.background = "";
-        btn.style.boxShadow = "none";
+        btn.style.boxShadow = "";
         btn.style.borderRadius = "";
         const label = btn.querySelector(".sidebar-ux-tab-label");
         if (label) {
-          label.style.color = "var(--lumiverse-text-dim)";
+          label.style.color = "";
         }
       }
       dlog(`showSecondaryTab: tab=${btn.getAttribute("data-tab-id")} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`);
@@ -1497,7 +1481,6 @@ var init_secondary_ctx = __esm(() => {
   init_secondary();
   init_buttons();
   init_drawer_sync();
-  init_store();
   init_assignment();
   init_tab_context_menu();
   _secondaryEntries = new Map;
@@ -1753,13 +1736,15 @@ async function assignToSecondary(tabId) {
         const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
         const _titleForButton = tab.title || _storeTabForButton?.title || resolvedId;
         const _iconSvgForButton = iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg;
+        const _shortNameForButton = shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName;
         addSecondaryTabButton({
           id: resolvedId,
           title: _titleForButton,
           root: _existingWrapper,
           iconSvg: _iconSvgForButton,
-          shortName: shortName || _storeTabForButton?.shortName
+          shortName: _shortNameForButton
         });
+        updateDrawerTabVisibility();
         dlog(`[SecondaryDrawer] assignToSecondary: existing-wrapper guard created missing tab button for ${resolvedId}`);
       }
       _activeTabId = resolvedId;
@@ -1792,13 +1777,15 @@ async function assignToSecondary(tabId) {
         }
         const _title = tab.title || _storeTab.title || resolvedId;
         const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg;
+        const _shortName = readMainButtonShortName(tab.button) || _storeTab.shortName;
         addSecondaryTabButton({
           id: resolvedId,
           title: _title,
           root: _root,
           iconSvg: _iconSvg,
-          shortName: _storeTab.shortName
+          shortName: _shortName
         });
+        updateDrawerTabVisibility();
         _activeTabId = resolvedId;
         _state = "tab_active";
         setActiveSecondaryTabId(resolvedId);
@@ -1864,13 +1851,15 @@ async function assignToSecondary(tabId) {
     }
     const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
     const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root?.querySelector("svg")?.outerHTML;
+    const _shortName = readMainButtonShortName(tab.button) || _storeTab?.shortName;
     addSecondaryTabButton({
       id: resolvedId,
       title: _title,
       root: _root,
       iconSvg: _iconSvg,
-      shortName: _storeTab?.shortName
+      shortName: _shortName
     });
+    updateDrawerTabVisibility();
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
     if (_state === "closed" && !isSecondarySidebarOpen()) {
@@ -2160,9 +2149,11 @@ async function assignTab(tabId, sidebar) {
       setTabAssignment(tabId, "secondary");
       hideMainTabButton(tabId);
       const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || findMainTabButton(tabId)?.getAttribute("title") || tabId;
-      const iconSvg = findMainTabButton(tabId)?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
-      dlog(`[tabmove] built-in icon: tabId="${tabId}" source=${findMainTabButton(tabId)?.querySelector("svg") ? "main-button" : iconSvg ? "builtIn-root" : "NONE"}`);
-      addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg });
+      const mainBtn = findMainTabButton(tabId);
+      const iconSvg = mainBtn?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
+      const shortName = readMainButtonShortName(mainBtn);
+      dlog(`[tabmove] built-in icon: tabId="${tabId}" source=${mainBtn?.querySelector("svg") ? "main-button" : iconSvg ? "builtIn-root" : "NONE"}`);
+      addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName });
       updateDrawerTabVisibility();
       if (!isSecondarySidebarOpen())
         openSecondarySidebar();
@@ -3252,6 +3243,53 @@ function injectDrawerTabStyles() {
       justify-content: center;
       color: var(--lumiverse-primary);
     }
+    /* Base button color — matches main drawer .tabBtn
+       (ViewportDrawer.module.css:213). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] {
+      color: var(--lumiverse-text-muted);
+    }
+    /* Label color — matches main drawer .tabLabel
+       (ViewportDrawer.module.css:245). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      color: var(--lumiverse-text-dim);
+    }
+    /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
+       (ViewportDrawer.module.css:222-225). Rounded corners. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover {
+      background: var(--lumiverse-primary-015);
+      color: var(--lumiverse-text);
+      border-radius: 8px;
+    }
+    /* Active tab hover: icon turns white, label stays colored.
+       Target the SVG directly so we only change the icon color. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+      color: var(--lumiverse-text) !important;
+    }
+    /* Smooth color transition for SVG icons (matches the tabBtn
+       transition: all 0.2s ease which only covers the button). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg {
+      transition: color 0.2s ease;
+    }
+    /* Smooth color transition for labels. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
+    }
+    /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
+       (ViewportDrawer.module.css:227-237) exactly: box-shadow
+       indicator + directional border-radius. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      background: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2)) !important;
+      color: var(--lumiverse-primary, #9370db) !important;
+      box-shadow: inset 3px 0 0 var(--lumiverse-primary, #9370db) !important;
+      border-radius: 0 8px 8px 0 !important;
+    }
+    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      box-shadow: inset -3px 0 0 var(--lumiverse-primary, #9370db) !important;
+      border-radius: 8px 0 0 8px !important;
+    }
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+      color: var(--lumiverse-primary, #9370db) !important;
+    }
   `);
   injectStyles("sidebar-ux-icon-size-styles", `
     .sidebar-ux-tab-list button[data-tab-id] > span > svg {
@@ -3300,10 +3338,11 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     justify-content: flex-end !important;
   }
-  /* Active tab indicator: bottom underline, matching main sidebar's
-     tabBtnActive mobile style. Top corners rounded, bottom flat. */
-  .sidebar-ux-secondary-wrapper button[class*="tab-active"] {
-    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+  /* Active tab indicator: bottom underline, top corners rounded.
+     Matches main sidebar's mobile .tabBtnActive exactly.
+     Same specificity as the desktop rule so it overrides on mobile. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary, #9370db) !important;
     border-radius: 8px 8px 0 0 !important;
   }
   /* Hide secondary's drawerTab when primary is open on mobile */
@@ -3535,6 +3574,7 @@ function openSecondarySidebar() {
   animateWrapper(_secondaryWrapper, 0);
   _secondarySidebarOpen = true;
   syncDrawerTabSettings();
+  updateDrawerTabVisibility();
   syncPanelHeaderFromMain();
   updateChatReflow();
   repositionAssignedTabs();
@@ -3549,6 +3589,7 @@ function closeSecondarySidebar(options) {
   animateWrapper(_secondaryWrapper, getClosedTransformPx());
   _secondarySidebarOpen = false;
   syncDrawerTabSettings();
+  updateDrawerTabVisibility();
   syncPanelHeaderFromMain();
   updateChatReflow();
   for (const [tabId, sidebar] of getTabAssignments()) {
@@ -3991,7 +4032,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.0.1", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.0.2", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();

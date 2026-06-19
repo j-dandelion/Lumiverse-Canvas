@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.7.0.2 — 2026-06-19
+
+### Fixed
+
+- Secondary drawer tab button now appears on mobile when a tab is moved to an empty second drawer.
+- Per-tab active state in the secondary drawer now uses Lumiverse CSS variables (--lumiverse-primary, --lumiverse-primary-020) matching the main drawer's .tabBtnActive exactly.
+- Hover behavior on secondary tabs matches main drawer: inactive hover is rounded, active hover turns icon white while label stays colored.
+- Tab labels use the main drawer's shorthand name (from DRAWER_TABS registry) instead of truncating the title.
+- Label color synced to --lumiverse-text-dim (matching main drawer's .tabLabel).
+- Smooth color transitions on hover (0.2s ease) for icons and labels.
+- Mobile active tab indicator uses bottom box-shadow with rounded top corners, matching main drawer's mobile .tabBtnActive.
+
 ## v1.7.0 — 2026-06-19
 
 ### Added

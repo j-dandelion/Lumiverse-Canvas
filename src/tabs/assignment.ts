@@ -22,7 +22,7 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, clos
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
-  cssEscape, findSafeFallbackButton, isSettingsButton,
+  cssEscape, findSafeFallbackButton, isSettingsButton, readMainButtonShortName,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
 import { runHandoff, captureSourceList } from './activation-handoff'
@@ -384,10 +384,12 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
       const title = wSpindleUi?.getBuiltInTabTitle?.(tabId)
         || findMainTabButton(tabId)?.getAttribute('title')
         || tabId
-      const iconSvg = findMainTabButton(tabId)?.querySelector('svg')?.outerHTML
+      const mainBtn = findMainTabButton(tabId)
+      const iconSvg = mainBtn?.querySelector('svg')?.outerHTML
         ?? builtInRoot.querySelector('svg')?.outerHTML
-      dlog(`[tabmove] built-in icon: tabId="${tabId}" source=${findMainTabButton(tabId)?.querySelector('svg') ? 'main-button' : iconSvg ? 'builtIn-root' : 'NONE'}`)
-      addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg })
+      const shortName = readMainButtonShortName(mainBtn)
+      dlog(`[tabmove] built-in icon: tabId="${tabId}" source=${mainBtn?.querySelector('svg') ? 'main-button' : iconSvg ? 'builtIn-root' : 'NONE'}`)
+      addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName })
       updateDrawerTabVisibility()
       if (!isSecondarySidebarOpen()) openSecondarySidebar()
       // showSecondaryTab sets data-canvas-active on the moved root via

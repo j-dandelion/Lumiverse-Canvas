@@ -16,6 +16,7 @@ import {
   hideMainTabButton,
   showMainTabButton,
   updateDrawerTabVisibility,
+  readMainButtonShortName,
 } from '../tabs/buttons'
 import { getTabAssignments, setTabAssignment, deleteTabAssignment } from '../tabs/assignment'
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
@@ -215,13 +216,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         const _iconSvgForButton = iconSvg
           || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
           || _storeTabForButton?.iconSvg
+        const _shortNameForButton = shortName || readMainButtonShortName(tab.button as Element) || _storeTabForButton?.shortName
         addSecondaryTabButton({
           id: resolvedId,
           title: _titleForButton,
           root: _existingWrapper,
           iconSvg: _iconSvgForButton,
-          shortName: shortName || _storeTabForButton?.shortName,
+          shortName: _shortNameForButton,
         })
+        updateDrawerTabVisibility()
         dlog(`[SecondaryDrawer] assignToSecondary: existing-wrapper guard created missing tab button for ${resolvedId}`)
       }
       // Re-activate the tab and refresh the header title so the visual
@@ -267,13 +270,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         }
         const _title = tab.title || _storeTab.title || resolvedId
         const _iconSvg = (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || _storeTab.iconSvg
+        const _shortName = readMainButtonShortName(tab.button as Element) || _storeTab.shortName
         addSecondaryTabButton({
           id: resolvedId,
           title: _title,
           root: _root,
           iconSvg: _iconSvg,
-          shortName: _storeTab.shortName,
+          shortName: _shortName,
         })
+        updateDrawerTabVisibility()
         _activeTabId = resolvedId
         _state = 'tab_active'
         setActiveSecondaryTabId(resolvedId)
@@ -382,13 +387,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // Add a secondary tab button
     const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
     const _iconSvg = tab.button?.querySelector('svg')?.outerHTML || _root?.querySelector('svg')?.outerHTML
+    const _shortName = readMainButtonShortName(tab.button as Element) || _storeTab?.shortName
     addSecondaryTabButton({
       id: resolvedId,
       title: _title,
       root: _root,
       iconSvg: _iconSvg,
-      shortName: _storeTab?.shortName,
+      shortName: _shortName,
     })
+    updateDrawerTabVisibility()
 
     // No "hide main panel content" or "click another tab" code here.
     // We don't click anything in the built-in path (clicking is destructive —

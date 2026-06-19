@@ -20,7 +20,6 @@ import type {
 import { getSecondaryWrapper, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import { showSecondaryTab, deriveShortName } from '../tabs/buttons'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
-import { getMainDrawerSide } from '../store'
 import { setTabAssignment, getTabAssignments } from '../tabs/assignment'
 import { showAssignmentMenu } from '../tabs/tab-context-menu'
 
@@ -317,12 +316,10 @@ export function buildCanvasSecondaryCtx(
          * reflect the active tab's title. Fire activate handlers and
          * call onActivate callback.
          *
-         * The inline active style mirrors what showSecondaryTab writes
-         * for the OLD main-sidebar buttons in src/tabs/buttons.ts:386-389
-         * (color #9370db, background rgba(147,112,219,0.2), box-shadow
-         * indicator, border-radius). The OLD showSecondaryTab is filtered
-         * out for the wrapper's buttons (`:not(.sidebar-ux-tab-secondary-canvas)`),
-         * so the wrapper must write the visual state itself.
+         * The active visual is now driven by CSS in src/sidebar/styles.ts
+         * via .sidebar-ux-tab-active — matches Lumiverse's .tabBtnActive
+         * (ViewportDrawer.module.css:227-237). The activateFn toggles
+         * the class and clears inline overrides so CSS takes over.
          */
         const activateFn = () => {
           // Toggle Canvas-owned roots
@@ -337,35 +334,33 @@ export function buildCanvasSecondaryCtx(
             }
           }
 
-          // Toggle Canvas-owned buttons — class + inline style, mirroring
-          // the OLD showSecondaryTab path. Indicator faces the content area;
-          // for the secondary drawer that means the side OPPOSITE the main
-          // drawer's side (secondary is on the other side of the screen).
+          // Toggle Canvas-owned buttons — class toggle drives the visual.
+          // CSS in src/sidebar/styles.ts handles active state via
+          // .sidebar-ux-tab-active (matches Lumiverse's .tabBtnActive).
           const tabList = wrapper.querySelector('.sidebar-ux-tab-list')
           if (tabList) {
-            const secondarySide = getMainDrawerSide() === 'left' ? 'right' : 'left'
-            const indicatorOnRight = secondarySide === 'left'
             const allBtns = tabList.querySelectorAll('.sidebar-ux-tab-secondary-canvas') as NodeListOf<HTMLButtonElement>
             for (const b of allBtns) {
               const isActive = b === btn
               b.classList.toggle('sidebar-ux-tab-active', isActive)
               if (isActive) {
-                b.style.setProperty('color', '#9370db', 'important')
-                b.style.setProperty('background', 'rgba(147, 112, 219, 0.2)', 'important')
-                b.style.setProperty('box-shadow', `inset ${indicatorOnRight ? '-' : ''}3px 0 0 #9370db`, 'important')
-                b.style.borderRadius = indicatorOnRight ? '8px 0 0 8px' : '0 8px 8px 0'
-                const label = b.querySelector('.sidebar-ux-tab-label') as HTMLElement
-                if (label) {
-                  label.style.setProperty('color', '#9370db', 'important')
-                }
-              } else {
-                b.style.color = 'var(--lumiverse-text-muted)'
+                // CSS drives the active visual; clear inline overrides.
+                b.style.color = ''
                 b.style.background = ''
-                b.style.boxShadow = 'none'
+                b.style.boxShadow = ''
                 b.style.borderRadius = ''
                 const label = b.querySelector('.sidebar-ux-tab-label') as HTMLElement
                 if (label) {
-                  label.style.color = 'var(--lumiverse-text-dim)'
+                  label.style.color = ''
+                }
+              } else {
+                b.style.color = ''
+                b.style.background = ''
+                b.style.boxShadow = ''
+                b.style.borderRadius = ''
+                const label = b.querySelector('.sidebar-ux-tab-label') as HTMLElement
+                if (label) {
+                  label.style.color = ''
                 }
               }
             }
@@ -381,13 +376,13 @@ export function buildCanvasSecondaryCtx(
             ) as NodeListOf<HTMLElement>
             for (const b of builtInBtns) {
               b.classList.remove('sidebar-ux-tab-active')
-              b.style.color = 'var(--lumiverse-text-muted)'
+              b.style.color = ''
               b.style.background = ''
-              b.style.boxShadow = 'none'
+              b.style.boxShadow = ''
               b.style.borderRadius = ''
               const label = b.querySelector('.sidebar-ux-tab-label') as HTMLElement
               if (label) {
-                label.style.color = 'var(--lumiverse-text-dim)'
+                label.style.color = ''
               }
             }
           }
