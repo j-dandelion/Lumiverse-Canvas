@@ -173,7 +173,7 @@ const secondaryWrapper = {
     return null
   },
   querySelectorAll(sel: string): StubButton[] {
-    if (sel === '.sidebar-ux-tab-list button[data-tab-id]') return stubButtons
+    if (sel === '.sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)') return stubButtons
     return []
   },
 }
@@ -186,6 +186,22 @@ const secondaryWrapper = {
 
 // Stub getComputedStyle for the dlog call inside showSecondaryTab
 ;(globalThis as any).getComputedStyle = (_el: unknown) => ({ color: 'rgb(255, 0, 0)' })
+
+// Stub window.spindle (matches assign-tab-wiring / secondary-drawer-wiring convention)
+;(globalThis as any).window = {
+  spindle: {
+    ui: {
+      getBuiltInTabRoot: () => undefined,
+      requestTabLocation: (_tabId: string, _loc: unknown) => {},
+      getTabLocation: () => null,
+    },
+    containers: {},
+  },
+  matchMedia(q: string) {
+    if (q === '(max-width: 600px)') return { matches: false }
+    return { matches: false }
+  },
+}
 
 // --- Import the module under test ---
 //

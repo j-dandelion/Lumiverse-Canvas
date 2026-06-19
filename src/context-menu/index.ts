@@ -1,19 +1,19 @@
 // Canvas tab context menu — injection into Lumiverse's built-in menu.
 //
-// Instead of maintaining a separate DOM menu for extension tabs in the
-// main sidebar, we inject a "Move to second sidebar" / "Move to Main"
-// Sidebar" item into Lumiverse's own ContextMenu (rendered via React
-// portal to document.body).
+// Instead of maintaining a separate DOM menu for tabs in the main sidebar,
+// we inject a "Move to second sidebar" / "Move to main drawer" item into
+// Lumiverse's own ContextMenu (rendered via React portal to document.body)
+// for both built-in tabs (Characters, History, ...) and extension tabs
+// (LumiBooks, Hone, ...). The Settings tab is excluded (see isSettingsButton).
 //
 // The secondary sidebar keeps its own Canvas-owned context menu
 // (showAssignmentMenu in tabs/buttons.ts) since Lumiverse doesn't
 // render tabs there.
 //
 // Event flow:
-//   1. User right-clicks extension tab → contextmenu event fires
-//   2. docCtxCapture (capture phase) detects the extension tab, sets
-//      _pendingTabInfo. Does NOT call stopPropagation() — Lumiverse's
-//      handler fires normally.
+//   1. User right-clicks a tab → contextmenu event fires
+//   2. docCtxCapture (capture phase) detects the tab, sets _pendingTabInfo.
+//      Does NOT call stopPropagation() — Lumiverse's handler fires normally.
 //   3. Lumiverse renders ContextMenu portal to document.body
 //   4. MutationObserver detects the new menu element
 //   5. requestAnimationFrame (ensures React committed the DOM)
@@ -25,6 +25,8 @@ import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
+import { isSettingsButton } from '../tabs/buttons'
+import { dlog, dwarn } from '../debug/log'
 
 /**
  * Re-clamp the Lumiverse context menu position after Canvas has injected
@@ -110,19 +112,30 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   let label: string
   let targetSidebar: 'primary' | 'secondary'
   if (info.currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
-    label = 'Move to Main Sidebar'
+    label = 'Move to main drawer'
     targetSidebar = 'primary'
   } else if (info.currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in second sidebar'
+    label = 'Open in second drawer'
     targetSidebar = 'secondary'
   } else {
-    label = 'Move to second sidebar'
+    label = 'Move to second drawer'
     targetSidebar = 'secondary'
   }
 
+  // [Canvas:tabmove] Injection decision — surface the label/target so we
+  // can confirm the right-click flow reached this point and made the
+  // correct branch decision. If the user reports "the right-click option
+  // does nothing", we need to know whether (a) the option was injected
+  // with the right label, (b) the click handler fired, and (c) assignTab
+  // took the right branch. The probe below covers (a).
+  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`)
+
   // Don't show the move option when the second sidebar is disabled —
   // there's nothing to move to.
-  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) return
+  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) {
+    dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`)
+    return
+  }
 
   // Divider — matches Lumiverse's ContextMenu.module.css .divider
   const divider = document.createElement('div')
@@ -167,6 +180,11 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   })
   btn.addEventListener('click', (e) => {
     e.stopPropagation()
+    // [Canvas:tabmove] Click handler — confirms the user actually clicked
+    // the injected item. The async assignTab returns a Promise; we don't
+    // await it here because the click handler is sync, but assignTab
+    // itself logs ENTRY on first line so we'll see the chain.
+    dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`)
     assignTab(info.tabId, targetSidebar)
     // Close Lumiverse's context menu — click its backdrop or trigger Escape.
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
@@ -207,21 +225,48 @@ export function startContextMenuListener(): void {
     const tabBtn = target?.closest?.('button[title]') as HTMLElement | null
     if (!tabBtn) { _pendingTabInfo = null; return }
 
-    // Only for extension tabs (after .tabDivider)
-    const isExtension = tabBtn.classList.toString().includes('Extension')
-      || tabBtn.previousElementSibling?.classList.toString().includes('Divider')
-    if (!isExtension) { _pendingTabInfo = null; return }
+    // Skip the Settings button (in .sidebarBottom, not a real tab).
+    // Both built-in tabs and extension tabs get the move option.
+    if (isSettingsButton(tabBtn)) { _pendingTabInfo = null; return }
 
     // Only for main sidebar — findStoreData + getDrawerTabs resolves the tab.
     const sidebar = getMainSidebar()
     if (!sidebar || !sidebar.contains(tabBtn)) { _pendingTabInfo = null; return }
 
     const title = tabBtn.getAttribute('title') || ''
-    findStoreData(true)
-    const tabs = getDrawerTabs()
-    const matchedTab = tabs.find(t => t.title === title)
-    const tabId = matchedTab?.id || title
+    // Resolve the tabId. Built-in tabs have a canonical data-tab-id on the
+    // button itself (Lumiverse's ViewportDrawer.tsx:226 sets it for built-in
+    // tabs but not for extension tabs at line 247). Use it directly when
+    // present — it's the only reliable id for built-ins, since the store
+    // title lookup can miss (e.g. the "Extensions" built-in's localized
+    // title "Extensions" doesn't always match the cached store snapshot,
+    // causing the previous code to fall through to passing the title as
+    // the tabId, which DrawerObserver and the store then both fail to find).
+    // For extension tabs, fall back to the store lookup which uses the
+    // title to match against the Lumiverse store's DrawerTab entries.
+    const dataTabId = tabBtn.getAttribute('data-tab-id')
+    let tabId: string
+    if (dataTabId) {
+      tabId = dataTabId
+    } else {
+      findStoreData(true)
+      const tabs = getDrawerTabs()
+      const matchedTab = tabs.find(t => t.title === title)
+      tabId = matchedTab?.id || title
+    }
     const currentSidebar = getTabSidebar(tabId)
+
+    // [Canvas:tabmove] Right-click entry probe — confirms the right-click
+    // handler fired, captured a tabId, and is about to start the observer
+    // that will inject the move item. If the user reports "right-click does
+    // nothing", the first question is "did docCtxCapture even fire for this
+    // tab?" — the log line below answers that with the resolved tabId and
+    // the source (data-tab-id attribute vs title store lookup fallback).
+    dlog(
+      `[tabmove] docCtxCapture: tabBtn title="${title}" data-tab-id="${dataTabId || '(none)'}" ` +
+      `-> resolved tabId="${tabId}" currentSidebar=${currentSidebar} ` +
+      `(source=${dataTabId ? 'data-tab-id' : 'store-title-fallback'})`
+    )
 
     _pendingTabInfo = { tabId, currentSidebar, btn: tabBtn }
     _injected = false

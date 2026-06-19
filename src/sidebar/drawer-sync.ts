@@ -24,17 +24,18 @@
 // buttons (catches post-MutationObserver registrations) and removes
 // _tabAssignments entries when their source extension unregisters.
 
-import { getMainSidebar } from '../dom/lumiverse'
-import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore } from '../store'
-import { dlog } from '../debug/log'
+import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
+import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore, findStoreData } from '../store'
+import { dlog, dwarn } from '../debug/log'
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
 import { getTabAssignments, repositionAssignedTabs, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility } from '../tabs/buttons'
+import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility, findMainTabButton } from '../tabs/buttons'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
+import { drawerObserver } from './drawer-observer'
 
 let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownVerticalPos: number | null = null
@@ -92,11 +93,60 @@ function _runSyncDrawerTabSettings(): void {
   if (!drawerTab) { dlog(`[drawer-sync] syncDrawerTabSettings: secondary tab not found`); return }
   dlog(`[drawer-sync] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
 
-  const mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)') as HTMLElement
+  // Bug fix (2026-06-19, follow-up): scope the main-drawer-tab query to
+  // the main WRAPPER rather than the whole document. The previous
+  // `document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)')`
+  // was returning the FIRST element in the document with `_drawerTab_` in
+  // its class. After a drawer-side change, Lumiverse re-renders the main
+  // drawer, and there can be transient elements in the DOM (e.g. during
+  // a multi-step transition, the old main drawer tab may still be in the
+  // tree with a class like `_drawerTabOld_abc`, OR a wrapper element may
+  // briefly have a class containing `_drawerTab_`). The wrong element's
+  // `offsetWidth` can be very large (e.g. 420px for the full drawer width
+  // or the full viewport), and the CSS vars get stamped to that value —
+  // the secondary's open/close drawer tab then renders at 420px wide,
+  // the "open/close tab becomes large" symptom reported on 2026-06-19.
+  //
+  // Scoping to `getMainWrapper()` (the Lumiverse wrapper element) means
+  // we only consider the main drawer's own drawer tab, never a transient
+  // or unrelated element elsewhere in the document. `getMainWrapper()`
+  // reads the DOM class (wrapperLeft / wrapperRight) so it's stable
+  // across re-renders.
+  //
+  // Fallback: if the wrapper isn't mounted yet (very early mount, before
+  // Lumiverse has rendered the wrapper element), fall back to the
+  // document-level query so the sync still works. The validation below
+  // catches the "wrong element" case even at the document level.
+  let mainDrawerTab: HTMLElement | null = null
+  const mainWrapper = getMainWrapper()
+  if (mainWrapper) {
+    mainDrawerTab = mainWrapper.querySelector(
+      '[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
+    ) as HTMLElement | null
+  }
+  if (!mainDrawerTab) {
+    mainDrawerTab = document.querySelector(
+      '[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
+    ) as HTMLElement | null
+  }
   if (!mainDrawerTab) {
     // Retry on the next frame. Bypass the coalesce gate — the retry must
     // actually fire even if the wrapper is still mid-coalesce.
     requestAnimationFrame(() => _runSyncDrawerTabSettings())
+    return
+  }
+
+  // Bug fix (2026-06-19, follow-up): validate the read dimensions. The
+  // main drawer's `.drawerTab` is 48px wide (or 32px in compact mode).
+  // Anything outside [16, 120]px is almost certainly the wrong element
+  // (e.g. the drawer, the wrapper, or a transient transition node). Fall
+  // back to Lumiverse's documented defaults rather than stamping
+  // garbage values that make the secondary's drawer tab render as a
+  // full-width slab.
+  const w = mainDrawerTab.offsetWidth
+  const h = mainDrawerTab.offsetHeight
+  if (w < 16 || w > 120 || h < 16 || h > 400) {
+    dlog(`[drawer-sync] main drawer tab dimensions look wrong (w=${w} h=${h}), skipping mirror`)
     return
   }
 
@@ -207,7 +257,9 @@ export function syncSecondaryTabLabels(): void {
     label.style.opacity = showLabels ? '1' : '0'
     label.style.height = showLabels ? 'auto' : '0'
     label.style.marginTop = showLabels ? '1px' : '0'
-    const btn = label.closest('button[data-tab-id]') as HTMLElement | null
+    // Skip Canvas-owned buttons (owned by the wrapper) — their label
+    // visibility is set via inline styles in secondary-ctx.ts.
+    const btn = label.closest('button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)') as HTMLElement | null
     if (btn) btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
   }
 }
@@ -219,6 +271,38 @@ export function checkSideChanged(): void {
     // unconditionally sets _secondarySidebarOpen = false.
     const wasOpen = isSecondarySidebarOpen()
     unmountSecondarySidebar()
+    // Bug fix (2026-06-19): invalidate caches and stop observers BEFORE
+    // mounting the new wrapper. The new wrapper has no CSS variables set
+    // (its style.cssText doesn't include them) and no observers attached
+    // to the new main drawer tab element. Without this reset:
+    //   1. _runSyncDrawerTabSettings computes newVars from the (possibly
+    //      new) main drawer tab, but newVars === _lastWrittenDrawerTabVars
+    //      (same dimensions, same padding, etc.) — the cache check at
+    //      line 159 short-circuits and the setProperty calls at lines
+    //      162-169 are SKIPPED. The new wrapper's drawer tab then falls
+    //      back to CSS defaults: width=48px, height=auto — the "open/close
+    //      tab becomes large" symptom reported on drawer side change.
+    //   2. _mainDrawerTabResizeObserver / _mainDrawerTabClassObserver /
+    //      _mainDrawerTabStyleObserver point at the OLD main drawer tab
+    //      (now detached). Subsequent syncs (drag resize, compact mode
+    //      toggle) never fire because the observers don't see mutations
+    //      on the new main drawer tab element.
+    //   3. _lastWrittenLabelsKey short-circuits the label visibility
+    //      update similarly (showLabels is a boolean so the cache key is
+    //      stable across mounts, but the new wrapper has no labels
+    //      styled yet).
+    // Resetting all three forces a full re-write on the new wrapper.
+    _lastWrittenDrawerTabVars = null
+    _lastWrittenLabelsKey = null
+    _lastKnownVerticalPos = null
+    stopDrawerTabResizeWatcher()
+    stopDrawerTabClassObserver()
+    stopDrawerTabStyleObserver()
+    // Force-walk the store so the rebuilt wrapper's tab buttons can find
+    // their tabs. The 3s cache (store/index.ts:97) may be stale or
+    // reference elements that were unmounted by Lumiverse's side-change
+    // re-render. getDrawerTabs() below will do a fresh fiber walk.
+    findStoreData(true)
     mountSecondarySidebar({ initialOpen: wasOpen })
     // Restore tab buttons for every tab still assigned to secondary. The
     // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
@@ -232,7 +316,7 @@ export function checkSideChanged(): void {
     // and only becomes visible when this function runs. Without this call,
     // the clickable edge handle stays hidden after the wrapper is recreated.
     updateDrawerTabVisibility()
-    // The new wrapper has a hardcoded title "Second Sidebar" (secondary.tsx:224).
+    // The new wrapper has a hardcoded title "Second drawer" (secondary.tsx:225).
     // On initial mount, applyLayout (apply.ts:226) calls showSecondaryTab()
     // to set the title to the active tab's name — but that path is not reached
     // on a side-change remount. Calling showSecondaryTab here restores the
@@ -267,11 +351,63 @@ export function checkSideChanged(): void {
  */
 export function restoreSecondaryTabButtons(): void {
   const tabs = getDrawerTabs()
-  if (!tabs || tabs.length === 0) return
   for (const [tabId, sidebar] of getTabAssignments()) {
     if (sidebar !== 'secondary') continue
-    const tab = tabs.find(t => t.id === tabId)
-    if (tab) addSecondaryTabButton(tab)
+    // Exact-match first (canonical path).
+    let tab = tabs && tabs.find(t => t.id === tabId)
+    if (!tab && tabs) {
+      // Suffix-drift fallback: Lumiverse assigns a session-variant suffix
+      // (:1, :2, :3) to extension tab ids. The assignment map may have an
+      // older suffix than the live store (e.g., the wrapper was just
+      // recreated after a side change and the extension was re-executed
+      // with a new suffix). Strip the trailing :N from both the stored
+      // id and each live id, then match by the stripped prefix. If
+      // exactly one live id matches, use it.
+      const stripSuffix = (id: string): string => {
+        const lastColon = id.lastIndexOf(':')
+        if (lastColon <= 0) return id
+        const tail = id.slice(lastColon + 1)
+        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
+      }
+      const storedPrefix = stripSuffix(tabId)
+      const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
+      if (candidates.length === 1) {
+        tab = candidates[0]
+        dlog(`restoreSecondaryTabButtons: suffix-drift fallback matched stored "${tabId}" -> live "${tab.id}"`)
+      }
+    }
+    if (tab) {
+      addSecondaryTabButton(tab)
+      continue
+    }
+    // Bug fix (2026-06-19, follow-up): DOM fallback. When the store
+    // doesn't have the tab (extension tabs moved to secondary are
+    // re-executed in the secondary context, so the primary context's
+    // store entry may have been removed), fall back to reading the tab
+    // data from the main sidebar's button. The main sidebar still
+    // renders a button for every tab — even moved-to-secondary tabs
+    // (hidden via display:none by hideMainTabButton). The button has
+    // data-tab-id, title, and an SVG icon child — enough to build a
+    // secondary tab button via addSecondaryTabButton.
+    //
+    // Without this fallback, the user reports "all of the tab buttons
+    // in the second drawer no longer appear" after a drawer-side change
+    // when extension tabs are in the secondary drawer.
+    const mainBtn = findMainTabButton(tabId) as HTMLElement | null
+    if (mainBtn) {
+      const id = mainBtn.getAttribute('data-tab-id') || tabId
+      const title = mainBtn.getAttribute('title') || tabId
+      const svg = mainBtn.querySelector('svg')?.outerHTML
+      addSecondaryTabButton({
+        id,
+        title,
+        root: undefined as any, // not used by addSecondaryTabButton body
+        iconSvg: svg,
+      } as any)
+      dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`)
+    } else {
+      dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`)
+    }
   }
 }
 
@@ -314,47 +450,5 @@ export function stopDrawerTabStyleObserver(): void {
   }
 }
 
-// Tab registration watcher (handles extension unregistration)
-let _tabRegInterval: ReturnType<typeof setInterval> | null = null
-let _tabRegPrevIds: Set<string> = new Set()
-
-export function startTabRegistrationWatcher(): void {
-  if (_tabRegInterval !== null) return // already running
-  _tabRegPrevIds = new Set<string>()
-
-  const check = () => {
-    // Re-tag any main sidebar buttons that weren't tagged on the first pass.
-    // This catches the case where the store's drawerTabs array was still
-    // being populated when tagMainSidebarButtons() first ran from the
-    // MutationObserver — the watcher's 3s poll gives the store time to
-    // settle.
-    tagMainSidebarButtons()
-
-    const currentTabs = getDrawerTabs()
-    const currentIds = new Set(currentTabs.map(t => t.id))
-
-    // Clean up stale assignments when an extension is unregistered.
-    for (const oldId of _tabRegPrevIds) {
-      if (!currentIds.has(oldId) && getTabAssignments().has(oldId)) {
-        dlog(`Extension tab ${oldId} was removed, cleaning up`)
-        deleteTabAssignment(oldId)
-        removeSecondaryTabButton(oldId)
-        persistLayout()
-      }
-    }
-
-    _tabRegPrevIds = currentIds
-  }
-
-  _tabRegInterval = setInterval(check, 3000)
-  // Cleanup is registered here (not at call sites) because these functions
-  // are also called from settings/panel.ts which doesn't have its own
-  // cleanup chain.
-  registerCleanup(() => stopTabRegistrationWatcher())
-}
-
-export function stopTabRegistrationWatcher(): void {
-  if (_tabRegInterval === null) return
-  clearInterval(_tabRegInterval)
-  _tabRegInterval = null
-}
+// Tab registration watcher is now handled by DrawerObserver (drawer-observer.ts)
+// which uses a MutationObserver instead of the 3s polling interval.

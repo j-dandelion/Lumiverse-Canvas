@@ -133,8 +133,14 @@ export function injectDrawerTabStyles(): void {
   // collapses to ~150px iframe in the secondary drawer because the inner
   // flex:1 iframeContainer becomes a non-flex-child and shrinks to its
   // content's intrinsic height.
-  injectStyles('canvas-moved-active-toggle', `
-    [data-canvas-moved]:not([data-canvas-active]) {
+  // Scope the hide rule to the secondary panel content. Without this
+// scoping, a built-in root that lost its data-canvas-active attribute
+// (e.g. removed by the safety-net movedRoots loop when other built-ins
+// were activated in secondary) stays hidden via display:none after
+// being moved back to the main drawer — TabPanelContent just moves the
+// root, it doesn't re-set data-canvas-active.
+injectStyles('canvas-moved-active-toggle', `
+    .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) {
       display: none !important;
     }
   `)

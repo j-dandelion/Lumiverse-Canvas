@@ -12,6 +12,12 @@ import { getTabSidebar } from '../tabs/assignment'
 import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { injectStyles } from '../debug/styles'
 
+// Test seam for showAssignmentMenu — allows tests to override the real implementation
+let _showAssignmentMenuOverride: ((x: number, y: number, tabId: string, tabTitle: string, originatingTarget?: HTMLElement | null) => void) | null = null
+export function __setShowAssignmentMenuForTest(fn: typeof _showAssignmentMenuOverride): void {
+  _showAssignmentMenuOverride = fn
+}
+
 let _contextMenu: HTMLElement | null = null
 // Tracks the element that originated the currently-open menu. Used to
 // ignore the synthesized click that browsers dispatch at the end of a
@@ -31,6 +37,10 @@ export function showAssignmentMenu(
   x: number, y: number, tabId: string, tabTitle: string,
   originatingTarget?: HTMLElement | null,
 ) {
+  if (_showAssignmentMenuOverride) {
+    _showAssignmentMenuOverride(x, y, tabId, tabTitle, originatingTarget)
+    return
+  }
   if (!_contextMenu) {
     _contextMenu = createAssignmentContextMenu()
     document.body.appendChild(_contextMenu)
@@ -41,13 +51,13 @@ export function showAssignmentMenu(
   let label: string
   let targetSidebar: 'primary' | 'secondary'
   if (currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
-    label = 'Move to Main Sidebar'
+    label = 'Move to main drawer'
     targetSidebar = 'primary'
   } else if (currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in second sidebar'
+    label = 'Open in second drawer'
     targetSidebar = 'secondary'
   } else {
-    label = 'Move to second sidebar'
+    label = 'Move to second drawer'
     targetSidebar = 'secondary'
   }
 

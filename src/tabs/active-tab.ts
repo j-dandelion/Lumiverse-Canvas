@@ -45,10 +45,31 @@ export function getActiveTabId(): ActiveTabState {
  * Thin boolean wrapper over getActiveTabId() for callers that only need
  * a yes/no. Prefer getActiveTabId() for new code — the sentinel shape is
  * the authoritative contract.
+ *
+ * DOM fallback (Q4 fix): the Zustand store can be stale relative to the
+ * DOM — a user click on a tab updates the DOM's `tabBtnActive` class
+ * synchronously, but the React commit that updates the store can lag by
+ * microtask/macrotask. When the store says "not active" but the DOM
+ * shows the tab as active, the DOM is the user-visible truth. Without
+ * this fallback, runHandoff's preMoveActiveTab check returns false, the
+ * source-replacement gate is skipped, and the host's
+ * pendingActiveTabReset useEffect then resets the active tab to the
+ * first non-moved tab (Profile) — the "always Profile" bug reported
+ * after wiring into all 4 paths.
  */
 export function isTabActiveInMainDrawer(tabId: string): boolean {
   const active = getActiveTabId()
-  if (active.state === 'active') return active.id === tabId
+  if (active.state === 'active' && active.id === tabId) return true
+  // DOM validation: when the store says "not active" (or the store is
+  // stale), double-check the DOM. If the DOM's active button has the
+  // same data-tab-id, the tab is active regardless of what the store
+  // says.
+  const sidebar = getMainSidebar()
+  if (sidebar) {
+    const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
+    const activeTabId = activeBtn?.getAttribute('data-tab-id') ?? null
+    if (activeTabId === tabId) return true
+  }
   return false
 }
 

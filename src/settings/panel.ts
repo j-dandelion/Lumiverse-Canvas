@@ -288,15 +288,15 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: shadowsMobile.btn,
   }))
 
-  // --- Section: Second Sidebar ---
-  const sec2 = section('Second Sidebar')
+  // --- Section: Second drawer ---
+  const sec2 = section('Second drawer')
 
   const master = makeToggle(
     () => getSettings().secondSidebarEnabled,
     (v) => setSettings({ secondSidebarEnabled: v })
   )
   sec2.appendChild(buildSettingRow({
-    label: 'Enable Second Sidebar',
+    label: 'Enable second drawer',
     hint: 'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.',
     control: master.btn,
   }))
@@ -325,7 +325,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   showLabelsWrap = buildShowLabelsSeg()
   showLabelsRow = buildSettingRow({
-    label: 'Tab labels in the second sidebar',
+    label: 'Tab labels in the second drawer',
     hint: "\"Follow\" mirrors Lumiverse's main sidebar setting. \"Show\" / \"Hide\" override it.",
     control: showLabelsWrap,
     disabled: !getSettings().secondSidebarEnabled,
