@@ -5,7 +5,8 @@
   "scripts": {
     "build": "bun build src/frontend.ts --outfile dist/frontend.js --target browser --format esm && bun build src/backend.ts --outfile dist/backend.js --target bun --format esm",
     "typecheck": "bunx tsc --noEmit",
-    "deploy": "bash build.sh"
+    "deploy": "bash build.sh",
+    "test": "find src -name '*.test.*' -type f | xargs -I{} bun run {}"
   },
   "dependencies": {
     "lumiverse-spindle-types": "^0.5.24",

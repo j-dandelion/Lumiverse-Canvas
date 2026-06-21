@@ -220,7 +220,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         addSecondaryTabButton({
           id: resolvedId,
           title: _titleForButton,
-          root: _existingWrapper,
+          root: _existingWrapper as HTMLElement,
           iconSvg: _iconSvgForButton,
           shortName: _shortNameForButton,
         })
