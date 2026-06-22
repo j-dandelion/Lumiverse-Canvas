@@ -2056,35 +2056,18 @@ async function assignToSecondary(tabId) {
     _state = "open";
     const _secondaryContentEarly = document.querySelector(".sidebar-ux-panel-content");
     const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
-    const _existingWrapper = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
-    if (_existingWrapper && _isExtensionTab) {
-      const _existingTabList = getSecondaryWrapper()?.querySelector(".sidebar-ux-tab-list");
-      const _buttonExists = !!_existingTabList?.querySelector(`[data-tab-id="${CSS.escape(resolvedId)}"]`);
-      if (_existingTabList && !_buttonExists) {
-        const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-        const _titleForButton = tab.title || _storeTabForButton?.title || resolvedId;
-        const _iconSvgForButton = iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg;
-        const _shortNameForButton = shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName;
-        addSecondaryTabButton({
-          id: resolvedId,
-          title: _titleForButton,
-          root: _existingWrapper,
-          iconSvg: _iconSvgForButton,
-          shortName: _shortNameForButton
-        });
-        updateDrawerTabVisibility();
-        dlog(`[SecondaryDrawer] assignToSecondary: existing-wrapper guard created missing tab button for ${resolvedId}`);
-      }
-      _activeTabId = resolvedId;
-      _state = "tab_active";
-      setActiveSecondaryTabId(resolvedId);
-      const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-      if (_headerTitle) {
-        _headerTitle.textContent = tab.title || _existingWrapper.getAttribute("data-tab-title") || resolvedId;
-      }
-      return;
-    }
-    if (!_existingWrapper) {
+    const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
+    if (_existingRoot) {
+      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: tab.title || _storeTabForButton?.title || resolvedId,
+        root: _existingRoot,
+        iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg,
+        shortName: shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName
+      });
+      updateDrawerTabVisibility();
+    } else {
       const _secondaryWrapper = getSecondaryWrapper();
       const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
       const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
@@ -2103,24 +2086,22 @@ async function assignToSecondary(tabId) {
             }
           }
         }
-        const _title = tab.title || _storeTab.title || resolvedId;
-        const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg;
-        const _shortName = readMainButtonShortName(tab.button) || _storeTab.shortName;
         addSecondaryTabButton({
           id: resolvedId,
-          title: _title,
+          title: tab.title || _storeTab.title || resolvedId,
           root: _root,
-          iconSvg: _iconSvg,
-          shortName: _shortName
+          iconSvg: tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg,
+          shortName: readMainButtonShortName(tab.button) || _storeTab.shortName
         });
         updateDrawerTabVisibility();
-        _activeTabId = resolvedId;
-        _state = "tab_active";
-        setActiveSecondaryTabId(resolvedId);
-        const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-        if (_headerTitle)
-          _headerTitle.textContent = _title;
       }
+    }
+    _activeTabId = resolvedId;
+    _state = "tab_active";
+    setActiveSecondaryTabId(resolvedId);
+    const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+    if (_headerTitle) {
+      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
     }
   } else {
     const _secondaryWrapper = getSecondaryWrapper();
@@ -2877,7 +2858,97 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
 `;
 var init_styles = () => {};
 
+// src/sidebar/panel-header-sync.ts
+function syncPanelHeaderFromMain(getWrapper) {
+  if (_syncPanelHeaderPending)
+    return;
+  _syncPanelHeaderPending = true;
+  requestAnimationFrame(() => {
+    _syncPanelHeaderPending = false;
+    _runSyncPanelHeaderFromMain(getWrapper);
+  });
+}
+function _runSyncPanelHeaderFromMain(getWrapper) {
+  const secondaryWrapper = getWrapper();
+  if (!secondaryWrapper)
+    return;
+  const mainHeader = getMainPanelHeader();
+  if (!mainHeader)
+    return;
+  if (!_mainPanelHeaderResizeObserver) {
+    _mainPanelHeaderResizeObserver = new ResizeObserver(() => {
+      syncPanelHeaderFromMain(getWrapper);
+    });
+    _mainPanelHeaderResizeObserver.observe(mainHeader);
+    registerCleanup(stopPanelHeaderObservers);
+  }
+  if (!_mainPanelHeaderAttrObserver) {
+    _mainPanelHeaderAttrObserver = new MutationObserver(() => {
+      syncPanelHeaderFromMain(getWrapper);
+    });
+    _mainPanelHeaderAttrObserver.observe(mainHeader, {
+      attributes: true,
+      attributeFilter: ["class", "style"]
+    });
+    registerCleanup(stopPanelHeaderObservers);
+  }
+  const headerStyle = getComputedStyle(mainHeader);
+  const titleEl = findHeaderTitleElement(mainHeader);
+  const titleStyle = titleEl ? getComputedStyle(titleEl) : null;
+  const height = `${mainHeader.offsetHeight}px`;
+  const paddingTop = headerStyle.paddingTop;
+  const paddingBottom = headerStyle.paddingBottom;
+  const fontSize = titleStyle?.fontSize || "";
+  const borderBottom = headerStyle.borderBottomWidth === "0px" ? "0px" : `${headerStyle.borderBottomWidth} ${headerStyle.borderBottomStyle} ${headerStyle.borderBottomColor}`;
+  const background = headerStyle.backgroundColor;
+  const cacheKey = [height, paddingTop, paddingBottom, fontSize, borderBottom, background].join("|");
+  if (cacheKey === _lastWrittenHeaderVars)
+    return;
+  _lastWrittenHeaderVars = cacheKey;
+  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-h", height);
+  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-pt", paddingTop);
+  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-pb", paddingBottom);
+  if (fontSize) {
+    secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-font-size", fontSize);
+  }
+  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-border-bottom", borderBottom);
+  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-bg", background);
+}
+function findHeaderTitleElement(header) {
+  for (const tag of ["H1", "H2", "H3"]) {
+    const byTag = header.querySelector(tag);
+    if (byTag)
+      return byTag;
+  }
+  const byClass = header.querySelector('[class*="title"], [class*="Title"]');
+  if (byClass)
+    return byClass;
+  if (header.children.length > 0)
+    return header.children[0];
+  return null;
+}
+function stopPanelHeaderObservers() {
+  if (_mainPanelHeaderResizeObserver) {
+    _mainPanelHeaderResizeObserver.disconnect();
+    _mainPanelHeaderResizeObserver = null;
+  }
+  if (_mainPanelHeaderAttrObserver) {
+    _mainPanelHeaderAttrObserver.disconnect();
+    _mainPanelHeaderAttrObserver = null;
+  }
+}
+function resetPanelHeaderSyncCache() {
+  _lastWrittenHeaderVars = null;
+}
+var _lastWrittenHeaderVars = null, _mainPanelHeaderResizeObserver = null, _mainPanelHeaderAttrObserver = null, _syncPanelHeaderPending = false;
+var init_panel_header_sync = __esm(() => {
+  init_cleanup();
+});
+
 // src/sidebar/secondary.tsx
+function syncPanelHeaderFromMain2() {
+  syncPanelHeaderFromMain(() => _secondaryWrapper);
+}
 function getSecondaryWrapper() {
   return _secondaryWrapper;
 }
@@ -2900,7 +2971,7 @@ function unmountSecondarySidebar() {
   }
   _secondarySidebarOpen = false;
   stopPanelHeaderObservers();
-  _lastWrittenHeaderVars = null;
+  resetPanelHeaderSyncCache();
 }
 function createSecondarySidebar(options) {
   const side = getMainDrawerSide() === "left" ? "right" : "left";
@@ -3072,7 +3143,7 @@ function openSecondarySidebar() {
   _secondarySidebarOpen = true;
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
-  syncPanelHeaderFromMain();
+  syncPanelHeaderFromMain2();
   updateChatReflow();
   Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
     for (const [tabId, side] of getTabAssignments()) {
@@ -3092,7 +3163,7 @@ function closeSecondarySidebar(options) {
   _secondarySidebarOpen = false;
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
-  syncPanelHeaderFromMain();
+  syncPanelHeaderFromMain2();
   updateChatReflow();
   for (const [tabId, sidebar] of getTabAssignments()) {
     if (sidebar === "secondary") {
@@ -3125,7 +3196,7 @@ function mountSecondarySidebar(options) {
     _secondarySidebarOpen = true;
   }
   syncDrawerTabSettings();
-  syncPanelHeaderFromMain();
+  syncPanelHeaderFromMain2();
   mountResizeHandles();
 }
 function tearDownSecondarySidebar() {
@@ -3179,88 +3250,9 @@ function tearDownSecondarySidebar() {
     }
   }
   stopPanelHeaderObservers();
-  _lastWrittenHeaderVars = null;
-  updateChatReflow();
+  resetPanelHeaderSyncCache();
 }
-function syncPanelHeaderFromMain() {
-  if (_syncPanelHeaderPending)
-    return;
-  _syncPanelHeaderPending = true;
-  requestAnimationFrame(() => {
-    _syncPanelHeaderPending = false;
-    _runSyncPanelHeaderFromMain();
-  });
-}
-function _runSyncPanelHeaderFromMain() {
-  const secondaryWrapper = _secondaryWrapper;
-  if (!secondaryWrapper)
-    return;
-  const mainHeader = getMainPanelHeader();
-  if (!mainHeader)
-    return;
-  if (!_mainPanelHeaderResizeObserver) {
-    _mainPanelHeaderResizeObserver = new ResizeObserver(() => {
-      syncPanelHeaderFromMain();
-    });
-    _mainPanelHeaderResizeObserver.observe(mainHeader);
-    registerCleanup(stopPanelHeaderObservers);
-  }
-  if (!_mainPanelHeaderAttrObserver) {
-    _mainPanelHeaderAttrObserver = new MutationObserver(() => {
-      syncPanelHeaderFromMain();
-    });
-    _mainPanelHeaderAttrObserver.observe(mainHeader, {
-      attributes: true,
-      attributeFilter: ["class", "style"]
-    });
-    registerCleanup(stopPanelHeaderObservers);
-  }
-  const headerStyle = getComputedStyle(mainHeader);
-  const titleEl = findHeaderTitleElement(mainHeader);
-  const titleStyle = titleEl ? getComputedStyle(titleEl) : null;
-  const height = `${mainHeader.offsetHeight}px`;
-  const paddingTop = headerStyle.paddingTop;
-  const paddingBottom = headerStyle.paddingBottom;
-  const fontSize = titleStyle?.fontSize || "";
-  const borderBottom = headerStyle.borderBottomWidth === "0px" ? "0px" : `${headerStyle.borderBottomWidth} ${headerStyle.borderBottomStyle} ${headerStyle.borderBottomColor}`;
-  const background = headerStyle.backgroundColor;
-  const cacheKey = [height, paddingTop, paddingBottom, fontSize, borderBottom, background].join("|");
-  if (cacheKey === _lastWrittenHeaderVars)
-    return;
-  _lastWrittenHeaderVars = cacheKey;
-  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-h", height);
-  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-pt", paddingTop);
-  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-pb", paddingBottom);
-  if (fontSize) {
-    secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-font-size", fontSize);
-  }
-  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-border-bottom", borderBottom);
-  secondaryWrapper.style.setProperty("--sidebar-ux-panel-header-bg", background);
-}
-function findHeaderTitleElement(header) {
-  for (const tag of ["H1", "H2", "H3"]) {
-    const byTag = header.querySelector(tag);
-    if (byTag)
-      return byTag;
-  }
-  const byClass = header.querySelector('[class*="title"], [class*="Title"]');
-  if (byClass)
-    return byClass;
-  if (header.children.length > 0)
-    return header.children[0];
-  return null;
-}
-function stopPanelHeaderObservers() {
-  if (_mainPanelHeaderResizeObserver) {
-    _mainPanelHeaderResizeObserver.disconnect();
-    _mainPanelHeaderResizeObserver = null;
-  }
-  if (_mainPanelHeaderAttrObserver) {
-    _mainPanelHeaderAttrObserver.disconnect();
-    _mainPanelHeaderAttrObserver = null;
-  }
-}
-var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null, _mainPanelHeaderResizeObserver = null, _mainPanelHeaderAttrObserver = null, _syncPanelHeaderPending = false, _lastWrittenHeaderVars = null;
+var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null;
 var init_secondary = __esm(() => {
   init_store();
   init_reflow();
@@ -3274,7 +3266,7 @@ var init_secondary = __esm(() => {
   init_tab_position();
   init_state();
   init_log();
-  init_cleanup();
+  init_panel_header_sync();
 });
 
 // src/layout/apply.ts

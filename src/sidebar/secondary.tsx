@@ -11,7 +11,7 @@
 // is anchored at `right: 0` (close transform is +width). When the main
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
-import { getMainSidebar, getMainPanelHeader, getMainPanelContent } from '../dom/lumiverse'
+import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { getHostBridge } from '../dom/host-bridge'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
@@ -29,6 +29,19 @@ import { applyTabListPosition } from './tab-position'
 import { getSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { registerCleanup } from './cleanup'
+import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
+
+// Re-export for backward compatibility — the test file imports these
+// from secondary.tsx.
+export { _stopPanelHeaderObservers as stopPanelHeaderObservers }
+
+/**
+ * Wrapper that passes the secondary wrapper accessor to the panel-header
+ * sync module. Preserves the public API so callers don't need to change.
+ */
+export function syncPanelHeaderFromMain(): void {
+  _syncPanelHeaderImpl(() => _secondaryWrapper)
+}
 
 // Re-export for backward compatibility
 export { SECONDARY_WIDTH_VAR, injectDrawerTabStyles }
@@ -50,10 +63,6 @@ let _secondaryDrawer: HTMLElement | null = null
 // header's inline `style.cssText` references these variables, falling
 // back to the 48px / 12px / 15px defaults when the main header is not
 // yet mounted.
-let _mainPanelHeaderResizeObserver: ResizeObserver | null = null
-let _mainPanelHeaderAttrObserver: MutationObserver | null = null
-let _syncPanelHeaderPending = false
-let _lastWrittenHeaderVars: string | null = null
 
 // Accessors used by other modules (resize/handles, sidebar/drawer-sync,
 // tabs/buttons, context-menu, layout/persist). All read; setSecondarySidebarOpen
@@ -89,10 +98,10 @@ export function unmountSecondarySidebar(): void {
   // Drop the panel-header observers so a future remount rebuilds them
   // (the underlying main-drawer header may have been replaced too).
   // Safe to call when the observers were never attached.
-  stopPanelHeaderObservers()
+  _stopPanelHeaderObservers()
   // Invalidate the value cache so the next remount does a real read
   // instead of skipping based on a stale serialized key.
-  _lastWrittenHeaderVars = null
+  resetPanelHeaderSyncCache()
 }
 
 export function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }): HTMLElement {
@@ -565,140 +574,7 @@ export function tearDownSecondarySidebar(): void {
   // Disconnect the panel-header observers (tearDownSecondarySidebar is
   // used by the master "second drawer" toggle's off path; the observers
   // would otherwise leak across the on→off→on cycle).
-  stopPanelHeaderObservers()
-  _lastWrittenHeaderVars = null
-  updateChatReflow()
+  _stopPanelHeaderObservers()
+  resetPanelHeaderSyncCache()
 }
 
-/* ------------------------------------------------------------------ */
-/* Panel-header sync: keep the secondary drawer's panel header in      */
-/* step with the main drawer's panel header (height, padding, title    */
-/* font-size, border, background).                                     */
-/* ------------------------------------------------------------------ */
-
-/**
- * Public, coalesced entry point. Call this after the secondary wrapper
- * mounts, opens/closes, or whenever the main drawer's panel header
- * might have changed. Internally routes through requestAnimationFrame
- * to dedupe rapid back-to-back calls (the ResizeObserver, the
- * MutationObserver, openSecondarySidebar, mountSecondarySidebar, and
- * the side-flip remount can all fire in the same tick).
- *
- * No-op if the secondary wrapper isn't mounted or if the main panel
- * header can't be found (e.g. cold start before Lumiverse mounted its
- * panel). The CSS variables on the wrapper stay at their initial
- * empty state, and the secondary header falls back to its inline
- * defaults (`min-height: 48px`, `padding: 12px 16px`, etc.).
- */
-export function syncPanelHeaderFromMain(): void {
-  if (_syncPanelHeaderPending) return
-  _syncPanelHeaderPending = true
-  requestAnimationFrame(() => {
-    _syncPanelHeaderPending = false
-    _runSyncPanelHeaderFromMain()
-  })
-}
-
-function _runSyncPanelHeaderFromMain(): void {
-  const secondaryWrapper = _secondaryWrapper
-  if (!secondaryWrapper) return
-  const mainHeader = getMainPanelHeader()
-  // Missing main header → keep current CSS var values (empty or stale).
-  // The 48px / 12px / 15px fallbacks in the header's `style.cssText`
-  // cover the case where the vars were never written yet.
-  if (!mainHeader) return
-
-  // Lazy-attach the observers on the FIRST successful run. We watch:
-  //   1. ResizeObserver → fires on size changes (padding, font-scale,
-  //      font-size CSS variable bump, viewport resize, etc.).
-  //   2. MutationObserver (class + style) → fires when Lumiverse
-  //      toggles a class for compact mode or rewrites the inline style
-  //      for some other reason. ResizeObserver alone misses class-only
-  //      changes that don't change the rendered box.
-  // Both observers are attached to the main header (which survives
-  // across secondary wrapper remounts), so we only ever attach once
-  // per process lifetime — matching the drawer-sync.ts pattern at
-  // syncDrawerTabSettings.
-  if (!_mainPanelHeaderResizeObserver) {
-    _mainPanelHeaderResizeObserver = new ResizeObserver(() => {
-      syncPanelHeaderFromMain()
-    })
-    _mainPanelHeaderResizeObserver.observe(mainHeader)
-    registerCleanup(stopPanelHeaderObservers)
-  }
-  if (!_mainPanelHeaderAttrObserver) {
-    _mainPanelHeaderAttrObserver = new MutationObserver(() => {
-      syncPanelHeaderFromMain()
-    })
-    _mainPanelHeaderAttrObserver.observe(mainHeader, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    })
-    registerCleanup(stopPanelHeaderObservers)
-  }
-
-  // Read the six mirrored values. The title lookup tries the common
-  // patterns: a heading, an element with a "title"-bearing class, then
-  // a direct text-node child. If nothing matches, font-size is left
-  // at its CSS default.
-  const headerStyle = getComputedStyle(mainHeader)
-  const titleEl = findHeaderTitleElement(mainHeader)
-  const titleStyle = titleEl ? getComputedStyle(titleEl) : null
-
-  const height = `${mainHeader.offsetHeight}px`
-  const paddingTop = headerStyle.paddingTop
-  const paddingBottom = headerStyle.paddingBottom
-  const fontSize = titleStyle?.fontSize || ''
-  const borderBottom = headerStyle.borderBottomWidth === '0px'
-    ? '0px'
-    : `${headerStyle.borderBottomWidth} ${headerStyle.borderBottomStyle} ${headerStyle.borderBottomColor}`
-  const background = headerStyle.backgroundColor
-
-  const cacheKey = [height, paddingTop, paddingBottom, fontSize, borderBottom, background].join('|')
-  if (cacheKey === _lastWrittenHeaderVars) return
-  _lastWrittenHeaderVars = cacheKey
-
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-h', height)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-pt', paddingTop)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-pb', paddingBottom)
-  if (fontSize) {
-    secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-font-size', fontSize)
-  }
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-border-bottom', borderBottom)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-bg', background)
-}
-
-/**
- * Locate the title element inside the main panel header. Tries, in order:
- *   1. `<h1>` / `<h2>` / `<h3>` direct child
- *   2. A descendant with a class containing "title" or "Title"
- *   3. Any direct child (fallback — at least we'll get a font-size)
- * Returns `null` only if the header has no children at all.
- */
-function findHeaderTitleElement(header: HTMLElement): HTMLElement | null {
-  for (const tag of ['H1', 'H2', 'H3']) {
-    const byTag = header.querySelector(tag) as HTMLElement | null
-    if (byTag) return byTag
-  }
-  const byClass = header.querySelector('[class*="title"], [class*="Title"]') as HTMLElement | null
-  if (byClass) return byClass
-  if (header.children.length > 0) return header.children[0] as HTMLElement
-  return null
-}
-
-/**
- * Disconnect both panel-header observers and null the handles so the
- * next syncPanelHeaderFromMain call rebuilds them. Idempotent — safe
- * to call when no observers are attached (e.g. on a cold start where
- * the main header was never found).
- */
-export function stopPanelHeaderObservers(): void {
-  if (_mainPanelHeaderResizeObserver) {
-    _mainPanelHeaderResizeObserver.disconnect()
-    _mainPanelHeaderResizeObserver = null
-  }
-  if (_mainPanelHeaderAttrObserver) {
-    _mainPanelHeaderAttrObserver.disconnect()
-    _mainPanelHeaderAttrObserver = null
-  }
-}
