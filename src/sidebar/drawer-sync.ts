@@ -28,7 +28,7 @@ import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore, findStoreData } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
-import { getTabAssignments, repositionAssignedTabs, deleteTabAssignment } from '../tabs/assignment'
+import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
@@ -311,7 +311,15 @@ export function checkSideChanged(): void {
     // for what's been moved; the actual store data (iconSvg, root, etc.)
     // comes from getDrawerTabs() inside addSecondaryTabButton.
     restoreSecondaryTabButtons()
-    repositionAssignedTabs()
+    // Re-attach the moved tab roots to the freshly-mounted wrapper.
+    // assignToSecondary hits the primary path (root not yet in the new
+    // content) for each tab, appendChild-ing the root and re-tagging it.
+    // Fire-and-forget — DOM work is synchronous inside the async function.
+    import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
+      for (const [tabId, side] of getTabAssignments()) {
+        if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
+      }
+    })
     // The drawerTab handle is created with display:none (secondary.tsx:112)
     // and only becomes visible when this function runs. Without this call,
     // the clickable edge handle stays hidden after the wrapper is recreated.

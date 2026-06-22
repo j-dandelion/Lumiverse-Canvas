@@ -19,7 +19,6 @@ import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { scheduleReflow } from '../chat/reflow'
 import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
-import { repositionAssignedTabs } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { getSettings } from '../settings/state'
 import { applyTabListPosition } from '../sidebar/tab-position'
@@ -191,8 +190,6 @@ export function mountResizeHandles(): void {
           const newWidth = clampSidebarWidth(startWidth + delta)
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)
           scheduleReflow()
-          // Reposition tabs after resize
-          repositionAssignedTabs()
         },
         () => {
           const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420

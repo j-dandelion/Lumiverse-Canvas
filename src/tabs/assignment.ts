@@ -1,28 +1,19 @@
 // Tab assignment system: which tabId is on which sidebar, and the
-// policy layer (applyAssignment) on top.
+// assignTab policy layer that wires the move through the host.
 //
-// v2.0.0 (drawer overhaul): The legacy DOM-move hack pile (repositionTab,
-// restoreTabToPrimary, the synthetic descriptor build, the DOM-walk
-// fallback, the activate-then-move dance) has been gutted. Extension tabs
-// now use bundle re-execution via ExtensionReExecutor + SecondaryDrawer.
-// Built-in tabs use the host's requestTabLocation API.
-//
-// The assignTab public API delegates to SecondaryDrawer for the secondary
-// path and unassigns directly for the primary path.
-//
-// The display-toggle path (showSecondaryTab in buttons.ts) is preserved
-// for backward compatibility — it toggles display:none on roots that are
-// already in the secondary content area.
-import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
-import { findStoreData, getDrawerTabs } from '../store'
+// assignTab delegates to SecondaryDrawer for the secondary path and to
+// unassignFromSecondary for the primary path. The display-toggle path
+// (showSecondaryTab in buttons.ts) is preserved for backward
+// compatibility — it toggles display:none on roots that are already in
+// the secondary content area.
+import { getMainSidebar } from '../dom/lumiverse'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { diagnoseMovedTab } from '../debug/moved-tab-diagnostics'
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, closeSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
+import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar } from '../sidebar/secondary'
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
-  cssEscape, readMainButtonShortName,
+  readMainButtonShortName,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
 import { runHandoff, captureSourceList } from './activation-handoff'
@@ -299,136 +290,3 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
   }
 }
 
-/**
- * Phase 4 (finding #1) + v1.3.0: pure DOM move — moves a tab's root element
- * between sidebars WITHOUT touching state, buttons, save, or open/close.
- * The policy layer (applyAssignment) wraps this with the side effects.
- *
- * v2.0.0 (drawer overhaul): The complex hack pile body has been gutted.
- * The synthetic descriptor build, DOM-walk fallback, and activate-then-move
- * dance are no longer needed — DrawerObserver provides tab discovery and
- * ExtensionReExecutor provides re-execution in the secondary context.
- *
- * This function is retained as a simplified stub for backward compatibility
- * with applyLayout and other callers. The core DOM move is preserved for
- * the display-toggle path (showSecondaryTab toggles display:none on roots
- * that are already in the secondary content area).
- *
- * TODO: Remove this function entirely once applyLayout is updated to use
- * SecondaryDrawer.assignToSecondary / unassignFromSecondary.
- */
-export function repositionTab(tabId: string, target: 'primary' | 'secondary'): boolean {
-  // Simplified: just do the DOM move without the complex hack pile.
-  findStoreData(true)
-  const tabs = getDrawerTabs()
-  const tab = tabs.find(t => t.id === tabId)
-  if (!tab?.root) {
-    dwarn(`repositionTab: tab not found for id=${tabId}`)
-    return false
-  }
-
-  if (target === 'secondary') {
-    const secondaryWrapper = getSecondaryWrapper()
-    const secondaryContent = secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
-    if (!secondaryContent) {
-      dwarn('repositionTab: no secondary content area')
-      return false
-    }
-    if (tab.root.parentElement !== secondaryContent) {
-      // Sweep: remove any prior copy of this tabId that is already in the
-      // secondary content area.
-      secondaryContent.querySelectorAll(`[data-canvas-moved="${cssEscape(tabId)}"]`)
-        .forEach(n => n.remove())
-      secondaryContent.appendChild(tab.root)
-      tab.root.setAttribute('data-canvas-moved', tabId)
-    }
-    // Position absolutely so the moved root overlaps the secondary content
-    // area. Use the content div's padding custom properties as inset values
-    // so the tab root sits INSIDE the padding rather than covering it —
-    // preserving the visual gap between the tab and the panel edge.
-    tab.root.style.setProperty('position', 'absolute', 'important')
-    tab.root.style.setProperty('inset',
-      'var(--sidebar-ux-content-pt) var(--sidebar-ux-content-pr) var(--sidebar-ux-content-pb) var(--sidebar-ux-content-pl)',
-      'important')
-    // Display management: hide if not the active secondary tab.
-    const activeId = getActiveSecondaryTabId()
-    if (activeId === tabId) {
-      tab.root.setAttribute('data-canvas-active', '')
-    } else if (activeId !== null) {
-      tab.root.removeAttribute('data-canvas-active')
-    } else {
-      // First-open case: set active so CSS rule doesn't hide it.
-      // showSecondaryTab will set correct displays via the applyLayout polling loop.
-      tab.root.setAttribute('data-canvas-active', '')
-    }
-
-    diagnoseMovedTab(tabId, tab.root)
-    // Delayed re-snapshot: showSecondaryTab runs AFTER repositionTab and
-    // may clear/change the display override; the steady-state layout is
-    // visible only ~100ms after the move completes. Capture both.
-    setTimeout(() => {
-      try {
-        if (tab.root.isConnected) diagnoseMovedTab(tabId + ' [+1s]', tab.root)
-      } catch { /* tab detached */ }
-    }, 1000)
-    return true
-  } else {
-    // target === 'primary' — restore from secondary back to the main panel.
-    const targetEl = getMainPanelContent()
-    if (!targetEl) {
-      dwarn(`repositionTab: no main panel content for tabId=${tabId}`)
-      return false
-    }
-    if (tab.root.parentElement !== targetEl) {
-      targetEl.appendChild(tab.root)
-    }
-    // Clear all secondary-state markers so the tab renders normally in
-    // the main panel. These are cleared unconditionally (not just when
-    // the DOM actually moved) so a root that's already in the main
-    // panel but still carries stale markers from a previous move gets
-    // cleaned up too — matches the unconditional clears for the other
-    // markers below.
-    //
-    // Markers/styles set while the tab was in secondary:
-    //   - data-canvas-moved={tabId} (this tab lives in secondary)
-    //   - data-canvas-active="" (this tab is the active secondary tab)
-    //   - display: none !important (showSecondaryTab for inactive tabs,
-    //     closeSecondarySidebar for all tabs on close)
-    //   - position: absolute !important + inset: 0 !important
-    //     (repositionTab secondary case, to make moved roots overlap
-    //     the secondary content area)
-    //
-    // Without clearing these, the restored tab would be invisible
-    // (display:none) and absolutely positioned relative to the wrong
-    // container (position:absolute anchors to panelContent, not the
-    // moved root's actual parent in the main panel).
-    tab.root.removeAttribute('data-canvas-moved')
-    tab.root.removeAttribute('data-canvas-active')
-    tab.root.style.removeProperty('position')
-    tab.root.style.removeProperty('inset')
-    // Bug fix (2026-06-19): also clear inline `display` set while the tab
-    // was in secondary. `repositionTab` secondary case doesn't set inline
-    // display, but other code paths (clearSecondaryTab at assignment.ts:629,
-    // future showSecondaryTab changes) may have. Without this clear, the
-    // root would remain `display: none !important` and invisible in the
-    // main panel — the "tabs return to main but content doesn't display"
-    // symptom reported on Canvas disable.
-    tab.root.style.removeProperty('display')
-    return true
-  }
-}
-
-
-/**
- * Reposition all assigned tabs (called after secondary sidebar opens/resizes).
- *
- * v2.0.0: retained for backward compatibility with applyLayout.
- * TODO: Remove once applyLayout is updated to use SecondaryDrawer.
- */
-export function repositionAssignedTabs() {
-  for (const [tabId, sidebar] of _tabAssignments) {
-    if (sidebar === 'secondary') {
-      repositionTab(tabId, 'secondary')
-    }
-  }
-}

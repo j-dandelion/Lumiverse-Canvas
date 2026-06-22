@@ -11,13 +11,13 @@
 // is anchored at `right: 0` (close transform is +width). When the main
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
-import { getMainSidebar, getMainPanelHeader } from '../dom/lumiverse'
+import { getMainSidebar, getMainPanelHeader, getMainPanelContent } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
-import { repositionAssignedTabs, repositionTab, isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
+import { isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
 import { injectStyles } from '../debug/styles'
@@ -367,7 +367,15 @@ export function openSecondarySidebar() {
   // call here guarantees the secondary matches on the very next open.
   syncPanelHeaderFromMain()
   updateChatReflow()
-  repositionAssignedTabs()
+  // Re-attach any moved tab roots to the (possibly fresh) wrapper.
+  // assignToSecondary is idempotent — for a tab already in the wrapper
+  // it hits the early-guard and just refreshes button + active state.
+  // Fire-and-forget because openSecondarySidebar is sync.
+  import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
+    for (const [tabId, side] of getTabAssignments()) {
+      if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
+    }
+  })
   persistOpenState()
   setMobileOpenClass('secondary', true)
 }
@@ -508,6 +516,7 @@ export function tearDownSecondarySidebar(): void {
     // tracked in tabLocations (they use raw DOM reparenting), so they
     // don't need this call.
     const _wSpindleUi = (window as any).spindle?.ui
+    const _mainPanelContent = getMainPanelContent()
     for (const [tabId] of Array.from(getTabAssignments())) {
       // Built-in detection: the host bridge can lazy-resolve a root for
       // built-in tab IDs. Extension tab IDs return undefined.
@@ -520,7 +529,23 @@ export function tearDownSecondarySidebar(): void {
           dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err)
         }
       }
-      repositionTab(tabId, 'primary')
+      // Move any moved root back to the main panel. Equivalent to the
+      // removed repositionTab(tabId, 'primary') — clear data-canvas-moved,
+      // data-canvas-active, and any inline position/inset/display styles
+      // left over from the tab's time in secondary.
+      const _movedRoot = _secondaryWrapper?.querySelector(
+        `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
+      ) as HTMLElement | null
+      if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
+        _mainPanelContent.appendChild(_movedRoot)
+      }
+      if (_movedRoot) {
+        _movedRoot.removeAttribute('data-canvas-moved')
+        _movedRoot.removeAttribute('data-canvas-active')
+        _movedRoot.style.removeProperty('position')
+        _movedRoot.style.removeProperty('inset')
+        _movedRoot.style.removeProperty('display')
+      }
       showMainTabButton(tabId)
     }
     clearTabAssignments()
