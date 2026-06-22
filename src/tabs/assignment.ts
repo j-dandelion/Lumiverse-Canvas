@@ -179,55 +179,6 @@ export function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string
 }
 
 /**
- * Phase 4 (finding #1): the policy layer for tab assignment. Wraps the pure
- * DOM move (repositionTab) with state updates, button affordances, optional
- * drawer open/close, optional active-tab switching, and optional save.
- *
- * v2.0.0: simplified — the complex hack pile (synthetic descriptor build,
- * DOM-walk fallback, activate-then-move dance) has been removed. The
- * assignTab public API now delegates to SecondaryDrawer for the secondary
- * path. applyAssignment is retained for backward compatibility but its body
- * is simplified.
- */
-export function applyAssignment(tabId: string, target: 'primary' | 'secondary', options: {
-  open?: boolean
-  switchActive?: boolean
-  save?: boolean
-} = {}): void {
-  const opts = { open: true, switchActive: true, save: true, ...options }
-
-  // 1. State: record the assignment
-  _tabAssignments.set(tabId, target)
-
-  // 2. Button affordances: hide in main / show in secondary
-  if (target === 'secondary') {
-    hideMainTabButton(tabId)
-    const tabs = getDrawerTabs()
-    const tab = tabs.find(t => t.id === tabId)
-    if (tab) addSecondaryTabButton(tab)
-  } else {
-    showMainTabButton(tabId)
-    removeSecondaryTabButton(tabId)
-  }
-  updateDrawerTabVisibility()
-
-  // 3. Display toggle for secondary (preserves backward compatibility)
-  if (target === 'secondary' && opts.switchActive) {
-    showSecondaryTab(tabId)
-  }
-
-  // 4. Open the drawer if requested.
-  if (target === 'secondary' && opts.open && !isSecondarySidebarOpen()) {
-    openSecondarySidebar()
-  }
-
-  // 5. Save (debounced via persistLayout).
-  if (opts.save) {
-    persistLayout()
-  }
-}
-
-/**
  * Phase 4 (finding #1): one-line wrapper around applyAssignment with the
  * defaults for a user-initiated context-menu move. Kept as a stable public
  * API — any caller (current or future) that just wants "move this tab to
