@@ -166,8 +166,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 
   if (_isExtensionTab) {
     // === EXTENSION TAB PATH ===
-    // Set assignment first, then reparent the DOM root. The primary
-    // instance survives with full state — no duplicate instance created.
     setTabAssignment(resolvedId, 'secondary')
     hideMainTabButton(resolvedId)
     if (_state === 'closed' && !isSecondarySidebarOpen()) {
@@ -175,80 +173,35 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     }
     _state = 'open'
 
-    // EARLY-GUARD: if the root is already reparented into the secondary
-    // content, the tab is already assigned. Skip re-parenting to avoid
-    // duplicate buttons or state resets. This defends against applyLayout's
-    // restore pass re-calling assignToSecondary for already-assigned tabs.
+    // Check if root is already reparented (data-canvas-moved set).
+    // applyLayout's restore pass or a duplicate call can hit this.
     const _secondaryContentEarly = document.querySelector('.sidebar-ux-panel-content')
     const _bareIdEarly = resolvedId.includes(':')
       ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
       : resolvedId
-    const _existingWrapper = _secondaryContentEarly?.querySelector(
+    const _existingRoot = (_secondaryContentEarly?.querySelector(
       `[data-canvas-moved="${CSS.escape(resolvedId)}"]`
     ) ?? _secondaryContentEarly?.querySelector(
       `[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`
-    )
-    if (_existingWrapper && _isExtensionTab) {
-      // Root already reparented. This typically happens when applyLayout's
-      // restore pass called assignToSecondary and either (a) the secondary
-      // tab list was not fully ready during initial mount, or (b) the
-      // initial addSecondaryTabButton returned early for some other reason
-      // (e.g. a stale alreadyHasButton match), so the reparent completed
-      // but the tab button was never created. Subsequent calls (including
-      // the user's manual right-click) hit this early-guard and would
-      // otherwise skip the primary path forever, leaving the tab button
-      // missing despite the root and header being visible — the symptom
-      // reported on 2026-06-19 for LumiBooks.
-      //
-      // Fix: idempotently create the tab button if it's missing.
-      // addSecondaryTabButton is itself idempotent (it checks alreadyHasButton
-      // by composite AND bare id, returning early on a match), so calling
-      // it from this guard is safe. We also re-set the active state and
-      // header title so the visual state matches a fresh move.
-      const _existingTabList = getSecondaryWrapper()?.querySelector('.sidebar-ux-tab-list')
-      const _buttonExists = !!_existingTabList?.querySelector(
-        `[data-tab-id="${CSS.escape(resolvedId)}"]`
-      )
-      if (_existingTabList && !_buttonExists) {
-        const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-        const _titleForButton = tab.title || _storeTabForButton?.title || resolvedId
-        const _iconSvgForButton = iconSvg
-          || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
-          || _storeTabForButton?.iconSvg
-        const _shortNameForButton = shortName || readMainButtonShortName(tab.button as Element) || _storeTabForButton?.shortName
-        addSecondaryTabButton({
-          id: resolvedId,
-          title: _titleForButton,
-          root: _existingWrapper as HTMLElement,
-          iconSvg: _iconSvgForButton,
-          shortName: _shortNameForButton,
-        })
-        updateDrawerTabVisibility()
-        dlog(`[SecondaryDrawer] assignToSecondary: existing-wrapper guard created missing tab button for ${resolvedId}`)
-      }
-      // Re-activate the tab and refresh the header title so the visual
-      // state matches a fresh move. (idempotent — re-setting attributes
-      // and active tab id to the same value is a no-op.)
-      _activeTabId = resolvedId
-      _state = 'tab_active'
-      setActiveSecondaryTabId(resolvedId)
-      const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-      if (_headerTitle) {
-        _headerTitle.textContent = tab.title
-          || _existingWrapper.getAttribute('data-tab-title')
-          || resolvedId
-      }
-      // Done — do not fall through to the primary path, which would
-      // re-reparent the root (no-op since parent already matches) and
-      // re-set attributes that are already correct.
-      return
-    }
+    )) as HTMLElement | null
 
-    // PRIMARY PATH: reparent the extension's primary DOM root into the
-    // secondary drawer. This preserves state, avoids a duplicate instance,
-    // and aligns extension moves with built-in moves. The early guard
-    // above already skips if the root is already reparented.
-    if (!_existingWrapper) {
+    if (_existingRoot) {
+      // Root already reparented — just create the button if missing and
+      // refresh state. addSecondaryTabButton is idempotent.
+      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: tab.title || _storeTabForButton?.title || resolvedId,
+        root: _existingRoot,
+        iconSvg: iconSvg
+          || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
+          || _storeTabForButton?.iconSvg,
+        shortName: shortName || readMainButtonShortName(tab.button as Element) || _storeTabForButton?.shortName,
+      })
+      updateDrawerTabVisibility()
+    } else {
+      // PRIMARY PATH: reparent the extension's primary DOM root into
+      // the secondary drawer. Preserves state, avoids duplicate instances.
       const _secondaryWrapper = getSecondaryWrapper()
       const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
       const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
@@ -267,23 +220,24 @@ export async function assignToSecondary(tabId: string): Promise<void> {
             }
           }
         }
-        const _title = tab.title || _storeTab.title || resolvedId
-        const _iconSvg = (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || _storeTab.iconSvg
-        const _shortName = readMainButtonShortName(tab.button as Element) || _storeTab.shortName
         addSecondaryTabButton({
           id: resolvedId,
-          title: _title,
+          title: tab.title || _storeTab.title || resolvedId,
           root: _root,
-          iconSvg: _iconSvg,
-          shortName: _shortName,
+          iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || _storeTab.iconSvg,
+          shortName: readMainButtonShortName(tab.button as Element) || _storeTab.shortName,
         })
         updateDrawerTabVisibility()
-        _activeTabId = resolvedId
-        _state = 'tab_active'
-        setActiveSecondaryTabId(resolvedId)
-        const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-        if (_headerTitle) _headerTitle.textContent = _title
       }
+    }
+
+    // Refresh active state and header (idempotent — safe on both paths).
+    _activeTabId = resolvedId
+    _state = 'tab_active'
+    setActiveSecondaryTabId(resolvedId)
+    const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
+    if (_headerTitle) {
+      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute('data-tab-title') || resolvedId
     }
   } else {
     // === BUILT-IN TAB PATH ===
