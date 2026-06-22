@@ -9,7 +9,7 @@
 // Lumiverse's React onClick handler on the main tab. It's installed
 // only when a drag is in progress and removed on drag-end.
 //
-// Diagnostics: dlog() calls fire on every key event. Enable with
+// Diagnostics: debug log calls fire on every key event. Enable with
 // `localStorage.setItem('sidebarUxDebug', '1')` then refresh.
 
 import { dlog } from '../debug/log'
@@ -130,7 +130,6 @@ export function installDrawerTabDrag(
     currentVh = readCurrentVh(el)
     // Block text selection / native drag during the drag
     document.body.style.userSelect = 'none'
-    dlog(`[drawerTabDrag] ${role} pointerdown startY=${startY} currentVh=${currentVh.toFixed(2)}vh`)
   }
 
   const onPointerMove = (e: PointerEvent) => {
@@ -148,7 +147,6 @@ export function installDrawerTabDrag(
         el.addEventListener('click', captureClick, true)
         dragInstalled = true
       }
-      dlog(`[drawerTabDrag] ${role} drag started (delta=${delta}px)`)
     }
     const newVh = pxToClampedVh(delta, window.innerHeight, currentVh)
     el.style.marginTop = `${newVh}vh`
@@ -158,7 +156,6 @@ export function installDrawerTabDrag(
     // only writes to its own element; the caller owns cross-element
     // writes.
     onLiveUpdate?.(newVh)
-    dlog(`[drawerTabDrag] ${role} move clientY=${e.clientY} delta=${delta}px newVh=${newVh}vh`)
   }
 
   const cleanup = () => {
@@ -197,13 +194,11 @@ export function installDrawerTabDrag(
       dlog(`[drawerTabDrag] ${role} pointerup finalVh=${finalVh}vh → onCommit`)
       onCommit(finalVh)
     } else {
-      dlog(`[drawerTabDrag] ${role} pointerup (no drag, threshold not crossed)`)
     }
     cleanup()
   }
 
   const onPointerCancel = () => {
-    dlog(`[drawerTabDrag] ${role} pointercancel`)
     cleanup()
   }
 

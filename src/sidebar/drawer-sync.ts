@@ -90,8 +90,8 @@ export function syncDrawerTabSettings(): void {
 
 function _runSyncDrawerTabSettings(): void {
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-  if (!drawerTab) { dlog(`[drawer-sync] syncDrawerTabSettings: secondary tab not found`); return }
-  dlog(`[drawer-sync] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`)
+  if (!drawerTab) { return }
+
 
   // Bug fix (2026-06-19, follow-up): scope the main-drawer-tab query to
   // the main WRAPPER rather than the whole document. The previous
@@ -184,7 +184,7 @@ function _runSyncDrawerTabSettings(): void {
   // read main's style, write secondary's style. Only attach once.
   if (!_mainDrawerTabStyleObserver) {
     _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      dlog(`[drawer-sync] style observer fired`)
+
       syncDrawerTabSettings()
     })
     _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['style'] })
@@ -228,9 +228,9 @@ function _runSyncDrawerTabSettings(): void {
 
   if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings()
-    dlog(`[drawer-sync] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`)
+
     if (settings.mirrorCompactPosition) {
-      dlog(`[drawer-sync] writing secondary marginTop=${posVh}vh`)
+
       drawerTab.style.marginTop = `${posVh}vh`
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       drawerTab.style.marginTop = ''  // mirror off, no override → clear

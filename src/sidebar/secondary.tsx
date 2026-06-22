@@ -27,7 +27,7 @@ import { animateWrapper } from './animation'
 import { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
 import { applyTabListPosition } from './tab-position'
 import { getSettings } from '../settings/state'
-import { dlog, dwarn } from '../debug/log'
+import { dwarn } from '../debug/log'
 import { registerCleanup } from './cleanup'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
 
@@ -317,20 +317,13 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   try {
     const wSpindle = getHostBridge()
     const wContainers = wSpindle?.containers
-    dlog(
-      `[tabmove] createSecondarySidebar: registerContainer probe: ` +
-      `window.spindle=${wSpindle ? 'present' : 'UNDEFINED'}, ` +
-      `window.spindle.containers=${wContainers ? 'present' : 'UNDEFINED'}, ` +
-      `has_registerContainer=${typeof wContainers?.registerContainer}, ` +
-      `target_element=${content ? 'present' : 'absent'} (className="${content?.className}")`
-    )
+
     if (wContainers?.registerContainer) {
       wContainers.registerContainer({
         id: 'canvas-secondary-drawer',
         side,
         element: content,
       })
-      dlog(`[tabmove] createSecondarySidebar: registerContainer CALLED id=canvas-secondary-drawer side=${side}`)
     } else {
       dwarn(
         `[tabmove] createSecondarySidebar: registerContainer SKIPPED — ` +
@@ -349,7 +342,6 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
 export function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   if (_secondarySidebarOpen) return
-  dlog(`[reflow-trace] openSecondarySidebar called from: ${(new Error().stack || '').split('\n').slice(1, 4).join(' | ')}`)
   // On mobile, close the other sidebar first
   enforceExclusionOnOpen('secondary')
   // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
@@ -380,7 +372,6 @@ export function openSecondarySidebar() {
 
 export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   if (!_secondaryWrapper || !_secondaryDrawer) return
-  dlog(`[reflow-trace] closeSecondarySidebar called from: ${(new Error().stack || '').split('\n').slice(1, 4).join(' | ')}`)
   // Animate wrapper back to its closed transform — direction-aware via
   // getClosedTransformPx: secondary on the right closes at +width, on the
   // left at -width.

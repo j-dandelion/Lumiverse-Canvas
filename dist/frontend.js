@@ -683,7 +683,6 @@ function pushCurrentState() {
   _lastSeenOpen = open;
   _lastSeenTabId = tabId;
   setMainDrawerState(open, tabId);
-  dlog(`main-persist: state change captured (open=${open}, tabId=${tabId})`);
   persistOpenState();
 }
 function _initObservers(drawer) {
@@ -703,14 +702,11 @@ function _initObservers(drawer) {
   _lastSeenTabId = sidebar ? readActiveTabId(sidebar) : null;
   suppressMainDrawer();
   setMainDrawerState(_lastSeenOpen, _lastSeenTabId);
-  dlog(`main-persist: seeded from DOM (open=${_lastSeenOpen}, tabId=${_lastSeenTabId})`);
   _classObserver = new MutationObserver((mutations) => {
     if (_stopped)
       return;
     for (const m of mutations) {
       if (m.type === "attributes" && m.attributeName === "class") {
-        const _newClass = wrapper.classList.toString();
-        dlog(`[reflow-trace] main-persist MO: wrapper class changed to "${_newClass}"`);
         pushCurrentState();
         if (wrapper) {
           const isOpen = readWrapperOpen(wrapper);
@@ -757,12 +753,10 @@ function _initObservers(drawer) {
     _resizeDebounce = setTimeout(() => {
       if (_stopped)
         return;
-      dlog(`main-persist: width changed, persisting`);
       persistLayout();
     }, RESIZE_DEBOUNCE_MS);
   });
   _resizeObserver.observe(wrapper);
-  dlog(`main-persist: started (wrapper=${!!wrapper}, sidebar=${!!sidebar})`);
 }
 function startMainDrawerPersistence() {
   if (!_stopped)
@@ -770,7 +764,6 @@ function startMainDrawerPersistence() {
   _stopped = false;
   const drawer = getMainDrawer();
   if (!drawer) {
-    dlog("main-persist: getMainDrawer() returned null; waiting for host DOM...");
     waitForDrawerDOM({ get value() {
       return _stopped;
     } }, _initObservers);
@@ -791,14 +784,10 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
   const clampedWidth = typeof targetWidthPx === "number" && targetWidthPx > 0 ? clampSidebarWidth(targetWidthPx) : null;
   const currentOpen = readWrapperOpen(wrapper);
   if (currentOpen === targetOpen) {
-    dlog(`main-persist restore: already in target state (open=${targetOpen}), nothing to do`);
     if (targetOpen && clampedWidth !== null && drawer) {
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`;
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
-        dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`);
-      } else {
-        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`);
       }
     }
     unsuppressMainDrawer();
@@ -809,15 +798,11 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`;
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
-        dlog(`main-persist restore: set width=${clampedWidth}px (opening)`);
-      } else {
-        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`);
       }
     }
     const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
     const tabBtn = sidebar?.querySelector('button[class*="tabBtn"]');
     if (tabBtn) {
-      dlog(`main-persist restore: clicking first tab to open drawer (target tabId=${targetTabId})`);
       unsuppressMainDrawer();
       try {
         tabBtn.click();
@@ -825,13 +810,11 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
       }
     } else {
-      dlog("main-persist restore: no tab button found in sidebar; cannot programmatically open");
       unsuppressMainDrawer();
     }
   } else {
     const toggleBtn = findDrawerToggleButton(wrapper);
     if (toggleBtn) {
-      dlog("main-persist restore: clicking drawer toggle to close");
       unsuppressMainDrawer();
       try {
         toggleBtn.click();
@@ -839,7 +822,6 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         dlog(`main-persist restore: toggleBtn.click() threw: ${err}`);
       }
     } else {
-      dlog("main-persist restore: target=closed but no toggle button found; leaving to user gesture");
       unsuppressMainDrawer();
     }
   }
@@ -1099,18 +1081,11 @@ function injectReflowStyles() {
   `);
 }
 function scheduleReflow() {
-  const _stack = (new Error().stack || "").split(`
-`).slice(1, 4).join(" | ");
-  dlog(`[reflow-trace] scheduleReflow called from: ${_stack}`);
   if (_reflowRaf !== null) {
-    dlog(`[reflow-trace] scheduleReflow EARLY RETURN (raf already scheduled, trace=${_reflowTrace})`);
     return;
   }
-  _reflowTrace = _stack;
   _reflowRaf = requestAnimationFrame(() => {
-    dlog(`[reflow-trace] scheduleReflow RAF firing (originally scheduled by: ${_reflowTrace})`);
     _reflowRaf = null;
-    _reflowTrace = "";
     updateChatReflow();
   });
 }
@@ -1125,7 +1100,6 @@ function getDockInsets() {
 function updateChatReflow() {
   if (isMobileViewport()) {
     clearChatMargins(getChatColumn());
-    dlog(`[reflow-trace] updateChatReflow: mobile viewport, cleared margins`);
     return;
   }
   const mainSide = getMainDrawerSide();
@@ -1144,10 +1118,6 @@ function updateChatReflow() {
   }
   rightMargin = Math.max(0, rightMargin - dockInsets.right);
   leftMargin = Math.max(0, leftMargin - dockInsets.left);
-  const _chat = getChatColumn();
-  const _prevMl = _chat?.style.getPropertyValue("--sidebar-ux-chat-ml") || "";
-  const _prevMr = _chat?.style.getPropertyValue("--sidebar-ux-chat-mr") || "";
-  dlog(`[reflow-trace] updateChatReflow: mainSide=${mainSide} mainOpen=${mainOpen} mainWidth=${mainWidth} ` + `isSecondaryOpen=${isSecondarySidebarOpen()} secondaryWidth=${secondaryWidth} ` + `dockInsets=${JSON.stringify(dockInsets)} ` + `→ leftMargin=${leftMargin}px (was "${_prevMl}") rightMargin=${rightMargin}px (was "${_prevMr}") ` + `chatFound=${!!_chat}`);
   setChatMargin("right", rightMargin);
   setChatMargin("left", leftMargin);
 }
@@ -1162,12 +1132,10 @@ function startReflowObserver() {
   injectReflowStyles();
   let cancelled = false;
   const observer = new MutationObserver((mutations) => {
-    dlog(`[reflow-trace] MutationObserver fired: ${mutations.length} mutation(s) on ${mutations[0]?.target instanceof Element ? `${mutations[0].target.tagName.toLowerCase()}.${mutations[0].target.className?.toString?.()?.slice(0, 60) || "?"}` : "unknown"} attrs=${mutations.map((m) => m.attributeName).filter(Boolean).join(",")}`);
     scheduleReflow();
   });
   waitForElement(getMainWrapper, "main wrapper").then((wrapper) => {
     if (wrapper && !cancelled) {
-      dlog(`[reflow-trace] startReflowObserver: main wrapper found, attaching MO. wrapperClassName="${wrapper.classList.toString()}"`);
       observer.observe(wrapper, { attributes: true, attributeFilter: ["class", "style"] });
       updateChatReflow();
     }
@@ -1181,13 +1149,11 @@ function startReflowObserver() {
     const _chatObserver = new MutationObserver(() => {
       const _chat = getChatColumn();
       if (_chat && !cancelled) {
-        dlog(`[reflow-trace] startReflowObserver: chat column detected via App child MO, triggering scheduleReflow`);
         scheduleReflow();
       }
     });
     _chatObserver.observe(_appElForChat, { childList: true, subtree: true });
     if (getChatColumn()) {
-      dlog(`[reflow-trace] startReflowObserver: chat column already in DOM at observer-mount, triggering scheduleReflow`);
       scheduleReflow();
     }
   }
@@ -1210,12 +1176,11 @@ function startReflowObserver() {
     _onMediaChange2 = null;
   };
 }
-var _reflowRaf = null, _reflowTrace = "", _mediaQuery2 = null, _onMediaChange2 = null;
+var _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
 var init_reflow = __esm(() => {
   init_store();
   init_secondary();
   init_tag_buttons();
-  init_log();
   init_wait_for();
   init_mobile_exclusion();
 });
@@ -1651,12 +1616,10 @@ async function captureSourceList(side, h) {
         const btn = mainSidebarEl.querySelector(`button[data-tab-id="${id}"]`);
         if (btn && btn.style.display === "none") {
           filteredOut.push(id);
-          dlog(`[tabmove] captureSourceList: filtering out tabId="${id}" (button display=none, in secondary)`);
           continue;
         }
         filtered.push(id);
       }
-      dlog(`[tabmove] captureSourceList: kept ${filtered.length}, filtered out ${filteredOut.length} (filteredOut=[${filteredOut.join(",")}])`);
       return filtered;
     }
     return merged;
@@ -1697,16 +1660,11 @@ async function activateInPrimary(tabId, h) {
     const bySegment = tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
     if (bySegment) {
       resolvedId = bySegment.id;
-      dlog(`[tabmove] primary restore: resolved bare id "${tabId}" -> composite id "${resolvedId}" via store segment match`);
-    } else {
-      dlog(`[tabmove] primary restore: could not resolve bare id "${tabId}" to composite id; known tabs=`, tabs.map((t) => ({ id: t.id, title: t.title })));
     }
   }
   const mainBtn = directBtn ?? _findBtn(resolvedId);
   if (mainBtn) {
-    dlog(`[tabmove] primary restore: main button found tabId="${tabId}" resolvedId="${resolvedId}" display=${mainBtn.style.display} classList="${mainBtn.className}"`);
     mainBtn.click();
-    dlog(`[tabmove] primary restore: clicked main button to activate tabId="${resolvedId}"`);
     const stickSidebar = (h?.getMainSidebar ?? getMainSidebar)();
     let stickObserver = null;
     if (stickSidebar && typeof MutationObserver !== "undefined") {
@@ -1718,7 +1676,6 @@ async function activateInPrimary(tabId, h) {
             stickObserver.disconnect();
             stickObserver = null;
           }
-          dlog(`[tabmove] primary restore: stick observer fired — host overwrote "${resolvedId}" with "${currentActiveId}", re-clicking`);
           mainBtn.click();
         }
       });
@@ -1729,7 +1686,6 @@ async function activateInPrimary(tabId, h) {
           stickObserver = null;
         }
       }, 200);
-      dlog(`[tabmove] primary restore: stick observer armed for resolvedId="${resolvedId}"`);
     }
     await new Promise((resolve) => {
       setTimeout(() => {
@@ -1741,22 +1697,17 @@ async function activateInPrimary(tabId, h) {
         const rootChildCount = rootForCheck ? rootForCheck.children.length : null;
         const rootComputedDisplay = rootForCheck ? getComputedStyle(rootForCheck).display : null;
         const rootRect = rootForCheck ? rootForCheck.getBoundingClientRect() : null;
-        dlog(`[tabmove] primary restore: post-click verification tabId="${resolvedId}" isActive=${active} rootInMain=${rootInMain} rootChildren=${rootChildCount} rootDisplay=${rootComputedDisplay} rootRect=${rootRect ? `${rootRect.width}x${rootRect.height}` : "null"}`);
         if (!active) {
-          dlog(`[tabmove] primary restore: post-click verification FAILED (host overwrote), re-clicking main button to activate tabId="${resolvedId}"`);
           mainBtn.click();
         }
         if (active && rootInMain === false && rootForCheck && mainPanelContentForCheck) {
           if (!mainPanelContentForCheck.contains(rootForCheck)) {
             mainPanelContentForCheck.appendChild(rootForCheck);
-            dlog(`[tabmove] primary restore: fallback mount — appended built-in root to main panel content for tabId="${resolvedId}"`);
           }
         }
         resolve();
       }, 100);
     });
-  } else {
-    dlog(`[tabmove] primary restore: main button NOT FOUND for tabId="${tabId}" resolvedId="${resolvedId}"`);
   }
 }
 function activateInSecondary(tabId, h) {
@@ -2045,7 +1996,6 @@ async function assignToSecondary(tabId) {
     iconSvg = tab.button.querySelector("svg")?.outerHTML;
   }
   const resolvedId = tab.tabId;
-  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
   const _isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
   if (_isExtensionTab) {
     setTabAssignment(resolvedId, "secondary");
@@ -2134,7 +2084,6 @@ async function assignToSecondary(tabId) {
         }
         _root = _lazyRoot;
         wSpindleUi.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
-        dlog(`[tabmove] restore: requestTabLocation CALLED for tabId=${tabId} -> container=canvas-secondary-drawer`);
       } else {
         if (!_isExtensionTab) {
           dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).", {
@@ -2195,7 +2144,6 @@ async function unassignFromSecondary(tabId) {
   if (_bySegment) {
     resolvedShowId = _bySegment.id;
     resolvedExtId = _bySegment.extensionId;
-    dlog(`[SecondaryDrawer] unassign: resolved bare id "${tabId}" -> composite id "${resolvedShowId}", extensionId="${resolvedExtId}"`);
   } else {
     const storeTab = findStoreTab(tabId);
     if (storeTab) {
@@ -2424,10 +2372,8 @@ function syncDrawerTabSettings() {
 function _runSyncDrawerTabSettings() {
   const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
   if (!drawerTab) {
-    dlog(`[drawer-sync] syncDrawerTabSettings: secondary tab not found`);
     return;
   }
-  dlog(`[drawer-sync] syncDrawerTabSettings: enter (lastVh=${_lastKnownVerticalPos})`);
   let mainDrawerTab = null;
   const mainWrapper = getMainWrapper();
   if (mainWrapper) {
@@ -2462,7 +2408,6 @@ function _runSyncDrawerTabSettings() {
   }
   if (!_mainDrawerTabStyleObserver) {
     _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      dlog(`[drawer-sync] style observer fired`);
       syncDrawerTabSettings();
     });
     _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
@@ -2500,9 +2445,7 @@ function _runSyncDrawerTabSettings() {
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
   if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings();
-    dlog(`[drawer-sync] vertical sync: posVh=${posVh} mirror=${settings.mirrorCompactPosition} override=${settings.secondaryDrawerTabOverrideVh}`);
     if (settings.mirrorCompactPosition) {
-      dlog(`[drawer-sync] writing secondary marginTop=${posVh}vh`);
       drawerTab.style.marginTop = `${posVh}vh`;
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       drawerTab.style.marginTop = "";
@@ -3114,14 +3057,12 @@ function createSecondarySidebar(options) {
   try {
     const wSpindle = getHostBridge();
     const wContainers = wSpindle?.containers;
-    dlog(`[tabmove] createSecondarySidebar: registerContainer probe: ` + `window.spindle=${wSpindle ? "present" : "UNDEFINED"}, ` + `window.spindle.containers=${wContainers ? "present" : "UNDEFINED"}, ` + `has_registerContainer=${typeof wContainers?.registerContainer}, ` + `target_element=${content ? "present" : "absent"} (className="${content?.className}")`);
     if (wContainers?.registerContainer) {
       wContainers.registerContainer({
         id: "canvas-secondary-drawer",
         side,
         element: content
       });
-      dlog(`[tabmove] createSecondarySidebar: registerContainer CALLED id=canvas-secondary-drawer side=${side}`);
     } else {
       dwarn(`[tabmove] createSecondarySidebar: registerContainer SKIPPED — ` + `window.spindle.containers.registerContainer not available. ` + `Built-in tab moves will silently fail (ContainerTabContent Pass 3 resets to main-drawer).`);
     }
@@ -3136,8 +3077,6 @@ function openSecondarySidebar() {
     return;
   if (_secondarySidebarOpen)
     return;
-  dlog(`[reflow-trace] openSecondarySidebar called from: ${(new Error().stack || "").split(`
-`).slice(1, 4).join(" | ")}`);
   enforceExclusionOnOpen("secondary");
   animateWrapper(_secondaryWrapper, 0);
   _secondarySidebarOpen = true;
@@ -3157,8 +3096,6 @@ function openSecondarySidebar() {
 function closeSecondarySidebar(options) {
   if (!_secondaryWrapper || !_secondaryDrawer)
     return;
-  dlog(`[reflow-trace] closeSecondarySidebar called from: ${(new Error().stack || "").split(`
-`).slice(1, 4).join(" | ")}`);
   animateWrapper(_secondaryWrapper, getClosedTransformPx());
   _secondarySidebarOpen = false;
   syncDrawerTabSettings();
@@ -5524,7 +5461,6 @@ function installDrawerTabDrag(el, role, onCommit, onLiveUpdate) {
     startY = e3.clientY;
     currentVh = readCurrentVh(el);
     document.body.style.userSelect = "none";
-    dlog(`[drawerTabDrag] ${role} pointerdown startY=${startY} currentVh=${currentVh.toFixed(2)}vh`);
   };
   const onPointerMove = (e3) => {
     if (!isPointerDown)
@@ -5538,13 +5474,11 @@ function installDrawerTabDrag(el, role, onCommit, onLiveUpdate) {
         el.addEventListener("click", captureClick, true);
         dragInstalled = true;
       }
-      dlog(`[drawerTabDrag] ${role} drag started (delta=${delta}px)`);
     }
     const newVh = pxToClampedVh(delta, window.innerHeight, currentVh);
     el.style.marginTop = `${newVh}vh`;
     el.setAttribute("aria-label", `Position: ${newVh}vh`);
     onLiveUpdate?.(newVh);
-    dlog(`[drawerTabDrag] ${role} move clientY=${e3.clientY} delta=${delta}px newVh=${newVh}vh`);
   };
   const cleanup = () => {
     if (dragInstalled) {
@@ -5569,13 +5503,10 @@ function installDrawerTabDrag(el, role, onCommit, onLiveUpdate) {
       const finalVh = parseVhFromStyle(el.style.marginTop) ?? currentVh;
       dlog(`[drawerTabDrag] ${role} pointerup finalVh=${finalVh}vh → onCommit`);
       onCommit(finalVh);
-    } else {
-      dlog(`[drawerTabDrag] ${role} pointerup (no drag, threshold not crossed)`);
     }
     cleanup();
   };
   const onPointerCancel = () => {
-    dlog(`[drawerTabDrag] ${role} pointercancel`);
     cleanup();
   };
   el.addEventListener("pointerdown", onPointerDown);

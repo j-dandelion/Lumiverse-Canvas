@@ -157,8 +157,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   // consistently across move-loops.
   const resolvedId = tab.tabId
 
-  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
-
   // Determine if this is an extension tab (has a UUID extensionId) vs a
   // built-in tab (extensionId is 'unknown' or empty, parsed from composite
   // id parts[2] when the id has no UUID prefix).
@@ -308,7 +306,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         }
         _root = _lazyRoot;
         wSpindleUi.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' });
-        dlog(`[tabmove] restore: requestTabLocation CALLED for tabId=${tabId} -> container=canvas-secondary-drawer`)
       } else {
         if (!_isExtensionTab) {
           dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).', {
@@ -398,7 +395,6 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
   if (_bySegment) {
     resolvedShowId = _bySegment.id
     resolvedExtId = _bySegment.extensionId
-    dlog(`[SecondaryDrawer] unassign: resolved bare id "${tabId}" -> composite id "${resolvedShowId}", extensionId="${resolvedExtId}"`)
   } else {
     const storeTab = findStoreTab(tabId)
     if (storeTab) {
