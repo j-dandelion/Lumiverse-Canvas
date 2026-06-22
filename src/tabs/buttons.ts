@@ -12,6 +12,7 @@
 //   / showSecondaryTab: secondary sidebar's per-tab buttons and visibility.
 // - deriveShortName: short name adapter matching Lumiverse's logic.
 import { getMainSidebar } from '../dom/lumiverse'
+import { getHostBridge } from '../dom/host-bridge'
 import { getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
@@ -351,7 +352,7 @@ export function showSecondaryTab(tabId: string): void {
   // Removable once Lumiverse fully owns built-in lifecycle.
   //
   // window.spindle IS defined at runtime. The probe CAN return a root when the tab is built-in. The display-toggle branch IS reachable.
-  const wSpindleUi = (window as any).spindle?.ui
+  const wSpindleUi = getHostBridge()?.ui
   const builtInRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId)
   dlog(
     `[tabmove] showSecondaryTab built-in probe: tabId="${tabId}" ` +

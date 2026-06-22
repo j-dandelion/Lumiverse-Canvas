@@ -24,6 +24,7 @@ import { getSecondaryWrapper, openSecondarySidebar, isSecondarySidebarOpen, clos
 import { findStoreData, getDrawerTabs, type DrawerTab } from '../store'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { dlog, dwarn } from '../debug/log'
+import { getHostBridge } from '../dom/host-bridge'
 
 export type SecondaryDrawerState = 'closed' | 'mounting' | 'open' | 'tab_active'
 
@@ -337,7 +338,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       }
     }
 
-    const wSpindle = (window as any).spindle;
+    const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
 
     if (!_root || !_secondaryContent) {

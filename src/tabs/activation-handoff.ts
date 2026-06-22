@@ -27,6 +27,7 @@ import {
 import { findMainTabButton, showSecondaryTab } from './buttons'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getMainPanelContent, getMainSidebar } from '../dom/lumiverse'
+import { getHostBridge } from '../dom/host-bridge'
 
 /* ------------------------------------------------------------------ */
 /* captureSourceList                                                   */
@@ -292,7 +293,7 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
     await new Promise<void>(resolve => {
       setTimeout(() => {
         const active = mainBtn.className.includes('tabBtnActive')
-        const wUiForCheck = (window as any).spindle?.ui
+        const wUiForCheck = getHostBridge()?.ui
         const rootForCheck = wUiForCheck?.getBuiltInTabRoot?.(resolvedId)
         const mainPanelContentForCheck = _getPanel()
         const rootInMain = rootForCheck && mainPanelContentForCheck ? mainPanelContentForCheck.contains(rootForCheck) : null

@@ -12,6 +12,7 @@
 // is on the RIGHT, the secondary is anchored at `left: 0` (close
 // transform is -width). getClosedTransformPx() centralizes this.
 import { getMainSidebar, getMainPanelHeader, getMainPanelContent } from '../dom/lumiverse'
+import { getHostBridge } from '../dom/host-bridge'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
@@ -305,7 +306,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // tabs can use requestTabLocation to move into this container.
   // System-level registration — not gated by extension permissions.
   try {
-    const wSpindle = (window as any).spindle
+    const wSpindle = getHostBridge()
     const wContainers = wSpindle?.containers
     dlog(
       `[tabmove] createSecondarySidebar: registerContainer probe: ` +
@@ -515,16 +516,15 @@ export function tearDownSecondarySidebar(): void {
     // symptom reported on Canvas disable. Extension tabs are not
     // tracked in tabLocations (they use raw DOM reparenting), so they
     // don't need this call.
-    const _wSpindleUi = (window as any).spindle?.ui
+    const _wSpindleUi = getHostBridge()?.ui
     const _mainPanelContent = getMainPanelContent()
     for (const [tabId] of Array.from(getTabAssignments())) {
       // Built-in detection: the host bridge can lazy-resolve a root for
       // built-in tab IDs. Extension tab IDs return undefined.
       const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null
-      if (_isBuiltIn) {
+      if (_isBuiltIn && _wSpindleUi?.requestTabLocation) {
         try {
           _wSpindleUi.requestTabLocation(tabId, { kind: 'main-drawer' })
-          dlog(`[tabmove] teardown: requestTabLocation CALLED for built-in tabId=${tabId} -> main-drawer`)
         } catch (err) {
           dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err)
         }
