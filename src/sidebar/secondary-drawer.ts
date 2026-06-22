@@ -6,7 +6,6 @@
 // preserve state; built-in tabs (Characters, History) use the display-toggle
 // path directly.
 
-import { reExecuteExtension, teardownExtension } from '../tabs/re-executor'
 import { drawerObserver, type ObservedTab } from './drawer-observer'
 import {
   showSecondaryTab as showSecondaryTabDisplay,
@@ -30,7 +29,6 @@ export type SecondaryDrawerState = 'closed' | 'mounting' | 'open' | 'tab_active'
 
 let _state: SecondaryDrawerState = 'closed'
 let _activeTabId: string | null = null
-let _ctx: SpindleFrontendContext | null = null
 
 // Guard flag: when true, the onTabUnregistered handlers (in this file and
 // in src/setup.ts) skip ALL their work — assignment deletion, button removal,
@@ -40,12 +38,10 @@ let _ctx: SpindleFrontendContext | null = null
 // tree, the wrapper's activateFn() flips state). Without this guard:
 //   1. The composite id assignment is wiped mid-restore.
 //   2. The polling loop's next tick sees no assignment and re-runs
-//      assignToSecondary, which calls teardownExtension on the in-flight
-//      re-execution → clearSecondaryTabs destroys ALL wrapper handles →
-//      tabs vanish.
-//   3. Even if teardown doesn't fire, the auto-close would race with the
-//      restore's end-of-interval logic (which already handles final state
-//      based on layout.secondary.open).
+//      assignToSecondary, racing with the restore's end-of-interval logic.
+//   3. The auto-close would race with the restore's end-of-interval
+//      logic (which already handles final state based on
+//      layout.secondary.open).
 // The restore's end-of-interval logic in src/layout/apply.ts is the
 // authoritative state-setter during restore. setRestoringFromLayout(true)
 // is called before the polling loop; setRestoringFromLayout(false) is
@@ -79,8 +75,10 @@ function findStoreTab(tabIdOrTitle: string): DrawerTab | null {
  * Initialize the SecondaryDrawer state machine. Wires up DrawerObserver
  * handlers for tab unregistration cleanup.
  */
-export function initSecondaryDrawer(ctx: SpindleFrontendContext): void {
-  _ctx = ctx
+export function initSecondaryDrawer(_ctx: SpindleFrontendContext): void {
+  // The ctx param is kept for API compatibility; the re-execution
+  // subsystem that consumed it was deleted in the Phase 2 cleanup.
+  void _ctx
   // Watch for tabs being unregistered — if we have an assignment, clean it up.
   // Note: setup.ts also registers an onTabUnregistered handler; this is the
   // SecondaryDrawer-specific one that also handles state machine transitions.
@@ -425,11 +423,8 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 
 /**
  * Remove a tab from the secondary drawer. Reparented roots are moved back
- * to the main panel. teardownExtension is a no-op for reparented tabs
- * (no _executions entry exists).
- *
- * Built-in tabs have no extensionId (or an empty one), so teardown is a
- * no-op for them.
+ * to the main panel. Built-in tabs have no extensionId (or an empty one),
+ * so no extension teardown is required.
  */
 export async function unassignFromSecondary(tabId: string): Promise<void> {
   dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`)
@@ -479,15 +474,6 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
       }
       _movedRoot.removeAttribute('data-canvas-moved')
       _movedRoot.removeAttribute('data-canvas-active')
-    }
-  }
-
-  // Tear down any re-executed extension (no-op for reparented tabs).
-  if (resolvedExtId) {
-    try {
-      await teardownExtension(resolvedExtId)
-    } catch (err) {
-      dwarn(`[SecondaryDrawer] teardown ${resolvedExtId} failed:`, err)
     }
   }
 
@@ -543,23 +529,9 @@ export function getSecondaryDrawerState(): SecondaryDrawerState {
 }
 
 /**
- * Resolve the bundle URL for an extension. The canonical Lumiverse API
- * path is /api/v1/spindle/{uuid}/frontend — this is the same URL the host
- * uses in its own spindle/loader.ts:148 to load the initial bundle, and
- * it works for any installed extension regardless of identifier or
- * version. The store's DrawerTab.extensionId is the UUID, not the
- * directory-style identifier, so we use the UUID directly.
- */
-function getBundleUrl(extensionId: string): string {
-  if (!extensionId) return ''
-  return `/api/v1/spindle/${extensionId}/frontend`
-}
-
-/**
  * Tear down the secondary drawer state machine. Called on Canvas disable.
  */
 export function teardownSecondaryDrawer(): void {
   _state = 'closed'
   _activeTabId = null
-  _ctx = null
 }

@@ -43,7 +43,6 @@ import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer, isRestoringFromLayout } from './sidebar/secondary-drawer'
-import { teardownAllExtensions } from './tabs/re-executor'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
@@ -185,10 +184,9 @@ export function setup(ctx: SpindleFrontendContext) {
     startContextMenuListener()
     registerCleanup(stopContextMenuListener)
 
-    // Drawer overhaul cleanup: tear down re-executed extensions and the
-    // SecondaryDrawer state machine on extension disable.
+    // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
+    // on extension disable.
     registerCleanup(() => {
-      teardownAllExtensions()
       teardownSecondaryDrawer()
     })
 

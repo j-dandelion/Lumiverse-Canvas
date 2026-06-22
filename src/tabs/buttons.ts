@@ -226,8 +226,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     align-items: center;
     justify-content: center;
     gap: 1px;
-    border-radius: 8px;
-    background: transparent;
     border: none;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -235,7 +233,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
 
   // Render icon from store data (matches ViewportDrawer.tsx rendering)
   const iconWrap = document.createElement('span')
-  iconWrap.style.cssText = 'display: flex; align-items: center; justify-content: center; flex-shrink: 0;'
   if (tab.iconSvg) {
     iconWrap.innerHTML = tab.iconSvg
   } else if (tab.iconUrl) {
@@ -256,14 +253,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   labelSpan.className = 'sidebar-ux-tab-label'
   labelSpan.textContent = deriveShortName(tab.title, tab.shortName)
   labelSpan.style.cssText = `
-    font-size: calc(9px * var(--lumiverse-font-scale, 1));
-    font-weight: 500;
-    line-height: 1;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 48px;
     opacity: ${showLabels ? '1' : '0'};
     height: ${showLabels ? 'auto' : '0'};
     margin-top: ${showLabels ? '1px' : '0'};
@@ -271,20 +260,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   `
   btn.appendChild(labelSpan)
 
-  btn.addEventListener('mouseenter', () => {
-    // Hover: CSS handles via :hover; clear inline styles so CSS wins.
-    btn.style.background = ''
-    btn.style.color = ''
-    dlog(`mouseenter: tab=${tab.id} btn.style.color cleared`)
-  })
-  btn.addEventListener('mouseleave', () => {
-    // Restore: CSS handles active via .sidebar-ux-tab-active; demote
-    // inactive to vars. Clear all inline overrides so CSS takes over.
-    btn.style.background = ''
-    btn.style.color = ''
-    labelSpan.style.color = ''
-    dlog(`mouseleave: tab=${tab.id} isActive=${btn.classList.contains('sidebar-ux-tab-active')} btn.style.color=${btn.style.color}`)
-  })
   btn.addEventListener('click', () => {
     if (!isSecondarySidebarOpen()) openSecondarySidebar()
     showSecondaryTab(tab.id)
