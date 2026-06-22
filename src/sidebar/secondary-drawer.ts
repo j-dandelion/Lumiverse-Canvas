@@ -156,6 +156,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   // state/button operations so persistence and id resolution are keyed
   // consistently across move-loops.
   const resolvedId = tab.tabId
+  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
 
   // Determine if this is an extension tab (has a UUID extensionId) vs a
   // built-in tab (extensionId is 'unknown' or empty, parsed from composite
