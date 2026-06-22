@@ -37,17 +37,17 @@ let _activeTabId: string | null = null
 // main sidebar (extensions finish loading, React re-commits the button
 // tree, the wrapper's activateFn() flips state). Without this guard:
 //   1. The composite id assignment is wiped mid-restore.
-//   2. The polling loop's next tick sees no assignment and re-runs
-//      assignToSecondary, racing with the restore's end-of-interval logic.
-//   3. The auto-close would race with the restore's end-of-interval
-//      logic (which already handles final state based on
-//      layout.secondary.open).
-// The restore's end-of-interval logic in src/layout/apply.ts is the
+//   2. The MutationObserver-driven restore pass would re-run
+//      assignToSecondary, racing with the restore's end-of-restore
+//      block (which is the authoritative state-setter).
+//   3. The auto-close would race with the restore's end-of-restore
+//      block.
+// The restore's end-of-restore block in src/layout/apply.ts is the
 // authoritative state-setter during restore. setRestoringFromLayout(true)
-// is called before the polling loop; setRestoringFromLayout(false) is
-// called right after cancelApplyLayoutInterval in the end-of-interval
-// block. After the flag is cleared, the handlers resume normal behavior
-// for user-initiated move-back and extension uninstall.
+// is called before the observer attaches; setRestoringFromLayout(false)
+// is called when finishRestore() runs. After the flag is cleared, the
+// handlers resume normal behavior for user-initiated move-back and
+// extension uninstall.
 let _restoringFromLayout = false
 export function setRestoringFromLayout(value: boolean): void {
   _restoringFromLayout = value
@@ -177,7 +177,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // EARLY-GUARD: if the root is already reparented into the secondary
     // content, the tab is already assigned. Skip re-parenting to avoid
     // duplicate buttons or state resets. This defends against applyLayout's
-    // polling loop re-calling assignToSecondary for already-assigned tabs.
+    // restore pass re-calling assignToSecondary for already-assigned tabs.
     const _secondaryContentEarly = document.querySelector('.sidebar-ux-panel-content')
     const _bareIdEarly = resolvedId.includes(':')
       ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
@@ -189,7 +189,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     )
     if (_existingWrapper && _isExtensionTab) {
       // Root already reparented. This typically happens when applyLayout's
-      // polling loop called assignToSecondary and either (a) the secondary
+      // restore pass called assignToSecondary and either (a) the secondary
       // tab list was not fully ready during initial mount, or (b) the
       // initial addSecondaryTabButton returned early for some other reason
       // (e.g. a stale alreadyHasButton match), so the reparent completed

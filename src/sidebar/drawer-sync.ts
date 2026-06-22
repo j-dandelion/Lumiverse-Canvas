@@ -419,12 +419,25 @@ export function restoreSecondaryTabButtons(): void {
   }
 }
 
-let _sideCheckInterval: ReturnType<typeof setInterval> | null = null
+let _sideObserver: MutationObserver | null = null
 
 export function startSideChangeWatcher(): void {
-  if (_sideCheckInterval !== null) return // already running
+  if (_sideObserver !== null) return // already running
   _lastKnownSide = getMainDrawerSide()
-  _sideCheckInterval = setInterval(checkSideChanged, 2000)
+  // Observe the main wrapper's class attribute. The host toggles
+  // `wrapperLeft` / `wrapperRight` on the wrapper when the user changes
+  // drawer side in Lumiverse settings. MutationObserver fires on the
+  // real event, so the rebuild happens in <100ms (was: up to 2s on the
+  // polling interval). Matches the pattern in main-persist.ts:225-242.
+  const wrapper = getMainWrapper()
+  if (!wrapper) {
+    dwarn('startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears')
+    return
+  }
+  _sideObserver = new MutationObserver(() => {
+    checkSideChanged()
+  })
+  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
   // Cleanup is registered here (not at call sites) because these functions
   // are also called from settings/panel.ts which doesn't have its own
   // cleanup chain.
@@ -432,9 +445,9 @@ export function startSideChangeWatcher(): void {
 }
 
 export function stopSideChangeWatcher(): void {
-  if (_sideCheckInterval === null) return
-  clearInterval(_sideCheckInterval)
-  _sideCheckInterval = null
+  if (_sideObserver === null) return
+  _sideObserver.disconnect()
+  _sideObserver = null
 }
 
 export function stopDrawerTabResizeWatcher(): void {

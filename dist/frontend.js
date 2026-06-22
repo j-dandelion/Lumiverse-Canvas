@@ -1877,61 +1877,6 @@ var init_activation_handoff = __esm(() => {
   init_store();
 });
 
-// src/context/secondary-ctx.ts
-function clearSecondaryTabs(extensionId) {
-  const entries = Array.from(_secondaryEntries.values());
-  for (const entry of entries) {
-    if (extensionId && entry.extensionId !== extensionId)
-      continue;
-    try {
-      entry.handle.destroy();
-    } catch {}
-  }
-  if (!extensionId) {
-    _secondaryTabs.clear();
-    _secondaryEntries.clear();
-  }
-}
-var _secondaryEntries, _secondaryTabs;
-var init_secondary_ctx = __esm(() => {
-  init_secondary();
-  init_buttons();
-  init_drawer_sync();
-  init_assignment();
-  init_tab_context_menu();
-  _secondaryEntries = new Map;
-  _secondaryTabs = new Map;
-});
-
-// src/tabs/re-executor.ts
-async function teardownExtension(extensionId) {
-  const execution = _executions.get(extensionId);
-  if (!execution)
-    return;
-  dlog(`[ExtensionReExecutor] tearing down ${extensionId}`);
-  try {
-    execution.teardown();
-  } catch (err) {}
-  clearSecondaryTabs(extensionId);
-  _executions.delete(extensionId);
-}
-function teardownAllExtensions() {
-  for (const [extId] of _executions) {
-    try {
-      teardownExtension(extId);
-    } catch (err) {
-      dwarn(`[ExtensionReExecutor] teardownAll: ${extId} failed:`, err);
-    }
-  }
-  _executions.clear();
-}
-var _executions;
-var init_re_executor = __esm(() => {
-  init_secondary_ctx();
-  init_log();
-  _executions = new Map;
-});
-
 // src/sidebar/cleanup.ts
 function registerCleanup(fn) {
   _cleanupFns.push(fn);
@@ -2110,8 +2055,7 @@ function findStoreTab(tabIdOrTitle) {
   const tabs = getDrawerTabs();
   return tabs.find((t) => t.id === tabIdOrTitle) || tabs.find((t) => t.title === tabIdOrTitle) || null;
 }
-function initSecondaryDrawer(ctx) {
-  _ctx = ctx;
+function initSecondaryDrawer(_ctx) {
   drawerObserver.onTabUnregistered((tabId) => {
     if (getTabAssignments().has(tabId)) {
       if (_restoringFromLayout)
@@ -2350,13 +2294,6 @@ async function unassignFromSecondary(tabId) {
       _movedRoot.removeAttribute("data-canvas-active");
     }
   }
-  if (resolvedExtId) {
-    try {
-      await teardownExtension(resolvedExtId);
-    } catch (err) {
-      dwarn(`[SecondaryDrawer] teardown ${resolvedExtId} failed:`, err);
-    }
-  }
   deleteTabAssignment(tabId);
   if (resolvedShowId !== tabId) {
     deleteTabAssignment(resolvedShowId);
@@ -2388,11 +2325,9 @@ function getSecondaryDrawerState() {
 function teardownSecondaryDrawer() {
   _state = "closed";
   _activeTabId = null;
-  _ctx = null;
 }
-var _state = "closed", _activeTabId = null, _ctx = null, _restoringFromLayout = false;
+var _state = "closed", _activeTabId = null, _restoringFromLayout = false;
 var init_secondary_drawer = __esm(() => {
-  init_re_executor();
   init_drawer_observer();
   init_buttons();
   init_assignment();
@@ -2763,17 +2698,25 @@ function restoreSecondaryTabButtons() {
   }
 }
 function startSideChangeWatcher() {
-  if (_sideCheckInterval !== null)
+  if (_sideObserver !== null)
     return;
   _lastKnownSide = getMainDrawerSide();
-  _sideCheckInterval = setInterval(checkSideChanged, 2000);
+  const wrapper = getMainWrapper();
+  if (!wrapper) {
+    dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
+    return;
+  }
+  _sideObserver = new MutationObserver(() => {
+    checkSideChanged();
+  });
+  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
   registerCleanup(() => stopSideChangeWatcher());
 }
 function stopSideChangeWatcher() {
-  if (_sideCheckInterval === null)
+  if (_sideObserver === null)
     return;
-  clearInterval(_sideCheckInterval);
-  _sideCheckInterval = null;
+  _sideObserver.disconnect();
+  _sideObserver = null;
 }
 function stopDrawerTabResizeWatcher() {
   if (_mainDrawerTabResizeObserver) {
@@ -2793,7 +2736,7 @@ function stopDrawerTabStyleObserver() {
     _mainDrawerTabStyleObserver = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideCheckInterval = null;
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null;
 var init_drawer_sync = __esm(() => {
   init_store();
   init_log();
@@ -3411,9 +3354,13 @@ var init_secondary = __esm(() => {
 
 // src/layout/apply.ts
 function cancelApplyLayoutInterval() {
-  if (_applyLayoutInterval !== null) {
-    clearInterval(_applyLayoutInterval);
-    _applyLayoutInterval = null;
+  if (_restoreObserver !== null) {
+    _restoreObserver.disconnect();
+    _restoreObserver = null;
+  }
+  if (_restoreTimeoutHandle !== null) {
+    clearTimeout(_restoreTimeoutHandle);
+    _restoreTimeoutHandle = null;
   }
 }
 function isTabFullyRestored(tabId) {
@@ -3454,15 +3401,15 @@ async function applyLayout(layout) {
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
     };
     setRestoringFromLayout(true);
-    let attempts = 0;
-    _applyLayoutInterval = setInterval(async () => {
-      attempts++;
+    const attemptRestore = () => {
+      let remaining = 0;
       for (let i = 0;i < layout.detachedTabs.length; i++) {
         const dt = layout.detachedTabs[i];
         const _alreadyAssigned = hasTabAssignment(dt.tabId);
         const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false;
         if (_alreadyAssigned && _fullyRestored)
           continue;
+        remaining++;
         const tabs = getDrawerTabs();
         let tab = tabs.find((t) => t.id === dt.tabId);
         let usedFallback = false;
@@ -3479,54 +3426,80 @@ async function applyLayout(layout) {
           }
         }
         if (tab) {
-          try {
-            await assignToSecondary(tab.id);
-          } catch (err) {
+          assignToSecondary(tab.id).catch((err) => {
             dwarn(`applyLayout: assignToSecondary(${tab.id}) failed:`, err);
-          }
+          });
         } else {
           const mainBtn = findMainTabButton(dt.tabId);
           if (mainBtn) {
             const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
-            try {
-              await assignToSecondary(liveTabId);
-            } catch (err) {
+            assignToSecondary(liveTabId).catch((err) => {
               dwarn(`applyLayout: LumiScript fallback assignToSecondary(${liveTabId}) failed:`, err);
-            }
+            });
             dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`);
-          } else if (!usedFallback && attempts === 5) {
+          } else {
             const knownIds = tabs.map((t) => t.id);
             dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(", ")}. Layout may be stale.`);
           }
         }
       }
-      if (attempts > 20 || layout.detachedTabs.every((dt) => isTabFullyRestored(dt.tabId))) {
-        cancelApplyLayoutInterval();
-        setRestoringFromLayout(false);
-        const savedActive = layout.secondary?.activeTabId;
-        const restored = savedActive && hasTabAssignment(savedActive) ? { tabId: savedActive } : layout.detachedTabs.find((dt) => hasTabAssignment(dt.tabId));
-        if (restored) {
-          showSecondaryTab(restored.tabId);
-        }
-        const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
-        const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
-        const savedOpen = layout.secondary?.open;
-        const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs;
-        if (mobileExcluded && isSecondarySidebarOpen()) {
-          enforceExclusionOnOpen("primary");
-        } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
-          openSecondarySidebar();
-        } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
-          closeSecondarySidebar();
-        }
-        if (_hasDetachedTabs) {
-          updateDrawerTabVisibility();
-        }
+      return remaining;
+    };
+    const finishRestore = () => {
+      if (_restoreObserver !== null) {
+        _restoreObserver.disconnect();
+        _restoreObserver = null;
       }
-    }, 500);
+      if (_restoreTimeoutHandle !== null) {
+        clearTimeout(_restoreTimeoutHandle);
+        _restoreTimeoutHandle = null;
+      }
+      setRestoringFromLayout(false);
+      const savedActive = layout.secondary?.activeTabId;
+      const restored = savedActive && hasTabAssignment(savedActive) ? { tabId: savedActive } : layout.detachedTabs.find((dt) => hasTabAssignment(dt.tabId));
+      if (restored) {
+        showSecondaryTab(restored.tabId);
+      }
+      const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
+      const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
+      const savedOpen = layout.secondary?.open;
+      const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs;
+      if (mobileExcluded && isSecondarySidebarOpen()) {
+        enforceExclusionOnOpen("primary");
+      } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
+        openSecondarySidebar();
+      } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
+        closeSecondarySidebar();
+      }
+      if (_hasDetachedTabs) {
+        updateDrawerTabVisibility();
+      }
+    };
+    const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
+    if (sidebar) {
+      _restoreObserver = new MutationObserver(() => {
+        const remaining = attemptRestore();
+        if (remaining === 0)
+          finishRestore();
+      });
+      _restoreObserver.observe(sidebar, { childList: true, subtree: true });
+    } else {
+      queueMicrotask(() => {
+        const remaining = attemptRestore();
+        if (remaining === 0)
+          finishRestore();
+      });
+    }
+    _restoreTimeoutHandle = setTimeout(() => {
+      attemptRestore();
+      finishRestore();
+    }, _restoreTimeoutMs);
+    const initialRemaining = attemptRestore();
+    if (initialRemaining === 0)
+      finishRestore();
   }
 }
-var _applyLayoutInterval = null;
+var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4;
 var init_apply = __esm(() => {
   init_store();
   init_secondary();
@@ -4326,7 +4299,7 @@ var init_suggest = __esm(() => {
 var SELECTOR_TEXTAREA = 'textarea[name="chat-message"]', SELECTOR_SEND_BTN = 'button[class*="sendBtn"]';
 
 // src/slash/intercept.ts
-function installIntercept(_ctx2, callbacks) {
+function installIntercept(_ctx, callbacks) {
   const keydownHandler = (e) => {
     const target = e.target;
     if (!target || target.tagName !== "TEXTAREA")
@@ -5727,7 +5700,7 @@ var init_drawer_tab_position = __esm(() => {
   _dragInstalled = new WeakSet;
   drawerTabDragFeature = {
     id: "drawerTabDrag",
-    init(_ctx2) {
+    init(_ctx) {
       if (!getSettings().drawerTabDrag)
         return;
       const observer = new MutationObserver(() => {
@@ -5751,7 +5724,7 @@ var init_drawer_tab_position = __esm(() => {
         registerCleanup(teardown);
       }
     },
-    mount(_ctx2) {
+    mount(_ctx) {
       if (!getSettings().drawerTabDrag)
         return;
       const secondaryTab = getSecondaryDrawerTab();
@@ -5895,7 +5868,7 @@ var init_registry = __esm(() => {
   };
   secondSidebarFeature = {
     id: "secondSidebarEnabled",
-    mount(_ctx2, layout) {
+    mount(_ctx, layout) {
       const initialWidth = layout?.secondary?.width;
       const initialOpen = layout?.secondary?.open === true;
       mountSecondarySidebar({ initialWidth, initialOpen });
@@ -6420,7 +6393,6 @@ init_mobile_exclusion();
 init_drawer_sync();
 init_drawer_observer();
 init_secondary_drawer();
-init_re_executor();
 
 // src/context-menu/index.ts
 init_store();
@@ -6705,7 +6677,6 @@ function setup(ctx) {
     startContextMenuListener();
     registerCleanup(stopContextMenuListener);
     registerCleanup(() => {
-      teardownAllExtensions();
       teardownSecondaryDrawer();
     });
     applyMainDrawer(layout);
