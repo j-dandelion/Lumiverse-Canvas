@@ -258,7 +258,7 @@ export function syncSecondaryTabLabels(): void {
     label.style.height = showLabels ? 'auto' : '0'
     label.style.marginTop = showLabels ? '1px' : '0'
     // Skip Canvas-owned buttons (owned by the wrapper) — their label
-    // visibility is set via inline styles in secondary-ctx.ts.
+    // visibility is managed by the wrapper's own styling.
     const btn = label.closest('button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)') as HTMLElement | null
     if (btn) btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
   }
@@ -354,7 +354,7 @@ export function checkSideChanged(): void {
  * drawer-side flip) so the tab list is restored from the persisted
  * `_tabAssignments` map without requiring the user to re-drag tabs.
  *
- * Mirrors the per-tab button creation in `applyAssignment` → `secondary`,
+ * Mirrors the per-tab button creation in `assignToSecondary`,
  * but in a single pass over the assignments map.
  */
 export function restoreSecondaryTabButtons(): void {
@@ -367,7 +367,7 @@ export function restoreSecondaryTabButtons(): void {
       // Suffix-drift fallback: Lumiverse assigns a session-variant suffix
       // (:1, :2, :3) to extension tab ids. The assignment map may have an
       // older suffix than the live store (e.g., the wrapper was just
-      // recreated after a side change and the extension was re-executed
+      // recreated after a side change and the extension re-registered
       // with a new suffix). Strip the trailing :N from both the stored
       // id and each live id, then match by the stripped prefix. If
       // exactly one live id matches, use it.
@@ -390,8 +390,8 @@ export function restoreSecondaryTabButtons(): void {
     }
     // Bug fix (2026-06-19, follow-up): DOM fallback. When the store
     // doesn't have the tab (extension tabs moved to secondary are
-    // re-executed in the secondary context, so the primary context's
-    // store entry may have been removed), fall back to reading the tab
+    // reparented, so the primary context's store entry may have been
+    // removed), fall back to reading the tab
     // data from the main sidebar's button. The main sidebar still
     // renders a button for every tab — even moved-to-secondary tabs
     // (hidden via display:none by hideMainTabButton). The button has

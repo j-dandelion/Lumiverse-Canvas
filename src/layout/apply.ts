@@ -133,7 +133,7 @@ export async function applyLayout(layout: any) {
     //
     // Phase 3 (finding #5): polling now uses assignToSecondary for both
     // direct and LumiScript-fallback paths. assignToSecondary handles the
-    // full lifecycle (state, buttons, re-execution for extension tabs,
+    // full lifecycle (state, buttons, DOM reparenting for extension tabs,
     // display-toggle for built-in tabs) without the policy-layer side
     // effects of assignTab: it does NOT call switchMainDrawerToFallback
     // (which would manipulate the main drawer that's already in its saved
@@ -159,9 +159,10 @@ export async function applyLayout(layout: any) {
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
     }
     // Guard: prevent the auto-close in secondary-drawer.ts's onTabUnregistered
-    // handler from firing during the restore. The re-execution lifecycle can
-    // spuriously unregister and re-register tabs (see secondary-drawer.ts
-    // flag declaration for full rationale).
+    // handler from firing during the restore. Lumiverse re-renders the main
+    // sidebar during restore (extensions finish loading, React re-commits),
+    // which can spuriously unregister and re-register tabs (see
+    // secondary-drawer.ts flag declaration for full rationale).
     setRestoringFromLayout(true)
 
     // One pass of restore work. Returns the number of tabs that still need

@@ -165,8 +165,8 @@ export function setup(ctx: SpindleFrontendContext) {
         // Skip during layout restore. The restore's end-of-interval logic
         // in src/layout/apply.ts is the authoritative state-setter; any
         // mutation here (especially the assignment delete) would race with
-        // the polling loop and cause a re-execution cascade that hides
-        // the user's tabs. See _restoringFromLayout in src/sidebar/secondary-drawer.ts
+        // the restore and cause a cascade that hides the user's tabs.
+        // See _restoringFromLayout in src/sidebar/secondary-drawer.ts
         // for the full failure mode.
         if (isRestoringFromLayout()) return
         deleteTabAssignment(tabId)

@@ -77,8 +77,8 @@ function findStoreTab(tabIdOrTitle: string): DrawerTab | null {
  * handlers for tab unregistration cleanup.
  */
 export function initSecondaryDrawer(_ctx: SpindleFrontendContext): void {
-  // The ctx param is kept for API compatibility; the re-execution
-  // subsystem that consumed it was deleted in the Phase 2 cleanup.
+  // The ctx param is kept for API compatibility; the subsystem that
+  // consumed it was deleted in the Phase 2 cleanup.
   void _ctx
   // Watch for tabs being unregistered — if we have an assignment, clean it up.
   // Note: setup.ts also registers an onTabUnregistered handler; this is the
@@ -153,7 +153,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   }
 
   // Use the resolved tabId (real id, not the title fallback) for all
-  // state/button operations so re-execution and persistence are keyed
+  // state/button operations so persistence and id resolution are keyed
   // consistently across move-loops.
   const resolvedId = tab.tabId
 
@@ -384,9 +384,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 export async function unassignFromSecondary(tabId: string): Promise<void> {
   dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`)
 
-  // Tear down any re-executed extension (no-op for reparented tabs since
-  // no _executions entry exists). The store lookup mirrors the one in
-  // assignToSecondary so we get the same extensionId resolution.
   // Resolve the bare id to the store's composite id. The wrapper button's
   // data-tab-id is the bare options.id, but the main sidebar button was
   // hidden with the composite id (assignToSecondary:125 used the store's

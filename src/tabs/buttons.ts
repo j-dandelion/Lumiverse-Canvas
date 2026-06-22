@@ -110,9 +110,9 @@ export function cssEscape(value: string): string {
 /**
  * Heuristic: does this sidebar button represent the Lumiverse Settings tab?
  * Used to exclude the Settings tab from fallback-button picks in
- * switchDrawerToFallback and tearDownSecondarySidebar — clicking the
- * Settings tab when the only extension tab is being moved opens the
- * Settings panel and leaves a ghost panel in the main sidebar.
+ * tearDownSecondarySidebar — clicking the Settings tab when the only
+ * extension tab is being moved opens the Settings panel and leaves a
+ * ghost panel in the main sidebar.
  *
  * The predicate is intentionally multi-pronged because Lumiverse's CSS
  * class names are module-hashed in production builds and the Settings
@@ -151,9 +151,7 @@ export function isSettingsButton(btn: HTMLElement): boolean {
  * a ghost panel behind).
  *
  * Used by:
- *   - tabs/assignment.ts switchDrawerToFallback  (the "last extension
- *     tab moved out" path — the bug this fixes)
- *   - sidebar/secondary.tsx tearDownSecondarySidebar  (the same
+ *   - sidebar/secondary.tsx tearDownSecondarySidebar  (the
  *     fallback when the secondary sidebar is torn down with an
  *     active secondary tab)
  */

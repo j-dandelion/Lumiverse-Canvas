@@ -479,8 +479,9 @@ export function tearDownSecondarySidebar(): void {
   if (_secondaryWrapper) {
     // If the main drawer is currently showing a tab that lives in the
     // secondary sidebar, switch to a built-in fallback first. Otherwise
-    // restoreTabToPrimary's click() won't re-render React (the DOM node
-    // was physically in the secondary sidebar and React never unmounted it).
+    // the DOM node that was physically in the secondary sidebar won't
+    // re-render React (it was never unmounted from the main drawer's
+    // perspective).
     // Use findSafeFallbackButton so we never click the Lumiverse Settings
     // tab (which would open the Settings panel and leave a ghost panel
     // behind — same root cause as the move-to-secondary bug fixed in
@@ -526,8 +527,7 @@ export function tearDownSecondarySidebar(): void {
           dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err)
         }
       }
-      // Move any moved root back to the main panel. Equivalent to the
-      // removed repositionTab(tabId, 'primary') — clear data-canvas-moved,
+      // Move any moved root back to the main panel. Clear data-canvas-moved,
       // data-canvas-active, and any inline position/inset/display styles
       // left over from the tab's time in secondary.
       const _movedRoot = _secondaryWrapper?.querySelector(
