@@ -76,16 +76,27 @@ import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../active-tab'
 let _tabListButtons: Array<{ tabId: string; title: string }> = []
 
 function buildFakeSecondaryWrapper() {
-  const buttonObjs = _tabListButtons.map(b => ({
-    _attrs: { 'data-tab-id': b.tabId, title: b.title } as Record<string, string>,
-    getAttribute(name: string) { return this._attrs[name] ?? null },
-    setAttribute(name: string, value: string) { this._attrs[name] = value },
-    removeAttribute(name: string) { delete this._attrs[name] },
-    style: { display: '' },
-    click() {},
-    textContent: b.title,
-    parentElement: null,
-  }))
+  const buttonObjs = _tabListButtons.map(b => {
+    const classes = new Set<string>()
+    return {
+      _attrs: { 'data-tab-id': b.tabId, title: b.title } as Record<string, string>,
+      getAttribute(name: string) { return this._attrs[name] ?? null },
+      setAttribute(name: string, value: string) { this._attrs[name] = value },
+      removeAttribute(name: string) { delete this._attrs[name] },
+      style: { display: '', color: '', background: '', boxShadow: '', borderRadius: '' },
+      classList: {
+        toggle(cls: string, force?: boolean) {
+          if (force === undefined ? !classes.has(cls) : force) classes.add(cls)
+          else classes.delete(cls)
+        },
+        contains(cls: string) { return classes.has(cls) },
+      },
+      click() {},
+      textContent: b.title,
+      parentElement: null,
+      querySelector(_sel: string) { return null },
+    }
+  })
   return {
     querySelectorAll(sel: string): any {
       if (sel === '.sidebar-ux-tab-list button[data-tab-id]') return buttonObjs
