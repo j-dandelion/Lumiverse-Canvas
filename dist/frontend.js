@@ -2732,33 +2732,35 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
+    overflow: hidden !important;
   }
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     width: 100% !important;
     flex-direction: row !important;
     overflow-x: auto !important;
     overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
     border-bottom: 1px solid var(--lumiverse-primary-020) !important;
     border-left: none !important;
     border-right: none !important;
     padding: 6px 8px !important;
   }
-  /* Tab buttons: match main sidebar's mobile tabBtn/tabBtnLabeled sizes.
-     Main sidebar uses 42×42 (no labels) / 52×48 (with labels).
-     Keep vertical layout (column) — same as main sidebar on mobile. */
+  /* Hide webkit scrollbar */
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Tab buttons: uniform width on mobile horizontal layout.
+     Matches main sidebar's mobile tabBtnLabeled size (52×48). */
   .sidebar-ux-tab-list button[data-tab-id] {
-    width: 42px !important;
-    height: 42px !important;
+    width: 52px !important;
     min-width: 0;
+    flex-shrink: 0;
     padding: 6px 4px !important;
   }
   .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
-  }
-  /* Side-aware alignment: single tab sits on the edge the sidebar opens from. */
-  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
-    justify-content: flex-end !important;
   }
   /* Active tab indicator: bottom underline, top corners rounded.
      Matches main sidebar's mobile .tabBtnActive exactly.
