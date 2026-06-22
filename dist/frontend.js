@@ -232,6 +232,19 @@ var init_store = __esm(() => {
   init_log();
 });
 
+// src/dom/host-bridge.ts
+function getHostBridge() {
+  if (typeof window === "undefined")
+    return null;
+  const ctx = window.spindle;
+  if (!ctx)
+    return null;
+  return {
+    ui: ctx.ui,
+    containers: ctx.containers
+  };
+}
+
 // src/dom/clamp.ts
 function clampSidebarWidth(px) {
   return Math.max(MIN_SIDEBAR_WIDTH, Math.min(window.innerWidth * MAX_SIDEBAR_WIDTH_FRAC, px));
@@ -1489,18 +1502,7 @@ function showSecondaryTab(tabId) {
   setActiveSecondaryTabId(tabId);
   persistLayout();
   const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-  if (secondaryContent) {
-    for (const child of Array.from(secondaryContent.children)) {
-      if (!(child instanceof HTMLElement))
-        continue;
-      if (child.hasAttribute("data-canvas-secondary"))
-        continue;
-      if (child.hasAttribute("data-canvas-moved"))
-        continue;
-      child.setAttribute("data-canvas-moved", "__unknown__");
-    }
-  }
-  const movedRoots = secondaryContent ? Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]:not([data-canvas-secondary])")) : [];
+  const movedRoots = secondaryContent ? Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]")) : [];
   let activeTitle = findMainTabButton(tabId)?.getAttribute("title") || "";
   for (const root of movedRoots) {
     const tid = root.getAttribute("data-canvas-moved") || "";
@@ -1513,87 +1515,27 @@ function showSecondaryTab(tabId) {
       root.removeAttribute("data-canvas-active");
     }
   }
-  const wSpindleUi = window.spindle?.ui;
-  const builtInRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
-  dlog(`[tabmove] showSecondaryTab built-in probe: tabId="${tabId}" ` + `window.spindle.ui=${wSpindleUi ? "present" : "UNDEFINED"}, ` + `builtInRoot=${builtInRoot ? "present" : "absent"}, ` + `builtInRoot_in_secondaryContent=${builtInRoot && secondaryContent?.contains(builtInRoot) ? "yes" : "no"}`);
-  if (builtInRoot && secondaryContent?.contains(builtInRoot)) {
-    if (!builtInRoot.getAttribute("data-canvas-moved")) {
-      builtInRoot.setAttribute("data-canvas-moved", tabId);
-    }
-    builtInRoot.setAttribute("data-canvas-active", "");
-    if (!activeTitle) {
-      const mainBtn = findMainTabButton(tabId);
-      if (mainBtn)
-        activeTitle = mainBtn.getAttribute("title") || "";
-    }
-    secondaryContent.querySelectorAll("[data-canvas-secondary]").forEach((r) => r.removeAttribute("data-canvas-active"));
-    const _wb = getSecondaryWrapper()?.querySelectorAll(".sidebar-ux-tab-secondary-canvas");
-    if (_wb)
-      for (const b of _wb) {
-        b.classList.remove("sidebar-ux-tab-active");
-        b.style.color = "";
-        b.style.background = "";
-        b.style.boxShadow = "";
-        b.style.borderRadius = "";
-        const _lbl = b.querySelector(".sidebar-ux-tab-label");
-        if (_lbl)
-          _lbl.style.color = "";
-      }
-    dlog(`[tabmove] showSecondaryTab built-in: demoted wrapper roots+buttons for tabId="${tabId}"`);
-  }
   if (activeTitle) {
     const title = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
     if (title)
       title.textContent = activeTitle;
   }
-  const allBtns = getSecondaryWrapper()?.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)");
+  const allBtns = getSecondaryWrapper()?.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
   if (allBtns) {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute("data-tab-id") === tabId;
       btn.classList.toggle("sidebar-ux-tab-active", isActive);
-      if (isActive) {} else {
-        btn.style.color = "";
-        btn.style.background = "";
-        btn.style.boxShadow = "";
-        btn.style.borderRadius = "";
-        const label = btn.querySelector(".sidebar-ux-tab-label");
-        if (label) {
-          label.style.color = "";
-        }
-      }
-      dlog(`showSecondaryTab: tab=${btn.getAttribute("data-tab-id")} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`);
-    }
-  }
-  if (builtInRoot && secondaryContent && !secondaryContent.contains(builtInRoot)) {
-    if (_deferredActivationObserver && _deferredActivationTabId !== tabId) {
-      _deferredActivationObserver.disconnect();
-      _deferredActivationObserver = null;
-    }
-    if (!_deferredActivationObserver) {
-      _deferredActivationTabId = tabId;
-      _deferredActivationObserver = new MutationObserver(() => {
-        if (secondaryContent.contains(builtInRoot)) {
-          if (_deferredActivationObserver) {
-            _deferredActivationObserver.disconnect();
-            _deferredActivationObserver = null;
-          }
-          dlog(`[tabmove] showSecondaryTab: deferred activation fired for tabId="${tabId}"`);
-          showSecondaryTab(tabId);
-        }
-      });
-      _deferredActivationObserver.observe(secondaryContent, { childList: true, subtree: true });
-      setTimeout(() => {
-        if (_deferredActivationObserver && _deferredActivationTabId === tabId) {
-          _deferredActivationObserver.disconnect();
-          _deferredActivationObserver = null;
-          _deferredActivationTabId = null;
-        }
-      }, 2000);
-      dlog(`[tabmove] showSecondaryTab: armed deferred activation for tabId="${tabId}"`);
+      btn.style.color = "";
+      btn.style.background = "";
+      btn.style.boxShadow = "";
+      btn.style.borderRadius = "";
+      const label = btn.querySelector(".sidebar-ux-tab-label");
+      if (label)
+        label.style.color = "";
     }
   }
 }
-var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null, _deferredActivationObserver = null, _deferredActivationTabId = null;
+var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null;
 var init_buttons = __esm(() => {
   init_store();
   init_log();
@@ -1792,7 +1734,7 @@ async function activateInPrimary(tabId, h) {
     await new Promise((resolve) => {
       setTimeout(() => {
         const active = mainBtn.className.includes("tabBtnActive");
-        const wUiForCheck = window.spindle?.ui;
+        const wUiForCheck = getHostBridge()?.ui;
         const rootForCheck = wUiForCheck?.getBuiltInTabRoot?.(resolvedId);
         const mainPanelContentForCheck = _getPanel();
         const rootInMain = rootForCheck && mainPanelContentForCheck ? mainPanelContentForCheck.contains(rootForCheck) : null;
@@ -2200,7 +2142,7 @@ async function assignToSecondary(tabId) {
         }
       }
     }
-    const wSpindle = window.spindle;
+    const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
     if (!_root || !_secondaryContent) {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
@@ -2370,101 +2312,85 @@ function deleteTabAssignment(tabId) {
 function getTabSidebar(tabId) {
   return _tabAssignments.get(tabId) || "primary";
 }
+function armMainDrawerActiveRestore(tabId) {
+  if (isMobileViewport())
+    return;
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const restoreBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  const restoreActiveId = restoreBtn?.getAttribute("data-tab-id") ?? null;
+  if (!restoreBtn || !restoreActiveId || restoreActiveId === tabId)
+    return;
+  let observer = new MutationObserver(() => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+    restoreBtn.click();
+  });
+  observer.observe(sidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
+  setTimeout(() => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  }, 200);
+}
+function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
+  queueMicrotask(() => {
+    const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
+    const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+    const rootInContainer = microContainer?.contains(builtInRoot) ?? false;
+    if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
+      dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ` + `${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to ` + `main-drawer because the target container is missing from Lumiverse's ` + `containers store. Fix: ensure the secondary drawer's panel content ` + `element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx:308 — the call exists but may be failing silently.)`);
+    }
+  });
+}
+function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
+  const mainBtn = findMainTabButton(tabId);
+  const title = bridge.ui.getBuiltInTabTitle?.(tabId) || mainBtn?.getAttribute("title") || tabId;
+  const iconSvg = mainBtn?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
+  const shortName = readMainButtonShortName(mainBtn);
+  addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName });
+}
 async function assignTab(tabId, sidebar) {
-  dlog(`[tabmove] assignTab ENTRY tabId=${tabId} sidebar=${sidebar} stack=`, new Error().stack?.split(`
-`).slice(1, 4).join(" | "));
   if (sidebar === "secondary") {
-    const wSpindle = window.spindle;
-    const wSpindleUi = wSpindle?.ui;
-    const builtInRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
-    dlog(`[tabmove] built-in probe: window.spindle=${wSpindle ? "present" : "UNDEFINED"} ` + `(type=${typeof wSpindle}), ` + `window.spindle.ui=${wSpindleUi ? "present" : "UNDEFINED"} (type=${typeof wSpindleUi}), ` + `getBuiltInTabRoot=${typeof wSpindleUi?.getBuiltInTabRoot}, ` + `requestTabLocation=${typeof wSpindleUi?.requestTabLocation}, ` + `builtInRoot=${builtInRoot ? "present" : "absent"} for tabId="${tabId}"`);
-    if (builtInRoot) {
-      const wContainers = wSpindle?.containers;
-      let containerCount = "N/A";
-      let containerIds = [];
-      try {
-        if (wContainers && typeof wContainers === "object") {
-          containerCount = "bridge-present (cannot enumerate without store access)";
-        }
-      } catch {}
-      dlog(`[tabmove] pre-call container probe: ` + `window.spindle.containers=${wContainers ? "present" : "UNDEFINED"} (type=${typeof wContainers}), ` + `has_registerContainer=${typeof wContainers?.registerContainer}, ` + `has_unregisterContainer=${typeof wContainers?.unregisterContainer}, ` + `has_getTabLocation=${typeof wSpindleUi?.getTabLocation}`);
-      const beforeLoc = wSpindleUi?.getTabLocation?.(tabId);
-      dlog(`[tabmove] pre-call tabLocation: tabId="${tabId}" before=${JSON.stringify(beforeLoc)}`);
-      const _restoreSidebar = getMainSidebar();
-      const _restoreBtn = _restoreSidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-      const _restoreActiveId = _restoreBtn?.getAttribute("data-tab-id") ?? null;
-      let _restoreObserver = null;
-      if (!isMobileViewport() && _restoreSidebar && _restoreBtn && _restoreActiveId && _restoreActiveId !== tabId) {
-        _restoreObserver = new MutationObserver(() => {
-          if (_restoreObserver) {
-            _restoreObserver.disconnect();
-            _restoreObserver = null;
-          }
-          dlog(`[tabmove] restore observer fired: re-clicking original main-drawer active button to preserve drawerTab`);
-          _restoreBtn.click();
-        });
-        _restoreObserver.observe(_restoreSidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
-        setTimeout(() => {
-          if (_restoreObserver) {
-            _restoreObserver.disconnect();
-            _restoreObserver = null;
-          }
-        }, 200);
-        dlog(`[tabmove] restore observer armed for originalActiveTabId="${_restoreActiveId}"`);
-      }
+    const bridge = getHostBridge();
+    const builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
+    if (builtInRoot && bridge) {
+      builtInRoot.setAttribute("data-canvas-moved", tabId);
+      builtInRoot.setAttribute("data-canvas-active", "");
+      armMainDrawerActiveRestore(tabId);
       const preMoveSourceList2 = await captureSourceList("primary");
       const preMoveActiveTab2 = isTabActiveInMainDrawer(tabId);
-      const result = wSpindleUi.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
-      dlog(`[tabmove] requestTabLocation CALLED for tabId=${tabId} -> container=canvas-secondary-drawer; returned=${typeof result}`);
-      const afterLoc = wSpindleUi?.getTabLocation?.(tabId);
-      dlog(`[tabmove] immediate read-back: tabId="${tabId}" after=${JSON.stringify(afterLoc)}`);
-      queueMicrotask(() => {
-        const microLoc = wSpindleUi?.getTabLocation?.(tabId);
-        const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-        const rootInContainer = microContainer?.contains(builtInRoot);
-        dlog(`[tabmove] microtask read-back: tabId="${tabId}" after=${JSON.stringify(microLoc)}, ` + `rootInContainer=${rootInContainer ? "YES" : "no"}, ` + `containerElement=${microContainer ? "present" : "absent"}`);
-        if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
-          dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ` + `${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to ` + `main-drawer because the target container is missing from Lumiverse's ` + `containers store. This is the bug. Fix: ensure the secondary drawer's ` + `panel content element is registered via window.spindle.containers.registerContainer ` + `BEFORE the move is attempted. (See secondary.tsx:275 — the call exists ` + `but may be failing silently.)`);
-        }
-      });
+      bridge.ui.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
+      const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
+      watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc);
       setTabAssignment(tabId, "secondary");
       hideMainTabButton(tabId);
-      const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || findMainTabButton(tabId)?.getAttribute("title") || tabId;
-      const mainBtn = findMainTabButton(tabId);
-      const iconSvg = mainBtn?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
-      const shortName = readMainButtonShortName(mainBtn);
-      dlog(`[tabmove] built-in icon: tabId="${tabId}" source=${mainBtn?.querySelector("svg") ? "main-button" : iconSvg ? "builtIn-root" : "NONE"}`);
-      addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName });
+      addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
       updateDrawerTabVisibility();
       if (!isSecondarySidebarOpen())
         openSecondarySidebar();
       await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList2, preMoveSourceActiveTab: preMoveActiveTab2 });
       persistLayout();
-      dlog(`[tabmove] built-in UI side effects complete: tabId="${tabId}" -> secondary (button hidden in main, button added to secondary, drawer opened, layout persisted)`);
       return;
     }
-    if (!wSpindle) {
-      dwarn(`[tabmove] SILENT FAILURE: tabId="${tabId}" looks built-in (no window.spindle bridge). ` + `getBuiltInTabRoot() could not be called; built-in branch skipped; ` + `falling through to extension re-execution which is a no-op for built-ins. ` + `This is the reported bug. Fix: capture SpindleFrontendContext in setup(ctx) ` + `and use ctx.ui.requestTabLocation instead of window.spindle?.ui?.requestTabLocation. ` + `See [[debug/canvas-lumiscript-tab-move]] for analysis.`);
-    } else {
-      dwarn(`[tabmove] FALLTHROUGH: tabId="${tabId}" not recognized as built-in by host ` + `(getBuiltInTabRoot returned undefined despite window.spindle being present). ` + `Possibly an extension tab or an id mismatch — checking store.`);
+    if (!bridge) {
+      dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`);
     }
     const { assignToSecondary: assignToSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-    dlog(`[tabmove] calling assignToSecondary (extension path) for tabId=${tabId}`);
     const preMoveSourceList = await captureSourceList("primary");
     const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
     await assignToSecondary2(tabId);
     await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
   } else {
-    const wUi = window.spindle?.ui;
-    if (wUi?.getBuiltInTabRoot) {
-      const builtInRootRestore = wUi.getBuiltInTabRoot(tabId);
-      if (builtInRootRestore) {
-        wUi.requestTabLocation(tabId, { kind: "main-drawer" });
-        dlog(`[tabmove] built-in primary restore: requestTabLocation CALLED for tabId=${tabId} -> main-drawer`);
-      }
+    const bridge = getHostBridge();
+    if (bridge?.ui.getBuiltInTabRoot?.(tabId) && bridge.ui.requestTabLocation) {
+      bridge.ui.requestTabLocation(tabId, { kind: "main-drawer" });
     }
     const { unassignFromSecondary: unassignFromSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-    dlog(`[tabmove] calling unassignFromSecondary (primary path) for tabId=${tabId}`);
     const preMoveSourceList = await captureSourceList("secondary");
     const preMoveActiveTab = getActiveSecondaryTabId() === tabId;
     await unassignFromSecondary2(tabId);
@@ -3115,7 +3041,7 @@ function createSecondarySidebar(options) {
   wrapper.appendChild(drawerTab);
   wrapper.appendChild(drawer);
   try {
-    const wSpindle = window.spindle;
+    const wSpindle = getHostBridge();
     const wContainers = wSpindle?.containers;
     dlog(`[tabmove] createSecondarySidebar: registerContainer probe: ` + `window.spindle=${wSpindle ? "present" : "UNDEFINED"}, ` + `window.spindle.containers=${wContainers ? "present" : "UNDEFINED"}, ` + `has_registerContainer=${typeof wContainers?.registerContainer}, ` + `target_element=${content ? "present" : "absent"} (className="${content?.className}")`);
     if (wContainers?.registerContainer) {
@@ -3216,14 +3142,13 @@ function tearDownSecondarySidebar() {
         }
       }
     }
-    const _wSpindleUi = window.spindle?.ui;
+    const _wSpindleUi = getHostBridge()?.ui;
     const _mainPanelContent = getMainPanelContent();
     for (const [tabId] of Array.from(getTabAssignments())) {
       const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null;
-      if (_isBuiltIn) {
+      if (_isBuiltIn && _wSpindleUi?.requestTabLocation) {
         try {
           _wSpindleUi.requestTabLocation(tabId, { kind: "main-drawer" });
-          dlog(`[tabmove] teardown: requestTabLocation CALLED for built-in tabId=${tabId} -> main-drawer`);
         } catch (err) {
           dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err);
         }

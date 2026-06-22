@@ -145,6 +145,15 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
     const bridge = getHostBridge()
     const builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId)
     if (builtInRoot && bridge) {
+      // Tag the built-in root BEFORE the host's async move. The
+      // data-canvas-moved/active attributes travel with the root when
+      // the host reparents it. The CSS rule that hides inactive moved
+      // roots is scoped to `.sidebar-ux-panel-content` so the
+      // attributes have no effect while the root is still in main.
+      // This is what allows showSecondaryTab to drop the F14 safety
+      // net and the F15 deferred-activation observer.
+      builtInRoot.setAttribute('data-canvas-moved', tabId)
+      builtInRoot.setAttribute('data-canvas-active', '')
       armMainDrawerActiveRestore(tabId)
       const preMoveSourceList = await captureSourceList('primary')
       const preMoveActiveTab = isTabActiveInMainDrawer(tabId)
