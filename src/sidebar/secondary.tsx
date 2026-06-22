@@ -346,18 +346,6 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   return wrapper
 }
 
-// Collect all ancestor elements that need overflow: visible override.
-// DELETED 2026-06-09 — the per-element overflow-override machinery
-// (_savedOverflow, enableOverflowVisible, restoreOverflow) was never wired
-// to a caller. enableOverflowVisible has zero call sites in the entire
-// repo history; restoreOverflow's call site in tabs/assignment.ts:400
-// short-circuits on the `if (!saved) return` guard because the map is
-// always empty. The "PR-B fix" comment described a real bug in code that
-// was never reachable. If the original intent (allowing tab roots to
-// overflow their ancestor's hidden overflow container) is ever revived,
-// the wiring should start from a fresh design rather than resurrecting
-// this dead machinery.
-
 export function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer) return
   if (_secondarySidebarOpen) return
