@@ -8,8 +8,8 @@
 //   2. Main-sidebar button tagging — watch the main sidebar for child-list
 //      changes (tab add/replace) and tag each extension tab button with a
 //      stable `data-tab-id` attribute. The id-based match is what
-//      findMainTabButton / switchMainDrawerToFallback / isMovedTabNode rely
-//      on; the previous title-match was the bug class v1.3.0 closed.
+//      findMainTabButton relies on; the previous title-match was the bug
+//      class v1.3.0 closed.
 //
 // Both observers are gated on this function being called, which in setup()
 // only happens when CanvasSettings.chatReflow is on.

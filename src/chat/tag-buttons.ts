@@ -2,8 +2,8 @@
 //
 // Walks the store's drawerTabs and matches each by title, setting
 // `data-tab-id` on every extension tab button. The id-based match is what
-// findMainTabButton / switchMainDrawerToFallback / isMovedTabNode rely
-// on; the previous title-match was the bug class v1.3.0 closed.
+// findMainTabButton relies on; the previous title-match was the bug class
+// v1.3.0 closed.
 //
 // Lives in its own module so chat/reflow.ts (which owns the chat-margin
 // reflow watcher) does not have to know about the tab-tagging concern.
