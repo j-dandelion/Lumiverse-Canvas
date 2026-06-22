@@ -1,5 +1,4 @@
-// Active-tab tracking: which tab is currently active in each sidebar,
-// and the moved-tab identification helpers used by the DOM guard.
+// Active-tab tracking: which tab is currently active in each sidebar.
 //
 // Extracted from tabs/assignment.ts to reduce file size and isolate
 // the active-tab concern from the tab-assignment/policy concerns.
@@ -78,40 +77,3 @@ export function isTabActiveInMainDrawer(tabId: string): boolean {
 let _activeSecondaryTabId: string | null = null
 export function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
 export function setActiveSecondaryTabId(tabId: string | null): void { _activeSecondaryTabId = tabId }
-
-// --- Moved-tab identification (v1.3.0 tabId-keyed) ---
-
-// Setter for the tab-assignments map (avoids circular import with assignment.ts).
-// Called once by assignment.ts at module init.
-let _getTabAssignments: (() => Map<string, 'primary' | 'secondary'>) | null = null
-export function _setTabAssignmentsGetter(getter: () => Map<string, 'primary' | 'secondary'>): void {
-  _getTabAssignments = getter
-}
-
-/**
- * Pure check: returns true iff this tabId is currently assigned to the
- * secondary sidebar. No DOM lookup, no cache dependency.
- */
-function isMovedTabId(tabId: string): boolean {
-  return _getTabAssignments?.().get(tabId) === 'secondary'
-}
-
-/**
- * What the wrapped container methods call. Primary check is the Canvas-owned
- * `data-canvas-moved` attribute set by repositionTab — this works even when
- * getDrawerTabs is broken (LumiScript interference: store returns only the
- * dock panel, so the store-based reverse-lookup misses extension tabs).
- * Falls back to the store-based lookup for nodes that are mounted in the
- * primary but have not been moved (defensive — the attribute is set/removed
- * symmetrically so this branch should rarely fire).
- */
-export function isMovedTabNode(node: Node): boolean {
-  if (node instanceof Element && node.hasAttribute('data-canvas-moved')) {
-    return true
-  }
-  findStoreData(true)
-  const tabs = getDrawerTabs()
-  const tab = tabs.find((t: any) => t.root === node)
-  if (!tab) return false
-  return isMovedTabId(tab.id)
-}

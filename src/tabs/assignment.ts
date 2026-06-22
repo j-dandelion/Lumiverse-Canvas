@@ -18,20 +18,14 @@ import {
 import { persistLayout } from '../layout/persist'
 import { runHandoff, captureSourceList } from './activation-handoff'
 import {
-  _setTabAssignmentsGetter,
-  getActiveTabId,
   isTabActiveInMainDrawer,
   getActiveSecondaryTabId,
   setActiveSecondaryTabId,
 } from './active-tab'
-// Wire the active-tab getter so isMovedTabId can read the assignments
-// without a circular import.
-_setTabAssignmentsGetter(() => _tabAssignments)
 
 // Re-export for backward compatibility — callers that import from
 // tabs/assignment still get the same symbols.
 export { isTabActiveInMainDrawer, getActiveSecondaryTabId, setActiveSecondaryTabId }
-export { isMovedTabNode, type ActiveTabState } from './active-tab'
 
 // Maps tab ID → which sidebar it belongs to
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
@@ -57,24 +51,9 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
 }
 
 /**
- * Magic 80ms wait for React to commit + mount after .click() on a tab button.
- * Empirical — must outlast a double-RAF (~32ms) plus mount cost.
- * v0.5.24 requestTabLocation is now published and used synchronously at
- * assignment.ts:240. This 80ms wait is retained for the showSecondaryTab
- * display-toggle path, where React commit latency still requires a brief
- * settle. See brain: orchestrator/spindle-tab-mobility-floating-plan B12.
- * See brain: orchestrator/spindle-tab-mobility-floating-plan B12.
- */
-export const TIMEOUT_REACT_COMMIT_MS = 80
-
-/**
- * Phase 4 (finding #1): one-line wrapper around applyAssignment with the
- * defaults for a user-initiated context-menu move. Kept as a stable public
- * API — any caller (current or future) that just wants "move this tab to
- * that sidebar" doesn't need to know about the options.
- *
- * v2.0.0: delegates to SecondaryDrawer for the secondary path and
- * unassigns directly for the primary path.
+ * Move a tab between sidebars. The stable public API for "move this tab
+ * to that sidebar". Delegates to SecondaryDrawer for the secondary path
+ * and to unassignFromSecondary for the primary path.
  *
  * window.spindle IS defined at runtime (Lumiverse loader.ts:1032-1087).
  * The built-in branch CAN execute when getBuiltInTabRoot returns a root.
