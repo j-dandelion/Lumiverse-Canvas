@@ -1996,6 +1996,7 @@ async function assignToSecondary(tabId) {
     iconSvg = tab.button.querySelector("svg")?.outerHTML;
   }
   const resolvedId = tab.tabId;
+  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
   const _isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
   if (_isExtensionTab) {
     setTabAssignment(resolvedId, "secondary");

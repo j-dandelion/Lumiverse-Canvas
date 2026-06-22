@@ -118,7 +118,7 @@ function buildFakeSecondaryWrapper() {
 // =====================================================================
 //
 // Before the fix, unassignFromSecondary unconditionally called
-// showSecondaryTabDisplay(nextTabId) when there were remaining secondary
+// showSecondaryTab(nextTabId) when there were remaining secondary
 // tabs, regardless of whether the moved tab was active. This violated the
 // spec: non-active source moves should leave the source unchanged.
 //
@@ -154,10 +154,10 @@ async function testT1() {
 
 // =====================================================================
 // T2: unassignFromSecondary with active moved tab does not double-activate
-//     (verifies the showSecondaryTabDisplay(null) guard)
+//     (verifies the showSecondaryTab(null) guard)
 // =====================================================================
 //
-// After the fix, showSecondaryTabDisplay(null) is only called when the
+// After the fix, showSecondaryTab(null) is only called when the
 // moved tab WAS the active secondary tab. For non-active moves, the
 // active tab is preserved. This test verifies both branches.
 async function testT2() {
@@ -176,7 +176,7 @@ async function testT2() {
 
   const { unassignFromSecondary } = await import('../../sidebar/secondary-drawer')
 
-  // Move tab-Y (active) to primary — showSecondaryTabDisplay(null) is called
+  // Move tab-Y (active) to primary — showSecondaryTab(null) is called
   // (the guard allows it when moved tab === active tab)
   await unassignFromSecondary('tab-Y')
   assertEqual(getActiveSecondaryTabId(), null,
@@ -227,7 +227,7 @@ async function testT3() {
 // =====================================================================
 //
 // The unconditional neighbor activation block (the `else` clause that
-// walked _tabAssignments and called showSecondaryTabDisplay) should be
+// walked _tabAssignments and called showSecondaryTab) should be
 // gone. We verify by reading the file.
 async function testT4() {
   const { readFileSync } = await import('fs')
@@ -236,8 +236,8 @@ async function testT4() {
   const src = readFileSync(path, 'utf-8')
 
   // The old block had: "for (const [assignedId] of _tabAssignments)"
-  // walking the map and calling showSecondaryTabDisplay unconditionally.
-  // After the fix, this block is removed. The showSecondaryTabDisplay
+  // walking the map and calling showSecondaryTab unconditionally.
+  // After the fix, this block is removed. The showSecondaryTab
   // call is now guarded by getActiveSecondaryTabId() === tabId.
   const hasUnconditionalWalk = src.includes('for (const [assignedId] of _tabAssignments)') &&
     src.match(/showSecondaryTabDisplay\(assignedId\)/g) !== null

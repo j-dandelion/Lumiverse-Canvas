@@ -27,6 +27,9 @@
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore, findStoreData } from '../store'
 import { dlog, dwarn } from '../debug/log'
+// NOTE: secondary.tsx imports from this module (bidirectional). Both modules
+// only call each other from inside function bodies — never at module init time.
+// Keep it that way to avoid initialization races.
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
 import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'

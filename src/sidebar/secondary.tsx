@@ -16,6 +16,9 @@ import { getHostBridge } from '../dom/host-bridge'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
+// NOTE: drawer-sync.ts imports from this module (bidirectional). Both modules
+// only call each other from inside function bodies — never at module init time.
+// Keep it that way to avoid initialization races.
 import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
 import { isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'

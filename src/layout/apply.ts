@@ -135,11 +135,11 @@ export async function applyLayout(layout: any) {
     // direct and LumiScript-fallback paths. assignToSecondary handles the
     // full lifecycle (state, buttons, DOM reparenting for extension tabs,
     // display-toggle for built-in tabs) without the policy-layer side
-    // effects of assignTab: it does NOT call switchMainDrawerToFallback
-    // (which would manipulate the main drawer that's already in its saved
-    // state) and it does NOT call persistLayout (we just LOADED this
-    // layout, no need to write it back — the internal persistLayout call
-    // in assignToSecondary is idempotent).
+    // effects of assignTab: it does not manipulate the main drawer
+    // (which is already in its saved state) and it does NOT call
+    // persistLayout (we just LOADED this layout, no need to write it
+    // back — the internal persistLayout call in assignToSecondary is
+    // idempotent).
     //
     // Phase 4.0 (suffix-drift fallback): Lumiverse assigns a session-variant
     // suffix (`:1`, `:2`, `:3`) to extension tab ids in the order they're
