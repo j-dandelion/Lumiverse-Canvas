@@ -22,7 +22,7 @@ import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, clos
 import {
   hideMainTabButton, showMainTabButton, findMainTabButton,
   addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
-  cssEscape, findSafeFallbackButton, isSettingsButton, readMainButtonShortName,
+  cssEscape, readMainButtonShortName,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
 import { runHandoff, captureSourceList } from './activation-handoff'
@@ -75,108 +75,6 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
  * See brain: orchestrator/spindle-tab-mobility-floating-plan B12.
  */
 export const TIMEOUT_REACT_COMMIT_MS = 80
-
-/**
- * Switch the main drawer to a fallback tab before moving the active extension
- * tab to the secondary sidebar. Without this, the previous ExtensionTabContent
- * stays mounted with an empty container (its useEffect dep [tab] is unchanged
- * after a DOM-move, so it doesn't re-fire), and the main panel renders a
- * stale header + empty body.
- *
- * Strategy: find the button immediately before the moved tab's button in the
- * main sidebar DOM, and click it. This is the user's expected behavior —
- * "the next panel whose tab was above or beneath" — and triggers Lumiverse's
- * real onClick → setDrawerTab + openDrawer flow.
- *
- * If the moved tab is the FIRST tab in the sidebar, fall back to the button
- * immediately after. If no neighbor exists (degenerate case), fall back to
- * the first built-in tab button. If even that fails, proceed without
- * switching (preserves the original buggy behavior rather than dead-locking).
- */
-/**
- * Phase 4 (finding #10): unified drawer-fallback switcher. Replaces the
- * separate `switchMainDrawerToFallback` and the (as-yet-unwritten) secondary
- * counterpart. The two-RAF wait is only needed for `'main'` because React
- * unmounts the old `ExtensionTabContent` asynchronously there. For `'secondary'`
- * the call is synchronous — the moved tab's node guard and the panel's
- * synchronous state update are enough to detach the node.
- */
-export function switchDrawerToFallback(side: 'main' | 'secondary', tabId: string, then: () => void): void {
-  if (side === 'secondary') {
-    // Phase 4 (finding #2): when the moved tab is the active secondary tab,
-    // there is no fallback drawer to switch — restoreTabToPrimary already
-    // handles the neighbor-tab fall-through via _activeSecondaryTabId.
-    // Just invoke then() synchronously.
-    then()
-    return
-  }
-  // side === 'main' — legacy logic, preserved verbatim from the previous
-  // switchMainDrawerToFallback implementation.
-  const sidebar = getMainSidebar()
-  if (!sidebar) {
-    dwarn('switchDrawerToFallback(main): no main sidebar found')
-    then()
-    return
-  }
-
-  const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]')) as HTMLElement[]
-
-  let movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('data-tab-id') === tabId)
-  if (movedBtnIdx === -1) {
-    const movedTab = getDrawerTabs().find((t: any) => t.id === tabId)
-    const movedTitle = movedTab?.title
-    if (movedTitle) {
-      movedBtnIdx = allButtons.findIndex((b) => b.getAttribute('title') === movedTitle)
-      if (movedBtnIdx === -1) {
-        dwarn(`switchDrawerToFallback(main): no button for id="${tabId}" (title="${movedTitle}") found, proceeding without switching`)
-        then()
-        return
-      }
-      dwarn(`switchDrawerToFallback(main): id-match missed for ${tabId}, fell back to title-match — tagMainSidebarButtons may not have run yet`)
-    } else {
-      dwarn(`switchDrawerToFallback(main): no tab in store for id=${tabId}, proceeding without switching`)
-      then()
-      return
-    }
-  }
-
-  // Pick a safe fallback: prefer the visible built-in tab immediately
-  // adjacent to the moved tab. Skip non-visible buttons, extension tabs,
-  // and the Lumiverse Settings tab.
-  const isSafeCandidate = (b: HTMLElement | undefined): b is HTMLElement => {
-    if (!b) return false
-    if (b.style.display === 'none') return false
-    if (!b.className.includes('tabBtn')) return false
-    if (b.className.includes('tabBtnExtension')) return false
-    return !isSettingsButton(b)
-  }
-  let fallbackBtn: HTMLElement | null = null
-  for (let offset = -1; offset >= -(movedBtnIdx) && !fallbackBtn; offset--) {
-    fallbackBtn = isSafeCandidate(allButtons[movedBtnIdx + offset]) ? allButtons[movedBtnIdx + offset] : null
-  }
-  if (!fallbackBtn) {
-    for (let offset = 1; offset < allButtons.length - movedBtnIdx && !fallbackBtn; offset++) {
-      fallbackBtn = isSafeCandidate(allButtons[movedBtnIdx + offset]) ? allButtons[movedBtnIdx + offset] : null
-    }
-  }
-  if (!fallbackBtn) {
-    fallbackBtn = findSafeFallbackButton(sidebar)
-  }
-  if (!fallbackBtn) {
-    dwarn('switchDrawerToFallback(main): no safe fallback button found, proceeding without switching')
-    then()
-    return
-  }
-
-  fallbackBtn.click()
-
-  // Wait two animation frames before performing the move.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      then()
-    })
-  })
-}
 
 /**
  * Phase 4 (finding #1): one-line wrapper around applyAssignment with the
@@ -520,91 +418,6 @@ export function repositionTab(tabId: string, target: 'primary' | 'secondary'): b
   }
 }
 
-
-/**
- * Restore a tab from the secondary drawer back to the primary sidebar.
- *
- * v2.0.0 (drawer overhaul): The complex hack pile body has been gutted.
- * The synthetic descriptor build, DOM-walk fallback, and neighbor-tab
- * fall-through dance are no longer needed — SecondaryDrawer handles
- * the state machine transitions.
- *
- * This function is retained as a simplified stub for backward compatibility.
- * The core logic delegates to repositionTab for the DOM move and
- * switchDrawerToFallback for the main drawer switch.
- *
- * TODO: Remove this function entirely once all callers are migrated to
- * SecondaryDrawer.unassignFromSecondary.
- */
-export function restoreTabToPrimary(tabId: string) {
-  // Simplified: just do the DOM move and switch the main drawer.
-  repositionTab(tabId, 'primary')
-
-  // Activate the restored tab in the main drawer with a guaranteed remount.
-  switchDrawerToFallback('main', tabId, () => {
-    const btn = findMainTabButton(tabId)
-    if (btn) (btn as HTMLElement).click()
-  })
-
-  // If the restored tab was the active secondary tab, fall through to a neighbor.
-  if (getActiveSecondaryTabId() === tabId) {
-    let neighborId: string | null = null
-    for (const [tid, side] of _tabAssignments) {
-      if (side === 'secondary' && tid !== tabId) {
-        neighborId = tid
-        break
-      }
-    }
-    if (neighborId) {
-      dlog(`restoreTabToPrimary: falling through to neighbor tab ${neighborId}`)
-      showSecondaryTab(neighborId)
-    } else {
-      dlog('restoreTabToPrimary: no neighbor tab in secondary; clearing panel header')
-      clearSecondaryTab()
-    }
-  }
-}
-
-/**
- * Phase 4 (finding #2): hide the secondary panel header and content when
- * no tab is assigned. Used by restoreTabToPrimary when the last secondary
- * tab is moved out.
- *
- * v2.0.0: simplified — the complex body has been gutted. The core logic
- * is preserved for backward compatibility.
- */
-function clearSecondaryTab() {
-  const secondaryWrapper = getSecondaryWrapper()
-  const title = secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-  if (title) title.textContent = ''
-  // Skip Canvas-owned buttons — they're owned by the wrapper in
-  // src/context/secondary-ctx.ts and have their own teardown via
-  // teardownExtension → clearSecondaryTabs. Touching them here would
-  // try to match against their bare options.id, which wouldn't match
-  // the composite Lumiverse id we iterate by.
-  const allBtns = secondaryWrapper?.querySelectorAll(
-    '.sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)',
-  ) as NodeListOf<HTMLElement>
-  if (allBtns) {
-    for (const btn of allBtns) {
-      btn.classList.remove('sidebar-ux-tab-active')
-      btn.style.color = ''
-      btn.style.background = ''
-      btn.style.boxShadow = ''
-      btn.style.borderRadius = ''
-      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
-      if (label) label.style.color = ''
-    }
-  }
-  // Hide tab roots that are in the secondary content area.
-  const content = secondaryWrapper?.querySelector('.sidebar-ux-panel-content') as HTMLElement
-  if (content) {
-    for (const child of Array.from(content.children) as HTMLElement[]) {
-      child.style.setProperty('display', 'none', 'important')
-    }
-  }
-  setActiveSecondaryTabId(null)
-}
 
 /**
  * Reposition all assigned tabs (called after secondary sidebar opens/resizes).
