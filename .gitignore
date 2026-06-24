@@ -5,10 +5,8 @@
 # Development scaffolding (not part of the shipping extension)
 AGENTS.md
 DEVLOG.md
-.hermes/
 .serena/
-.sisyphus/
-docs/plans/
+.workflow/
 
 # Editor / OS
 .vscode/
