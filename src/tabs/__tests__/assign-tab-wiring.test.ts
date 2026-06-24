@@ -252,6 +252,36 @@ async function testT4() {
 }
 
 // =====================================================================
+// T5: assignTab primary->secondary auto-open is mobile-gated
+// =====================================================================
+async function testT5() {
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(
+    join(process.cwd(), 'src/tabs/assignment.ts'), 'utf-8'
+  )
+  const hasMobileGuard = /isSecondarySidebarOpen\(\)\s*&&\s*!?isMobileViewport\(\)/.test(src)
+  assert(hasMobileGuard,
+    'T5: assignTab primary->secondary auto-open is mobile-gated')
+}
+
+// =====================================================================
+// T6: secondary-drawer.ts has mobile guards on both auto-open sites
+// =====================================================================
+async function testT6() {
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(
+    join(process.cwd(), 'src/sidebar/secondary-drawer.ts'), 'utf-8'
+  )
+  const guards = src.match(/!\s*isMobileViewport\(\)/g) ?? []
+  assert(guards.length >= 2,
+    `T6: secondary-drawer.ts has ${guards.length} mobile guards, expected >= 2`)
+  assert(src.includes("from './mobile-exclusion'"),
+    'T6: secondary-drawer.ts imports from ./mobile-exclusion')
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -259,6 +289,8 @@ async function main() {
   await testT2()
   await testT3()
   await testT4()
+  await testT5()
+  await testT6()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

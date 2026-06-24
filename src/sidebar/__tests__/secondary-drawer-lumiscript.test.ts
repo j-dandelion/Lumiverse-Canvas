@@ -348,7 +348,15 @@ function setupLumiScriptTest(opts: {
   }
 
   // --- Spindle bridge stubs ---
-  globalThis.window = { spindle: { ui: {} } } as any
+  // matchMedia stub: required because the mobile-fix in secondary-drawer.ts
+  // calls isMobileViewport() unconditionally inside assignToSecondary.
+  // matches: false (desktop) is the safe default — the test was designed
+  // for the desktop path and remains so; the mobile branch is exercised
+  // by T-M1/T-M2 in secondary-drawer.test.ts.
+  globalThis.window = {
+    spindle: { ui: {} },
+    matchMedia(_q: string) { return { matches: false, addEventListener() {}, removeEventListener() {} } },
+  } as any
 
   return { fakeRoot, fakePanelContent, fakeTabList, fakeMainButton, fakeWrapper, fakeHeaderTitle, extensionId, tabId, tabTitle }
 }

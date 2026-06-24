@@ -2001,10 +2001,10 @@ async function assignToSecondary(tabId) {
   if (_isExtensionTab) {
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen()) {
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport()) {
       await openSecondarySidebar();
+      _state = "open";
     }
-    _state = "open";
     const _secondaryContentEarly = document.querySelector(".sidebar-ux-panel-content");
     const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
     const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
@@ -2047,9 +2047,11 @@ async function assignToSecondary(tabId) {
         updateDrawerTabVisibility();
       }
     }
-    _activeTabId = resolvedId;
-    _state = "tab_active";
-    setActiveSecondaryTabId(resolvedId);
+    if (!isMobileViewport()) {
+      _activeTabId = resolvedId;
+      _state = "tab_active";
+      setActiveSecondaryTabId(resolvedId);
+    }
     const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
     if (_headerTitle) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
@@ -2121,12 +2123,12 @@ async function assignToSecondary(tabId) {
     updateDrawerTabVisibility();
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen()) {
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport()) {
       await openSecondarySidebar();
+      _state = "tab_active";
+      _activeTabId = resolvedId;
+      setActiveSecondaryTabId(resolvedId);
     }
-    _state = "tab_active";
-    _activeTabId = resolvedId;
-    setActiveSecondaryTabId(resolvedId);
     const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
     if (_headerTitle)
       _headerTitle.textContent = _title;
@@ -2208,6 +2210,7 @@ var init_secondary_drawer = __esm(() => {
   init_secondary();
   init_store();
   init_log();
+  init_mobile_exclusion();
 });
 
 // src/tabs/assignment.ts
@@ -2301,7 +2304,7 @@ async function assignTab(tabId, sidebar) {
       hideMainTabButton(tabId);
       addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
       updateDrawerTabVisibility();
-      if (!isSecondarySidebarOpen())
+      if (!isSecondarySidebarOpen() && !isMobileViewport())
         openSecondarySidebar();
       await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList2, preMoveSourceActiveTab: preMoveActiveTab2 });
       persistLayout();
@@ -3506,7 +3509,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.0.3", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();

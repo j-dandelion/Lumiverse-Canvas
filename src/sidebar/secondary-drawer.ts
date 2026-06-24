@@ -25,6 +25,7 @@ import { findStoreData, getDrawerTabs, type DrawerTab } from '../store'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { dlog, dwarn } from '../debug/log'
 import { getHostBridge } from '../dom/host-bridge'
+import { isMobileViewport } from './mobile-exclusion'
 
 export type SecondaryDrawerState = 'closed' | 'mounting' | 'open' | 'tab_active'
 
@@ -167,10 +168,14 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // === EXTENSION TAB PATH ===
     setTabAssignment(resolvedId, 'secondary')
     hideMainTabButton(resolvedId)
-    if (_state === 'closed' && !isSecondarySidebarOpen()) {
+    // On mobile, do not auto-open the drawer during assignToSecondary.
+    // This is invoked from assignTab's extension path; auto-opening
+    // would trigger enforceExclusionOnOpen and close the source drawer.
+    // (See assignment.ts:172 for the built-in-path equivalent.)
+    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport()) {
       await openSecondarySidebar()
+      _state = 'open'
     }
-    _state = 'open'
 
     // Check if root is already reparented (data-canvas-moved set).
     // applyLayout's restore pass or a duplicate call can hit this.
@@ -231,9 +236,13 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     }
 
     // Refresh active state and header (idempotent — safe on both paths).
-    _activeTabId = resolvedId
-    _state = 'tab_active'
-    setActiveSecondaryTabId(resolvedId)
+    // On mobile, skip state activation when the drawer wasn't opened —
+    // the user stays in the source drawer; destination opens manually.
+    if (!isMobileViewport()) {
+      _activeTabId = resolvedId
+      _state = 'tab_active'
+      setActiveSecondaryTabId(resolvedId)
+    }
     const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
     if (_headerTitle) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute('data-tab-title') || resolvedId
@@ -356,12 +365,12 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // Set assignment AFTER successful fallback
     setTabAssignment(resolvedId, 'secondary')
     hideMainTabButton(resolvedId)
-    if (_state === 'closed' && !isSecondarySidebarOpen()) {
+    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport()) {
       await openSecondarySidebar()
+      _state = 'tab_active'
+      _activeTabId = resolvedId
+      setActiveSecondaryTabId(resolvedId)
     }
-    _state = 'tab_active'
-    _activeTabId = resolvedId
-    setActiveSecondaryTabId(resolvedId)
 
     // Update panel header title
     const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')

@@ -169,7 +169,13 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
       hideMainTabButton(tabId)
       addBuiltInSecondaryButton(bridge, tabId, builtInRoot)
       updateDrawerTabVisibility()
-      if (!isSecondarySidebarOpen()) openSecondarySidebar()
+      // On mobile, do not auto-open the destination drawer. Otherwise
+      // enforceExclusionOnOpen inside openSecondarySidebar clicks the
+      // source (currently-open) drawer's toggle button closed. The user
+      // stays in the source drawer; runHandoff Part B already activates
+      // a neighbor in the source on mobile (activation-handoff.ts:11-13).
+      // Destination drawer can be opened manually.
+      if (!isSecondarySidebarOpen() && !isMobileViewport()) openSecondarySidebar()
       await runHandoff({tabId, source: 'primary', destination: 'secondary', sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab})
       persistLayout()
       return
