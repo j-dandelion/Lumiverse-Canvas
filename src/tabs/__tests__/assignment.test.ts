@@ -47,16 +47,6 @@ assertEqual(getTabSidebar('tab-3'), 'secondary', 'getTabSidebar returns secondar
 deleteTabAssignment('tab-2')
 deleteTabAssignment('tab-3')
 
-// --- isMovedTabNode identifies moved tabs ---
-// Note: isMovedTabNode depends on runtime DOM store state (getDrawerTabs).
-// In a headless test environment it should return false for a bare DOM node.
-import('../active-tab').then(({ isMovedTabNode }) => {
-  const el = document.createElement('div')
-  assert(isMovedTabNode(el) === false, 'isMovedTabNode returns false for unknown node')
-}).catch(() => {
-  console.log('SKIP: isMovedTabNode requires runtime store (expected in headless)')
-})
-
 // --- findSafeFallbackButton skips the Settings tab ---
 // Regression test for the ghost-panel bug: when the only extension tab
 // in the main sidebar is moved to the second sidebar while focused, the

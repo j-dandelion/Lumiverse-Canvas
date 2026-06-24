@@ -27,6 +27,7 @@ import {
 import { findMainTabButton, showSecondaryTab } from './buttons'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getMainPanelContent, getMainSidebar } from '../dom/lumiverse'
+import { getHostBridge } from '../dom/host-bridge'
 
 /* ------------------------------------------------------------------ */
 /* captureSourceList                                                   */
@@ -152,12 +153,12 @@ export async function captureSourceList(side: 'primary' | 'secondary', h?: TestH
         const btn = mainSidebarEl.querySelector(`button[data-tab-id="${id}"]`) as HTMLElement | null
         if (btn && btn.style.display === 'none') {
           filteredOut.push(id)
-          dlog(`[tabmove] captureSourceList: filtering out tabId="${id}" (button display=none, in secondary)`)
+
           continue
         }
         filtered.push(id)
       }
-      dlog(`[tabmove] captureSourceList: kept ${filtered.length}, filtered out ${filteredOut.length} (filteredOut=[${filteredOut.join(',')}])`)
+
       return filtered
     }
 
@@ -247,16 +248,14 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
     const bySegment = tabs.find(t => t.id.includes(`:tab:${tabId}:`) || t.id === tabId)
     if (bySegment) {
       resolvedId = bySegment.id
-      dlog(`[tabmove] primary restore: resolved bare id "${tabId}" -> composite id "${resolvedId}" via store segment match`)
+
     } else {
-      dlog(`[tabmove] primary restore: could not resolve bare id "${tabId}" to composite id; known tabs=`, tabs.map(t => ({ id: t.id, title: t.title })))
+
     }
   }
   const mainBtn = (directBtn ?? _findBtn(resolvedId)) as HTMLElement | null
   if (mainBtn) {
-    dlog(`[tabmove] primary restore: main button found tabId="${tabId}" resolvedId="${resolvedId}" display=${mainBtn.style.display} classList="${mainBtn.className}"`)
     mainBtn.click()
-    dlog(`[tabmove] primary restore: clicked main button to activate tabId="${resolvedId}"`)
 
     // BUG 5 FIX v5 (stick observer): re-click if the host's
     // pendingActiveTabReset useEffect (ViewportDrawer.tsx:114-120) fires
@@ -279,27 +278,24 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
         const currentActiveId = currentActive?.getAttribute('data-tab-id')
         if (currentActiveId && currentActiveId !== resolvedId) {
           if (stickObserver) { stickObserver.disconnect(); stickObserver = null }
-          dlog(`[tabmove] primary restore: stick observer fired — host overwrote "${resolvedId}" with "${currentActiveId}", re-clicking`)
           mainBtn.click()
         }
       })
       stickObserver.observe(stickSidebar, { attributes: true, attributeFilter: ['class'], subtree: true })
       setTimeout(() => { if (stickObserver) { stickObserver.disconnect(); stickObserver = null } }, 200)
-      dlog(`[tabmove] primary restore: stick observer armed for resolvedId="${resolvedId}"`)
     }
 
     // 100ms post-click verification (Q5 user-confirmed).
     await new Promise<void>(resolve => {
       setTimeout(() => {
         const active = mainBtn.className.includes('tabBtnActive')
-        const wUiForCheck = (window as any).spindle?.ui
+        const wUiForCheck = getHostBridge()?.ui
         const rootForCheck = wUiForCheck?.getBuiltInTabRoot?.(resolvedId)
         const mainPanelContentForCheck = _getPanel()
         const rootInMain = rootForCheck && mainPanelContentForCheck ? mainPanelContentForCheck.contains(rootForCheck) : null
         const rootChildCount = rootForCheck ? rootForCheck.children.length : null
         const rootComputedDisplay = rootForCheck ? getComputedStyle(rootForCheck).display : null
         const rootRect = rootForCheck ? rootForCheck.getBoundingClientRect() : null
-        dlog(`[tabmove] primary restore: post-click verification tabId="${resolvedId}" isActive=${active} rootInMain=${rootInMain} rootChildren=${rootChildCount} rootDisplay=${rootComputedDisplay} rootRect=${rootRect ? `${rootRect.width}x${rootRect.height}` : 'null'}`)
         // Host's ViewportDrawer useEffect (spindle-placement.ts:350-361) fires
         // ~1-16ms after requestTabLocation commits, resetting drawerTab to
         // the first non-moved tab (topmost). By 100ms, the useEffect has
@@ -308,20 +304,17 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
         // when the moved tab is active, so this re-click is the only
         // counter to the host's reset.
         if (!active) {
-          dlog(`[tabmove] primary restore: post-click verification FAILED (host overwrote), re-clicking main button to activate tabId="${resolvedId}"`)
           mainBtn.click()
         }
         if (active && rootInMain === false && rootForCheck && mainPanelContentForCheck) {
           if (!mainPanelContentForCheck.contains(rootForCheck)) {
             mainPanelContentForCheck.appendChild(rootForCheck)
-            dlog(`[tabmove] primary restore: fallback mount — appended built-in root to main panel content for tabId="${resolvedId}"`)
           }
         }
         resolve()
       }, 100)
     })
   } else {
-    dlog(`[tabmove] primary restore: main button NOT FOUND for tabId="${tabId}" resolvedId="${resolvedId}"`)
   }
 }
 

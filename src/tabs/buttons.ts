@@ -110,9 +110,9 @@ export function cssEscape(value: string): string {
 /**
  * Heuristic: does this sidebar button represent the Lumiverse Settings tab?
  * Used to exclude the Settings tab from fallback-button picks in
- * switchDrawerToFallback and tearDownSecondarySidebar — clicking the
- * Settings tab when the only extension tab is being moved opens the
- * Settings panel and leaves a ghost panel in the main sidebar.
+ * tearDownSecondarySidebar — clicking the Settings tab when the only
+ * extension tab is being moved opens the Settings panel and leaves a
+ * ghost panel in the main sidebar.
  *
  * The predicate is intentionally multi-pronged because Lumiverse's CSS
  * class names are module-hashed in production builds and the Settings
@@ -151,9 +151,7 @@ export function isSettingsButton(btn: HTMLElement): boolean {
  * a ghost panel behind).
  *
  * Used by:
- *   - tabs/assignment.ts switchDrawerToFallback  (the "last extension
- *     tab moved out" path — the bug this fixes)
- *   - sidebar/secondary.tsx tearDownSecondarySidebar  (the same
+ *   - sidebar/secondary.tsx tearDownSecondarySidebar  (the
  *     fallback when the secondary sidebar is torn down with an
  *     active secondary tab)
  */
@@ -226,8 +224,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     align-items: center;
     justify-content: center;
     gap: 1px;
-    border-radius: 8px;
-    background: transparent;
     border: none;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -235,7 +231,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
 
   // Render icon from store data (matches ViewportDrawer.tsx rendering)
   const iconWrap = document.createElement('span')
-  iconWrap.style.cssText = 'display: flex; align-items: center; justify-content: center; flex-shrink: 0;'
   if (tab.iconSvg) {
     iconWrap.innerHTML = tab.iconSvg
   } else if (tab.iconUrl) {
@@ -256,14 +251,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   labelSpan.className = 'sidebar-ux-tab-label'
   labelSpan.textContent = deriveShortName(tab.title, tab.shortName)
   labelSpan.style.cssText = `
-    font-size: calc(9px * var(--lumiverse-font-scale, 1));
-    font-weight: 500;
-    line-height: 1;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 48px;
     opacity: ${showLabels ? '1' : '0'};
     height: ${showLabels ? 'auto' : '0'};
     margin-top: ${showLabels ? '1px' : '0'};
@@ -271,20 +258,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   `
   btn.appendChild(labelSpan)
 
-  btn.addEventListener('mouseenter', () => {
-    // Hover: CSS handles via :hover; clear inline styles so CSS wins.
-    btn.style.background = ''
-    btn.style.color = ''
-    dlog(`mouseenter: tab=${tab.id} btn.style.color cleared`)
-  })
-  btn.addEventListener('mouseleave', () => {
-    // Restore: CSS handles active via .sidebar-ux-tab-active; demote
-    // inactive to vars. Clear all inline overrides so CSS takes over.
-    btn.style.background = ''
-    btn.style.color = ''
-    labelSpan.style.color = ''
-    dlog(`mouseleave: tab=${tab.id} isActive=${btn.classList.contains('sidebar-ux-tab-active')} btn.style.color=${btn.style.color}`)
-  })
   btn.addEventListener('click', () => {
     if (!isSecondarySidebarOpen()) openSecondarySidebar()
     showSecondaryTab(tab.id)
@@ -311,8 +284,7 @@ export function updateDrawerTabVisibility(): void {
 }
 
 export function showSecondaryTab(tabId: string): void {
-  // Record which tab is now active so restoreTabToPrimary can fall through
-  // to a neighbor when the active tab is moved out.
+  // Record which tab is now active.
   setActiveSecondaryTabId(tabId)
   // Persist the new active tab so layout restore brings back the same tab.
   // persistLayout is 500ms debounced; multiple clicks coalesce to one write.
@@ -320,38 +292,12 @@ export function showSecondaryTab(tabId: string): void {
 
   const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 
-  // SWEEP: tag any untagged non-wrapper children with data-canvas-moved.
-  // On the first move of a built-in tab, builtInRoot_in_secondaryContent
-  // is 'no' (the root hasn't been placed by Lumiverse yet), so the safety
-  // net below never tags it. Without data-canvas-moved, the CSS hide rule
-  // [data-canvas-moved]:not([data-canvas-active]) doesn't apply and the
-  // root stays visible when a different built-in becomes active. The
-  // placeholder triggers the hide rule; the safety net overwrites it
-  // with the real tabId when it activates this root.
-  if (secondaryContent) {
-    for (const child of Array.from(secondaryContent.children)) {
-      if (!(child instanceof HTMLElement)) continue
-      if (child.hasAttribute('data-canvas-secondary')) continue
-      if (child.hasAttribute('data-canvas-moved')) continue
-      child.setAttribute('data-canvas-moved', '__unknown__')
-    }
-  }
-
-  // Source of truth: Canvas-owned `data-canvas-moved` attribute on roots in
-  // the secondary content. Works even when getDrawerTabs is broken
-  // (LumiScript interference). Iterate the moved roots directly; the
-  // original code used getDrawerTabs().find(t => t.id === tid) and
-  // tab.root from the store, which returns undefined for LumiBooks/Hone
-  // when LumiScript is installed, causing the display toggle to no-op.
-  //
-  // Skip roots marked `data-canvas-secondary` — those are owned by the
-  // wrapper in src/context/secondary-ctx.ts and toggle their own active
-  // state via activateFn. The wrapper uses bare options.id for
-  // data-canvas-moved, while this function iterates by composite
-  // Lumiverse id, so iterating them here would hide the wrapper's
-  // active tab on every call.
+  // Iterate moved roots in the secondary content. Each root's
+  // data-canvas-moved attribute carries the tabId; we activate the
+  // matching root and deactivate all others. Works even when
+  // getDrawerTabs is broken (LumiScript interference).
   const movedRoots = secondaryContent
-    ? Array.from(secondaryContent.querySelectorAll('[data-canvas-moved]:not([data-canvas-secondary])')) as HTMLElement[]
+    ? Array.from(secondaryContent.querySelectorAll('[data-canvas-moved]')) as HTMLElement[]
     : []
   let activeTitle = findMainTabButton(tabId)?.getAttribute('title') || ''
   for (const root of movedRoots) {
@@ -369,136 +315,30 @@ export function showSecondaryTab(tabId: string): void {
     }
   }
 
-  // SAFETY NET: built-in tabs are placed by the host via requestTabLocation
-  // and may not have data-canvas-moved set. Ensure the CSS rule
-  // [data-canvas-moved]:not([data-canvas-active]) applies by setting both
-  // attributes. Moves go through assignTab; this is display-toggle only.
-  // Removable once Lumiverse fully owns built-in lifecycle.
-  //
-  // window.spindle IS defined at runtime. The probe CAN return a root when the tab is built-in. The display-toggle branch IS reachable.
-  const wSpindleUi = (window as any).spindle?.ui
-  const builtInRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId)
-  dlog(
-    `[tabmove] showSecondaryTab built-in probe: tabId="${tabId}" ` +
-    `window.spindle.ui=${wSpindleUi ? 'present' : 'UNDEFINED'}, ` +
-    `builtInRoot=${builtInRoot ? 'present' : 'absent'}, ` +
-    `builtInRoot_in_secondaryContent=${builtInRoot && secondaryContent?.contains(builtInRoot) ? 'yes' : 'no'}`
-  )
-  if (builtInRoot && secondaryContent?.contains(builtInRoot)) {
-    if (!builtInRoot.getAttribute('data-canvas-moved')) {
-      builtInRoot.setAttribute('data-canvas-moved', tabId)
-    }
-    builtInRoot.setAttribute('data-canvas-active', '')
-    if (!activeTitle) {
-      const mainBtn = findMainTabButton(tabId)
-      if (mainBtn) activeTitle = mainBtn.getAttribute('title') || ''
-    }
-    // BUG 2 FIX: built-in activation must demote wrapper-owned extension tabs.
-    // Wrapper roots carry data-canvas-moved AND data-canvas-secondary (see
-    // secondary-ctx.ts:241-242); the movedRoots loop at :330 filters them out
-    // via :not([data-canvas-secondary]). When a wrapper tab was previously
-    // active, its data-canvas-active lingers, stacking on top of the just-
-    // activated built-in. Removing the attribute lets the existing CSS
-    // hide rule apply. We also clear the wrapper button's active styles
-    // (the .sidebar-ux-tab-secondary-canvas class) so the purple
-    // indicator moves to the built-in. Also reset the label's purple color
-    // (set by the wrapper's activateFn) so the icon's purple indicator is
-    // the only visual change.
-    secondaryContent.querySelectorAll('[data-canvas-secondary]').forEach(r => (r as HTMLElement).removeAttribute('data-canvas-active'))
-    const _wb = getSecondaryWrapper()?.querySelectorAll('.sidebar-ux-tab-secondary-canvas') as NodeListOf<HTMLElement> | undefined
-    if (_wb) for (const b of _wb) {
-      b.classList.remove('sidebar-ux-tab-active')
-      b.style.color = ''
-      b.style.background = ''
-      b.style.boxShadow = ''
-      b.style.borderRadius = ''
-      const _lbl = b.querySelector('.sidebar-ux-tab-label') as HTMLElement
-      if (_lbl) _lbl.style.color = ''
-    }
-    dlog(`[tabmove] showSecondaryTab built-in: demoted wrapper roots+buttons for tabId="${tabId}"`)
-  }
-
-  // Update header title
+  // Update header title.
   if (activeTitle) {
     const title = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
     if (title) title.textContent = activeTitle
   }
 
-  // Update active state on tab buttons. Skip Canvas-owned buttons (those
-  // with class `sidebar-ux-tab-secondary-canvas`) — they're owned by the
-  // wrapper's activateFn in src/context/secondary-ctx.ts and toggle their
-  // own active state via the root's `data-canvas-moved` and the button's
-  // bare `options.id` (not the composite Lumiverse id this function
-  // iterates by). Without this filter, calling showSecondaryTab with a
-  // composite id (e.g. during layout restore) would iterate Canvas-owned
-  // buttons, find no match, and remove their active class — hiding the
-  // tab the user just activated.
+  // Update active state on tab buttons. CSS drives the active visual
+  // via .sidebar-ux-tab-active — matches Lumiverse's .tabBtnActive
+  // (ViewportDrawer.module.css:227-237). No inline style needed.
   const allBtns = getSecondaryWrapper()?.querySelectorAll(
-    '.sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)',
+    '.sidebar-ux-tab-list button[data-tab-id]',
   ) as NodeListOf<HTMLElement>
   if (allBtns) {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute('data-tab-id') === tabId
       btn.classList.toggle('sidebar-ux-tab-active', isActive)
-      if (isActive) {
-        // CSS in src/sidebar/styles.ts drives the active visual via
-        // .sidebar-ux-tab-active — matches Lumiverse's .tabBtnActive
-        // (ViewportDrawer.module.css:227-237). No inline style needed.
-      } else {
-        // Demote: clear inline styles so CSS takes over for inactive state.
-        btn.style.color = ''
-        btn.style.background = ''
-        btn.style.boxShadow = ''
-        btn.style.borderRadius = ''
-        const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
-        if (label) {
-          label.style.color = ''
-        }
-      }
-      dlog(`showSecondaryTab: tab=${btn.getAttribute('data-tab-id')} isActive=${isActive} btn.color=${btn.style.color} computed=${getComputedStyle(btn).color}`)
-    }
-  }
-
-  // DEFERRED ACTIVATION: if the target built-in root isn't in secondaryContent
-  // yet (Lumiverse places it asynchronously after requestTabLocation), arm a
-  // one-shot MutationObserver that re-runs activation when the root appears.
-  // Without this, the first move of a built-in leaves the root without
-  // data-canvas-active (it's not in the DOM when this function runs), so the
-  // CSS hide rule doesn't apply and the content is invisible. Module-level
-  // observer prevents leaks when showSecondaryTab is called rapidly.
-  if (builtInRoot && secondaryContent && !secondaryContent.contains(builtInRoot)) {
-    if (_deferredActivationObserver && _deferredActivationTabId !== tabId) {
-      _deferredActivationObserver.disconnect()
-      _deferredActivationObserver = null
-    }
-    if (!_deferredActivationObserver) {
-      _deferredActivationTabId = tabId
-      _deferredActivationObserver = new MutationObserver(() => {
-        if (secondaryContent.contains(builtInRoot)) {
-          if (_deferredActivationObserver) {
-            _deferredActivationObserver.disconnect()
-            _deferredActivationObserver = null
-          }
-          dlog(`[tabmove] showSecondaryTab: deferred activation fired for tabId="${tabId}"`)
-          showSecondaryTab(tabId)
-        }
-      })
-      _deferredActivationObserver.observe(secondaryContent, { childList: true, subtree: true })
-      setTimeout(() => {
-        if (_deferredActivationObserver && _deferredActivationTabId === tabId) {
-          _deferredActivationObserver.disconnect()
-          _deferredActivationObserver = null
-          _deferredActivationTabId = null
-        }
-      }, 2000)
-      dlog(`[tabmove] showSecondaryTab: armed deferred activation for tabId="${tabId}"`)
+      // Clear any leftover inline styles so CSS takes over.
+      btn.style.color = ''
+      btn.style.background = ''
+      btn.style.boxShadow = ''
+      btn.style.borderRadius = ''
+      const label = btn.querySelector('.sidebar-ux-tab-label') as HTMLElement
+      if (label) label.style.color = ''
     }
   }
 }
-
-// Module-level state for the deferred activation observer (see end of
-// showSecondaryTab). Reusing one observer across calls prevents leaks when
-// showSecondaryTab is called rapidly for different tabs.
-let _deferredActivationObserver: MutationObserver | null = null
-let _deferredActivationTabId: string | null = null
 

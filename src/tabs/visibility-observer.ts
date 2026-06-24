@@ -4,7 +4,7 @@
 // This replaces the node-guard monkey-patching of appendChild/removeChild/replaceChildren.
 //
 // node-guard existed to prevent React from reclaiming moved DOM nodes.
-// With re-execution, no DOM is moved - extensions own their visibility via observation.
+// With DOM reparenting, extensions own their visibility via observation.
 // This file handles the legitimate use case: knowing when a tab becomes visible.
 
 type VisibilityHandler = () => void

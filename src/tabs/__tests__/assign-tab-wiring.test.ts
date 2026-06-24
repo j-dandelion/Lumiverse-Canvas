@@ -76,16 +76,27 @@ import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../active-tab'
 let _tabListButtons: Array<{ tabId: string; title: string }> = []
 
 function buildFakeSecondaryWrapper() {
-  const buttonObjs = _tabListButtons.map(b => ({
-    _attrs: { 'data-tab-id': b.tabId, title: b.title } as Record<string, string>,
-    getAttribute(name: string) { return this._attrs[name] ?? null },
-    setAttribute(name: string, value: string) { this._attrs[name] = value },
-    removeAttribute(name: string) { delete this._attrs[name] },
-    style: { display: '' },
-    click() {},
-    textContent: b.title,
-    parentElement: null,
-  }))
+  const buttonObjs = _tabListButtons.map(b => {
+    const classes = new Set<string>()
+    return {
+      _attrs: { 'data-tab-id': b.tabId, title: b.title } as Record<string, string>,
+      getAttribute(name: string) { return this._attrs[name] ?? null },
+      setAttribute(name: string, value: string) { this._attrs[name] = value },
+      removeAttribute(name: string) { delete this._attrs[name] },
+      style: { display: '', color: '', background: '', boxShadow: '', borderRadius: '' },
+      classList: {
+        toggle(cls: string, force?: boolean) {
+          if (force === undefined ? !classes.has(cls) : force) classes.add(cls)
+          else classes.delete(cls)
+        },
+        contains(cls: string) { return classes.has(cls) },
+      },
+      click() {},
+      textContent: b.title,
+      parentElement: null,
+      querySelector(_sel: string) { return null },
+    }
+  })
   return {
     querySelectorAll(sel: string): any {
       if (sel === '.sidebar-ux-tab-list button[data-tab-id]') return buttonObjs
@@ -107,7 +118,7 @@ function buildFakeSecondaryWrapper() {
 // =====================================================================
 //
 // Before the fix, unassignFromSecondary unconditionally called
-// showSecondaryTabDisplay(nextTabId) when there were remaining secondary
+// showSecondaryTab(nextTabId) when there were remaining secondary
 // tabs, regardless of whether the moved tab was active. This violated the
 // spec: non-active source moves should leave the source unchanged.
 //
@@ -143,10 +154,10 @@ async function testT1() {
 
 // =====================================================================
 // T2: unassignFromSecondary with active moved tab does not double-activate
-//     (verifies the showSecondaryTabDisplay(null) guard)
+//     (verifies the showSecondaryTab(null) guard)
 // =====================================================================
 //
-// After the fix, showSecondaryTabDisplay(null) is only called when the
+// After the fix, showSecondaryTab(null) is only called when the
 // moved tab WAS the active secondary tab. For non-active moves, the
 // active tab is preserved. This test verifies both branches.
 async function testT2() {
@@ -165,7 +176,7 @@ async function testT2() {
 
   const { unassignFromSecondary } = await import('../../sidebar/secondary-drawer')
 
-  // Move tab-Y (active) to primary — showSecondaryTabDisplay(null) is called
+  // Move tab-Y (active) to primary — showSecondaryTab(null) is called
   // (the guard allows it when moved tab === active tab)
   await unassignFromSecondary('tab-Y')
   assertEqual(getActiveSecondaryTabId(), null,
@@ -216,7 +227,7 @@ async function testT3() {
 // =====================================================================
 //
 // The unconditional neighbor activation block (the `else` clause that
-// walked _tabAssignments and called showSecondaryTabDisplay) should be
+// walked _tabAssignments and called showSecondaryTab) should be
 // gone. We verify by reading the file.
 async function testT4() {
   const { readFileSync } = await import('fs')
@@ -225,8 +236,8 @@ async function testT4() {
   const src = readFileSync(path, 'utf-8')
 
   // The old block had: "for (const [assignedId] of _tabAssignments)"
-  // walking the map and calling showSecondaryTabDisplay unconditionally.
-  // After the fix, this block is removed. The showSecondaryTabDisplay
+  // walking the map and calling showSecondaryTab unconditionally.
+  // After the fix, this block is removed. The showSecondaryTab
   // call is now guarded by getActiveSecondaryTabId() === tabId.
   const hasUnconditionalWalk = src.includes('for (const [assignedId] of _tabAssignments)') &&
     src.match(/showSecondaryTabDisplay\(assignedId\)/g) !== null
@@ -241,6 +252,36 @@ async function testT4() {
 }
 
 // =====================================================================
+// T5: assignTab primary->secondary auto-open is mobile-gated
+// =====================================================================
+async function testT5() {
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(
+    join(process.cwd(), 'src/tabs/assignment.ts'), 'utf-8'
+  )
+  const hasMobileGuard = /isSecondarySidebarOpen\(\)\s*&&\s*!?isMobileViewport\(\)/.test(src)
+  assert(hasMobileGuard,
+    'T5: assignTab primary->secondary auto-open is mobile-gated')
+}
+
+// =====================================================================
+// T6: secondary-drawer.ts has mobile guards on both auto-open sites
+// =====================================================================
+async function testT6() {
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(
+    join(process.cwd(), 'src/sidebar/secondary-drawer.ts'), 'utf-8'
+  )
+  const guards = src.match(/!\s*isMobileViewport\(\)/g) ?? []
+  assert(guards.length >= 2,
+    `T6: secondary-drawer.ts has ${guards.length} mobile guards, expected >= 2`)
+  assert(src.includes("from './mobile-exclusion'"),
+    'T6: secondary-drawer.ts imports from ./mobile-exclusion')
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -248,6 +289,8 @@ async function main() {
   await testT2()
   await testT3()
   await testT4()
+  await testT5()
+  await testT6()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

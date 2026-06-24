@@ -60,12 +60,32 @@ let _fakeSidebar: any = null
 ;(globalThis as any).HTMLElement = class {}
 
 // =====================================================================
+// matchMedia stub for mobile viewport tests
+// =====================================================================
+const _origMatchMedia: typeof window.matchMedia | undefined =
+  (globalThis as any).window?.matchMedia
+function setMobileMatchMedia(mobile: boolean) {
+  ;(globalThis as any).window = (globalThis as any).window || {}
+  ;(globalThis as any).window.matchMedia = (_q: string) => ({
+    matches: mobile,
+    addEventListener() {},
+    removeEventListener() {},
+  })
+}
+function restoreMatchMedia() {
+  if (_origMatchMedia) {
+    ;(globalThis as any).window.matchMedia = _origMatchMedia
+  }
+}
+
+// =====================================================================
 // Imports (after DOM stubs)
 // =====================================================================
 import { drawerObserver } from '../drawer-observer'
 import { getTabAssignments, deleteTabAssignment } from '../../tabs/assignment'
 import { __setSecondaryWrapperForTest } from '../secondary'
 import { __setDrawerTabsForTest, __setStoreSnapshotForTest } from '../../store'
+import { teardownSecondaryDrawer } from '../secondary-drawer'
 
 // =====================================================================
 // Mock tracking
@@ -180,7 +200,10 @@ function setupTest(opts: {
       requestTabLocationCalls.push({ tabId: tabIdArg, location })
     }),
   }
-  globalThis.window = { spindle: { ui: spindleUi } } as any
+  globalThis.window = {
+    spindle: { ui: spindleUi },
+    matchMedia(_q: string) { return { matches: false, addEventListener() {}, removeEventListener() {} } },
+  } as any
 
   // --- Register a fake built-in tab with drawerObserver ---
   const fakeButton = {
@@ -416,14 +439,19 @@ function setupExtTest(opts: {
     getBuiltInTabRoot: () => undefined,
     requestTabLocation: () => {},
   }
-  globalThis.window = { spindle: { ui: spindleUi } } as any
+  globalThis.window = {
+    spindle: { ui: spindleUi },
+    matchMedia(_q: string) { return { matches: false, addEventListener() {}, removeEventListener() {} } },
+  } as any
 
   return { fakeRoot, fakePanelContent, fakeTabList, fakeMainButton, fakeWrapper, extensionId, tabId, tabTitle }
 }
 
 function restoreTest() {
+  teardownSecondaryDrawer()
   globalThis.window = _origWindow
   _fakeSidebar = null
+  restoreMatchMedia()
   // Clean up all state between tests
   for (const [key] of getTabAssignments()) {
     deleteTabAssignment(key)
@@ -694,6 +722,45 @@ async function testExtT7() {
 }
 
 // =====================================================================
+// MOBILE AUTO-OPEN GUARD TESTS (T-M1, T-M2)
+// =====================================================================
+
+// =====================================================================
+// T-M1: Extension tab path on mobile — does NOT auto-open
+// =====================================================================
+async function testExtMobileNoAutoOpen() {
+  const env = setupExtTest()
+  setMobileMatchMedia(true)
+  try {
+    const { assignToSecondary, getSecondaryDrawerState } = await import('../secondary-drawer')
+    await assignToSecondary(env.tabId)
+    // State stays 'closed' — drawer was NOT auto-opened on mobile
+    assertEqual(getSecondaryDrawerState(), 'closed',
+      'T-M1 mobile: assignToSecondary does NOT auto-open secondary drawer')
+    // Root still reparented (the move itself succeeded)
+    assertEqual(env.fakeRoot.getAttribute('data-canvas-moved'), env.tabId,
+      'T-M1 mobile: root reparenting still happens')
+    // Tab button still created
+    const tabButtons = (env.fakeTabList as any).children
+    assert(tabButtons.length > 0, 'T-M1 mobile: tab button still created')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
+// T-M2: Built-in tab path on mobile — does NOT auto-open
+// =====================================================================
+async function testBuiltinMobileNoAutoOpen() {
+  setupTest({ tabId: 'databank-mob', tabTitle: 'Databank' })
+  setMobileMatchMedia(true)
+  try {
+    const { assignToSecondary, getSecondaryDrawerState } = await import('../secondary-drawer')
+    await assignToSecondary('databank-mob')
+    assertEqual(getSecondaryDrawerState(), 'closed',
+      'T-M2 mobile: built-in assignToSecondary does NOT auto-open')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -712,6 +779,10 @@ async function main() {
   await testExtT5()
   await testExtT6()
   await testExtT7()
+
+  // Mobile auto-open guard tests
+  await testExtMobileNoAutoOpen()
+  await testBuiltinMobileNoAutoOpen()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

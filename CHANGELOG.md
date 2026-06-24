@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.7.1.0 — 2026-06-22
+
+### Changed
+
+- Deleted re-execution subsystem (`ffbb11a`) and F1/F2/F3/F6/F7/F8/F12/F30/F31 dead code. Net: 2,589 lines deleted across 33 files over 24 commits.
+- Replaced `setInterval` polling with MutationObserver-based layout and reflow observation (`9220bc1`). `applyLayout`'s restore loop now observes `[data-spindle-mount="sidebar"]` childList+subtree with a 10s safety timeout. `checkSideChanged` observes the main wrapper's class attribute instead of polling every 2s.
+- Introduced typed `HostBridge` module (`src/dom/host-bridge.ts`) replacing `(window as any).spindle` chains. Bumped as minor (1.7.0 → 1.7.1) because HostBridge is a new public surface consumed by other extensions.
+- Simplified `assignTab` and `showSecondaryTab` via 3 helpers — resolved 21 pre-existing test failures (`b100dbf`). `showSecondaryTab` went from ~184 lines to ~70.
+- Trimmed debug logging: dropped 54 dlog calls (82 → 28) across 8 files (`10fc0b5`). Kept state transitions, error paths, and decision summaries.
+- Extracted `panel-header-sync` from `secondary.tsx` into its own module (`acb49dd`). `secondary.tsx` 704 → 580 lines; no file > 580 lines.
+
+### Fixed
+
+- On mobile, moving a tab between drawers no longer closes the source (currently-open) drawer. A neighboring tab in the source drawer becomes active instead. The destination drawer stays closed and can be opened manually.
+
 ## v1.7.0.3 — 2026-06-19
 
 ### Fixed

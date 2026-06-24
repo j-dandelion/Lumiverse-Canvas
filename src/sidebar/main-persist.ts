@@ -169,7 +169,7 @@ function pushCurrentState() {
   _lastSeenOpen = open
   _lastSeenTabId = tabId
   setMainDrawerState(open, tabId)
-  dlog(`main-persist: state change captured (open=${open}, tabId=${tabId})`)
+  
   persistOpenState()
 }
 
@@ -217,7 +217,7 @@ function _initObservers(drawer: HTMLElement): void {
   // Seed the module-level cache so snapshotLayout() reads the right
   // values on the first save after mount.
   setMainDrawerState(_lastSeenOpen, _lastSeenTabId)
-  dlog(`main-persist: seeded from DOM (open=${_lastSeenOpen}, tabId=${_lastSeenTabId})`)
+  
 
   // Observe the wrapper's class attribute. Open/close transitions
   // toggle `wrapperOpen`; the MutationObserver fires once per
@@ -226,8 +226,6 @@ function _initObservers(drawer: HTMLElement): void {
     if (_stopped) return
     for (const m of mutations) {
       if (m.type === 'attributes' && m.attributeName === 'class') {
-        const _newClass = wrapper.classList.toString()
-        dlog(`[reflow-trace] main-persist MO: wrapper class changed to "${_newClass}"`)
         pushCurrentState()
         // Mobile exclusion: detect closed→open transition
         if (wrapper) {
@@ -278,13 +276,13 @@ function _initObservers(drawer: HTMLElement): void {
     if (_resizeDebounce) clearTimeout(_resizeDebounce)
     _resizeDebounce = setTimeout(() => {
       if (_stopped) return
-      dlog(`main-persist: width changed, persisting`)
+      
       persistLayout()
     }, RESIZE_DEBOUNCE_MS)
   })
   _resizeObserver.observe(wrapper)
 
-  dlog(`main-persist: started (wrapper=${!!wrapper}, sidebar=${!!sidebar})`)
+  
 }
 
 export function startMainDrawerPersistence(): void {
@@ -293,7 +291,7 @@ export function startMainDrawerPersistence(): void {
 
   const drawer = getMainDrawer()
   if (!drawer) {
-    dlog('main-persist: getMainDrawer() returned null; waiting for host DOM...')
+    
     waitForDrawerDOM(
       { get value() { return _stopped } },
       _initObservers,
@@ -341,7 +339,7 @@ export function restoreMainDrawerFromDom(
 
   const currentOpen = readWrapperOpen(wrapper)
   if (currentOpen === targetOpen) {
-    dlog(`main-persist restore: already in target state (open=${targetOpen}), nothing to do`)
+    
     // If the drawer is open, set the width so it's correct on this session.
     // If closed, leave --drawer-panel-w alone — the host's CSS uses it
     // for the close animation (translateX). Clearing it breaks the
@@ -350,9 +348,9 @@ export function restoreMainDrawerFromDom(
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-        dlog(`main-persist restore: set width=${clampedWidth}px (open, same state)`)
+        
       } else {
-        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`)
+        
       }
     }
     unsuppressMainDrawer()
@@ -367,9 +365,9 @@ export function restoreMainDrawerFromDom(
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-        dlog(`main-persist restore: set width=${clampedWidth}px (opening)`)
+        
       } else {
-        dlog(`main-persist restore: skipped width override on mobile (host CSS handles sizing)`)
+        
       }
     }
     // Find a tab button to click. The host's first visible built-in
@@ -378,7 +376,7 @@ export function restoreMainDrawerFromDom(
     const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
     const tabBtn = sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
     if (tabBtn) {
-      dlog(`main-persist restore: clicking first tab to open drawer (target tabId=${targetTabId})`)
+      
       unsuppressMainDrawer()
       try {
         tabBtn.click()
@@ -386,7 +384,7 @@ export function restoreMainDrawerFromDom(
         dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
       }
     } else {
-      dlog('main-persist restore: no tab button found in sidebar; cannot programmatically open')
+      
       unsuppressMainDrawer()
     }
   } else {
@@ -395,7 +393,7 @@ export function restoreMainDrawerFromDom(
     // toggles open/close. Click it to close.
     const toggleBtn = findDrawerToggleButton(wrapper)
     if (toggleBtn) {
-      dlog('main-persist restore: clicking drawer toggle to close')
+      
       unsuppressMainDrawer()
       try {
         toggleBtn.click()
@@ -403,7 +401,7 @@ export function restoreMainDrawerFromDom(
         dlog(`main-persist restore: toggleBtn.click() threw: ${err}`)
       }
     } else {
-      dlog('main-persist restore: target=closed but no toggle button found; leaving to user gesture')
+      
       unsuppressMainDrawer()
     }
   }

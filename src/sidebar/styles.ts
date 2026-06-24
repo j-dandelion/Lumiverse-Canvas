@@ -18,41 +18,42 @@ const SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
+    overflow: hidden !important;
   }
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     width: 100% !important;
     flex-direction: row !important;
     overflow-x: auto !important;
     overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
     border-bottom: 1px solid var(--lumiverse-primary-020) !important;
     border-left: none !important;
     border-right: none !important;
     padding: 6px 8px !important;
   }
-  /* Tab buttons: match main sidebar's mobile tabBtn/tabBtnLabeled sizes.
-     Main sidebar uses 42×42 (no labels) / 52×48 (with labels).
-     Keep vertical layout (column) — same as main sidebar on mobile. */
+  /* Hide webkit scrollbar */
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Tab buttons: uniform width on mobile horizontal layout.
+     Matches main sidebar's mobile tabBtnLabeled size (52×48). */
   .sidebar-ux-tab-list button[data-tab-id] {
-    width: 42px !important;
-    height: 42px !important;
+    width: 52px !important;
     min-width: 0;
+    flex-shrink: 0;
     padding: 6px 4px !important;
-    border-radius: 8px !important;
   }
   .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
   }
-  /* Side-aware alignment: single tab sits on the edge the sidebar opens from. */
-  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right > .sidebar-ux-drawer > .sidebar-ux-tab-list {
-    justify-content: flex-end !important;
-  }
   /* Active tab indicator: bottom underline, top corners rounded.
      Matches main sidebar's mobile .tabBtnActive exactly.
      Same specificity as the desktop rule so it overrides on mobile. */
   .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-    box-shadow: inset 0 -3px 0 var(--lumiverse-primary, #9370db) !important;
-    border-radius: 8px 8px 0 0 !important;
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary);
+    border-radius: 8px 8px 0 0;
   }
   /* Hide secondary's drawerTab when primary is open on mobile */
   body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
@@ -132,10 +133,32 @@ export function injectDrawerTabStyles(): void {
       justify-content: center;
       color: var(--lumiverse-primary);
     }
+    /* Icon container — matches main drawer .extIconSvg
+       (ViewportDrawer.module.css:284-290). */
+    .sidebar-ux-tab-list button[data-tab-id] > span:first-child {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    /* Label typography — matches main drawer .tabLabel
+       (ViewportDrawer.module.css:241-252). */
+    .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1));
+      font-weight: 500;
+      line-height: 1;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 48px;
+      flex-shrink: 0;
+    }
     /* Base button color — matches main drawer .tabBtn
        (ViewportDrawer.module.css:213). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] {
       color: var(--lumiverse-text-muted);
+      border-radius: 8px;
     }
     /* Label color — matches main drawer .tabLabel
        (ViewportDrawer.module.css:245). */
@@ -152,7 +175,7 @@ export function injectDrawerTabStyles(): void {
     /* Active tab hover: icon turns white, label stays colored.
        Target the SVG directly so we only change the icon color. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
-      color: var(--lumiverse-text) !important;
+      color: var(--lumiverse-text);
     }
     /* Smooth color transition for SVG icons (matches the tabBtn
        transition: all 0.2s ease which only covers the button). */
@@ -167,17 +190,17 @@ export function injectDrawerTabStyles(): void {
        (ViewportDrawer.module.css:227-237) exactly: box-shadow
        indicator + directional border-radius. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-      background: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2)) !important;
-      color: var(--lumiverse-primary, #9370db) !important;
-      box-shadow: inset 3px 0 0 var(--lumiverse-primary, #9370db) !important;
-      border-radius: 0 8px 8px 0 !important;
+      background: var(--lumiverse-primary-020);
+      color: var(--lumiverse-primary);
+      box-shadow: inset 3px 0 0 var(--lumiverse-primary);
+      border-radius: 0 8px 8px 0;
     }
     .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-      box-shadow: inset -3px 0 0 var(--lumiverse-primary, #9370db) !important;
-      border-radius: 8px 0 0 8px !important;
+      box-shadow: inset -3px 0 0 var(--lumiverse-primary);
+      border-radius: 8px 0 0 8px;
     }
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
-      color: var(--lumiverse-primary, #9370db) !important;
+      color: var(--lumiverse-primary);
     }
   `)
 

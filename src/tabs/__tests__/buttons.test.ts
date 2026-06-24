@@ -1,27 +1,9 @@
-// Regression test: showSecondaryTab() writes the active tab's color,
-// background, box-shadow inset indicator, and label color as literal
-// hex values with `!important` priority (no CSS var) so the active
-// state always renders the Lumiverse-default purple (#9370db) — even
-// in themes where `--lumiverse-primary` resolves to a non-purple value
-// (e.g. the engine dark-mode formula `hsla(h, s, 75, 0.9)` produces
-// near-white, identical to `--lumiverse-text-muted`).
+// Test for showSecondaryTab().
 //
-// Pre-fix, the code wrote just `var(--lumiverse-primary)` with no
-// fallback. When the var was missing the browser fell through to the
-// inherited color (white-65%), so active and inactive buttons looked
-// identical.
-//
-// The first fix attempt (cb56bc3) added `var(--lumiverse-primary, #9370db)`
-// as a CSS-var fallback. This is wrong: CSS var fallbacks only fire when
-// the var is UNSET, not when it's set to a wrong value. The user's
-// theme sets `--lumiverse-primary` to white-65%, so the fallback is
-// never reached and active still renders white.
-//
-// The correct fix: write the literal purple with `!important` priority
-// via `setProperty(name, value, 'important')`. The `!important` flag
-// forces the literal to win over any other declaration (including the
-// theme-defined var). The inactive case keeps `var(--lumiverse-text-muted)`
-// because that var resolves to the user-expected text color.
+// showSecondaryTab toggles the sidebar-ux-tab-active CSS class on tab
+// buttons and clears any leftover inline styles so the CSS rules in
+// src/sidebar/styles.ts drive the active visual. The active tab's root
+// gets data-canvas-active and the header title is updated.
 
 let passed = 0
 let failed = 0
@@ -173,7 +155,7 @@ const secondaryWrapper = {
     return null
   },
   querySelectorAll(sel: string): StubButton[] {
-    if (sel === '.sidebar-ux-tab-list button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)') return stubButtons
+    if (sel === '.sidebar-ux-tab-list button[data-tab-id]') return stubButtons
     return []
   },
 }
@@ -216,12 +198,8 @@ import { showSecondaryTab } from '../buttons'
 
 // ============================================================
 // T10: showSecondaryTab('tab1') makes btn1 active and btn2 inactive.
-//   - btn1.style.color = '#9370db' with !important
-//   - btn2.style.color = 'var(--lumiverse-text-muted)' (no priority)
-//   - btn1.style.background = 'rgba(147, 112, 219, 0.2)' with !important
-//   - btn1.style.boxShadow references the literal #9370db with !important
-//   - btn2.style.boxShadow = 'none'
-//   - btn1's label color = '#9370db' with !important
+//   - sidebar-ux-tab-active class toggled on btn1, cleared on btn2
+//   - Inline styles cleared on both buttons so CSS takes over
 // ============================================================
 {
   // Reset button state in case prior tests touched them
@@ -229,57 +207,35 @@ import { showSecondaryTab } from '../buttons'
   btn2.classList = makeClassList()
   btn1.style = makeStyle()
   btn2.style = makeStyle()
-  // The label sub-element is created lazily by querySelector — its style
-  // is also reset on each call.
   showSecondaryTab('tab1')
 
-  assertEqual(btn1.style.color, '#9370db',
-    'T10.a: active button color is literal #9370db')
-  assertEqual(btn1.style.getPropertyPriority('color'), 'important',
-    'T10.b: active button color has !important priority')
-  assertEqual(btn2.style.color, 'var(--lumiverse-text-muted)',
-    'T10.c: inactive button color is var(--lumiverse-text-muted) (no primary var)')
-  assertEqual(btn2.style.getPropertyPriority('color'), '',
-    'T10.d: inactive button color has no priority')
-
   assert(btn1.classList.contains('sidebar-ux-tab-active'),
-    'T10.e: active button has sidebar-ux-tab-active class')
+    'T10.a: active button has sidebar-ux-tab-active class')
   assert(!btn2.classList.contains('sidebar-ux-tab-active'),
-    'T10.f: inactive button does not have sidebar-ux-tab-active class')
+    'T10.b: inactive button does not have sidebar-ux-tab-active class')
 
-  // Active background should be a literal purple with !important
-  assertEqual(btn1.style.background, 'rgba(147, 112, 219, 0.2)',
-    'T10.g: active button background is literal purple-20%')
-  assertEqual(btn1.style.getPropertyPriority('background'), 'important',
-    'T10.h: active button background has !important priority')
-  assertEqual(btn2.style.background, '',
-    'T10.i: inactive button background is empty string')
+  // Inline styles cleared on all buttons — CSS drives the visuals.
+  assertEqual(btn1.style.color, '',
+    'T10.c: active button inline color cleared')
+  assertEqual(btn1.style.background, '',
+    'T10.d: active button inline background cleared')
+  assertEqual(btn1.style.boxShadow, '',
+    'T10.e: active button inline box-shadow cleared')
+  assertEqual(btn2.style.color, '',
+    'T10.f: inactive button inline color cleared')
+  assertEqual(btn2.style.boxShadow, '',
+    'T10.g: inactive button inline box-shadow cleared')
 
-  // Active box-shadow: literal #9370db inset, !important, side-aware
-  // (with default getMainDrawerSide='right', indicatorOnRight=true → '-3px').
-  assertEqual(btn1.style.boxShadow, 'inset -3px 0 0 #9370db',
-    'T10.j: active button box-shadow uses literal #9370db with correct inset side')
-  assertEqual(btn1.style.getPropertyPriority('box-shadow'), 'important',
-    'T10.k: active button box-shadow has !important priority')
-  assertEqual(btn2.style.boxShadow, 'none',
-    'T10.l: inactive button box-shadow is "none"')
-
-  // Label color: active = literal #9370db with !important, inactive = text-dim
+  // Label styles cleared too.
   const label1 = btn1.querySelector('.sidebar-ux-tab-label')
-  const label2 = btn2.querySelector('.sidebar-ux-tab-label')
-  assertEqual(label1?.style.color, '#9370db',
-    'T10.m: active button label color is literal #9370db')
-  assertEqual(label1?.style.getPropertyPriority('color'), 'important',
-    'T10.n: active button label color has !important priority')
-  assertEqual(label2?.style.color, 'var(--lumiverse-text-dim)',
-    'T10.o: inactive button label color is var(--lumiverse-text-dim)')
+  assertEqual(label1?.style.color, '',
+    'T10.h: active button label inline color cleared')
 }
 
 // ============================================================
 // T11: showSecondaryTab('tab2') switches the active tab.
-//   - btn2.style.color = '#9370db' with !important
-//   - btn1.style.color = 'var(--lumiverse-text-muted)' (no priority)
-//   - The class toggle and box-shadow flip accordingly
+//   - sidebar-ux-tab-active class toggled on btn2, cleared on btn1
+//   - Inline styles cleared on both buttons
 // ============================================================
 {
   // Reset state
@@ -289,31 +245,24 @@ import { showSecondaryTab } from '../buttons'
   btn2.style = makeStyle()
   showSecondaryTab('tab2')
 
-  assertEqual(btn2.style.color, '#9370db',
-    'T11.a: new active button color is literal #9370db')
-  assertEqual(btn2.style.getPropertyPriority('color'), 'important',
-    'T11.b: new active button color has !important priority')
-  assertEqual(btn1.style.color, 'var(--lumiverse-text-muted)',
-    'T11.c: now-inactive button color is var(--lumiverse-text-muted)')
-
   assert(btn2.classList.contains('sidebar-ux-tab-active'),
-    'T11.d: new active button has sidebar-ux-tab-active class')
+    'T11.a: new active button has sidebar-ux-tab-active class')
   assert(!btn1.classList.contains('sidebar-ux-tab-active'),
-    'T11.e: old active button no longer has the class')
+    'T11.b: old active button no longer has the class')
 
-  assertEqual(btn2.style.boxShadow, 'inset -3px 0 0 #9370db',
-    'T11.f: new active button box-shadow uses literal #9370db')
-  assertEqual(btn2.style.getPropertyPriority('box-shadow'), 'important',
-    'T11.g: new active button box-shadow has !important priority')
-  assertEqual(btn1.style.boxShadow, 'none',
-    'T11.h: now-inactive button box-shadow is "none"')
+  assertEqual(btn2.style.color, '',
+    'T11.c: new active button inline color cleared')
+  assertEqual(btn1.style.color, '',
+    'T11.d: old active button inline color cleared')
+  assertEqual(btn2.style.boxShadow, '',
+    'T11.e: new active button inline box-shadow cleared')
+  assertEqual(btn1.style.boxShadow, '',
+    'T11.f: old active button inline box-shadow cleared')
 }
 
 // ============================================================
 // T12: Calling showSecondaryTab() twice with the same id is idempotent.
-//   The second call writes the same color values, not a different
-//   fallback (regression for any "apply once then skip" optimization
-//   that might bypass the color write).
+//   The second call produces the same class state as the first.
 // ============================================================
 {
   btn1.classList = makeClassList()
@@ -321,31 +270,20 @@ import { showSecondaryTab } from '../buttons'
   btn1.style = makeStyle()
   btn2.style = makeStyle()
   showSecondaryTab('tab1')
-  const firstColor = btn1.style.color
-  const firstPriority = btn1.style.getPropertyPriority('color')
-  const firstBox = btn1.style.boxShadow
-  const firstBoxPriority = btn1.style.getPropertyPriority('box-shadow')
   showSecondaryTab('tab1')
-  assertEqual(btn1.style.color, firstColor,
-    'T12.a: second call writes the same active color')
-  assertEqual(btn1.style.getPropertyPriority('color'), firstPriority,
-    'T12.b: second call preserves the !important priority on color')
-  assertEqual(btn1.style.boxShadow, firstBox,
-    'T12.c: second call writes the same active box-shadow')
-  assertEqual(btn1.style.getPropertyPriority('box-shadow'), firstBoxPriority,
-    'T12.d: second call preserves the !important priority on box-shadow')
-  assertEqual(btn1.style.color, '#9370db',
-    'T12.e: idempotent active color is the literal purple')
-  assertEqual(btn1.style.getPropertyPriority('color'), 'important',
-    'T12.f: idempotent active color has !important')
+
+  assert(btn1.classList.contains('sidebar-ux-tab-active'),
+    'T12.a: idempotent active button has sidebar-ux-tab-active class')
+  assert(!btn2.classList.contains('sidebar-ux-tab-active'),
+    'T12.b: idempotent inactive button still lacks the class')
+  assertEqual(btn1.style.color, '',
+    'T12.c: idempotent active button inline color still cleared')
 }
 
 // ============================================================
 // T13: Switching active tab demotes the previously-active button:
-//   The old active button's !important inline color must be replaced
-//   by a non-!important `var(--lumiverse-text-muted)` write. Otherwise
-//   the old active tab would stay purple even after the user clicks a
-//   different tab.
+//   The old active button loses the sidebar-ux-tab-active class
+//   and all inline styles are cleared.
 // ============================================================
 {
   // Activate tab1, then switch to tab2
@@ -356,16 +294,14 @@ import { showSecondaryTab } from '../buttons'
   showSecondaryTab('tab1')
   showSecondaryTab('tab2')
 
-  // btn1 (now inactive) must NOT have !important on its color
-  // (it should be the non-priority var(--lumiverse-text-muted) write)
-  assertEqual(btn1.style.getPropertyPriority('color'), '',
-    'T13.a: demoted button color has NO !important (was set as inactive)')
-  assertEqual(btn1.style.color, 'var(--lumiverse-text-muted)',
-    'T13.b: demoted button color is var(--lumiverse-text-muted)')
-  assertEqual(btn1.style.boxShadow, 'none',
-    'T13.c: demoted button box-shadow is "none"')
-  assertEqual(btn1.style.getPropertyPriority('box-shadow'), '',
-    'T13.d: demoted button box-shadow has NO !important')
+  assert(!btn1.classList.contains('sidebar-ux-tab-active'),
+    'T13.a: demoted button lost sidebar-ux-tab-active class')
+  assert(btn2.classList.contains('sidebar-ux-tab-active'),
+    'T13.b: new active button has sidebar-ux-tab-active class')
+  assertEqual(btn1.style.color, '',
+    'T13.c: demoted button inline color cleared')
+  assertEqual(btn1.style.boxShadow, '',
+    'T13.d: demoted button inline box-shadow cleared')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
