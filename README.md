@@ -2,25 +2,24 @@
 Convenient tweaks and features to enhance your Lumiverse UI! 
 
 - Everything is optional, toggle each behavior
-- Most tweaks are aimed at deeper customization and quality-of-life improvements
-- Fits well with Lumiverse theme system (if you have custom CSS it might need some adjusting) 
+- Most tweaks are aimed at deeper UI customization and quality-of-life improvements
+- Fits well with your Lumiverse theme (though if you have custom CSS it might need some adjusting) 
 
 ## Features included so far
 - Drag sidebar/drawer panel edges to resize them
 - Center the chat in the visible area (prevent panels from covering chat)
-- Add a second drawer, move extension tabs between drawers freely (right click tab, click move)
+- Add a second drawer, move any tab between drawers freely (right click tab, click move)
 - Move tab buttons to the other side of the drawer panel (along screen edge)
-- Press and drag drawer open/close buttons (drawer tabs) to move them without going into settings
+- Press and drag drawer open/close buttons to move them without going into settings
 - Slash commands system (focus on performance, more commands on the way)
 
 ## Coming soon™
-- All tabs/panels (not just extensions) movable between drawers, and can render at the same time 
-- Turn any panel into a floating window 
 - Change size of tabs easily
-- Drag to reorder tabs
+- Keep tabs visible when drawer is closed
+- Drag to reorder tab buttons
 - Layout system (try different layouts, save and load)
-- Move drawer/tab bar to top or bottom of screen
-- Advanced theme options, like custom sizing/layout of chat message elements and a bunch of other CSS variables.
+- Drawers on top/bottom of screen
+- Advanced theme options, like controls for custom sizing/layout of chat message elements and a bunch of other CSS variables.
 - Tweaks for mobile UI (help me think of some!)
 
 ## Screenshots
