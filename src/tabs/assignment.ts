@@ -209,6 +209,25 @@ function addBuiltInSecondaryButton(
 
 export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary'): Promise<void> {
   if (sidebar === 'secondary') {
+    // BUG: Lorebook dropdown empty after move without pre-activation.
+    // Lumiverse only renders the active built-in's root
+    // (src/sidebar/secondary-drawer.ts:266-275). The Lorebook component
+    // fetches its dropdown data on mount; a never-activated tab has no
+    // root, so reparenting an absent root into secondary yields an empty
+    // dropdown. Pre-activate so Lumiverse mounts the root + the useEffect
+    // fires; subsequent `getBuiltInTabRoot(tabId)` will return a mounted
+    // root and the built-in branch will handle the move normally
+    // (requestTabLocation reparents a mounted React fiber, preserving
+    // the fetched data).
+    //
+    // Caveat: clicking a main-sidebar tab *can* trigger a Lumiverse
+    // re-render that destroys the main sidebar (see comment at
+    // src/sidebar/secondary-drawer.ts:266-275). In the user's specific
+    // workflow (stay-on-same-side swap) this is benign — the existing
+    // addSecondaryTabButton path at assignment.ts:177-181 already
+    // survives the same re-render on the working "open in main first"
+    // path.
+    await ensureBuiltInTabActiveInMain(tabId)
     // Built-in tabs: delegate to the host's requestTabLocation API.
     // Extension tabs fall through to SecondaryDrawer.assignToSecondary.
     const bridge = getHostBridge()
