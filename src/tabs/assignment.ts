@@ -89,6 +89,75 @@ function armMainDrawerActiveRestore(tabId: string): void {
   setTimeout(() => { if (observer) { observer.disconnect(); observer = null } }, 200)
 }
 
+export interface EnsureActiveHooks {
+  isTabActiveInMainDrawer?: (tabId: string) => boolean
+  findMainTabButton?: (tabId: string) => Element | null
+  isMobileViewport?: () => boolean
+  getBuiltInTabRoot?: (tabId: string) => HTMLElement | undefined
+  dlog?: (...args: unknown[]) => void
+}
+
+/**
+ * Bug fix: built-in tabs (Lorebook, Databank, etc.) don't have their root
+ * in the DOM unless Lumiverse decides to render them as the active tab.
+ * Per the BUILT-IN TAB LIMITATION comment in src/sidebar/secondary-drawer.ts:
+ * "Lumiverse only renders the ACTIVE tab's root in the main panel content."
+ * Most built-ins populate dropdowns/tables via a React useEffect that fires
+ * on component mount. So moving a never-activated built-in tab to the
+ * secondary drawer reparents *nothing* — the root never existed.
+ *
+ * The supported mechanism to mount a built-in root is to make the tab
+ * active in the main drawer, which Lumiverse does on tab-button click.
+ * This helper does that activation as a setup step before requestTabLocation.
+ *
+ * No-op when the tab is already active in main (avoids a re-click that
+ * would briefly empty an already-populated dropdown via React re-mount).
+ * No-op on mobile (the main sidebar is hidden; clicks land on the wrong
+ * element via the mobile flyout pattern). Mobile edge case is unhandled
+ * in this fix; follow up if a mobile user reports it.
+ */
+export async function ensureBuiltInTabActiveInMain(
+  tabId: string,
+  h: EnsureActiveHooks = {},
+): Promise<void> {
+  const _isActive = h.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer
+  const _findBtn = h.findMainTabButton ?? findMainTabButton
+  const _isMobile = h.isMobileViewport ?? isMobileViewport
+  const _getRoot = h.getBuiltInTabRoot ?? (() => undefined)
+  const _dlog = h.dlog ?? (() => {})
+
+  if (_isActive(tabId)) return
+
+  if (_isMobile()) {
+    _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`)
+    return
+  }
+
+  const btn = _findBtn(tabId)
+  if (!btn) {
+    _dlog(
+      `[tabmove] ensure-active: main button-not-found for "${tabId}", ` +
+      `relying on host lazy-mount`,
+    )
+    return
+  }
+  // btn is Element (per buttons.ts:47) — narrow at click site.
+  ;(btn as HTMLElement).click()
+
+  // Wait for one rAF (~16ms) so Lumiverse commits the activation and
+  // Lorebook's mount useEffect fires. 1-16ms is the documented latency
+  // of Lumiverse's pendingActiveTabReset useEffect.
+  await new Promise<void>(r => requestAnimationFrame(() => r()))
+
+  const root = _getRoot(tabId)
+  if (!root) {
+    _dlog(
+      `[tabmove] ensure-active: post-click root still null for "${tabId}"; ` +
+      `move will fall through to host lazy-mount`,
+    )
+  }
+}
+
 /**
  * Warn if ContainerTabContent's Pass 3 reset undid our move. Pass 3
  * fires on the next React commit (~microtask) and reverts tabLocations
