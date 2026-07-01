@@ -2082,7 +2082,7 @@ async function assignToSecondary(tabId) {
     const wSpindleUi = wSpindle?.ui;
     if (!_root || !_secondaryContent) {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-        await ensureBuiltInTabPanelLoaded(resolvedId);
+        await ensureBuiltInTabActiveInMain(resolvedId);
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId);
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
@@ -2229,7 +2229,6 @@ __export(exports_assignment, {
   getTabSidebar: () => getTabSidebar,
   getTabAssignments: () => getTabAssignments,
   getActiveSecondaryTabId: () => getActiveSecondaryTabId,
-  ensureBuiltInTabPanelLoaded: () => ensureBuiltInTabPanelLoaded,
   ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
   deleteTabAssignment: () => deleteTabAssignment,
   clearTabAssignments: () => clearTabAssignments,
@@ -2277,27 +2276,6 @@ function armMainDrawerActiveRestore(tabId) {
       observer = null;
     }
   }, 200);
-}
-async function ensureBuiltInTabPanelLoaded(tabId, h = {}) {
-  const _getSnap = h.getStoreSnapshot ?? (() => {
-    findStoreData(true);
-    return getStoreSnapshot();
-  });
-  const _dlog = h.dlog ?? (() => {});
-  _dlog(`[canvas-debug] ENSURE_LOADED_BEGIN tab=${tabId}`);
-  const store = _getSnap();
-  if (!store || typeof store.openDrawer !== "function") {
-    _dlog(`[tabmove] ensure-loaded: store snapshot has no openDrawer ` + `(store=${!!store} hasOpenDrawer=${!!(store && typeof store.openDrawer === "function")}); ` + `skipping pre-fetch — loadBooks may not fire on this code path.`);
-    return;
-  }
-  store.openDrawer(tabId);
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  if (typeof store.closeDrawer === "function")
-    store.closeDrawer();
-  if (typeof store.setDrawerTab === "function")
-    store.setDrawerTab(null);
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  _dlog(`[canvas-debug] ENSURE_LOADED_DONE tab=${tabId}`);
 }
 async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
   const _isActive = h.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer;
@@ -2392,7 +2370,6 @@ async function assignTab(tabId, sidebar) {
 var _tabAssignments;
 var init_assignment = __esm(() => {
   init_log();
-  init_store();
   init_mobile_exclusion();
   init_secondary();
   init_buttons();

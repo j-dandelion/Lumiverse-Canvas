@@ -18,7 +18,7 @@ import {
   readMainButtonShortName,
 } from '../tabs/buttons'
 import {
-  ensureBuiltInTabPanelLoaded,
+  ensureBuiltInTabActiveInMain,
   getTabAssignments, setTabAssignment, deleteTabAssignment,
 } from '../tabs/assignment'
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
@@ -282,12 +282,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     //   getBuiltInTabRoot(tabId) which calls ensureRegistryRoot(tabId)
     //   (frontend/src/lib/drawer-tab-registry.tsx:409). That lazily
     //   mounts the panel on first request — without requiring it to be
-    //   active in the main drawer. Combined with the cold-boot fix
-    //   (ensureBuiltInTabActiveInMain) and the warm-boot fix
-    //   (ensureBuiltInTabPanelLoaded — this file's LAZY_MOUNT_OK branch
-    //   below), we can restore any built-in tab regardless of its
-    //   pre-restore activation state. Extension tabs use storeTab.root
-    //   which is populated independently of the DOM.
+    //   active in the main drawer. The LAZY_MOUNT_OK branch below
+    //   calls ensureBuiltInTabActiveInMain (the same helper used by
+    //   the cold-boot right-click path) to trigger the panel's data
+    //   fetch before requestTabLocation moves the root into the
+    //   secondary container. End state matches the cold-boot case
+    //   the user already accepts: main drawer open with empty
+    //   content, secondary drawer open with the built-in populated.
+    //   Extension tabs use storeTab.root which is populated
+    //   independently of the DOM.
     let _root: HTMLElement | undefined = _storeTab?.root
     if (!_root && !_isExtensionTab) {
       // For built-in tabs, try the DOM as a last resort. This will only
@@ -331,16 +334,21 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         // WorldBookPanel.tsx:165-178) is gated on
         //   isVisible = drawerOpen && drawerTab === 'lorebook'
         // and the Lumiverse store starts at drawerOpen=false on every
-        // page load. Without this pre-fetch trigger, the panel mounts
-        // with isVisible=false and the dropdown stays empty.
+        // page load (Lumiverse doesn't persist drawer state).
+        // Without this pre-activation, the panel mounts via
+        // ensureRegistryRoot with isVisible=false and the dropdown
+        // stays empty.
         //
-        // ensureBuiltInTabPanelLoaded flips drawerOpen=true → false
-        // across two rAFs so the panel's effect sees a clean
-        // false→true→false transition: loadBooks fires on the rising
-        // edge, wasVisibleRef prevents a re-fetch on the falling edge.
-        // The visual side effect is a single-frame flash of the main
-        // drawer.
-        await ensureBuiltInTabPanelLoaded(resolvedId)
+        // The cold-boot right-click "Move to second drawer" path
+        // (src/tabs/assignment.ts) does the same pre-activation and
+        // it works because the synthetic click on the main drawer
+        // button triggers Lumiverse's React onClick handler, which
+        // sets drawerOpen=true and mounts the panel as the active
+        // tab. We use the same helper here on warm-boot for symmetry.
+        // End state matches the cold-boot case the user already
+        // accepts: main drawer open with empty content, secondary
+        // drawer open with Lorebook populated.
+        await ensureBuiltInTabActiveInMain(resolvedId)
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)

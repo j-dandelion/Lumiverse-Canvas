@@ -8,7 +8,6 @@
 // the secondary content area.
 import { getMainSidebar } from '../dom/lumiverse'
 import { dlog, dwarn } from '../debug/log'
-import { findStoreData, getStoreSnapshot } from '../store'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar } from '../sidebar/secondary'
 import {
@@ -96,97 +95,6 @@ export interface EnsureActiveHooks {
   isMobileViewport?: () => boolean
   getBuiltInTabRoot?: (tabId: string) => HTMLElement | undefined
   dlog?: (...args: unknown[]) => void
-}
-
-export interface EnsureLoadedHooks {
-  /**
-   * Returns the Lumiverse Zustand store snapshot (extracted via the
-   * fiber-tree walker in src/store/index.ts). The snapshot exposes the
-   * `openDrawer`, `closeDrawer`, and `setDrawerTab` action functions
-   * that mutate the live store.
-   *
-   * Tests pass a fake snapshot; production wires to `getStoreSnapshot`.
-   */
-  getStoreSnapshot?: () => unknown
-  dlog?: (...args: unknown[]) => void
-}
-
-/**
- * Warm-boot fix: trigger the Lorebook panel's data fetch without leaving
- * the Lumiverse main drawer visually open.
- *
- * The Lorebook React component (frontend/src/components/panels/world-book/
- * WorldBookPanel.tsx:165-178) gates its books-list fetch on
- * `isVisible = drawerOpen && drawerTab === 'lorebook'`. On warm-boot
- * restore the Lumiverse store starts at its initial values
- * (drawerOpen=false, drawerTab=null) because the store does not persist
- * drawer state across reloads. The panel's first useEffect therefore
- * runs with isVisible=false, and loadBooks() is never re-fired even
- * after the root is moved to the secondary container.
- *
- * The cold-boot right-click "Move to second drawer" path works because
- * `assignTab` calls `ensureBuiltInTabActiveInMain` (above) first — the
- * synthetic click on the main drawer button sets drawerOpen=true via
- * Lumiverse's main-button onClick handler, which fires loadBooks() while
- * the panel is still in main. This helper does the same store mutation
- * WITHOUT a DOM click (which would visually open the main drawer for
- * longer than one rAF), then immediately restores drawerOpen=false +
- * drawerTab=null so the user's prior state is preserved.
- *
- * The two store mutations are split across rAFs so React commits the
- * open state first (which fires loadBooks() via the panel's useEffect)
- * and the close state second (which doesn't re-fire because
- * wasVisibleRef.current is now true, so becameVisible=false). The
- * visual side effect is a single-frame flash of the main drawer, which
- * is below typical human perception threshold.
- *
- * On warm-boot restore via SecondaryDrawer.assignToSecondary, this is
- * called BEFORE getBuiltInTabRoot + requestTabLocation so the panel's
- * books are already populated when the root is moved to the container.
- */
-export async function ensureBuiltInTabPanelLoaded(
-  tabId: string,
-  h: EnsureLoadedHooks = {},
-): Promise<void> {
-  const _getSnap = h.getStoreSnapshot ?? (() => {
-    // Force-walk the fiber tree if the cache is stale, so we always
-    // get a fresh snapshot.
-    findStoreData(true)
-    return getStoreSnapshot()
-  })
-  const _dlog = h.dlog ?? (() => {})
-
-  _dlog(`[canvas-debug] ENSURE_LOADED_BEGIN tab=${tabId}`)
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const store: any = _getSnap()
-  if (!store || typeof store.openDrawer !== 'function') {
-    _dlog(
-      `[tabmove] ensure-loaded: store snapshot has no openDrawer ` +
-      `(store=${!!store} hasOpenDrawer=${!!(store && typeof store.openDrawer === 'function')}); ` +
-      `skipping pre-fetch — loadBooks may not fire on this code path.`,
-    )
-    return
-  }
-
-  // 1) Flip drawerOpen=true + drawerTab=tabId. The panel's useEffect
-  //    re-runs with isVisible=true and fires loadBooks().
-  store.openDrawer(tabId)
-  // Wait for one rAF so React commits the openDrawer update and the
-  // panel's useEffect fires loadBooks() before we close.
-  await new Promise<void>(r => requestAnimationFrame(() => r()))
-
-  // 2) Restore the prior visual state. The user's last session had
-  //    drawerOpen=false (Lumiverse doesn't persist it; store always
-  //    starts at false on page load). We mirror that here.
-  if (typeof store.closeDrawer === 'function') store.closeDrawer()
-  if (typeof store.setDrawerTab === 'function') store.setDrawerTab(null)
-  // Second rAF so the close state commits in a distinct React batch
-  // from the open state — the panel's useEffect sees a clean
-  // false→true→false transition.
-  await new Promise<void>(r => requestAnimationFrame(() => r()))
-
-  _dlog(`[canvas-debug] ENSURE_LOADED_DONE tab=${tabId}`)
 }
 
 /**
