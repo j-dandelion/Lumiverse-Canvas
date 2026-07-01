@@ -80,7 +80,7 @@ async function main() {
     })
     ok(clicks === 0, 'T4: no click when main button not found')
     ok(
-      logged.length === 1 && logged[0].includes('button-not-found'),
+      logged.some(l => l.includes('button-not-found')),
       'T4: emits dlog breadcrumb when button not found',
     )
   }

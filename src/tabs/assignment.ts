@@ -126,6 +126,8 @@ export async function ensureBuiltInTabActiveInMain(
   const _getRoot = h.getBuiltInTabRoot ?? (() => undefined)
   const _dlog = h.dlog ?? (() => {})
 
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`)
+
   if (_isActive(tabId)) return
 
   if (_isMobile()) {
@@ -142,6 +144,7 @@ export async function ensureBuiltInTabActiveInMain(
     return
   }
   // btn is Element (per buttons.ts:47) — narrow at click site.
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`)
   ;(btn as HTMLElement).click()
 
   // Wait for one rAF (~16ms) so Lumiverse commits the activation and
@@ -150,6 +153,7 @@ export async function ensureBuiltInTabActiveInMain(
   await new Promise<void>(r => requestAnimationFrame(() => r()))
 
   const root = _getRoot(tabId)
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? 'null'}`)
   if (!root) {
     _dlog(
       `[tabmove] ensure-active: post-click root still null for "${tabId}"; ` +
