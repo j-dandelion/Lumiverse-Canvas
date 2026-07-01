@@ -17,7 +17,10 @@ import {
   updateDrawerTabVisibility,
   readMainButtonShortName,
 } from '../tabs/buttons'
-import { getTabAssignments, setTabAssignment, deleteTabAssignment } from '../tabs/assignment'
+import {
+  ensureBuiltInTabPanelLoaded,
+  getTabAssignments, setTabAssignment, deleteTabAssignment,
+} from '../tabs/assignment'
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
 import { persistLayout } from '../layout/persist'
 import { getSecondaryWrapper, openSecondarySidebar, isSecondarySidebarOpen, closeSecondarySidebar } from './secondary'
@@ -264,16 +267,27 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // main panel content for the root directly. Match by data-tab-id,
     // data-tab-title, or text content containing the tab title.
     //
-    // BUILT-IN TAB LIMITATION: Lumiverse only renders the ACTIVE tab's root
-    // in the main panel content. For built-in tabs (extensionId="unknown"),
-    // the only way to get the root is to make the tab active — which
-    // requires clicking its main button. But clicking is destructive: it
-    // triggers a Lumiverse re-render that destroys the main sidebar, which
-    // cascades into the 2s checkSideChanged watcher re-creating the
-    // secondary on the wrong side. So we do NOT click. Built-in tabs that
-    // are not the currently-active tab CANNOT be restored on hard-refresh;
-    // the user must drag them again. Extension tabs use storeTab.root which
-    // is populated independently of the DOM.
+    // BUILT-IN TAB LIMITATION (pre-fix history, now obsolete):
+    //   Lumiverse only renders the ACTIVE tab's root in the main panel
+    //   content. For built-in tabs (extensionId="unknown"), the only
+    //   way to get a mounted root is to make the tab active — which
+    //   used to require clicking the main button. Clicking was
+    //   destructive: it triggered a Lumiverse re-render that destroyed
+    //   the main sidebar, which cascaded into the 2s checkSideChanged
+    //   watcher re-creating the secondary on the wrong side. So we
+    //   originally did NOT click, and built-in tabs that were not
+    //   currently-active could not be restored on hard-refresh.
+    //
+    // Current approach: a built-in tab is "mounted" via the host bridge's
+    //   getBuiltInTabRoot(tabId) which calls ensureRegistryRoot(tabId)
+    //   (frontend/src/lib/drawer-tab-registry.tsx:409). That lazily
+    //   mounts the panel on first request — without requiring it to be
+    //   active in the main drawer. Combined with the cold-boot fix
+    //   (ensureBuiltInTabActiveInMain) and the warm-boot fix
+    //   (ensureBuiltInTabPanelLoaded — this file's LAZY_MOUNT_OK branch
+    //   below), we can restore any built-in tab regardless of its
+    //   pre-restore activation state. Extension tabs use storeTab.root
+    //   which is populated independently of the DOM.
     let _root: HTMLElement | undefined = _storeTab?.root
     if (!_root && !_isExtensionTab) {
       // For built-in tabs, try the DOM as a last resort. This will only
@@ -311,6 +325,22 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       // placement into the secondary drawer. This mirrors the runtime
       // move pattern in src/tabs/assignment.ts:273-411.
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+        // Warm-boot fix: trigger the Lorebook panel's data fetch
+        // (loadBooks) before the root is moved to the container. The
+        // panel's useEffect (frontend/src/components/panels/world-book/
+        // WorldBookPanel.tsx:165-178) is gated on
+        //   isVisible = drawerOpen && drawerTab === 'lorebook'
+        // and the Lumiverse store starts at drawerOpen=false on every
+        // page load. Without this pre-fetch trigger, the panel mounts
+        // with isVisible=false and the dropdown stays empty.
+        //
+        // ensureBuiltInTabPanelLoaded flips drawerOpen=true → false
+        // across two rAFs so the panel's effect sees a clean
+        // false→true→false transition: loadBooks fires on the rising
+        // edge, wasVisibleRef prevents a re-fetch on the falling edge.
+        // The visual side effect is a single-frame flash of the main
+        // drawer.
+        await ensureBuiltInTabPanelLoaded(resolvedId)
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)

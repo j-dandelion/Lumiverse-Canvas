@@ -2060,6 +2060,7 @@ async function assignToSecondary(tabId) {
     const _secondaryWrapper = getSecondaryWrapper();
     const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
     const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} hasSecondaryContent=${!!_secondaryContent}`);
     let _root = _storeTab?.root;
     if (!_root && !_isExtensionTab) {
       const _mainContent = document.querySelector('[class*="_panelContent_"]');
@@ -2076,18 +2077,23 @@ async function assignToSecondary(tabId) {
         }
       }
     }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!_root} rootTagId=${_root?.getAttribute("data-tab-id") ?? "null"}`);
     const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
     if (!_root || !_secondaryContent) {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+        await ensureBuiltInTabPanelLoaded(resolvedId);
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId);
         if (!_lazyRoot) {
+          dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
           dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId, resolvedId });
           return;
         }
+        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
         _root = _lazyRoot;
         wSpindleUi.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
       } else {
+        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`);
         if (!_isExtensionTab) {
           dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).", {
             tabId,
@@ -2223,6 +2229,8 @@ __export(exports_assignment, {
   getTabSidebar: () => getTabSidebar,
   getTabAssignments: () => getTabAssignments,
   getActiveSecondaryTabId: () => getActiveSecondaryTabId,
+  ensureBuiltInTabPanelLoaded: () => ensureBuiltInTabPanelLoaded,
+  ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
   deleteTabAssignment: () => deleteTabAssignment,
   clearTabAssignments: () => clearTabAssignments,
   assignTab: () => assignTab
@@ -2270,6 +2278,56 @@ function armMainDrawerActiveRestore(tabId) {
     }
   }, 200);
 }
+async function ensureBuiltInTabPanelLoaded(tabId, h = {}) {
+  const _getSnap = h.getStoreSnapshot ?? (() => {
+    findStoreData(true);
+    return getStoreSnapshot();
+  });
+  const _dlog = h.dlog ?? (() => {});
+  _dlog(`[canvas-debug] ENSURE_LOADED_BEGIN tab=${tabId}`);
+  const store = _getSnap();
+  if (!store || typeof store.openDrawer !== "function") {
+    _dlog(`[tabmove] ensure-loaded: store snapshot has no openDrawer ` + `(store=${!!store} hasOpenDrawer=${!!(store && typeof store.openDrawer === "function")}); ` + `skipping pre-fetch — loadBooks may not fire on this code path.`);
+    return;
+  }
+  store.openDrawer(tabId);
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  if (typeof store.closeDrawer === "function")
+    store.closeDrawer();
+  if (typeof store.setDrawerTab === "function")
+    store.setDrawerTab(null);
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  _dlog(`[canvas-debug] ENSURE_LOADED_DONE tab=${tabId}`);
+}
+async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
+  const _isActive = h.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer;
+  const _findBtn = h.findMainTabButton ?? findMainTabButton;
+  const _isMobile = h.isMobileViewport ?? isMobileViewport;
+  const _getRoot = h.getBuiltInTabRoot ?? (() => {
+    return;
+  });
+  const _dlog = h.dlog ?? (() => {});
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`);
+  if (_isActive(tabId))
+    return;
+  if (_isMobile()) {
+    _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`);
+    return;
+  }
+  const btn = _findBtn(tabId);
+  if (!btn) {
+    _dlog(`[tabmove] ensure-active: main button-not-found for "${tabId}", ` + `relying on host lazy-mount`);
+    return;
+  }
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
+  btn.click();
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  const root = _getRoot(tabId);
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? "null"}`);
+  if (!root) {
+    _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
+  }
+}
 function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
   queueMicrotask(() => {
     const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
@@ -2289,6 +2347,7 @@ function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
 }
 async function assignTab(tabId, sidebar) {
   if (sidebar === "secondary") {
+    await ensureBuiltInTabActiveInMain(tabId);
     const bridge = getHostBridge();
     const builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
     if (builtInRoot && bridge) {
@@ -2333,6 +2392,7 @@ async function assignTab(tabId, sidebar) {
 var _tabAssignments;
 var init_assignment = __esm(() => {
   init_log();
+  init_store();
   init_mobile_exclusion();
   init_secondary();
   init_buttons();
@@ -3509,7 +3569,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.1.0", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
