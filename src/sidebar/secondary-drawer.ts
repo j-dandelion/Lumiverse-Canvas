@@ -256,6 +256,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     const _secondaryWrapper = getSecondaryWrapper()
     const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
     const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} hasSecondaryContent=${!!_secondaryContent}`)
 
     // DOM-based root lookup fallback. The Zustand store may not have loaded
     // the tab yet (Lumiverse populates the store asynchronously — the main
@@ -299,6 +300,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         }
       }
     }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!_root} rootTagId=${_root?.getAttribute('data-tab-id') ?? 'null'}`)
 
     const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
@@ -311,12 +313,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
         if (!_lazyRoot) {
+          dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)
           dwarn('[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.', { tabId, resolvedId });
           return
         }
+        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`)
         _root = _lazyRoot;
         wSpindleUi.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' });
       } else {
+        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`)
         if (!_isExtensionTab) {
           dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).', {
             tabId,
