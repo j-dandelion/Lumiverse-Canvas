@@ -2,12 +2,6 @@
 *.js.map
 *.dist
 
-# Development scaffolding (not part of the shipping extension)
-AGENTS.md
-DEVLOG.md
-.serena/
-.workflow/
-
 # Editor / OS
 .vscode/
 .idea/

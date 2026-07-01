@@ -348,7 +348,11 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         // End state matches the cold-boot case the user already
         // accepts: main drawer open with empty content, secondary
         // drawer open with Lorebook populated.
+        // eslint-disable-next-line no-console
+        console.log('[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_before_ensure tab=' + resolvedId)
         await ensureBuiltInTabActiveInMain(resolvedId)
+        // eslint-disable-next-line no-console
+        console.log('[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_after_ensure tab=' + resolvedId)
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)

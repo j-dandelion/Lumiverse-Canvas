@@ -58,6 +58,8 @@ export function getActiveTabId(): ActiveTabState {
  */
 export function isTabActiveInMainDrawer(tabId: string): boolean {
   const active = getActiveTabId()
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] isTabActiveInMainDrawer tab=' + tabId + ' active=' + JSON.stringify(active))
   if (active.state === 'active' && active.id === tabId) return true
   // DOM validation: when the store says "not active" (or the store is
   // stale), double-check the DOM. If the DOM's active button has the

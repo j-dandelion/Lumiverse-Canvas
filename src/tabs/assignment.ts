@@ -126,16 +126,33 @@ export async function ensureBuiltInTabActiveInMain(
   const _getRoot = h.getBuiltInTabRoot ?? (() => undefined)
   const _dlog = h.dlog ?? (() => {})
 
+  // DIAG (always-on console.log, not dlog-gated): reveal which path
+  // the helper takes at warm-boot. The user reports the lorebook
+  // dropdown is still empty after the warm-boot fix. We don't know
+  // whether the helper bails at isActive/isMobile/button-not-found,
+  // or whether the click fires but openDrawer doesn't take effect.
+  // Replace with dlog once we know. See plan 2026-07-01_164112.
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_BEGIN tab=' + tabId)
+
   _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`)
 
-  if (_isActive(tabId)) return
+  const _isActiveResult = _isActive(tabId)
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_isActive tab=' + tabId + ' isActive=' + _isActiveResult)
+  if (_isActiveResult) return
 
-  if (_isMobile()) {
+  const _isMobileResult = _isMobile()
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_isMobile tab=' + tabId + ' mobile=' + _isMobileResult)
+  if (_isMobileResult) {
     _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`)
     return
   }
 
   const btn = _findBtn(tabId)
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=' + tabId + ' btn=' + (btn ? '<' + (btn as any).tagName + (typeof (btn as any).getAttribute === 'function' ? ' data-tab-id=' + (btn as Element).getAttribute('data-tab-id') : '') + '>' : 'null'))
   if (!btn) {
     _dlog(
       `[tabmove] ensure-active: main button-not-found for "${tabId}", ` +
@@ -145,14 +162,22 @@ export async function ensureBuiltInTabActiveInMain(
   }
   // btn is Element (per buttons.ts:47) — narrow at click site.
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`)
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_clicking tab=' + tabId)
   ;(btn as HTMLElement).click()
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_clicked tab=' + tabId + ' awaiting rAF')
 
   // Wait for one rAF (~16ms) so Lumiverse commits the activation and
   // Lorebook's mount useEffect fires. 1-16ms is the documented latency
   // of Lumiverse's pendingActiveTabReset useEffect.
   await new Promise<void>(r => requestAnimationFrame(() => r()))
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_afterRaf tab=' + tabId + ' about to call getBuiltInTabRoot')
 
   const root = _getRoot(tabId)
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_rootResult tab=' + tabId + ' root=' + (root ? '<' + root.tagName + '>' : 'null'))
   _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? 'null'}`)
   if (!root) {
     _dlog(
