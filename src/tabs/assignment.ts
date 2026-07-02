@@ -152,7 +152,7 @@ export async function ensureBuiltInTabActiveInMain(
 
   const btn = _findBtn(tabId)
   // eslint-disable-next-line no-console
-  console.log('[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=' + tabId + ' btn=' + (btn ? '<' + (btn as any).tagName + (typeof (btn as any).getAttribute === 'function' ? ' data-tab-id=' + (btn as Element).getAttribute('data-tab-id') : '') + '>' : 'null'))
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=' + tabId + ' btn=' + (btn ? '<' + (btn as any).tagName + (typeof (btn as any).getAttribute === 'function' ? ' data-tab-id=' + (btn as Element).getAttribute('data-tab-id') + ' class=' + (btn as Element).getAttribute('class') : '') + '>' : 'null'))
   if (!btn) {
     _dlog(
       `[tabmove] ensure-active: main button-not-found for "${tabId}", ` +
@@ -163,6 +163,8 @@ export async function ensureBuiltInTabActiveInMain(
   // btn is Element (per buttons.ts:47) — narrow at click site.
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`)
   // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_preClickClass tab=' + tabId + ' class=' + (btn as any).className)
+  // eslint-disable-next-line no-console
   console.log('[Canvas-DIAG] ENSURE_ACTIVE_clicking tab=' + tabId)
   ;(btn as HTMLElement).click()
   // eslint-disable-next-line no-console
@@ -172,6 +174,8 @@ export async function ensureBuiltInTabActiveInMain(
   // Lorebook's mount useEffect fires. 1-16ms is the documented latency
   // of Lumiverse's pendingActiveTabReset useEffect.
   await new Promise<void>(r => requestAnimationFrame(() => r()))
+  // eslint-disable-next-line no-console
+  console.log('[Canvas-DIAG] ENSURE_ACTIVE_postClickClass tab=' + tabId + ' class=' + (btn as any).className)
   // eslint-disable-next-line no-console
   console.log('[Canvas-DIAG] ENSURE_ACTIVE_afterRaf tab=' + tabId + ' about to call getBuiltInTabRoot')
 

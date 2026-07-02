@@ -2303,16 +2303,18 @@ async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
     return;
   }
   const btn = _findBtn(tabId);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=" + tabId + " btn=" + (btn ? "<" + btn.tagName + (typeof btn.getAttribute === "function" ? " data-tab-id=" + btn.getAttribute("data-tab-id") : "") + ">" : "null"));
+  console.log("[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=" + tabId + " btn=" + (btn ? "<" + btn.tagName + (typeof btn.getAttribute === "function" ? " data-tab-id=" + btn.getAttribute("data-tab-id") + " class=" + btn.getAttribute("class") : "") + ">" : "null"));
   if (!btn) {
     _dlog(`[tabmove] ensure-active: main button-not-found for "${tabId}", ` + `relying on host lazy-mount`);
     return;
   }
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
+  console.log("[Canvas-DIAG] ENSURE_ACTIVE_preClickClass tab=" + tabId + " class=" + btn.className);
   console.log("[Canvas-DIAG] ENSURE_ACTIVE_clicking tab=" + tabId);
   btn.click();
   console.log("[Canvas-DIAG] ENSURE_ACTIVE_clicked tab=" + tabId + " awaiting rAF");
   await new Promise((r) => requestAnimationFrame(() => r()));
+  console.log("[Canvas-DIAG] ENSURE_ACTIVE_postClickClass tab=" + tabId + " class=" + btn.className);
   console.log("[Canvas-DIAG] ENSURE_ACTIVE_afterRaf tab=" + tabId + " about to call getBuiltInTabRoot");
   const root = _getRoot(tabId);
   console.log("[Canvas-DIAG] ENSURE_ACTIVE_rootResult tab=" + tabId + " root=" + (root ? "<" + root.tagName + ">" : "null"));
