@@ -54,6 +54,17 @@ if (lazyMountOkIdx !== -1) {
     const ensureIdx = slice.indexOf('ensureBuiltInTabActiveInMain(')
     const getRootIdx = slice.indexOf('getBuiltInTabRoot(')
     const requestIdx = slice.indexOf('requestTabLocation(')
+    // Count the number of rAF awaits inside the LAZY_MOUNT_OK branch.
+    // The fix (plan 2026-07-01_175400 Option A) inserts two:
+    //   1. after ensureBuiltInTabActiveInMain — lets the detached
+    //      React root commit so WorldBookPanel's first useEffect runs
+    //      with isVisible=true (loadBooks fires).
+    //   2. before requestTabLocation — defers moveTabTo's
+    //      pendingActiveTabReset until AFTER that first effect.
+    // A purely textual test would pass even if these were silently
+    // removed; pin the count so a regression is caught.
+    const rafPattern = /requestAnimationFrame\(\(\)\s*=>\s*r\(\)\)/g
+    const rafMatches = slice.match(rafPattern) ?? []
     ok(
       ensureIdx !== -1,
       'T-WARM-WIRE-1: ensureBuiltInTabActiveInMain is called inside the LAZY_MOUNT_OK branch',
@@ -75,6 +86,10 @@ if (lazyMountOkIdx !== -1) {
       ensureIdx !== -1 && requestIdx !== -1 && ensureIdx < requestIdx,
       'T-WARM-WIRE-1: ensureBuiltInTabActiveInMain runs BEFORE requestTabLocation ' +
       '(so the panel is pre-activated before the root is moved to the container)',
+    )
+    ok(
+      rafMatches.length >= 2,
+      `T-WARM-WIRE-1: LAZY_MOUNT_OK branch awaits requestAnimationFrame at least twice (found ${rafMatches.length})`,
     )
   }
 }

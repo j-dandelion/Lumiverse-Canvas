@@ -47,13 +47,9 @@ export function showMainTabButton(tabId: string): void {
 export function findMainTabButton(tabId: string): Element | null {
   const sidebar = getMainSidebar()
   if (!sidebar) {
-    // eslint-disable-next-line no-console
-    console.log('[Canvas-DIAG] findMainTabButton tab=' + tabId + ' sidebar=null')
     dwarn('findMainTabButton: no sidebar found')
     return null
   }
-  // eslint-disable-next-line no-console
-  console.log('[Canvas-DIAG] findMainTabButton tab=' + tabId + ' sidebar=present childButtons=' + sidebar.querySelectorAll('button').length)
 
   // Fast path: id-based match via data-tab-id (set by tagMainSidebarButtons).
   // This is the canonical match — stable across title changes, translations,

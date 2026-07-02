@@ -348,11 +348,20 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         // End state matches the cold-boot case the user already
         // accepts: main drawer open with empty content, secondary
         // drawer open with Lorebook populated.
-        // eslint-disable-next-line no-console
-        console.log('[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_before_ensure tab=' + resolvedId)
+        // Extra rAF: ensureBuiltInTabActiveInMain only awaits one rAF
+        // for Lumiverse's React onClick handler to commit drawerOpen=
+        // true + drawerTab='lorebook' on the main app's React tree.
+        // WorldBookPanel mounts via ensureRegistryRoot on a SEPARATE
+        // detached React root (Lumiverse frontend/src/lib/drawer-tab-
+        // registry.tsx:105-116) whose commit is scheduled async by the
+        // React 18 scheduler (~1-5ms typical). One extra rAF (~16ms)
+        // gives that detached root time to commit and run its first
+        // useEffect WITH isVisible=true, so loadBooks() fires (panel
+        // gate: drawerOpen && drawerTab === 'lorebook', see
+        // Lumiverse frontend/src/components/panels/world-book/
+        // WorldBookPanel.tsx:165-178).
         await ensureBuiltInTabActiveInMain(resolvedId)
-        // eslint-disable-next-line no-console
-        console.log('[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_after_ensure tab=' + resolvedId)
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)
@@ -361,6 +370,17 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         }
         dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`)
         _root = _lazyRoot;
+        // Second rAF: defer requestTabLocation (which calls moveTabTo
+        // → pendingActiveTabReset → ViewportDrawer resets drawerTab
+        // to a fallback, see Lumiverse frontend/src/store/slices/
+        // spindle-placement.ts:389-401 and components/panels/
+        // ViewportDrawer.tsx:117-123) until AFTER the panel's first
+        // useEffect has already run. If loadBooks() fires once with
+        // isVisible=true, then the reset to drawerTab='profile' flips
+        // isVisible=false but wasVisibleRef.current is now true, so
+        // no refetch (no duplicate XHR). The dropdown stays populated
+        // from the first fetch.
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
         wSpindleUi.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' });
       } else {
         dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`)

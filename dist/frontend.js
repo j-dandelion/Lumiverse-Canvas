@@ -1327,11 +1327,9 @@ function showMainTabButton(tabId) {
 function findMainTabButton(tabId) {
   const sidebar = getMainSidebar();
   if (!sidebar) {
-    console.log("[Canvas-DIAG] findMainTabButton tab=" + tabId + " sidebar=null");
     dwarn("findMainTabButton: no sidebar found");
     return null;
   }
-  console.log("[Canvas-DIAG] findMainTabButton tab=" + tabId + " sidebar=present childButtons=" + sidebar.querySelectorAll("button").length);
   const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`);
   if (byId)
     return byId;
@@ -1541,7 +1539,6 @@ function getActiveTabId() {
 }
 function isTabActiveInMainDrawer(tabId) {
   const active = getActiveTabId();
-  console.log("[Canvas-DIAG] isTabActiveInMainDrawer tab=" + tabId + " active=" + JSON.stringify(active));
   if (active.state === "active" && active.id === tabId)
     return true;
   const sidebar = getMainSidebar();
@@ -2085,9 +2082,8 @@ async function assignToSecondary(tabId) {
     const wSpindleUi = wSpindle?.ui;
     if (!_root || !_secondaryContent) {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-        console.log("[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_before_ensure tab=" + resolvedId);
         await ensureBuiltInTabActiveInMain(resolvedId);
-        console.log("[Canvas-DIAG] WARMBOOT_LAZY_MOUNT_OK_after_ensure tab=" + resolvedId);
+        await new Promise((r) => requestAnimationFrame(() => r()));
         const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId);
         if (!_lazyRoot) {
           dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
@@ -2096,6 +2092,7 @@ async function assignToSecondary(tabId) {
         }
         dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
         _root = _lazyRoot;
+        await new Promise((r) => requestAnimationFrame(() => r()));
         wSpindleUi.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
       } else {
         dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`);
@@ -2290,34 +2287,24 @@ async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
     return;
   });
   const _dlog = h.dlog ?? (() => {});
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_BEGIN tab=" + tabId);
   _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`);
   const _isActiveResult = _isActive(tabId);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_isActive tab=" + tabId + " isActive=" + _isActiveResult);
   if (_isActiveResult)
     return;
   const _isMobileResult = _isMobile();
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_isMobile tab=" + tabId + " mobile=" + _isMobileResult);
   if (_isMobileResult) {
     _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`);
     return;
   }
   const btn = _findBtn(tabId);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_findBtn tab=" + tabId + " btn=" + (btn ? "<" + btn.tagName + (typeof btn.getAttribute === "function" ? " data-tab-id=" + btn.getAttribute("data-tab-id") + " class=" + btn.getAttribute("class") : "") + ">" : "null"));
   if (!btn) {
     _dlog(`[tabmove] ensure-active: main button-not-found for "${tabId}", ` + `relying on host lazy-mount`);
     return;
   }
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_preClickClass tab=" + tabId + " class=" + btn.className);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_clicking tab=" + tabId);
   btn.click();
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_clicked tab=" + tabId + " awaiting rAF");
   await new Promise((r) => requestAnimationFrame(() => r()));
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_postClickClass tab=" + tabId + " class=" + btn.className);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_afterRaf tab=" + tabId + " about to call getBuiltInTabRoot");
   const root = _getRoot(tabId);
-  console.log("[Canvas-DIAG] ENSURE_ACTIVE_rootResult tab=" + tabId + " root=" + (root ? "<" + root.tagName + ">" : "null"));
   _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? "null"}`);
   if (!root) {
     _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
@@ -3563,7 +3550,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.1.0", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
