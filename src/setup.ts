@@ -28,13 +28,14 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout } from './layout/persist'
+import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave } from './layout/persist'
 import { getTabAssignments, deleteTabAssignment } from './tabs/assignment'
 import { removeSecondaryTabButton } from './tabs/buttons'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
 import { applyLayout } from './layout/apply'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
+  resetHydrationGuard,
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
@@ -80,6 +81,10 @@ export function setup(ctx: SpindleFrontendContext) {
     document.getElementById('sidebar-ux-shadow-disable-mobile')?.remove()
   })
 
+  // Cancel any pending debounced layout save on teardown so the timer
+  // doesn't fire after _backendCtx is nulled.
+  registerCleanup(cancelLayoutSave)
+
   // Mount the settings panel immediately. The host may not be in the DOM yet
   // (the user hasn't opened Settings → Extensions), but ctx.ui.mount sets up
   // a MutationObserver that reparents the host as soon as it appears.
@@ -109,7 +114,10 @@ export function setup(ctx: SpindleFrontendContext) {
       )
     }
     // Hydrate settings from the loaded layout (defaults filled by
-    // mergeCanvasSettings inside hydrateSettings).
+    // mergeCanvasSettings inside hydrateSettings). Reset the guard first
+    // so a module re-evaluation (page reload) does not leave the old
+    // "user has touched" flag stuck at true, which would skip hydration.
+    resetHydrationGuard()
     hydrateSettings(layout?.settings)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)

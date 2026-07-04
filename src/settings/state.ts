@@ -21,7 +21,7 @@
 import { mergeCanvasSettings, type CanvasSettings } from '../types'
 import { setDebug, dlog } from '../debug/log'
 import { applySettings } from './panel'
-import { getBackendCtx, snapshotLayout } from '../layout/persist'
+import { getBackendCtx, snapshotLayout, isLoadInProgress } from '../layout/persist'
 
 type FullCanvasSettings = Required<CanvasSettings>
 export type { FullCanvasSettings }
@@ -38,6 +38,16 @@ let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
 // becomes a no-op so a late-arriving loadSavedLayout() cannot clobber a
 // setting the user toggled during the load window.
 let _userHasTouchedSettings = false
+
+/**
+ * Reset the hydration guard before a fresh loadSavedLayout cycle. Called
+ * from setup() so that a page reload (module re-evaluation) does not
+ * leave the guard stuck at true from a prior session — which would
+ * silently skip hydrating saved settings and leave the user on defaults.
+ */
+export function resetHydrationGuard(): void {
+  _userHasTouchedSettings = false
+}
 
 // Panel refresh registry — set by settings/panel.ts on mount, called by
 // setSettings so the panel re-renders to reflect the new value. Replaces
@@ -95,22 +105,20 @@ export function refreshSettingsPanel() {
 export function persistSettings(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) { dlog('persistSettings: no backendCtx, skipping'); return }
+  if (isLoadInProgress()) { dlog('persistSettings: load in progress, skipping'); return }
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }
   _saveSettingsTimer = setTimeout(() => {
     _saveSettingsTimer = null
     // Persist via the same SAVE_LAYOUT IPC; the settings field rides on the
-    // existing layout blob. The other layout fields (primary, secondary,
-    // detachedTabs) come from snapshotLayout() so we don't drop them —
-    // UNLESS the user has the layoutPersistence toggle OFF, in which case
-    // we record a clean snapshot (everything closed, no detached tabs).
-    // The toggle's "off" state means "don't capture current layout" — so
-    // a reload after toggling off starts from defaults, not from "what
-    // was on screen when the user turned the toggle off."
+    // existing layout blob. When layoutPersistence is ON, we snapshot the
+    // live drawer state. When OFF, we preserve the last loaded layout so
+    // toggling persistence off then on again does not lose the user's
+    // layout — only the settings field is updated.
     const layoutSnapshot = _settings.layoutPersistence
       ? snapshotLayout()
-      : { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] }
+      : (_lastLoadedLayout ?? { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] })
     const layout = { ...layoutSnapshot, settings: _settings }
     dlog(`persistSettings: debounced firing (layoutPersistence=${_settings.layoutPersistence}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })

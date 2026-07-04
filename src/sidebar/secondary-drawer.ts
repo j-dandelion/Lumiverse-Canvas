@@ -175,7 +175,9 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // This is invoked from assignTab's extension path; auto-opening
     // would trigger enforceExclusionOnOpen and close the source drawer.
     // (See assignment.ts:172 for the built-in-path equivalent.)
-    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport()) {
+    // During layout restore, skip auto-open so finishRestore (apply.ts)
+    // makes the authoritative open/closed decision without flicker.
+    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar()
       _state = 'open'
     }
@@ -432,7 +434,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // Set assignment AFTER successful fallback
     setTabAssignment(resolvedId, 'secondary')
     hideMainTabButton(resolvedId)
-    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport()) {
+    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar()
       _state = 'tab_active'
       _activeTabId = resolvedId

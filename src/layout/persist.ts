@@ -44,6 +44,12 @@ export function setBackendCtx(ctx: BackendCtx): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
+// Guard: true while loadSavedLayout is awaiting the backend response.
+// Suppresses all writes so a slow backend (2s timeout → null) does not
+// result in the pagehide/beforeunload flush writing defaults over the
+// real layout on disk.
+let _loadInProgress = false
+export function isLoadInProgress(): boolean { return _loadInProgress }
 // Called by sidebar/cleanup.cleanupAll on teardown.
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
@@ -68,6 +74,7 @@ export function flushPendingSaves(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
   if (!isPersistenceEnabled()) return
+  if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
@@ -167,6 +174,7 @@ export function persistOpenState(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
   if (!isPersistenceEnabled()) return
+  if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
@@ -189,6 +197,7 @@ export function persistLayout(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
   if (!isPersistenceEnabled()) return
+  if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
@@ -206,6 +215,7 @@ export function persistLayout(): void {
 export function loadSavedLayout(): Promise<any> {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return Promise.resolve(null)
+  _loadInProgress = true
   return new Promise((resolve) => {
     let settled = false
 
@@ -217,6 +227,7 @@ export function loadSavedLayout(): Promise<any> {
       if (payload.type === 'LAYOUT_DATA') {
         if (settled) return
         settled = true
+        _loadInProgress = false
         clearTimeout(timeoutId)
         if (typeof unsub === 'function') unsub()
         resolve(payload.layout)
@@ -231,6 +242,7 @@ export function loadSavedLayout(): Promise<any> {
     const timeoutId = setTimeout(() => {
       if (settled) return
       settled = true
+      _loadInProgress = false
       if (typeof unsub === 'function') unsub()
       resolve(null)
     }, 2000)
