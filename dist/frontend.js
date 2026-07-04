@@ -790,6 +790,26 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
       }
     }
+    if (targetOpen && targetTabId) {
+      const targetId = targetTabId;
+      setTimeout(() => {
+        if (_stopped)
+          return;
+        const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+        let tabBtn = null;
+        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`);
+        if (!tabBtn) {
+          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`);
+        }
+        if (tabBtn) {
+          try {
+            tabBtn.click();
+          } catch (err) {
+            dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
+          }
+        }
+      }, 100);
+    }
     unsuppressMainDrawer();
     return;
   }
@@ -800,18 +820,32 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
       }
     }
-    const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
-    const tabBtn = sidebar?.querySelector('button[class*="tabBtn"]');
-    if (tabBtn) {
-      unsuppressMainDrawer();
-      try {
-        tabBtn.click();
-      } catch (err) {
-        dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
+    const targetId = targetTabId;
+    setTimeout(() => {
+      if (_stopped)
+        return;
+      const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+      let tabBtn = null;
+      if (targetId) {
+        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`);
+        if (!tabBtn) {
+          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`);
+        }
       }
-    } else {
-      unsuppressMainDrawer();
-    }
+      if (!tabBtn) {
+        tabBtn = sidebar?.querySelector('button[class*="tabBtn"]');
+      }
+      if (tabBtn) {
+        unsuppressMainDrawer();
+        try {
+          tabBtn.click();
+        } catch (err) {
+          dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
+        }
+      } else {
+        unsuppressMainDrawer();
+      }
+    }, 100);
   } else {
     const toggleBtn = findDrawerToggleButton(wrapper);
     if (toggleBtn) {
@@ -3600,7 +3634,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.3", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -6633,10 +6667,10 @@ function setup(ctx) {
     registerCleanup(() => {
       teardownSecondaryDrawer();
     });
-    applyMainDrawer(layout);
     if (layout && getSettings().secondSidebarEnabled) {
       applyLayout(layout);
     }
+    applyMainDrawer(layout);
   }).catch((err) => {
     dwarn("Canvas: loadSavedLayout failed, mounting with defaults:", err);
   });

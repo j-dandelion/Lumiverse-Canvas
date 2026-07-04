@@ -339,7 +339,6 @@ export function restoreMainDrawerFromDom(
 
   const currentOpen = readWrapperOpen(wrapper)
   if (currentOpen === targetOpen) {
-    
     // If the drawer is open, set the width so it's correct on this session.
     // If closed, leave --drawer-panel-w alone — the host's CSS uses it
     // for the close animation (translateX). Clearing it breaks the
@@ -348,10 +347,31 @@ export function restoreMainDrawerFromDom(
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-        
-      } else {
-        
       }
+    }
+    // Drawer is already in the target state — still restore the active tab.
+    // Defer the click so it runs after async secondary-sidebar setup
+    // (lazy mounts + addSecondaryTabButton) finishes mutating the main
+    // sidebar DOM. Without the delay, the secondary setup overwrites
+    // the restored tab.
+    if (targetOpen && targetTabId) {
+      const targetId = targetTabId
+      setTimeout(() => {
+        if (_stopped) return
+        const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+        let tabBtn: HTMLButtonElement | null = null
+        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
+        if (!tabBtn) {
+          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
+        }
+        if (tabBtn) {
+          try {
+            tabBtn.click()
+          } catch (err) {
+            dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
+          }
+        }
+      }, 100)
     }
     unsuppressMainDrawer()
     return
@@ -365,28 +385,35 @@ export function restoreMainDrawerFromDom(
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
-        
+      }
+    }
+    // Find a tab button to click. Defer the click so it runs after
+    // async secondary-sidebar setup finishes mutating the main sidebar.
+    const targetId = targetTabId
+    setTimeout(() => {
+      if (_stopped) return
+      const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+      let tabBtn: HTMLButtonElement | null = null
+      if (targetId) {
+        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
+        if (!tabBtn) {
+          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
+        }
+      }
+      if (!tabBtn) {
+        tabBtn = sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
+      }
+      if (tabBtn) {
+        unsuppressMainDrawer()
+        try {
+          tabBtn.click()
+        } catch (err) {
+          dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
+        }
       } else {
-        
+        unsuppressMainDrawer()
       }
-    }
-    // Find a tab button to click. The host's first visible built-in
-    // tab is a safe default — clicking opens the drawer and switches
-    // to that tab. The user can switch tabs after.
-    const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
-    const tabBtn = sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
-    if (tabBtn) {
-      
-      unsuppressMainDrawer()
-      try {
-        tabBtn.click()
-      } catch (err) {
-        dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
-      }
-    } else {
-      
-      unsuppressMainDrawer()
-    }
+    }, 100)
   } else {
     // Target state is "closed" but drawer is open. The host's
     // drawer-tab button (sibling of the drawer div inside the wrapper)

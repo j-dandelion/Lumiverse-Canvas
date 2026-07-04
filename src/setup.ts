@@ -205,13 +205,19 @@ export function setup(ctx: SpindleFrontendContext) {
     // expects the main drawer to reopen. applyLayout (below) is
     // gated on secondSidebarEnabled because it touches the secondary
     // wrapper; applyMainDrawer has no such dependency.
-    applyMainDrawer(layout)
+    //
+    // IMPORTANT: applyLayout must run BEFORE applyMainDrawer because
+    // applyLayout moves tabs to the secondary sidebar, which changes
+    // the main drawer's active tab as a side effect. applyMainDrawer
+    // then restores the correct tab after those assignments are done.
 
     // Apply the rest of the layout (tab assignments + width delta if any).
     // Safe to call after mount: it won't double-animate the wrapper.
     if (layout && getSettings().secondSidebarEnabled) {
       applyLayout(layout)
     }
+
+    applyMainDrawer(layout)
   }).catch((err) => {
     dwarn('Canvas: loadSavedLayout failed, mounting with defaults:', err)
   })
