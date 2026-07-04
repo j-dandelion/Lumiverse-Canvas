@@ -9,7 +9,7 @@
 // paths need).
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { getFiberFromElement } from '../dom/fiber'
-import { dwarn } from '../debug/log'
+import { dlog } from '../debug/log'
 
 let _drawerTabsCache: DrawerTab[] | null = null
 let _storeSnapshotCache: Record<string, unknown> | null = null
@@ -137,7 +137,7 @@ export function findStoreData(force = false): void {
 export function getDrawerTabs(): DrawerTab[] {
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
-  dwarn('Could not find drawerTabs in fiber tree')
+  dlog('getDrawerTabs: drawerTabs not found in fiber tree (returning empty)')
   return []
 }
 
