@@ -524,27 +524,47 @@ export function tearDownSecondarySidebar(): void {
       // Move any moved root back to the main panel. Clear data-canvas-moved,
       // data-canvas-active, and any inline position/inset/display styles
       // left over from the tab's time in secondary.
-      const _movedRoot = _secondaryWrapper?.querySelector(
-        `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
-      ) as HTMLElement | null
-      if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
-        _mainPanelContent.appendChild(_movedRoot)
-      }
-      if (_movedRoot) {
-        _movedRoot.removeAttribute('data-canvas-moved')
-        _movedRoot.removeAttribute('data-canvas-active')
-        _movedRoot.style.removeProperty('position')
-        _movedRoot.style.removeProperty('inset')
-        _movedRoot.style.removeProperty('display')
+      //
+      // Skip this for built-in tabs: requestTabLocation (called above)
+      // handles moving built-in roots back to the main drawer via
+      // Lumiverse's React reconciliation. The DOM fallback below would
+      // run BEFORE that async reconciliation completes, moving the root
+      // to main prematurely. When React then fires, it moves the root
+      // again from secondary to main, creating a duplicate visible root
+      // (the "tabs stack instead of swapping" bug).
+      if (!_isBuiltIn) {
+        const _movedRoot = _secondaryWrapper?.querySelector(
+          `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
+        ) as HTMLElement | null
+        if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
+          _mainPanelContent.appendChild(_movedRoot)
+        }
+        if (_movedRoot) {
+          _movedRoot.removeAttribute('data-canvas-moved')
+          _movedRoot.removeAttribute('data-canvas-active')
+          _movedRoot.style.removeProperty('position')
+          _movedRoot.style.removeProperty('inset')
+          _movedRoot.style.removeProperty('display')
+        }
       }
       showMainTabButton(tabId)
     }
     clearTabAssignments()
+    // Unregister the container from the host bridge so re-enabling
+    // (mount → registerContainer) doesn't conflict with a stale entry.
+    try {
+      const wContainers = getHostBridge()?.containers
+      wContainers?.unregisterContainer?.('canvas-secondary-drawer')
+    } catch (err) {
+      dwarn('[tabmove] teardown: unregisterContainer failed:', err)
+    }
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }
   _secondarySidebarOpen = false
   setMobileOpenClass('secondary', false)
+  // Clear stale chat margins left by the now-removed secondary drawer.
+  updateChatReflow()
   // Drop any in-flight resize handle bound to the wrapper, so a re-mount
   // creates a fresh one.
   const handles = document.querySelectorAll('.sidebar-ux-resize-handle')
