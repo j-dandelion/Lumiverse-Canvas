@@ -1,6 +1,6 @@
 # Canvas Documentation
 
-AI-agent-optimized documentation for the Canvas extension codebase. Start here to understand the architecture, then dive into specific subsystems.
+Documentation for the Canvas extension codebase, optimized for coding agents. Start here to understand the architecture, then dive into specific subsystems.
 
 ## Reading Order
 
