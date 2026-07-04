@@ -2330,6 +2330,7 @@ function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
 async function assignTab(tabId, sidebar) {
   if (sidebar === "secondary") {
     await ensureBuiltInTabActiveInMain(tabId);
+    await new Promise((r) => requestAnimationFrame(() => r()));
     const bridge = getHostBridge();
     const builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
     if (builtInRoot && bridge) {
@@ -2338,6 +2339,7 @@ async function assignTab(tabId, sidebar) {
       armMainDrawerActiveRestore(tabId);
       const preMoveSourceList2 = await captureSourceList("primary");
       const preMoveActiveTab2 = isTabActiveInMainDrawer(tabId);
+      await new Promise((r) => requestAnimationFrame(() => r()));
       bridge.ui.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
       const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
       watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc);
@@ -3550,7 +3552,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.1.0", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();

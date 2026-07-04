@@ -234,6 +234,11 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
     // survives the same re-render on the working "open in main first"
     // path.
     await ensureBuiltInTabActiveInMain(tabId)
+    // rAF #1: the panel's detached React root (mounted by
+    // ensureRegistryRoot) commits asynchronously. One rAF (~16ms)
+    // lets WorldBookPanel's first useEffect run with isVisible=true
+    // so loadBooks() fires.
+    await new Promise<void>(r => requestAnimationFrame(() => r()))
     // Built-in tabs: delegate to the host's requestTabLocation API.
     // Extension tabs fall through to SecondaryDrawer.assignToSecondary.
     const bridge = getHostBridge()
@@ -252,6 +257,12 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
       const preMoveSourceList = await captureSourceList('primary')
       const preMoveActiveTab = isTabActiveInMainDrawer(tabId)
 
+      // rAF #2: defer requestTabLocation until AFTER the panel's first
+      // useEffect has run loadBooks() with isVisible=true. Without this,
+      // requestTabLocation → moveTabTo → pendingActiveTabReset fires
+      // before the detached React root commits, resetting drawerTab and
+      // causing isVisible=false on the panel's first render.
+      await new Promise<void>(r => requestAnimationFrame(() => r()))
       bridge.ui.requestTabLocation!(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' })
       const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null
       watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc)

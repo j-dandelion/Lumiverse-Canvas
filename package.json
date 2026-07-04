@@ -1,6 +1,6 @@
 {
   "name": "canvas",
-  "version": "1.7.1.0",
+  "version": "1.7.2",
   "packageManager": "bun@1.3.14",
   "scripts": {
     "build": "bun build src/frontend.ts --outfile dist/frontend.js --target browser --format esm && bun build src/backend.ts --outfile dist/backend.js --target bun --format esm",
