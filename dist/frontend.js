@@ -2001,7 +2001,7 @@ async function assignToSecondary(tabId) {
   if (_isExtensionTab) {
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport()) {
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar();
       _state = "open";
     }
@@ -2080,6 +2080,35 @@ async function assignToSecondary(tabId) {
     dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!_root} rootTagId=${_root?.getAttribute("data-tab-id") ?? "null"}`);
     const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
+    const _alreadyInSecondary = _secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`);
+    if (_alreadyInSecondary) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
+      const _title2 = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: _title2,
+        root: _alreadyInSecondary,
+        iconSvg: tab.button?.querySelector("svg")?.outerHTML || _alreadyInSecondary.querySelector("svg")?.outerHTML,
+        shortName: readMainButtonShortName(tab.button) || _storeTab?.shortName
+      });
+      updateDrawerTabVisibility();
+      setTabAssignment(resolvedId, "secondary");
+      hideMainTabButton(resolvedId);
+      if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+        await openSecondarySidebar();
+        _state = "tab_active";
+        _activeTabId = resolvedId;
+        setActiveSecondaryTabId(resolvedId);
+      }
+      const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
+      if (_headerTitle2)
+        _headerTitle2.textContent = _title2;
+      if (!isMobileViewport()) {
+        showSecondaryTab(resolvedId);
+      }
+      persistLayout();
+      return;
+    }
     if (!_root || !_secondaryContent) {
       if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
         await ensureBuiltInTabActiveInMain(resolvedId);
@@ -2131,7 +2160,7 @@ async function assignToSecondary(tabId) {
     updateDrawerTabVisibility();
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport()) {
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar();
       _state = "tab_active";
       _activeTabId = resolvedId;
@@ -3428,6 +3457,7 @@ __export(exports_persist, {
   persistOpenState: () => persistOpenState,
   persistLayout: () => persistLayout,
   loadSavedLayout: () => loadSavedLayout,
+  isLoadInProgress: () => isLoadInProgress,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
   cancelLayoutSave: () => cancelLayoutSave,
@@ -3441,6 +3471,9 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
+function isLoadInProgress() {
+  return _loadInProgress;
+}
 function cancelLayoutSave() {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
@@ -3452,6 +3485,8 @@ function flushPendingSaves() {
   if (!backendCtx)
     return;
   if (!isPersistenceEnabled())
+    return;
+  if (_loadInProgress)
     return;
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
@@ -3497,6 +3532,8 @@ function persistOpenState() {
     return;
   if (!isPersistenceEnabled())
     return;
+  if (_loadInProgress)
+    return;
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
     _saveLayoutTimer = null;
@@ -3510,6 +3547,8 @@ function persistLayout() {
   if (!backendCtx)
     return;
   if (!isPersistenceEnabled())
+    return;
+  if (_loadInProgress)
     return;
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
@@ -3525,6 +3564,7 @@ function loadSavedLayout() {
   const backendCtx = getBackendCtx();
   if (!backendCtx)
     return Promise.resolve(null);
+  _loadInProgress = true;
   return new Promise((resolve) => {
     let settled = false;
     const handler = (payload) => {
@@ -3532,6 +3572,7 @@ function loadSavedLayout() {
         if (settled)
           return;
         settled = true;
+        _loadInProgress = false;
         clearTimeout(timeoutId);
         if (typeof unsub === "function")
           unsub();
@@ -3544,6 +3585,7 @@ function loadSavedLayout() {
       if (settled)
         return;
       settled = true;
+      _loadInProgress = false;
       if (typeof unsub === "function")
         unsub();
       resolve(null);
@@ -3558,7 +3600,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2", _backendCtx = null, _saveLayoutTimer = null, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -3600,6 +3642,9 @@ var init_log = __esm(() => {
 });
 
 // src/settings/state.ts
+function resetHydrationGuard() {
+  _userHasTouchedSettings = false;
+}
 function getSettings() {
   return _settings;
 }
@@ -3642,12 +3687,16 @@ function persistSettings() {
     dlog("persistSettings: no backendCtx, skipping");
     return;
   }
+  if (isLoadInProgress()) {
+    dlog("persistSettings: load in progress, skipping");
+    return;
+  }
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer);
   }
   _saveSettingsTimer = setTimeout(() => {
     _saveSettingsTimer = null;
-    const layoutSnapshot = _settings.layoutPersistence ? snapshotLayout() : { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] };
+    const layoutSnapshot = _settings.layoutPersistence ? snapshotLayout() : _lastLoadedLayout ?? { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] };
     const layout = { ...layoutSnapshot, settings: _settings };
     dlog(`persistSettings: debounced firing (layoutPersistence=${_settings.layoutPersistence}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`);
     backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
@@ -6533,6 +6582,7 @@ function setup(ctx) {
     document.getElementById("sidebar-ux-shadow-disable-desktop")?.remove();
     document.getElementById("sidebar-ux-shadow-disable-mobile")?.remove();
   });
+  registerCleanup(cancelLayoutSave);
   mountSettingsPanel(ctx);
   for (const teardown of alwaysCleanups()) {
     registerCleanup(teardown);
@@ -6541,6 +6591,7 @@ function setup(ctx) {
     if (layout?.version && layout.version !== CANVAS_VERSION) {
       dwarn(`Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` + `Hard-refresh (Ctrl+F5) to load the updated extension.`);
     }
+    resetHydrationGuard();
     hydrateSettings(layout?.settings);
     setDebug(getSettings().debugMode);
     setLastLoadedLayout(layout);

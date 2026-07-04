@@ -324,6 +324,43 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
 
+    // Early exit: if this tab is already reparented to the secondary
+    // content, skip the root-finding + ensureBuiltInTabActiveInMain path.
+    // Without this guard, every openSecondarySidebar re-runs assignToSecondary
+    // for all assigned tabs, and the built-in path's ensureBuiltInTabActiveInMain
+    // clicks a main sidebar button — which opens the main drawer and switches
+    // to the clicked tab (then pendingActiveTabReset resets to Profile).
+    const _alreadyInSecondary = _secondaryContent?.querySelector(
+      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`
+    ) as HTMLElement | null
+    if (_alreadyInSecondary) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`)
+      const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: _title,
+        root: _alreadyInSecondary,
+        iconSvg: tab.button?.querySelector('svg')?.outerHTML || _alreadyInSecondary.querySelector('svg')?.outerHTML,
+        shortName: readMainButtonShortName(tab.button as Element) || _storeTab?.shortName,
+      })
+      updateDrawerTabVisibility()
+      setTabAssignment(resolvedId, 'secondary')
+      hideMainTabButton(resolvedId)
+      if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+        await openSecondarySidebar()
+        _state = 'tab_active'
+        _activeTabId = resolvedId
+        setActiveSecondaryTabId(resolvedId)
+      }
+      const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
+      if (_headerTitle) _headerTitle.textContent = _title
+      if (!isMobileViewport()) {
+        showSecondaryTabDisplay(resolvedId)
+      }
+      persistLayout()
+      return
+    }
+
     if (!_root || !_secondaryContent) {
       // For built-in tabs with a host bridge available, attempt a lazy
       // mount via the host's drawer-tab-registry and then request
