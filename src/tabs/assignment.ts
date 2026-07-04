@@ -291,32 +291,42 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
       // causing isVisible=false on the panel's first render.
       await new Promise<void>(r => requestAnimationFrame(() => r()))
 
+      // Arm a MutationObserver to catch Lumiverse's pendingActiveTabReset
+      // before it renders. That useEffect resets drawerTab to the first
+      // non-moved tab (usually profile) when any tab leaves main-drawer,
+      // even for non-selected moves. The observer fires synchronously on
+      // class attribute changes, so we can revert the click in the same
+      // microtask — no visible flicker.
+      let _restoreObserver: MutationObserver | null = null
+      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
+        _restoreObserver = new MutationObserver(() => {
+          const active = _preClickSidebar.querySelector(
+            'button.tabBtnActive, button[class*="tabBtnActive"]'
+          ) as HTMLElement | null
+          const activeId = active?.getAttribute('data-tab-id')
+            || active?.getAttribute('title')
+            || null
+          if (activeId && activeId !== _origActiveTabId) {
+            _preClickActiveBtn.click()
+          }
+        })
+        _restoreObserver.observe(_preClickSidebar, {
+          attributes: true,
+          attributeFilter: ['class'],
+          subtree: true,
+        })
+      }
+
       bridge.ui.requestTabLocation!(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' })
       const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null
       watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc)
 
-      // Prevent Lumiverse's pendingActiveTabReset useEffect from firing.
-      // That effect resets drawerTab to the first non-moved tab (usually
-      // profile), discarding whatever was active. For non-selected moves
-      // (preMoveActiveTab=false), this is wrong — we want to keep the
-      // original active tab. We know from diagnostics that the useEffect
-      // fires within 1 microtask of requestTabLocation. Wait for it to
-      // fire, then overwrite its result.
-      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn) {
-        // Wait 2 microtasks: 1 for the pendingActiveTabReset useEffect
-        // to fire, 1 for its setDrawerTab to commit.
-        await new Promise<void>(r => {
-          Promise.resolve().then(() => Promise.resolve().then(() => r()))
-        })
-        const currentActive = _preClickSidebar?.querySelector(
-          'button.tabBtnActive, button[class*="tabBtnActive"]'
-        ) as HTMLElement | null
-        const currentId = currentActive?.getAttribute('data-tab-id')
-          || currentActive?.getAttribute('title')
-          || null
-        if (currentId !== _origActiveTabId) {
-          _preClickActiveBtn.click()
-        }
+      // Disconnect the observer after one frame — by then any pending
+      // reset has fired and been reverted (or was never triggered).
+      if (_restoreObserver) {
+        await new Promise<void>(r => requestAnimationFrame(() => r()))
+        _restoreObserver.disconnect()
+        _restoreObserver = null
       }
 
       // UI side effects: the data-layer move above is invisible to the user

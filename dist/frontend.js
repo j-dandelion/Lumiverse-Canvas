@@ -191,7 +191,7 @@ function getDrawerTabs() {
   findStoreData();
   if (_drawerTabsCache)
     return _drawerTabsCache;
-  dwarn("Could not find drawerTabs in fiber tree");
+  dlog("getDrawerTabs: drawerTabs not found in fiber tree (returning empty)");
   return [];
 }
 function getStoreSnapshot() {
@@ -2393,27 +2393,54 @@ function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
 }
 async function assignTab(tabId, sidebar) {
   if (sidebar === "secondary") {
-    await ensureBuiltInTabActiveInMain(tabId);
-    await new Promise((r) => requestAnimationFrame(() => r()));
+    const _preClickSidebar = getMainSidebar();
+    const _preClickActiveBtn = _preClickSidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const _origActiveTabId = _preClickActiveBtn?.getAttribute("data-tab-id") || _preClickActiveBtn?.getAttribute("title") || null;
+    const preMoveSourceList = await captureSourceList("primary");
+    const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
     const bridge = getHostBridge();
-    const builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
+    let builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
+    if (!builtInRoot) {
+      await ensureBuiltInTabActiveInMain(tabId);
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
+    }
     if (builtInRoot && bridge) {
       builtInRoot.setAttribute("data-canvas-moved", tabId);
       builtInRoot.setAttribute("data-canvas-active", "");
-      armMainDrawerActiveRestore(tabId);
-      const preMoveSourceList2 = await captureSourceList("primary");
-      const preMoveActiveTab2 = isTabActiveInMainDrawer(tabId);
+      if (preMoveActiveTab)
+        armMainDrawerActiveRestore(tabId);
       await new Promise((r) => requestAnimationFrame(() => r()));
+      let _restoreObserver = null;
+      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
+        _restoreObserver = new MutationObserver(() => {
+          const active = _preClickSidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+          const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
+          if (activeId && activeId !== _origActiveTabId) {
+            _preClickActiveBtn.click();
+          }
+        });
+        _restoreObserver.observe(_preClickSidebar, {
+          attributes: true,
+          attributeFilter: ["class"],
+          subtree: true
+        });
+      }
       bridge.ui.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
       const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
       watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc);
+      if (_restoreObserver) {
+        await new Promise((r) => requestAnimationFrame(() => r()));
+        _restoreObserver.disconnect();
+        _restoreObserver = null;
+      }
       setTabAssignment(tabId, "secondary");
       hideMainTabButton(tabId);
       addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
       updateDrawerTabVisibility();
       if (!isSecondarySidebarOpen() && !isMobileViewport())
         openSecondarySidebar();
-      await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList2, preMoveSourceActiveTab: preMoveActiveTab2 });
+      await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
       persistLayout();
       return;
     }
@@ -2421,8 +2448,6 @@ async function assignTab(tabId, sidebar) {
       dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`);
     }
     const { assignToSecondary: assignToSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-    const preMoveSourceList = await captureSourceList("primary");
-    const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
     await assignToSecondary2(tabId);
     await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
   } else {
@@ -3274,25 +3299,34 @@ function tearDownSecondarySidebar() {
           dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err);
         }
       }
-      const _movedRoot = _secondaryWrapper?.querySelector(`.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
-      if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
-        _mainPanelContent.appendChild(_movedRoot);
-      }
-      if (_movedRoot) {
-        _movedRoot.removeAttribute("data-canvas-moved");
-        _movedRoot.removeAttribute("data-canvas-active");
-        _movedRoot.style.removeProperty("position");
-        _movedRoot.style.removeProperty("inset");
-        _movedRoot.style.removeProperty("display");
+      if (!_isBuiltIn) {
+        const _movedRoot = _secondaryWrapper?.querySelector(`.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
+        if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
+          _mainPanelContent.appendChild(_movedRoot);
+        }
+        if (_movedRoot) {
+          _movedRoot.removeAttribute("data-canvas-moved");
+          _movedRoot.removeAttribute("data-canvas-active");
+          _movedRoot.style.removeProperty("position");
+          _movedRoot.style.removeProperty("inset");
+          _movedRoot.style.removeProperty("display");
+        }
       }
       showMainTabButton(tabId);
     }
     clearTabAssignments();
+    try {
+      const wContainers = getHostBridge()?.containers;
+      wContainers?.unregisterContainer?.("canvas-secondary-drawer");
+    } catch (err) {
+      dwarn("[tabmove] teardown: unregisterContainer failed:", err);
+    }
     _secondaryWrapper.remove();
     _secondaryWrapper = null;
   }
   _secondarySidebarOpen = false;
   setMobileOpenClass("secondary", false);
+  updateChatReflow();
   const handles = document.querySelectorAll(".sidebar-ux-resize-handle");
   for (const h of Array.from(handles)) {
     if (h.parentElement && h.parentElement.classList.contains("sidebar-ux-drawer")) {
@@ -3634,7 +3668,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.3", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.4", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
