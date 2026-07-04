@@ -2141,8 +2141,9 @@ async function assignToSecondary(tabId) {
     if (_headerTitle)
       _headerTitle.textContent = _title;
   }
-  const _finalPanelB = document.querySelector(".sidebar-ux-panel-content");
-  const _finalTabListB = document.querySelector(".sidebar-ux-tab-list");
+  if (!isMobileViewport()) {
+    showSecondaryTab(resolvedId);
+  }
   persistLayout();
 }
 async function unassignFromSecondary(tabId) {
@@ -3398,8 +3399,13 @@ async function applyLayout(layout) {
       finishRestore();
     }, _restoreTimeoutMs);
     const initialRemaining = attemptRestore();
-    if (initialRemaining === 0)
+    if (initialRemaining === 0) {
       finishRestore();
+    } else {
+      const followUp = attemptRestore();
+      if (followUp === 0)
+        finishRestore();
+    }
   }
 }
 var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4;

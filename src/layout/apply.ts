@@ -292,6 +292,16 @@ export async function applyLayout(layout: any) {
     // Initial pass: handle the case where tabs are already registered
     // before the observer attaches. Most common on a fast session restart.
     const initialRemaining = attemptRestore()
-    if (initialRemaining === 0) finishRestore()
+    if (initialRemaining === 0) {
+      finishRestore()
+    } else {
+      // assignToSecondary may complete synchronously when the drawer is
+      // already open (the await openSecondarySidebar path is skipped). The
+      // first pass already fired it — a second pass catches the
+      // now-fully-restored tabs without waiting for the observer (which
+      // only watches the main sidebar) or the 10s safety timeout.
+      const followUp = attemptRestore()
+      if (followUp === 0) finishRestore()
+    }
   }
 }

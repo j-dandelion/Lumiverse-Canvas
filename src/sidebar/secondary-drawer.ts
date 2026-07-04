@@ -444,8 +444,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     if (_headerTitle) _headerTitle.textContent = _title
   }
 
-  const _finalPanelB = document.querySelector('.sidebar-ux-panel-content')
-  const _finalTabListB = document.querySelector('.sidebar-ux-tab-list')
+  // Ensure the tab button is visually highlighted. addSecondaryTabButton
+  // creates the button without the active class — only showSecondaryTab
+  // applies sidebar-ux-tab-active. Called here rather than relying on
+  // finishRestore (apply.ts) because that path may run before the button
+  // exists (assignToSecondary is async) or may not run at all if the
+  // observer never fires (extensions already registered).
+  if (!isMobileViewport()) {
+    showSecondaryTabDisplay(resolvedId)
+  }
 
   persistLayout()
 }
