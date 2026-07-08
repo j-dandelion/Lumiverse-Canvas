@@ -3,6 +3,8 @@ import { CommandRegistry } from './registry'
 import { installIntercept } from './intercept'
 import { makeHelpCommand } from './builtin-help'
 import { makeSelectCommands } from './commands/select'
+import { makeNewChatCommand } from './commands/newchat'
+import { makePersonaCommand } from './commands/persona'
 import { showSuggest, hideSuggest } from './suggest'
 import { dispatchCommand } from './dispatch'
 import { mountToastSurface } from './toast'
@@ -40,6 +42,8 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   for (const cmd of makeSelectCommands()) {
     registry.register(cmd)
   }
+  registry.register(makeNewChatCommand())
+  registry.register(makePersonaCommand())
 
   // Track cleanup functions returned by registry.register so we can invoke
   // them on `canvas:slash-unregister` (mid-session command removal). Map
