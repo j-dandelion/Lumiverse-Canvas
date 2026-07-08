@@ -109,7 +109,7 @@ function injectToastStyles(): void {
       position: fixed;
       bottom: 16px;
       right: 16px;
-      z-index: 9980;
+      z-index: 10004;
       display: flex;
       flex-direction: column;
       gap: 8px;

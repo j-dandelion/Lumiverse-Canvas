@@ -331,7 +331,7 @@ function injectSuggestStyles(): void {
   injectStyles(STYLE_ID, `
     #${SUGGEST_ID} {
       position: fixed;
-      z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (now 9980) */
+      z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
       background: var(--lumiverse-bg-elevated);
       border: 1px solid var(--lumiverse-border);
       border-radius: var(--lumiverse-radius-md);
