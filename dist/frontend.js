@@ -3668,7 +3668,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.5", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.6", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -4953,13 +4953,42 @@ function findPersonaButton() {
   }
   return null;
 }
-function hidePersonaPopover() {
-  const popovers = document.querySelectorAll('[class*="popover"]');
-  for (const el of popovers) {
-    if (el.getAttribute("data-canvas-slash"))
-      continue;
-    el.style.display = "none";
-  }
+function hidePopoversAsTheyAppear() {
+  let resolved = false;
+  const observer = new MutationObserver((mutations) => {
+    if (resolved)
+      return;
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        if (node.getAttribute("data-canvas-slash"))
+          continue;
+        if (node.matches?.('[class*="popover"]')) {
+          node.style.display = "none";
+          resolved = true;
+          observer.disconnect();
+          return;
+        }
+        const child = node.querySelector?.('[class*="popover"]:not([data-canvas-slash])');
+        if (child) {
+          child.style.display = "none";
+          resolved = true;
+          observer.disconnect();
+          return;
+        }
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => {
+    if (!resolved)
+      observer.disconnect();
+  }, 500);
+  return () => {
+    resolved = true;
+    observer.disconnect();
+  };
 }
 async function findPersonaItemByName(name) {
   const lower = name.toLowerCase();
@@ -5011,8 +5040,8 @@ function makePersonaCommand() {
         return;
       }
       log(`Clicking persona button`);
+      const stopWatching = hidePopoversAsTheyAppear();
       personaButton.click();
-      hidePersonaPopover();
       const target = await findPersonaItemByName(personaName);
       if (!target) {
         ctx.toast("error", `Persona not found: ${personaName}`);
