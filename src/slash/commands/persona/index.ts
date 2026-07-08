@@ -1,9 +1,5 @@
 import type { SlashCommandDef } from '../../types'
 
-function log(msg: string): void {
-  console.log(`[Canvas:persona] ${msg}`)
-}
-
 function findPersonaButton(): HTMLElement | null {
   const allButtons = document.querySelectorAll<HTMLButtonElement>('button')
   for (const btn of Array.from(allButtons)) {
@@ -19,9 +15,47 @@ function findPersonaButton(): HTMLElement | null {
   return null
 }
 
+/**
+ * Watch for a new popover to appear in the DOM (React render) and hide it
+ * the instant it's added — before the browser paints. MutationObserver
+ * callbacks fire synchronously after DOM mutations but before paint, so
+ * `display: none` here means the popover is never visible.
+ *
+ * Only targets non-Canvas popovers (skips elements with data-canvas-slash).
+ */
+function hidePopoversAsTheyAppear(): () => void {
+  let resolved = false
+  const observer = new MutationObserver((mutations) => {
+    if (resolved) return
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue
+        if (node.getAttribute('data-canvas-slash')) continue
+        if (node.matches?.('[class*="popover"]')) {
+          node.style.display = 'none'
+          resolved = true
+          observer.disconnect()
+          return
+        }
+        // Check children too (popover might be nested in a wrapper)
+        const child = node.querySelector?.<HTMLElement>('[class*="popover"]:not([data-canvas-slash])')
+        if (child) {
+          child.style.display = 'none'
+          resolved = true
+          observer.disconnect()
+          return
+        }
+      }
+    }
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+  // Safety: disconnect after 500ms if nothing appeared
+  setTimeout(() => { if (!resolved) observer.disconnect() }, 500)
+  return () => { resolved = true; observer.disconnect() }
+}
+
 async function findPersonaItemByName(name: string): Promise<HTMLElement | null> {
   const lower = name.toLowerCase()
-  log(`Looking for persona: "${name}"`)
 
   for (let i = 0; i < 100; i++) {
     await new Promise((r) => requestAnimationFrame(r))
@@ -32,14 +66,12 @@ async function findPersonaItemByName(name: string): Promise<HTMLElement | null> 
 
       // Direct match
       if (text === lower) {
-        log(`Found exact match at iteration ${i}`)
         return btn
       }
 
       // Match with avatar initial prefix (e.g., "JJaime" for "Jaime")
       // The pattern is: first char is the avatar initial, rest is the name
       if (text.length > 1 && text.substring(1) === lower) {
-        log(`Found with avatar prefix at iteration ${i}: "${text}"`)
         return btn
       }
 
@@ -48,14 +80,12 @@ async function findPersonaItemByName(name: string): Promise<HTMLElement | null> 
         // Exclude non-persona buttons
         const withoutPrefix = text.substring(1)
         if (!withoutPrefix.includes('clear') && !withoutPrefix.includes('manage') && !withoutPrefix.includes('select')) {
-          log(`Found with avatar prefix + extra at iteration ${i}: "${text}"`)
           return btn
         }
       }
     }
   }
 
-  log(`No persona matching "${name}" found after 100 iterations`)
   return null
 }
 
@@ -68,7 +98,6 @@ export function makePersonaCommand(): SlashCommandDef {
     category: 'chat',
     handler: async (args, ctx) => {
       const personaName = args._raw?.trim()
-      log(`Handler called with: "${personaName}"`)
 
       if (!personaName) {
         ctx.toast('error', 'Usage: /persona <name>')
@@ -85,7 +114,10 @@ export function makePersonaCommand(): SlashCommandDef {
         return
       }
 
-      log(`Clicking persona button`)
+      // Start watching for the popover BEFORE clicking — the observer fires
+      // synchronously on DOM mutations (before paint), so display:none takes
+      // effect before the popover is ever visible.
+      hidePopoversAsTheyAppear()
       personaButton.click()
 
       const target = await findPersonaItemByName(personaName)
@@ -94,7 +126,6 @@ export function makePersonaCommand(): SlashCommandDef {
         return
       }
 
-      log(`Clicking persona item`)
       target.click()
 
       await new Promise((r) => requestAnimationFrame(r))

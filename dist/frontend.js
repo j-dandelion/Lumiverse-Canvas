@@ -3668,7 +3668,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.6", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.7", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -4885,25 +4885,12 @@ function findToolsButton() {
   }
   return null;
 }
-function findNewChatButtonInPopover() {
+function findNewChatButton() {
   const buttons = document.querySelectorAll("button");
   for (const btn of Array.from(buttons)) {
     const text = btn.textContent?.trim().toLowerCase() || "";
     if (text.includes("new chat") || text.includes("newchat")) {
-      const parent = btn.closest('[class*="popover"]') || btn.closest('[class*="popRow"]');
-      if (parent) {
-        return btn;
-      }
-    }
-  }
-  const svgButtons = document.querySelectorAll("button svg");
-  for (const svg of Array.from(svgButtons)) {
-    const btn = svg.closest("button");
-    if (btn instanceof HTMLElement) {
-      const text = btn.textContent?.trim().toLowerCase() || "";
-      if (text.includes("new chat") || text.includes("newchat")) {
-        return btn;
-      }
+      return btn;
     }
   }
   return null;
@@ -4925,7 +4912,8 @@ function makeNewChatCommand() {
       toolsButton.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      const newChatButton = findNewChatButtonInPopover();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const newChatButton = findNewChatButton();
       if (!newChatButton) {
         ctx.toast("error", "Could not find New Chat button in popover");
         return;
@@ -4939,9 +4927,6 @@ function makeNewChatCommand() {
 }
 
 // src/slash/commands/persona/index.ts
-function log(msg) {
-  console.log(`[Canvas:persona] ${msg}`);
-}
 function findPersonaButton() {
   const allButtons = document.querySelectorAll("button");
   for (const btn of Array.from(allButtons)) {
@@ -4992,30 +4977,25 @@ function hidePopoversAsTheyAppear() {
 }
 async function findPersonaItemByName(name) {
   const lower = name.toLowerCase();
-  log(`Looking for persona: "${name}"`);
   for (let i = 0;i < 100; i++) {
     await new Promise((r) => requestAnimationFrame(r));
     const buttons = document.querySelectorAll("button");
     for (const btn of Array.from(buttons)) {
       const text = btn.textContent?.trim().toLowerCase() || "";
       if (text === lower) {
-        log(`Found exact match at iteration ${i}`);
         return btn;
       }
       if (text.length > 1 && text.substring(1) === lower) {
-        log(`Found with avatar prefix at iteration ${i}: "${text}"`);
         return btn;
       }
       if (text.length > 1 && text.substring(1).startsWith(lower)) {
         const withoutPrefix = text.substring(1);
         if (!withoutPrefix.includes("clear") && !withoutPrefix.includes("manage") && !withoutPrefix.includes("select")) {
-          log(`Found with avatar prefix + extra at iteration ${i}: "${text}"`);
           return btn;
         }
       }
     }
   }
-  log(`No persona matching "${name}" found after 100 iterations`);
   return null;
 }
 function makePersonaCommand() {
@@ -5027,7 +5007,6 @@ function makePersonaCommand() {
     category: "chat",
     handler: async (args, ctx) => {
       const personaName = args._raw?.trim();
-      log(`Handler called with: "${personaName}"`);
       if (!personaName) {
         ctx.toast("error", "Usage: /persona <name>");
         ctx.setText("");
@@ -5039,15 +5018,13 @@ function makePersonaCommand() {
         ctx.toast("error", "Could not find persona button");
         return;
       }
-      log(`Clicking persona button`);
-      const stopWatching = hidePopoversAsTheyAppear();
+      hidePopoversAsTheyAppear();
       personaButton.click();
       const target = await findPersonaItemByName(personaName);
       if (!target) {
         ctx.toast("error", `Persona not found: ${personaName}`);
         return;
       }
-      log(`Clicking persona item`);
       target.click();
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
