@@ -4,7 +4,7 @@ Canvas is a Spindle extension for Lumiverse (an AI chat frontend) that adds a se
 
 ## Documentation
 
-Start with the docs folder at `docs/README.md` — it has a reading order and quick reference for the entire codebase.
+You MUST start with the docs folder at `/docs/README.md` — it has a reading order and quick reference for the entire codebase.
 
 ```
 docs/

@@ -1,43 +1,74 @@
 import type { SlashCommandDef } from '../../types'
 
 /**
- * Find Lumiverse's "New Chat" button using multiple selector strategies.
- *
- * Lumiverse's CSS-module class names are hashed in production, so we match
- * by prefix/substring rather than exact class names. We also try data-testid
- * and aria-label attributes as fallbacks.
- *
- * NOTE: These selectors should be validated against the actual Lumiverse DOM
- * in DevTools. If none match, inspect the New Chat button and add the correct
- * selector to the list below.
+ * Find the "tools" button in Lumiverse's chat input area.
+ * The tools button has a wrench icon and opens a popover with "New Chat" option.
  */
-function findNewChatButton(): HTMLElement | null {
+function findToolsButton(): HTMLElement | null {
+  // The tools button has title attribute with "tools" text and contains a wrench icon
   const selectors = [
-    // data-testid is the most reliable when present
-    '[data-testid*="new-chat"]',
-    '[data-testid*="newChat"]',
-    // CSS-module class substrings (Lumiverse convention: _someName_hash)
-    '[class*="newChat"]',
-    '[class*="newChatBtn"]',
-    '[class*="new-chat"]',
-    // ARIA labels as fallback
-    'button[aria-label*="New Chat" i]',
-    'button[aria-label*="new chat" i]',
-    // Title attribute fallback
-    'button[title*="New Chat" i]',
-    'button[title*="new chat" i]',
+    'button[title*="tools" i]',
+    'button[title*="Tools" i]',
+    // CSS-module class substrings for action buttons
+    'button[class*="actionBtn"]',
+    // Fallback: look for buttons with wrench icon
+    'button svg',
   ]
 
   for (const selector of selectors) {
-    const el = document.querySelector<HTMLElement>(selector)
-    if (el) return el
+    const buttons = document.querySelectorAll<HTMLElement>(selector)
+    for (const el of buttons) {
+      const btn = el.closest('button') || el
+      if (btn instanceof HTMLElement) {
+        const title = btn.getAttribute('title')?.toLowerCase() || ''
+        const text = btn.textContent?.toLowerCase() || ''
+        if (title.includes('tools') || text.includes('tools')) {
+          return btn
+        }
+      }
+    }
   }
 
-  // Last resort: scan buttons by visible text content
+  // Last resort: scan all buttons for tools-related content
+  const allButtons = document.querySelectorAll<HTMLButtonElement>('button')
+  for (const btn of Array.from(allButtons)) {
+    const title = btn.getAttribute('title')?.toLowerCase() || ''
+    const text = btn.textContent?.toLowerCase() || ''
+    if (title.includes('tools') || text.includes('tools')) {
+      return btn
+    }
+  }
+
+  return null
+}
+
+/**
+ * Find the "New Chat" button inside the tools popover.
+ * The button has text content matching "new chat" (localized).
+ */
+function findNewChatButtonInPopover(): HTMLElement | null {
+  // Look for buttons with "new chat" text in the popover
   const buttons = document.querySelectorAll<HTMLButtonElement>('button')
   for (const btn of Array.from(buttons)) {
-    if (btn.textContent?.trim().toLowerCase() === 'new chat') {
-      return btn
+    const text = btn.textContent?.trim().toLowerCase() || ''
+    if (text.includes('new chat') || text.includes('newchat')) {
+      // Verify it's inside a popover (has popRowBtn class or similar)
+      const parent = btn.closest('[class*="popover"]') || btn.closest('[class*="popRow"]')
+      if (parent) {
+        return btn
+      }
+    }
+  }
+
+  // Fallback: look for buttons with FilePlus icon (used in New Chat button)
+  const svgButtons = document.querySelectorAll<HTMLButtonElement>('button svg')
+  for (const svg of Array.from(svgButtons)) {
+    const btn = svg.closest('button')
+    if (btn instanceof HTMLElement) {
+      const text = btn.textContent?.trim().toLowerCase() || ''
+      if (text.includes('new chat') || text.includes('newchat')) {
+        return btn
+      }
     }
   }
 
@@ -52,29 +83,34 @@ export function makeNewChatCommand(): SlashCommandDef {
     owner: 'canvas',
     category: 'chat',
     handler: async (_args, ctx) => {
-      const button = findNewChatButton()
-      if (!button) {
-        ctx.toast('error', 'Could not find new chat button')
+      // Clear the command from textarea immediately to avoid flicker
+      ctx.setText('')
+
+      // Step 1: Find and click the tools button to open the popover
+      const toolsButton = findToolsButton()
+      if (!toolsButton) {
+        ctx.toast('error', 'Could not find tools button')
         return
       }
 
-      button.click()
+      toolsButton.click()
 
-      // Wait for React to commit the state change and re-render.
-      // Two rAFs ensures the first frame paints before we verify.
+      // Step 2: Wait for the popover to appear
       await new Promise((resolve) => requestAnimationFrame(resolve))
       await new Promise((resolve) => requestAnimationFrame(resolve))
 
-      // Best-effort verification: if the textarea still has content
-      // after a short delay, the chat may not have changed.
-      try {
-        const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
-        if (textarea && textarea.value !== '') {
-          await new Promise((resolve) => setTimeout(resolve, 500))
-        }
-      } catch {
-        // Ignore verification errors — command likely worked.
+      // Step 3: Find and click the "New Chat" button in the popover
+      const newChatButton = findNewChatButtonInPopover()
+      if (!newChatButton) {
+        ctx.toast('error', 'Could not find New Chat button in popover')
+        return
       }
+
+      newChatButton.click()
+
+      // Step 4: Wait for React to commit the state change and re-render
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      await new Promise((resolve) => requestAnimationFrame(resolve))
 
       ctx.toast('success', 'New chat started')
     },

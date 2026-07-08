@@ -155,7 +155,8 @@ export function showSuggest(
         // state from a focused, in-DOM textarea. The helper handles
         // the trailing space, the synthetic input event, the skip
         // flag, and cursor placement.
-        const label = cmd.usage ?? `/${cmd.name}`
+        // Use command name, not usage — usage may contain placeholders like <name>
+        const label = `/${cmd.name}`
         applySuggestion(currentAnchor, label)
         const parsed = parseCommand(label)
         if (parsed) setIntent(parsed, 'click')

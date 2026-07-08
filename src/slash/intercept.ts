@@ -122,7 +122,8 @@ export function installIntercept(
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
-      const label = activeCmd.usage ?? `/${activeCmd.name}`
+      // Use command name, not usage — usage may contain placeholders like <name>
+      const label = `/${activeCmd.name}`
       applySuggestion(ta, label)
       hideSuggest()
       return
@@ -194,7 +195,8 @@ export function installIntercept(
         e.preventDefault()
         e.stopPropagation()
         e.stopImmediatePropagation()
-        const label = activeCmd.usage ?? `/${activeCmd.name}`
+        // Use command name, not usage — usage may contain placeholders like <name>
+        const label = `/${activeCmd.name}`
         applySuggestion(ta, label)
         const parsed = parseCommand(label)
         if (parsed) setIntent(parsed, 'enter-popup')
