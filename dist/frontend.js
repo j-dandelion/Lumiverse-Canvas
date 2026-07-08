@@ -3987,6 +3987,9 @@ function setControlledValue(ta, value) {
   }
   ta.dispatchEvent(new Event("input", { bubbles: true }));
 }
+function setSkipNextTextChange() {
+  _skipNextTextChange = true;
+}
 function consumeSkipNextTextChange() {
   if (_skipNextTextChange) {
     _skipNextTextChange = false;
@@ -4103,7 +4106,7 @@ function showSuggest(textarea, options, initialActiveIndex = 0) {
           hideSuggest();
           return;
         }
-        const label = cmd.usage ?? `/${cmd.name}`;
+        const label = `/${cmd.name}`;
         applySuggestion(currentAnchor, label);
         const parsed = parseCommand(label);
         if (parsed)
@@ -4373,7 +4376,7 @@ function installIntercept(_ctx, callbacks) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const label = activeCmd.usage ?? `/${activeCmd.name}`;
+      const label = `/${activeCmd.name}`;
       applySuggestion(ta, label);
       hideSuggest();
       return;
@@ -4404,7 +4407,7 @@ function installIntercept(_ctx, callbacks) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        const label = activeCmd.usage ?? `/${activeCmd.name}`;
+        const label = `/${activeCmd.name}`;
         applySuggestion(ta, label);
         const parsed2 = parseCommand(label);
         if (parsed2)
@@ -4419,10 +4422,8 @@ function installIntercept(_ctx, callbacks) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        requestAnimationFrame(() => {
-          ta.value = "";
-          ta.dispatchEvent(new Event("input", { bubbles: true }));
-        });
+        setSkipNextTextChange();
+        setControlledValue(ta, "");
         hideSuggest();
         callbacks.onParsed(parsed, ta);
         return;
@@ -4474,10 +4475,8 @@ function installIntercept(_ctx, callbacks) {
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
-    requestAnimationFrame(() => {
-      ta.value = "";
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    setSkipNextTextChange();
+    setControlledValue(ta, "");
     hideSuggest();
     callbacks.onParsed(parsed, ta);
   };
@@ -4856,27 +4855,55 @@ var init_select = __esm(() => {
 });
 
 // src/slash/commands/newchat/index.ts
-function findNewChatButton() {
+function findToolsButton() {
   const selectors = [
-    '[data-testid*="new-chat"]',
-    '[data-testid*="newChat"]',
-    '[class*="newChat"]',
-    '[class*="newChatBtn"]',
-    '[class*="new-chat"]',
-    'button[aria-label*="New Chat" i]',
-    'button[aria-label*="new chat" i]',
-    'button[title*="New Chat" i]',
-    'button[title*="new chat" i]'
+    'button[title*="tools" i]',
+    'button[title*="Tools" i]',
+    'button[class*="actionBtn"]',
+    "button svg"
   ];
   for (const selector of selectors) {
-    const el = document.querySelector(selector);
-    if (el)
-      return el;
+    const buttons = document.querySelectorAll(selector);
+    for (const el of buttons) {
+      const btn = el.closest("button") || el;
+      if (btn instanceof HTMLElement) {
+        const title = btn.getAttribute("title")?.toLowerCase() || "";
+        const text = btn.textContent?.toLowerCase() || "";
+        if (title.includes("tools") || text.includes("tools")) {
+          return btn;
+        }
+      }
+    }
   }
+  const allButtons = document.querySelectorAll("button");
+  for (const btn of Array.from(allButtons)) {
+    const title = btn.getAttribute("title")?.toLowerCase() || "";
+    const text = btn.textContent?.toLowerCase() || "";
+    if (title.includes("tools") || text.includes("tools")) {
+      return btn;
+    }
+  }
+  return null;
+}
+function findNewChatButtonInPopover() {
   const buttons = document.querySelectorAll("button");
   for (const btn of Array.from(buttons)) {
-    if (btn.textContent?.trim().toLowerCase() === "new chat") {
-      return btn;
+    const text = btn.textContent?.trim().toLowerCase() || "";
+    if (text.includes("new chat") || text.includes("newchat")) {
+      const parent = btn.closest('[class*="popover"]') || btn.closest('[class*="popRow"]');
+      if (parent) {
+        return btn;
+      }
+    }
+  }
+  const svgButtons = document.querySelectorAll("button svg");
+  for (const svg of Array.from(svgButtons)) {
+    const btn = svg.closest("button");
+    if (btn instanceof HTMLElement) {
+      const text = btn.textContent?.trim().toLowerCase() || "";
+      if (text.includes("new chat") || text.includes("newchat")) {
+        return btn;
+      }
     }
   }
   return null;
@@ -4889,68 +4916,100 @@ function makeNewChatCommand() {
     owner: "canvas",
     category: "chat",
     handler: async (_args, ctx) => {
-      const button = findNewChatButton();
-      if (!button) {
-        ctx.toast("error", "Could not find new chat button");
+      ctx.setText("");
+      const toolsButton = findToolsButton();
+      if (!toolsButton) {
+        ctx.toast("error", "Could not find tools button");
         return;
       }
-      button.click();
+      toolsButton.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      try {
-        const textarea = document.querySelector("textarea");
-        if (textarea && textarea.value !== "") {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      } catch {}
+      const newChatButton = findNewChatButtonInPopover();
+      if (!newChatButton) {
+        ctx.toast("error", "Could not find New Chat button in popover");
+        return;
+      }
+      newChatButton.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
       ctx.toast("success", "New chat started");
     }
   };
 }
 
 // src/slash/commands/persona/index.ts
-function findPersonaContainer() {
-  for (const sel of CONTAINER_SELECTORS) {
-    const el = document.querySelector(sel);
-    if (el)
-      return el;
+function log(msg) {
+  console.log(`[Canvas:persona] ${msg}`);
+}
+function findPersonaButton() {
+  const allButtons = document.querySelectorAll("button");
+  for (const btn of Array.from(allButtons)) {
+    const title = btn.getAttribute("title") || "";
+    const titleLower = title.toLowerCase();
+    if ((titleLower.includes("switch persona") || titleLower.includes("send as persona")) && !titleLower.startsWith("personas")) {
+      return btn;
+    }
   }
   return null;
 }
-function findPersonaItem(container, name) {
+async function findPersonaItemByName(name) {
   const lower = name.toLowerCase();
-  for (const sel of ITEM_SELECTORS) {
-    for (const item of container.querySelectorAll(sel)) {
-      const text = item.textContent?.toLowerCase().trim();
-      if (text === lower)
-        return item;
+  log(`Looking for persona: "${name}"`);
+  for (let i = 0;i < 100; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+    const buttons = document.querySelectorAll("button");
+    for (const btn of Array.from(buttons)) {
+      const text = btn.textContent?.trim().toLowerCase() || "";
+      if (text === lower) {
+        log(`Found exact match at iteration ${i}`);
+        return btn;
+      }
+      if (text.length > 1 && text.substring(1) === lower) {
+        log(`Found with avatar prefix at iteration ${i}: "${text}"`);
+        return btn;
+      }
+      if (text.length > 1 && text.substring(1).startsWith(lower)) {
+        const withoutPrefix = text.substring(1);
+        if (!withoutPrefix.includes("clear") && !withoutPrefix.includes("manage") && !withoutPrefix.includes("select")) {
+          log(`Found with avatar prefix + extra at iteration ${i}: "${text}"`);
+          return btn;
+        }
+      }
     }
   }
+  log(`No persona matching "${name}" found after 100 iterations`);
   return null;
 }
 function makePersonaCommand() {
   return {
     name: "persona",
-    description: "Switch the active persona in the current chat",
-    usage: "/persona <name>",
+    description: "Switch the active persona in the current chat (Example: /persona Bob)",
+    usage: "/persona",
     owner: "canvas",
     category: "chat",
     handler: async (args, ctx) => {
       const personaName = args._raw?.trim();
+      log(`Handler called with: "${personaName}"`);
       if (!personaName) {
         ctx.toast("error", "Usage: /persona <name>");
+        ctx.setText("");
         return;
       }
-      const container = findPersonaContainer();
-      if (!container) {
-        ctx.toast("error", "Could not find persona picker");
+      ctx.setText("");
+      const personaButton = findPersonaButton();
+      if (!personaButton) {
+        ctx.toast("error", "Could not find persona button");
         return;
       }
-      const target = findPersonaItem(container, personaName);
+      log(`Clicking persona button`);
+      personaButton.click();
+      const target = await findPersonaItemByName(personaName);
       if (!target) {
         ctx.toast("error", `Persona not found: ${personaName}`);
         return;
       }
+      log(`Clicking persona item`);
       target.click();
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
@@ -4958,23 +5017,6 @@ function makePersonaCommand() {
     }
   };
 }
-var CONTAINER_SELECTORS, ITEM_SELECTORS;
-var init_persona = __esm(() => {
-  CONTAINER_SELECTORS = [
-    '[data-testid*="persona"]',
-    '[class*="persona"]',
-    '[class*="Persona"]',
-    '[data-component*="persona" i]',
-    '[data-component*="Persona"]'
-  ];
-  ITEM_SELECTORS = [
-    '[role="option"]',
-    '[role="menuitem"]',
-    '[role="radio"]',
-    "button",
-    "li"
-  ];
-});
 
 // src/slash/microtask.ts
 function defer(fn) {
@@ -5685,7 +5727,6 @@ function attachSlashRuntime(ctx) {
 var init_runtime = __esm(() => {
   init_intercept();
   init_select();
-  init_persona();
   init_suggest();
   init_dispatch();
   init_toast();

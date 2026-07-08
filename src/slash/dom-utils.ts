@@ -61,6 +61,15 @@ export function setControlledValue(ta: HTMLTextAreaElement, value: string): void
 }
 
 /**
+ * Set the skip flag so the next onTextChange is suppressed. Used by
+ * intercept.ts when clearing the textarea synchronously — the synthetic
+ * input event would otherwise re-trigger the popup.
+ */
+export function setSkipNextTextChange(): void {
+  _skipNextTextChange = true
+}
+
+/**
  * Read and clear the skip flag. Called by intercept.ts's inputHandler;
  * returns true if the next onTextChange should be suppressed.
  */

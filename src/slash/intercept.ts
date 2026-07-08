@@ -27,6 +27,8 @@ import {
   consumeSkipNextTextChange,
   isValidSlashContext,
   resetSkipNextTextChange,
+  setSkipNextTextChange,
+  setControlledValue,
   textareaHasUsage,
 } from './dom-utils'
 
@@ -218,14 +220,13 @@ export function installIntercept(
         e.stopPropagation()
         e.stopImmediatePropagation()
 
-        // Clear the textarea on the next frame (rAF fires after the current paint).
-        // The textarea is a React controlled component — useState for `text` won't
-        // re-render without a synthetic `input` event. Dispatching it manually
-        // after rAF is the load-bearing pattern. (Chronicle skill pitfall #5)
-        requestAnimationFrame(() => {
-          ta.value = ''
-          ta.dispatchEvent(new Event('input', { bubbles: true }))
-        })
+        // Clear the textarea synchronously, synced with React state via
+        // setControlledValue (native setter + synthetic input event).
+        // Set the skip flag so the input handler suppresses onTextChange
+        // and the popup doesn't re-open. The command handler's ctx.setText('')
+        // is a redundant safety net — this is the primary clear path.
+        setSkipNextTextChange()
+        setControlledValue(ta, '')
 
         hideSuggest()
         callbacks.onParsed(parsed, ta)
@@ -302,10 +303,10 @@ export function installIntercept(
     e.stopPropagation()
     e.stopImmediatePropagation()
 
-    requestAnimationFrame(() => {
-      ta.value = ''
-      ta.dispatchEvent(new Event('input', { bubbles: true }))
-    })
+    // Clear the textarea synchronously, synced with React state.
+    // Same pattern as the Enter handler — setControlledValue + skip flag.
+    setSkipNextTextChange()
+    setControlledValue(ta, '')
 
     hideSuggest()
     callbacks.onParsed(parsed, ta)
