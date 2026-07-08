@@ -17,8 +17,14 @@
 
 import { getMainDrawerSide } from '../store'
 import { getMainDrawer, getMainSidebar, getMainPanel } from '../dom/lumiverse'
+import { getSettings } from '../settings/state'
 import { isMobileViewport } from './mobile-exclusion'
 import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
+
+/** Class added to .sidebar-ux-tab-list when keepTabListVisible pins it to
+ *  the viewport edge. Used both as a runtime flag (idempotency check) and
+ *  as a CSS hook for any pinned-specific rules in sidebar/styles.ts. */
+export const TAB_LIST_PINNED_CLASS = 'sidebar-ux-tab-list--pinned'
 
 // Structural element type — only the inline `style` is touched, so any
 // object exposing a `CSSStyleDeclaration` works. Real HTMLElements in
@@ -171,5 +177,80 @@ export function getTabListPosition(opts?: ElementOpts): {
     mainDrawerDir: mainDrawer?.style.flexDirection || '',
     mainTabListBorderLeft: mainTabList?.style.borderLeft || '',
     mainTabListBorderRight: mainTabList?.style.borderRight || '',
+  }
+}
+
+/** Pin the secondary drawer's tab-button-list to the viewport edge so it
+ *  remains visible even when the drawer is closed. The panel (the drawer's
+ *  only remaining flex child) slides in/out from behind the pinned tab
+ *  list. The drawer toggle (`.sidebar-ux-drawer-tab`) is unchanged — it
+ *  still slides with the wrapper, hidden behind the tab list when closed
+ *  and visible to the left of the drawer when open.
+ *
+ *  Idempotent. No-op on mobile (the drawer's mobile layout already handles
+ *  the tab list differently via media queries). No-op if the secondary
+ *  wrapper doesn't exist (master toggle off or before mount). */
+export function applyTabListPin(enabled: boolean): void {
+  if (isMobileViewport()) return
+
+  const tabList = getSecondaryTabList()
+  if (!tabList) return
+  const drawer = getSecondaryDrawer()
+  const panel = getSecondaryPanel()
+
+  const isPinned = tabList.classList.contains(TAB_LIST_PINNED_CLASS)
+  if (enabled === isPinned) return  // already in target state
+
+  // Secondary is on the opposite side of the main.
+  const side: 'left' | 'right' = getMainDrawerSide() === 'left' ? 'right' : 'left'
+  const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
+  const borderVal = '1px solid var(--lumiverse-primary-020)'
+
+  if (enabled) {
+    tabList.classList.add(TAB_LIST_PINNED_CLASS)
+    // Position the tab list at the viewport edge.
+    ;(tabList as any).style.position = 'fixed'
+    ;(tabList as any).style.top = '0'
+    ;(tabList as any).style.bottom = '0'
+    ;(tabList as any).style[side] = '0'
+    ;(tabList as any).style.zIndex = '10000'
+    ;(tabList as any).style.width = '56px'
+    ;(tabList as any).style.pointerEvents = 'auto'
+    // Border on the inner (panel-facing) side.
+    if (innerBorderSide === 'right') {
+      ;(tabList as any).style.borderRight = borderVal
+      ;(tabList as any).style.borderLeft = 'none'
+    } else {
+      ;(tabList as any).style.borderLeft = borderVal
+      ;(tabList as any).style.borderRight = 'none'
+    }
+    // Reset the drawer's flex direction — the tab list is no longer a
+    // flex child, so the direction has no effect.
+    if (drawer) {
+      ;(drawer as any).style.flexDirection = ''
+    }
+    // Clear the panel's chat-facing border — the tab list no longer
+    // sits next to the panel inside the drawer.
+    if (panel) {
+      ;(panel as any).style.borderRight = 'none'
+      ;(panel as any).style.borderLeft = 'none'
+    }
+  } else {
+    tabList.classList.remove(TAB_LIST_PINNED_CLASS)
+    // Clear the pinning styles on the tab list.
+    ;(tabList as any).style.position = ''
+    ;(tabList as any).style.top = ''
+    ;(tabList as any).style.bottom = ''
+    ;(tabList as any).style.left = ''
+    ;(tabList as any).style.right = ''
+    ;(tabList as any).style.zIndex = ''
+    ;(tabList as any).style.width = ''
+    ;(tabList as any).style.pointerEvents = ''
+    // Clear the borders we set — applyTabListPosition will set them
+    // based on moveControlsToOuterEdge.
+    ;(tabList as any).style.borderLeft = ''
+    ;(tabList as any).style.borderRight = ''
+    // Restore the drawer's flex direction and the panel's border.
+    applyTabListPosition(getSettings().moveControlsToOuterEdge)
   }
 }
