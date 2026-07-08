@@ -4481,6 +4481,41 @@ function installIntercept(_ctx, callbacks) {
     callbacks.onParsed(parsed, ta);
   };
   document.addEventListener("click", clickHandler, true);
+  const touchHandler = (e) => {
+    const target = e.target;
+    if (!target)
+      return;
+    if (!target.closest(SELECTOR_SEND_BTN))
+      return;
+    const ta = document.querySelector(SELECTOR_TEXTAREA);
+    if (!ta)
+      return;
+    let parsed = null;
+    const intent = getIntent();
+    if (intent) {
+      const cmdPrefix = "/" + intent.command.name;
+      if (ta.value.startsWith(cmdPrefix)) {
+        const args = ta.value.startsWith(cmdPrefix + " ") ? ta.value.slice(cmdPrefix.length + 1) : intent.command.args;
+        parsed = { name: intent.command.name, args };
+      } else if (ta.value.trim() === "" || ta.value === "/") {
+        parsed = intent.command;
+      }
+      clearIntent();
+    }
+    if (!parsed) {
+      parsed = parseCommand(ta.value);
+    }
+    if (!parsed)
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    setSkipNextTextChange();
+    setControlledValue(ta, "");
+    hideSuggest();
+    callbacks.onParsed(parsed, ta);
+  };
+  document.addEventListener("touchend", touchHandler, true);
   const inputHandler = (e) => {
     const target = e.target;
     if (!target || target.tagName !== "TEXTAREA")
@@ -4500,6 +4535,7 @@ function installIntercept(_ctx, callbacks) {
   return () => {
     document.removeEventListener("keydown", keydownHandler, true);
     document.removeEventListener("click", clickHandler, true);
+    document.removeEventListener("touchend", touchHandler, true);
     document.removeEventListener("input", inputHandler, true);
     document.removeEventListener("compositionstart", compositionStartHandler, true);
     document.removeEventListener("compositionend", compositionEndHandler, true);

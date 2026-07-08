@@ -314,6 +314,50 @@ export function installIntercept(
 
   document.addEventListener('click', clickHandler, true)
 
+  // ── Send button: capture-phase touchend (mobile). On touch devices,
+  //    touchend fires BEFORE click, so Lumiverse's handleSendTouchEnd
+  //    calls handleSend() before our click handler runs. This handler
+  //    intercepts the touch event and dispatches slash commands first.
+  const touchHandler = (e: TouchEvent) => {
+    const target = e.target as HTMLElement | null
+    if (!target) return
+    if (!target.closest(SELECTOR_SEND_BTN)) return
+
+    const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
+    if (!ta) return
+
+    let parsed: ParsedCommand | null = null
+    const intent = getIntent()
+    if (intent) {
+      const cmdPrefix = '/' + intent.command.name
+      if (ta.value.startsWith(cmdPrefix)) {
+        const args = ta.value.startsWith(cmdPrefix + ' ')
+          ? ta.value.slice(cmdPrefix.length + 1)
+          : intent.command.args
+        parsed = { name: intent.command.name, args }
+      } else if (ta.value.trim() === '' || ta.value === '/') {
+        parsed = intent.command
+      }
+      clearIntent()
+    }
+    if (!parsed) {
+      parsed = parseCommand(ta.value)
+    }
+    if (!parsed) return
+
+    e.preventDefault()
+    e.stopPropagation()
+    e.stopImmediatePropagation()
+
+    setSkipNextTextChange()
+    setControlledValue(ta, '')
+
+    hideSuggest()
+    callbacks.onParsed(parsed, ta)
+  }
+
+  document.addEventListener('touchend', touchHandler, true)
+
   // ── Suggest overlay: forward textarea input to the runtime, which decides
   //    whether to show or hide the popup. The inputHandler is a thin relay.
   const inputHandler = (e: Event) => {
@@ -342,6 +386,7 @@ export function installIntercept(
   return () => {
     document.removeEventListener('keydown', keydownHandler, true)
     document.removeEventListener('click', clickHandler, true)
+    document.removeEventListener('touchend', touchHandler, true)
     document.removeEventListener('input', inputHandler, true)
     document.removeEventListener('compositionstart', compositionStartHandler, true)
     document.removeEventListener('compositionend', compositionEndHandler, true)
