@@ -35,7 +35,7 @@ import { cancelLayoutSave } from '../layout/persist'
 import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
-import { applyTabListPosition } from '../sidebar/tab-position'
+import { applyTabListPosition, applyTabListPin } from '../sidebar/tab-position'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -362,6 +362,28 @@ const tabPositionFeature: CanvasFeature = {
   },
 }
 
+/** Keep tab list visible: pins the secondary drawer's tab-button-list to
+ *  the screen edge so the user can switch tabs even when the drawer is
+ *  closed. The panel still slides in/out from behind the pinned list.
+ *  No-op on mobile (mobile CSS handles the tab list separately).
+ *
+ *  init() is a no-op (the secondary wrapper doesn't exist at init time —
+ *  it's created later in secondSidebarFeature.mount()). mount() reads
+ *  the current setting and applies it. apply() re-applies on diff. The
+ *  returned teardown un-pins the tab list so the secondary wrapper can
+ *  be torn down cleanly without leaving a body-level orphan. */
+const keepTabListVisibleFeature: CanvasFeature = {
+  id: 'keepTabListVisible',
+  mount(_ctx, _layout) {
+    applyTabListPin(getSettings().keepTabListVisible)
+    return () => applyTabListPin(false)
+  },
+  apply(prev, next) {
+    if (prev.keepTabListVisible === next.keepTabListVisible) return
+    applyTabListPin(next.keepTabListVisible)
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -376,6 +398,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   layoutPersistenceFeature,
   slashFeature,
   tabPositionFeature,
+  keepTabListVisibleFeature,
   drawerTabDragFeature,
 ]
 
