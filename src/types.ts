@@ -55,6 +55,12 @@ export interface CanvasSettings {
    *  No-op on mobile (mobile CSS forces column layout + bottom border). */
   moveControlsToOuterEdge?: boolean
 
+  /** When the secondary drawer is closed, keep the tab-button-list visible
+   *  at the screen edge so the user can switch tabs without opening the
+   *  drawer. Works regardless of `moveControlsToOuterEdge`. The panel still
+   *  slides in/out from behind the pinned tab list. No-op on mobile. */
+  keepTabListVisible?: boolean
+
   /** Show box-shadow on sidebars at min-width: 601px (desktop). */
   sidebarShadowsDesktop?: boolean
 
@@ -113,6 +119,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   consistentIconSize: true,
   // Sidebars
   moveControlsToOuterEdge: false,
+  keepTabListVisible: false,
   sidebarShadowsDesktop: true,
   sidebarShadowsMobile: false,
   // Chat & Layout
