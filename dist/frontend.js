@@ -3668,7 +3668,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.4", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.5", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -4225,7 +4225,7 @@ function injectSuggestStyles() {
   injectStyles(STYLE_ID, `
     #${SUGGEST_ID} {
       position: fixed;
-      z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (now 9980) */
+      z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
       background: var(--lumiverse-bg-elevated);
       border: 1px solid var(--lumiverse-border);
       border-radius: var(--lumiverse-radius-md);
@@ -4953,6 +4953,14 @@ function findPersonaButton() {
   }
   return null;
 }
+function hidePersonaPopover() {
+  const popovers = document.querySelectorAll('[class*="popover"]');
+  for (const el of popovers) {
+    if (el.getAttribute("data-canvas-slash"))
+      continue;
+    el.style.display = "none";
+  }
+}
 async function findPersonaItemByName(name) {
   const lower = name.toLowerCase();
   log(`Looking for persona: "${name}"`);
@@ -5004,6 +5012,7 @@ function makePersonaCommand() {
       }
       log(`Clicking persona button`);
       personaButton.click();
+      hidePersonaPopover();
       const target = await findPersonaItemByName(personaName);
       if (!target) {
         ctx.toast("error", `Persona not found: ${personaName}`);
@@ -5594,7 +5603,7 @@ function injectToastStyles() {
       position: fixed;
       bottom: 16px;
       right: 16px;
-      z-index: 9980;
+      z-index: 10004;
       display: flex;
       flex-direction: column;
       gap: 8px;
