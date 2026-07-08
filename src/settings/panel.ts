@@ -256,6 +256,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: moveControlsToOuter.btn,
   }))
 
+  const keepTabListVisible = makeToggle(
+    () => getSettings().keepTabListVisible,
+    (v) => setSettings({ keepTabListVisible: v })
+  )
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Keep tab list visible',
+    hint: 'Pins the tab buttons to the screen edge so you can switch tabs even when the second drawer is closed. The panel still slides in and out from behind the list.',
+    control: keepTabListVisible.btn,
+  }))
+
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
     (v) => setSettings({ resizeSidebars: v }),
@@ -372,6 +382,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   const refresh = () => {
     master.refresh()
     moveControlsToOuter.refresh()
+    keepTabListVisible.refresh()
     resizeSidebars.refresh()
     compact.refresh()
     iconSize.refresh()
