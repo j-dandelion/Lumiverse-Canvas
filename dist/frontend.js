@@ -4855,6 +4855,127 @@ var init_select = __esm(() => {
   init_selection();
 });
 
+// src/slash/commands/newchat/index.ts
+function findNewChatButton() {
+  const selectors = [
+    '[data-testid*="new-chat"]',
+    '[data-testid*="newChat"]',
+    '[class*="newChat"]',
+    '[class*="newChatBtn"]',
+    '[class*="new-chat"]',
+    'button[aria-label*="New Chat" i]',
+    'button[aria-label*="new chat" i]',
+    'button[title*="New Chat" i]',
+    'button[title*="new chat" i]'
+  ];
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el)
+      return el;
+  }
+  const buttons = document.querySelectorAll("button");
+  for (const btn of Array.from(buttons)) {
+    if (btn.textContent?.trim().toLowerCase() === "new chat") {
+      return btn;
+    }
+  }
+  return null;
+}
+function makeNewChatCommand() {
+  return {
+    name: "newchat",
+    description: "Start a new chat with the currently selected character",
+    usage: "/newchat",
+    owner: "canvas",
+    category: "chat",
+    handler: async (_args, ctx) => {
+      const button = findNewChatButton();
+      if (!button) {
+        ctx.toast("error", "Could not find new chat button");
+        return;
+      }
+      button.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      try {
+        const textarea = document.querySelector("textarea");
+        if (textarea && textarea.value !== "") {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      } catch {}
+      ctx.toast("success", "New chat started");
+    }
+  };
+}
+
+// src/slash/commands/persona/index.ts
+function findPersonaContainer() {
+  for (const sel of CONTAINER_SELECTORS) {
+    const el = document.querySelector(sel);
+    if (el)
+      return el;
+  }
+  return null;
+}
+function findPersonaItem(container, name) {
+  const lower = name.toLowerCase();
+  for (const sel of ITEM_SELECTORS) {
+    for (const item of container.querySelectorAll(sel)) {
+      const text = item.textContent?.toLowerCase().trim();
+      if (text === lower)
+        return item;
+    }
+  }
+  return null;
+}
+function makePersonaCommand() {
+  return {
+    name: "persona",
+    description: "Switch the active persona in the current chat",
+    usage: "/persona <name>",
+    owner: "canvas",
+    category: "chat",
+    handler: async (args, ctx) => {
+      const personaName = args._raw?.trim();
+      if (!personaName) {
+        ctx.toast("error", "Usage: /persona <name>");
+        return;
+      }
+      const container = findPersonaContainer();
+      if (!container) {
+        ctx.toast("error", "Could not find persona picker");
+        return;
+      }
+      const target = findPersonaItem(container, personaName);
+      if (!target) {
+        ctx.toast("error", `Persona not found: ${personaName}`);
+        return;
+      }
+      target.click();
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
+      ctx.toast("success", `Switched to persona: ${personaName}`);
+    }
+  };
+}
+var CONTAINER_SELECTORS, ITEM_SELECTORS;
+var init_persona = __esm(() => {
+  CONTAINER_SELECTORS = [
+    '[data-testid*="persona"]',
+    '[class*="persona"]',
+    '[class*="Persona"]',
+    '[data-component*="persona" i]',
+    '[data-component*="Persona"]'
+  ];
+  ITEM_SELECTORS = [
+    '[role="option"]',
+    '[role="menuitem"]',
+    '[role="radio"]',
+    "button",
+    "li"
+  ];
+});
+
 // src/slash/microtask.ts
 function defer(fn) {
   return new Promise((resolve, reject) => {
@@ -5480,6 +5601,8 @@ function attachSlashRuntime(ctx) {
   for (const cmd of makeSelectCommands()) {
     registry.register(cmd);
   }
+  registry.register(makeNewChatCommand());
+  registry.register(makePersonaCommand());
   const unregisterByName = new Map;
   let lastActiveIndex = null;
   const slashCtx = {
@@ -5562,6 +5685,7 @@ function attachSlashRuntime(ctx) {
 var init_runtime = __esm(() => {
   init_intercept();
   init_select();
+  init_persona();
   init_suggest();
   init_dispatch();
   init_toast();

@@ -28,7 +28,7 @@ Command handler runs with SlashContext
 
 `attachSlashRuntime(ctx)` wires everything:
 1. Creates `CommandRegistry`
-2. Registers built-in commands (`/help`, `/select`)
+2. Registers built-in commands (`/help`, `/select`, `/newchat`, `/persona`)
 3. Installs capture-phase intercept
 4. Mounts toast surface (Preact)
 5. Listens for `canvas:slash-register` / `canvas:slash-unregister` CustomEvents
@@ -147,6 +147,14 @@ Source types: `'click' | 'enter-popup' | 'enter-direct' | 'tab' | 'setText'`
 
 ### `/help` (`slash/builtin-help.ts`)
 Lists all registered commands via `registry.list()`.
+
+### `/newchat` (`slash/commands/newchat/`)
+
+Starts a new chat with the currently selected character. Finds Lumiverse's "New Chat" button using a cascade of selector strategies (data-testid, CSS-module class substrings, ARIA labels, title attribute, and visible text content). Shows an error toast if the button cannot be found, or a success toast after clicking.
+
+### `/persona` (`slash/commands/persona/`)
+
+Switches the active persona in the current chat. Takes a persona name as argument (`/persona <name>`). Finds the persona picker container via DOM selectors, then locates the matching persona item by text content (case-insensitive, whitespace-trimmed). Shows an error toast if the picker or persona is not found, or a success toast after switching.
 
 ### `/select` (`slash/commands/select/`)
 
