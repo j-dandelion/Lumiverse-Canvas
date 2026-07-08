@@ -206,10 +206,15 @@ export function startMobileExclusion(): () => void {
         const isOpen = wrapper.classList.toString().includes('wrapperOpen')
         setMobileOpenClass('primary', isOpen)
       }
+      // Clear desktop tab-list pin so mobile horizontal layout is not fought.
+      // Dynamic import avoids a static cycle (tab-position imports isMobileViewport).
+      void import('./tab-position').then((m) => m.reconcileTabListPin())
     } else {
       // Cross-up to desktop: clear both body classes, don't auto-reopen
       _updateDrawerWidth()
       document.body.classList.remove(BODY_CLASS_PRIMARY, BODY_CLASS_SECONDARY)
+      // Restore pin if keepTabListVisible is still true.
+      void import('./tab-position').then((m) => m.reconcileTabListPin())
     }
   }
   _mediaQuery.addEventListener('change', _onMediaChange)

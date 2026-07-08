@@ -28,7 +28,7 @@ import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
 import { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
-import { applyTabListPosition } from './tab-position'
+import { applyTabListPin, applyTabListPosition, reconcileTabListPin, TAB_LIST_PIN_HOST_CLASS } from './tab-position'
 import { getSettings } from '../settings/state'
 import { dwarn } from '../debug/log'
 import { registerCleanup } from './cleanup'
@@ -76,7 +76,14 @@ export function getSecondaryDrawer(): HTMLElement | null {
 }
 
 export function getSecondaryTabList(): HTMLElement | null {
-  return _secondaryWrapper?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
+  if (!_secondaryWrapper) return null
+  // Unpinned: tab list lives inside the drawer under the wrapper.
+  const inWrapper = _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
+  if (inWrapper) return inWrapper
+  // Pinned: reparented onto the body-level pin host (outside the transform).
+  return document.querySelector(
+    `.${TAB_LIST_PIN_HOST_CLASS} > .sidebar-ux-tab-list`,
+  ) as HTMLElement | null
 }
 
 export function getSecondaryPanel(): HTMLElement | null {
@@ -93,6 +100,9 @@ export function setSecondarySidebarOpen(open: boolean): void { _secondarySidebar
 // Consolidates the "remove + null + open=false" pattern used by
 // tearDownSecondarySidebar, checkSideChanged, and cleanupAll.
 export function unmountSecondarySidebar(): void {
+  // Unpin first so a reparented tab list is restored (or cleaned) before
+  // the wrapper is removed — otherwise the pin host keeps an orphan strip.
+  applyTabListPin(false, { force: true })
   if (_secondaryWrapper) {
     _secondaryWrapper.remove()
     _secondaryWrapper = null
@@ -443,6 +453,9 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
     tabList: _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement,
     handle: _secondaryWrapper.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null,
   })
+  // Re-apply pin after construction/remount. Setting can stay true across a
+  // side-change remount while the fresh DOM is unpinned.
+  reconcileTabListPin()
   // Phase 3: sync the in-flight state to the initial layout so a hard-refresh
   // with secondary open doesn't trip the "no transition needed" check inside
   // openSecondarySidebar() on the first user click.

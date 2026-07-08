@@ -10,6 +10,9 @@ import { injectStyles } from '../debug/styles'
 // it for persistence.
 export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
+/** Secondary tab-strip width in px (construction, pin, spacer, reflow). */
+export const TAB_LIST_WIDTH_PX = 56
+
 // Mobile CSS — scoped to @media (max-width: 600px). Restructures the
 // secondary sidebar to match Lumiverse's main sidebar mobile pattern:
 // full-width drawer, horizontal tab bar, bottom indicator, mutual
@@ -156,50 +159,62 @@ export function injectDrawerTabStyles(): void {
     }
     /* Base button color — matches main drawer .tabBtn
        (ViewportDrawer.module.css:213). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] {
+    /* Tab-list button chrome — under secondary wrapper (unpinned) or the
+       body-level pin host (keepTabListVisible reparents out of the
+       transformed wrapper so position:fixed is viewport-relative). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id],
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] {
       color: var(--lumiverse-text-muted);
       border-radius: 8px;
     }
     /* Label color — matches main drawer .tabLabel
        (ViewportDrawer.module.css:245). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
       color: var(--lumiverse-text-dim);
     }
     /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
        (ViewportDrawer.module.css:222-225). Rounded corners. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover {
       background: var(--lumiverse-primary-015);
       color: var(--lumiverse-text);
       border-radius: 8px;
     }
     /* Active tab hover: icon turns white, label stays colored.
        Target the SVG directly so we only change the icon color. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
       color: var(--lumiverse-text);
     }
     /* Smooth color transition for SVG icons (matches the tabBtn
        transition: all 0.2s ease which only covers the button). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg {
       transition: color 0.2s ease;
     }
     /* Smooth color transition for labels. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
       transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
     }
     /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
        (ViewportDrawer.module.css:227-237) exactly: box-shadow
        indicator + directional border-radius. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
       background: var(--lumiverse-primary-020);
       color: var(--lumiverse-primary);
       box-shadow: inset 3px 0 0 var(--lumiverse-primary);
       border-radius: 0 8px 8px 0;
     }
-    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
       box-shadow: inset -3px 0 0 var(--lumiverse-primary);
       border-radius: 8px 0 0 8px;
     }
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
       color: var(--lumiverse-primary);
     }
   `)

@@ -35,6 +35,7 @@ var init_types = __esm(() => {
     showTabLabels: "follow",
     consistentIconSize: true,
     moveControlsToOuterEdge: false,
+    keepTabListVisible: false,
     sidebarShadowsDesktop: true,
     sidebarShadowsMobile: false,
     chatReflow: true,
@@ -341,7 +342,236 @@ function injectStyles(id, css) {
   document.head.appendChild(style);
 }
 
+// src/sidebar/styles.ts
+function injectDrawerTabStyles() {
+  injectStyles("sidebar-ux-drawer-tab-styles", `
+    .sidebar-ux-drawer-tab {
+      flex-shrink: 0;
+      align-self: flex-start;
+      width: var(--sidebar-ux-drawer-tab-w, 48px);
+      height: var(--sidebar-ux-drawer-tab-h, auto);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sidebar-ux-drawer-tab-gap, 8px);
+      padding-top: var(--sidebar-ux-drawer-tab-pt, 16px);
+      padding-right: var(--sidebar-ux-drawer-tab-pr, 8px);
+      padding-bottom: var(--sidebar-ux-drawer-tab-pb, 20px);
+      padding-left: var(--sidebar-ux-drawer-tab-pl, 8px);
+      border: var(--sidebar-ux-drawer-tab-border, 1px solid var(--lumiverse-border-hover));
+      background: var(--lcs-glass-bg, var(--lumiverse-bg));
+      color: var(--lumiverse-text-muted);
+      cursor: pointer;
+      pointer-events: auto;
+      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .sidebar-ux-drawer-tab:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab--active:hover {
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+      border-color: var(--lumiverse-primary-050);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-drawer-tab-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--lumiverse-primary);
+    }
+    /* Icon container — matches main drawer .extIconSvg
+       (ViewportDrawer.module.css:284-290). */
+    .sidebar-ux-tab-list button[data-tab-id] > span:first-child {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    /* Label typography — matches main drawer .tabLabel
+       (ViewportDrawer.module.css:241-252). */
+    .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1));
+      font-weight: 500;
+      line-height: 1;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 48px;
+      flex-shrink: 0;
+    }
+    /* Base button color — matches main drawer .tabBtn
+       (ViewportDrawer.module.css:213). */
+    /* Tab-list button chrome — under secondary wrapper (unpinned) or the
+       body-level pin host (keepTabListVisible reparents out of the
+       transformed wrapper so position:fixed is viewport-relative). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id],
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] {
+      color: var(--lumiverse-text-muted);
+      border-radius: 8px;
+    }
+    /* Label color — matches main drawer .tabLabel
+       (ViewportDrawer.module.css:245). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      color: var(--lumiverse-text-dim);
+    }
+    /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
+       (ViewportDrawer.module.css:222-225). Rounded corners. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover {
+      background: var(--lumiverse-primary-015);
+      color: var(--lumiverse-text);
+      border-radius: 8px;
+    }
+    /* Active tab hover: icon turns white, label stays colored.
+       Target the SVG directly so we only change the icon color. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+      color: var(--lumiverse-text);
+    }
+    /* Smooth color transition for SVG icons (matches the tabBtn
+       transition: all 0.2s ease which only covers the button). */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg {
+      transition: color 0.2s ease;
+    }
+    /* Smooth color transition for labels. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+      transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
+    }
+    /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
+       (ViewportDrawer.module.css:227-237) exactly: box-shadow
+       indicator + directional border-radius. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      background: var(--lumiverse-primary-020);
+      color: var(--lumiverse-primary);
+      box-shadow: inset 3px 0 0 var(--lumiverse-primary);
+      border-radius: 0 8px 8px 0;
+    }
+    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+      box-shadow: inset -3px 0 0 var(--lumiverse-primary);
+      border-radius: 8px 0 0 8px;
+    }
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+      color: var(--lumiverse-primary);
+    }
+  `);
+  injectStyles("sidebar-ux-icon-size-styles", `
+    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+  `);
+  injectStyles("canvas-ux-secondary-mobile", SECONDARY_MOBILE_CSS);
+  injectStyles("canvas-moved-active-toggle", `
+    .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) {
+      display: none !important;
+    }
+  `);
+}
+var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", TAB_LIST_WIDTH_PX = 56, SECONDARY_MOBILE_CSS = `
+@media (max-width: 600px) {
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    border-bottom: 1px solid var(--lumiverse-primary-020) !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+  }
+  /* Hide webkit scrollbar */
+  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Tab buttons: uniform width on mobile horizontal layout.
+     Matches main sidebar's mobile tabBtnLabeled size (52×48). */
+  .sidebar-ux-tab-list button[data-tab-id] {
+    width: 52px !important;
+    min-width: 0;
+    flex-shrink: 0;
+    padding: 6px 4px !important;
+  }
+  .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
+    width: 52px !important;
+    height: 48px !important;
+  }
+  /* Active tab indicator: bottom underline, top corners rounded.
+     Matches main sidebar's mobile .tabBtnActive exactly.
+     Same specificity as the desktop rule so it overrides on mobile. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary);
+    border-radius: 8px 8px 0 0;
+  }
+  /* Hide secondary's drawerTab when primary is open on mobile */
+  body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  /* Hide main's drawerTab when secondary is open on mobile */
+  body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  /* Backdrop: full-viewport overlay that darkens the screen (including the
+     safe area at the top) when the secondary drawer is open on mobile.
+     Mirrors Lumiverse's main-drawer .backdrop element
+     (ViewportDrawer.module.css:101-109 + ViewportDrawer.tsx:174-184).
+     The secondary wrapper itself stays at top: env(safe-area-inset-top)
+     so the drawer tab aligns vertically with the main drawer tab; the
+     backdrop is a SEPARATE fixed-position layer behind the wrapper that
+     fills the entire viewport (inset:0), so the safe-area-inset-top zone
+     is also darkened. Body class is toggled by setMobileOpenClass() in
+     mobile-exclusion.ts:99-110 (called from openSecondarySidebar /
+     closeSecondarySidebar). pointer-events: none — purely visual, so
+     chat/touch interactions underneath are unaffected (the user closes
+     via the X button in the secondary header). */
+  body.canvas-ux-mobile-secondary-open::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: var(--lumiverse-fill-heavy);
+    z-index: 9989;
+    pointer-events: none;
+  }
+}
+`;
+var init_styles = () => {};
+
 // src/sidebar/tab-position.ts
+var exports_tab_position = {};
+__export(exports_tab_position, {
+  reconcileTabListPin: () => reconcileTabListPin,
+  isTabListPinned: () => isTabListPinned,
+  getTabListPosition: () => getTabListPosition,
+  applyTabListPosition: () => applyTabListPosition,
+  applyTabListPin: () => applyTabListPin,
+  TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
+  TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
+  TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
+  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS
+});
 function setIfDifferent(el, prop, val) {
   if (el[prop] !== val) {
     el[prop] = val;
@@ -386,13 +616,16 @@ function applyTabListPosition(enabled, opts) {
   const tabList = opts?.tabList ?? getSecondaryTabList();
   const panel = opts?.panel ?? getSecondaryPanel();
   if (drawer && tabList) {
-    const secondaryDrawerSide = side === "left" ? "right" : "left";
-    const defaultFlex = secondaryDrawerSide === "left" ? "row-reverse" : "row";
-    const toggledFlex = secondaryDrawerSide === "left" ? "row" : "row-reverse";
-    const wantFlex = enabled ? toggledFlex : defaultFlex;
-    applyFlexAndBorder(drawer, tabList, wantFlex);
-    if (panel)
-      applyPanelChatBorder(panel, secondaryDrawerSide, enabled);
+    const pinned = typeof tabList.classList?.contains === "function" && tabList.classList.contains(TAB_LIST_PINNED_CLASS);
+    if (!pinned) {
+      const secondaryDrawerSide = side === "left" ? "right" : "left";
+      const defaultFlex = secondaryDrawerSide === "left" ? "row-reverse" : "row";
+      const toggledFlex = secondaryDrawerSide === "left" ? "row" : "row-reverse";
+      const wantFlex = enabled ? toggledFlex : defaultFlex;
+      applyFlexAndBorder(drawer, tabList, wantFlex);
+      if (panel)
+        applyPanelChatBorder(panel, secondaryDrawerSide, enabled);
+    }
   }
   const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
   const mainTabList = opts?.mainTabList ?? getMainSidebar();
@@ -406,10 +639,226 @@ function applyTabListPosition(enabled, opts) {
       applyPanelChatBorder(mainPanel, side, enabled);
   }
 }
+function getTabListPosition(opts) {
+  const empty = {
+    drawerDir: "",
+    tabListBorderLeft: "",
+    tabListBorderRight: "",
+    handleLeft: "",
+    handleRight: "",
+    mainDrawerDir: "",
+    mainTabListBorderLeft: "",
+    mainTabListBorderRight: ""
+  };
+  const drawer = opts?.drawer ?? null;
+  const tabList = opts?.tabList ?? null;
+  const handle = opts?.handle ?? null;
+  const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
+  const mainTabList = opts?.mainTabList ?? getMainSidebar();
+  return {
+    drawerDir: drawer?.style.flexDirection || "",
+    tabListBorderLeft: tabList?.style.borderLeft || "",
+    tabListBorderRight: tabList?.style.borderRight || "",
+    handleLeft: handle?.style.left || "",
+    handleRight: handle?.style.right || "",
+    mainDrawerDir: mainDrawer?.style.flexDirection || "",
+    mainTabListBorderLeft: mainTabList?.style.borderLeft || "",
+    mainTabListBorderRight: mainTabList?.style.borderRight || ""
+  };
+}
+function isTabListPinned(tabList) {
+  const el = tabList ?? getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+  return !!el?.classList.contains(TAB_LIST_PINNED_CLASS);
+}
+function reconcileTabListPin() {
+  if (isMobileViewport()) {
+    applyTabListPin(false, { force: true });
+    return;
+  }
+  applyTabListPin(!!getSettings().keepTabListVisible, { force: true });
+}
+function applyTabListPin(enabled, opts) {
+  if (isMobileViewport()) {
+    if (enabled && !opts?.force)
+      return;
+    const el = getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+    if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
+      unpinTabList(el);
+    }
+    return;
+  }
+  if (!enabled) {
+    const el = getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+    const hasPinState = !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer;
+    if (!hasPinState) {
+      if (opts?.force)
+        destroyPinChrome();
+      return;
+    }
+    unpinTabList(el);
+    return;
+  }
+  const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
+  const isPinned = tabList.classList.contains(TAB_LIST_PINNED_CLASS);
+  if (isPinned && !opts?.force)
+    return;
+  pinTabList(tabList);
+}
+function secondarySide() {
+  return getMainDrawerSide() === "left" ? "right" : "left";
+}
+function ensurePinHost(side) {
+  if (typeof document === "undefined" || !document.body)
+    return null;
+  if (!_pinHost) {
+    _pinHost = document.createElement("div");
+    document.body.appendChild(_pinHost);
+  }
+  _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
+  setIfDifferent(_pinHost.style, "position", "fixed");
+  setIfDifferent(_pinHost.style, "top", SAFE_TOP);
+  setIfDifferent(_pinHost.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(_pinHost.style, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(_pinHost.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(_pinHost.style, "pointerEvents", "none");
+  if (side === "right") {
+    setIfDifferent(_pinHost.style, "right", "0");
+    setIfDifferent(_pinHost.style, "left", "");
+  } else {
+    setIfDifferent(_pinHost.style, "left", "0");
+    setIfDifferent(_pinHost.style, "right", "");
+  }
+  return _pinHost;
+}
+function pinTabList(tabList) {
+  const drawer = getSecondaryDrawer();
+  const panel = getSecondaryPanel();
+  const side = secondarySide();
+  const innerBorderSide = side === "right" ? "left" : "right";
+  const parent = tabList.parentElement;
+  if (parent && parent !== _pinHost) {
+    _restoreParent = parent;
+    _restoreNext = tabList.nextSibling;
+    if (!_pinSpacer) {
+      _pinSpacer = document.createElement("div");
+      _pinSpacer.className = TAB_LIST_SPACER_CLASS;
+      _pinSpacer.setAttribute("aria-hidden", "true");
+      setIfDifferent(_pinSpacer.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+      setIfDifferent(_pinSpacer.style, "flexShrink", "0");
+    }
+    if (_pinSpacer.parentElement !== parent) {
+      parent.insertBefore(_pinSpacer, _restoreNext);
+    }
+    const host = ensurePinHost(side);
+    if (host && tabList.parentElement !== host) {
+      host.appendChild(tabList);
+    }
+  } else if (_pinHost) {
+    _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
+    if (side === "right") {
+      setIfDifferent(_pinHost.style, "right", "0");
+      setIfDifferent(_pinHost.style, "left", "");
+    } else {
+      setIfDifferent(_pinHost.style, "left", "0");
+      setIfDifferent(_pinHost.style, "right", "");
+    }
+  }
+  tabList.classList.add(TAB_LIST_PINNED_CLASS);
+  setIfDifferent(tabList.style, "position", "fixed");
+  setIfDifferent(tabList.style, "top", SAFE_TOP);
+  setIfDifferent(tabList.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(tabList.style, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(tabList.style, "pointerEvents", "auto");
+  if (side === "right") {
+    setIfDifferent(tabList.style, "right", "0");
+    setIfDifferent(tabList.style, "left", "");
+  } else {
+    setIfDifferent(tabList.style, "left", "0");
+    setIfDifferent(tabList.style, "right", "");
+  }
+  if (innerBorderSide === "right") {
+    setIfDifferent(tabList.style, "borderRight", INNER_BORDER);
+    setIfDifferent(tabList.style, "borderLeft", "none");
+  } else {
+    setIfDifferent(tabList.style, "borderLeft", INNER_BORDER);
+    setIfDifferent(tabList.style, "borderRight", "none");
+  }
+  if (drawer) {
+    setIfDifferent(drawer.style, "flexDirection", "");
+  }
+  if (panel) {
+    setIfDifferent(panel.style, "borderRight", "none");
+    setIfDifferent(panel.style, "borderLeft", "none");
+  }
+}
+function unpinTabList(tabList) {
+  if (tabList) {
+    tabList.classList.remove(TAB_LIST_PINNED_CLASS);
+    setIfDifferent(tabList.style, "position", "");
+    setIfDifferent(tabList.style, "top", "");
+    setIfDifferent(tabList.style, "bottom", "");
+    setIfDifferent(tabList.style, "left", "");
+    setIfDifferent(tabList.style, "right", "");
+    setIfDifferent(tabList.style, "zIndex", "");
+    setIfDifferent(tabList.style, "pointerEvents", "");
+    setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+    setIfDifferent(tabList.style, "borderLeft", "");
+    setIfDifferent(tabList.style, "borderRight", "");
+    if (_restoreParent && tabList.parentElement === _pinHost) {
+      if (_pinSpacer?.parentElement === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _pinSpacer);
+      } else if (_restoreNext && _restoreNext.parentNode === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _restoreNext);
+      } else {
+        const panel = getSecondaryPanel();
+        if (panel && panel.parentElement === _restoreParent) {
+          _restoreParent.insertBefore(tabList, panel);
+        } else {
+          _restoreParent.appendChild(tabList);
+        }
+      }
+    }
+  }
+  destroyPinChrome();
+  applyTabListPosition(getSettings().moveControlsToOuterEdge);
+}
+function destroyPinChrome() {
+  if (_pinSpacer) {
+    _pinSpacer.remove();
+    _pinSpacer = null;
+  }
+  _restoreParent = null;
+  _restoreNext = null;
+  if (_pinHost) {
+    if (_pinHost.childNodes.length === 0) {
+      _pinHost.remove();
+      _pinHost = null;
+    } else {
+      const drawer = getSecondaryDrawer();
+      const panel = getSecondaryPanel();
+      while (_pinHost.firstChild) {
+        const child = _pinHost.removeChild(_pinHost.firstChild);
+        if (drawer && panel) {
+          drawer.insertBefore(child, panel);
+        } else if (drawer) {
+          drawer.appendChild(child);
+        }
+      }
+      _pinHost.remove();
+      _pinHost = null;
+    }
+  }
+}
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null;
 var init_tab_position = __esm(() => {
   init_store();
+  init_state();
   init_mobile_exclusion();
   init_secondary();
+  init_styles();
 });
 
 // src/resize/handles.ts
@@ -519,8 +968,8 @@ function mountResizeHandles() {
     const secondaryDrawer = secondaryWrapper.querySelector(".sidebar-ux-drawer");
     if (secondaryDrawer && !secondaryDrawer.querySelector(".sidebar-ux-resize-handle")) {
       const mainSide = getMainDrawerSide();
-      const secondarySide = mainSide === "left" ? "right" : "left";
-      const secondaryDirection = secondarySide === "right" ? "left" : "right";
+      const secondarySide2 = mainSide === "left" ? "right" : "left";
+      const secondaryDirection = secondarySide2 === "right" ? "left" : "right";
       const handle = createResizeHandle(secondaryDirection, (startWidth, delta) => {
         const newWidth = clampSidebarWidth(startWidth + delta);
         document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`);
@@ -530,7 +979,7 @@ function mountResizeHandles() {
         persistLayout();
       }, () => isSecondarySidebarOpen());
       handle.style.cssText += `
-        ${secondarySide === "left" ? "right" : "left"}: -4px;
+        ${secondarySide2 === "left" ? "right" : "left"}: -4px;
       `;
       secondaryDrawer.appendChild(handle);
       applyTabListPosition(getSettings().moveControlsToOuterEdge, {
@@ -1032,9 +1481,11 @@ function startMobileExclusion() {
         const isOpen = wrapper2.classList.toString().includes("wrapperOpen");
         setMobileOpenClass("primary", isOpen);
       }
+      Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
     } else {
       _updateDrawerWidth();
       document.body.classList.remove(BODY_CLASS_PRIMARY, BODY_CLASS_SECONDARY);
+      Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
     }
   };
   _mediaQuery.addEventListener("change", _onMediaChange);
@@ -1139,7 +1590,10 @@ function updateChatReflow() {
   const mainSide = getMainDrawerSide();
   const mainOpen = isMainDrawerOpen();
   const mainWidth = mainOpen ? getMainDrawerWidth() : 0;
-  const secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  if (secondaryWidth === 0 && getSettings().keepTabListVisible && getSecondaryTabList()) {
+    secondaryWidth = TAB_LIST_WIDTH_PX;
+  }
   const dockInsets = getDockInsets();
   let rightMargin;
   let leftMargin;
@@ -1217,6 +1671,8 @@ var init_reflow = __esm(() => {
   init_tag_buttons();
   init_wait_for();
   init_mobile_exclusion();
+  init_state();
+  init_styles();
 });
 
 // src/tabs/tab-context-menu.ts
@@ -2734,211 +3190,6 @@ var init_drawer_sync = __esm(() => {
   init_active_tab();
 });
 
-// src/sidebar/styles.ts
-function injectDrawerTabStyles() {
-  injectStyles("sidebar-ux-drawer-tab-styles", `
-    .sidebar-ux-drawer-tab {
-      flex-shrink: 0;
-      align-self: flex-start;
-      width: var(--sidebar-ux-drawer-tab-w, 48px);
-      height: var(--sidebar-ux-drawer-tab-h, auto);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: var(--sidebar-ux-drawer-tab-gap, 8px);
-      padding-top: var(--sidebar-ux-drawer-tab-pt, 16px);
-      padding-right: var(--sidebar-ux-drawer-tab-pr, 8px);
-      padding-bottom: var(--sidebar-ux-drawer-tab-pb, 20px);
-      padding-left: var(--sidebar-ux-drawer-tab-pl, 8px);
-      border: var(--sidebar-ux-drawer-tab-border, 1px solid var(--lumiverse-border-hover));
-      background: var(--lcs-glass-bg, var(--lumiverse-bg));
-      color: var(--lumiverse-text-muted);
-      cursor: pointer;
-      pointer-events: auto;
-      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-    }
-    .sidebar-ux-drawer-tab:hover {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab--active {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab--active:hover {
-      background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
-      border-color: var(--lumiverse-primary-050);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-drawer-tab-icon {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--lumiverse-primary);
-    }
-    /* Icon container — matches main drawer .extIconSvg
-       (ViewportDrawer.module.css:284-290). */
-    .sidebar-ux-tab-list button[data-tab-id] > span:first-child {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-    /* Label typography — matches main drawer .tabLabel
-       (ViewportDrawer.module.css:241-252). */
-    .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
-      font-size: calc(9px * var(--lumiverse-font-scale, 1));
-      font-weight: 500;
-      line-height: 1;
-      text-align: center;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 48px;
-      flex-shrink: 0;
-    }
-    /* Base button color — matches main drawer .tabBtn
-       (ViewportDrawer.module.css:213). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] {
-      color: var(--lumiverse-text-muted);
-      border-radius: 8px;
-    }
-    /* Label color — matches main drawer .tabLabel
-       (ViewportDrawer.module.css:245). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
-      color: var(--lumiverse-text-dim);
-    }
-    /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
-       (ViewportDrawer.module.css:222-225). Rounded corners. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover {
-      background: var(--lumiverse-primary-015);
-      color: var(--lumiverse-text);
-      border-radius: 8px;
-    }
-    /* Active tab hover: icon turns white, label stays colored.
-       Target the SVG directly so we only change the icon color. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
-      color: var(--lumiverse-text);
-    }
-    /* Smooth color transition for SVG icons (matches the tabBtn
-       transition: all 0.2s ease which only covers the button). */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg {
-      transition: color 0.2s ease;
-    }
-    /* Smooth color transition for labels. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
-      transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
-    }
-    /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
-       (ViewportDrawer.module.css:227-237) exactly: box-shadow
-       indicator + directional border-radius. */
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-      background: var(--lumiverse-primary-020);
-      color: var(--lumiverse-primary);
-      box-shadow: inset 3px 0 0 var(--lumiverse-primary);
-      border-radius: 0 8px 8px 0;
-    }
-    .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-      box-shadow: inset -3px 0 0 var(--lumiverse-primary);
-      border-radius: 8px 0 0 8px;
-    }
-    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
-      color: var(--lumiverse-primary);
-    }
-  `);
-  injectStyles("sidebar-ux-icon-size-styles", `
-    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
-      width: 20px;
-      height: 20px;
-      flex-shrink: 0;
-    }
-  `);
-  injectStyles("canvas-ux-secondary-mobile", SECONDARY_MOBILE_CSS);
-  injectStyles("canvas-moved-active-toggle", `
-    .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) {
-      display: none !important;
-    }
-  `);
-}
-var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", SECONDARY_MOBILE_CSS = `
-@media (max-width: 600px) {
-  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
-    flex-direction: column !important;
-    overflow: hidden !important;
-  }
-  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
-    width: 100% !important;
-    flex-direction: row !important;
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    scrollbar-width: none !important;
-    -ms-overflow-style: none !important;
-    border-bottom: 1px solid var(--lumiverse-primary-020) !important;
-    border-left: none !important;
-    border-right: none !important;
-    padding: 6px 8px !important;
-  }
-  /* Hide webkit scrollbar */
-  .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
-    display: none !important;
-  }
-  /* Tab buttons: uniform width on mobile horizontal layout.
-     Matches main sidebar's mobile tabBtnLabeled size (52×48). */
-  .sidebar-ux-tab-list button[data-tab-id] {
-    width: 52px !important;
-    min-width: 0;
-    flex-shrink: 0;
-    padding: 6px 4px !important;
-  }
-  .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
-    width: 52px !important;
-    height: 48px !important;
-  }
-  /* Active tab indicator: bottom underline, top corners rounded.
-     Matches main sidebar's mobile .tabBtnActive exactly.
-     Same specificity as the desktop rule so it overrides on mobile. */
-  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-    box-shadow: inset 0 -3px 0 var(--lumiverse-primary);
-    border-radius: 8px 8px 0 0;
-  }
-  /* Hide secondary's drawerTab when primary is open on mobile */
-  body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
-    display: none !important;
-    pointer-events: none !important;
-  }
-  /* Hide main's drawerTab when secondary is open on mobile */
-  body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
-    display: none !important;
-    pointer-events: none !important;
-  }
-  /* Backdrop: full-viewport overlay that darkens the screen (including the
-     safe area at the top) when the secondary drawer is open on mobile.
-     Mirrors Lumiverse's main-drawer .backdrop element
-     (ViewportDrawer.module.css:101-109 + ViewportDrawer.tsx:174-184).
-     The secondary wrapper itself stays at top: env(safe-area-inset-top)
-     so the drawer tab aligns vertically with the main drawer tab; the
-     backdrop is a SEPARATE fixed-position layer behind the wrapper that
-     fills the entire viewport (inset:0), so the safe-area-inset-top zone
-     is also darkened. Body class is toggled by setMobileOpenClass() in
-     mobile-exclusion.ts:99-110 (called from openSecondarySidebar /
-     closeSecondarySidebar). pointer-events: none — purely visual, so
-     chat/touch interactions underneath are unaffected (the user closes
-     via the X button in the secondary header). */
-  body.canvas-ux-mobile-secondary-open::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background: var(--lumiverse-fill-heavy);
-    z-index: 9989;
-    pointer-events: none;
-  }
-}
-`;
-var init_styles = () => {};
-
 // src/sidebar/panel-header-sync.ts
 function syncPanelHeaderFromMain(getWrapper) {
   if (_syncPanelHeaderPending)
@@ -3037,7 +3288,12 @@ function getSecondaryDrawer() {
   return _secondaryWrapper?.querySelector(".sidebar-ux-drawer");
 }
 function getSecondaryTabList() {
-  return _secondaryWrapper?.querySelector(".sidebar-ux-tab-list");
+  if (!_secondaryWrapper)
+    return null;
+  const inWrapper = _secondaryWrapper.querySelector(".sidebar-ux-tab-list");
+  if (inWrapper)
+    return inWrapper;
+  return document.querySelector(`.${TAB_LIST_PIN_HOST_CLASS} > .sidebar-ux-tab-list`);
 }
 function getSecondaryPanel() {
   return _secondaryWrapper?.querySelector(".sidebar-ux-panel");
@@ -3046,6 +3302,7 @@ function isSecondarySidebarOpen() {
   return _secondarySidebarOpen;
 }
 function unmountSecondarySidebar() {
+  applyTabListPin(false, { force: true });
   if (_secondaryWrapper) {
     _secondaryWrapper.remove();
     _secondaryWrapper = null;
@@ -3267,6 +3524,7 @@ function mountSecondarySidebar(options) {
     tabList: _secondaryWrapper.querySelector(".sidebar-ux-tab-list"),
     handle: _secondaryWrapper.querySelector(".sidebar-ux-resize-handle")
   });
+  reconcileTabListPin();
   if (options?.initialOpen === true) {
     _secondarySidebarOpen = true;
   }
@@ -4921,12 +5179,25 @@ function findToolsButton() {
   }
   return null;
 }
-function findNewChatButton() {
+function findNewChatButtonInPopover() {
   const buttons = document.querySelectorAll("button");
   for (const btn of Array.from(buttons)) {
     const text = btn.textContent?.trim().toLowerCase() || "";
     if (text.includes("new chat") || text.includes("newchat")) {
-      return btn;
+      const parent = btn.closest('[class*="popover"]') || btn.closest('[class*="popRow"]');
+      if (parent) {
+        return btn;
+      }
+    }
+  }
+  const svgButtons = document.querySelectorAll("button svg");
+  for (const svg of Array.from(svgButtons)) {
+    const btn = svg.closest("button");
+    if (btn instanceof HTMLElement) {
+      const text = btn.textContent?.trim().toLowerCase() || "";
+      if (text.includes("new chat") || text.includes("newchat")) {
+        return btn;
+      }
     }
   }
   return null;
@@ -4948,8 +5219,7 @@ function makeNewChatCommand() {
       toolsButton.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const newChatButton = findNewChatButton();
+      const newChatButton = findNewChatButtonInPopover();
       if (!newChatButton) {
         ctx.toast("error", "Could not find New Chat button in popover");
         return;
@@ -6064,7 +6334,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, consistentIconSizeFeature, shadowsDesktopFeature, shadowsMobileFeature, layoutPersistenceFeature, _slashImpl, slashFeature, tabPositionFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, consistentIconSizeFeature, shadowsDesktopFeature, shadowsMobileFeature, layoutPersistenceFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_log();
@@ -6250,6 +6520,21 @@ var init_registry = __esm(() => {
       applyTabListPosition(next.moveControlsToOuterEdge);
     }
   };
+  keepTabListVisibleFeature = {
+    id: "keepTabListVisible",
+    mount(_ctx, _layout) {
+      reconcileTabListPin();
+      updateChatReflow();
+      return () => {
+        applyTabListPin(false, { force: true });
+        updateChatReflow();
+      };
+    },
+    apply(_prev, next) {
+      applyTabListPin(!!next.keepTabListVisible, { force: true });
+      updateChatReflow();
+    }
+  };
   FEATURES = [
     debugFeature,
     chatReflowFeature,
@@ -6262,6 +6547,7 @@ var init_registry = __esm(() => {
     layoutPersistenceFeature,
     slashFeature,
     tabPositionFeature,
+    keepTabListVisibleFeature,
     drawerTabDragFeature
   ];
 });
@@ -6504,6 +6790,13 @@ function buildSettingsPanelDOM() {
     hint: "Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area.",
     control: moveControlsToOuter.btn
   }));
+  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
+  secSidebars.appendChild(buildSettingRow({
+    label: "Keep tab list visible",
+    hint: "Pins the second drawer’s tab buttons to the screen edge so you can switch tabs even when the drawer is closed. The panel still slides in and out from behind the list.",
+    control: keepTabListVisible.btn,
+    disabled: !getSettings().secondSidebarEnabled
+  }));
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   secSidebars.appendChild(buildSettingRow({
     label: "Drag to resize sidebars",
@@ -6572,6 +6865,7 @@ function buildSettingsPanelDOM() {
   const refresh = () => {
     master.refresh();
     moveControlsToOuter.refresh();
+    keepTabListVisible.refresh();
     resizeSidebars.refresh();
     compact.refresh();
     iconSize.refresh();
@@ -6581,7 +6875,7 @@ function buildSettingsPanelDOM() {
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
-    for (const row of [resizeSidebars, compact]) {
+    for (const row of [resizeSidebars, compact, keepTabListVisible]) {
       const d3 = !getSettings().secondSidebarEnabled;
       row.btn.disabled = d3;
       row.btn.style.cursor = d3 ? "not-allowed" : "pointer";

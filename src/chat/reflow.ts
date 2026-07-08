@@ -28,12 +28,14 @@
 // viewport-cross pattern in sidebar/mobile-exclusion.ts.
 import { getChatColumn, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
-import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
+import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { getSettings } from '../settings/state'
+import { TAB_LIST_WIDTH_PX } from '../sidebar/styles'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -117,10 +119,19 @@ export function updateChatReflow(): void {
   const mainOpen = isMainDrawerOpen()
   const mainWidth = mainOpen ? getMainDrawerWidth() : 0
 
-  // Secondary sidebar is on the opposite side
-  const secondaryWidth = isSecondarySidebarOpen()
+  // Secondary sidebar is on the opposite side. When closed but the tab
+  // list is pinned visible, still reserve the strip width so chat does
+  // not sit under the fixed tab buttons.
+  let secondaryWidth = isSecondarySidebarOpen()
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
+  if (
+    secondaryWidth === 0 &&
+    getSettings().keepTabListVisible &&
+    getSecondaryTabList()
+  ) {
+    secondaryWidth = TAB_LIST_WIDTH_PX
+  }
 
   // Account for the LumiScript dock panel widths. The dock panel and the
   // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with

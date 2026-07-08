@@ -12,10 +12,15 @@ The secondary sidebar is a wrapper element with this hierarchy:
 .sidebar-ux-secondary-wrapper          (position: fixed, animated via translateX)
   ├── .sidebar-ux-drawer-tab           (open/close toggle button, mirrors main drawer's tab)
   └── .sidebar-ux-drawer               (the drawer itself)
-        ├── .sidebar-ux-tab-list       (column of tab buttons)
-        └── .sidebar-ux-panel-content  (hosts reparented extension roots)
-              └── .sidebar-ux-panel-title (header showing active tab name)
+        ├── .sidebar-ux-tab-list       (column of tab buttons)  [unpinned]
+        └── .sidebar-ux-panel          (content area)
+              ├── .sidebar-ux-panel-header
+              └── .sidebar-ux-panel-content  (hosts reparented extension roots)
 ```
+
+### `keepTabListVisible` (pin)
+
+When the setting is on (desktop only), the tab list is **reparented** onto a body-level `.sidebar-ux-tab-list-pin-host` outside the transforming wrapper. A 56px spacer stays in the drawer so the panel does not draw under the strip when open. `position: fixed` alone is not enough: the wrapper always has `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. See `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts`. Remount (`mountSecondarySidebar`) re-applies pin from settings.
 
 ## DOM Construction (`secondary.tsx`)
 

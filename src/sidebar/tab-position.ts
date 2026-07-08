@@ -20,11 +20,34 @@ import { getMainDrawer, getMainSidebar, getMainPanel } from '../dom/lumiverse'
 import { getSettings } from '../settings/state'
 import { isMobileViewport } from './mobile-exclusion'
 import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
+import { TAB_LIST_WIDTH_PX } from './styles'
 
-/** Class added to .sidebar-ux-tab-list when keepTabListVisible pins it to
- *  the viewport edge. Used both as a runtime flag (idempotency check) and
- *  as a CSS hook for any pinned-specific rules in sidebar/styles.ts. */
+/** Re-export for callers that already import pin helpers from this module. */
+export { TAB_LIST_WIDTH_PX }
+
+/** Runtime flag on the tab list while keepTabListVisible is applied.
+ *  Also a CSS hook (see styles under pin host / secondary wrapper). */
 export const TAB_LIST_PINNED_CLASS = 'sidebar-ux-tab-list--pinned'
+
+/** Body-level host that holds the tab list while pinned. Must not live
+ *  under the secondary wrapper — that wrapper always has a non-none
+ *  transform, which would become the containing block for position:fixed
+ *  and slide the strip off-screen when the drawer closes. */
+export const TAB_LIST_PIN_HOST_CLASS = 'sidebar-ux-tab-list-pin-host'
+
+/** In-flow placeholder left in the drawer while the tab list is reparented. */
+export const TAB_LIST_SPACER_CLASS = 'sidebar-ux-tab-list-spacer'
+
+const PIN_Z_INDEX = '10000'
+const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
+const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
+const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
+
+/** Module state for pin reparent / restore. Cleared on unpin. */
+let _pinHost: HTMLElement | null = null
+let _pinSpacer: HTMLElement | null = null
+let _restoreParent: HTMLElement | null = null
+let _restoreNext: ChildNode | null = null
 
 // Structural element type — only the inline `style` is touched, so any
 // object exposing a `CSSStyleDeclaration` works. Real HTMLElements in
@@ -122,13 +145,21 @@ export function applyTabListPosition(
   const panel = opts?.panel ?? getSecondaryPanel()
 
   if (drawer && tabList) {
-    // drawerSide for secondary is opposite of main.
-    const secondaryDrawerSide = side === 'left' ? 'right' : 'left'
-    const defaultFlex = secondaryDrawerSide === 'left' ? 'row-reverse' : 'row'
-    const toggledFlex = secondaryDrawerSide === 'left' ? 'row' : 'row-reverse'
-    const wantFlex = enabled ? toggledFlex : defaultFlex
-    applyFlexAndBorder(drawer, tabList, wantFlex)
-    if (panel) applyPanelChatBorder(panel, secondaryDrawerSide, enabled)
+    // Pin owns secondary chrome while active — skip flex/border writes that
+    // would fight the pinned strip (still apply main-drawer half below).
+    // StyledElement test stubs may omit classList; treat that as unpinned.
+    const pinned =
+      typeof (tabList as HTMLElement).classList?.contains === 'function' &&
+      (tabList as HTMLElement).classList.contains(TAB_LIST_PINNED_CLASS)
+    if (!pinned) {
+      // drawerSide for secondary is opposite of main.
+      const secondaryDrawerSide = side === 'left' ? 'right' : 'left'
+      const defaultFlex = secondaryDrawerSide === 'left' ? 'row-reverse' : 'row'
+      const toggledFlex = secondaryDrawerSide === 'left' ? 'row' : 'row-reverse'
+      const wantFlex = enabled ? toggledFlex : defaultFlex
+      applyFlexAndBorder(drawer, tabList, wantFlex)
+      if (panel) applyPanelChatBorder(panel, secondaryDrawerSide, enabled)
+    }
   }
 
   // --- Main drawer ---
@@ -180,77 +211,246 @@ export function getTabListPosition(opts?: ElementOpts): {
   }
 }
 
-/** Pin the secondary drawer's tab-button-list to the viewport edge so it
- *  remains visible even when the drawer is closed. The panel (the drawer's
- *  only remaining flex child) slides in/out from behind the pinned tab
- *  list. The drawer toggle (`.sidebar-ux-drawer-tab`) is unchanged — it
- *  still slides with the wrapper, hidden behind the tab list when closed
- *  and visible to the left of the drawer when open.
+/** True when the secondary tab list is currently in the pinned state. */
+export function isTabListPinned(tabList?: Element | null): boolean {
+  const el = tabList ?? getSecondaryTabList() ?? _pinHost?.querySelector('.sidebar-ux-tab-list')
+  return !!el?.classList.contains(TAB_LIST_PINNED_CLASS)
+}
+
+/**
+ * Re-apply pin from current settings + live DOM. Safe anytime (mount,
+ * side-change remount, viewport cross-up, settings apply).
  *
- *  Idempotent. No-op on mobile (the drawer's mobile layout already handles
- *  the tab list differently via media queries). No-op if the secondary
- *  wrapper doesn't exist (master toggle off or before mount). */
-export function applyTabListPin(enabled: boolean): void {
-  if (isMobileViewport()) return
+ * On mobile, always force-unpins (clears styles + restores parent).
+ */
+export function reconcileTabListPin(): void {
+  if (isMobileViewport()) {
+    applyTabListPin(false, { force: true })
+    return
+  }
+  applyTabListPin(!!getSettings().keepTabListVisible, { force: true })
+}
+
+/**
+ * Pin the secondary drawer's tab-button-list to the viewport edge so it
+ * remains visible even when the drawer is closed.
+ *
+ * Implementation note: `position: fixed` alone is not enough. The secondary
+ * wrapper always has `transform: translateX(...)`, which becomes the
+ * containing block for fixed descendants. While pinned we therefore
+ * **reparent** the tab list onto a body-level pin host (no transform) and
+ * leave a 56px spacer in the drawer so the panel does not draw under the
+ * strip when open.
+ *
+ * `force: true` re-applies even when the class already matches (remount /
+ * side flip). On mobile, enable is a no-op and disable still clears any
+ * leftover pin state.
+ */
+export function applyTabListPin(
+  enabled: boolean,
+  opts?: { force?: boolean },
+): void {
+  if (isMobileViewport()) {
+    // Never pin on mobile; still clear pin if present (viewport cross-down).
+    if (enabled && !opts?.force) return
+    const el =
+      getSecondaryTabList() ??
+      (_pinHost?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null)
+    if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
+      unpinTabList(el)
+    }
+    return
+  }
+
+  if (!enabled) {
+    const el =
+      getSecondaryTabList() ??
+      (_pinHost?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null)
+    const hasPinState =
+      !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer
+    if (!hasPinState) {
+      if (opts?.force) destroyPinChrome()
+      return
+    }
+    unpinTabList(el)
+    return
+  }
 
   const tabList = getSecondaryTabList()
   if (!tabList) return
-  const drawer = getSecondaryDrawer()
-  const panel = getSecondaryPanel()
 
   const isPinned = tabList.classList.contains(TAB_LIST_PINNED_CLASS)
-  if (enabled === isPinned) return  // already in target state
+  if (isPinned && !opts?.force) return
 
-  // Secondary is on the opposite side of the main.
-  const side: 'left' | 'right' = getMainDrawerSide() === 'left' ? 'right' : 'left'
-  const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
-  const borderVal = '1px solid var(--lumiverse-primary-020)'
+  pinTabList(tabList)
+}
 
-  if (enabled) {
-    tabList.classList.add(TAB_LIST_PINNED_CLASS)
-    // Position the tab list at the viewport edge.
-    ;(tabList as any).style.position = 'fixed'
-    ;(tabList as any).style.top = '0'
-    ;(tabList as any).style.bottom = '0'
-    ;(tabList as any).style[side] = '0'
-    ;(tabList as any).style.zIndex = '10000'
-    ;(tabList as any).style.width = '56px'
-    ;(tabList as any).style.pointerEvents = 'auto'
-    // Border on the inner (panel-facing) side.
-    if (innerBorderSide === 'right') {
-      ;(tabList as any).style.borderRight = borderVal
-      ;(tabList as any).style.borderLeft = 'none'
-    } else {
-      ;(tabList as any).style.borderLeft = borderVal
-      ;(tabList as any).style.borderRight = 'none'
-    }
-    // Reset the drawer's flex direction — the tab list is no longer a
-    // flex child, so the direction has no effect.
-    if (drawer) {
-      ;(drawer as any).style.flexDirection = ''
-    }
-    // Clear the panel's chat-facing border — the tab list no longer
-    // sits next to the panel inside the drawer.
-    if (panel) {
-      ;(panel as any).style.borderRight = 'none'
-      ;(panel as any).style.borderLeft = 'none'
-    }
+function secondarySide(): 'left' | 'right' {
+  return getMainDrawerSide() === 'left' ? 'right' : 'left'
+}
+
+function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
+  if (typeof document === 'undefined' || !document.body) return null
+  if (!_pinHost) {
+    _pinHost = document.createElement('div')
+    document.body.appendChild(_pinHost)
+  }
+  _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
+  // Host is a non-transformed positioning shell; children take pointer events.
+  setIfDifferent(_pinHost.style, 'position', 'fixed')
+  setIfDifferent(_pinHost.style, 'top', SAFE_TOP)
+  setIfDifferent(_pinHost.style, 'bottom', SAFE_BOTTOM)
+  setIfDifferent(_pinHost.style, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(_pinHost.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(_pinHost.style, 'pointerEvents', 'none')
+  if (side === 'right') {
+    setIfDifferent(_pinHost.style, 'right', '0')
+    setIfDifferent(_pinHost.style, 'left', '')
   } else {
+    setIfDifferent(_pinHost.style, 'left', '0')
+    setIfDifferent(_pinHost.style, 'right', '')
+  }
+  return _pinHost
+}
+
+function pinTabList(tabList: HTMLElement): void {
+  const drawer = getSecondaryDrawer()
+  const panel = getSecondaryPanel()
+  const side = secondarySide()
+  const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
+
+  // Reparent out of the transformed wrapper when a real parent exists.
+  // Unit tests often pass parent-less stubs — styles still apply.
+  const parent = tabList.parentElement
+  if (parent && parent !== _pinHost) {
+    _restoreParent = parent
+    _restoreNext = tabList.nextSibling
+    if (!_pinSpacer) {
+      _pinSpacer = document.createElement('div')
+      _pinSpacer.className = TAB_LIST_SPACER_CLASS
+      _pinSpacer.setAttribute('aria-hidden', 'true')
+      setIfDifferent(_pinSpacer.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+      setIfDifferent(_pinSpacer.style, 'flexShrink', '0')
+    }
+    if (_pinSpacer.parentElement !== parent) {
+      parent.insertBefore(_pinSpacer, _restoreNext)
+    }
+    const host = ensurePinHost(side)
+    if (host && tabList.parentElement !== host) {
+      host.appendChild(tabList)
+    }
+  } else if (_pinHost) {
+    _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
+    if (side === 'right') {
+      setIfDifferent(_pinHost.style, 'right', '0')
+      setIfDifferent(_pinHost.style, 'left', '')
+    } else {
+      setIfDifferent(_pinHost.style, 'left', '0')
+      setIfDifferent(_pinHost.style, 'right', '')
+    }
+  }
+
+  tabList.classList.add(TAB_LIST_PINNED_CLASS)
+
+  // Fill the pin host (or viewport edge if no reparent in stub tests).
+  setIfDifferent(tabList.style, 'position', 'fixed')
+  setIfDifferent(tabList.style, 'top', SAFE_TOP)
+  setIfDifferent(tabList.style, 'bottom', SAFE_BOTTOM)
+  setIfDifferent(tabList.style, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(tabList.style, 'pointerEvents', 'auto')
+  if (side === 'right') {
+    setIfDifferent(tabList.style, 'right', '0')
+    setIfDifferent(tabList.style, 'left', '')
+  } else {
+    setIfDifferent(tabList.style, 'left', '0')
+    setIfDifferent(tabList.style, 'right', '')
+  }
+
+  if (innerBorderSide === 'right') {
+    setIfDifferent(tabList.style, 'borderRight', INNER_BORDER)
+    setIfDifferent(tabList.style, 'borderLeft', 'none')
+  } else {
+    setIfDifferent(tabList.style, 'borderLeft', INNER_BORDER)
+    setIfDifferent(tabList.style, 'borderRight', 'none')
+  }
+
+  // Out of flex flow while pinned — flex-direction no longer affects layout.
+  if (drawer) {
+    setIfDifferent(drawer.style, 'flexDirection', '')
+  }
+  if (panel) {
+    setIfDifferent(panel.style, 'borderRight', 'none')
+    setIfDifferent(panel.style, 'borderLeft', 'none')
+  }
+}
+
+function unpinTabList(tabList: HTMLElement | null): void {
+  if (tabList) {
     tabList.classList.remove(TAB_LIST_PINNED_CLASS)
-    // Clear the pinning styles on the tab list.
-    ;(tabList as any).style.position = ''
-    ;(tabList as any).style.top = ''
-    ;(tabList as any).style.bottom = ''
-    ;(tabList as any).style.left = ''
-    ;(tabList as any).style.right = ''
-    ;(tabList as any).style.zIndex = ''
-    ;(tabList as any).style.width = ''
-    ;(tabList as any).style.pointerEvents = ''
-    // Clear the borders we set — applyTabListPosition will set them
-    // based on moveControlsToOuterEdge.
-    ;(tabList as any).style.borderLeft = ''
-    ;(tabList as any).style.borderRight = ''
-    // Restore the drawer's flex direction and the panel's border.
-    applyTabListPosition(getSettings().moveControlsToOuterEdge)
+    setIfDifferent(tabList.style, 'position', '')
+    setIfDifferent(tabList.style, 'top', '')
+    setIfDifferent(tabList.style, 'bottom', '')
+    setIfDifferent(tabList.style, 'left', '')
+    setIfDifferent(tabList.style, 'right', '')
+    setIfDifferent(tabList.style, 'zIndex', '')
+    setIfDifferent(tabList.style, 'pointerEvents', '')
+    // Restore construction width — do not blank it.
+    setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+    // Borders restored via applyTabListPosition below.
+    setIfDifferent(tabList.style, 'borderLeft', '')
+    setIfDifferent(tabList.style, 'borderRight', '')
+
+    // Restore into the drawer if we reparented.
+    if (_restoreParent && tabList.parentElement === _pinHost) {
+      if (_pinSpacer?.parentElement === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _pinSpacer)
+      } else if (_restoreNext && _restoreNext.parentNode === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _restoreNext)
+      } else {
+        const panel = getSecondaryPanel()
+        if (panel && panel.parentElement === _restoreParent) {
+          _restoreParent.insertBefore(tabList, panel)
+        } else {
+          _restoreParent.appendChild(tabList)
+        }
+      }
+    }
+  }
+
+  destroyPinChrome()
+  applyTabListPosition(getSettings().moveControlsToOuterEdge)
+}
+
+function destroyPinChrome(): void {
+  if (_pinSpacer) {
+    _pinSpacer.remove()
+    _pinSpacer = null
+  }
+  _restoreParent = null
+  _restoreNext = null
+  if (_pinHost) {
+    // Safety: if anything is still inside (orphan), leave it — caller
+    // should have reparented the tab list already.
+    if (_pinHost.childNodes.length === 0) {
+      _pinHost.remove()
+      _pinHost = null
+    } else {
+      // Move remaining children back to secondary drawer if possible.
+      // Detach from host first so parent/child stays consistent even under
+      // partial DOM stubs.
+      const drawer = getSecondaryDrawer()
+      const panel = getSecondaryPanel()
+      while (_pinHost.firstChild) {
+        const child = _pinHost.removeChild(_pinHost.firstChild)
+        if (drawer && panel) {
+          drawer.insertBefore(child, panel)
+        } else if (drawer) {
+          drawer.appendChild(child)
+        }
+      }
+      _pinHost.remove()
+      _pinHost = null
+    }
   }
 }
