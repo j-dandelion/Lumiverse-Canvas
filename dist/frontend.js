@@ -3668,7 +3668,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.8", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -6001,12 +6001,16 @@ function makeSlashFeature(attach) {
   const slashFeature = {
     id: "slashCommandsEnabled",
     mount(ctx) {
+      if (typeof window !== "undefined" && window.__slashCommandsActive)
+        return;
       if (active)
         return active;
       active = attach(ctx);
       return active;
     },
     apply(_prev, next, ctx) {
+      if (typeof window !== "undefined" && window.__slashCommandsActive)
+        return;
       if (next.slashCommandsEnabled) {
         if (!active) {
           active = attach(ctx);
@@ -6020,12 +6024,25 @@ function makeSlashFeature(attach) {
       }
     }
   };
+  const disableListener = () => {
+    if (active) {
+      const detach = active;
+      active = null;
+      detach();
+    }
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("canvas:slash-disable", disableListener);
+  }
   return {
     feature: slashFeature,
     alwaysCleanup() {
       if (active) {
         active();
         active = null;
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("canvas:slash-disable", disableListener);
       }
     },
     getActiveDetach: () => active

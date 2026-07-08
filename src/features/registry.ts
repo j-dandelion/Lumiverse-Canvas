@@ -289,11 +289,15 @@ export function makeSlashFeature(
   const slashFeature: CanvasFeature = {
     id: 'slashCommandsEnabled',
     mount(ctx) {
+      // Skip if the standalone slash-commands extension is active
+      if (typeof window !== 'undefined' && (window as any).__slashCommandsActive) return
       if (active) return active
       active = attach(ctx)
       return active
     },
     apply(_prev, next, ctx) {
+      // Skip if the standalone slash-commands extension is active
+      if (typeof window !== 'undefined' && (window as any).__slashCommandsActive) return
       if (next.slashCommandsEnabled) {
         if (!active) {
           active = attach(ctx)
@@ -307,12 +311,26 @@ export function makeSlashFeature(
       }
     },
   }
+  // Listen for canvas:slash-disable to tear down an already-mounted runtime
+  const disableListener = () => {
+    if (active) {
+      const detach = active
+      active = null
+      detach()
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('canvas:slash-disable', disableListener)
+  }
   return {
     feature: slashFeature,
     alwaysCleanup() {
       if (active) {
         active()
         active = null
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('canvas:slash-disable', disableListener)
       }
     },
     getActiveDetach: () => active,
