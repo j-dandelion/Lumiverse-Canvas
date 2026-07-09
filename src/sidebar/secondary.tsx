@@ -13,7 +13,6 @@
 // transform is -width). getClosedTransformPx() centralizes this.
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { getHostBridge } from '../dom/host-bridge'
-import { clampSidebarWidth } from '../dom/clamp'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 // NOTE: drawer-sync.ts imports from this module (bidirectional). Both modules
@@ -24,10 +23,9 @@ import { mountResizeHandles } from '../resize/handles'
 import { isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } from '../tabs/buttons'
 import { persistOpenState } from '../layout/persist'
-import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
-import { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
+import { SECONDARY_WIDTH_VAR } from './styles'
 import {
   applyTabListPin,
   applyTabListPosition,
@@ -36,9 +34,13 @@ import {
 } from './tab-position'
 import { getSettings } from '../settings/state'
 import { dwarn } from '../debug/log'
-import { registerCleanup } from './cleanup'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
 import { setSuppressAutoActivation } from './secondary-drawer'
+import {
+  closedTransformPx,
+  createDrawerShell,
+  readWidthCssVar,
+} from './drawer-shell'
 
 // Re-export for backward compatibility — the test file imports these
 // from secondary.tsx.
@@ -53,7 +55,7 @@ export function syncPanelHeaderFromMain(): void {
 }
 
 // Re-export for backward compatibility
-export { SECONDARY_WIDTH_VAR, injectDrawerTabStyles }
+export { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
 export { animateWrapper } from './animation'
 
 // Standalone Puzzle icon SVG (lucide-react fallback for extensions without icons)
@@ -126,211 +128,26 @@ export function unmountSecondarySidebar(): void {
 }
 
 export function createSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }): HTMLElement {
+  // Secondary anchors opposite the main drawer.
   const side = getMainDrawerSide() === 'left' ? 'right' : 'left'
-
-  // Wrapper: mirrors main sidebar .wrapper exactly
-  // The WRAPPER translates — drawerTab and drawer are both children, moving as one unit.
-  const wrapper = document.createElement('div')
-  // Side class enables mobile CSS to align the tab list to the correct edge
-  wrapper.className = `sidebar-ux-secondary-wrapper sidebar-ux-side-${side}`
-  // Phase 3 (finding #13): prefer the layout-supplied width on first mount so the
-  // initial paint matches the saved state — no 420px fallback flash.
-  const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR))
-  const rawWidth = options?.initialWidth && options.initialWidth > 0
-    ? options.initialWidth
-    : (isFinite(cssVarWidth) ? cssVarWidth : 420)
-  // On mobile, the drawer is 100vw and the close transform must match.
-  // Use the viewport width directly — clamping a desktop-saved width to
-  // 80% of a mobile viewport would leave a visible peek. The desktop
-  // branch uses the shared clamp helper (PR-C) so resize handles,
-  // applyLayout, and createSecondarySidebar all share the same bounds.
   const onMobile = isMobileViewport()
-  const initWidth = onMobile
-    ? window.innerWidth
-    : Math.ceil(clampSidebarWidth(rawWidth))
-  // Set the CSS var to match the drawer's actual width so
-  // getClosedTransformPx() stays in sync.
-  document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${initWidth}px`)
-  // Phase 3: if the saved layout says open, translate to 0 so the drawer is
-  // visible from the very first frame. Otherwise stay off-screen. The
-  // closed transform's sign is direction-aware (see getClosedTransformPx):
-  // +width when the secondary is anchored on the right (main on left), and
-  // -width when anchored on the left (main on right).
-  const initialOpen = options?.initialOpen === true
-  const initWrapperTransform = initialOpen
-    ? 'translateX(0)'
-    : `translateX(${
-        getMainDrawerSide() === 'right' ? -initWidth : initWidth
-      }px)`
-  wrapper.style.cssText = `
-    position: fixed;
-    top: env(safe-area-inset-top, 0px); bottom: env(safe-area-inset-bottom, 0px);
-    z-index: 9990;
-    display: flex;
-    align-items: stretch;
-    pointer-events: none;
-    transform: ${initWrapperTransform};
-    ${side === 'left'
-      ? `left: 0; flex-direction: row-reverse;`
-      : `right: 0; flex-direction: row;`};
-  `
 
-  // Inject CSS rules for drawer tab (default, hover, active, compact states)
-  injectDrawerTabStyles()
-
-  // Drawer tab — flex child of wrapper, NOT position: fixed.
-  // When the wrapper translates, the drawerTab moves with it as a unit.
-  // Visual state managed via CSS classes (sidebar-ux-drawer-tab--active, --compact).
-  // Only layout properties (width, padding, gap, marginTop) use inline styles.
-  const drawerTab = document.createElement('button')
-  drawerTab.className = 'sidebar-ux-drawer-tab'
-  drawerTab.style.cssText = `
-    display: none;
-    border-${side === 'left' ? 'left' : 'right'}: none;
-    border-radius: ${side === 'left' ? '0 12px 12px 0' : '12px 0 0 12px'};
-  `
-  const iconWrapper = document.createElement('div')
-  iconWrapper.className = 'sidebar-ux-drawer-tab-icon'
-  iconWrapper.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`
-  drawerTab.appendChild(iconWrapper)
-  drawerTab.addEventListener('click', () => {
-    if (_secondarySidebarOpen) closeSecondarySidebar()
-    else openSecondarySidebar()
+  const shell = createDrawerShell({
+    owner: 'secondary',
+    side,
+    widthCssVar: SECONDARY_WIDTH_VAR,
+    defaultWidth: 420,
+    initialWidth: options?.initialWidth,
+    initialOpen: options?.initialOpen === true,
+    fullViewportWidth: onMobile,
+    title: 'Second drawer',
+    drawerTabDisplay: 'none',
+    onDrawerTabClick: () => {
+      if (_secondarySidebarOpen) closeSecondarySidebar()
+      else openSecondarySidebar()
+    },
+    onHeaderClose: () => closeSecondarySidebar(),
   })
-
-  // Drawer (contains tab strip + panel, mirrors main sidebar .drawer)
-  const drawer = document.createElement('div')
-  drawer.className = 'sidebar-ux-drawer'
-  // No initial transform — the wrapper handles all positioning via translateX.
-  // `position: relative` makes the drawer a positioning context so the
-  // resize handle (inserted by mountResizeHandles) offsets from the
-  // drawer itself rather than from the wrapper. Without this, the handle's
-  // position is computed relative to the wrapper's full translated width,
-  // which corrupts the position when the drawerTab sibling's visibility
-  // changes (e.g. when no tabs are assigned). The wrapper is at 100%
-  // viewport height via top:0/bottom:0; the drawer's height is 100% of
-  // that.
-  drawer.style.cssText = `
-    width: ${isMobileViewport() ? '100vw' : `var(${SECONDARY_WIDTH_VAR}, 420px)`};
-    height: 100%;
-    position: relative;
-    display: flex;
-    background: var(--lumiverse-bg-deep);
-    box-shadow: var(--lumiverse-shadow-xl);
-    pointer-events: auto;
-    /* overflow intentionally not set (defaults to visible) so the resize
-       handle's 4px overhang on the inner edge isn't clipped. Children
-       (sidebar, panel, content) handle their own overflow containment. */
-    isolation: isolate;
-    flex-direction: ${side === 'right' ? 'row' : 'row-reverse'};
-  `
-
-  // Sidebar (tab list, matches main sidebar .sidebar exactly)
-  const sidebar = document.createElement('div')
-  sidebar.className = 'sidebar-ux-tab-list'
-  sidebar.style.cssText = `
-    width: 56px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    padding: 6px 0;
-    gap: 4px;
-    overflow-y: auto;
-    scrollbar-width: none;
-    border-${side === 'right' ? 'right' : 'left'}: 1px solid var(--lumiverse-primary-020);
-    background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
-  `
-
-  // Panel (content area, mirrors main sidebar .panel)
-  const panel = document.createElement('div')
-  panel.className = 'sidebar-ux-panel'
-  panel.style.cssText = `
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-  `
-
-  // Panel header (matches the main drawer's .panelHeader).
-  // Height/padding/border/background are driven by CSS variables set by
-  // syncPanelHeaderFromMain() below. The fallbacks in each var(..., ...)
-  // keep the original hardcoded values for the case where the main
-  // header is not yet mounted (cold start, host rebuild) — see
-  // syncPanelHeaderFromMain for the "keep 48px fallback" contract.
-  const header = document.createElement('div')
-  header.className = 'sidebar-ux-panel-header'
-  header.style.cssText = `
-    min-height: var(--sidebar-ux-panel-header-h, 48px);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--sidebar-ux-panel-header-pt, 12px) 16px var(--sidebar-ux-panel-header-pb, 12px);
-    border-bottom: var(--sidebar-ux-panel-header-border-bottom, 1px solid var(--lumiverse-primary-015));
-    background: var(--sidebar-ux-panel-header-bg, var(--lumiverse-primary-008, rgba(255, 255, 255, 0.02)));
-    flex-shrink: 0;
-  `
-
-  const title = document.createElement('h2')
-  title.className = 'sidebar-ux-panel-title'
-  title.style.cssText = `
-    margin: 0;
-    font-size: var(--sidebar-ux-panel-header-font-size, calc(15px * var(--lumiverse-font-scale, 1)));
-    font-weight: 600;
-    color: var(--lumiverse-text);
-  `
-  title.textContent = 'Second drawer'
-
-  const closeBtn = document.createElement('button')
-  closeBtn.className = 'sidebar-ux-close-btn'
-  closeBtn.style.cssText = `
-    background: none;
-    border: none;
-    color: var(--lumiverse-text-dim);
-    cursor: pointer;
-    padding: 4px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  `
-  closeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`
-  closeBtn.addEventListener('click', () => closeSecondarySidebar())
-
-  header.appendChild(title)
-  header.appendChild(closeBtn)
-
-  // Panel content (where extension tab roots are appended)
-  const content = document.createElement('div')
-  content.className = 'sidebar-ux-panel-content'
-  // Position moved tab roots absolutely so they overlap. With
-  // position: relative on this container, position: absolute on
-  // children anchors them to this content area instead of the body.
-  // Inactive tabs get display: none in showSecondaryTab, which fully
-  // removes them from the layout — preventing the "active tab below
-  // the fold" symptom where the second tab in a stack is invisible
-  // without scrolling.
-  content.style.cssText = `
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior-y: contain;
-    --sidebar-ux-content-pt: 12px;
-    --sidebar-ux-content-pr: 12px;
-    --sidebar-ux-content-pb: 40px;
-    --sidebar-ux-content-pl: 12px;
-    padding: var(--sidebar-ux-content-pt) var(--sidebar-ux-content-pr) var(--sidebar-ux-content-pb) var(--sidebar-ux-content-pl);
-    position: relative;
-  `
-
-  panel.appendChild(header)
-  panel.appendChild(content)
-  drawer.appendChild(sidebar)
-  drawer.appendChild(panel)
-  wrapper.appendChild(drawerTab)
-  wrapper.appendChild(drawer)
 
   // Register the secondary drawer content area with Spindle so built-in
   // tabs can use requestTabLocation to move into this container.
@@ -343,7 +160,7 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
       wContainers.registerContainer({
         id: 'canvas-secondary-drawer',
         side,
-        element: content,
+        element: shell.content,
       })
     } else {
       dwarn(
@@ -356,8 +173,8 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     dwarn(`[tabmove] createSecondarySidebar: registerContainer THREW:`, err)
   }
 
-  _secondaryDrawer = drawer
-  return wrapper
+  _secondaryDrawer = shell.drawer
+  return shell.wrapper
 }
 
 export function openSecondarySidebar() {
@@ -454,16 +271,12 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
  * when the user moved the main to the right).
  */
 export function getClosedTransformPx(): number {
-  const w = Math.ceil(
-    parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-  )
-  // `getMainDrawerSide()` returns the MAIN drawer's side. The secondary
-  // lives on the opposite side. When the main is on the LEFT, the
-  // secondary is on the RIGHT (anchored at `right: 0`) → close transform
-  // is +w (pushes wrapper right, off the right edge). When the main is
-  // on the RIGHT, the secondary is on the LEFT (anchored at `left: 0`)
-  // → close transform is -w (pushes wrapper left, off the left edge).
-  return getMainDrawerSide() === 'right' ? -w : w
+  // Secondary is opposite the main drawer. Map main side → secondary
+  // anchor side, then use the shared closed-transform helper.
+  const secondarySide: 'left' | 'right' =
+    getMainDrawerSide() === 'left' ? 'right' : 'left'
+  const w = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420))
+  return closedTransformPx(secondarySide, w)
 }
 
 export function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }) {

@@ -411,23 +411,37 @@ function injectDrawerTabStyles() {
     /* Base button color — matches main drawer .tabBtn
        (ViewportDrawer.module.css:213). */
     /* Tab-list button chrome — under secondary wrapper (unpinned) or the
-       body-level pin host (keepTabListVisible reparents out of the
-       transformed wrapper so position:fixed is viewport-relative). */
+       body-level pin host (secondary reparent + main mirror strip).
+       Main mirror buttons use .sidebar-ux-main-tab-mirror-btn (may lack
+       data-tab-id until the host tagger runs). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id],
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id],
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
       color: var(--lumiverse-text-muted);
       border-radius: 8px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 8px 4px;
+      box-sizing: border-box;
     }
     /* Label color — matches main drawer .tabLabel
        (ViewportDrawer.module.css:245). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label {
       color: var(--lumiverse-text-dim);
     }
     /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
        (ViewportDrawer.module.css:222-225). Rounded corners. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover {
       background: var(--lumiverse-primary-015);
       color: var(--lumiverse-text);
       border-radius: 8px;
@@ -438,38 +452,45 @@ function injectDrawerTabStyles() {
        button color (primary) and transitions 0.2s back to text/white. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover svg,
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover svg,
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active:hover svg {
       color: var(--lumiverse-text);
     }
     /* Smooth color transition for SVG icons (matches the tabBtn
        transition: all 0.2s ease which only covers the button). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn svg {
       transition: color 0.2s ease;
     }
     /* Smooth color transition for labels. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label {
       transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
     }
     /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
        (ViewportDrawer.module.css:227-237) exactly: box-shadow
        indicator + directional border-radius. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
       background: var(--lumiverse-primary-020);
       color: var(--lumiverse-primary);
       box-shadow: inset 3px 0 0 var(--lumiverse-primary);
       border-radius: 0 8px 8px 0;
     }
     .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
-    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
       box-shadow: inset -3px 0 0 var(--lumiverse-primary);
       border-radius: 8px 0 0 8px;
     }
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active .sidebar-ux-tab-label {
       color: var(--lumiverse-primary);
     }
   `);
@@ -570,15 +591,22 @@ __export(exports_tab_position, {
   isTabListPinned: () => isTabListPinned,
   getTabListPosition: () => getTabListPosition,
   getPinnedTabList: () => getPinnedTabList,
+  getMainPinHost: () => getMainPinHost,
+  ensureMainPinHost: () => ensureMainPinHost,
+  destroyMainPinHost: () => destroyMainPinHost,
   applyTabListPosition: () => applyTabListPosition,
   applyTabListPin: () => applyTabListPin,
   __setPinHostForTest: () => __setPinHostForTest,
+  __setMainPinHostForTest: () => __setMainPinHostForTest,
   __resetPinStateForTest: () => __resetPinStateForTest,
   __getPinHostForTest: () => __getPinHostForTest,
+  __getMainPinHostForTest: () => __getMainPinHostForTest,
   TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
   TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
   TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
-  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS
+  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
+  PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
+  PIN_OWNER_MAIN: () => PIN_OWNER_MAIN
 });
 function getPinnedTabList() {
   if (!_pinHost)
@@ -618,11 +646,59 @@ function __getPinHostForTest() {
 function __setPinHostForTest(host) {
   _pinHost = host;
 }
+function __getMainPinHostForTest() {
+  return _mainPinHost;
+}
+function __setMainPinHostForTest(host) {
+  _mainPinHost = host;
+}
 function __resetPinStateForTest() {
   _pinHost = null;
   _pinSpacer = null;
   _restoreParent = null;
   _restoreNext = null;
+  _mainPinHost = null;
+}
+function getMainPinHost() {
+  return _mainPinHost;
+}
+function ensureMainPinHost(side) {
+  if (typeof document === "undefined" || !document.body)
+    return null;
+  if (!_mainPinHost) {
+    _mainPinHost = document.createElement("div");
+    document.body.appendChild(_mainPinHost);
+  }
+  sweepStrayPinHosts();
+  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN);
+  return _mainPinHost;
+}
+function destroyMainPinHost() {
+  if (_mainPinHost) {
+    while (_mainPinHost.firstChild) {
+      _mainPinHost.removeChild(_mainPinHost.firstChild);
+    }
+    _mainPinHost.remove();
+    _mainPinHost = null;
+  }
+  sweepStrayPinHosts();
+}
+function applyPinHostChrome(host, side, owner) {
+  host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
+  host.setAttribute("data-pin-owner", owner);
+  setIfDifferent(host.style, "position", "fixed");
+  setIfDifferent(host.style, "top", SAFE_TOP);
+  setIfDifferent(host.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(host.style, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(host.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(host.style, "pointerEvents", "none");
+  if (side === "right") {
+    setIfDifferent(host.style, "right", "0");
+    setIfDifferent(host.style, "left", "");
+  } else {
+    setIfDifferent(host.style, "left", "0");
+    setIfDifferent(host.style, "right", "");
+  }
 }
 function setIfDifferent(el, prop, val) {
   if (el[prop] !== val) {
@@ -769,20 +845,7 @@ function ensurePinHost(side) {
     document.body.appendChild(_pinHost);
   }
   sweepStrayPinHosts();
-  _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
-  setIfDifferent(_pinHost.style, "position", "fixed");
-  setIfDifferent(_pinHost.style, "top", SAFE_TOP);
-  setIfDifferent(_pinHost.style, "bottom", SAFE_BOTTOM);
-  setIfDifferent(_pinHost.style, "zIndex", PIN_Z_INDEX);
-  setIfDifferent(_pinHost.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(_pinHost.style, "pointerEvents", "none");
-  if (side === "right") {
-    setIfDifferent(_pinHost.style, "right", "0");
-    setIfDifferent(_pinHost.style, "left", "");
-  } else {
-    setIfDifferent(_pinHost.style, "left", "0");
-    setIfDifferent(_pinHost.style, "right", "");
-  }
+  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
   return _pinHost;
 }
 function sweepStrayPinHosts() {
@@ -790,7 +853,7 @@ function sweepStrayPinHosts() {
     return;
   const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`);
   for (const host of Array.from(hosts)) {
-    if (host !== _pinHost) {
+    if (host !== _pinHost && host !== _mainPinHost) {
       host.remove();
     }
   }
@@ -833,14 +896,7 @@ function pinTabList(tabList) {
     }
     removeOrphanTabListsFromHost(tabList);
   } else if (_pinHost) {
-    _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
-    if (side === "right") {
-      setIfDifferent(_pinHost.style, "right", "0");
-      setIfDifferent(_pinHost.style, "left", "");
-    } else {
-      setIfDifferent(_pinHost.style, "left", "0");
-      setIfDifferent(_pinHost.style, "right", "");
-    }
+    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
     removeOrphanTabListsFromHost(tabList);
   }
   tabList.classList.add(TAB_LIST_PINNED_CLASS);
@@ -928,7 +984,7 @@ function destroyPinChrome() {
   }
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
@@ -1462,6 +1518,310 @@ function animateWrapper(wrapper, targetPx) {
 }
 var ANIM_DURATION_MS = 350, _animRaf = null, _animStart = null, _animFrom = 0, _animTo = 0;
 
+// src/sidebar/main-tab-pin.ts
+var exports_main_tab_pin = {};
+__export(exports_main_tab_pin, {
+  reconcileMainTabListPin: () => reconcileMainTabListPin,
+  isMainTabListPinActive: () => isMainTabListPinActive,
+  applyMainTabListPin: () => applyMainTabListPin,
+  __resetMainTabPinForTest: () => __resetMainTabPinForTest,
+  MAIN_MIRROR_LIST_CLASS: () => MAIN_MIRROR_LIST_CLASS,
+  MAIN_MIRROR_BTN_CLASS: () => MAIN_MIRROR_BTN_CLASS
+});
+function applyMainTabListPin(enabled, opts) {
+  if (isMobileViewport()) {
+    if (enabled && !opts?.force)
+      return;
+    teardownMainPin();
+    return;
+  }
+  if (!enabled) {
+    teardownMainPin();
+    return;
+  }
+  if (_enabled && !opts?.force) {
+    scheduleReconcile();
+    return;
+  }
+  _enabled = true;
+  ensureObservers();
+  reconcileMainMirror();
+}
+function reconcileMainTabListPin() {
+  if (isMobileViewport()) {
+    applyMainTabListPin(false, { force: true });
+    return;
+  }
+  applyMainTabListPin(!!getSettings().keepTabListVisible, { force: true });
+}
+function isMainTabListPinActive() {
+  return _enabled && !isMobileViewport();
+}
+function __resetMainTabPinForTest() {
+  stopObservers();
+  _enabled = false;
+  _reconcileRaf = null;
+  _observedSidebar = null;
+  _observedWrapper = null;
+  destroyMainPinHost();
+}
+function teardownMainPin() {
+  _enabled = false;
+  stopObservers();
+  destroyMainPinHost();
+}
+function scheduleReconcile() {
+  if (_reconcileRaf !== null)
+    return;
+  _reconcileRaf = requestAnimationFrame(() => {
+    _reconcileRaf = null;
+    if (_enabled)
+      reconcileMainMirror();
+  });
+}
+function reconcileMainMirror() {
+  if (!_enabled)
+    return;
+  const side = getMainDrawerSide();
+  const host = ensureMainPinHost(side);
+  if (!host)
+    return;
+  if (isMainDrawerOpen()) {
+    if (host.style.display !== "none")
+      host.style.display = "none";
+    return;
+  }
+  if (host.style.display === "none")
+    host.style.display = "";
+  const list = ensureMirrorList(host, side);
+  const sidebar = getMainSidebar();
+  if (!sidebar) {
+    while (list.firstChild)
+      list.removeChild(list.firstChild);
+    return;
+  }
+  if (sidebar !== _observedSidebar) {
+    attachSidebarObserver(sidebar);
+  }
+  const hostButtons = collectHostTabButtons(sidebar);
+  const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)));
+  for (const child of Array.from(list.children)) {
+    const btn = child;
+    if (!btn.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+      list.removeChild(btn);
+      continue;
+    }
+    const key = btn.getAttribute("data-mirror-key") || "";
+    if (!wantedKeys.has(key)) {
+      list.removeChild(btn);
+    }
+  }
+  let insertBefore = list.firstChild;
+  for (const hostBtn of hostButtons) {
+    const key = hostButtonKey(hostBtn);
+    let mirror = list.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(key)}"]`);
+    if (!mirror) {
+      mirror = document.createElement("button");
+      mirror.type = "button";
+      mirror.classList.add(MAIN_MIRROR_BTN_CLASS);
+      mirror.setAttribute("data-mirror-key", key);
+      mirror.addEventListener("click", onMirrorClick);
+      list.insertBefore(mirror, insertBefore);
+    } else if (mirror !== insertBefore) {
+      list.insertBefore(mirror, insertBefore);
+    }
+    syncMirrorFromHost(mirror, hostBtn);
+    _mirrorToHost.set(mirror, hostBtn);
+    insertBefore = mirror.nextSibling;
+  }
+}
+function ensureMirrorList(host, side) {
+  let list = host.querySelector(`.${MAIN_MIRROR_LIST_CLASS}`);
+  if (!list) {
+    list = document.createElement("div");
+    list.classList.add("sidebar-ux-tab-list");
+    list.classList.add(MAIN_MIRROR_LIST_CLASS);
+    list.classList.add(TAB_LIST_PINNED_CLASS);
+    host.appendChild(list);
+  }
+  list.style.position = "fixed";
+  list.style.top = SAFE_TOP2;
+  list.style.bottom = SAFE_BOTTOM2;
+  list.style.zIndex = "10000";
+  list.style.width = `${TAB_LIST_WIDTH_PX}px`;
+  list.style.pointerEvents = "auto";
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.alignItems = "center";
+  list.style.overflowY = "auto";
+  list.style.overflowX = "hidden";
+  list.style.boxSizing = "border-box";
+  list.style.background = "var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a1a))";
+  const innerBorderSide = side === "right" ? "left" : "right";
+  if (side === "right") {
+    list.style.right = "0";
+    list.style.left = "";
+  } else {
+    list.style.left = "0";
+    list.style.right = "";
+  }
+  if (innerBorderSide === "right") {
+    list.style.borderRight = INNER_BORDER2;
+    list.style.borderLeft = "none";
+  } else {
+    list.style.borderLeft = INNER_BORDER2;
+    list.style.borderRight = "none";
+  }
+  return list;
+}
+function collectHostTabButtons(sidebar) {
+  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
+  return buttons.filter((b) => {
+    if (b.style.display === "none")
+      return false;
+    if (!String(b.className || "").includes("tabBtn"))
+      return false;
+    return true;
+  });
+}
+function hostButtonKey(btn) {
+  const id = btn.getAttribute("data-tab-id");
+  if (id)
+    return `id__${id}`;
+  const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || "";
+  if (title)
+    return `title__${title}`;
+  return `node__${btn.tagName}__${btn.className}`;
+}
+function syncMirrorFromHost(mirror, hostBtn) {
+  const tabId = hostBtn.getAttribute("data-tab-id");
+  if (tabId)
+    mirror.setAttribute("data-tab-id", tabId);
+  else
+    mirror.removeAttribute("data-tab-id");
+  const title = hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || "";
+  if (title) {
+    mirror.setAttribute("title", title);
+    mirror.setAttribute("aria-label", title);
+  }
+  const isActive = hostBtn.classList.contains("tabBtnActive") || String(hostBtn.className || "").includes("tabBtnActive");
+  mirror.classList.toggle("sidebar-ux-tab-active", isActive);
+  const labeled = hostBtn.classList.contains("tabBtnLabeled") || String(hostBtn.className || "").includes("tabBtnLabeled");
+  mirror.classList.toggle("sidebar-ux-tab-labeled", labeled);
+  const nextHtml = buildMirrorInnerHtml(hostBtn);
+  if (mirror.getAttribute("data-mirror-html") !== nextHtml) {
+    mirror.setAttribute("data-mirror-html", nextHtml);
+    mirror.innerHTML = nextHtml;
+  }
+}
+function buildMirrorInnerHtml(hostBtn) {
+  const parts = [];
+  const svg = hostBtn.querySelector("svg");
+  if (svg) {
+    parts.push(`<span>${svg.outerHTML}</span>`);
+  }
+  const label = hostBtn.querySelector('span[class*="tabLabel"]');
+  if (label) {
+    const text = (label.textContent || "").trim();
+    parts.push(`<span class="sidebar-ux-tab-label">${escapeHtml(text)}</span>`);
+  }
+  return parts.join("");
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function cssAttrEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/(["\\])/g, "\\$1");
+}
+function onMirrorClick(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const mirror = ev.currentTarget;
+  const hostBtn = _mirrorToHost.get(mirror);
+  if (!hostBtn || !hostBtn.isConnected) {
+    reconcileMainMirror();
+    const again = _mirrorToHost.get(mirror);
+    if (again && again.isConnected) {
+      try {
+        again.click();
+      } catch {}
+    }
+    return;
+  }
+  try {
+    hostBtn.click();
+  } catch {}
+}
+function ensureObservers() {
+  const sidebar = getMainSidebar();
+  if (sidebar)
+    attachSidebarObserver(sidebar);
+  const wrapper = getMainWrapper();
+  if (wrapper)
+    attachWrapperObserver(wrapper);
+}
+function attachSidebarObserver(sidebar) {
+  if (_sidebarObserver && _observedSidebar === sidebar)
+    return;
+  if (_sidebarObserver) {
+    _sidebarObserver.disconnect();
+    _sidebarObserver = null;
+  }
+  _observedSidebar = sidebar;
+  if (typeof MutationObserver === "undefined")
+    return;
+  _sidebarObserver = new MutationObserver(() => scheduleReconcile());
+  _sidebarObserver.observe(sidebar, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "style", "data-tab-id", "title", "aria-label"]
+  });
+}
+function attachWrapperObserver(wrapper) {
+  if (_wrapperObserver && _observedWrapper === wrapper)
+    return;
+  if (_wrapperObserver) {
+    _wrapperObserver.disconnect();
+    _wrapperObserver = null;
+  }
+  _observedWrapper = wrapper;
+  if (typeof MutationObserver === "undefined")
+    return;
+  _wrapperObserver = new MutationObserver(() => scheduleReconcile());
+  _wrapperObserver.observe(wrapper, {
+    attributes: true,
+    attributeFilter: ["class"]
+  });
+}
+function stopObservers() {
+  if (_sidebarObserver) {
+    _sidebarObserver.disconnect();
+    _sidebarObserver = null;
+  }
+  if (_wrapperObserver) {
+    _wrapperObserver.disconnect();
+    _wrapperObserver = null;
+  }
+  _observedSidebar = null;
+  _observedWrapper = null;
+  if (_reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_reconcileRaf);
+    _reconcileRaf = null;
+  }
+}
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", SAFE_TOP2 = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM2 = "env(safe-area-inset-bottom, 0px)", INNER_BORDER2 = "1px solid var(--lumiverse-primary-020)", _enabled = false, _sidebarObserver = null, _wrapperObserver = null, _reconcileRaf = null, _observedSidebar = null, _observedWrapper = null, _mirrorToHost;
+var init_main_tab_pin = __esm(() => {
+  init_store();
+  init_state();
+  init_mobile_exclusion();
+  init_tab_position();
+  _mirrorToHost = new WeakMap;
+});
+
 // src/sidebar/mobile-exclusion.ts
 function syncCssVarToDrawerWidth() {
   const el = document.documentElement;
@@ -1558,10 +1918,12 @@ function startMobileExclusion() {
         setMobileOpenClass("primary", isOpen);
       }
       Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
+      Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
     } else {
       _updateDrawerWidth();
       document.body.classList.remove(BODY_CLASS_PRIMARY, BODY_CLASS_SECONDARY);
       Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
+      Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
     }
   };
   _mediaQuery.addEventListener("change", _onMediaChange);
@@ -1665,7 +2027,10 @@ function updateChatReflow() {
   }
   const mainSide = getMainDrawerSide();
   const mainOpen = isMainDrawerOpen();
-  const mainWidth = mainOpen ? getMainDrawerWidth() : 0;
+  let mainWidth = mainOpen ? getMainDrawerWidth() : 0;
+  if (mainWidth === 0 && getSettings().keepTabListVisible) {
+    mainWidth = TAB_LIST_WIDTH_PX;
+  }
   let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
   if (secondaryWidth === 0 && getSettings().keepTabListVisible && getSecondaryTabList()) {
     secondaryWidth = TAB_LIST_WIDTH_PX;
@@ -3171,6 +3536,7 @@ function checkSideChanged() {
     stopDrawerTabStyleObserver();
     findStoreData(true);
     mountSecondarySidebar({ initialOpen: wasOpen });
+    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
     restoreSecondaryTabButtons();
     Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
       for (const [tabId, side] of getTabAssignments()) {
@@ -4582,9 +4948,9 @@ function showSuggest(textarea, options, initialActiveIndex = 0, onActiveIndexCha
   };
   const renderRows = () => {
     el.innerHTML = currentOptions.map((c, i) => {
-      const label = escapeHtml(c.usage ?? "/" + c.name);
-      const desc = escapeHtml(c.description ?? "");
-      const owner = escapeHtml(c.owner);
+      const label = escapeHtml2(c.usage ?? "/" + c.name);
+      const desc = escapeHtml2(c.description ?? "");
+      const owner = escapeHtml2(c.owner);
       const isActive = i === activeIndex;
       return `<div id="canvas-slash-opt-${i}" class="canvas-slash-opt"` + ` role="option" aria-selected="${isActive}" data-active="${isActive}"` + ` data-cmd="${escapeAttr(c.name)}">` + `<span class="canvas-slash-opt-body">` + `<span class="canvas-slash-opt-name">${label}</span>` + `<span class="canvas-slash-opt-desc">${desc}</span>` + `</span>` + `<span class="canvas-slash-opt-source">${owner}</span>` + `</div>`;
     }).join("");
@@ -4814,7 +5180,7 @@ function injectSuggestStyles() {
     }
   `);
 }
-function escapeHtml(s) {
+function escapeHtml2(s) {
   return s.replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
     "<": "&lt;",
@@ -4824,7 +5190,7 @@ function escapeHtml(s) {
   })[c] ?? c);
 }
 function escapeAttr(s) {
-  return escapeHtml(s);
+  return escapeHtml2(s);
 }
 var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID2 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
@@ -6879,6 +7245,7 @@ var init_registry = __esm(() => {
   init_runtime();
   init_toast();
   init_tab_position();
+  init_main_tab_pin();
   init_drawer_tab_position();
   debugFeature = {
     id: "debugMode",
@@ -7054,14 +7421,17 @@ var init_registry = __esm(() => {
     id: "keepTabListVisible",
     mount(_ctx2, _layout) {
       reconcileTabListPin();
+      reconcileMainTabListPin();
       updateChatReflow();
       return () => {
         applyTabListPin(false, { force: true });
+        applyMainTabListPin(false, { force: true });
         updateChatReflow();
       };
     },
     apply(_prev, next) {
       applyTabListPin(!!next.keepTabListVisible, { force: true });
+      applyMainTabListPin(!!next.keepTabListVisible, { force: true });
       updateChatReflow();
     }
   };
@@ -7320,12 +7690,11 @@ function buildSettingsPanelDOM() {
     hint: "Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area.",
     control: moveControlsToOuter.btn
   }));
-  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
+  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }));
   secSidebars.appendChild(buildSettingRow({
-    label: "Keep tab list visible",
-    hint: "Pins the second drawer’s tab buttons to the screen edge so you can switch tabs even when the drawer is closed. The panel still slides in and out from behind the list.",
-    control: keepTabListVisible.btn,
-    disabled: !getSettings().secondSidebarEnabled
+    label: "Keep tab lists visible",
+    hint: "Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer. Panels still slide in and out from behind the list.",
+    control: keepTabListVisible.btn
   }));
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   secSidebars.appendChild(buildSettingRow({
@@ -7405,7 +7774,7 @@ function buildSettingsPanelDOM() {
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
-    for (const row of [resizeSidebars, compact, keepTabListVisible]) {
+    for (const row of [resizeSidebars, compact]) {
       const d3 = !getSettings().secondSidebarEnabled;
       row.btn.disabled = d3;
       row.btn.style.cursor = d3 ? "not-allowed" : "pointer";

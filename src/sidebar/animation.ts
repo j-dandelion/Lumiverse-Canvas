@@ -1,58 +1,81 @@
-// JS-based animation for the secondary sidebar wrapper.
+// JS-based animation for Canvas drawer wrappers (secondary + main mirror).
 // Uses requestAnimationFrame + easeOutCubic (350ms) — no CSS transitions,
 // no counter-translate. The wrapper translates, and both the drawerTab
 // and drawer (its children) move as one unit.
 //
-// Extracted from sidebar/secondary.tsx.
+// Per-wrapper state so main and secondary can animate independently.
 
 const ANIM_DURATION_MS = 350
-let _animRaf: number | null = null
-let _animStart: number | null = null
-let _animFrom = 0
-let _animTo = 0
+
+type AnimState = {
+  raf: number | null
+  start: number | null
+  from: number
+  to: number
+}
+
+const _anims = new WeakMap<HTMLElement, AnimState>()
+
+/** Test / cancel-all fallback when a single global cancel is needed. */
+let _lastWrapper: HTMLElement | null = null
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
 }
 
-function animFrame(wrapper: HTMLElement, now: number) {
-  if (_animStart === null) _animStart = now
-  const elapsed = now - _animStart
+function animFrame(wrapper: HTMLElement, state: AnimState, now: number) {
+  if (state.start === null) state.start = now
+  const elapsed = now - state.start
   const progress = Math.min(elapsed / ANIM_DURATION_MS, 1)
   const eased = easeOutCubic(progress)
 
-  const val = _animFrom + (_animTo - _animFrom) * eased
+  const val = state.from + (state.to - state.from) * eased
   wrapper.style.transform = `translateX(${val}px)`
 
   if (progress < 1) {
-    _animRaf = requestAnimationFrame((t) => animFrame(wrapper, t))
+    state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t))
   } else {
-    _animRaf = null
-    _animStart = null
+    state.raf = null
+    state.start = null
   }
 }
 
-/** Cancel any in-flight rAF so it can't overwrite a transform set by
- *  a viewport breakpoint cross (e.g. _updateDrawerWidth in mobile-exclusion). */
-export function cancelWrapperAnimation(): void {
-  if (_animRaf !== null) {
-    cancelAnimationFrame(_animRaf)
-    _animRaf = null
-    _animStart = null
+/** Cancel in-flight rAF for a specific wrapper (or the last animated one). */
+export function cancelWrapperAnimation(wrapper?: HTMLElement | null): void {
+  const target = wrapper ?? _lastWrapper
+  if (!target) return
+  const state = _anims.get(target)
+  if (state?.raf != null) {
+    cancelAnimationFrame(state.raf)
+    state.raf = null
+    state.start = null
   }
 }
 
-export function __getAnimState() {
-  return { animRaf: _animRaf, animStart: _animStart }
+/** Test helper: inspect last wrapper's anim state (or a specific wrapper). */
+export function __getAnimState(wrapper?: HTMLElement | null) {
+  const target = wrapper ?? _lastWrapper
+  if (!target) return { animRaf: null as number | null, animStart: null as number | null }
+  const state = _anims.get(target)
+  return {
+    animRaf: state?.raf ?? null,
+    animStart: state?.start ?? null,
+  }
 }
 
 export function animateWrapper(wrapper: HTMLElement, targetPx: number) {
+  _lastWrapper = wrapper
+  let state = _anims.get(wrapper)
+  if (!state) {
+    state = { raf: null, start: null, from: 0, to: 0 }
+    _anims.set(wrapper, state)
+  }
   const current = wrapper
     ? (parseFloat(wrapper.style.transform?.match(/-?[\d.]+/)?.[0] || '0'))
     : 0
-  _animFrom = current
-  _animTo = targetPx
-  _animStart = null
-  if (_animRaf !== null) cancelAnimationFrame(_animRaf)
-  _animRaf = requestAnimationFrame((t) => animFrame(wrapper, t))
+  state.from = current
+  state.to = targetPx
+  state.start = null
+  if (state.raf !== null) cancelAnimationFrame(state.raf)
+  state.raf = requestAnimationFrame((t) => animFrame(wrapper, state!, t))
 }
