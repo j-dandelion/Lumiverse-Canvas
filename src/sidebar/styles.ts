@@ -181,8 +181,12 @@ export function injectDrawerTabStyles(): void {
       color: var(--lumiverse-text);
       border-radius: 8px;
     }
-    /* Active tab hover: icon turns white, label stays colored.
-       Target the SVG directly so we only change the icon color. */
+    /* Hover icon color is set on the SVG itself (not only inherited from
+       the button) so removing .sidebar-ux-tab-active mid-hover does not
+       flash purple: without this, the SVG briefly inherits the active
+       button color (primary) and transitions 0.2s back to text/white. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover svg,
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
       color: var(--lumiverse-text);
