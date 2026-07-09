@@ -6,7 +6,8 @@
 import type { SlashCommandDef } from './types'
 import { injectStyles } from '../debug/styles'
 import { position, attachViewportListeners, detachViewportListeners } from './positioning'
-import { applySuggestion, isValidSlashContext, textareaHasUsage } from './dom-utils'
+import { applySuggestion, isValidSlashContext, suggestionLabel, textareaHasUsage } from './dom-utils'
+import { hideGhost } from './ghost-text'
 import { setIntent } from './intent'
 import { parseCommand } from './parse'
 export { position, attachViewportListeners, detachViewportListeners } from './positioning'
@@ -35,11 +36,14 @@ export interface SuggestController {
  * a controller used by intercept.ts for keyboard navigation and dispatch.
  *
  * @param options Commands to display. The displayed text is `cmd.usage ?? '/' + cmd.name`.
+ * @param onActiveIndexChange Optional callback when the active row changes
+ *   (arrows, hover). Used by runtime to keep ghost-text in sync.
  */
 export function showSuggest(
   textarea: HTMLTextAreaElement,
   options: SlashCommandDef[],
   initialActiveIndex: number = 0,
+  onActiveIndexChange?: (index: number, cmd: SlashCommandDef | null) => void,
 ): SuggestController {
   // Empty options: hide any existing popup and return a no-op controller.
   if (options.length === 0) {
@@ -63,6 +67,13 @@ export function showSuggest(
     ? Math.max(0, Math.min(options.length - 1, initialActiveIndex))
     : 0
   let visible = true
+  const notifyActive = (): void => {
+    const cmd =
+      activeIndex >= 0 && activeIndex < currentOptions.length
+        ? currentOptions[activeIndex]!
+        : null
+    onActiveIndexChange?.(activeIndex, cmd)
+  }
 
   // --- helpers ---
 
@@ -155,8 +166,7 @@ export function showSuggest(
         // state from a focused, in-DOM textarea. The helper handles
         // the trailing space, the synthetic input event, the skip
         // flag, and cursor placement.
-        // Use command name, not usage — usage may contain placeholders like <name>
-        const label = `/${cmd.name}`
+        const label = suggestionLabel(cmd)
         applySuggestion(currentAnchor, label)
         const parsed = parseCommand(label)
         if (parsed) setIntent(parsed, 'click')
@@ -170,6 +180,7 @@ export function showSuggest(
     if (currentOptions.length === 0) {
       activeIndex = -1
       updateActiveDom()
+      notifyActive()
       return
     }
     const clamped = Math.max(0, Math.min(currentOptions.length - 1, i))
@@ -177,6 +188,7 @@ export function showSuggest(
     activeIndex = clamped
     updateActiveDom()
     scrollActiveIntoView()
+    notifyActive()
   }
 
   const scrollActiveIntoView = (): void => {
@@ -218,6 +230,8 @@ export function hideSuggest(): void {
   currentAnchor = null
   currentEl = null
   _currentController = null
+  // Ghost is only valid while the suggest popup is visible.
+  hideGhost()
 }
 
 /** True while a popup is on screen. Used by intercept to gate key handling. */

@@ -36,6 +36,24 @@ export function applySuggestion(
 }
 
 /**
+ * Label written by Tab/Enter/click/ArrowRight autocomplete.
+ *
+ * Prefer a concrete `usage` that has no angle-bracket placeholders
+ * (e.g. `/select all`, `/persona Chris`). Placeholder usages like
+ * `/select <range>` fall back to `/${name}`.
+ *
+ * This is required for arg-mode synthetic rows (name is the candidate
+ * alone; usage is the full `/${cmd} ${arg}` line).
+ */
+export function suggestionLabel(cmd: { name: string; usage?: string }): string {
+  const u = cmd.usage?.trim()
+  if (u && !/[<>]/.test(u)) {
+    return u.startsWith('/') ? u : `/${u}`
+  }
+  return `/${cmd.name}`
+}
+
+/**
  * Set a controlled-input value in a way that keeps React's state in sync.
  * Uses the prototype's native value setter (bypasses any installed setter
  * for proper _valueTracker behavior), then dispatches a synthetic input

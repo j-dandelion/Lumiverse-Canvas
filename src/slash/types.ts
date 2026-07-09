@@ -11,6 +11,12 @@ export interface SlashCommandDef {
     values?: string[]
     optional?: boolean
   }[]
+  /**
+   * Sync preferred. Prefix is current arg text after first space (may be '').
+   * Return candidate argument strings (not full command lines). Used for
+   * arg-mode suggest rows + ghost-text completion.
+   */
+  getArgCompletions?: (prefix: string, ctx: { chatId: string }) => string[]
   handler: (args: Record<string, string>, ctx: SlashContext) => Promise<void> | void
   owner: string                         // extension identifier
   category?: 'select' | 'layout' | 'theme' | 'lore' | 'chat' | 'meta'

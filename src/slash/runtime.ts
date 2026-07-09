@@ -15,6 +15,8 @@ import {
   shouldHideForNonMatchingArgs,
   setControlledValue,
 } from './dom-utils'
+import { parseArgMode, pickActive } from './arg-completions'
+import { hideGhost, setGhost } from './ghost-text'
 import type { SlashCommandDef, SlashContext } from './types'
 
 // Runtime type guard for the `canvas:slash-register` CustomEvent detail.
@@ -34,6 +36,21 @@ function isSlashCommandDef(x: unknown): x is SlashCommandDef {
     'handler' in x &&
     typeof (x as { handler: unknown }).handler === 'function'
   )
+}
+
+/** Build synthetic suggest rows for arg completions. */
+function argCompletionRows(
+  cmd: SlashCommandDef,
+  candidates: string[],
+): SlashCommandDef[] {
+  return candidates.map((c) => ({
+    name: c,
+    description: 'Complete argument',
+    owner: cmd.owner,
+    usage: `/${cmd.name} ${c}`,
+    handler: cmd.handler,
+    category: cmd.category,
+  }))
 }
 
 export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
@@ -76,36 +93,115 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     },
   }
 
+  const syncGhostForArg = (
+    ta: HTMLTextAreaElement,
+    fullArg: string | null,
+    argStart: number,
+    argEnd: number,
+    typedPrefix: string,
+  ): void => {
+    if (!fullArg) {
+      hideGhost()
+      return
+    }
+    setGhost(ta, {
+      fullArg,
+      range: { start: argStart, end: argEnd },
+      typedPrefix,
+    })
+  }
+
+  const onTextChange = (text: string): void => {
+    if (!text.startsWith('/')) {
+      hideSuggest()
+      lastActiveIndex = null
+      return
+    }
+
+    // ── Arg mode: space after command token + command has getArgCompletions
+    const argMode = parseArgMode(text)
+    if (argMode) {
+      const cmd =
+        registry.lookup(argMode.cmdName) ??
+        registry.lookup(argMode.cmdName.toLowerCase())
+      if (cmd?.getArgCompletions) {
+        const candidates = cmd.getArgCompletions(argMode.argPrefix, {
+          chatId: slashCtx.chatId,
+        })
+        if (candidates.length === 0) {
+          hideSuggest()
+          lastActiveIndex = null
+          return
+        }
+
+        const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
+        if (!ta) return
+
+        // Sticky active index while typing a non-empty arg prefix.
+        let activeIndex = 0
+        if (
+          lastActiveIndex != null &&
+          lastActiveIndex >= 0 &&
+          lastActiveIndex < candidates.length &&
+          argMode.argPrefix.trim().length > 0
+        ) {
+          activeIndex = lastActiveIndex
+        }
+        lastActiveIndex = activeIndex
+
+        const rows = argCompletionRows(cmd, candidates)
+        showSuggest(ta, rows, activeIndex, (i, activeCmd) => {
+          lastActiveIndex = i
+          const fullArg = activeCmd?.name ?? pickActive(candidates, i)
+          syncGhostForArg(
+            ta,
+            fullArg,
+            argMode.argStart,
+            argMode.argEnd,
+            argMode.argPrefix,
+          )
+        })
+
+        const fullArg = pickActive(candidates, activeIndex)
+        syncGhostForArg(
+          ta,
+          fullArg,
+          argMode.argStart,
+          argMode.argEnd,
+          argMode.argPrefix,
+        )
+        return
+      }
+    }
+
+    // ── Command-name mode (or arg mode without getArgCompletions)
+    hideGhost()
+    const prefix = text.split(/\s/)[0]!.slice(1).toLowerCase()
+    const matches = registry.list()
+      .filter((c) => c.name.toLowerCase().startsWith(prefix))
+    if (matches.length === 0) {
+      hideSuggest()
+      lastActiveIndex = null
+      return
+    }
+    const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
+    if (!ta) return
+    const completionIdx = findCompletionCandidateIndex(matches, text)
+    if (shouldHideForNonMatchingArgs(text, completionIdx >= 0)) {
+      hideSuggest()
+      lastActiveIndex = null
+      return
+    }
+    const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex)
+    lastActiveIndex = nextSticky
+    showSuggest(ta, matches, activeIndex)
+  }
+
   const detachIntercept = installIntercept(ctx, {
     onParsed: (parsed) => {
       dispatchCommand(parsed, slashCtx, registry)
     },
-    onTextChange: (text) => {
-      if (text.startsWith('/')) {
-        const prefix = text.split(/\s/)[0].slice(1).toLowerCase()
-        const matches = registry.list()
-          .filter((c) => c.name.toLowerCase().startsWith(prefix))
-        if (matches.length === 0) {
-          hideSuggest()
-          lastActiveIndex = null
-          return
-        }
-        const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
-        if (!ta) return
-        const completionIdx = findCompletionCandidateIndex(matches, text)
-        if (shouldHideForNonMatchingArgs(text, completionIdx >= 0)) {
-          hideSuggest()
-          lastActiveIndex = null
-          return
-        }
-        const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex)
-        lastActiveIndex = nextSticky
-        showSuggest(ta, matches, activeIndex)
-      } else {
-        hideSuggest()
-        lastActiveIndex = null
-      }
-    },
+    onTextChange,
   })
 
   // Mount the toast surface. The toast.tsx module registers a CustomEvent
@@ -147,13 +243,24 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
   }
   window.addEventListener('canvas:slash-unregister', unregisterListener)
 
+  // Persona (and similar) warm caches async; refresh suggest when ready.
+  const completionsChangedListener = (): void => {
+    const ta = document.querySelector<HTMLTextAreaElement>(SELECTOR_TEXTAREA)
+    if (!ta) return
+    if (!ta.value.startsWith('/')) return
+    onTextChange(ta.value)
+  }
+  window.addEventListener('canvas:slash-completions-changed', completionsChangedListener)
+
   // And in teardown:
   return () => {
     unmountToast()
     detachIntercept()
     window.removeEventListener('canvas:slash-register', registerListener)
     window.removeEventListener('canvas:slash-unregister', unregisterListener)
+    window.removeEventListener('canvas:slash-completions-changed', completionsChangedListener)
     unregisterByName.clear()
     registry.clear()
+    hideGhost()
   }
 }

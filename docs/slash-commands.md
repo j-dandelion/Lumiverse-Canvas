@@ -55,6 +55,8 @@ interface SlashCommandDef {
   description: string    // shown in /help
   usage?: string         // '/select <range>' — shown in /help
   argsSchema?: { name: string; type: 'string' | 'number' | 'enum'; values?: string[]; optional?: boolean }[]
+  /** Sync preferred. Prefix is current arg text after first space (may be ''). */
+  getArgCompletions?: (prefix: string, ctx: { chatId: string }) => string[]
   handler: (args: Record<string, string>, ctx: SlashContext) => Promise<void> | void
   owner: string          // extension identifier
   category?: 'select' | 'layout' | 'theme' | 'lore' | 'chat' | 'meta'
@@ -82,12 +84,36 @@ Capture-phase handlers on `document`:
 
 ### Keydown
 - **Escape**: dismiss popup (when visible)
-- **ArrowUp/Down**: navigate popup rows
-- **Tab**: autocomplete active row's usage into textarea
+- **ArrowUp/Down**: navigate popup rows (also rebinds arg ghost-text)
+- **Tab**: accept ghost if painted, else autocomplete via `suggestionLabel` (concrete `usage` without `<>` placeholders, else `/${name}`)
+- **ArrowRight**: same as Tab, but only when the caret is at the end of the value
 - **Enter**:
-  - Popup visible: autocomplete + set intent
+  - Popup visible: accept ghost or autocomplete + set intent
   - Popup hidden + parseable command: dispatch command, clear textarea
 - All keys gated on `!e.isComposing` (CJK IME support)
+
+## Arg completion + ghost text
+
+When the textarea has a space after the command token and the looked-up
+command defines `getArgCompletions`:
+
+1. Runtime calls `getArgCompletions(argPrefix, { chatId })` (sync).
+2. Zero candidates → hide suggest + ghost.
+3. Otherwise show popup rows as synthetic defs (`usage: /cmd candidate`).
+4. Grey **ghost** suffix (active row remainder) is painted only while the
+   suggest popup is visible (`ghost-text.ts`, z-index below suggest).
+5. Tab / ArrowRight / Enter / click write the full completion + trailing
+   space via `applySuggestion` or `acceptGhost` — never sends to the LLM.
+
+Built-ins:
+
+- `/select` → `['all', 'clear']` (filtered by prefix)
+- `/persona` → cached persona names; cache warmed via one-shot invisible
+  popover scrape (`hide-before-paint` MutationObserver). On warm complete
+  dispatches `canvas:slash-completions-changed` so the popup refreshes.
+
+Pure helpers live in `slash/arg-completions.ts` (`parseArgMode`,
+`filterPrefix`, `ghostSuffix`, `pickActive`).
 
 ### Input
 - Forwards textarea value to `onTextChange` callback

@@ -26,6 +26,7 @@ import {
   resolveActiveIndex,
   resetSkipNextTextChange,
   shouldHideForNonMatchingArgs,
+  suggestionLabel,
   textareaHasUsage,
 } from '../dom-utils'
 
@@ -477,6 +478,19 @@ const MATCHES = [
   const r = resolveActiveIndex(MATCHES, '/select a', null)
   assert(r.activeIndex === 1, '/select a (null sticky): activeIndex 1')
   assert(r.nextSticky === 1, '/select a (null sticky): sticky 1 (not null)')
+}
+
+// --- suggestionLabel (smoke; full coverage in suggestion-label.test.ts) ---
+
+{
+  assert(
+    suggestionLabel({ name: 'select-all', usage: '/select all' }) === '/select all',
+    'suggestionLabel prefers concrete usage with space',
+  )
+  assert(
+    suggestionLabel({ name: 'select', usage: '/select <range>' }) === '/select',
+    'suggestionLabel falls back when usage has placeholders',
+  )
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); throw new Error(`${failed} test failures`) }

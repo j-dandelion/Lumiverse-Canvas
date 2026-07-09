@@ -29,8 +29,10 @@ import {
   resetSkipNextTextChange,
   setSkipNextTextChange,
   setControlledValue,
+  suggestionLabel,
   textareaHasUsage,
 } from './dom-utils'
+import { acceptGhost, hasGhost } from './ghost-text'
 
 export interface InterceptCallbacks {
   onParsed: (parsed: ParsedCommand, textarea: HTMLTextAreaElement) => void
@@ -81,7 +83,8 @@ export function installIntercept(
 
     // ArrowDown / ArrowUp: move active row when popup is visible.
     // When the popup is hidden, the textarea's default cursor-movement
-    // behavior takes over.
+    // behavior takes over. Active-index change notifies runtime via
+    // showSuggest's onActiveIndexChange (ghost-text rebind).
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       if (!ctrl) return
       e.preventDefault()
@@ -93,8 +96,41 @@ export function installIntercept(
       return
     }
 
-    // Tab: autocomplete the active row's usage into the textarea. We do NOT
-    // dispatch — Tab is for "insert this command name, let me keep editing."
+    // ArrowRight: accept ghost (or full active suggestion) only when the
+    // caret is at the end of the value — otherwise let default cursor move.
+    if (e.key === 'ArrowRight') {
+      if (!popupVisible || !ctrl) return
+      if (ta.selectionStart !== ta.value.length || ta.selectionEnd !== ta.value.length) {
+        return
+      }
+      if (!isValidSlashContext(ta)) {
+        hideSuggest()
+        return
+      }
+      if (hasGhost() && acceptGhost(ta)) {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        hideSuggest()
+        return
+      }
+      const activeCmd = ctrl.getActiveCommand()
+      if (!activeCmd) return
+      if (textareaHasUsage(ta, activeCmd)) {
+        hideSuggest()
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      applySuggestion(ta, suggestionLabel(activeCmd))
+      hideSuggest()
+      return
+    }
+
+    // Tab: autocomplete the active row into the textarea. We do NOT
+    // dispatch — Tab is for "insert this command/arg, let me keep editing."
+    // Prefer ghost accept when the grey remainder is painted.
     if (e.key === 'Tab') {
       if (!ctrl) return
       const activeCmd = ctrl.getActiveCommand()
@@ -124,9 +160,11 @@ export function installIntercept(
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
-      // Use command name, not usage — usage may contain placeholders like <name>
-      const label = `/${activeCmd.name}`
-      applySuggestion(ta, label)
+      if (hasGhost() && acceptGhost(ta)) {
+        hideSuggest()
+        return
+      }
+      applySuggestion(ta, suggestionLabel(activeCmd))
       hideSuggest()
       return
     }
@@ -197,8 +235,14 @@ export function installIntercept(
         e.preventDefault()
         e.stopPropagation()
         e.stopImmediatePropagation()
-        // Use command name, not usage — usage may contain placeholders like <name>
-        const label = `/${activeCmd.name}`
+        if (hasGhost() && acceptGhost(ta)) {
+          const parsed = parseCommand(ta.value.trimEnd())
+          if (parsed) setIntent(parsed, 'enter-popup')
+          hideSuggest()
+          ta.focus()
+          return
+        }
+        const label = suggestionLabel(activeCmd)
         applySuggestion(ta, label)
         const parsed = parseCommand(label)
         if (parsed) setIntent(parsed, 'enter-popup')

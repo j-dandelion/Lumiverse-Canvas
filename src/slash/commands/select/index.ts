@@ -21,6 +21,7 @@
 //   - index.ts:    this file — orchestrates the three for SlashContext.
 
 import type { SlashCommandDef, SlashContext } from '../../types'
+import { filterPrefix } from '../../arg-completions'
 import { parseSelectArgs } from './parser'
 import { readIndexInChat } from './extract'
 import {
@@ -32,6 +33,8 @@ import {
 
 const SELECTOR_MESSAGE_ROW = '[data-component="BubbleMessage"]'
 
+const SELECT_ARG_KEYWORDS = ['all', 'clear']
+
 export function makeSelectCommands(): SlashCommandDef[] {
   return [
     {
@@ -40,6 +43,7 @@ export function makeSelectCommands(): SlashCommandDef[] {
       usage: '/select',
       owner: 'canvas',
       category: 'select',
+      getArgCompletions: (prefix) => filterPrefix(SELECT_ARG_KEYWORDS, prefix),
       handler: async (args, ctx) => {
         const raw = args._raw ?? ''
         const parsed = parseSelectArgs(raw)
