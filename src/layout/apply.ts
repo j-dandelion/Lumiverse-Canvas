@@ -11,8 +11,11 @@ import {
 import {
   hasTabAssignment, setTabAssignment,
 } from '../tabs/assignment'
-import { getActiveSecondaryTabId } from '../tabs/active-tab'
-import { assignToSecondary, setRestoringFromLayout } from '../sidebar/secondary-drawer'
+import {
+  assignToSecondary,
+  setRestoringFromLayout,
+  setSuppressAutoActivation,
+} from '../sidebar/secondary-drawer'
 import {
   hideMainTabButton, showSecondaryTab, findMainTabButton, updateDrawerTabVisibility,
 } from '../tabs/buttons'
@@ -38,9 +41,9 @@ export function setRestoreTimeoutMs(ms: number): void {
 
 /**
  * Cancel any in-flight layout restore. Disconnects the observer and
- * clears the safety timeout. Called from features/registry.ts
- * alwaysCleanups when Canvas is disabled. Replaces the old
- * cancelApplyLayoutInterval — same role, observer-backed now.
+ * clears the safety timeout. Also releases restore/suppress guards so
+ * disable/teardown cannot leave activation permanently deferred.
+ * Called from features/registry.ts alwaysCleanups when Canvas is disabled.
  */
 export function cancelApplyLayoutInterval(): void {
   if (_restoreObserver !== null) {
@@ -51,6 +54,8 @@ export function cancelApplyLayoutInterval(): void {
     clearTimeout(_restoreTimeoutHandle)
     _restoreTimeoutHandle = null
   }
+  setRestoringFromLayout(false)
+  setSuppressAutoActivation(false)
 }
 
 /**
@@ -163,7 +168,12 @@ export async function applyLayout(layout: any) {
     // sidebar during restore (extensions finish loading, React re-commits),
     // which can spuriously unregister and re-register tabs (see
     // secondary-drawer.ts flag declaration for full rationale).
+    //
+    // Also suppress per-assign activation so finishRestore is the sole
+    // authority for which secondary tab is active (late Lorebook assigns
+    // must not overwrite the saved active tab after ~10s).
     setRestoringFromLayout(true)
+    setSuppressAutoActivation(true)
 
     // One pass of restore work. Returns the number of tabs that still need
     // more work. The observer callback calls this; the timeout also calls
@@ -181,18 +191,25 @@ export async function applyLayout(layout: any) {
         // Try exact match first
         const tabs = getDrawerTabs()
         let tab = tabs.find(t => t.id === dt.tabId)
-        let usedFallback = false
         if (!tab) {
           // Exact match missed — try stripped-suffix match
           const storedPrefix = stripSuffix(dt.tabId)
           const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
           if (candidates.length === 1) {
             tab = candidates[0]
-            usedFallback = true
             dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`)
             // Self-heal: rewrite the in-memory layout so the next persistLayout
-            // call stores the live id.
+            // call stores the live id. Also heal secondary.activeTabId when it
+            // pointed at the drifted stored id (exact or same stripped prefix).
+            const prevId = dt.tabId
             layout.detachedTabs[i] = { ...dt, tabId: tab.id }
+            const savedActive = layout.secondary?.activeTabId as string | undefined
+            if (
+              savedActive &&
+              (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))
+            ) {
+              layout.secondary = { ...layout.secondary, activeTabId: tab.id }
+            }
           } else if (candidates.length > 1) {
             dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`)
           }
@@ -218,10 +235,29 @@ export async function applyLayout(layout: any) {
       return remaining
     }
 
+    /** Resolve which secondary tab should be active after restore. */
+    const resolveRestoredActiveTabId = (): string | null => {
+      const saved = layout.secondary?.activeTabId as string | undefined
+      if (saved) {
+        if (hasTabAssignment(saved)) return saved
+        const prefix = stripSuffix(saved)
+        const matches = (layout.detachedTabs as { tabId: string }[])
+          .map((dt) => dt.tabId)
+          .filter((id) => hasTabAssignment(id) && stripSuffix(id) === prefix)
+        if (matches.length === 1) {
+          if (layout.secondary) layout.secondary.activeTabId = matches[0]
+          return matches[0]
+        }
+      }
+      const fallback = (layout.detachedTabs as { tabId: string }[])
+        .find((dt) => hasTabAssignment(dt.tabId))
+      return fallback?.tabId ?? null
+    }
+
     // End-of-restore block. Runs once when all tabs are restored OR the
     // safety timeout fires. Disconnects the observer, clears the timeout,
-    // releases the restoring-from-layout guard, picks the active tab, and
-    // re-applies the persisted open/closed state.
+    // picks the active tab (authoritative), re-applies open/closed state,
+    // then releases restore/suppress guards.
     const finishRestore = () => {
       if (_restoreObserver !== null) {
         _restoreObserver.disconnect()
@@ -231,15 +267,12 @@ export async function applyLayout(layout: any) {
         clearTimeout(_restoreTimeoutHandle)
         _restoreTimeoutHandle = null
       }
-      setRestoringFromLayout(false)
-      // Prefer the persisted active secondary tab if it was saved and is
-      // still assigned. Old layouts fall back to the first detached tab.
-      const savedActive = layout.secondary?.activeTabId
-      const restored = (savedActive && hasTabAssignment(savedActive))
-        ? { tabId: savedActive }
-        : layout.detachedTabs.find((dt: any) => hasTabAssignment(dt.tabId))
-      if (restored) {
-        showSecondaryTab(restored.tabId)
+      // Prefer the persisted active secondary tab (with suffix-drift heal).
+      // Old layouts without activeTabId fall back to the first detached tab.
+      // Keep suppress true through this call so concurrent assigns cannot steal.
+      const restoredId = resolveRestoredActiveTabId()
+      if (restoredId) {
+        showSecondaryTab(restoredId)
       }
       // Safety net for the case where applyLayout is called WITHOUT a
       // prior mountSecondarySidebar(layout) — re-apply open/closed state.
@@ -268,6 +301,8 @@ export async function applyLayout(layout: any) {
           m.ensureRestoredPrimaryTab(primaryTabId)
         })
       }
+      setRestoringFromLayout(false)
+      setSuppressAutoActivation(false)
     }
 
     // Observe the main sidebar for childList + subtree — each new tab

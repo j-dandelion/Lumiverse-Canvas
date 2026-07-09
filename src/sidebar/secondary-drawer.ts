@@ -141,6 +141,13 @@ export function initSecondaryDrawer(_ctx: SpindleFrontendContext): void {
  * those without re-querying the DOM.
  */
 export async function assignToSecondary(tabId: string): Promise<void> {
+  // Snapshot at entry so fire-and-forget async tails still defer activation
+  // after finishRestore / openSecondarySidebar clear the live flags.
+  // Only "become the active secondary tab" side effects are gated — assignment,
+  // button create, reparent, and hideMainTabButton always proceed.
+  const deferActivation =
+    isRestoringFromLayout() || isSuppressAutoActivation()
+
   let tab = drawerObserver.getTab(tabId)
   let iconSvg: string | undefined
   let iconUrl: string | undefined
@@ -236,12 +243,16 @@ export async function assignToSecondary(tabId: string): Promise<void> {
           _secondaryContent.appendChild(_root)
         }
         _root.setAttribute('data-canvas-moved', resolvedId)
-        for (const _child of Array.from(_secondaryContent.children)) {
-          if (_child instanceof HTMLElement) {
-            if (_child === _root) {
-              _child.setAttribute('data-canvas-active', '')
-            } else {
-              _child.removeAttribute('data-canvas-active')
+        // During restore / suppress, leave data-canvas-active alone so
+        // finishRestore → showSecondaryTab is the sole content switcher.
+        if (!deferActivation) {
+          for (const _child of Array.from(_secondaryContent.children)) {
+            if (_child instanceof HTMLElement) {
+              if (_child === _root) {
+                _child.setAttribute('data-canvas-active', '')
+              } else {
+                _child.removeAttribute('data-canvas-active')
+              }
             }
           }
         }
@@ -259,15 +270,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // Refresh active state and header (idempotent — safe on both paths).
     // On mobile, skip state activation when the drawer wasn't opened —
     // the user stays in the source drawer; destination opens manually.
-    // Suppressed during openSecondarySidebar's re-assignment loop so
-    // the user's clicked tab stays active instead of being overwritten.
-    if (!isMobileViewport() && !_suppressAutoActivation) {
+    // Suppressed during openSecondarySidebar's re-assignment loop and
+    // layout restore so the authoritative showSecondaryTab call wins.
+    if (!isMobileViewport() && !deferActivation) {
       _activeTabId = resolvedId
       _state = 'tab_active'
       setActiveSecondaryTabId(resolvedId)
     }
     const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle && !_suppressAutoActivation) {
+    if (_headerTitle && !deferActivation) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute('data-tab-title') || resolvedId
     }
   } else {
@@ -366,13 +377,15 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       hideMainTabButton(resolvedId)
       if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
         await openSecondarySidebar()
-        _state = 'tab_active'
-        _activeTabId = resolvedId
-        setActiveSecondaryTabId(resolvedId)
+        if (!deferActivation) {
+          _state = 'tab_active'
+          _activeTabId = resolvedId
+          setActiveSecondaryTabId(resolvedId)
+        }
       }
       const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-      if (_headerTitle && !_suppressAutoActivation) _headerTitle.textContent = _title
-      if (!isMobileViewport() && !_suppressAutoActivation) {
+      if (_headerTitle && !deferActivation) _headerTitle.textContent = _title
+      if (!isMobileViewport() && !deferActivation) {
         showSecondaryTabDisplay(resolvedId)
       }
       persistLayout()
@@ -457,13 +470,17 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     }
     _root.setAttribute('data-canvas-moved', resolvedId)
 
-    // Set this root active, deactivate all other moved roots
-    for (const _child of Array.from(_secondaryContent.children)) {
-      if (_child instanceof HTMLElement) {
-        if (_child === _root) {
-          _child.setAttribute('data-canvas-active', '')
-        } else {
-          _child.removeAttribute('data-canvas-active')
+    // Set this root active, deactivate all other moved roots.
+    // During restore / suppress, leave data-canvas-active alone so
+    // finishRestore → showSecondaryTab is the sole content switcher.
+    if (!deferActivation) {
+      for (const _child of Array.from(_secondaryContent.children)) {
+        if (_child instanceof HTMLElement) {
+          if (_child === _root) {
+            _child.setAttribute('data-canvas-active', '')
+          } else {
+            _child.removeAttribute('data-canvas-active')
+          }
         }
       }
     }
@@ -491,14 +508,16 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     hideMainTabButton(resolvedId)
     if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar()
-      _state = 'tab_active'
-      _activeTabId = resolvedId
-      setActiveSecondaryTabId(resolvedId)
+      if (!deferActivation) {
+        _state = 'tab_active'
+        _activeTabId = resolvedId
+        setActiveSecondaryTabId(resolvedId)
+      }
     }
 
     // Update panel header title
     const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle && !_suppressAutoActivation) _headerTitle.textContent = _title
+    if (_headerTitle && !deferActivation) _headerTitle.textContent = _title
   }
 
   // Ensure the tab button is visually highlighted. addSecondaryTabButton
@@ -508,10 +527,10 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   // exists (assignToSecondary is async) or may not run at all if the
   // observer never fires (extensions already registered).
   //
-  // Suppressed during the openSecondarySidebar re-assignment loop
-  // (_suppressAutoActivation) so the user's clicked tab stays highlighted
-  // instead of being overwritten by the last tab in the loop.
-  if (!isMobileViewport() && !_suppressAutoActivation) {
+  // Suppressed during openSecondarySidebar re-assignment and layout restore
+  // (entry-captured deferActivation) so late async assigns cannot overwrite
+  // the authoritative active tab after finishRestore.
+  if (!isMobileViewport() && !deferActivation) {
     showSecondaryTabDisplay(resolvedId)
   }
 

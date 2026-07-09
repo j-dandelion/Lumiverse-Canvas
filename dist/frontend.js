@@ -1811,6 +1811,7 @@ function initSecondaryDrawer(_ctx) {
   });
 }
 async function assignToSecondary(tabId) {
+  const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
   let tab = drawerObserver.getTab(tabId);
   let iconSvg;
   let iconUrl;
@@ -1871,12 +1872,14 @@ async function assignToSecondary(tabId) {
           _secondaryContent.appendChild(_root);
         }
         _root.setAttribute("data-canvas-moved", resolvedId);
-        for (const _child of Array.from(_secondaryContent.children)) {
-          if (_child instanceof HTMLElement) {
-            if (_child === _root) {
-              _child.setAttribute("data-canvas-active", "");
-            } else {
-              _child.removeAttribute("data-canvas-active");
+        if (!deferActivation) {
+          for (const _child of Array.from(_secondaryContent.children)) {
+            if (_child instanceof HTMLElement) {
+              if (_child === _root) {
+                _child.setAttribute("data-canvas-active", "");
+              } else {
+                _child.removeAttribute("data-canvas-active");
+              }
             }
           }
         }
@@ -1890,13 +1893,13 @@ async function assignToSecondary(tabId) {
         updateDrawerTabVisibility();
       }
     }
-    if (!isMobileViewport() && !_suppressAutoActivation) {
+    if (!isMobileViewport() && !deferActivation) {
       _activeTabId = resolvedId;
       _state = "tab_active";
       setActiveSecondaryTabId(resolvedId);
     }
     const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !_suppressAutoActivation) {
+    if (_headerTitle && !deferActivation) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
     }
   } else {
@@ -1939,14 +1942,16 @@ async function assignToSecondary(tabId) {
       hideMainTabButton(resolvedId);
       if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
         await openSecondarySidebar();
-        _state = "tab_active";
-        _activeTabId = resolvedId;
-        setActiveSecondaryTabId(resolvedId);
+        if (!deferActivation) {
+          _state = "tab_active";
+          _activeTabId = resolvedId;
+          setActiveSecondaryTabId(resolvedId);
+        }
       }
       const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-      if (_headerTitle2 && !_suppressAutoActivation)
+      if (_headerTitle2 && !deferActivation)
         _headerTitle2.textContent = _title2;
-      if (!isMobileViewport() && !_suppressAutoActivation) {
+      if (!isMobileViewport() && !deferActivation) {
         showSecondaryTab(resolvedId);
       }
       persistLayout();
@@ -1981,12 +1986,14 @@ async function assignToSecondary(tabId) {
       _secondaryContent.appendChild(_root);
     }
     _root.setAttribute("data-canvas-moved", resolvedId);
-    for (const _child of Array.from(_secondaryContent.children)) {
-      if (_child instanceof HTMLElement) {
-        if (_child === _root) {
-          _child.setAttribute("data-canvas-active", "");
-        } else {
-          _child.removeAttribute("data-canvas-active");
+    if (!deferActivation) {
+      for (const _child of Array.from(_secondaryContent.children)) {
+        if (_child instanceof HTMLElement) {
+          if (_child === _root) {
+            _child.setAttribute("data-canvas-active", "");
+          } else {
+            _child.removeAttribute("data-canvas-active");
+          }
         }
       }
     }
@@ -2005,15 +2012,17 @@ async function assignToSecondary(tabId) {
     hideMainTabButton(resolvedId);
     if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
       await openSecondarySidebar();
-      _state = "tab_active";
-      _activeTabId = resolvedId;
-      setActiveSecondaryTabId(resolvedId);
+      if (!deferActivation) {
+        _state = "tab_active";
+        _activeTabId = resolvedId;
+        setActiveSecondaryTabId(resolvedId);
+      }
     }
     const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !_suppressAutoActivation)
+    if (_headerTitle && !deferActivation)
       _headerTitle.textContent = _title;
   }
-  if (!isMobileViewport() && !_suppressAutoActivation) {
+  if (!isMobileViewport() && !deferActivation) {
     showSecondaryTab(resolvedId);
   }
   persistLayout();
@@ -5410,6 +5419,8 @@ function cancelApplyLayoutInterval() {
     clearTimeout(_restoreTimeoutHandle);
     _restoreTimeoutHandle = null;
   }
+  setRestoringFromLayout(false);
+  setSuppressAutoActivation(false);
 }
 function isTabFullyRestored(tabId) {
   if (!hasTabAssignment(tabId))
@@ -5449,6 +5460,7 @@ async function applyLayout(layout) {
       return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
     };
     setRestoringFromLayout(true);
+    setSuppressAutoActivation(true);
     const attemptRestore = () => {
       let remaining = 0;
       for (let i = 0;i < layout.detachedTabs.length; i++) {
@@ -5460,15 +5472,18 @@ async function applyLayout(layout) {
         remaining++;
         const tabs = getDrawerTabs();
         let tab = tabs.find((t) => t.id === dt.tabId);
-        let usedFallback = false;
         if (!tab) {
           const storedPrefix = stripSuffix(dt.tabId);
           const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
           if (candidates.length === 1) {
             tab = candidates[0];
-            usedFallback = true;
             dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
+            const prevId = dt.tabId;
             layout.detachedTabs[i] = { ...dt, tabId: tab.id };
+            const savedActive = layout.secondary?.activeTabId;
+            if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
+              layout.secondary = { ...layout.secondary, activeTabId: tab.id };
+            }
           } else if (candidates.length > 1) {
             dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
           }
@@ -5493,6 +5508,22 @@ async function applyLayout(layout) {
       }
       return remaining;
     };
+    const resolveRestoredActiveTabId = () => {
+      const saved = layout.secondary?.activeTabId;
+      if (saved) {
+        if (hasTabAssignment(saved))
+          return saved;
+        const prefix = stripSuffix(saved);
+        const matches = layout.detachedTabs.map((dt) => dt.tabId).filter((id) => hasTabAssignment(id) && stripSuffix(id) === prefix);
+        if (matches.length === 1) {
+          if (layout.secondary)
+            layout.secondary.activeTabId = matches[0];
+          return matches[0];
+        }
+      }
+      const fallback = layout.detachedTabs.find((dt) => hasTabAssignment(dt.tabId));
+      return fallback?.tabId ?? null;
+    };
     const finishRestore = () => {
       if (_restoreObserver !== null) {
         _restoreObserver.disconnect();
@@ -5502,11 +5533,9 @@ async function applyLayout(layout) {
         clearTimeout(_restoreTimeoutHandle);
         _restoreTimeoutHandle = null;
       }
-      setRestoringFromLayout(false);
-      const savedActive = layout.secondary?.activeTabId;
-      const restored = savedActive && hasTabAssignment(savedActive) ? { tabId: savedActive } : layout.detachedTabs.find((dt) => hasTabAssignment(dt.tabId));
-      if (restored) {
-        showSecondaryTab(restored.tabId);
+      const restoredId = resolveRestoredActiveTabId();
+      if (restoredId) {
+        showSecondaryTab(restoredId);
       }
       const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
       const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
@@ -5528,6 +5557,8 @@ async function applyLayout(layout) {
           m.ensureRestoredPrimaryTab(primaryTabId);
         });
       }
+      setRestoringFromLayout(false);
+      setSuppressAutoActivation(false);
     };
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
     if (sidebar) {

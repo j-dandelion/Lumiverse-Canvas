@@ -74,7 +74,13 @@ import {
 import { __setSecondaryWrapperForTest } from '../../sidebar/secondary'
 import { __setDrawerTabsForTest, __setStoreSnapshotForTest } from '../../store'
 import { applyLayout, setRestoreTimeoutMs, cancelApplyLayoutInterval } from '../apply'
-import { isRestoringFromLayout, setRestoringFromLayout } from '../../sidebar/secondary-drawer'
+import {
+  isRestoringFromLayout,
+  setRestoringFromLayout,
+  isSuppressAutoActivation,
+  setSuppressAutoActivation,
+} from '../../sidebar/secondary-drawer'
+import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../../tabs/active-tab'
 
 // =====================================================================
 // DOM builders
@@ -233,6 +239,8 @@ function cleanup() {
   cancelApplyLayoutInterval()
   setRestoreTimeoutMs(10000)
   setRestoringFromLayout(false)
+  setSuppressAutoActivation(false)
+  setActiveSecondaryTabId(null)
 }
 
 // Wait for microtasks (assignToSecondary is async — reparenting happens after await)
@@ -381,7 +389,7 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 }
 
 // =====================================================================
-// T5: cancelApplyLayoutInterval stops an in-flight restore
+// T5: cancelApplyLayoutInterval stops an in-flight restore and clears guards
 // =====================================================================
 {
   setupEnv([])
@@ -394,14 +402,17 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 
   await applyLayout(layout)
   assert(isRestoringFromLayout(), 'T5: guard is true (restore in flight)')
+  assert(isSuppressAutoActivation(), 'T5: suppress is true during restore')
 
   cancelApplyLayoutInterval()
 
-  // Wait past the safety timeout — the timeout should NOT fire
-  await new Promise(resolve => setTimeout(resolve, 150))
+  // Cancel clears restore/suppress so teardown cannot leave activation deferred
+  assert(!isRestoringFromLayout(), 'T5: restoring guard cleared after cancel')
+  assert(!isSuppressAutoActivation(), 'T5: suppress cleared after cancel')
 
-  // Guard is still true (cancel doesn't call finishRestore)
-  assert(isRestoringFromLayout(), 'T5: guard still true after cancel')
+  // Wait past the safety timeout — the timeout should NOT re-arm restore
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert(!isRestoringFromLayout(), 'T5: still cleared after timeout window')
 
   cleanup()
 }
@@ -521,6 +532,103 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
     assert(obs.options?.childList === true, 'T10: observer watches childList')
     assert(obs.options?.subtree === true, 'T10: observer watches subtree')
   }
+
+  cleanup()
+}
+
+// =====================================================================
+// T11: activeTabId suffix-drift — saved :0 resolves to live :1
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:lore:1', title: 'Lorebook' },
+    { id: 'tab:ext:1', title: 'My Tab' },
+  ])
+  setRestoreTimeoutMs(50)
+
+  const layout = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:ext:0' },
+    detachedTabs: [
+      { tabId: 'tab:lore:0' },
+      { tabId: 'tab:ext:0' },
+    ],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  assertEqual(getActiveSecondaryTabId(), 'tab:ext:1', 'T11: active is healed ext:1 not first detached lore')
+  assertEqual(layout.secondary.activeTabId, 'tab:ext:1', 'T11: layout.secondary.activeTabId self-healed')
+  assert(!isRestoringFromLayout(), 'T11: guard cleared')
+  assert(!isSuppressAutoActivation(), 'T11: suppress cleared')
+
+  cleanup()
+}
+
+// =====================================================================
+// T12: Missing activeTabId falls back to first assigned detached
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:lore:1', title: 'Lorebook' },
+    { id: 'tab:ext:1', title: 'My Tab' },
+  ])
+  setRestoreTimeoutMs(50)
+
+  const layout = {
+    secondary: { open: true, width: 300 },
+    detachedTabs: [
+      { tabId: 'tab:lore:1' },
+      { tabId: 'tab:ext:1' },
+    ],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  assertEqual(getActiveSecondaryTabId(), 'tab:lore:1', 'T12: fallback active is first assigned detached')
+  assert(!isRestoringFromLayout(), 'T12: guard cleared')
+
+  cleanup()
+}
+
+// =====================================================================
+// T13: Saved active wins over last-assigned during multi-tab restore
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:lore:1', title: 'Lorebook' },
+    { id: 'tab:ext:1', title: 'My Tab' },
+  ])
+  setRestoreTimeoutMs(50)
+
+  // First in list is Lorebook (would win last-assign without suppress);
+  // saved active is the second tab.
+  const layout = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:ext:1' },
+    detachedTabs: [
+      { tabId: 'tab:lore:1' },
+      { tabId: 'tab:ext:1' },
+    ],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  assertEqual(getActiveSecondaryTabId(), 'tab:ext:1', 'T13: final active matches saved, not last assign')
+  assert(!isSuppressAutoActivation(), 'T13: suppress cleared after finish')
 
   cleanup()
 }
