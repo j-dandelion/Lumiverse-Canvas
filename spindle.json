@@ -1,0 +1,13 @@
+{
+  "version": "1.7.2.9",
+  "name": "Canvas",
+  "identifier": "canvas",
+  "author": "Creature",
+  "github": "https://github.com/j-dandelion/Lumiverse-Canvas",
+  "homepage": "https://github.com/j-dandelion/Lumiverse-Canvas",
+  "description": "Adds a second sidebar for organizing extension tabs, with chat reflow and drag-to-resize.",
+  "permissions": [],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "0.1.0"
+}
