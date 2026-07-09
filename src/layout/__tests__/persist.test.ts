@@ -9,6 +9,11 @@ function assert(cond: unknown, msg: string) {
 // snapshotLayout depends on DOM state (getMainDrawerWidth, isSecondarySidebarOpen,
 // document.documentElement.style). In headless bun, document may not exist.
 import { snapshotLayout } from '../persist'
+import {
+  CANVAS_MAIN_ACTIVE_CLASS,
+  CANVAS_MAIN_OPEN_CLASS,
+  MAIN_MIRROR_WIDTH_VAR,
+} from '../../sidebar/styles'
 
 try {
   const snap = snapshotLayout()
@@ -33,6 +38,31 @@ try {
   assert(Array.isArray(snap.detachedTabs), 'detachedTabs is an array')
 } catch (e) {
   console.log(`SKIP: snapshotLayout requires DOM — ${e}`)
+}
+
+// --- Canvas main-mirror mode: primary open/width from document markers + CSS var ---
+try {
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.classList.add(CANVAS_MAIN_ACTIVE_CLASS)
+    document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS)
+    document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, '333px')
+    const snapOpen = snapshotLayout()
+    assert(snapOpen.primary.open === true, 'canvas-main snapshot open=true from open class')
+    assert(snapOpen.primary.width === 333, 'canvas-main snapshot width from MAIN_MIRROR_WIDTH_VAR')
+
+    document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
+    document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, '280px')
+    const snapClosed = snapshotLayout()
+    assert(snapClosed.primary.open === false, 'canvas-main snapshot open=false without open class')
+    assert(snapClosed.primary.width === 280, 'canvas-main snapshot width updates with CSS var')
+
+    document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS)
+    document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR)
+  } else {
+    console.log('SKIP: canvas-main snapshotLayout — no document')
+  }
+} catch (e) {
+  console.log(`SKIP: canvas-main snapshotLayout — ${e}`)
 }
 
 // --- loadSavedLayout returns a Promise ---

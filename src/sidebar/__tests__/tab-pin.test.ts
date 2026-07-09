@@ -248,8 +248,9 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   assertEqual(stubTabList.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C1: borderLeft')
   assertEqual(stubTabList.style.borderRight, 'none', 'C1: borderRight')
   assertEqual(stubDrawer.style.flexDirection, '', 'C1: drawer flex reset')
-  assertEqual(stubPanel.style.borderRight, 'none', 'C1: panel borderRight')
-  assertEqual(stubPanel.style.borderLeft, 'none', 'C1: panel borderLeft')
+  // Secondary on right → chat on left → chat-facing panel border on left.
+  assertEqual(stubPanel.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C1: panel chat-facing borderLeft')
+  assertEqual(stubPanel.style.borderRight, 'none', 'C1: panel borderRight none')
   assert(stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C1: pinned class')
 }
 
@@ -262,6 +263,9 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   assertEqual(stubTabList.style.right, '', 'C2: right empty')
   assertEqual(stubTabList.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C2: borderRight')
   assertEqual(stubTabList.style.borderLeft, 'none', 'C2: borderLeft')
+  // Secondary on left → chat on right → chat-facing panel border on right.
+  assertEqual(stubPanel.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C2: panel chat-facing borderRight')
+  assertEqual(stubPanel.style.borderLeft, 'none', 'C2: panel borderLeft none')
   assert(stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C2: pinned class')
 }
 

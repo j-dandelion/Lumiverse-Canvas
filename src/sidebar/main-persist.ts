@@ -46,6 +46,7 @@
 import { getMainDrawer } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
+import { getSettings } from '../settings/state'
 import { dlog } from '../debug/log'
 import { isPointerResizeActive } from '../resize/handles'
 import { enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
@@ -163,14 +164,25 @@ export function findDrawerToggleButton(wrapper: HTMLElement): HTMLButtonElement 
  */
 function pushCurrentState() {
   if (!_wrapper) return
-  const open = readWrapperOpen(_wrapper)
+  // Canvas main-mirror owns open/close; host wrapperOpen is headless and
+  // must not clobber primary.open. Still track active tabId from host.
+  const canvasMain = !!getSettings().keepTabListVisible
+    && typeof window !== 'undefined'
+    && window.innerWidth > 600
+  const open = canvasMain
+    ? document.documentElement.classList.contains('sidebar-ux-canvas-main-open')
+    : readWrapperOpen(_wrapper)
   const tabId = _sidebar ? readActiveTabId(_sidebar) : null
   if (open === _lastSeenOpen && tabId === _lastSeenTabId) return
   _lastSeenOpen = open
   _lastSeenTabId = tabId
   setMainDrawerState(open, tabId)
-  
-  persistOpenState()
+  // Open transitions are persisted by open/closeCanvasMainDrawer in mirror
+  // mode; host mode still needs the watcher write. Tab-only changes always
+  // persist so primary.tabId stays fresh.
+  if (!canvasMain || tabId !== null) {
+    persistOpenState()
+  }
 }
 
 /**
@@ -336,6 +348,57 @@ export function restoreMainDrawerFromDom(
   const clampedWidth = (typeof targetWidthPx === 'number' && targetWidthPx > 0)
     ? clampSidebarWidth(targetWidthPx)
     : null
+
+  // Canvas main-mirror owns open/close + width when keepTabListVisible is on
+  // (desktop). Host wrapperOpen / --drawer-panel-w are headless and must not
+  // drive restore — apply MAIN_MIRROR_WIDTH_VAR and open/close the shell.
+  const keepVisible = !!getSettings().keepTabListVisible
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
+  if (keepVisible && !isMobile) {
+    void import('./main-mirror-drawer').then((m) => {
+      if (_stopped) return
+      if (clampedWidth !== null) {
+        m.applyMainMirrorRestoredWidth(clampedWidth)
+      }
+      if (targetOpen) {
+        m.openCanvasMainDrawer()
+        if (targetTabId) {
+          setTimeout(() => {
+            if (_stopped) return
+            const sidebar =
+              _sidebar
+              || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+            let tabBtn =
+              sidebar?.querySelector(
+                `button[data-tab-id="${CSS.escape(targetTabId)}"]`,
+              ) as HTMLButtonElement | null
+            if (!tabBtn) {
+              tabBtn = sidebar?.querySelector(
+                `button[title="${CSS.escape(targetTabId)}"]`,
+              ) as HTMLButtonElement | null
+            }
+            // Prefer mirror button if present (forwards .click() to host).
+            const mirrorBtn = document.querySelector(
+              `.sidebar-ux-main-tab-mirror-btn[data-tab-id="${CSS.escape(targetTabId)}"],`
+              + `.sidebar-ux-main-tab-mirror-btn[title="${CSS.escape(targetTabId)}"]`,
+            ) as HTMLButtonElement | null
+            const clickTarget = mirrorBtn || tabBtn
+            if (clickTarget) {
+              try {
+                clickTarget.click()
+              } catch (err) {
+                dlog(`main-persist restore (mirror): tab click threw: ${err}`)
+              }
+            }
+          }, 100)
+        }
+      } else {
+        m.closeCanvasMainDrawer()
+      }
+    })
+    unsuppressMainDrawer()
+    return
+  }
 
   const currentOpen = readWrapperOpen(wrapper)
   if (currentOpen === targetOpen) {

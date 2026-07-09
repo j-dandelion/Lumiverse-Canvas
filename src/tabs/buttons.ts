@@ -23,6 +23,7 @@ import {
   openSecondarySidebar,
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
+import { getSettings } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
@@ -300,6 +301,12 @@ export function removeSecondaryTabButton(tabId: string): void {
 export function updateDrawerTabVisibility(): void {
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
   if (!drawerTab) return
+  // keepTabListVisible: pinned tab strip is the open/close chrome — hide the
+  // edge drawer-tab toggle (main mirror mounts with display:none already).
+  if (getSettings().keepTabListVisible) {
+    drawerTab.style.display = 'none'
+    return
+  }
   const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === 'secondary')
   drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
 }

@@ -23,6 +23,11 @@ import { getDrawerTabs } from '../store'
 import {
   getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR,
 } from '../sidebar/secondary'
+import {
+  CANVAS_MAIN_ACTIVE_CLASS,
+  CANVAS_MAIN_OPEN_CLASS,
+  MAIN_MIRROR_WIDTH_VAR,
+} from '../sidebar/styles'
 import { getTabAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getSettings, cancelSettingsSave } from '../settings/state'
@@ -121,6 +126,38 @@ export function setMainDrawerState(open: boolean, tabId: string | null): void {
 }
 
 /**
+ * When keepTabListVisible owns main chrome, primary open/width live on the
+ * Canvas main-mirror shell (document markers + CSS var), not the headless
+ * host wrapper. Reading host open/width would freeze stale/wrong values.
+ */
+function isCanvasMainModeDom(): boolean {
+  try {
+    return typeof document !== 'undefined'
+      && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)
+  } catch {
+    return false
+  }
+}
+
+function readPrimaryOpen(): boolean {
+  if (isCanvasMainModeDom()) {
+    return document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS)
+  }
+  return _mainDrawerOpen
+}
+
+function readPrimaryWidth(): number {
+  if (isCanvasMainModeDom()) {
+    const fromVar = parseFloat(
+      document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR),
+    )
+    if (isFinite(fromVar) && fromVar > 0) return fromVar
+  }
+  const hostW = getMainDrawerWidth()
+  return hostW > 0 ? hostW : 420
+}
+
+/**
  * Build the current layout snapshot from in-memory state. Pure — no side effects.
  */
 export function snapshotLayout(): any {
@@ -129,12 +166,10 @@ export function snapshotLayout(): any {
   const result = {
     version: CANVAS_VERSION,
     primary: {
-      // Read from the module-level cache populated by the watcher. Falls
-      // back to isMainDrawerOpen() (Zustand snapshot) at module init
-      // time, before the watcher has had a chance to fire its first
-      // event. After the first event, the cache is authoritative.
-      open: _mainDrawerOpen,
-      width: getMainDrawerWidth(),
+      // Host path: module-level cache from main-persist watchers.
+      // Canvas main-mirror path: document open class + MAIN_MIRROR_WIDTH_VAR.
+      open: readPrimaryOpen(),
+      width: readPrimaryWidth(),
       tabId: _mainDrawerTabId,
     },
     secondary: {

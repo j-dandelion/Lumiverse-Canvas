@@ -168,7 +168,7 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(stubTabList.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C2: secondary borderRight set')
   assertEqual(stubTabList.style.borderLeft, 'none', 'C2: secondary borderLeft = none')
   // Toggle ON, secondary on left of screen → chat-side = right
-  assertEqual(panel.style.borderRight, '1px solid var(--lumiverse-bg-070)', 'C2: panel borderRight = bg-070 (toggle on, secondary left)')
+  assertEqual(panel.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C2: panel borderRight = primary-020 (toggle on, secondary left)')
   assertEqual(panel.style.borderLeft, 'none', 'C2: panel borderLeft = none (toggle on)')
 }
 
@@ -209,7 +209,7 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(stubTabList.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C4: secondary borderLeft set')
   assertEqual(stubTabList.style.borderRight, 'none', 'C4: secondary borderRight = none')
   // Toggle ON, secondary on right of screen → chat-side = left
-  assertEqual(panel.style.borderLeft, '1px solid var(--lumiverse-bg-070)', 'C4: panel borderLeft = bg-070 (toggle on, secondary right)')
+  assertEqual(panel.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C4: panel borderLeft = primary-020 (toggle on, secondary right)')
   assertEqual(panel.style.borderRight, 'none', 'C4: panel borderRight = none (toggle on)')
 }
 
@@ -337,9 +337,9 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(stubSecondaryDrawer.style.flexDirection, 'row', 'C12: fallback drawer flex-direction = row')
   assertEqual(stubSecondaryTabList.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C12: fallback borderRight set')
   assertEqual(stubSecondaryTabList.style.borderLeft, 'none', 'C12: fallback borderLeft = none')
-  // Toggle ON: panel gets bg-070 border on chat-facing side
+  // Toggle ON: panel gets primary-020 border on chat-facing side
   // (row → panel on right → chat is to the right of panel → border on panel.right)
-  assertEqual(stubSecondaryPanel.style.borderRight, '1px solid var(--lumiverse-bg-070)', 'C12: toggle on — panel borderRight = bg-070')
+  assertEqual(stubSecondaryPanel.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C12: toggle on — panel borderRight = primary-020')
   assertEqual(stubSecondaryPanel.style.borderLeft, 'none', 'C12: toggle on — panel borderLeft = none')
 
   __setSecondaryWrapperForTest(null)
@@ -387,7 +387,7 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(mainTabListStub.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C8: main borderRight set')
   assertEqual(mainTabListStub.style.borderLeft, 'none', 'C8: main borderLeft = none')
   // Toggle ON, main on left of screen → chat-side = right
-  assertEqual(mainPanelStub.style.borderRight, '1px solid var(--lumiverse-bg-070)', 'C8: main panel borderRight = bg-070 (toggle on, main left)')
+  assertEqual(mainPanelStub.style.borderRight, '1px solid var(--lumiverse-primary-020)', 'C8: main panel borderRight = primary-020 (toggle on, main left)')
   assertEqual(mainPanelStub.style.borderLeft, 'none', 'C8: main panel borderLeft = none (toggle on)')
 }
 
@@ -433,7 +433,7 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(mainTabListStub.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C10: main borderLeft set')
   assertEqual(mainTabListStub.style.borderRight, 'none', 'C10: main borderRight = none')
   // Toggle ON, main on right of screen → chat-side = left
-  assertEqual(mainPanelStub.style.borderLeft, '1px solid var(--lumiverse-bg-070)', 'C10: main panel borderLeft = bg-070 (toggle on, main right)')
+  assertEqual(mainPanelStub.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C10: main panel borderLeft = primary-020 (toggle on, main right)')
   assertEqual(mainPanelStub.style.borderRight, 'none', 'C10: main panel borderRight = none (toggle on)')
 }
 

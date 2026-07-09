@@ -164,6 +164,25 @@ function bumpResizeHandles(): void {
   void import('../resize/handles').then((m) => m.mountResizeHandles())
 }
 
+function persistCanvasMainOpenState(): void {
+  // Same write path as secondary open/close — snapshot reads open class +
+  // MAIN_MIRROR_WIDTH_VAR while canvas-main mode is active.
+  void import('../layout/persist').then((m) => m.persistOpenState())
+}
+
+/**
+ * Apply a restored primary width to the mirror CSS var and, if closed,
+ * recompute the off-screen transform so the shell fully hides at the new width.
+ */
+export function applyMainMirrorRestoredWidth(widthPx: number): void {
+  const w = Math.ceil(clampSidebarWidth(widthPx))
+  if (!(w > 0)) return
+  document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w}px`)
+  if (_shell && !_open) {
+    _shell.wrapper.style.transform = `translateX(${closedTransformPx(_shell.side, w)}px)`
+  }
+}
+
 export function openCanvasMainDrawer(): void {
   if (!_shell || !_active) return
   ensureHostContentParked()
@@ -180,6 +199,7 @@ export function openCanvasMainDrawer(): void {
   animateWrapper(_shell.wrapper, 0)
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
   bumpReflow()
+  persistCanvasMainOpenState()
 }
 
 export function closeCanvasMainDrawer(): void {
@@ -195,6 +215,7 @@ export function closeCanvasMainDrawer(): void {
   clearMainMirrorActiveHighlights()
   // Content stays parked in the shell while mode is active (secondary parity).
   bumpReflow()
+  persistCanvasMainOpenState()
 }
 
 /** Clear active highlight on main mirror tab buttons (secondary close parity). */
@@ -292,7 +313,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     initialWidth: seedW,
     initialOpen: opts.initialOpen,
     title: 'Drawer',
-    drawerTabDisplay: 'flex',
+    // keepTabListVisible: pinned tab strip is the open/close chrome — no edge toggle.
+    drawerTabDisplay: 'none',
     onDrawerTabClick: () => {
       if (_open) closeCanvasMainDrawer()
       else openCanvasMainDrawer()

@@ -63,7 +63,9 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 ### `snapshotLayout()`
 
 Builds the current layout from in-memory state:
-- `primary`: reads from module-level cache (`_mainDrawerOpen`, `_mainDrawerTabId`) + DOM measurement for width
+- `primary`:
+  - **Host main** (default): module-level cache (`_mainDrawerOpen`, `_mainDrawerTabId`) + `getMainDrawerWidth()`
+  - **Canvas main mirror** (`keepTabListVisible` desktop): `html.sidebar-ux-canvas-main-open` for open + `--sidebar-ux-main-mirror-w` for width (host wrapper is headless; measuring it freezes stale open/width)
 - `secondary`: reads `isSecondarySidebarOpen()`, CSS variable for width, `getActiveSecondaryTabId()` for active tab
 - `detachedTabs`: maps secondary assignments to `{ tabId, tabTitle, sidebar }`
 
@@ -80,10 +82,12 @@ Drains both layout and settings debounce timers, posts a single merged SAVE_LAYO
 ### `applyMainDrawer(layout)`
 
 Restores the main drawer's open/close + active tab. Delegates to `restoreMainDrawerFromDom()` which:
-1. Compares current state with saved state
-2. If open target: clicks the first tab button to open the drawer
-3. If closed target: clicks the drawer toggle button to close
-4. Restores width by setting `drawer.style.width` and `--drawer-panel-w`
+1. **Canvas main mirror** (`keepTabListVisible`): sets `--sidebar-ux-main-mirror-w`, calls `openCanvasMainDrawer` / `closeCanvasMainDrawer`, clicks host/mirror tab for content
+2. **Host main** (default):
+   - Compares current state with saved state
+   - If open target: clicks the tab button to open the drawer
+   - If closed target: clicks the drawer toggle button to close
+   - Restores width via `drawer.style.width` and `--drawer-panel-w`
 
 ### Main Drawer State Cache
 

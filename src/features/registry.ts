@@ -37,6 +37,7 @@ import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
 import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
+import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -375,16 +376,19 @@ const keepTabListVisibleFeature: CanvasFeature = {
   mount(_ctx, _layout) {
     reconcileTabListPin()
     reconcileMainTabListPin()
+    updateDrawerTabVisibility()
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
       applyMainTabListPin(false, { force: true })
+      updateDrawerTabVisibility()
       updateChatReflow()
     }
   },
   apply(_prev, next) {
     applyTabListPin(!!next.keepTabListVisible, { force: true })
     applyMainTabListPin(!!next.keepTabListVisible, { force: true })
+    updateDrawerTabVisibility()
     updateChatReflow()
   },
 }

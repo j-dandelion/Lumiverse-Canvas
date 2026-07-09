@@ -46,6 +46,8 @@ const PIN_Z_INDEX = '10000'
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
+/** Panel edge facing the chat column (outer-edge / keep-tabs-visible). */
+const CHAT_FACING_BORDER = '1px solid var(--lumiverse-primary-020)'
 
 /** Module state for secondary pin reparent / restore. Cleared on unpin. */
 let _pinHost: HTMLElement | null = null
@@ -238,23 +240,22 @@ function applyFlexAndBorder(
  *  drawer is on, NOT on the toggle: a drawer on the left of the screen
  *  has chat to its right, so the panel's chat-facing edge is always its
  *  right side (and vice versa).
- *  - Toggle ON: write the bg-070 border on the chat-facing side.
- *  - Toggle OFF: clear the border (the existing primary-020 border
- *    between tab list and panel is the only divider needed when
- *    controls are on the inner edge). */
+ *  - Enabled (moveControlsToOuterEdge and/or keepTabListVisible): write
+ *    CHAT_FACING_BORDER on the chat-facing side.
+ *  - Disabled: clear the border (the primary-020 border between tab list
+ *    and panel is the only divider needed when controls are on the inner edge). */
 function applyPanelChatBorder(
   panel: StyledElement,
   drawerSide: 'left' | 'right',
   enabled: boolean,
 ): void {
   const chatSide: 'left' | 'right' = drawerSide === 'left' ? 'right' : 'left'
-  const borderVal = '1px solid var(--lumiverse-bg-070)'
   if (enabled) {
     if (chatSide === 'right') {
-      setIfDifferent(panel.style, 'borderRight', borderVal)
+      setIfDifferent(panel.style, 'borderRight', CHAT_FACING_BORDER)
       setIfDifferent(panel.style, 'borderLeft', 'none')
     } else {
-      setIfDifferent(panel.style, 'borderLeft', borderVal)
+      setIfDifferent(panel.style, 'borderLeft', CHAT_FACING_BORDER)
       setIfDifferent(panel.style, 'borderRight', 'none')
     }
   } else {
@@ -265,6 +266,12 @@ function applyPanelChatBorder(
   setIfDifferent(panel.style, 'borderBottom', 'none')
 }
 
+/** Chat-facing panel border when tabs sit on the outer edge (explicit toggle
+ *  or keep-tabs-visible pin, which always parks the strip at the screen edge). */
+function wantsChatFacingPanelBorder(outerEdgeEnabled: boolean): boolean {
+  return outerEdgeEnabled || !!getSettings().keepTabListVisible
+}
+
 export function applyTabListPosition(
   enabled: boolean,
   opts?: ElementOpts,
@@ -272,6 +279,7 @@ export function applyTabListPosition(
   if (isMobileViewport()) return
 
   const side = getMainDrawerSide()
+  const chatBorder = wantsChatFacingPanelBorder(enabled)
 
   // --- Secondary drawer ---
   // Secondary is on the opposite side of the main.
@@ -280,21 +288,23 @@ export function applyTabListPosition(
   const panel = opts?.panel ?? getSecondaryPanel()
 
   if (drawer && tabList) {
-    // Pin owns secondary chrome while active — skip flex/border writes that
-    // would fight the pinned strip (still apply main-drawer half below).
+    // Pin owns secondary tab-list flex/chrome while active — skip those
+    // writes (would fight the pinned strip). Panel chat-facing border is
+    // still applied: pin used to clear it and left secondary without an
+    // edge against the chat column.
     // StyledElement test stubs may omit classList; treat that as unpinned.
     const pinned =
       typeof (tabList as HTMLElement).classList?.contains === 'function' &&
       (tabList as HTMLElement).classList.contains(TAB_LIST_PINNED_CLASS)
+    // drawerSide for secondary is opposite of main.
+    const secondaryDrawerSide = side === 'left' ? 'right' : 'left'
     if (!pinned) {
-      // drawerSide for secondary is opposite of main.
-      const secondaryDrawerSide = side === 'left' ? 'right' : 'left'
       const defaultFlex = secondaryDrawerSide === 'left' ? 'row-reverse' : 'row'
       const toggledFlex = secondaryDrawerSide === 'left' ? 'row' : 'row-reverse'
       const wantFlex = enabled ? toggledFlex : defaultFlex
       applyFlexAndBorder(drawer, tabList, wantFlex)
-      if (panel) applyPanelChatBorder(panel, secondaryDrawerSide, enabled)
     }
+    if (panel) applyPanelChatBorder(panel, secondaryDrawerSide, chatBorder)
   }
 
   // --- Main drawer ---
@@ -308,7 +318,7 @@ export function applyTabListPosition(
     const mainToggledFlex = side === 'left' ? 'row' : 'row-reverse'
     const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex
     applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex)
-    if (mainPanel) applyPanelChatBorder(mainPanel, side, enabled)
+    if (mainPanel) applyPanelChatBorder(mainPanel, side, chatBorder)
   }
 }
 
@@ -561,9 +571,11 @@ function pinTabList(tabList: HTMLElement): void {
   if (drawer) {
     setIfDifferent(drawer.style, 'flexDirection', '')
   }
+  // Keep chat-facing panel border while pin owns the tab strip (same edge
+  // as moveControlsToOuterEdge). applyTabListPosition skips flex on pinned
+  // lists but still reapplies this; set here so first pin is correct.
   if (panel) {
-    setIfDifferent(panel.style, 'borderRight', 'none')
-    setIfDifferent(panel.style, 'borderLeft', 'none')
+    applyPanelChatBorder(panel, side, true)
   }
 }
 
