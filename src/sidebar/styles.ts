@@ -13,11 +13,14 @@ export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 /** Canvas main mirror drawer width (keepTabListVisible desktop mode). */
 export const MAIN_MIRROR_WIDTH_VAR = '--sidebar-ux-main-mirror-w'
 
-/** Class on host main wrapper while Canvas owns main chrome. */
+/** @deprecated Host class hide was removed (fought React). Use document markers. */
 export const HOST_MAIN_HIDDEN_CLASS = 'sidebar-ux-host-main-hidden'
 
 /** DocumentElement marker while main mirror mode is active. */
 export const CANVAS_MAIN_ACTIVE_CLASS = 'sidebar-ux-canvas-main-active'
+
+/** DocumentElement marker while Canvas main shell is open (reveal host panel content). */
+export const CANVAS_MAIN_OPEN_CLASS = 'sidebar-ux-canvas-main-open'
 
 /** Secondary tab-strip width in px (construction, pin, spacer, reflow). */
 export const TAB_LIST_WIDTH_PX = 56

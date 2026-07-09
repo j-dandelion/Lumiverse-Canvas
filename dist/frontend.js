@@ -580,7 +580,7 @@ function injectDrawerTabStyles() {
     }
   `);
 }
-var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "--sidebar-ux-main-mirror-w", HOST_MAIN_HIDDEN_CLASS = "sidebar-ux-host-main-hidden", CANVAS_MAIN_ACTIVE_CLASS = "sidebar-ux-canvas-main-active", TAB_LIST_WIDTH_PX = 56, SECONDARY_MOBILE_CSS = `
+var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "--sidebar-ux-main-mirror-w", CANVAS_MAIN_ACTIVE_CLASS = "sidebar-ux-canvas-main-active", CANVAS_MAIN_OPEN_CLASS = "sidebar-ux-canvas-main-open", TAB_LIST_WIDTH_PX = 56, SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
@@ -1277,14 +1277,14 @@ function applyMainMirrorDrawer(enabled, opts) {
     teardownMainMirror();
     return;
   }
-  if (_active && !opts?.force) {
-    ensureHostHidden();
+  const side = getMainDrawerSide();
+  if (_active && _shell && _mountedSide === side && !opts?.force) {
     return;
   }
-  if (_active && opts?.force) {
+  if (_active && (_mountedSide !== side || opts?.force)) {
     const wasOpen = _open;
     teardownMainMirror({ keepWidthVar: true });
-    mountMainMirror({ initialOpen: opts.initialOpen ?? wasOpen });
+    mountMainMirror({ initialOpen: opts?.initialOpen ?? wasOpen });
     return;
   }
   mountMainMirror({
@@ -1297,10 +1297,17 @@ function reconcileMainMirrorDrawer(opts) {
     return;
   }
   const on = !!getSettings().keepTabListVisible;
-  applyMainMirrorDrawer(on, {
-    force: true,
+  if (!on) {
+    applyMainMirrorDrawer(false, { force: true });
+    return;
+  }
+  applyMainMirrorDrawer(true, {
+    force: false,
     initialOpen: opts?.initialOpen
   });
+  if (opts?.initialOpen !== undefined && _active && !_open && opts.initialOpen) {
+    openCanvasMainDrawer();
+  }
 }
 function bumpReflow() {
   Promise.resolve().then(() => (init_reflow(), exports_reflow)).then((m) => m.updateChatReflow());
@@ -1312,12 +1319,13 @@ function openCanvasMainDrawer() {
   if (!_shell || !_active)
     return;
   if (_open) {
-    schedulePortalSync();
+    scheduleContentLayout();
     return;
   }
   animateWrapper(_shell.wrapper, 0);
   _open = true;
-  schedulePortalSync();
+  document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS);
+  scheduleContentLayout();
   bumpReflow();
 }
 function closeCanvasMainDrawer() {
@@ -1329,6 +1337,8 @@ function closeCanvasMainDrawer() {
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420);
   animateWrapper(_shell.wrapper, closedTransformPx(side, w));
   _open = false;
+  document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
+  clearContentLayout();
   bumpReflow();
 }
 function setCanvasMainTitle(text) {
@@ -1341,48 +1351,39 @@ function onMainMirrorTabActivated(title) {
   if (title)
     setCanvasMainTitle(title);
   openCanvasMainDrawer();
-  schedulePortalSync();
+  scheduleContentLayout();
+  requestAnimationFrame(() => scheduleContentLayout());
 }
 function __resetMainMirrorForTest() {
   teardownMainMirror();
-  _portalRaf = null;
+  _layoutRaf = null;
 }
 function injectHostHideStyles() {
   injectStyles("sidebar-ux-host-main-hide", `
-    .${HOST_MAIN_HIDDEN_CLASS} {
+    /* Hide entire host main drawer chrome while Canvas owns main UX. */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) {
       visibility: hidden !important;
       pointer-events: none !important;
     }
-    /* Mirror shell reuses secondary tab chrome via shared pin-host rules +
-       its own wrapper selector. */
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id],
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
-      color: var(--lumiverse-text-muted);
-      border-radius: 8px;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      padding: 8px 4px;
-      box-sizing: border-box;
+    /*
+     * visibility:hidden is inherited; a child can opt back in with
+     * visibility:visible. When Canvas main is open, reveal host panel
+     * content only and park it over the Canvas panel rect (inline styles
+     * set by layoutHostPanelContent). React keeps the node in the host tree.
+     */
+    html.${CANVAS_MAIN_ACTIVE_CLASS}.${CANVAS_MAIN_OPEN_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="_panelContent_"] {
+      visibility: visible !important;
+      pointer-events: auto !important;
+      position: fixed !important;
+      z-index: 9995 !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
+      overflow: auto !important;
     }
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover {
-      background: var(--lumiverse-primary-015);
-      color: var(--lumiverse-text);
-    }
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
-      background: var(--lumiverse-primary-020);
-      color: var(--lumiverse-primary);
-      box-shadow: inset 3px 0 0 var(--lumiverse-primary);
-      border-radius: 0 8px 8px 0;
-    }
-    .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
-      box-shadow: inset -3px 0 0 var(--lumiverse-primary);
-      border-radius: 8px 0 0 8px;
+    /* Hide host drawer tab (edge toggle) so it does not double with Canvas. */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="drawerTab"] {
+      visibility: hidden !important;
+      pointer-events: none !important;
     }
   `);
 }
@@ -1414,20 +1415,25 @@ function mountMainMirror(opts) {
     },
     onHeaderClose: () => closeCanvasMainDrawer()
   });
+  _shell.content.style.background = "transparent";
+  _shell.content.setAttribute("data-canvas-main-content-slot", "1");
   document.body.appendChild(_shell.wrapper);
   _active = true;
   _open = opts.initialOpen;
+  _mountedSide = side;
+  if (_open) {
+    document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS);
+  } else {
+    document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
+  }
   pinShellTabList(side);
-  ensureHostHidden();
-  ensureWrapperObserver();
-  ensurePortalObserver();
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     drawer: _shell.drawer,
     tabList: getMainMirrorTabList(),
     handle: _shell.drawer.querySelector(".sidebar-ux-resize-handle")
   });
   if (_open)
-    schedulePortalSync();
+    scheduleContentLayout();
   if (!_open && isMainDrawerOpen()) {
     openCanvasMainDrawer();
   }
@@ -1502,139 +1508,47 @@ function unpinShellTabList() {
   _tabListRestoreNext = null;
   destroyMainPinHost();
 }
-function ensureHostHidden() {
-  const wrapper = getMainWrapper();
-  if (!wrapper)
+function scheduleContentLayout() {
+  if (_layoutRaf !== null)
     return;
-  if (_hiddenWrapper && _hiddenWrapper !== wrapper) {
-    _hiddenWrapper.classList.remove(HOST_MAIN_HIDDEN_CLASS);
-  }
-  wrapper.classList.add(HOST_MAIN_HIDDEN_CLASS);
-  _hiddenWrapper = wrapper;
-  if (wrapper !== _observedWrapper) {
-    attachWrapperObserver(wrapper);
-  }
-}
-function unhideHost() {
-  if (_hiddenWrapper) {
-    _hiddenWrapper.classList.remove(HOST_MAIN_HIDDEN_CLASS);
-    _hiddenWrapper = null;
-  }
-  const live = getMainWrapper();
-  if (live)
-    live.classList.remove(HOST_MAIN_HIDDEN_CLASS);
-  document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
-}
-function schedulePortalSync() {
-  if (_portalRaf !== null)
-    return;
-  _portalRaf = requestAnimationFrame(() => {
-    _portalRaf = null;
-    requestAnimationFrame(() => portalHostContent());
+  _layoutRaf = requestAnimationFrame(() => {
+    _layoutRaf = null;
+    layoutHostPanelContent();
   });
 }
-function portalHostContent() {
+function layoutHostPanelContent() {
   if (!_shell || !_active || !_open)
     return;
+  const slot = _shell.content;
   const hostContent = getMainPanelContent();
-  if (!hostContent)
+  if (!hostContent || !slot.isConnected)
     return;
-  if (hostContent.parentElement === _shell.content) {
-    _portalNode = hostContent;
+  _contentEl = hostContent;
+  const rect = slot.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1)
     return;
-  }
-  if (_portalNode && _portalNode !== hostContent && _portalNode.parentElement === _shell.content) {
-    restorePortalNode(_portalNode);
-  }
-  if (!_portalRestoreParent) {
-    _portalRestoreParent = hostContent.parentElement;
-    _portalRestoreNext = hostContent.nextSibling;
-  }
-  _shell.content.appendChild(hostContent);
-  _portalNode = hostContent;
+  const s = hostContent.style;
+  s.setProperty("top", `${Math.round(rect.top)}px`, "important");
+  s.setProperty("left", `${Math.round(rect.left)}px`, "important");
+  s.setProperty("width", `${Math.round(rect.width)}px`, "important");
+  s.setProperty("height", `${Math.round(rect.height)}px`, "important");
 }
-function restorePortalNode(node) {
-  if (!node)
-    return;
-  if (_portalRestoreParent && node.parentElement !== _portalRestoreParent) {
-    try {
-      _portalRestoreParent.insertBefore(node, _portalRestoreNext);
-    } catch {
-      try {
-        _portalRestoreParent.appendChild(node);
-      } catch {}
-    }
+function clearContentLayout() {
+  if (_contentEl) {
+    const s = _contentEl.style;
+    s.removeProperty("top");
+    s.removeProperty("left");
+    s.removeProperty("width");
+    s.removeProperty("height");
   }
-}
-function restorePortal() {
-  if (_portalNode) {
-    restorePortalNode(_portalNode);
-  }
-  _portalNode = null;
-  _portalRestoreParent = null;
-  _portalRestoreNext = null;
-}
-function ensurePortalObserver() {
-  if (typeof MutationObserver === "undefined")
-    return;
-  if (_portalObserver)
-    return;
-  const drawer = getMainWrapper();
-  if (!drawer)
-    return;
-  _portalObserver = new MutationObserver(() => {
-    if (_active && _open)
-      schedulePortalSync();
-    if (_active && !_open && isMainDrawerOpen()) {
-      openCanvasMainDrawer();
-    }
-    ensureHostHidden();
-  });
-  _portalObserver.observe(drawer, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
-}
-function ensureWrapperObserver() {
-  const wrapper = getMainWrapper();
-  if (wrapper)
-    attachWrapperObserver(wrapper);
-}
-function attachWrapperObserver(wrapper) {
-  if (typeof MutationObserver === "undefined")
-    return;
-  if (_wrapperObserver && _observedWrapper === wrapper)
-    return;
-  if (_wrapperObserver) {
-    _wrapperObserver.disconnect();
-    _wrapperObserver = null;
-  }
-  _observedWrapper = wrapper;
-  _wrapperObserver = new MutationObserver(() => {
-    if (!_active)
-      return;
-    ensureHostHidden();
-    if (!_open && isMainDrawerOpen()) {
-      openCanvasMainDrawer();
-    }
-  });
-  _wrapperObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
-}
-function stopObservers() {
-  if (_portalObserver) {
-    _portalObserver.disconnect();
-    _portalObserver = null;
-  }
-  if (_wrapperObserver) {
-    _wrapperObserver.disconnect();
-    _wrapperObserver = null;
-  }
-  _observedWrapper = null;
-  if (_portalRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_portalRaf);
-    _portalRaf = null;
-  }
+  _contentEl = null;
 }
 function teardownMainMirror(opts) {
-  stopObservers();
-  restorePortal();
+  if (_layoutRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_layoutRaf);
+    _layoutRaf = null;
+  }
+  clearContentLayout();
   unpinShellTabList();
   if (_shell) {
     const handles = _shell.drawer.querySelectorAll(".sidebar-ux-resize-handle");
@@ -1646,7 +1560,6 @@ function teardownMainMirror(opts) {
   if (!opts?.keepWidthVar) {
     const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0);
     if (w > 0) {
-      const hostDrawer = getMainWrapper()?.querySelector?.('[class*="_drawer_"]') ?? null;
       const wrapper = getMainWrapper();
       if (wrapper) {
         wrapper.style.setProperty("--drawer-panel-w", `${Math.ceil(clampSidebarWidth(w))}px`, "important");
@@ -1654,12 +1567,14 @@ function teardownMainMirror(opts) {
     }
     document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR);
   }
-  unhideHost();
+  document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
+  document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
   _active = false;
   _open = false;
+  _mountedSide = null;
   bumpReflow();
 }
-var _active = false, _open = false, _shell = null, _hiddenWrapper = null, _portalNode = null, _portalRestoreParent = null, _portalRestoreNext = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _portalObserver = null, _wrapperObserver = null, _portalRaf = null, _observedWrapper = null;
+var _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _layoutRaf = null, _contentEl = null, _mountedSide = null;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
   init_state();
@@ -2211,7 +2126,7 @@ function applyMainTabListPin(enabled, opts) {
     teardownMainPin();
     return;
   }
-  applyMainMirrorDrawer(true, { force: opts?.force });
+  applyMainMirrorDrawer(true, { force: !!opts?.force });
   if (_enabled && !opts?.force) {
     scheduleReconcile();
     return;
@@ -2239,7 +2154,7 @@ function isMainTabListPinActive() {
   return _enabled && isMainMirrorActive();
 }
 function __resetMainTabPinForTest() {
-  stopObservers2();
+  stopObservers();
   _enabled = false;
   _reconcileRaf = null;
   _observedSidebar = null;
@@ -2248,7 +2163,7 @@ function __resetMainTabPinForTest() {
 }
 function teardownMainPin() {
   _enabled = false;
-  stopObservers2();
+  stopObservers();
   applyMainMirrorDrawer(false, { force: true });
   destroyMainPinHost();
 }
@@ -2447,10 +2362,10 @@ function attachSidebarObserver(sidebar) {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["class", "style", "data-tab-id", "title", "aria-label"]
+    attributeFilter: ["class", "data-tab-id", "title", "aria-label"]
   });
 }
-function stopObservers2() {
+function stopObservers() {
   if (_sidebarObserver) {
     _sidebarObserver.disconnect();
     _sidebarObserver = null;

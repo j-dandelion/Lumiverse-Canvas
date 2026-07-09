@@ -64,8 +64,8 @@ export function applyMainTabListPin(
     return
   }
 
-  // Mount / remount Canvas main shell + hide host.
-  applyMainMirrorDrawer(true, { force: opts?.force })
+  // Mount Canvas main shell + hide host (soft apply unless force).
+  applyMainMirrorDrawer(true, { force: !!opts?.force })
 
   if (_enabled && !opts?.force) {
     scheduleReconcile()
@@ -349,12 +349,15 @@ function attachSidebarObserver(sidebar: HTMLElement): void {
   }
   _observedSidebar = sidebar
   if (typeof MutationObserver === 'undefined') return
+  // Coalesce heavily — host React mutates often; never do work sync in
+  // the observer callback beyond scheduling one rAF reconcile.
   _sidebarObserver = new MutationObserver(() => scheduleReconcile())
   _sidebarObserver.observe(sidebar, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['class', 'style', 'data-tab-id', 'title', 'aria-label'],
+    // Do not watch style — host may thrash style during layout.
+    attributeFilter: ['class', 'data-tab-id', 'title', 'aria-label'],
   })
 }
 

@@ -454,9 +454,11 @@ function resetAll() {
     '',
     'M2: pin stays visible when host open',
   )
+  // Host is hidden via documentElement CSS marker, not host class mutation
+  // (mutating host className fought React and froze the tab).
   assert(
-    mainWrapper.classList.contains('sidebar-ux-host-main-hidden'),
-    'M2: host wrapper hidden via Canvas class',
+    documentElementStub.classList.contains('sidebar-ux-canvas-main-active'),
+    'M2: document marker for Canvas main mode',
   )
 }
 

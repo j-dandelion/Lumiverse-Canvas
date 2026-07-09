@@ -25,7 +25,7 @@ When the setting is on (desktop only):
 | Drawer | Strategy | Module |
 |--------|----------|--------|
 | **Secondary** | **Reparent** Canvas-owned `.sidebar-ux-tab-list` onto a body-level `.sidebar-ux-tab-list-pin-host` (`data-pin-owner="secondary"`). A 56px spacer stays in the drawer. Strip stays visible while closed. | `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts` |
-| **Main** | **Headless host + Canvas shell** — hide host main wrapper (`sidebar-ux-host-main-hidden`); mount a full Canvas drawer (shared `drawer-shell.ts`) on the main side; pin its tab list (`data-pin-owner="main"`); mirror host tab buttons and forward `.click()`; reparent host panel content into the Canvas panel (portal). Visual open/close is Canvas-only — pin strip is **never** hidden because host `wrapperOpen` flipped. | `main-mirror-drawer.ts` + `main-tab-pin.ts` |
+| **Main** | **Headless host + Canvas shell** — hide host main chrome via `html.sidebar-ux-canvas-main-active` CSS (`:has([data-spindle-mount="sidebar"])`); mount a full Canvas drawer (shared `drawer-shell.ts`) on the main side; pin its tab list (`data-pin-owner="main"`); mirror host tab buttons and forward `.click()`. Host panel content stays in the React tree and is **overlay-positioned** over the Canvas panel when open (`visibility:visible` under a hidden ancestor) — never reparented (reparent + MutationObserver fought React and froze the tab). | `main-mirror-drawer.ts` + `main-tab-pin.ts` |
 
 Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... })` so main and secondary look the same. **No Lumiverse source changes** — host React stays in the tree as the activation/content engine.
 
