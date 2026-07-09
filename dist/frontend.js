@@ -4235,6 +4235,13 @@ function applySuggestion(ta, label) {
   setControlledValue(ta, `${normalized} `);
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
+function suggestionLabel(cmd) {
+  const u = cmd.usage?.trim();
+  if (u && !/[<>]/.test(u)) {
+    return u.startsWith("/") ? u : `/${u}`;
+  }
+  return `/${cmd.name}`;
+}
 function setControlledValue(ta, value) {
   const proto = Object.getPrototypeOf(ta);
   const desc = Object.getOwnPropertyDescriptor(proto, "value");
@@ -4306,8 +4313,141 @@ function resolveActiveIndex(matches, text, lastSticky) {
 }
 var _skipNextTextChange = false;
 
+// src/slash/ghost-text.ts
+function setGhost(ta, payload) {
+  if (!payload) {
+    hideGhost();
+    return;
+  }
+  const suffix = ghostSuffixLocal(payload.fullArg, payload.typedPrefix);
+  _ctx = {
+    ta,
+    fullArg: payload.fullArg,
+    range: payload.range,
+    typedPrefix: payload.typedPrefix,
+    visible: false
+  };
+  if (!suffix) {
+    removeOverlay();
+    return;
+  }
+  injectGhostStyles();
+  _ctx.visible = true;
+  renderGhostOverlay(ta, suffix, payload.range.end);
+}
+function hasGhost() {
+  return _ctx?.visible === true;
+}
+function acceptGhost(ta) {
+  if (!_ctx?.visible)
+    return false;
+  const { fullArg, range } = _ctx;
+  const value = ta.value;
+  const start = Math.max(0, Math.min(range.start, value.length));
+  const end = Math.max(start, Math.min(range.end, value.length));
+  let next = value.slice(0, start) + fullArg + value.slice(end);
+  if (!next.endsWith(" "))
+    next += " ";
+  setSkipNextTextChange();
+  setControlledValue(ta, next);
+  ta.setSelectionRange(next.length, next.length);
+  hideGhost();
+  return true;
+}
+function hideGhost() {
+  _ctx = null;
+  removeOverlay();
+}
+function removeOverlay() {
+  const el = document.getElementById(GHOST_ID);
+  if (el)
+    el.remove();
+}
+function ghostSuffixLocal(full, typedPrefix) {
+  if (!full.toLowerCase().startsWith(typedPrefix.toLowerCase()))
+    return null;
+  if (full.length <= typedPrefix.length)
+    return null;
+  return full.slice(typedPrefix.length);
+}
+function renderGhostOverlay(ta, suffix, caretPos) {
+  const coords = measureCaretPosition(ta, caretPos);
+  let el = document.getElementById(GHOST_ID);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = GHOST_ID;
+    el.setAttribute("data-canvas-slash", "ghost");
+    el.setAttribute("aria-hidden", "true");
+    document.body.appendChild(el);
+  }
+  el.textContent = suffix;
+  const style = window.getComputedStyle(ta);
+  el.style.font = style.font;
+  el.style.fontFamily = style.fontFamily;
+  el.style.fontSize = style.fontSize;
+  el.style.fontWeight = style.fontWeight;
+  el.style.fontStyle = style.fontStyle;
+  el.style.lineHeight = style.lineHeight;
+  el.style.letterSpacing = style.letterSpacing;
+  el.style.top = `${coords.top}px`;
+  el.style.left = `${coords.left}px`;
+}
+function measureCaretPosition(ta, pos) {
+  const style = window.getComputedStyle(ta);
+  const mirror = document.createElement("div");
+  mirror.style.font = style.font;
+  mirror.style.fontFamily = style.fontFamily;
+  mirror.style.fontSize = style.fontSize;
+  mirror.style.fontWeight = style.fontWeight;
+  mirror.style.fontStyle = style.fontStyle;
+  mirror.style.lineHeight = style.lineHeight;
+  mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.textTransform = style.textTransform;
+  mirror.style.padding = style.padding;
+  mirror.style.border = style.border;
+  mirror.style.boxSizing = style.boxSizing;
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.wordWrap = "break-word";
+  mirror.style.overflowWrap = style.overflowWrap || "break-word";
+  mirror.style.width = `${ta.clientWidth}px`;
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.left = "-9999px";
+  mirror.style.top = "0";
+  mirror.style.overflow = "hidden";
+  const clamped = Math.max(0, Math.min(pos, ta.value.length));
+  mirror.textContent = ta.value.slice(0, clamped);
+  const marker = document.createElement("span");
+  marker.textContent = "​";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const taRect = ta.getBoundingClientRect();
+  const mirrorRect = mirror.getBoundingClientRect();
+  const markerRect = marker.getBoundingClientRect();
+  const top = taRect.top + (markerRect.top - mirrorRect.top) - ta.scrollTop;
+  const left = taRect.left + (markerRect.left - mirrorRect.left) - ta.scrollLeft;
+  mirror.remove();
+  return { top, left };
+}
+function injectGhostStyles() {
+  injectStyles(STYLE_ID, `
+    #${GHOST_ID} {
+      position: fixed;
+      z-index: 10004; /* below suggest (10005), above toast */
+      pointer-events: none;
+      color: var(--lumiverse-text-muted, var(--lumiverse-text-dim, #888));
+      opacity: 0.65;
+      font-family: var(--lumiverse-font-family, inherit);
+      white-space: pre;
+      user-select: none;
+    }
+  `);
+}
+var GHOST_ID = "canvas-slash-ghost", STYLE_ID = "canvas-slash-ghost-styles", _ctx = null;
+var init_ghost_text = () => {};
+
 // src/slash/suggest.ts
-function showSuggest(textarea, options, initialActiveIndex = 0) {
+function showSuggest(textarea, options, initialActiveIndex = 0, onActiveIndexChange) {
   if (options.length === 0) {
     hideSuggest();
     return makeNoopController();
@@ -4321,6 +4461,10 @@ function showSuggest(textarea, options, initialActiveIndex = 0) {
   let currentOptions = options;
   let activeIndex = options.length > 0 ? Math.max(0, Math.min(options.length - 1, initialActiveIndex)) : 0;
   let visible = true;
+  const notifyActive = () => {
+    const cmd = activeIndex >= 0 && activeIndex < currentOptions.length ? currentOptions[activeIndex] : null;
+    onActiveIndexChange?.(activeIndex, cmd);
+  };
   const updateActiveDom = () => {
     const rows = el.querySelectorAll(".canvas-slash-opt");
     rows.forEach((row, i) => {
@@ -4364,7 +4508,7 @@ function showSuggest(textarea, options, initialActiveIndex = 0) {
           hideSuggest();
           return;
         }
-        const label = `/${cmd.name}`;
+        const label = suggestionLabel(cmd);
         applySuggestion(currentAnchor, label);
         const parsed = parseCommand(label);
         if (parsed)
@@ -4378,6 +4522,7 @@ function showSuggest(textarea, options, initialActiveIndex = 0) {
     if (currentOptions.length === 0) {
       activeIndex = -1;
       updateActiveDom();
+      notifyActive();
       return;
     }
     const clamped = Math.max(0, Math.min(currentOptions.length - 1, i));
@@ -4386,6 +4531,7 @@ function showSuggest(textarea, options, initialActiveIndex = 0) {
     activeIndex = clamped;
     updateActiveDom();
     scrollActiveIntoView();
+    notifyActive();
   };
   const scrollActiveIntoView = () => {
     if (activeIndex < 0)
@@ -4420,6 +4566,7 @@ function hideSuggest() {
   currentAnchor = null;
   currentEl = null;
   _currentController = null;
+  hideGhost();
 }
 function isSuggestVisible() {
   return _currentController?.isVisible() === true;
@@ -4480,7 +4627,7 @@ function applyTextareaAriaBaseline(textarea) {
   }
 }
 function injectSuggestStyles() {
-  injectStyles(STYLE_ID, `
+  injectStyles(STYLE_ID2, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
@@ -4577,8 +4724,9 @@ function escapeHtml(s) {
 function escapeAttr(s) {
   return escapeHtml(s);
 }
-var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
+var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID2 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
+  init_ghost_text();
   init_intent();
 });
 
@@ -4586,7 +4734,7 @@ var init_suggest = __esm(() => {
 var SELECTOR_TEXTAREA = 'textarea[name="chat-message"]', SELECTOR_SEND_BTN = 'button[class*="sendBtn"]';
 
 // src/slash/intercept.ts
-function installIntercept(_ctx, callbacks) {
+function installIntercept(_ctx2, callbacks) {
   const keydownHandler = (e) => {
     const target = e.target;
     if (!target || target.tagName !== "TEXTAREA")
@@ -4615,6 +4763,37 @@ function installIntercept(_ctx, callbacks) {
       ctrl.setActiveIndex(e.key === "ArrowDown" ? ctrl.getActiveIndex() + 1 : ctrl.getActiveIndex() - 1);
       return;
     }
+    if (e.key === "ArrowRight") {
+      if (!popupVisible || !ctrl)
+        return;
+      if (ta.selectionStart !== ta.value.length || ta.selectionEnd !== ta.value.length) {
+        return;
+      }
+      if (!isValidSlashContext(ta)) {
+        hideSuggest();
+        return;
+      }
+      if (hasGhost() && acceptGhost(ta)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        hideSuggest();
+        return;
+      }
+      const activeCmd = ctrl.getActiveCommand();
+      if (!activeCmd)
+        return;
+      if (textareaHasUsage(ta, activeCmd)) {
+        hideSuggest();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      applySuggestion(ta, suggestionLabel(activeCmd));
+      hideSuggest();
+      return;
+    }
     if (e.key === "Tab") {
       if (!ctrl)
         return;
@@ -4634,8 +4813,11 @@ function installIntercept(_ctx, callbacks) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const label = `/${activeCmd.name}`;
-      applySuggestion(ta, label);
+      if (hasGhost() && acceptGhost(ta)) {
+        hideSuggest();
+        return;
+      }
+      applySuggestion(ta, suggestionLabel(activeCmd));
       hideSuggest();
       return;
     }
@@ -4665,7 +4847,15 @@ function installIntercept(_ctx, callbacks) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        const label = `/${activeCmd.name}`;
+        if (hasGhost() && acceptGhost(ta)) {
+          const parsed3 = parseCommand(ta.value.trimEnd());
+          if (parsed3)
+            setIntent(parsed3, "enter-popup");
+          hideSuggest();
+          ta.focus();
+          return;
+        }
+        const label = suggestionLabel(activeCmd);
         applySuggestion(ta, label);
         const parsed2 = parseCommand(label);
         if (parsed2)
@@ -4807,6 +4997,7 @@ var _isComposing = false;
 var init_intercept = __esm(() => {
   init_intent();
   init_suggest();
+  init_ghost_text();
 });
 
 // src/slash/builtin-help.ts
@@ -4824,6 +5015,38 @@ function makeHelpCommand(registry) {
 `));
     }
   };
+}
+
+// src/slash/arg-completions.ts
+function parseArgMode(text) {
+  if (!text.startsWith("/"))
+    return null;
+  const spaceIdx = text.indexOf(" ");
+  if (spaceIdx < 0)
+    return null;
+  const cmdName = text.slice(1, spaceIdx);
+  if (!cmdName)
+    return null;
+  let argStart = spaceIdx + 1;
+  while (argStart < text.length && /\s/.test(text[argStart])) {
+    argStart++;
+  }
+  const argEnd = text.length;
+  const argPrefix = text.slice(argStart, argEnd);
+  return { cmdName, argPrefix, argStart, argEnd };
+}
+function filterPrefix(candidates, prefix) {
+  if (prefix === "")
+    return candidates.slice();
+  const lower = prefix.toLowerCase();
+  return candidates.filter((c) => c.toLowerCase().startsWith(lower));
+}
+function pickActive(candidates, activeIndex) {
+  if (candidates.length === 0)
+    return null;
+  if (activeIndex < 0 || activeIndex >= candidates.length)
+    return null;
+  return candidates[activeIndex] ?? null;
 }
 
 // src/slash/commands/select/parser.ts
@@ -5054,6 +5277,7 @@ function makeSelectCommands() {
       usage: "/select",
       owner: "canvas",
       category: "select",
+      getArgCompletions: (prefix) => filterPrefix(SELECT_ARG_KEYWORDS, prefix),
       handler: async (args, ctx) => {
         const raw = args._raw ?? "";
         const parsed = parseSelectArgs(raw);
@@ -5142,10 +5366,11 @@ function toastResult(ctx, result, fallback) {
     ctx.toast("success", fallback ?? `Selected ${matched} messages`);
   }
 }
-var SELECTOR_MESSAGE_ROW2 = '[data-component="BubbleMessage"]';
+var SELECTOR_MESSAGE_ROW2 = '[data-component="BubbleMessage"]', SELECT_ARG_KEYWORDS;
 var init_select = __esm(() => {
   init_extract();
   init_selection();
+  SELECT_ARG_KEYWORDS = ["all", "clear"];
 });
 
 // src/slash/commands/newchat/index.ts
@@ -5233,6 +5458,48 @@ function makeNewChatCommand() {
 }
 
 // src/slash/commands/persona/index.ts
+function extractPersonaLabel(text) {
+  const t = text.trim();
+  if (!t)
+    return "";
+  if (t.length > 1 && t[0].toLowerCase() === t[1].toLowerCase()) {
+    return t.slice(1).trim();
+  }
+  return t;
+}
+function cacheValid(chatId) {
+  return _cache !== null && _cache.chatId === chatId && Date.now() - _cache.fetchedAt < CACHE_TTL_MS2;
+}
+function getCachedNames(chatId) {
+  if (cacheValid(chatId))
+    return _cache.names;
+  return [];
+}
+function warmPersonaCache(chatId) {
+  if (_warming)
+    return;
+  if (cacheValid(chatId))
+    return;
+  const personaButton = findPersonaButton();
+  if (!personaButton)
+    return;
+  _warming = true;
+  const stop = capturePersonaPopoverNames((names) => {
+    _cache = { chatId, names, fetchedAt: Date.now() };
+    _warming = false;
+    window.dispatchEvent(new CustomEvent("canvas:slash-completions-changed"));
+  });
+  personaButton.click();
+  setTimeout(() => {
+    if (_warming) {
+      _warming = false;
+      stop();
+      if (!cacheValid(chatId)) {
+        _cache = { chatId, names: [], fetchedAt: Date.now() - CACHE_TTL_MS2 + 1500 };
+      }
+    }
+  }, 500);
+}
 function findPersonaButton() {
   const allButtons = document.querySelectorAll("button");
   for (const btn of Array.from(allButtons)) {
@@ -5281,6 +5548,61 @@ function hidePopoversAsTheyAppear() {
     observer.disconnect();
   };
 }
+function capturePersonaPopoverNames(onNames) {
+  let resolved = false;
+  const observer = new MutationObserver((mutations) => {
+    if (resolved)
+      return;
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        if (node.getAttribute("data-canvas-slash"))
+          continue;
+        let popover = null;
+        if (node.matches?.('[class*="popover"]')) {
+          popover = node;
+        } else {
+          popover = node.querySelector?.('[class*="popover"]:not([data-canvas-slash])') ?? null;
+        }
+        if (!popover)
+          continue;
+        const names = [];
+        const buttons = popover.querySelectorAll("button");
+        for (const btn of Array.from(buttons)) {
+          const raw = (btn.textContent ?? "").trim();
+          if (!raw)
+            continue;
+          const lower = raw.toLowerCase();
+          if (lower.includes("clear") || lower.includes("manage") || lower.includes("select")) {
+            continue;
+          }
+          const label = extractPersonaLabel(raw);
+          if (label && !names.some((n) => n.toLowerCase() === label.toLowerCase())) {
+            names.push(label);
+          }
+        }
+        popover.style.display = "none";
+        resolved = true;
+        observer.disconnect();
+        onNames(names);
+        try {
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        } catch {}
+        return;
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => {
+    if (!resolved)
+      observer.disconnect();
+  }, 500);
+  return () => {
+    resolved = true;
+    observer.disconnect();
+  };
+}
 async function findPersonaItemByName(name) {
   const lower = name.toLowerCase();
   for (let i = 0;i < 100; i++) {
@@ -5311,6 +5633,10 @@ function makePersonaCommand() {
     usage: "/persona",
     owner: "canvas",
     category: "chat",
+    getArgCompletions: (prefix, ctx) => {
+      warmPersonaCache(ctx.chatId);
+      return filterPrefix(getCachedNames(ctx.chatId), prefix);
+    },
     handler: async (args, ctx) => {
       const personaName = args._raw?.trim();
       if (!personaName) {
@@ -5338,6 +5664,8 @@ function makePersonaCommand() {
     }
   };
 }
+var CACHE_TTL_MS2 = 60000, _cache = null, _warming = false;
+var init_persona = () => {};
 
 // src/slash/microtask.ts
 function defer(fn) {
@@ -5910,7 +6238,7 @@ function unmountToastSurface() {
   toasts = [];
 }
 function injectToastStyles() {
-  injectStyles(STYLE_ID2, `
+  injectStyles(STYLE_ID3, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -5944,7 +6272,7 @@ function injectToastStyles() {
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
   `);
 }
-var STYLE_ID2 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
+var STYLE_ID3 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
 var init_toast = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -5957,6 +6285,16 @@ var init_toast = __esm(() => {
 // src/slash/runtime.ts
 function isSlashCommandDef(x2) {
   return typeof x2 === "object" && x2 !== null && "name" in x2 && typeof x2.name === "string" && "description" in x2 && typeof x2.description === "string" && "owner" in x2 && typeof x2.owner === "string" && "handler" in x2 && typeof x2.handler === "function";
+}
+function argCompletionRows(cmd, candidates) {
+  return candidates.map((c3) => ({
+    name: c3,
+    description: "Complete argument",
+    owner: cmd.owner,
+    usage: `/${cmd.name} ${c3}`,
+    handler: cmd.handler,
+    category: cmd.category
+  }));
 }
 function attachSlashRuntime(ctx) {
   const registry = new CommandRegistry;
@@ -5982,36 +6320,80 @@ function attachSlashRuntime(ctx) {
       window.dispatchEvent(new CustomEvent("canvas:slash-toast", { detail: { kind, text } }));
     }
   };
+  const syncGhostForArg = (ta, fullArg, argStart, argEnd, typedPrefix) => {
+    if (!fullArg) {
+      hideGhost();
+      return;
+    }
+    setGhost(ta, {
+      fullArg,
+      range: { start: argStart, end: argEnd },
+      typedPrefix
+    });
+  };
+  const onTextChange = (text) => {
+    if (!text.startsWith("/")) {
+      hideSuggest();
+      lastActiveIndex = null;
+      return;
+    }
+    const argMode = parseArgMode(text);
+    if (argMode) {
+      const cmd = registry.lookup(argMode.cmdName) ?? registry.lookup(argMode.cmdName.toLowerCase());
+      if (cmd?.getArgCompletions) {
+        const candidates = cmd.getArgCompletions(argMode.argPrefix, {
+          chatId: slashCtx.chatId
+        });
+        if (candidates.length === 0) {
+          hideSuggest();
+          lastActiveIndex = null;
+          return;
+        }
+        const ta2 = document.querySelector(SELECTOR_TEXTAREA);
+        if (!ta2)
+          return;
+        let activeIndex2 = 0;
+        if (lastActiveIndex != null && lastActiveIndex >= 0 && lastActiveIndex < candidates.length && argMode.argPrefix.trim().length > 0) {
+          activeIndex2 = lastActiveIndex;
+        }
+        lastActiveIndex = activeIndex2;
+        const rows = argCompletionRows(cmd, candidates);
+        showSuggest(ta2, rows, activeIndex2, (i3, activeCmd) => {
+          lastActiveIndex = i3;
+          const fullArg2 = activeCmd?.name ?? pickActive(candidates, i3);
+          syncGhostForArg(ta2, fullArg2, argMode.argStart, argMode.argEnd, argMode.argPrefix);
+        });
+        const fullArg = pickActive(candidates, activeIndex2);
+        syncGhostForArg(ta2, fullArg, argMode.argStart, argMode.argEnd, argMode.argPrefix);
+        return;
+      }
+    }
+    hideGhost();
+    const prefix = text.split(/\s/)[0].slice(1).toLowerCase();
+    const matches = registry.list().filter((c3) => c3.name.toLowerCase().startsWith(prefix));
+    if (matches.length === 0) {
+      hideSuggest();
+      lastActiveIndex = null;
+      return;
+    }
+    const ta = document.querySelector(SELECTOR_TEXTAREA);
+    if (!ta)
+      return;
+    const completionIdx = findCompletionCandidateIndex(matches, text);
+    if (shouldHideForNonMatchingArgs(text, completionIdx >= 0)) {
+      hideSuggest();
+      lastActiveIndex = null;
+      return;
+    }
+    const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex);
+    lastActiveIndex = nextSticky;
+    showSuggest(ta, matches, activeIndex);
+  };
   const detachIntercept = installIntercept(ctx, {
     onParsed: (parsed) => {
       dispatchCommand(parsed, slashCtx, registry);
     },
-    onTextChange: (text) => {
-      if (text.startsWith("/")) {
-        const prefix = text.split(/\s/)[0].slice(1).toLowerCase();
-        const matches = registry.list().filter((c3) => c3.name.toLowerCase().startsWith(prefix));
-        if (matches.length === 0) {
-          hideSuggest();
-          lastActiveIndex = null;
-          return;
-        }
-        const ta = document.querySelector(SELECTOR_TEXTAREA);
-        if (!ta)
-          return;
-        const completionIdx = findCompletionCandidateIndex(matches, text);
-        if (shouldHideForNonMatchingArgs(text, completionIdx >= 0)) {
-          hideSuggest();
-          lastActiveIndex = null;
-          return;
-        }
-        const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex);
-        lastActiveIndex = nextSticky;
-        showSuggest(ta, matches, activeIndex);
-      } else {
-        hideSuggest();
-        lastActiveIndex = null;
-      }
-    }
+    onTextChange
   });
   const unmountToast = mountToastSurface();
   const registerListener = (e3) => {
@@ -6036,21 +6418,34 @@ function attachSlashRuntime(ctx) {
     }
   };
   window.addEventListener("canvas:slash-unregister", unregisterListener);
+  const completionsChangedListener = () => {
+    const ta = document.querySelector(SELECTOR_TEXTAREA);
+    if (!ta)
+      return;
+    if (!ta.value.startsWith("/"))
+      return;
+    onTextChange(ta.value);
+  };
+  window.addEventListener("canvas:slash-completions-changed", completionsChangedListener);
   return () => {
     unmountToast();
     detachIntercept();
     window.removeEventListener("canvas:slash-register", registerListener);
     window.removeEventListener("canvas:slash-unregister", unregisterListener);
+    window.removeEventListener("canvas:slash-completions-changed", completionsChangedListener);
     unregisterByName.clear();
     registry.clear();
+    hideGhost();
   };
 }
 var init_runtime = __esm(() => {
   init_intercept();
   init_select();
+  init_persona();
   init_suggest();
   init_dispatch();
   init_toast();
+  init_ghost_text();
 });
 
 // src/drawerTabPosition/apply.ts
@@ -6206,7 +6601,7 @@ var init_drawer_tab_position = __esm(() => {
   _dragInstalled = new WeakSet;
   drawerTabDragFeature = {
     id: "drawerTabDrag",
-    init(_ctx) {
+    init(_ctx2) {
       if (!getSettings().drawerTabDrag)
         return;
       const observer = new MutationObserver(() => {
@@ -6230,7 +6625,7 @@ var init_drawer_tab_position = __esm(() => {
         registerCleanup(teardown);
       }
     },
-    mount(_ctx) {
+    mount(_ctx2) {
       if (!getSettings().drawerTabDrag)
         return;
       const secondaryTab = getSecondaryDrawerTab();
@@ -6391,7 +6786,7 @@ var init_registry = __esm(() => {
   };
   secondSidebarFeature = {
     id: "secondSidebarEnabled",
-    mount(_ctx, layout) {
+    mount(_ctx2, layout) {
       const initialWidth = layout?.secondary?.width;
       const initialOpen = layout?.secondary?.open === true;
       mountSecondarySidebar({ initialWidth, initialOpen });
@@ -6522,7 +6917,7 @@ var init_registry = __esm(() => {
   };
   keepTabListVisibleFeature = {
     id: "keepTabListVisible",
-    mount(_ctx, _layout) {
+    mount(_ctx2, _layout) {
       reconcileTabListPin();
       updateChatReflow();
       return () => {
