@@ -3590,6 +3590,12 @@ function closeSecondarySidebar(options) {
         tab.root.removeAttribute("data-canvas-active");
     }
   }
+  const tabList = getSecondaryTabList();
+  if (tabList) {
+    for (const btn of tabList.querySelectorAll("button.sidebar-ux-tab-active")) {
+      btn.classList.remove("sidebar-ux-tab-active");
+    }
+  }
   if (!options?.silent) {
     persistOpenState();
   }

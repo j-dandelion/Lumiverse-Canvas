@@ -419,6 +419,15 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
     }
   }
 
+  // Clear the active highlight from all tab buttons so no tab appears
+  // selected while the drawer is closed.
+  const tabList = getSecondaryTabList()
+  if (tabList) {
+    for (const btn of tabList.querySelectorAll('button.sidebar-ux-tab-active')) {
+      btn.classList.remove('sidebar-ux-tab-active')
+    }
+  }
+
   if (!options?.silent) {
     persistOpenState()
   }
