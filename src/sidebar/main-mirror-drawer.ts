@@ -359,6 +359,11 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   }
 
   void import('./drawer-sync').then((m) => m.syncDrawerTabSettings())
+  // Stamp host panel-header metrics onto this shell (secondary + main-mirror).
+  void import('./panel-header-sync').then((m) => {
+    m.resetPanelHeaderSyncCache()
+    m.syncPanelHeaderFromMain(() => _shell?.wrapper ?? null)
+  })
   bumpResizeHandles()
   bumpReflow()
 }

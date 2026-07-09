@@ -118,8 +118,17 @@ class StubElement {
     if (sel.includes('[data-mirror-key=') || sel.includes('data-mirror-key=')) {
       const m = sel.match(/data-mirror-key="([^"]+)"/)
       if (m) {
+        const walk = (el: StubElement): StubElement | null => {
+          if (el.getAttribute('data-mirror-key') === m[1]) return el
+          for (const c of el.children) {
+            const hit = walk(c)
+            if (hit) return hit
+          }
+          return null
+        }
         for (const c of this.children) {
-          if (c.getAttribute('data-mirror-key') === m[1]) return c
+          const hit = walk(c)
+          if (hit) return hit
         }
       }
       return null
@@ -149,6 +158,15 @@ class StubElement {
   querySelectorAll(sel: string): StubElement[] {
     if (sel.includes('tabBtn')) {
       return this.children.filter((c) => c.className.includes('tabBtn') || String(c.tagName) === 'BUTTON')
+    }
+    if (sel.includes('sidebar-ux-main-tab-mirror-btn')) {
+      const out: StubElement[] = []
+      const walk = (el: StubElement) => {
+        if (el.className.includes('sidebar-ux-main-tab-mirror-btn')) out.push(el)
+        for (const c of el.children) walk(c)
+      }
+      for (const c of this.children) walk(c)
+      return out
     }
     return []
   }
@@ -343,8 +361,21 @@ import {
   isMainTabListPinActive,
   MAIN_MIRROR_LIST_CLASS,
   MAIN_MIRROR_BTN_CLASS,
+  MAIN_MIRROR_LIST_MAIN_CLASS,
+  MAIN_MIRROR_LIST_BOTTOM_CLASS,
   __resetMainTabPinForTest,
 } from '../main-tab-pin'
+
+/** Collect mirror buttons from the list (nested under main/bottom sections). */
+function collectMirrorButtons(list: StubElement): StubElement[] {
+  const out: StubElement[] = []
+  const walk = (el: StubElement) => {
+    if (el.className.includes(MAIN_MIRROR_BTN_CLASS)) out.push(el)
+    for (const c of el.children) walk(c)
+  }
+  for (const c of list.children) walk(c)
+  return out
+}
 import {
   applyTabListPin,
   ensureMainPinHost,
@@ -430,7 +461,7 @@ function resetAll() {
 
   const list = host!.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))
   assert(!!list, 'M1: mirror list present')
-  const mirrors = list!.children.filter((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))
+  const mirrors = collectMirrorButtons(list!)
   assertEqual(mirrors.length, 2, 'M1: two mirror buttons')
   assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M1: first mirror id')
   // Secondary parity: no tab looks selected while the drawer is closed.
@@ -441,7 +472,7 @@ function resetAll() {
   applyMainTabListPin(true, { force: true })
   const listAfter = (getMainPinHost() as unknown as StubElement)!
     .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const m0 = listAfter.children.find((c) => c.getAttribute('data-tab-id') === 'profile')!
+  const m0 = collectMirrorButtons(listAfter).find((c) => c.getAttribute('data-tab-id') === 'profile')!
   assert(m0.classList.contains('sidebar-ux-tab-active'), 'M1: active class mirrored when open')
 }
 
@@ -484,7 +515,7 @@ function resetAll() {
 
   const host = getMainPinHost() as unknown as StubElement
   const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const mirror = list.children[0] as StubElement
+  const mirror = collectMirrorButtons(list)[0]
   assert(!!mirror, 'M3: mirror exists')
   mirror.click()
   assertEqual(hostBtn.clickCount, 1, 'M3: host button clicked')
@@ -566,8 +597,9 @@ function resetAll() {
   applyMainTabListPin(true, { force: true })
   const host = getMainPinHost() as unknown as StubElement
   const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  assertEqual(list.children.length, 1, 'M7: only visible button mirrored')
-  assertEqual(list.children[0].getAttribute('data-tab-id'), 'profile', 'M7: profile only')
+  const mirrors = collectMirrorButtons(list)
+  assertEqual(mirrors.length, 1, 'M7: only visible button mirrored')
+  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M7: profile only')
 }
 
 // M8: reconcileMainTabListPin with default setting leaves off
@@ -576,6 +608,49 @@ function resetAll() {
   reconcileMainTabListPin()
   assert(!isMainTabListPinActive(), 'M8: default off')
   assertEqual(getMainPinHost(), null, 'M8: no host')
+}
+
+// M9: Settings mirrors into bottom dock with separator chrome (host .sidebarBottom)
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const settings = makeHostBtn('settings', 'Settings', false)
+  // Host settings often has no data-tab-id — isSettingsButton uses title.
+  settings.removeAttribute('data-tab-id')
+  settings.setAttribute('title', 'Settings')
+  settings.setAttribute('aria-label', 'Settings')
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(settings)
+
+  applyMainTabListPin(true, { force: true })
+
+  const host = getMainPinHost() as unknown as StubElement
+  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))
+  const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))
+  assert(!!mainSec, 'M9: main section present')
+  assert(!!bottomSec, 'M9: bottom section present')
+  assertEqual(bottomSec!.style.display, 'flex', 'M9: bottom visible when settings exists')
+  assertEqual(bottomSec!.style.marginTop, 'auto', 'M9: margin-top auto docks to strip end')
+  assert(
+    String(bottomSec!.style.borderTop || '').includes('primary-020') ||
+      String(bottomSec!.style.borderTop || '').includes('1px'),
+    'M9: top border separator',
+  )
+
+  const mainMirrors = mainSec!.children.filter((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))
+  const bottomMirrors = bottomSec!.children.filter((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))
+  assertEqual(mainMirrors.length, 1, 'M9: profile in main section')
+  assertEqual(mainMirrors[0].getAttribute('data-tab-id'), 'profile', 'M9: profile id')
+  assertEqual(bottomMirrors.length, 1, 'M9: settings in bottom section')
+  assertEqual(bottomMirrors[0].getAttribute('title'), 'Settings', 'M9: settings title')
+  // Click still forwards
+  bottomMirrors[0].click()
+  assertEqual(settings.clickCount, 1, 'M9: settings click forwards to host')
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

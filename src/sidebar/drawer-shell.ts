@@ -210,20 +210,28 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
   `
   title.textContent = titleText
 
+  // Match Lumiverse CloseButton size="md" (32×32, icon 16) so panel header
+  // height matches host (padding 12+12 + 32 ≈ 56px, not a short 24px X).
   const closeBtn = document.createElement('button')
   closeBtn.className = 'sidebar-ux-close-btn'
+  closeBtn.type = 'button'
+  closeBtn.setAttribute('aria-label', 'Close')
   closeBtn.style.cssText = `
-    background: none;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    background: transparent;
     border: none;
-    color: var(--lumiverse-text-dim);
+    border-radius: 8px;
+    color: var(--lumiverse-text-muted);
     cursor: pointer;
-    padding: 4px;
-    border-radius: 4px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
   `
-  closeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`
+  closeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`
   if (onHeaderClose) {
     closeBtn.addEventListener('click', onHeaderClose)
   }

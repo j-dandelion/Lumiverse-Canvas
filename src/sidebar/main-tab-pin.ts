@@ -32,6 +32,7 @@ import {
   ensureMainPinHost,
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
+import { isSettingsButton } from '../tabs/buttons'
 import { showAssignmentMenu } from '../tabs/tab-context-menu'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
@@ -39,6 +40,19 @@ export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
 
 /** Mirror button class (also carries data-tab-id for shared pin-host CSS). */
 export const MAIN_MIRROR_BTN_CLASS = 'sidebar-ux-main-tab-mirror-btn'
+
+/**
+ * Scrollable upper section of the main-mirror strip (built-in + extension tabs).
+ * Matches Lumiverse `.tabListWrap` / `.tabList` — flex:1 so Settings can pin
+ * to the bottom of the strip.
+ */
+export const MAIN_MIRROR_LIST_MAIN_CLASS = 'sidebar-ux-tab-list-main'
+
+/**
+ * Bottom section for the Settings mirror — matches Lumiverse `.sidebarBottom`
+ * (margin-top auto via flex parent + border-top separator).
+ */
+export const MAIN_MIRROR_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
 let _enabled = false
 let _sidebarObserver: MutationObserver | null = null
@@ -166,29 +180,134 @@ function reconcileMainMirror(): void {
     attachSidebarObserver(sidebar)
   }
 
+  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list)
+
   const hostButtons = collectHostTabButtons(sidebar)
+  const regularButtons = hostButtons.filter((b) => !isSettingsButton(b))
+  const settingsButtons = hostButtons.filter((b) => isSettingsButton(b))
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)))
 
-  for (const child of Array.from(list.children)) {
-    const btn = child as HTMLElement
-    if (!btn.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
-      // Keep non-button nodes? Shell shouldn't put any. Remove unknowns
-      // that look like stale mirrors only.
-      if (btn.tagName === 'BUTTON' || btn.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
-        list.removeChild(btn)
-      }
-      continue
-    }
+  // Drop stale mirrors anywhere under the list (main + bottom + legacy flat).
+  for (const btn of Array.from(
+    list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`),
+  ) as HTMLElement[]) {
     const key = btn.getAttribute('data-mirror-key') || ''
     if (!wantedKeys.has(key)) {
-      list.removeChild(btn)
+      btn.remove()
     }
   }
 
-  let insertBefore: ChildNode | null = list.firstChild
+  // Built-in / extension tabs: scrollable top section (host .tabListWrap).
+  syncMirrorButtonsInto(mainSection, regularButtons, list)
+
+  // Settings: pinned to strip bottom with separator (host .sidebarBottom).
+  if (settingsButtons.length > 0) {
+    bottomSection.style.display = 'flex'
+    syncMirrorButtonsInto(bottomSection, settingsButtons, list)
+  } else {
+    bottomSection.style.display = 'none'
+    while (bottomSection.firstChild) bottomSection.removeChild(bottomSection.firstChild)
+  }
+
+  dlog('[main-mirror] reconcile tabs', {
+    hostCount: hostButtons.length,
+    regularCount: regularButtons.length,
+    settingsCount: settingsButtons.length,
+    mirrorCount: list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`).length,
+    open: isCanvasMainOpen(),
+    activeKeys: hostButtons
+      .filter((b) => String(b.className || '').includes('tabBtnActive'))
+      .map((b) => hostButtonKey(b)),
+  })
+}
+
+/** Direct child with class (no CSS :scope — works under test stubs). */
+function directChildByClass(parent: HTMLElement, className: string): HTMLElement | null {
+  for (const child of Array.from(parent.children)) {
+    const el = child as HTMLElement
+    if (el.classList?.contains?.(className) || String(el.className || '').includes(className)) {
+      return el
+    }
+  }
+  return null
+}
+
+/**
+ * Host-shaped strip: scrollable main + bottom Settings dock.
+ * Outer list is flex column / full height (pinned top+bottom); main takes
+ * remaining space; bottom stays at the end with a top border separator.
+ */
+function ensureMirrorListStructure(list: HTMLElement): {
+  main: HTMLElement
+  bottom: HTMLElement
+} {
+  let main = directChildByClass(list, MAIN_MIRROR_LIST_MAIN_CLASS)
+  let bottom = directChildByClass(list, MAIN_MIRROR_LIST_BOTTOM_CLASS)
+
+  if (!main) {
+    main = document.createElement('div')
+    main.className = MAIN_MIRROR_LIST_MAIN_CLASS
+    list.insertBefore(main, list.firstChild)
+  }
+  if (!bottom) {
+    bottom = document.createElement('div')
+    bottom.className = MAIN_MIRROR_LIST_BOTTOM_CLASS
+    list.appendChild(bottom)
+  }
+
+  // Adopt any legacy flat mirror buttons into main before reordering sections.
+  for (const child of Array.from(list.children)) {
+    if (
+      child !== main &&
+      child !== bottom &&
+      (child as HTMLElement).classList?.contains(MAIN_MIRROR_BTN_CLASS)
+    ) {
+      main.appendChild(child)
+    }
+  }
+
+  // Canonical order: main then bottom (only structural children).
+  if (list.firstChild !== main) list.insertBefore(main, list.firstChild)
+  if (main.nextSibling !== bottom) list.appendChild(bottom)
+
+  // Outer list fills the pin host; scroll lives in main so Settings stays docked.
+  if (list.style.overflowY !== 'hidden') list.style.overflowY = 'hidden'
+  if (list.style.minHeight !== '0') list.style.minHeight = '0'
+
+  if (main.style.flex !== '1 1 auto') main.style.flex = '1 1 auto'
+  if (main.style.minHeight !== '0') main.style.minHeight = '0'
+  if (main.style.display !== 'flex') main.style.display = 'flex'
+  if (main.style.flexDirection !== 'column') main.style.flexDirection = 'column'
+  // Host .tabList uses gap: 2px (ViewportDrawer.module.css) — not the
+  // outer .sidebar gap of 4px (that only spaces tabListWrap vs bottom).
+  if (main.style.gap !== '2px') main.style.gap = '2px'
+  if (main.style.overflowY !== 'auto') main.style.overflowY = 'auto'
+  if (main.style.overflowX !== 'hidden') main.style.overflowX = 'hidden'
+  if (main.style.scrollbarWidth !== 'none') main.style.scrollbarWidth = 'none'
+
+  if (bottom.style.flexShrink !== '0') bottom.style.flexShrink = '0'
+  if (bottom.style.flexDirection !== 'column') bottom.style.flexDirection = 'column'
+  if (bottom.style.gap !== '2px') bottom.style.gap = '2px'
+  // Match ViewportDrawer.module.css .sidebarBottom
+  if (bottom.style.marginTop !== 'auto') bottom.style.marginTop = 'auto'
+  if (bottom.style.paddingTop !== '8px') bottom.style.paddingTop = '8px'
+  if (bottom.style.borderTop !== '1px solid var(--lumiverse-primary-020)') {
+    bottom.style.borderTop = '1px solid var(--lumiverse-primary-020)'
+  }
+
+  return { main, bottom }
+}
+
+/** Create/order/sync mirror buttons for a host button set into `container`. */
+function syncMirrorButtonsInto(
+  container: HTMLElement,
+  hostButtons: HTMLElement[],
+  listRoot: HTMLElement,
+): void {
+  let insertBefore: ChildNode | null = container.firstChild
   for (const hostBtn of hostButtons) {
     const key = hostButtonKey(hostBtn)
-    let mirror = list.querySelector(
+    let mirror = listRoot.querySelector(
       `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(key)}"]`,
     ) as HTMLElement | null
 
@@ -201,9 +320,9 @@ function reconcileMainMirror(): void {
       // Canvas-owned context menu (host Lumiverse menu only fires on host
       // React buttons — mirror strip is outside the host sidebar).
       mirror.addEventListener('contextmenu', onMirrorContextMenu)
-      list.insertBefore(mirror, insertBefore)
-    } else if (mirror !== insertBefore) {
-      list.insertBefore(mirror, insertBefore)
+      container.insertBefore(mirror, insertBefore)
+    } else if (mirror.parentElement !== container || mirror !== insertBefore) {
+      container.insertBefore(mirror, insertBefore)
     }
 
     syncMirrorFromHost(mirror, hostBtn)
@@ -211,14 +330,18 @@ function reconcileMainMirror(): void {
     insertBefore = mirror.nextSibling
   }
 
-  dlog('[main-mirror] reconcile tabs', {
-    hostCount: hostButtons.length,
-    mirrorCount: list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`).length,
-    open: isCanvasMainOpen(),
-    activeKeys: hostButtons
-      .filter((b) => String(b.className || '').includes('tabBtnActive'))
-      .map((b) => hostButtonKey(b)),
-  })
+  // Remove extra non-mirror nodes left in this container (shouldn't happen).
+  for (const child of Array.from(container.children)) {
+    const el = child as HTMLElement
+    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+      container.removeChild(el)
+      continue
+    }
+    const key = el.getAttribute('data-mirror-key') || ''
+    if (!hostButtons.some((b) => hostButtonKey(b) === key)) {
+      container.removeChild(el)
+    }
+  }
 }
 
 /** Canvas showTabLabels + host tabBtnLabeled — same rules as isShowTabLabels for follow. */
@@ -262,7 +385,8 @@ function applyMirrorButtonChrome(btn: HTMLElement, labeled: boolean): void {
   btn.style.border = 'none'
   btn.style.cursor = 'pointer'
   btn.style.transition = 'all 0.2s ease'
-  btn.style.padding = '0 4px'
+  // Host .tabBtn has no horizontal padding (ViewportDrawer.module.css).
+  btn.style.padding = '0'
   btn.style.boxSizing = 'border-box'
   // Let stylesheet control fill / active chrome.
   btn.style.background = ''
@@ -361,10 +485,11 @@ function buildMirrorInnerHtml(hostBtn: HTMLElement, labeled: boolean): string {
   }
   const label = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
   const text = label ? (label.textContent || '').trim() : ''
-  // Always emit label span like secondary (opacity/height toggled by setting).
-  if (text || labeled) {
+  // Host only renders .tabLabel when showTabLabels is on. Emitting a zero-
+  // height label still costs the button's 1px flex gap and can read taller.
+  if (labeled && text) {
     parts.push(
-      `<span class="sidebar-ux-tab-label" style="opacity:${labeled ? '1' : '0'};height:${labeled ? 'auto' : '0'};margin-top:${labeled ? '1px' : '0'};transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
+      `<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
     )
   }
   return parts.join('')

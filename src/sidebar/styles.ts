@@ -189,12 +189,13 @@ export function injectDrawerTabStyles(): void {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      /* Square tabs matching Lumiverse tabBtn (48) / tabBtnLabeled (56). */
+      /* Square tabs matching Lumiverse tabBtn (48) / tabBtnLabeled (56).
+         Host .tabBtn has no padding — only explicit height. */
       width: 100%;
       height: 48px;
       flex-shrink: 0;
       gap: 1px;
-      padding: 0 4px;
+      padding: 0;
       box-sizing: border-box;
       transition: all 0.2s ease;
     }
@@ -321,6 +322,42 @@ export function injectDrawerTabStyles(): void {
 injectStyles('canvas-moved-active-toggle', `
     .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) {
       display: none !important;
+    }
+  `)
+  // Main-mirror strip: host-shaped layout (scrollable tabs + Settings dock).
+  // Mirrors ViewportDrawer.module.css .tabListWrap / .sidebarBottom so the
+  // Settings button sits at the end of the pin strip with a top separator.
+  injectStyles('canvas-main-mirror-tab-list-structure', `
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list.sidebar-ux-main-tab-list-mirror,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list.sidebar-ux-main-tab-list-mirror {
+      overflow-y: hidden;
+      min-height: 0;
+    }
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list-main,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-main {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      /* Host .tabList gap is 2px, not sidebar's 4px. */
+      gap: 2px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: none;
+    }
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list-main::-webkit-scrollbar,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-main::-webkit-scrollbar {
+      display: none;
+    }
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list-bottom,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-bottom {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: auto;
+      padding-top: 8px;
+      border-top: 1px solid var(--lumiverse-primary-020);
     }
   `)
 }

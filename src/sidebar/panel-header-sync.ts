@@ -1,6 +1,6 @@
-// Panel-header sync: keep the secondary drawer's panel header in step
-// with the main drawer's panel header (height, padding, title font-size,
-// border, background).
+// Panel-header sync: keep Canvas drawer panel headers in step with the
+// host main drawer's panel header (height, padding, title font-size,
+// border, background). Targets secondary AND main-mirror shells.
 //
 // Extracted from secondary.tsx to reduce file size. The module-level
 // state (observers + cache key) lives here; secondary.tsx imports the
@@ -14,37 +14,81 @@ let _lastWrittenHeaderVars: string | null = null
 let _mainPanelHeaderResizeObserver: ResizeObserver | null = null
 let _mainPanelHeaderAttrObserver: MutationObserver | null = null
 let _syncPanelHeaderPending = false
+/** Last getWrapper callback — observers re-use it for secondary primary target. */
+let _getPrimaryWrapper: (() => HTMLElement | null) | null = null
 
 /**
- * Public, coalesced entry point. Call this after the secondary wrapper
- * mounts, opens/closes, or whenever the main drawer's panel header
- * might have changed. Internally routes through requestAnimationFrame
- * to dedupe rapid back-to-back calls (the ResizeObserver, the
- * MutationObserver, openSecondarySidebar, mountSecondarySidebar, and
- * the side-flip remount can all fire in the same tick).
+ * Public, coalesced entry point. Call after secondary or main-mirror
+ * mounts, opens/closes, or whenever the host panel header might have
+ * changed. Internally routes through requestAnimationFrame to dedupe
+ * rapid back-to-back calls.
  *
- * No-op if the secondary wrapper isn't mounted or if the main panel
- * header can't be found (e.g. cold start before Lumiverse mounted its
- * panel). The CSS variables on the wrapper stay at their initial
- * empty state, and the secondary header falls back to its inline
- * defaults (`min-height: 48px`, `padding: 12px 16px`, etc.).
+ * Stamps CSS vars onto every live Canvas shell (`.sidebar-ux-secondary-wrapper`
+ * and `.sidebar-ux-main-mirror-wrapper`) so both match host header geometry.
+ * Optional `getWrapper` is kept as a primary target (secondary module state).
+ *
+ * No-op if no Canvas shell is mounted or the host panel header can't be
+ * found. Shells fall back to drawer-shell defaults (`min-height: 48px`,
+ * `padding: 12px 16px`, CloseButton-md-sized close control).
  */
 export function syncPanelHeaderFromMain(
-  getWrapper: () => HTMLElement | null,
+  getWrapper?: () => HTMLElement | null,
 ): void {
+  if (getWrapper) _getPrimaryWrapper = getWrapper
   if (_syncPanelHeaderPending) return
   _syncPanelHeaderPending = true
   requestAnimationFrame(() => {
     _syncPanelHeaderPending = false
-    _runSyncPanelHeaderFromMain(getWrapper)
+    _runSyncPanelHeaderFromMain()
   })
 }
 
-function _runSyncPanelHeaderFromMain(
-  getWrapper: () => HTMLElement | null,
+/** Shells that consume --sidebar-ux-panel-header-* vars on the wrapper. */
+function collectHeaderVarTargets(primary: HTMLElement | null): HTMLElement[] {
+  const out: HTMLElement[] = []
+  const seen = new Set<HTMLElement>()
+  const add = (el: HTMLElement | null | undefined) => {
+    if (!el || seen.has(el)) return
+    seen.add(el)
+    out.push(el)
+  }
+  add(primary)
+  if (typeof document !== 'undefined' && document.querySelectorAll) {
+    document
+      .querySelectorAll(
+        '.sidebar-ux-secondary-wrapper, .sidebar-ux-main-mirror-wrapper',
+      )
+      .forEach((n) => add(n as HTMLElement))
+  }
+  return out
+}
+
+function applyHeaderVars(
+  target: HTMLElement,
+  vars: {
+    height: string
+    paddingTop: string
+    paddingBottom: string
+    fontSize: string
+    borderBottom: string
+    background: string
+  },
 ): void {
-  const secondaryWrapper = getWrapper()
-  if (!secondaryWrapper) return
+  target.style.setProperty('--sidebar-ux-panel-header-h', vars.height)
+  target.style.setProperty('--sidebar-ux-panel-header-pt', vars.paddingTop)
+  target.style.setProperty('--sidebar-ux-panel-header-pb', vars.paddingBottom)
+  if (vars.fontSize) {
+    target.style.setProperty('--sidebar-ux-panel-header-font-size', vars.fontSize)
+  }
+  target.style.setProperty('--sidebar-ux-panel-header-border-bottom', vars.borderBottom)
+  target.style.setProperty('--sidebar-ux-panel-header-bg', vars.background)
+}
+
+function _runSyncPanelHeaderFromMain(): void {
+  const primary = _getPrimaryWrapper ? _getPrimaryWrapper() : null
+  const targets = collectHeaderVarTargets(primary)
+  if (targets.length === 0) return
+
   const mainHeader = getMainPanelHeader()
   // Missing main header → keep current CSS var values (empty or stale).
   if (!mainHeader) return
@@ -57,14 +101,14 @@ function _runSyncPanelHeaderFromMain(
   // across secondary wrapper remounts), so we only ever attach once.
   if (!_mainPanelHeaderResizeObserver) {
     _mainPanelHeaderResizeObserver = new ResizeObserver(() => {
-      syncPanelHeaderFromMain(getWrapper)
+      syncPanelHeaderFromMain()
     })
     _mainPanelHeaderResizeObserver.observe(mainHeader)
     registerCleanup(stopPanelHeaderObservers)
   }
   if (!_mainPanelHeaderAttrObserver) {
     _mainPanelHeaderAttrObserver = new MutationObserver(() => {
-      syncPanelHeaderFromMain(getWrapper)
+      syncPanelHeaderFromMain()
     })
     _mainPanelHeaderAttrObserver.observe(mainHeader, {
       attributes: true,
@@ -87,18 +131,21 @@ function _runSyncPanelHeaderFromMain(
     : `${headerStyle.borderBottomWidth} ${headerStyle.borderBottomStyle} ${headerStyle.borderBottomColor}`
   const background = headerStyle.backgroundColor
 
+  const vars = { height, paddingTop, paddingBottom, fontSize, borderBottom, background }
   const cacheKey = [height, paddingTop, paddingBottom, fontSize, borderBottom, background].join('|')
-  if (cacheKey === _lastWrittenHeaderVars) return
+
+  // Always stamp onto any target missing vars (new main-mirror mount after
+  // an earlier secondary-only sync). Skip only when cache matches AND every
+  // target already has the height var.
+  const allStamped =
+    cacheKey === _lastWrittenHeaderVars &&
+    targets.every((t) => !!t.style.getPropertyValue('--sidebar-ux-panel-header-h'))
+  if (allStamped) return
   _lastWrittenHeaderVars = cacheKey
 
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-h', height)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-pt', paddingTop)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-pb', paddingBottom)
-  if (fontSize) {
-    secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-font-size', fontSize)
+  for (const target of targets) {
+    applyHeaderVars(target, vars)
   }
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-border-bottom', borderBottom)
-  secondaryWrapper.style.setProperty('--sidebar-ux-panel-header-bg', background)
 }
 
 /**
