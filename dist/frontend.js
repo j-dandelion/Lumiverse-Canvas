@@ -2003,9 +2003,16 @@ function addSecondaryTabButton(tab) {
   `;
   btn.appendChild(labelSpan);
   btn.addEventListener("click", () => {
-    if (!isSecondarySidebarOpen())
+    if (isSecondarySidebarOpen()) {
+      if (getActiveSecondaryTabId() === tab.id) {
+        closeSecondarySidebar();
+      } else {
+        showSecondaryTab(tab.id);
+      }
+    } else {
       openSecondarySidebar();
-    showSecondaryTab(tab.id);
+      showSecondaryTab(tab.id);
+    }
   });
   btn.addEventListener("contextmenu", (e) => {
     e.preventDefault();

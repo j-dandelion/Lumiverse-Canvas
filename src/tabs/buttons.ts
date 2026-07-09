@@ -16,13 +16,14 @@ import { getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
 import {
+  closeSecondarySidebar,
   getSecondaryTabList,
   getSecondaryWrapper,
   isSecondarySidebarOpen,
   openSecondarySidebar,
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
-import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
+import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
 
@@ -267,8 +268,16 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.appendChild(labelSpan)
 
   btn.addEventListener('click', () => {
-    if (!isSecondarySidebarOpen()) openSecondarySidebar()
-    showSecondaryTab(tab.id)
+    if (isSecondarySidebarOpen()) {
+      if (getActiveSecondaryTabId() === tab.id) {
+        closeSecondarySidebar()
+      } else {
+        showSecondaryTab(tab.id)
+      }
+    } else {
+      openSecondarySidebar()
+      showSecondaryTab(tab.id)
+    }
   })
   btn.addEventListener('contextmenu', (e) => {
     e.preventDefault()
