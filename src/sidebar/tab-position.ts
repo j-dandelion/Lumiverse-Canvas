@@ -49,6 +49,68 @@ let _pinSpacer: HTMLElement | null = null
 let _restoreParent: HTMLElement | null = null
 let _restoreNext: ChildNode | null = null
 
+/**
+ * Live tab list currently under the module-owned pin host, if any.
+ * Prefer this over document.querySelector — dual/orphan lists under a
+ * host make document-first-match return the wrong (stale) strip.
+ *
+ * When multiple tab lists sit under the host (orphan bug), return the
+ * **last** one — that is the most recently pinned (live) list; earlier
+ * siblings are orphans from incomplete tearDown.
+ */
+export function getPinnedTabList(): HTMLElement | null {
+  if (!_pinHost) return null
+  // Walk children — works with partial test stubs and avoids :scope.
+  const kids = _pinHost.children
+  if (kids && kids.length) {
+    let last: HTMLElement | null = null
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i] as HTMLElement
+      if (isTabListElement(c)) last = c
+    }
+    if (last) return last
+  }
+  return (_pinHost.querySelector?.('.sidebar-ux-tab-list') as HTMLElement | null) ?? null
+}
+
+function isTabListElement(el: Element | null | undefined): el is HTMLElement {
+  if (!el) return false
+  // Prefer className token check — some test stubs only track add()'d tokens
+  // in classList.contains, so 'sidebar-ux-tab-list' may be missing from the
+  // Set even though it remains in the className string. Also treat the
+  // pinned flag alone as a tab list (orphan stubs may only carry that).
+  const cn = (el as HTMLElement).className
+  if (typeof cn === 'string') {
+    const tokens = cn.split(/\s+/).filter(Boolean)
+    if (tokens.includes('sidebar-ux-tab-list') || tokens.includes(TAB_LIST_PINNED_CLASS)) {
+      return true
+    }
+  }
+  const cls = (el as HTMLElement).classList
+  if (typeof cls?.contains === 'function') {
+    return cls.contains('sidebar-ux-tab-list') || cls.contains(TAB_LIST_PINNED_CLASS)
+  }
+  return false
+}
+
+/** Test-only: expose module pin host for dual-list / teardown assertions. */
+export function __getPinHostForTest(): HTMLElement | null {
+  return _pinHost
+}
+
+/** Test-only: inject a pin host so getPinnedTabList / getters can resolve. */
+export function __setPinHostForTest(host: HTMLElement | null): void {
+  _pinHost = host
+}
+
+/** Test-only: reset module pin state without touching a live document. */
+export function __resetPinStateForTest(): void {
+  _pinHost = null
+  _pinSpacer = null
+  _restoreParent = null
+  _restoreNext = null
+}
+
 // Structural element type — only the inline `style` is touched, so any
 // object exposing a `CSSStyleDeclaration` works. Real HTMLElements in
 // production; test stubs in unit tests.
@@ -213,7 +275,7 @@ export function getTabListPosition(opts?: ElementOpts): {
 
 /** True when the secondary tab list is currently in the pinned state. */
 export function isTabListPinned(tabList?: Element | null): boolean {
-  const el = tabList ?? getSecondaryTabList() ?? _pinHost?.querySelector('.sidebar-ux-tab-list')
+  const el = tabList ?? getSecondaryTabList() ?? getPinnedTabList()
   return !!el?.classList.contains(TAB_LIST_PINNED_CLASS)
 }
 
@@ -253,9 +315,7 @@ export function applyTabListPin(
   if (isMobileViewport()) {
     // Never pin on mobile; still clear pin if present (viewport cross-down).
     if (enabled && !opts?.force) return
-    const el =
-      getSecondaryTabList() ??
-      (_pinHost?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null)
+    const el = getSecondaryTabList() ?? getPinnedTabList()
     if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
       unpinTabList(el)
     }
@@ -263,9 +323,7 @@ export function applyTabListPin(
   }
 
   if (!enabled) {
-    const el =
-      getSecondaryTabList() ??
-      (_pinHost?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null)
+    const el = getSecondaryTabList() ?? getPinnedTabList()
     const hasPinState =
       !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer
     if (!hasPinState) {
@@ -295,6 +353,8 @@ function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
     _pinHost = document.createElement('div')
     document.body.appendChild(_pinHost)
   }
+  // Drop any stray pin hosts left by lost module state / incomplete teardown.
+  sweepStrayPinHosts()
   _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
   // Host is a non-transformed positioning shell; children take pointer events.
   setIfDifferent(_pinHost.style, 'position', 'fixed')
@@ -311,6 +371,39 @@ function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
     setIfDifferent(_pinHost.style, 'right', '')
   }
   return _pinHost
+}
+
+/** Remove document pin hosts that are not the module-owned `_pinHost`. */
+function sweepStrayPinHosts(): void {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return
+  const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`)
+  for (const host of Array.from(hosts)) {
+    if (host !== _pinHost) {
+      host.remove()
+    }
+  }
+}
+
+/**
+ * Ensure the pin host holds only `keep` as its tab list. Orphan lists from
+ * incomplete tearDown + remount would otherwise sit first in DOM order and
+ * poison document.querySelector / highlight writes.
+ */
+function removeOrphanTabListsFromHost(keep: HTMLElement): void {
+  if (!_pinHost) return
+  // Prefer children (Element list) — childNodes may include text nodes and
+  // test stubs often omit nodeType.
+  const kids = _pinHost.children
+    ? Array.from(_pinHost.children)
+    : Array.from(_pinHost.childNodes).filter(
+        (c) => (c as Node).nodeType === 1 || isTabListElement(c as Element),
+      )
+  for (const child of kids) {
+    if (child === keep) continue
+    if (isTabListElement(child as Element)) {
+      _pinHost.removeChild(child)
+    }
+  }
 }
 
 function pinTabList(tabList: HTMLElement): void {
@@ -337,8 +430,12 @@ function pinTabList(tabList: HTMLElement): void {
     }
     const host = ensurePinHost(side)
     if (host && tabList.parentElement !== host) {
+      // Drop any stale list still sitting on the host before we append.
+      removeOrphanTabListsFromHost(tabList)
       host.appendChild(tabList)
     }
+    // After append, guarantee exclusive ownership (covers re-pin force path).
+    removeOrphanTabListsFromHost(tabList)
   } else if (_pinHost) {
     _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
     if (side === 'right') {
@@ -348,6 +445,7 @@ function pinTabList(tabList: HTMLElement): void {
       setIfDifferent(_pinHost.style, 'left', '0')
       setIfDifferent(_pinHost.style, 'right', '')
     }
+    removeOrphanTabListsFromHost(tabList)
   }
 
   tabList.classList.add(TAB_LIST_PINNED_CLASS)
@@ -430,15 +528,11 @@ function destroyPinChrome(): void {
   _restoreParent = null
   _restoreNext = null
   if (_pinHost) {
-    // Safety: if anything is still inside (orphan), leave it — caller
-    // should have reparented the tab list already.
-    if (_pinHost.childNodes.length === 0) {
-      _pinHost.remove()
-      _pinHost = null
-    } else {
-      // Move remaining children back to secondary drawer if possible.
-      // Detach from host first so parent/child stays consistent even under
-      // partial DOM stubs.
+    // Best-effort: reparent remaining children into the live drawer so the
+    // tab list is not left as a body-level orphan strip. If the drawer is
+    // already gone (teardown mid-flight), drop the children — assignment
+    // restore recreates buttons on the next mount.
+    if (_pinHost.childNodes.length > 0) {
       const drawer = getSecondaryDrawer()
       const panel = getSecondaryPanel()
       while (_pinHost.firstChild) {
@@ -448,9 +542,12 @@ function destroyPinChrome(): void {
         } else if (drawer) {
           drawer.appendChild(child)
         }
+        // else: drop — no live drawer to attach to
       }
-      _pinHost.remove()
-      _pinHost = null
     }
+    _pinHost.remove()
+    _pinHost = null
   }
+  // Defensive: clear any stray hosts that module state no longer tracks.
+  sweepStrayPinHosts()
 }

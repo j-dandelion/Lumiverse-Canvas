@@ -22,6 +22,8 @@ The secondary sidebar is a wrapper element with this hierarchy:
 
 When the setting is on (desktop only), the tab list is **reparented** onto a body-level `.sidebar-ux-tab-list-pin-host` outside the transforming wrapper. A 56px spacer stays in the drawer so the panel does not draw under the strip when open. `position: fixed` alone is not enough: the wrapper always has `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. See `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts`. Remount (`mountSecondarySidebar`) re-applies pin from settings.
 
+**Lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan.
+
 ## DOM Construction (`secondary.tsx`)
 
 `createSecondarySidebar(options?)` builds the entire DOM tree programmatically:

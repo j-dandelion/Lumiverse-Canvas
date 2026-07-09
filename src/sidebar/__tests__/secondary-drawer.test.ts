@@ -43,12 +43,22 @@ let _fakeSidebar: any = null
       classList: {
         _classes: [] as string[],
         add(cls: string) { this._classes.push(cls) },
+        remove(cls: string) { this._classes = this._classes.filter(c => c !== cls) },
         contains(cls: string) { return this._classes.includes(cls) },
+        toggle(cls: string, force?: boolean) {
+          const has = this._classes.includes(cls)
+          const shouldAdd = force !== undefined ? force : !has
+          if (shouldAdd && !has) this._classes.push(cls)
+          if (!shouldAdd && has) this._classes = this._classes.filter(c => c !== cls)
+          return shouldAdd
+        },
       },
       setAttribute(name: string, value: string) { this._attrs[name] = value },
       getAttribute(name: string) { return this._attrs[name] ?? null },
       setProperty(name: string, value: string, _imp?: string) { this.style[name] = value },
       appendChild(child: any) { this.children.push(child) },
+      querySelector(_sel: string) { return null },
+      remove() {},
       addEventListener(_evt: string, _fn: any) {},
     }
   },
@@ -58,6 +68,10 @@ let _fakeSidebar: any = null
 ;(globalThis as any).getComputedStyle = () => ({ display: '', visibility: '' })
 ;(globalThis as any).MutationObserver = class { observe() {} disconnect() {} }
 ;(globalThis as any).HTMLElement = class {}
+;(globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) => {
+  setTimeout(() => cb(performance.now()), 0)
+  return 0
+}
 
 // =====================================================================
 // matchMedia stub for mobile viewport tests
@@ -124,6 +138,12 @@ function setupTest(opts: {
       if (sel === '.sidebar-ux-tab-list') return null
       if (sel === '.sidebar-ux-panel-title') return null
       return null
+    },
+    querySelectorAll(sel: string) {
+      if (sel.includes('[data-canvas-moved]')) {
+        return fakePanelContent.children.filter((c: any) => c.getAttribute?.('data-canvas-moved'))
+      }
+      return []
     },
     closest(_sel: string) { return fakePanelContent },
     getAttribute(name: string) { return fakePanelContent._attrs[name] ?? null },
@@ -282,6 +302,13 @@ function setupExtTest(opts: {
         }
       }
       return null
+    },
+    // showSecondaryTab highlights via tabList.querySelectorAll('button[data-tab-id]')
+    querySelectorAll(sel: string) {
+      if (sel === 'button[data-tab-id]' || sel.includes('button[data-tab-id]')) {
+        return _secondaryTabButtons
+      }
+      return []
     },
     getAttribute(name: string) { return fakeTabList._attrs[name] ?? null },
     setAttribute(name: string, value: string) { fakeTabList._attrs[name] = value },

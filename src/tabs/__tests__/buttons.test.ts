@@ -19,8 +19,9 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
 //
 // showSecondaryTab needs:
 //   - getSecondaryWrapper() returns our stub (via __setSecondaryWrapperForTest)
-//   - getSecondaryWrapper().querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]')
-//     returns our stub buttons
+//   - getSecondaryTabList() resolves via wrapper.querySelector('.sidebar-ux-tab-list')
+//     (unpinned) or getPinnedTabList() / module pin host (pinned)
+//   - tab list querySelectorAll('button[data-tab-id]') returns stub buttons
 //   - getMainDrawerSide() falls through to the default 'right' (no DOM matches)
 //   - getComputedStyle(btn).color (the dlog call uses it for debug output)
 //
@@ -148,14 +149,44 @@ const btn1 = makeButton('tab1', 'Tab One')
 const btn2 = makeButton('tab2', 'Tab Two')
 const stubButtons: StubButton[] = [btn1, btn2]
 
-const secondaryWrapper = {
-  querySelector(_sel: string): unknown {
-    // No panel content / title for this test — we only exercise the
-    // tab-button styling branch.
+// Unpinned: list under wrapper.
+const stubTabList = {
+  className: 'sidebar-ux-tab-list',
+  querySelector(_sel: string): unknown { return null },
+  querySelectorAll(sel: string): StubButton[] {
+    if (sel === 'button[data-tab-id]') return stubButtons
+    return []
+  },
+}
+
+// Pinned: list under module pin host (getPinnedTabList).
+const stubPinnedTabList = {
+  className: 'sidebar-ux-tab-list sidebar-ux-tab-list--pinned',
+  querySelector(_sel: string): unknown { return null },
+  querySelectorAll(sel: string): StubButton[] {
+    if (sel === 'button[data-tab-id]') return stubButtons
+    return []
+  },
+}
+const stubPinHost = {
+  className: 'sidebar-ux-tab-list-pin-host',
+  children: [stubPinnedTabList] as unknown[],
+  querySelector(sel: string): unknown {
+    if (typeof sel === 'string' && sel.includes('sidebar-ux-tab-list')) return stubPinnedTabList
     return null
   },
-  querySelectorAll(sel: string): StubButton[] {
-    if (sel === '.sidebar-ux-tab-list button[data-tab-id]') return stubButtons
+}
+
+let pinMode = false
+
+const secondaryWrapper = {
+  querySelector(sel: string): unknown {
+    // Unpinned: tab list lives under the wrapper.
+    if (sel === '.sidebar-ux-tab-list' && !pinMode) return stubTabList
+    // No panel content / title for this test — styling branch only.
+    return null
+  },
+  querySelectorAll(_sel: string): StubButton[] {
     return []
   },
 }
@@ -192,6 +223,7 @@ const secondaryWrapper = {
 // matters: setting the wrapper before showSecondaryTab is called ensures
 // the getter returns the stub.
 import { __setSecondaryWrapperForTest } from '../../sidebar/secondary'
+import { __setPinHostForTest, __resetPinStateForTest } from '../../sidebar/tab-position'
 __setSecondaryWrapperForTest(secondaryWrapper as unknown as HTMLElement)
 
 import { showSecondaryTab } from '../buttons'
@@ -302,6 +334,34 @@ import { showSecondaryTab } from '../buttons'
     'T13.c: demoted button inline color cleared')
   assertEqual(btn1.style.boxShadow, '',
     'T13.d: demoted button inline box-shadow cleared')
+}
+
+// ============================================================
+// T14: keepTabListVisible (pin host) — showSecondaryTab still updates
+//   highlight when the tab list is outside the secondary wrapper.
+// ============================================================
+{
+  pinMode = true
+  __setPinHostForTest(stubPinHost as unknown as HTMLElement)
+  btn1.classList = makeClassList()
+  btn2.classList = makeClassList()
+  btn1.style = makeStyle()
+  btn2.style = makeStyle()
+  showSecondaryTab('tab1')
+
+  assert(btn1.classList.contains('sidebar-ux-tab-active'),
+    'T14.a: pinned list — active button has sidebar-ux-tab-active')
+  assert(!btn2.classList.contains('sidebar-ux-tab-active'),
+    'T14.b: pinned list — inactive button lacks the class')
+
+  showSecondaryTab('tab2')
+  assert(!btn1.classList.contains('sidebar-ux-tab-active'),
+    'T14.c: pinned list — old active demoted after switch')
+  assert(btn2.classList.contains('sidebar-ux-tab-active'),
+    'T14.d: pinned list — new active promoted after switch')
+
+  pinMode = false
+  __resetPinStateForTest()
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -76,6 +76,7 @@ function buildFakeSecondaryWrapper() {
       textContent: b.title,
       parentElement: null,
       querySelector(_sel: string) { return null },
+      remove() {},
     }
   })
   return {
@@ -85,8 +86,19 @@ function buildFakeSecondaryWrapper() {
       return []
     },
     querySelector(sel: string): any {
-      if (sel === '.sidebar-ux-tab-list') return {
-        querySelectorAll(_s: string) { return buttonObjs },
+      if (sel === '.sidebar-ux-tab-list') {
+        return {
+          querySelectorAll(_s: string) { return buttonObjs },
+          querySelector(s: string): any {
+            // Match [data-tab-id="…"] used by removeSecondaryTabButton
+            const m = typeof s === 'string' ? s.match(/data-tab-id="([^"]+)"/) : null
+            if (m) {
+              return buttonObjs.find((b: any) => b.getAttribute('data-tab-id') === m[1]) ?? null
+            }
+            return null
+          },
+          remove() {},
+        }
       }
       return null
     },

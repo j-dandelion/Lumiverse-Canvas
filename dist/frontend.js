@@ -565,13 +565,61 @@ __export(exports_tab_position, {
   reconcileTabListPin: () => reconcileTabListPin,
   isTabListPinned: () => isTabListPinned,
   getTabListPosition: () => getTabListPosition,
+  getPinnedTabList: () => getPinnedTabList,
   applyTabListPosition: () => applyTabListPosition,
   applyTabListPin: () => applyTabListPin,
+  __setPinHostForTest: () => __setPinHostForTest,
+  __resetPinStateForTest: () => __resetPinStateForTest,
+  __getPinHostForTest: () => __getPinHostForTest,
   TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
   TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
   TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
   TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS
 });
+function getPinnedTabList() {
+  if (!_pinHost)
+    return null;
+  const kids = _pinHost.children;
+  if (kids && kids.length) {
+    let last = null;
+    for (let i = 0;i < kids.length; i++) {
+      const c = kids[i];
+      if (isTabListElement(c))
+        last = c;
+    }
+    if (last)
+      return last;
+  }
+  return _pinHost.querySelector?.(".sidebar-ux-tab-list") ?? null;
+}
+function isTabListElement(el) {
+  if (!el)
+    return false;
+  const cn = el.className;
+  if (typeof cn === "string") {
+    const tokens = cn.split(/\s+/).filter(Boolean);
+    if (tokens.includes("sidebar-ux-tab-list") || tokens.includes(TAB_LIST_PINNED_CLASS)) {
+      return true;
+    }
+  }
+  const cls = el.classList;
+  if (typeof cls?.contains === "function") {
+    return cls.contains("sidebar-ux-tab-list") || cls.contains(TAB_LIST_PINNED_CLASS);
+  }
+  return false;
+}
+function __getPinHostForTest() {
+  return _pinHost;
+}
+function __setPinHostForTest(host) {
+  _pinHost = host;
+}
+function __resetPinStateForTest() {
+  _pinHost = null;
+  _pinSpacer = null;
+  _restoreParent = null;
+  _restoreNext = null;
+}
 function setIfDifferent(el, prop, val) {
   if (el[prop] !== val) {
     el[prop] = val;
@@ -667,7 +715,7 @@ function getTabListPosition(opts) {
   };
 }
 function isTabListPinned(tabList) {
-  const el = tabList ?? getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+  const el = tabList ?? getSecondaryTabList() ?? getPinnedTabList();
   return !!el?.classList.contains(TAB_LIST_PINNED_CLASS);
 }
 function reconcileTabListPin() {
@@ -681,14 +729,14 @@ function applyTabListPin(enabled, opts) {
   if (isMobileViewport()) {
     if (enabled && !opts?.force)
       return;
-    const el = getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+    const el = getSecondaryTabList() ?? getPinnedTabList();
     if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
       unpinTabList(el);
     }
     return;
   }
   if (!enabled) {
-    const el = getSecondaryTabList() ?? _pinHost?.querySelector(".sidebar-ux-tab-list");
+    const el = getSecondaryTabList() ?? getPinnedTabList();
     const hasPinState = !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer;
     if (!hasPinState) {
       if (opts?.force)
@@ -716,6 +764,7 @@ function ensurePinHost(side) {
     _pinHost = document.createElement("div");
     document.body.appendChild(_pinHost);
   }
+  sweepStrayPinHosts();
   _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
   setIfDifferent(_pinHost.style, "position", "fixed");
   setIfDifferent(_pinHost.style, "top", SAFE_TOP);
@@ -731,6 +780,28 @@ function ensurePinHost(side) {
     setIfDifferent(_pinHost.style, "right", "");
   }
   return _pinHost;
+}
+function sweepStrayPinHosts() {
+  if (typeof document === "undefined" || !document.querySelectorAll)
+    return;
+  const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`);
+  for (const host of Array.from(hosts)) {
+    if (host !== _pinHost) {
+      host.remove();
+    }
+  }
+}
+function removeOrphanTabListsFromHost(keep) {
+  if (!_pinHost)
+    return;
+  const kids = _pinHost.children ? Array.from(_pinHost.children) : Array.from(_pinHost.childNodes).filter((c) => c.nodeType === 1 || isTabListElement(c));
+  for (const child of kids) {
+    if (child === keep)
+      continue;
+    if (isTabListElement(child)) {
+      _pinHost.removeChild(child);
+    }
+  }
 }
 function pinTabList(tabList) {
   const drawer = getSecondaryDrawer();
@@ -753,8 +824,10 @@ function pinTabList(tabList) {
     }
     const host = ensurePinHost(side);
     if (host && tabList.parentElement !== host) {
+      removeOrphanTabListsFromHost(tabList);
       host.appendChild(tabList);
     }
+    removeOrphanTabListsFromHost(tabList);
   } else if (_pinHost) {
     _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
     if (side === "right") {
@@ -764,6 +837,7 @@ function pinTabList(tabList) {
       setIfDifferent(_pinHost.style, "left", "0");
       setIfDifferent(_pinHost.style, "right", "");
     }
+    removeOrphanTabListsFromHost(tabList);
   }
   tabList.classList.add(TAB_LIST_PINNED_CLASS);
   setIfDifferent(tabList.style, "position", "fixed");
@@ -833,10 +907,7 @@ function destroyPinChrome() {
   _restoreParent = null;
   _restoreNext = null;
   if (_pinHost) {
-    if (_pinHost.childNodes.length === 0) {
-      _pinHost.remove();
-      _pinHost = null;
-    } else {
+    if (_pinHost.childNodes.length > 0) {
       const drawer = getSecondaryDrawer();
       const panel = getSecondaryPanel();
       while (_pinHost.firstChild) {
@@ -847,10 +918,11 @@ function destroyPinChrome() {
           drawer.appendChild(child);
         }
       }
-      _pinHost.remove();
-      _pinHost = null;
     }
+    _pinHost.remove();
+    _pinHost = null;
   }
+  sweepStrayPinHosts();
 }
 var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null;
 var init_tab_position = __esm(() => {
@@ -1880,7 +1952,7 @@ function readMainButtonShortName(mainBtn) {
   return;
 }
 function addSecondaryTabButton(tab) {
-  const tabList = getSecondaryWrapper()?.querySelector(".sidebar-ux-tab-list");
+  const tabList = getSecondaryTabList();
   const _bareId = tab.id.includes(":") ? tab.id.replace(/:\d+$/, "").split(":").pop() ?? tab.id : tab.id;
   const alreadyHasButton = !!(tabList && (tabList.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`) || tabList.querySelector(`[data-tab-id="${CSS.escape(_bareId)}"]`)));
   if (!tabList || alreadyHasButton)
@@ -1943,7 +2015,7 @@ function addSecondaryTabButton(tab) {
   tabList.appendChild(btn);
 }
 function removeSecondaryTabButton(tabId) {
-  const btn = getSecondaryWrapper()?.querySelector(`[data-tab-id="${tabId}"]`);
+  const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   btn?.remove();
 }
 function updateDrawerTabVisibility() {
@@ -1975,7 +2047,7 @@ function showSecondaryTab(tabId) {
     if (title)
       title.textContent = activeTitle;
   }
-  const allBtns = getSecondaryWrapper()?.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
+  const allBtns = getSecondaryTabList()?.querySelectorAll("button[data-tab-id]");
   if (allBtns) {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute("data-tab-id") === tabId;
@@ -2114,7 +2186,8 @@ async function captureSourceList(side, h) {
     }
     return merged;
   }
-  const btns = document.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
+  const list = getSecondaryTabList();
+  const btns = list ? list.querySelectorAll("button[data-tab-id]") : document.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
   return Array.from(btns).map((b) => b.getAttribute("data-tab-id")).filter(Boolean);
 }
 async function isMovedTabActiveInSource(tabId, side, h, preMoveSourceActiveTab) {
@@ -2255,6 +2328,7 @@ async function runHandoff({ tabId, source, destination, sourceList, preMoveSourc
 var init_activation_handoff = __esm(() => {
   init_log();
   init_mobile_exclusion();
+  init_secondary();
   init_active_tab();
   init_buttons();
   init_store();
@@ -2419,19 +2493,31 @@ var exports_secondary_drawer = {};
 __export(exports_secondary_drawer, {
   unassignFromSecondary: () => unassignFromSecondary,
   teardownSecondaryDrawer: () => teardownSecondaryDrawer,
+  setSuppressAutoActivation: () => setSuppressAutoActivation,
   setRestoringFromLayout: () => setRestoringFromLayout,
+  isSuppressAutoActivation: () => isSuppressAutoActivation,
   isRestoringFromLayout: () => isRestoringFromLayout,
   initSecondaryDrawer: () => initSecondaryDrawer,
   getSecondaryDrawerState: () => getSecondaryDrawerState,
   getActiveSecondaryTab: () => getActiveSecondaryTab,
   assignToSecondary: () => assignToSecondary,
-  activateSecondaryTab: () => activateSecondaryTab
+  activateSecondaryTab: () => activateSecondaryTab,
+  __resetAutoActivationGuardForTest: () => __resetAutoActivationGuardForTest
 });
 function setRestoringFromLayout(value) {
   _restoringFromLayout = value;
 }
 function isRestoringFromLayout() {
   return _restoringFromLayout;
+}
+function setSuppressAutoActivation(value) {
+  _suppressAutoActivation = value;
+}
+function isSuppressAutoActivation() {
+  return _suppressAutoActivation;
+}
+function __resetAutoActivationGuardForTest() {
+  _suppressAutoActivation = false;
 }
 function findStoreTab(tabIdOrTitle) {
   findStoreData(true);
@@ -2537,7 +2623,7 @@ async function assignToSecondary(tabId) {
         updateDrawerTabVisibility();
       }
     }
-    if (!isMobileViewport()) {
+    if (!isMobileViewport() && !_suppressAutoActivation) {
       _activeTabId = resolvedId;
       _state = "tab_active";
       setActiveSecondaryTabId(resolvedId);
@@ -2593,7 +2679,7 @@ async function assignToSecondary(tabId) {
       const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
       if (_headerTitle2)
         _headerTitle2.textContent = _title2;
-      if (!isMobileViewport()) {
+      if (!isMobileViewport() && !_suppressAutoActivation) {
         showSecondaryTab(resolvedId);
       }
       persistLayout();
@@ -2660,7 +2746,7 @@ async function assignToSecondary(tabId) {
     if (_headerTitle)
       _headerTitle.textContent = _title;
   }
-  if (!isMobileViewport()) {
+  if (!isMobileViewport() && !_suppressAutoActivation) {
     showSecondaryTab(resolvedId);
   }
   persistLayout();
@@ -2728,7 +2814,7 @@ function teardownSecondaryDrawer() {
   _state = "closed";
   _activeTabId = null;
 }
-var _state = "closed", _activeTabId = null, _restoringFromLayout = false;
+var _state = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
 var init_secondary_drawer = __esm(() => {
   init_drawer_observer();
   init_buttons();
@@ -3293,7 +3379,7 @@ function getSecondaryTabList() {
   const inWrapper = _secondaryWrapper.querySelector(".sidebar-ux-tab-list");
   if (inWrapper)
     return inWrapper;
-  return document.querySelector(`.${TAB_LIST_PIN_HOST_CLASS} > .sidebar-ux-tab-list`);
+  return getPinnedTabList();
 }
 function getSecondaryPanel() {
   return _secondaryWrapper?.querySelector(".sidebar-ux-panel");
@@ -3480,10 +3566,9 @@ function openSecondarySidebar() {
   syncPanelHeaderFromMain2();
   updateChatReflow();
   Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
-    for (const [tabId, side] of getTabAssignments()) {
-      if (side === "secondary")
-        assignToSecondary2(tabId).catch(() => {});
-    }
+    setSuppressAutoActivation(true);
+    const promises = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(([tabId]) => assignToSecondary2(tabId).catch(() => {}));
+    Promise.all(promises).finally(() => setSuppressAutoActivation(false));
   });
   persistOpenState();
   setMobileOpenClass("secondary", true);
@@ -3533,6 +3618,7 @@ function mountSecondarySidebar(options) {
   mountResizeHandles();
 }
 function tearDownSecondarySidebar() {
+  applyTabListPin(false, { force: true });
   if (_secondaryWrapper) {
     const sidebar = getMainSidebar();
     if (sidebar) {
@@ -3609,6 +3695,7 @@ var init_secondary = __esm(() => {
   init_state();
   init_log();
   init_panel_header_sync();
+  init_secondary_drawer();
 });
 
 // src/layout/apply.ts
@@ -3926,7 +4013,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "1.7.2.8", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();

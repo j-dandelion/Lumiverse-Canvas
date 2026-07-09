@@ -15,7 +15,13 @@ import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar, PUZZLE_ICON_SVG } from '../sidebar/secondary'
+import {
+  getSecondaryTabList,
+  getSecondaryWrapper,
+  isSecondarySidebarOpen,
+  openSecondarySidebar,
+  PUZZLE_ICON_SVG,
+} from '../sidebar/secondary'
 import { getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
@@ -199,7 +205,9 @@ interface SecondaryTabDescriptor {
 }
 
 export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
-  const tabList = getSecondaryWrapper()?.querySelector('.sidebar-ux-tab-list')
+  // Use getSecondaryTabList() so this works when keepTabListVisible has
+  // reparented the list onto the body-level pin host (outside the wrapper).
+  const tabList = getSecondaryTabList()
   const _bareId = tab.id.includes(':')
     ? (tab.id.replace(/:\d+$/, '').split(':').pop() ?? tab.id)
     : tab.id
@@ -272,7 +280,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
 }
 
 export function removeSecondaryTabButton(tabId: string): void {
-  const btn = getSecondaryWrapper()?.querySelector(`[data-tab-id="${tabId}"]`)
+  // Prefer the tab list (works pinned or unpinned). Fall back to wrapper
+  // for any stray buttons that might still live under the drawer chrome.
+  const btn =
+    getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ??
+    getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`)
   btn?.remove()
 }
 
@@ -324,9 +336,13 @@ export function showSecondaryTab(tabId: string): void {
   // Update active state on tab buttons. CSS drives the active visual
   // via .sidebar-ux-tab-active — matches Lumiverse's .tabBtnActive
   // (ViewportDrawer.module.css:227-237). No inline style needed.
-  const allBtns = getSecondaryWrapper()?.querySelectorAll(
-    '.sidebar-ux-tab-list button[data-tab-id]',
-  ) as NodeListOf<HTMLElement>
+  //
+  // Query via getSecondaryTabList() so the highlight still updates when
+  // keepTabListVisible has reparented the list onto the pin host (outside
+  // the secondary wrapper — wrapper.querySelector would miss the buttons).
+  const allBtns = getSecondaryTabList()?.querySelectorAll(
+    'button[data-tab-id]',
+  ) as NodeListOf<HTMLElement> | undefined
   if (allBtns) {
     for (const btn of allBtns) {
       const isActive = btn.getAttribute('data-tab-id') === tabId

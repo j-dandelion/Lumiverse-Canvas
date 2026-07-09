@@ -28,11 +28,17 @@ import { injectStyles } from '../debug/styles'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
 import { SECONDARY_WIDTH_VAR, injectDrawerTabStyles } from './styles'
-import { applyTabListPin, applyTabListPosition, reconcileTabListPin, TAB_LIST_PIN_HOST_CLASS } from './tab-position'
+import {
+  applyTabListPin,
+  applyTabListPosition,
+  getPinnedTabList,
+  reconcileTabListPin,
+} from './tab-position'
 import { getSettings } from '../settings/state'
 import { dwarn } from '../debug/log'
 import { registerCleanup } from './cleanup'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
+import { setSuppressAutoActivation } from './secondary-drawer'
 
 // Re-export for backward compatibility — the test file imports these
 // from secondary.tsx.
@@ -77,13 +83,15 @@ export function getSecondaryDrawer(): HTMLElement | null {
 
 export function getSecondaryTabList(): HTMLElement | null {
   if (!_secondaryWrapper) return null
-  // Unpinned: tab list lives inside the drawer under the wrapper.
+  // 1) In-wrapper list wins when present — covers unpinned layout and the
+  //    remount window where a fresh empty list sits in the drawer while an
+  //    orphan may still linger on the pin host (pin will reparent + drop
+  //    orphans).
   const inWrapper = _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
   if (inWrapper) return inWrapper
-  // Pinned: reparented onto the body-level pin host (outside the transform).
-  return document.querySelector(
-    `.${TAB_LIST_PIN_HOST_CLASS} > .sidebar-ux-tab-list`,
-  ) as HTMLElement | null
+  // 2) Module-owned pin list (not document.querySelector first-match, which
+  //    returns a stale orphan when dual lists exist under the host).
+  return getPinnedTabList()
 }
 
 export function getSecondaryPanel(): HTMLElement | null {
@@ -373,11 +381,16 @@ export function openSecondarySidebar() {
   // Re-attach any moved tab roots to the (possibly fresh) wrapper.
   // assignToSecondary is idempotent — for a tab already in the wrapper
   // it hits the early-guard and just refreshes button + active state.
-  // Fire-and-forget because openSecondarySidebar is sync.
+  // Suppress auto-activation during the re-assignment loop so that if
+  // the user clicked a tab button to open the drawer, their clicked
+  // tab stays highlighted instead of being overwritten by the last
+  // tab in the loop.
   import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
-    for (const [tabId, side] of getTabAssignments()) {
-      if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
-    }
+    setSuppressAutoActivation(true)
+    const promises = Array.from(getTabAssignments())
+      .filter(([, side]) => side === 'secondary')
+      .map(([tabId]) => assignToSecondary(tabId).catch(() => {}))
+    Promise.all(promises).finally(() => setSuppressAutoActivation(false))
   })
   persistOpenState()
   setMobileOpenClass('secondary', true)
@@ -483,6 +496,12 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
  * decision (the user may flip the master back on and want the layout back).
  */
 export function tearDownSecondarySidebar(): void {
+  // Unpin first (same as unmountSecondarySidebar). While pinned the tab
+  // list lives on a body-level host outside the wrapper — removing the
+  // wrapper without unpin leaves an orphan strip that poisons remount
+  // (dual lists; highlight / restore write to the wrong one).
+  applyTabListPin(false, { force: true })
+
   if (_secondaryWrapper) {
     // If the main drawer is currently showing a tab that lives in the
     // secondary sidebar, switch to a built-in fallback first. Otherwise

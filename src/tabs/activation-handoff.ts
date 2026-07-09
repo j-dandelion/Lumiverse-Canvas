@@ -19,6 +19,7 @@
  */
 import { dlog } from '../debug/log'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { getSecondaryTabList } from '../sidebar/secondary'
 import {
   isTabActiveInMainDrawer,
   getActiveSecondaryTabId,
@@ -164,8 +165,13 @@ export async function captureSourceList(side: 'primary' | 'secondary', h?: TestH
 
     return merged
   }
-  // secondary — DOM-based (the store may be unreliable for wrapper tabs)
-  const btns = document.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]')
+  // secondary — DOM-based (the store may be unreliable for wrapper tabs).
+  // Use the live secondary list (pin-aware) so dual/orphan pin hosts do not
+  // mix button ids from a stale strip.
+  const list = getSecondaryTabList()
+  const btns = list
+    ? list.querySelectorAll('button[data-tab-id]')
+    : document.querySelectorAll('.sidebar-ux-tab-list button[data-tab-id]')
   return Array.from(btns).map(b => b.getAttribute('data-tab-id')).filter(Boolean) as string[]
 }
 

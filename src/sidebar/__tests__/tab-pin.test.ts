@@ -171,6 +171,12 @@ bodyStub.className = 'body'
     }
     return null
   },
+  querySelectorAll(sel: string): StubElement[] {
+    if (sel.includes('sidebar-ux-tab-list-pin-host')) {
+      return bodyStub.children.filter((c) => c.className.includes('sidebar-ux-tab-list-pin-host'))
+    }
+    return []
+  },
 }
 
 ;(globalThis as any).window = {
@@ -186,13 +192,16 @@ bodyStub.className = 'body'
 import {
   applyTabListPin,
   applyTabListPosition,
+  getPinnedTabList,
   TAB_LIST_PINNED_CLASS,
   TAB_LIST_PIN_HOST_CLASS,
   TAB_LIST_SPACER_CLASS,
   TAB_LIST_WIDTH_PX,
   reconcileTabListPin,
+  __getPinHostForTest,
+  __resetPinStateForTest,
 } from '../tab-position'
-import { __setSecondaryWrapperForTest } from '../secondary'
+import { __setSecondaryWrapperForTest, getSecondaryTabList } from '../secondary'
 
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
@@ -386,6 +395,93 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   resetStubs('right')
   reconcileTabListPin()
   assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C11: reconcile with default false')
+}
+
+// C12: orphan list under pin host is removed when a new list is pinned
+// (simulates incomplete tearDown leaving a stale strip)
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  const host = __getPinHostForTest() as unknown as StubElement | null
+  assert(!!host, 'C12: pin host exists after pin')
+
+  // Inject an orphan tab list *before* the live one in the host.
+  // Set both class tokens on className (stub classList.add overwrites className).
+  const orphan = new StubElement()
+  orphan.className = `sidebar-ux-tab-list ${TAB_LIST_PINNED_CLASS}`
+  orphan.classList = {
+    _set: new Set(['sidebar-ux-tab-list', TAB_LIST_PINNED_CLASS]),
+    add(c: string) { this._set.add(c); orphan.className = Array.from(this._set).join(' ') },
+    remove(c: string) { this._set.delete(c); orphan.className = Array.from(this._set).join(' ') },
+    contains(c: string) { return this._set.has(c) },
+    toString() { return orphan.className },
+  } as any
+  // Put orphan first: insertBefore live list
+  host!.insertBefore(orphan, stubTabList)
+
+  assertEqual(host!.children.length, 2, 'C12: pre — dual lists under host')
+  assertEqual(host!.children[0], orphan, 'C12: pre — orphan is first (document-first-match trap)')
+
+  // Force re-pin the live list — should drop the orphan.
+  applyTabListPin(true, { force: true })
+
+  assertEqual(host!.children.length, 1, 'C12: only one tab list under host after force pin')
+  assertEqual(host!.children[0], stubTabList, 'C12: live list remains')
+  assertEqual(getPinnedTabList(), stubTabList as any, 'C12: getPinnedTabList returns live list')
+  assertEqual(getSecondaryTabList(), stubTabList as any, 'C12: getSecondaryTabList returns live list')
+}
+
+// C13: force destroy when pin host exists but getter cannot resolve list
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  assert(!!__getPinHostForTest(), 'C13: pre — pin host set')
+
+  // Detach list from host without going through unpin — leaves orphan host state.
+  const host = __getPinHostForTest() as unknown as StubElement
+  if (stubTabList.parentElement === host) host.removeChild(stubTabList)
+  // Put list back in drawer so the tree is not fully lost
+  stubDrawer.insertBefore(stubTabList, stubPanel)
+  stubTabList.classList.remove(TAB_LIST_PINNED_CLASS)
+
+  // Clear module host pointer simulation: destroy via force unpin with null getter path
+  // (wrapper still exists; host may still hold no list). Force-disable must clear host.
+  applyTabListPin(false, { force: true })
+  assertEqual(__getPinHostForTest(), null, 'C13: force unpin clears module pin host')
+  assert(
+    !bodyStub.children.some((c) => c.className.includes(TAB_LIST_PIN_HOST_CLASS)),
+    'C13: pin host removed from body',
+  )
+}
+
+// C14: getSecondaryTabList prefers module pin list over document first-match
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  const host = __getPinHostForTest() as unknown as StubElement
+  const orphan = new StubElement()
+  orphan.className = 'sidebar-ux-tab-list'
+  host.insertBefore(orphan, stubTabList)
+
+  // Without exclusive cleanup, document first-match would be orphan.
+  // Getter must still return the module-walk first child after we force-pin
+  // which removes orphans — call force pin first then check.
+  // Here we only check that after force pin the getter is live:
+  applyTabListPin(true, { force: true })
+  assertEqual(getSecondaryTabList(), stubTabList as any, 'C14: getter is live list not orphan')
+  assertEqual(getPinnedTabList(), stubTabList as any, 'C14: pinned accessor is live list')
+}
+
+// C15: __resetPinStateForTest clears module refs without throwing
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  __resetPinStateForTest()
+  assertEqual(__getPinHostForTest(), null, 'C15: reset clears host ref')
+  // Clean body leftovers for subsequent tests
+  while (bodyStub.firstChild) bodyStub.removeChild(bodyStub.firstChild!)
+  wireDefaultTree()
+  __setSecondaryWrapperForTest(secondaryWrapper as any)
 }
 
 console.log(`PASS: ${passed}`)

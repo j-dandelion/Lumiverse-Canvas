@@ -61,6 +61,26 @@ export function isRestoringFromLayout(): boolean {
   return _restoringFromLayout
 }
 
+// Guard flag: when true, assignToSecondary skips the showSecondaryTabDisplay
+// call at the end of its run. openSecondarySidebar fires a re-assignment
+// loop that calls assignToSecondary for every assigned tab — each call
+// currently calls showSecondaryTabDisplay(resolvedId), and the last one
+// wins. When the user clicks a tab button while the drawer is closed, the
+// click handler calls showSecondaryTab(clickedTabId) synchronously, but the
+// async re-assignment loop then overwrites the highlight with the last tab
+// in the list. Setting this flag during that loop prevents the overwrite.
+let _suppressAutoActivation = false
+export function setSuppressAutoActivation(value: boolean): void {
+  _suppressAutoActivation = value
+}
+export function isSuppressAutoActivation(): boolean {
+  return _suppressAutoActivation
+}
+/** Test-only: reset module state between tests. */
+export function __resetAutoActivationGuardForTest(): void {
+  _suppressAutoActivation = false
+}
+
 /**
  * Resolve a tab in Lumiverse's Zustand store by id (canonical) or title
  * (fallback for when the context-menu's store lookup missed and the
@@ -243,7 +263,9 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     // Refresh active state and header (idempotent — safe on both paths).
     // On mobile, skip state activation when the drawer wasn't opened —
     // the user stays in the source drawer; destination opens manually.
-    if (!isMobileViewport()) {
+    // Suppressed during openSecondarySidebar's re-assignment loop so
+    // the user's clicked tab stays active instead of being overwritten.
+    if (!isMobileViewport() && !_suppressAutoActivation) {
       _activeTabId = resolvedId
       _state = 'tab_active'
       setActiveSecondaryTabId(resolvedId)
@@ -354,7 +376,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       }
       const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
       if (_headerTitle) _headerTitle.textContent = _title
-      if (!isMobileViewport()) {
+      if (!isMobileViewport() && !_suppressAutoActivation) {
         showSecondaryTabDisplay(resolvedId)
       }
       persistLayout()
@@ -489,7 +511,11 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   // finishRestore (apply.ts) because that path may run before the button
   // exists (assignToSecondary is async) or may not run at all if the
   // observer never fires (extensions already registered).
-  if (!isMobileViewport()) {
+  //
+  // Suppressed during the openSecondarySidebar re-assignment loop
+  // (_suppressAutoActivation) so the user's clicked tab stays highlighted
+  // instead of being overwritten by the last tab in the loop.
+  if (!isMobileViewport() && !_suppressAutoActivation) {
     showSecondaryTabDisplay(resolvedId)
   }
 
