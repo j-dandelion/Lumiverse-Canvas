@@ -465,11 +465,66 @@ function removeOrphanTabListsFromHost(keep: HTMLElement): void {
   }
 }
 
+/**
+ * Shared edge chrome for a pinned tab list (secondary reparent + main mirror).
+ * Does NOT touch background/padding/gap — those stay at construction values
+ * from createDrawerShell so main and secondary look identical.
+ */
+export function applyPinnedTabListChrome(
+  tabList: HTMLElement,
+  side: 'left' | 'right',
+): void {
+  const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
+
+  tabList.classList.add(TAB_LIST_PINNED_CLASS)
+
+  // Fill the pin host (or viewport edge if no reparent in stub tests).
+  setIfDifferent(tabList.style, 'position', 'fixed')
+  setIfDifferent(tabList.style, 'top', SAFE_TOP)
+  setIfDifferent(tabList.style, 'bottom', SAFE_BOTTOM)
+  setIfDifferent(tabList.style, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(tabList.style, 'pointerEvents', 'auto')
+  if (side === 'right') {
+    setIfDifferent(tabList.style, 'right', '0')
+    setIfDifferent(tabList.style, 'left', '')
+  } else {
+    setIfDifferent(tabList.style, 'left', '0')
+    setIfDifferent(tabList.style, 'right', '')
+  }
+
+  if (innerBorderSide === 'right') {
+    setIfDifferent(tabList.style, 'borderRight', INNER_BORDER)
+    setIfDifferent(tabList.style, 'borderLeft', 'none')
+  } else {
+    setIfDifferent(tabList.style, 'borderLeft', INNER_BORDER)
+    setIfDifferent(tabList.style, 'borderRight', 'none')
+  }
+}
+
+/**
+ * Clear pinned edge chrome (position/edges/z-index/pointer-events).
+ * Restores construction width; borders are reapplied by applyTabListPosition.
+ */
+export function clearPinnedTabListChrome(tabList: HTMLElement): void {
+  tabList.classList.remove(TAB_LIST_PINNED_CLASS)
+  setIfDifferent(tabList.style, 'position', '')
+  setIfDifferent(tabList.style, 'top', '')
+  setIfDifferent(tabList.style, 'bottom', '')
+  setIfDifferent(tabList.style, 'left', '')
+  setIfDifferent(tabList.style, 'right', '')
+  setIfDifferent(tabList.style, 'zIndex', '')
+  setIfDifferent(tabList.style, 'pointerEvents', '')
+  // Restore construction width — do not blank it.
+  setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(tabList.style, 'borderLeft', '')
+  setIfDifferent(tabList.style, 'borderRight', '')
+}
+
 function pinTabList(tabList: HTMLElement): void {
   const drawer = getSecondaryDrawer()
   const panel = getSecondaryPanel()
   const side = secondarySide()
-  const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
 
   // Reparent out of the transformed wrapper when a real parent exists.
   // Unit tests often pass parent-less stubs — styles still apply.
@@ -500,30 +555,7 @@ function pinTabList(tabList: HTMLElement): void {
     removeOrphanTabListsFromHost(tabList)
   }
 
-  tabList.classList.add(TAB_LIST_PINNED_CLASS)
-
-  // Fill the pin host (or viewport edge if no reparent in stub tests).
-  setIfDifferent(tabList.style, 'position', 'fixed')
-  setIfDifferent(tabList.style, 'top', SAFE_TOP)
-  setIfDifferent(tabList.style, 'bottom', SAFE_BOTTOM)
-  setIfDifferent(tabList.style, 'zIndex', PIN_Z_INDEX)
-  setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
-  setIfDifferent(tabList.style, 'pointerEvents', 'auto')
-  if (side === 'right') {
-    setIfDifferent(tabList.style, 'right', '0')
-    setIfDifferent(tabList.style, 'left', '')
-  } else {
-    setIfDifferent(tabList.style, 'left', '0')
-    setIfDifferent(tabList.style, 'right', '')
-  }
-
-  if (innerBorderSide === 'right') {
-    setIfDifferent(tabList.style, 'borderRight', INNER_BORDER)
-    setIfDifferent(tabList.style, 'borderLeft', 'none')
-  } else {
-    setIfDifferent(tabList.style, 'borderLeft', INNER_BORDER)
-    setIfDifferent(tabList.style, 'borderRight', 'none')
-  }
+  applyPinnedTabListChrome(tabList, side)
 
   // Out of flex flow while pinned — flex-direction no longer affects layout.
   if (drawer) {
@@ -537,19 +569,7 @@ function pinTabList(tabList: HTMLElement): void {
 
 function unpinTabList(tabList: HTMLElement | null): void {
   if (tabList) {
-    tabList.classList.remove(TAB_LIST_PINNED_CLASS)
-    setIfDifferent(tabList.style, 'position', '')
-    setIfDifferent(tabList.style, 'top', '')
-    setIfDifferent(tabList.style, 'bottom', '')
-    setIfDifferent(tabList.style, 'left', '')
-    setIfDifferent(tabList.style, 'right', '')
-    setIfDifferent(tabList.style, 'zIndex', '')
-    setIfDifferent(tabList.style, 'pointerEvents', '')
-    // Restore construction width — do not blank it.
-    setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
-    // Borders restored via applyTabListPosition below.
-    setIfDifferent(tabList.style, 'borderLeft', '')
-    setIfDifferent(tabList.style, 'borderRight', '')
+    clearPinnedTabListChrome(tabList)
 
     // Restore into the drawer if we reparented.
     if (_restoreParent && tabList.parentElement === _pinHost) {

@@ -146,10 +146,16 @@ export function mountResizeHandles(): void {
         ${mainSide === 'left' ? 'right' : 'left'}: -4px;
       `
       mirrorDrawer.appendChild(handle)
+      // Main-mirror shell is the main drawer — use main* opts so flex
+      // follows getMainDrawerSide(), not the opposite secondary side.
       applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-        drawer: mirrorDrawer,
-        tabList: mirrorDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement,
-        handle,
+        mainDrawer: mirrorDrawer,
+        mainTabList:
+          (mirrorDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement | null) ??
+          (document.querySelector(
+            '.sidebar-ux-tab-list-pin-host[data-pin-owner="main"] .sidebar-ux-tab-list',
+          ) as HTMLElement | null),
+        mainPanel: mirrorDrawer.querySelector('.sidebar-ux-panel') as HTMLElement | null,
       })
     }
     // Do not mount a host main handle while host is headless.

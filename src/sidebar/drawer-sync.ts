@@ -31,6 +31,7 @@ import { dlog, dwarn } from '../debug/log'
 // only call each other from inside function bodies — never at module init time.
 // Keep it that way to avoid initialization races.
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
+import { getMainMirrorWrapper, isCanvasMainOpen, isMainMirrorActive } from './main-mirror-drawer'
 import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -92,9 +93,11 @@ export function syncDrawerTabSettings(): void {
 }
 
 function _runSyncDrawerTabSettings(): void {
-  const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
-  if (!drawerTab) { return }
-
+  // Secondary and/or Canvas main-mirror edge toggles. Either may be absent
+  // (second drawer off, keepTabListVisible off) — still sync the other.
+  const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
+  const mainMirrorWrapperEarly = getMainMirrorWrapper()
+  if (!drawerTab && !mainMirrorWrapperEarly) return
 
   // Bug fix (2026-06-19, follow-up): scope the main-drawer-tab query to
   // the main WRAPPER rather than the whole document. The previous
@@ -195,30 +198,47 @@ function _runSyncDrawerTabSettings(): void {
   }
 
   // Mirror dimensions — GUARDED. Cache the 8 values as a serialized string.
+  // Stamp onto secondary AND main-mirror wrappers so both edge toggles match host.
   const secondaryWrapper = getSecondaryWrapper()
-  if (secondaryWrapper) {
-    const mainStyle = getComputedStyle(mainDrawerTab)
-    const newVars = [
-      `${mainDrawerTab.offsetWidth}px`,
-      `${mainDrawerTab.offsetHeight}px`,
-      mainStyle.paddingTop,
-      mainStyle.paddingRight,
-      mainStyle.paddingBottom,
-      mainStyle.paddingLeft,
-      mainStyle.gap,
-      `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`,
-    ].join('|')
-    if (newVars !== _lastWrittenDrawerTabVars) {
-      _lastWrittenDrawerTabVars = newVars
+  const mainMirrorWrapper = getMainMirrorWrapper()
+  const mainStyle = getComputedStyle(mainDrawerTab)
+  const newVars = [
+    `${mainDrawerTab.offsetWidth}px`,
+    `${mainDrawerTab.offsetHeight}px`,
+    mainStyle.paddingTop,
+    mainStyle.paddingRight,
+    mainStyle.paddingBottom,
+    mainStyle.paddingLeft,
+    mainStyle.gap,
+    `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`,
+  ].join('|')
+  if (newVars !== _lastWrittenDrawerTabVars) {
+    _lastWrittenDrawerTabVars = newVars
+    const parts = newVars.split('|')
+    const stamp = (wrapper: HTMLElement) => {
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
+      wrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
+    }
+    if (secondaryWrapper) stamp(secondaryWrapper)
+    if (mainMirrorWrapper) stamp(mainMirrorWrapper)
+  } else {
+    // First paint of main mirror after vars already cached — still stamp once.
+    if (mainMirrorWrapper && !mainMirrorWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w')) {
       const parts = newVars.split('|')
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
-      secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
+      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
     }
   }
 
@@ -233,37 +253,63 @@ function _runSyncDrawerTabSettings(): void {
     const settings = getSettings()
 
     if (settings.mirrorCompactPosition) {
-
-      drawerTab.style.marginTop = `${posVh}vh`
+      if (drawerTab) drawerTab.style.marginTop = `${posVh}vh`
+      // Canvas main edge toggle tracks host vertical position too.
+      const mainMirrorTab = mainMirrorWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
+      if (mainMirrorTab) mainMirrorTab.style.marginTop = `${posVh}vh`
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
-      drawerTab.style.marginTop = ''  // mirror off, no override → clear
+      if (drawerTab) drawerTab.style.marginTop = ''  // mirror off, no override → clear
     }
     _lastKnownVerticalPos = posVh
   }
 
   // Sync active state via CSS class (background/border/color handled by CSS rules)
-  drawerTab.classList.toggle('sidebar-ux-drawer-tab--active', isSecondarySidebarOpen())
+  if (drawerTab) {
+    drawerTab.classList.toggle('sidebar-ux-drawer-tab--active', isSecondarySidebarOpen())
+  }
+  const mainMirrorTab = mainMirrorWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
+  if (mainMirrorTab && isMainMirrorActive()) {
+    mainMirrorTab.classList.toggle('sidebar-ux-drawer-tab--active', isCanvasMainOpen())
+  }
 
   // Sync tab labels with showTabLabels setting
   syncSecondaryTabLabels()
 }
 
-/** Update all secondary tab buttons' label visibility to match showTabLabels. */
+/** Update all secondary + main-mirror tab buttons' label visibility to match showTabLabels. */
 export function syncSecondaryTabLabels(): void {
   const showLabels = isShowTabLabels()
   const cacheKey = showLabels ? 'show' : 'hide'
   if (cacheKey === _lastWrittenLabelsKey) return
   _lastWrittenLabelsKey = cacheKey
-  const labels = getSecondaryWrapper()?.querySelectorAll('.sidebar-ux-tab-label') as NodeListOf<HTMLElement>
-  if (!labels) return
-  for (const label of labels) {
-    label.style.opacity = showLabels ? '1' : '0'
-    label.style.height = showLabels ? 'auto' : '0'
-    label.style.marginTop = showLabels ? '1px' : '0'
-    // Skip Canvas-owned buttons (owned by the wrapper) — their label
-    // visibility is managed by the wrapper's own styling.
-    const btn = label.closest('button[data-tab-id]:not(.sidebar-ux-tab-secondary-canvas)') as HTMLElement | null
-    if (btn) btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
+
+  const roots: ParentNode[] = []
+  const secondary = getSecondaryWrapper()
+  if (secondary) roots.push(secondary)
+  const mainMirror = getMainMirrorWrapper()
+  if (mainMirror) roots.push(mainMirror)
+  // Pinned lists live on body-level pin hosts, outside wrappers.
+  if (typeof document.querySelectorAll === 'function') {
+    for (const host of Array.from(document.querySelectorAll('.sidebar-ux-tab-list-pin-host'))) {
+      roots.push(host)
+    }
+  }
+
+  for (const root of roots) {
+    const labels = root.querySelectorAll('.sidebar-ux-tab-label') as NodeListOf<HTMLElement>
+    for (const label of labels) {
+      label.style.opacity = showLabels ? '1' : '0'
+      label.style.height = showLabels ? 'auto' : '0'
+      label.style.marginTop = showLabels ? '1px' : '0'
+      const btn = label.closest(
+        'button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn',
+      ) as HTMLElement | null
+      if (btn) {
+        btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
+        // Keep square geometry in sync with labeled class (secondary + main).
+        btn.style.height = showLabels ? '56px' : '48px'
+      }
+    }
   }
 }
 

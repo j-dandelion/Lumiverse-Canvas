@@ -189,9 +189,21 @@ export function injectDrawerTabStyles(): void {
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      /* Square tabs matching Lumiverse tabBtn (48) / tabBtnLabeled (56). */
       width: 100%;
-      padding: 8px 4px;
+      height: 48px;
+      flex-shrink: 0;
+      gap: 1px;
+      padding: 0 4px;
       box-sizing: border-box;
+      transition: all 0.2s ease;
+    }
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled {
+      height: 56px;
     }
     /* Label color — matches main drawer .tabLabel
        (ViewportDrawer.module.css:245). */
@@ -254,9 +266,10 @@ export function injectDrawerTabStyles(): void {
     .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active,
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
-      background: var(--lumiverse-primary-020);
-      color: var(--lumiverse-primary);
-      box-shadow: inset 3px 0 0 var(--lumiverse-primary);
+      /* !important so leftover inline styles cannot kill the fill */
+      background: var(--lumiverse-primary-020, rgba(139, 92, 246, 0.2)) !important;
+      color: var(--lumiverse-primary, #a78bfa) !important;
+      box-shadow: inset 3px 0 0 var(--lumiverse-primary, #a78bfa) !important;
       border-radius: 0 8px 8px 0;
     }
     .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
@@ -264,7 +277,7 @@ export function injectDrawerTabStyles(): void {
     .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active,
     .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
     .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
-      box-shadow: inset -3px 0 0 var(--lumiverse-primary);
+      box-shadow: inset -3px 0 0 var(--lumiverse-primary, #a78bfa) !important;
       border-radius: 8px 0 0 8px;
     }
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
@@ -278,8 +291,10 @@ export function injectDrawerTabStyles(): void {
 
   // Icon-size styles — separate injection so the consistentIconSize toggle
   // can remove/re-inject without affecting the rest of the drawer tab styles.
+  // Covers secondary (data-tab-id) and main-mirror buttons.
   injectStyles('sidebar-ux-icon-size-styles', `
-    .sidebar-ux-tab-list button[data-tab-id] > span > svg {
+    .sidebar-ux-tab-list button[data-tab-id] > span > svg,
+    .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn > span > svg {
       width: 20px;
       height: 20px;
       flex-shrink: 0;

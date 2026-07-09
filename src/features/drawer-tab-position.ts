@@ -27,11 +27,17 @@ import { applyDrawerTabPosition } from '../drawerTabPosition'
 import { installDrawerTabDrag } from '../drawerTabPosition/drag'
 
 /**
- * Query the main drawer tab: Lumiverse's own drawer-tab button, excluding
- * our secondary sidebar's drawer-tab (which has the .sidebar-ux-drawer-tab
- * class).
+ * Query the main drawer tab for drag install.
+ * When Canvas main mirror owns the chrome, use the Canvas edge toggle
+ * (host tab is visibility-hidden and not useful to drag).
  */
 function getMainDrawerTab(): HTMLElement | null {
+  const canvasMain = document.querySelector(
+    '.sidebar-ux-main-mirror-wrapper .sidebar-ux-drawer-tab',
+  ) as HTMLElement | null
+  if (canvasMain && document.documentElement.classList.contains('sidebar-ux-canvas-main-active')) {
+    return canvasMain
+  }
   return document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)')
 }
 

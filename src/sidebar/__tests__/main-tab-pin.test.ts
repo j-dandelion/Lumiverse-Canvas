@@ -433,7 +433,16 @@ function resetAll() {
   const mirrors = list!.children.filter((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))
   assertEqual(mirrors.length, 2, 'M1: two mirror buttons')
   assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M1: first mirror id')
-  assert(mirrors[0].classList.contains('sidebar-ux-tab-active'), 'M1: active class mirrored')
+  // Secondary parity: no tab looks selected while the drawer is closed.
+  assert(!mirrors[0].classList.contains('sidebar-ux-tab-active'), 'M1: no active highlight while closed')
+  // Open via mirror click → host active should show on open.
+  mirrors[0].click()
+  // Reconcile after open restores host active class.
+  applyMainTabListPin(true, { force: true })
+  const listAfter = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const m0 = listAfter.children.find((c) => c.getAttribute('data-tab-id') === 'profile')!
+  assert(m0.classList.contains('sidebar-ux-tab-active'), 'M1: active class mirrored when open')
 }
 
 // M2: host wrapperOpen does NOT hide pin host (Canvas owns open/close)

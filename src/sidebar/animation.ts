@@ -12,12 +12,23 @@ type AnimState = {
   start: number | null
   from: number
   to: number
+  onComplete: (() => void) | null
 }
 
 const _anims = new WeakMap<HTMLElement, AnimState>()
 
 /** Test / cancel-all fallback when a single global cancel is needed. */
 let _lastWrapper: HTMLElement | null = null
+
+/** Parse translateX px from an inline transform (0 if absent / none). */
+export function parseTranslateX(transform: string | null | undefined): number {
+  if (!transform || transform === 'none') return 0
+  const m = transform.match(/translateX\(\s*(-?[\d.]+)\s*px\s*\)/)
+  if (m) return parseFloat(m[1]) || 0
+  // Fallback: first signed number (legacy `translateX(N)` without units in tests).
+  const n = transform.match(/-?[\d.]+/)
+  return n ? parseFloat(n[0]) || 0 : 0
+}
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
@@ -37,6 +48,15 @@ function animFrame(wrapper: HTMLElement, state: AnimState, now: number) {
   } else {
     state.raf = null
     state.start = null
+    const done = state.onComplete
+    state.onComplete = null
+    if (done) {
+      try {
+        done()
+      } catch {
+        /* caller errors must not break animation bookkeeping */
+      }
+    }
   }
 }
 
@@ -49,6 +69,7 @@ export function cancelWrapperAnimation(wrapper?: HTMLElement | null): void {
     cancelAnimationFrame(state.raf)
     state.raf = null
     state.start = null
+    state.onComplete = null
   }
 }
 
@@ -63,19 +84,41 @@ export function __getAnimState(wrapper?: HTMLElement | null) {
   }
 }
 
-export function animateWrapper(wrapper: HTMLElement, targetPx: number) {
+/**
+ * Animate wrapper translateX to targetPx over ANIM_DURATION_MS.
+ * Optional onComplete fires once when the animation settles (not on cancel).
+ */
+export function animateWrapper(
+  wrapper: HTMLElement,
+  targetPx: number,
+  onComplete?: () => void,
+): void {
   _lastWrapper = wrapper
   let state = _anims.get(wrapper)
   if (!state) {
-    state = { raf: null, start: null, from: 0, to: 0 }
+    state = { raf: null, start: null, from: 0, to: 0, onComplete: null }
     _anims.set(wrapper, state)
   }
-  const current = wrapper
-    ? (parseFloat(wrapper.style.transform?.match(/-?[\d.]+/)?.[0] || '0'))
-    : 0
+  const current = parseTranslateX(wrapper.style.transform)
   state.from = current
   state.to = targetPx
   state.start = null
+  state.onComplete = onComplete ?? null
   if (state.raf !== null) cancelAnimationFrame(state.raf)
+  // Already at target — settle immediately so onComplete still runs.
+  if (current === targetPx) {
+    wrapper.style.transform = `translateX(${targetPx}px)`
+    state.raf = null
+    const done = state.onComplete
+    state.onComplete = null
+    if (done) {
+      try {
+        done()
+      } catch {
+        /* ignore */
+      }
+    }
+    return
+  }
   state.raf = requestAnimationFrame((t) => animFrame(wrapper, state!, t))
 }

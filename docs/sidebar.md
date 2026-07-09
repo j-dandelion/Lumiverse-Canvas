@@ -25,9 +25,11 @@ When the setting is on (desktop only):
 | Drawer | Strategy | Module |
 |--------|----------|--------|
 | **Secondary** | **Reparent** Canvas-owned `.sidebar-ux-tab-list` onto a body-level `.sidebar-ux-tab-list-pin-host` (`data-pin-owner="secondary"`). A 56px spacer stays in the drawer. Strip stays visible while closed. | `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts` |
-| **Main** | **Headless host + Canvas shell** — hide host main chrome via `html.sidebar-ux-canvas-main-active` CSS (`:has([data-spindle-mount="sidebar"])`); mount a full Canvas drawer (shared `drawer-shell.ts`) on the main side; pin its tab list (`data-pin-owner="main"`); mirror host tab buttons and forward `.click()`. Host panel content stays in the React tree and is **overlay-positioned** over the Canvas panel when open (`visibility:visible` under a hidden ancestor) — never reparented (reparent + MutationObserver fought React and froze the tab). | `main-mirror-drawer.ts` + `main-tab-pin.ts` |
+| **Main** | **Headless host + Canvas shell** — hide host main chrome via `html.sidebar-ux-canvas-main-active`; mount shared `createDrawerShell({ owner: 'main' })` on Lumiverse drawer side; pin tab list; mirror tab clicks. Host `panelContent` is **soft-reparented into `shell.content`** for the whole mode lifetime (same pattern as secondary parking extension roots). Open/close = one `animateWrapper` on the shell; resize = CSS width var + flex. No body overlay / fixed layout ticker. | `main-mirror-drawer.ts` + `main-tab-pin.ts` |
 
-Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... })` so main and secondary look the same. **No Lumiverse source changes** — host React stays in the tree as the activation/content engine.
+Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... })` so main and secondary look the same: same tab-list surface, 48/56 tabs, edge drawer-tab, open/close animation, closed-state active-highlight rules. Pin chrome is shared via `applyPinnedTabListChrome`. **No Lumiverse source changes** — host React still owns the panel content node; only its DOM parent changes while mode is active (restored on teardown).
+
+**Drawer side (left/right):** shell anchor, pin host, closed transform (`−width` left / `+width` right), resize handle, and chat reflow all follow `getMainDrawerSide()`. Side-change remounts via `checkSideChanged` → `reconcileMainTabListPin`.
 
 `position: fixed` alone is not enough: wrappers always have `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. Dual pin hosts are keyed by `data-pin-owner` so `sweepStrayPinHosts` never deletes the other drawer’s host.
 

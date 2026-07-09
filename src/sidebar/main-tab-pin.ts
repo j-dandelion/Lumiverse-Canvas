@@ -15,10 +15,13 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
 import { getSettings } from '../settings/state'
+import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from './mobile-exclusion'
 import {
   applyMainMirrorDrawer,
+  closeCanvasMainDrawer,
   getMainMirrorTabList,
+  isCanvasMainOpen,
   isMainMirrorActive,
   onMainMirrorTabActivated,
   reconcileMainMirrorDrawer,
@@ -29,6 +32,7 @@ import {
   ensureMainPinHost,
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
+import { showAssignmentMenu } from '../tabs/tab-context-menu'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -194,6 +198,9 @@ function reconcileMainMirror(): void {
       mirror.classList.add(MAIN_MIRROR_BTN_CLASS)
       mirror.setAttribute('data-mirror-key', key)
       mirror.addEventListener('click', onMirrorClick)
+      // Canvas-owned context menu (host Lumiverse menu only fires on host
+      // React buttons — mirror strip is outside the host sidebar).
+      mirror.addEventListener('contextmenu', onMirrorContextMenu)
       list.insertBefore(mirror, insertBefore)
     } else if (mirror !== insertBefore) {
       list.insertBefore(mirror, insertBefore)
@@ -203,6 +210,65 @@ function reconcileMainMirror(): void {
     _mirrorToHost.set(mirror, hostBtn)
     insertBefore = mirror.nextSibling
   }
+
+  dlog('[main-mirror] reconcile tabs', {
+    hostCount: hostButtons.length,
+    mirrorCount: list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`).length,
+    open: isCanvasMainOpen(),
+    activeKeys: hostButtons
+      .filter((b) => String(b.className || '').includes('tabBtnActive'))
+      .map((b) => hostButtonKey(b)),
+  })
+}
+
+/** Canvas showTabLabels + host tabBtnLabeled — same rules as isShowTabLabels for follow. */
+function resolveMirrorLabeled(hostBtn: HTMLElement): boolean {
+  const mode = getSettings().showTabLabels
+  if (mode === 'show') return true
+  if (mode === 'hide') return false
+  return (
+    hostBtn.classList.contains('tabBtnLabeled') ||
+    String(hostBtn.className || '').includes('tabBtnLabeled')
+  )
+}
+
+/**
+ * Match secondary tab button geometry: square 48px (icon-only) / 56px (labeled).
+ * Secondary sets these as inline styles at create time; keep main in lockstep.
+ *
+ * Do NOT set inline background/boxShadow/color — CSS drives hover +
+ * .sidebar-ux-tab-active (inline background:transparent was killing the
+ * active highlight).
+ */
+function applyMirrorButtonChrome(btn: HTMLElement, labeled: boolean): void {
+  const height = labeled ? '56px' : '48px'
+  // Only rewrite when height (or base chrome) drifted — avoid layout thrash.
+  if (btn.style.height === height && btn.style.gap === '1px') {
+    // Still clear any leftover paint overrides so active CSS can apply.
+    btn.style.background = ''
+    btn.style.boxShadow = ''
+    btn.style.color = ''
+    btn.style.borderRadius = ''
+    return
+  }
+  btn.style.width = '100%'
+  btn.style.height = height
+  btn.style.flexShrink = '0'
+  btn.style.display = 'flex'
+  btn.style.flexDirection = 'column'
+  btn.style.alignItems = 'center'
+  btn.style.justifyContent = 'center'
+  btn.style.gap = '1px'
+  btn.style.border = 'none'
+  btn.style.cursor = 'pointer'
+  btn.style.transition = 'all 0.2s ease'
+  btn.style.padding = '0 4px'
+  btn.style.boxSizing = 'border-box'
+  // Let stylesheet control fill / active chrome.
+  btn.style.background = ''
+  btn.style.boxShadow = ''
+  btn.style.color = ''
+  btn.style.borderRadius = ''
 }
 
 function resolveMirrorList(): HTMLElement | null {
@@ -258,34 +324,47 @@ function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
     mirror.setAttribute('aria-label', title)
   }
 
-  const isActive =
+  // Match secondary: no tab looks selected while the drawer is closed.
+  const hostActive =
     hostBtn.classList.contains('tabBtnActive') ||
     String(hostBtn.className || '').includes('tabBtnActive')
-  mirror.classList.toggle('sidebar-ux-tab-active', isActive)
+  const showActive = hostActive && isCanvasMainOpen()
+  const wasActive = mirror.classList.contains('sidebar-ux-tab-active')
+  mirror.classList.toggle('sidebar-ux-tab-active', showActive)
+  if (showActive !== wasActive) {
+    dlog('[main-mirror] active toggle', {
+      title: mirror.getAttribute('title'),
+      showActive,
+      hostActive,
+      open: isCanvasMainOpen(),
+    })
+  }
 
-  const labeled =
-    hostBtn.classList.contains('tabBtnLabeled') ||
-    String(hostBtn.className || '').includes('tabBtnLabeled')
+  const labeled = resolveMirrorLabeled(hostBtn)
   mirror.classList.toggle('sidebar-ux-tab-labeled', labeled)
 
-  const nextHtml = buildMirrorInnerHtml(hostBtn)
+  const nextHtml = buildMirrorInnerHtml(hostBtn, labeled)
   if (mirror.getAttribute('data-mirror-html') !== nextHtml) {
     mirror.setAttribute('data-mirror-html', nextHtml)
     mirror.innerHTML = nextHtml
   }
+
+  // Keep geometry in sync when labels toggle; never paint-override active CSS.
+  applyMirrorButtonChrome(mirror, labeled)
 }
 
-function buildMirrorInnerHtml(hostBtn: HTMLElement): string {
+function buildMirrorInnerHtml(hostBtn: HTMLElement, labeled: boolean): string {
   const parts: string[] = []
   const svg = hostBtn.querySelector('svg')
   if (svg) {
     parts.push(`<span>${svg.outerHTML}</span>`)
   }
   const label = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
-  if (label) {
-    const text = (label.textContent || '').trim()
+  const text = label ? (label.textContent || '').trim() : ''
+  // Always emit label span like secondary (opacity/height toggled by setting).
+  if (text || labeled) {
     parts.push(
-      `<span class="sidebar-ux-tab-label">${escapeHtml(text)}</span>`,
+      `<span class="sidebar-ux-tab-label" style="opacity:${labeled ? '1' : '0'};height:${labeled ? 'auto' : '0'};margin-top:${labeled ? '1px' : '0'};transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
     )
   }
   return parts.join('')
@@ -314,7 +393,31 @@ function onMirrorClick(ev: Event): void {
     mirror.getAttribute('title') ||
     mirror.getAttribute('aria-label') ||
     undefined
+
+  // Secondary parity: clicking the already-active tab while open closes the drawer.
+  const wasActive =
+    mirror.classList.contains('sidebar-ux-tab-active') ||
+    // Host may still mark active while Canvas closed (we hide highlight then).
+    (() => {
+      const host = _mirrorToHost.get(mirror)
+      if (!host) return false
+      return (
+        host.classList.contains('tabBtnActive') ||
+        String(host.className || '').includes('tabBtnActive')
+      )
+    })()
+  if (isCanvasMainOpen() && wasActive) {
+    dlog('[main-mirror] click → close (active tab)', { title })
+    closeCanvasMainDrawer()
+    return
+  }
+
   const hostBtn = _mirrorToHost.get(mirror)
+  dlog('[main-mirror] click', {
+    title,
+    hostConnected: !!(hostBtn && hostBtn.isConnected),
+    open: isCanvasMainOpen(),
+  })
   if (!hostBtn || !hostBtn.isConnected) {
     reconcileMainMirror()
     const again = _mirrorToHost.get(mirror)
@@ -334,6 +437,34 @@ function onMirrorClick(ev: Event): void {
     /* ignore */
   }
   onMainMirrorTabActivated(title)
+}
+
+/** Right-click on mirror tabs → Canvas assignment menu (secondary parity). */
+function onMirrorContextMenu(ev: Event): void {
+  const e = ev as MouseEvent
+  e.preventDefault()
+  e.stopPropagation()
+  const mirror = e.currentTarget as HTMLElement
+  const tabId =
+    mirror.getAttribute('data-tab-id') ||
+    mirror.getAttribute('title') ||
+    mirror.getAttribute('aria-label') ||
+    ''
+  const title =
+    mirror.getAttribute('title') ||
+    mirror.getAttribute('aria-label') ||
+    tabId
+  if (!tabId) {
+    dwarn('[main-mirror] contextmenu: no tabId/title on mirror button')
+    return
+  }
+  dlog('[main-mirror] contextmenu', {
+    tabId,
+    title,
+    x: e.clientX,
+    y: e.clientY,
+  })
+  showAssignmentMenu(e.clientX, e.clientY, tabId, title, mirror)
 }
 
 function ensureObservers(): void {

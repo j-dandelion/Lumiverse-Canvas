@@ -1,13 +1,12 @@
 // Canvas-owned main drawer when keepTabListVisible is on (desktop).
 //
-// Headless host + Canvas shell (no React reparenting):
-//   - Host main wrapper is hidden via document-level CSS (no class fight
-//     with React on the host node).
-//   - Canvas shell provides visible chrome (tab list, panel frame, header).
-//   - Host panel *content* is revealed with visibility:visible under a
-//     hidden ancestor and positioned over the Canvas panel — React keeps
-//     owning those nodes; we never appendChild them out of the host tree
-//     (reparenting caused freezes from React↔Canvas thrash).
+// Same shape as the secondary drawer (shared createDrawerShell):
+//   - Hide host main chrome via document-level CSS (no class fight with React).
+//   - Canvas shell = visible chrome (tab list, panel frame, header, open/close).
+//   - Host panelContent is soft-reparented into shell.content (like secondary
+//     parks extension roots) for the whole time mode is active — open/close
+//     transform and resize are free (content lives in the flex/transform tree).
+//   - No body overlay, no per-frame fixed-position layout, no MutationObserver.
 //   - Mirror tab buttons forward .click() for activation.
 //
 // Canvas-only — no Lumiverse source changes.
@@ -16,6 +15,7 @@ import { getMainPanelContent, getMainWrapper, getMainDrawerWidth } from '../dom/
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { getSettings } from '../settings/state'
+import { dlog, dwarn } from '../debug/log'
 import { animateWrapper } from './animation'
 import {
   closedTransformPx,
@@ -25,14 +25,14 @@ import {
 } from './drawer-shell'
 import { isMobileViewport } from './mobile-exclusion'
 import {
+  applyPinnedTabListChrome,
   applyTabListPosition,
+  clearPinnedTabListChrome,
   destroyMainPinHost,
   ensureMainPinHost,
-  TAB_LIST_PINNED_CLASS,
   TAB_LIST_SPACER_CLASS,
   TAB_LIST_WIDTH_PX,
 } from './tab-position'
-import { injectStyles } from '../debug/styles'
 import {
   MAIN_MIRROR_WIDTH_VAR,
   CANVAS_MAIN_ACTIVE_CLASS,
@@ -41,16 +41,22 @@ import {
 
 export { MAIN_MIRROR_WIDTH_VAR }
 
+/** Marks the host panelContent node while it lives in the Canvas shell. */
+const CONTENT_MARK_ATTR = 'data-canvas-main-panel-content'
+
 let _active = false
 let _open = false
 let _shell: DrawerShell | null = null
 let _pinSpacer: HTMLElement | null = null
 let _tabListRestoreParent: HTMLElement | null = null
 let _tabListRestoreNext: ChildNode | null = null
-let _layoutRaf: number | null = null
 let _contentEl: HTMLElement | null = null
+let _contentRestoreParent: HTMLElement | null = null
+let _contentRestoreNext: ChildNode | null = null
 /** Last side we mounted for — skip full remount when unchanged. */
 let _mountedSide: 'left' | 'right' | null = null
+/** Soft re-park if React pulls content back into the host tree. */
+let _reparkTimer: ReturnType<typeof setInterval> | null = null
 
 export function getMainMirrorWidthVar(): string {
   return MAIN_MIRROR_WIDTH_VAR
@@ -92,8 +98,8 @@ export function getMainMirrorTitleEl(): HTMLElement | null {
 
 /**
  * Enable/disable Canvas main mirror mode.
- * When on (desktop): hide host drawer chrome, mount shell, pin tab list.
- * When off / mobile: full teardown and host restore.
+ * When on (desktop): hide host drawer chrome, mount shell, pin tab list,
+ * park host panelContent into the shell (secondary-style).
  */
 export function applyMainMirrorDrawer(
   enabled: boolean,
@@ -111,8 +117,9 @@ export function applyMainMirrorDrawer(
 
   const side = getMainDrawerSide()
 
-  // Already mounted on the correct side — light touch only.
+  // Already mounted on the correct side — keep content parked.
   if (_active && _shell && _mountedSide === side && !opts?.force) {
+    ensureHostContentParked()
     return
   }
 
@@ -140,12 +147,10 @@ export function reconcileMainMirrorDrawer(opts?: { initialOpen?: boolean }): voi
     applyMainMirrorDrawer(false, { force: true })
     return
   }
-  // Prefer soft apply — only remount on side mismatch.
   applyMainMirrorDrawer(true, {
     force: false,
     initialOpen: opts?.initialOpen,
   })
-  // If force remount requested via initialOpen after side change:
   if (opts?.initialOpen !== undefined && _active && !_open && opts.initialOpen) {
     openCanvasMainDrawer()
   }
@@ -161,14 +166,19 @@ function bumpResizeHandles(): void {
 
 export function openCanvasMainDrawer(): void {
   if (!_shell || !_active) return
+  ensureHostContentParked()
   if (_open) {
-    scheduleContentLayout()
+    dlog('[main-mirror] open (already open)')
+    _shell.wrapper.style.transform = 'translateX(0)'
     return
   }
-  animateWrapper(_shell.wrapper, 0)
+  dlog(`[main-mirror] open side=${_shell.side}`)
   _open = true
   document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS)
-  scheduleContentLayout()
+  _shell.drawerTab.classList.add('sidebar-ux-drawer-tab--active')
+  // Content is a child of the shell — one animateWrapper moves chrome + content.
+  animateWrapper(_shell.wrapper, 0)
+  void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
   bumpReflow()
 }
 
@@ -177,62 +187,88 @@ export function closeCanvasMainDrawer(): void {
   if (!_open) return
   const side = _shell.side
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
+  dlog(`[main-mirror] close side=${side} closedTx=${closedTransformPx(side, w)}`)
   animateWrapper(_shell.wrapper, closedTransformPx(side, w))
   _open = false
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
-  clearContentLayout()
+  _shell.drawerTab.classList.remove('sidebar-ux-drawer-tab--active')
+  clearMainMirrorActiveHighlights()
+  // Content stays parked in the shell while mode is active (secondary parity).
   bumpReflow()
+}
+
+/** Clear active highlight on main mirror tab buttons (secondary close parity). */
+function clearMainMirrorActiveHighlights(): void {
+  const list = getMainMirrorTabList()
+  if (!list) return
+  for (const btn of list.querySelectorAll('button.sidebar-ux-tab-active')) {
+    btn.classList.remove('sidebar-ux-tab-active')
+  }
 }
 
 export function setCanvasMainTitle(text: string): void {
   if (_shell?.title) _shell.title.textContent = text || 'Drawer'
 }
 
-/** Called after mirror tab click to open + layout content + title. */
+/** Called after mirror tab click to open + title. Content already in shell. */
 export function onMainMirrorTabActivated(title?: string): void {
   if (!_active) return
   if (title) setCanvasMainTitle(title)
+  // Host React may swap panel children a frame later — re-park if needed.
+  ensureHostContentParked()
   openCanvasMainDrawer()
-  // Host React may commit new panel content a frame later.
-  scheduleContentLayout()
-  requestAnimationFrame(() => scheduleContentLayout())
+  requestAnimationFrame(() => ensureHostContentParked())
 }
 
 export function __resetMainMirrorForTest(): void {
   teardownMainMirror()
-  _layoutRaf = null
 }
 
 function injectHostHideStyles(): void {
-  // Document-level markers only — never mutate host wrapper className
-  // (React owns it; fighting className caused observer loops).
-  injectStyles('sidebar-ux-host-main-hide', `
-    /* Hide entire host main drawer chrome while Canvas owns main UX. */
+  const id = 'sidebar-ux-host-main-hide'
+  const css = `
+    /* Hide host main drawer chrome while Canvas owns main UX. */
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) {
       visibility: hidden !important;
       pointer-events: none !important;
+      /* Avoid transform trapping any leftover fixed descendants. */
+      transform: none !important;
+      transition: none !important;
     }
-    /*
-     * visibility:hidden is inherited; a child can opt back in with
-     * visibility:visible. When Canvas main is open, reveal host panel
-     * content only and park it over the Canvas panel rect (inline styles
-     * set by layoutHostPanelContent). React keeps the node in the host tree.
-     */
-    html.${CANVAS_MAIN_ACTIVE_CLASS}.${CANVAS_MAIN_OPEN_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="_panelContent_"] {
-      visibility: visible !important;
-      pointer-events: auto !important;
-      position: fixed !important;
-      z-index: 9995 !important;
-      margin: 0 !important;
-      box-sizing: border-box !important;
-      overflow: auto !important;
-    }
-    /* Hide host drawer tab (edge toggle) so it does not double with Canvas. */
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="drawerTab"] {
       visibility: hidden !important;
       pointer-events: none !important;
     }
-  `)
+    /*
+     * Host panelContent parked in the Canvas shell fills the content slot
+     * like a secondary-drawer tab root — in normal flow, not position:fixed.
+     */
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      overflow: auto;
+      position: relative !important;
+      top: auto !important;
+      left: auto !important;
+      right: auto !important;
+      bottom: auto !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      opacity: 1 !important;
+    }
+  `
+  if (typeof document === 'undefined' || !document.head) return
+  let el = document.getElementById(id) as HTMLStyleElement | null
+  if (!el) {
+    el = document.createElement('style')
+    el.id = id
+    document.head.appendChild(el)
+  }
+  el.textContent = css
 }
 
 function mountMainMirror(opts: { initialOpen: boolean }): void {
@@ -256,7 +292,7 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     initialWidth: seedW,
     initialOpen: opts.initialOpen,
     title: 'Drawer',
-    drawerTabDisplay: 'none',
+    drawerTabDisplay: 'flex',
     onDrawerTabClick: () => {
       if (_open) closeCanvasMainDrawer()
       else openCanvasMainDrawer()
@@ -264,9 +300,11 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     onHeaderClose: () => closeCanvasMainDrawer(),
   })
 
-  // Panel content area is a positioning target only — host content is
-  // overlaid via fixed layout, not reparented into this node.
-  _shell.content.style.background = 'transparent'
+  // Shell content is a flex column host for reparented host panelContent
+  // (same role as secondary panel content for extension roots).
+  _shell.content.style.display = 'flex'
+  _shell.content.style.flexDirection = 'column'
+  _shell.content.style.padding = '0'
   _shell.content.setAttribute('data-canvas-main-content-slot', '1')
 
   document.body.appendChild(_shell.wrapper)
@@ -276,25 +314,29 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
 
   if (_open) {
     document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS)
+    _shell.drawerTab.classList.add('sidebar-ux-drawer-tab--active')
   } else {
     document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
+    _shell.drawerTab.classList.remove('sidebar-ux-drawer-tab--active')
   }
 
   pinShellTabList(side)
 
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-    drawer: _shell.drawer,
-    tabList: getMainMirrorTabList(),
-    handle: _shell.drawer.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null,
+    mainDrawer: _shell.drawer,
+    mainTabList: getMainMirrorTabList() ?? _shell.tabList,
+    mainPanel: _shell.panel,
   })
 
-  if (_open) scheduleContentLayout()
+  // Park host panelContent into the shell for the whole mode lifetime.
+  ensureHostContentParked()
+  startReparkWatch()
 
-  // If host was already open when mode enabled, open Canvas shell once.
   if (!_open && isMainDrawerOpen()) {
     openCanvasMainDrawer()
   }
 
+  void import('./drawer-sync').then((m) => m.syncDrawerTabSettings())
   bumpResizeHandles()
   bumpReflow()
 }
@@ -311,6 +353,7 @@ function pinShellTabList(side: 'left' | 'right'): void {
     if (!_pinSpacer) {
       _pinSpacer = document.createElement('div')
       _pinSpacer.className = TAB_LIST_SPACER_CLASS
+      _pinSpacer.setAttribute('aria-hidden', 'true')
       _pinSpacer.style.width = `${TAB_LIST_WIDTH_PX}px`
       _pinSpacer.style.flexShrink = '0'
       _tabListRestoreParent.insertBefore(_pinSpacer, _tabListRestoreNext)
@@ -318,44 +361,13 @@ function pinShellTabList(side: 'left' | 'right'): void {
     host.appendChild(tabList)
   }
 
-  tabList.classList.add(TAB_LIST_PINNED_CLASS)
-  tabList.style.position = 'fixed'
-  tabList.style.top = 'env(safe-area-inset-top, 0px)'
-  tabList.style.bottom = 'env(safe-area-inset-bottom, 0px)'
-  tabList.style.zIndex = '10000'
-  tabList.style.width = `${TAB_LIST_WIDTH_PX}px`
-  tabList.style.pointerEvents = 'auto'
-  tabList.style.display = 'flex'
-  tabList.style.flexDirection = 'column'
-  tabList.style.alignItems = 'center'
-  tabList.style.overflowY = 'auto'
-  tabList.style.overflowX = 'hidden'
-  tabList.style.boxSizing = 'border-box'
-  tabList.style.background = 'var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a1a))'
-  if (side === 'right') {
-    tabList.style.right = '0'
-    tabList.style.left = ''
-    tabList.style.borderLeft = '1px solid var(--lumiverse-primary-020)'
-    tabList.style.borderRight = 'none'
-  } else {
-    tabList.style.left = '0'
-    tabList.style.right = ''
-    tabList.style.borderRight = '1px solid var(--lumiverse-primary-020)'
-    tabList.style.borderLeft = 'none'
-  }
+  applyPinnedTabListChrome(tabList, side)
 }
 
 function unpinShellTabList(): void {
   if (!_shell) return
   const tabList = _shell.tabList
-  tabList.classList.remove(TAB_LIST_PINNED_CLASS)
-  tabList.style.position = ''
-  tabList.style.top = ''
-  tabList.style.bottom = ''
-  tabList.style.left = ''
-  tabList.style.right = ''
-  tabList.style.zIndex = ''
-  tabList.style.pointerEvents = ''
+  clearPinnedTabListChrome(tabList)
   if (_tabListRestoreParent && tabList.parentElement !== _tabListRestoreParent) {
     _tabListRestoreParent.insertBefore(tabList, _tabListRestoreNext)
   }
@@ -368,55 +380,129 @@ function unpinShellTabList(): void {
   destroyMainPinHost()
 }
 
-function scheduleContentLayout(): void {
-  if (_layoutRaf !== null) return
-  _layoutRaf = requestAnimationFrame(() => {
-    _layoutRaf = null
-    layoutHostPanelContent()
-  })
+/**
+ * Resolve host panelContent even after it has been moved into the shell
+ * (getMainPanelContent only walks the host panel tree).
+ */
+function resolveHostPanelContent(): HTMLElement | null {
+  if (_contentEl?.isConnected) return _contentEl
+  const fromHost = getMainPanelContent()
+  if (fromHost) return fromHost
+  if (typeof document === 'undefined') return null
+  return document.querySelector(`[${CONTENT_MARK_ATTR}]`) as HTMLElement | null
 }
 
 /**
- * Position host panel content over the Canvas panel content slot.
- * Does NOT reparent — React keeps ownership of the node tree.
+ * Soft-reparent host panelContent into shell.content — same pattern as
+ * secondary assignToSecondary parking extension roots. No fixed overlay,
+ * no layout ticker: content is in the shell's flex + transform tree.
  */
-function layoutHostPanelContent(): void {
-  if (!_shell || !_active || !_open) return
+function ensureHostContentParked(): void {
+  if (!_shell || !_active) return
   const slot = _shell.content
-  const hostContent = getMainPanelContent()
-  if (!hostContent || !slot.isConnected) return
+  const hostContent = resolveHostPanelContent()
+  if (!hostContent || !slot.isConnected) {
+    dlog(
+      `[main-mirror] park skip hostContent=${!!hostContent} slot=${!!slot?.isConnected}`,
+    )
+    return
+  }
 
   _contentEl = hostContent
-  const rect = slot.getBoundingClientRect()
-  // Skip zero-size (closed / not laid out yet).
-  if (rect.width < 1 || rect.height < 1) return
+  hostContent.setAttribute(CONTENT_MARK_ATTR, '1')
 
-  const s = hostContent.style
-  s.setProperty('top', `${Math.round(rect.top)}px`, 'important')
-  s.setProperty('left', `${Math.round(rect.left)}px`, 'important')
-  s.setProperty('width', `${Math.round(rect.width)}px`, 'important')
-  s.setProperty('height', `${Math.round(rect.height)}px`, 'important')
+  if (hostContent.parentElement !== slot) {
+    if (!_contentRestoreParent) {
+      _contentRestoreParent = hostContent.parentElement
+      _contentRestoreNext = hostContent.nextSibling
+    }
+    // Clear any leftover fixed-overlay styles from earlier approaches.
+    const s = hostContent.style
+    for (const prop of [
+      'top', 'left', 'right', 'bottom', 'width', 'height',
+      'position', 'z-index', 'visibility', 'opacity', 'pointer-events',
+      'margin', 'box-sizing', 'overflow', 'background',
+    ]) {
+      s.removeProperty(prop)
+    }
+    slot.appendChild(hostContent)
+    dlog('[main-mirror] parked panelContent in shell.content (secondary-style)')
+  }
+
+  // Keep host chrome suppressed (React may re-apply transform).
+  const wrap = getMainWrapper()
+  if (wrap) {
+    wrap.style.setProperty('transform', 'none', 'important')
+    wrap.style.setProperty('transition', 'none', 'important')
+    wrap.style.setProperty('visibility', 'hidden', 'important')
+    wrap.style.setProperty('pointer-events', 'none', 'important')
+  }
 }
 
-function clearContentLayout(): void {
+function restoreHostContent(): void {
   if (_contentEl) {
     const s = _contentEl.style
-    s.removeProperty('top')
-    s.removeProperty('left')
-    s.removeProperty('width')
-    s.removeProperty('height')
-    // position/visibility come from CSS when open class is on; leaving
-    // residual fixed top/left would stick content after close.
+    for (const prop of [
+      'top', 'left', 'right', 'bottom', 'width', 'height',
+      'position', 'z-index', 'visibility', 'opacity', 'pointer-events',
+      'margin', 'box-sizing', 'overflow', 'background',
+    ]) {
+      s.removeProperty(prop)
+    }
+    if (
+      _contentRestoreParent &&
+      _contentEl.parentElement !== _contentRestoreParent
+    ) {
+      try {
+        _contentRestoreParent.insertBefore(_contentEl, _contentRestoreNext)
+      } catch {
+        try {
+          _contentRestoreParent.appendChild(_contentEl)
+        } catch {
+          /* host panel may have been unmounted */
+        }
+      }
+    }
+    _contentEl.removeAttribute(CONTENT_MARK_ATTR)
   }
   _contentEl = null
+  _contentRestoreParent = null
+  _contentRestoreNext = null
+}
+
+function startReparkWatch(): void {
+  stopReparkWatch()
+  // Lightweight poll — no MutationObserver (that fought React). If host
+  // React re-inserts panelContent under the hidden wrapper, put it back.
+  _reparkTimer = setInterval(() => {
+    if (!_active || !_shell) return
+    const el = resolveHostPanelContent()
+    if (el && el.parentElement !== _shell.content) {
+      dlog('[main-mirror] re-park: React moved panelContent back to host')
+      ensureHostContentParked()
+    }
+  }, 500)
+}
+
+function stopReparkWatch(): void {
+  if (_reparkTimer !== null) {
+    clearInterval(_reparkTimer)
+    _reparkTimer = null
+  }
+}
+
+function clearHostWrapperInline(): void {
+  const wrap = getMainWrapper()
+  if (!wrap) return
+  for (const prop of ['transform', 'transition', 'visibility', 'pointer-events', 'z-index']) {
+    wrap.style.removeProperty(prop)
+  }
 }
 
 function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
-  if (_layoutRaf !== null && typeof cancelAnimationFrame === 'function') {
-    cancelAnimationFrame(_layoutRaf)
-    _layoutRaf = null
-  }
-  clearContentLayout()
+  stopReparkWatch()
+  restoreHostContent()
+  clearHostWrapperInline()
   unpinShellTabList()
 
   if (_shell) {

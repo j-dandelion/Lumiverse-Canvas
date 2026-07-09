@@ -229,9 +229,25 @@ export function startContextMenuListener(): void {
     // Both built-in tabs and extension tabs get the move option.
     if (isSettingsButton(tabBtn)) { _pendingTabInfo = null; return }
 
+    // Main-mirror strip buttons are Canvas-owned (outside host React). They
+    // use showAssignmentMenu via their own contextmenu listener — do not
+    // start the Lumiverse-menu injector for them (host menu never opens).
+    if (tabBtn.classList.contains('sidebar-ux-main-tab-mirror-btn')) {
+      dlog('[tabmove] docCtxCapture: main-mirror btn — Canvas menu handles it')
+      _pendingTabInfo = null
+      return
+    }
+
     // Only for main sidebar — findStoreData + getDrawerTabs resolves the tab.
     const sidebar = getMainSidebar()
-    if (!sidebar || !sidebar.contains(tabBtn)) { _pendingTabInfo = null; return }
+    if (!sidebar || !sidebar.contains(tabBtn)) {
+      dlog('[tabmove] docCtxCapture: skip (not in host sidebar)', {
+        title: tabBtn.getAttribute('title'),
+        classes: tabBtn.className,
+      })
+      _pendingTabInfo = null
+      return
+    }
 
     const title = tabBtn.getAttribute('title') || ''
     // Resolve the tabId. Built-in tabs have a canonical data-tab-id on the

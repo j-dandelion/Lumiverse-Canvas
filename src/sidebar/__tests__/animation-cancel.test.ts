@@ -6,12 +6,19 @@ function assert(cond: unknown, msg: string) {
 }
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
-    console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
+    console.error(`FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
     failed++
+  } else {
+    passed++
   }
 }
 
-import { animateWrapper, cancelWrapperAnimation, __getAnimState } from '../animation'
+import {
+  animateWrapper,
+  cancelWrapperAnimation,
+  parseTranslateX,
+  __getAnimState,
+} from '../animation'
 
 // --- Setup: mock rAF/cancelAnimationFrame for non-browser test env ---
 let _rafId = 0
@@ -101,6 +108,48 @@ try {
   assert(wrapper.style.transform !== '', 'subsequent animateWrapper works: transform updated after flush')
 } catch (e) {
   console.log(`SKIP: subsequent animateWrapper works — ${e}`)
+}
+
+// --- Test: parseTranslateX (open-geometry compensation for main-mirror overlay) ---
+try {
+  assert(typeof parseTranslateX === 'function', 'parseTranslateX is exported')
+  assertEqual(parseTranslateX(''), 0, 'parseTranslateX empty → 0')
+  assertEqual(parseTranslateX('none'), 0, 'parseTranslateX none → 0')
+  assertEqual(parseTranslateX('translateX(0px)'), 0, 'parseTranslateX 0px')
+  assertEqual(parseTranslateX('translateX(420px)'), 420, 'parseTranslateX +420 (right closed)')
+  assertEqual(parseTranslateX('translateX(-420px)'), -420, 'parseTranslateX -420 (left closed)')
+  assertEqual(parseTranslateX('translateX(12.5px)'), 12.5, 'parseTranslateX fractional')
+  // Open-slot left = rawLeft − tx (right side mid-open example from production logs).
+  const rawLeft = 690
+  const tx = parseTranslateX('translateX(248px)')
+  assertEqual(rawLeft - tx, 442, 'open geometry: raw 690 − tx 248 = 442 on-screen')
+} catch (e) {
+  console.log(`SKIP: parseTranslateX — ${e}`)
+}
+
+// --- Test: onComplete fires when already at target; cancel suppresses pending complete ---
+try {
+  const wrapper = makeStubWrapper()
+  wrapper.style.transform = 'translateX(0px)'
+  let done = 0
+  cancelWrapperAnimation()
+  animateWrapper(wrapper, 0, () => {
+    done++
+  })
+  assertEqual(done, 1, 'onComplete fires immediately when already at target')
+  assertEqual(__getAnimState(wrapper).animRaf, null, 'no rAF when already at target')
+
+  done = 0
+  wrapper.style.transform = 'translateX(100px)'
+  animateWrapper(wrapper, 0, () => {
+    done++
+  })
+  assert(done === 0, 'onComplete not yet fired mid-animation')
+  cancelWrapperAnimation(wrapper)
+  flushRaf()
+  assertEqual(done, 0, 'cancel suppresses onComplete')
+} catch (e) {
+  console.log(`SKIP: onComplete — ${e}`)
 }
 
 // --- Cleanup ---
