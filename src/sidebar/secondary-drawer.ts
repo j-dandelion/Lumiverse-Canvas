@@ -267,7 +267,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       setActiveSecondaryTabId(resolvedId)
     }
     const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle) {
+    if (_headerTitle && !_suppressAutoActivation) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute('data-tab-title') || resolvedId
     }
   } else {
@@ -371,7 +371,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
         setActiveSecondaryTabId(resolvedId)
       }
       const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-      if (_headerTitle) _headerTitle.textContent = _title
+      if (_headerTitle && !_suppressAutoActivation) _headerTitle.textContent = _title
       if (!isMobileViewport() && !_suppressAutoActivation) {
         showSecondaryTabDisplay(resolvedId)
       }
@@ -498,7 +498,7 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 
     // Update panel header title
     const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle) _headerTitle.textContent = _title
+    if (_headerTitle && !_suppressAutoActivation) _headerTitle.textContent = _title
   }
 
   // Ensure the tab button is visually highlighted. addSecondaryTabButton

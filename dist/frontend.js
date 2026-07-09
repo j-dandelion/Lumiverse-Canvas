@@ -2625,7 +2625,7 @@ async function assignToSecondary(tabId) {
       setActiveSecondaryTabId(resolvedId);
     }
     const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle) {
+    if (_headerTitle && !_suppressAutoActivation) {
       _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
     }
   } else {
@@ -2673,7 +2673,7 @@ async function assignToSecondary(tabId) {
         setActiveSecondaryTabId(resolvedId);
       }
       const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-      if (_headerTitle2)
+      if (_headerTitle2 && !_suppressAutoActivation)
         _headerTitle2.textContent = _title2;
       if (!isMobileViewport() && !_suppressAutoActivation) {
         showSecondaryTab(resolvedId);
@@ -2739,7 +2739,7 @@ async function assignToSecondary(tabId) {
       setActiveSecondaryTabId(resolvedId);
     }
     const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle)
+    if (_headerTitle && !_suppressAutoActivation)
       _headerTitle.textContent = _title;
   }
   if (!isMobileViewport() && !_suppressAutoActivation) {
@@ -4015,7 +4015,7 @@ function applyMainDrawer(layout) {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
   });
 }
-var CANVAS_VERSION = "", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
