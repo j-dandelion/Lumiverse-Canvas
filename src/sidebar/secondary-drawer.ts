@@ -76,10 +76,6 @@ export function setSuppressAutoActivation(value: boolean): void {
 export function isSuppressAutoActivation(): boolean {
   return _suppressAutoActivation
 }
-/** Test-only: reset module state between tests. */
-export function __resetAutoActivationGuardForTest(): void {
-  _suppressAutoActivation = false
-}
 
 /**
  * Resolve a tab in Lumiverse's Zustand store by id (canonical) or title
