@@ -359,12 +359,15 @@ import {
   applyMainTabListPin,
   reconcileMainTabListPin,
   isMainTabListPinActive,
+  getActiveMainMirrorKey,
+  activateMainMirrorFromRestore,
   MAIN_MIRROR_LIST_CLASS,
   MAIN_MIRROR_BTN_CLASS,
   MAIN_MIRROR_LIST_MAIN_CLASS,
   MAIN_MIRROR_LIST_BOTTOM_CLASS,
   __resetMainTabPinForTest,
 } from '../main-tab-pin'
+import { isCanvasMainOpen } from '../main-mirror-drawer'
 
 /** Collect mirror buttons from the list (nested under main/bottom sections). */
 function collectMirrorButtons(list: StubElement): StubElement[] {
@@ -420,6 +423,8 @@ function resetAll() {
   while (bodyStub.firstChild) bodyStub.removeChild(bodyStub.firstChild!)
   while (mainSidebar.firstChild) mainSidebar.removeChild(mainSidebar.firstChild!)
   mainWrapper.className = '_wrapper_abc' // closed — no wrapperOpen
+  // Clear canvas main open/active markers left by prior cases.
+  for (const c of Array.from(_docClassSet)) documentElementStub.classList.remove(c)
   ;(globalThis as any).window.matchMedia = () => ({
     matches: false,
     addEventListener() {},
@@ -651,6 +656,106 @@ function resetAll() {
   // Click still forwards
   bottomMirrors[0].click()
   assertEqual(settings.clickCount, 1, 'M9: settings click forwards to host')
+}
+
+// M10: toggle-close — click already-active tab while open closes drawer
+// Regression: host can lose tabBtnActive while Canvas still owns open state;
+// Canvas-owned active key must still close.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const b1 = makeHostBtn('profile', 'Profile', false)
+  const b2 = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(b1)
+  mainSidebar.appendChild(b2)
+  applyMainTabListPin(true, { force: true })
+
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mirrors = collectMirrorButtons(list)
+  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
+
+  // Open profile
+  profileMirror.click()
+  assert(isCanvasMainOpen(), 'M10: drawer open after first click')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: active key = profile')
+  assertEqual(b1.clickCount, 1, 'M10: host profile clicked once')
+
+  // Simulate host losing tabBtnActive while Canvas stays open (repark / headless).
+  b1.classList.remove('tabBtnActive')
+  b1.className = 'tabBtn'
+  applyMainTabListPin(true, { force: true })
+  assert(isCanvasMainOpen(), 'M10: still open after reconcile')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: key survives host active loss')
+
+  // Click same tab → close (must not re-open via onMainMirrorTabActivated)
+  const hostClicksBeforeClose = b1.clickCount
+  profileMirror.click()
+  assert(!isCanvasMainOpen(), 'M10: click active tab closes drawer')
+  assertEqual(b1.clickCount, hostClicksBeforeClose, 'M10: close path does not host-click')
+  // Key retained for reopen parity (secondary-style)
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: key not cleared on close')
+
+  // Different tab while open switches (not close)
+  profileMirror.click() // reopen
+  assert(isCanvasMainOpen(), 'M10: reopen works')
+  memoryMirror.click()
+  assert(isCanvasMainOpen(), 'M10: switch keeps drawer open')
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M10: active key updates to memory')
+  assertEqual(b2.clickCount, 1, 'M10: memory host clicked')
+}
+
+// M11: restore / hard-refresh — Canvas key exclusive vs host default Profile.
+// Host often leaves Profile tabBtnActive while restore activates another tab;
+// mirror must not show two active highlights.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  // Profile still host-active (default); Memory is the restored target.
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  applyMainTabListPin(true, { force: true })
+
+  activateMainMirrorFromRestore(memory as unknown as HTMLElement, 'Memory')
+  applyMainTabListPin(true, { force: true })
+
+  assert(isCanvasMainOpen(), 'M11: drawer open after restore')
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M11: canvas key = memory')
+
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mirrors = collectMirrorButtons(list)
+  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
+  assert(
+    !profileMirror.classList.contains('sidebar-ux-tab-active'),
+    'M11: Profile not active when canvas key is Memory (host still tabBtnActive)',
+  )
+  assert(
+    memoryMirror.classList.contains('sidebar-ux-tab-active'),
+    'M11: Memory alone is active',
+  )
+  assertEqual(
+    mirrors.filter((m) => m.classList.contains('sidebar-ux-tab-active')).length,
+    1,
+    'M11: exactly one mirror active',
+  )
+
+  // Click Profile (host still tabBtnActive, not canvas key) must switch, not close.
+  const profileClicksBefore = profile.clickCount
+  profileMirror.click()
+  assert(isCanvasMainOpen(), 'M11: Profile click switches (stays open), not close')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M11: canvas key updates to profile')
+  assertEqual(profile.clickCount, profileClicksBefore + 1, 'M11: Profile host clicked on switch')
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

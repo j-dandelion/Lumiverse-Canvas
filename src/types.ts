@@ -57,10 +57,10 @@ export interface CanvasSettings {
 
   /** When a drawer is closed, keep its tab-button-list visible at the
    *  screen edge so the user can switch tabs without opening the drawer.
+   *  Requires `moveControlsToOuterEdge` (forced off when outer-edge is off).
    *  Secondary: reparents Canvas-owned tab list. Main: Canvas mirror strip
    *  (host React nodes stay in place; clicks forward to host buttons).
-   *  Works regardless of `moveControlsToOuterEdge`. Panels still slide
-   *  in/out from behind the list. No-op on mobile. */
+   *  Panels still slide in/out from behind the list. No-op on mobile. */
   keepTabListVisible?: boolean
 
   /** Show box-shadow on sidebars at min-width: 601px (desktop). */

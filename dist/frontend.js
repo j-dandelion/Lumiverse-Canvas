@@ -2943,7 +2943,9 @@ var exports_main_tab_pin = {};
 __export(exports_main_tab_pin, {
   reconcileMainTabListPin: () => reconcileMainTabListPin,
   isMainTabListPinActive: () => isMainTabListPinActive,
+  getActiveMainMirrorKey: () => getActiveMainMirrorKey,
   applyMainTabListPin: () => applyMainTabListPin,
+  activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
   __resetMainTabPinForTest: () => __resetMainTabPinForTest,
   MAIN_MIRROR_LIST_MAIN_CLASS: () => MAIN_MIRROR_LIST_MAIN_CLASS,
   MAIN_MIRROR_LIST_CLASS: () => MAIN_MIRROR_LIST_CLASS,
@@ -2993,11 +2995,28 @@ function __resetMainTabPinForTest() {
   _enabled = false;
   _reconcileRaf = null;
   _observedSidebar = null;
+  _activeMainMirrorKey = null;
   __resetMainMirrorForTest();
   destroyMainPinHost();
 }
+function getActiveMainMirrorKey() {
+  return _activeMainMirrorKey;
+}
+function activateMainMirrorFromRestore(hostBtn, title) {
+  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
+  if (hostBtn && hostBtn.isConnected) {
+    _activeMainMirrorKey = hostButtonKey(hostBtn);
+    try {
+      hostBtn.click();
+    } catch {}
+  } else if (resolvedTitle) {
+    _activeMainMirrorKey = `title__${resolvedTitle}`;
+  }
+  onMainMirrorTabActivated(resolvedTitle);
+}
 function teardownMainPin() {
   _enabled = false;
+  _activeMainMirrorKey = null;
   stopObservers();
   applyMainMirrorDrawer(false, { force: true });
   destroyMainPinHost();
@@ -3240,6 +3259,23 @@ function hostButtonKey(btn) {
     return `title__${title}`;
   return `node__${btn.tagName}__${btn.className}`;
 }
+function mirrorButtonKey(mirror) {
+  const id = mirror.getAttribute("data-tab-id");
+  if (id)
+    return `id__${id}`;
+  const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || "";
+  if (title)
+    return `title__${title}`;
+  const dataKey = mirror.getAttribute("data-mirror-key");
+  if (dataKey)
+    return dataKey;
+  return `node__${mirror.tagName}__${mirror.className}`;
+}
+function hostHasTabBtnActive(host) {
+  if (!host)
+    return false;
+  return host.classList.contains("tabBtnActive") || String(host.className || "").includes("tabBtnActive");
+}
 function syncMirrorFromHost(mirror, hostBtn) {
   const tabId = hostBtn.getAttribute("data-tab-id");
   if (tabId)
@@ -3251,8 +3287,10 @@ function syncMirrorFromHost(mirror, hostBtn) {
     mirror.setAttribute("title", title);
     mirror.setAttribute("aria-label", title);
   }
-  const hostActive = hostBtn.classList.contains("tabBtnActive") || String(hostBtn.className || "").includes("tabBtnActive");
-  const showActive = hostActive && isCanvasMainOpen();
+  const key = hostButtonKey(hostBtn);
+  const hostActive = hostHasTabBtnActive(hostBtn);
+  const canvasActive = _activeMainMirrorKey != null && key === _activeMainMirrorKey;
+  const showActive = isCanvasMainOpen() && (_activeMainMirrorKey != null ? canvasActive : hostActive);
   const wasActive = mirror.classList.contains("sidebar-ux-tab-active");
   mirror.classList.toggle("sidebar-ux-tab-active", showActive);
   if (showActive !== wasActive) {
@@ -3260,6 +3298,8 @@ function syncMirrorFromHost(mirror, hostBtn) {
       title: mirror.getAttribute("title"),
       showActive,
       hostActive,
+      canvasActive,
+      canvasKey: _activeMainMirrorKey,
       open: isCanvasMainOpen()
     });
   }
@@ -3299,20 +3339,17 @@ function onMirrorClick(ev) {
   ev.stopPropagation();
   const mirror = ev.currentTarget;
   const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || undefined;
-  const wasActive = mirror.classList.contains("sidebar-ux-tab-active") || (() => {
-    const host = _mirrorToHost.get(mirror);
-    if (!host)
-      return false;
-    return host.classList.contains("tabBtnActive") || String(host.className || "").includes("tabBtnActive");
-  })();
+  const hostBtn = _mirrorToHost.get(mirror);
+  const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror);
+  const wasActive = _activeMainMirrorKey != null ? key === _activeMainMirrorKey : mirror.classList.contains("sidebar-ux-tab-active") || hostHasTabBtnActive(hostBtn);
   if (isCanvasMainOpen() && wasActive) {
-    dlog("[main-mirror] click → close (active tab)", { title });
+    dlog("[main-mirror] click → close (active tab)", { title, key });
     closeCanvasMainDrawer();
     return;
   }
-  const hostBtn = _mirrorToHost.get(mirror);
   dlog("[main-mirror] click", {
     title,
+    key,
     hostConnected: !!(hostBtn && hostBtn.isConnected),
     open: isCanvasMainOpen()
   });
@@ -3320,9 +3357,12 @@ function onMirrorClick(ev) {
     reconcileMainMirror();
     const again = _mirrorToHost.get(mirror);
     if (again && again.isConnected) {
+      _activeMainMirrorKey = hostButtonKey(again);
       try {
         again.click();
       } catch {}
+    } else {
+      _activeMainMirrorKey = key;
     }
     onMainMirrorTabActivated(title);
     return;
@@ -3330,6 +3370,7 @@ function onMirrorClick(ev) {
   try {
     hostBtn.click();
   } catch {}
+  _activeMainMirrorKey = key;
   onMainMirrorTabActivated(title);
 }
 function onMirrorContextMenu(ev) {
@@ -3385,7 +3426,7 @@ function stopObservers() {
     _reconcileRaf = null;
   }
 }
-var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _enabled = false, _sidebarObserver = null, _reconcileRaf = null, _observedSidebar = null, _mirrorToHost;
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _enabled = false, _sidebarObserver = null, _reconcileRaf = null, _observedSidebar = null, _activeMainMirrorKey = null, _mirrorToHost;
 var init_main_tab_pin = __esm(() => {
   init_store();
   init_state();
@@ -3531,6 +3572,7 @@ __export(exports_main_mirror_drawer, {
   getMainMirrorTabList: () => getMainMirrorTabList,
   getMainMirrorPanelContent: () => getMainMirrorPanelContent,
   getMainMirrorDrawer: () => getMainMirrorDrawer,
+  ensureHostContentParkedPublic: () => ensureHostContentParkedPublic,
   closeCanvasMainDrawer: () => closeCanvasMainDrawer,
   applyMainMirrorRestoredWidth: () => applyMainMirrorRestoredWidth,
   applyMainMirrorDrawer: () => applyMainMirrorDrawer,
@@ -3691,9 +3733,12 @@ function __resetMainMirrorForTest() {
 function injectHostHideStyles() {
   const id = "sidebar-ux-host-main-hide";
   const css = `
-    /* Hide host main drawer chrome while Canvas owns main UX. */
+    /* Hide host main drawer chrome while Canvas owns main UX.
+     * opacity:0 is required: host panelContent often has
+     * visibility:visible and would paint through visibility:hidden alone. */
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) {
       visibility: hidden !important;
+      opacity: 0 !important;
       pointer-events: none !important;
       /* Avoid transform trapping any leftover fixed descendants. */
       transform: none !important;
@@ -3701,11 +3746,23 @@ function injectHostHideStyles() {
     }
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="drawerTab"] {
       visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Any host panel body still under the host tree (mid tab-switch
+     * remount before repark) must not paint through. */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="_panelContent_"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
       pointer-events: none !important;
     }
     /*
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
+     *
+     * Skip visibility/opacity force while html.sidebar-ux-main-restore-pending
+     * (see main-persist restore guard). Otherwise visibility:visible !important
+     * paints profile content through a parent with visibility:hidden.
      */
     .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       flex: 1 1 auto;
@@ -3720,6 +3777,9 @@ function injectHostHideStyles() {
       left: auto !important;
       right: auto !important;
       bottom: auto !important;
+    }
+    html:not(.sidebar-ux-main-restore-pending)
+      .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       visibility: visible !important;
       pointer-events: auto !important;
       opacity: 1 !important;
@@ -3856,6 +3916,7 @@ function ensureHostContentParked() {
   }
   _contentEl = hostContent;
   hostContent.setAttribute(CONTENT_MARK_ATTR, "1");
+  const restorePending = typeof document !== "undefined" && document.documentElement.classList.contains("sidebar-ux-main-restore-pending");
   if (hostContent.parentElement !== slot) {
     if (!_contentRestoreParent) {
       _contentRestoreParent = hostContent.parentElement;
@@ -3871,15 +3932,17 @@ function ensureHostContentParked() {
       "height",
       "position",
       "z-index",
-      "visibility",
-      "opacity",
-      "pointer-events",
       "margin",
       "box-sizing",
       "overflow",
       "background"
     ]) {
       s.removeProperty(prop);
+    }
+    if (!restorePending) {
+      for (const prop of ["visibility", "opacity", "pointer-events"]) {
+        s.removeProperty(prop);
+      }
     }
     slot.appendChild(hostContent);
     dlog("[main-mirror] parked panelContent in shell.content (secondary-style)");
@@ -3891,6 +3954,14 @@ function ensureHostContentParked() {
     wrap.style.setProperty("visibility", "hidden", "important");
     wrap.style.setProperty("pointer-events", "none", "important");
   }
+  if (restorePending) {
+    Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
+      m.stampPanelBodyHide();
+    }).catch(() => {});
+  }
+}
+function ensureHostContentParkedPublic() {
+  ensureHostContentParked();
 }
 function restoreHostContent() {
   if (_contentEl) {
@@ -3931,7 +4002,9 @@ function restoreHostContent() {
 }
 function startReparkWatch() {
   stopReparkWatch();
-  _reparkTimer = setInterval(() => {
+  const tickMs = () => typeof document !== "undefined" && document.documentElement.classList.contains("sidebar-ux-main-restore-pending") ? 50 : 500;
+  const tick = () => {
+    _reparkTimer = null;
     if (!_active || !_shell)
       return;
     const el = resolveHostPanelContent();
@@ -3939,11 +4012,13 @@ function startReparkWatch() {
       dlog("[main-mirror] re-park: React moved panelContent back to host");
       ensureHostContentParked();
     }
-  }, 500);
+    _reparkTimer = setTimeout(tick, tickMs());
+  };
+  _reparkTimer = setTimeout(tick, tickMs());
 }
 function stopReparkWatch() {
   if (_reparkTimer !== null) {
-    clearInterval(_reparkTimer);
+    clearTimeout(_reparkTimer);
     _reparkTimer = null;
   }
 }
@@ -4245,9 +4320,13 @@ __export(exports_main_persist, {
   suppressMainDrawer: () => suppressMainDrawer,
   stopMainDrawerPersistence: () => stopMainDrawerPersistence,
   startMainDrawerPersistence: () => startMainDrawerPersistence,
+  stampPanelBodyHide: () => stampPanelBodyHide,
   restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
+  isMainDrawerRestorePending: () => isMainDrawerRestorePending,
   findDrawerToggleButton: () => findDrawerToggleButton,
-  cleanupDomPoll: () => cleanupDomPoll
+  ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
+  cleanupDomPoll: () => cleanupDomPoll,
+  beginMainDrawerRestoreGuard: () => beginMainDrawerRestoreGuard
 });
 function readWrapperOpen(wrapper) {
   return wrapper.classList.toString().includes("wrapperOpen");
@@ -4258,11 +4337,123 @@ function readActiveTabId(sidebar) {
     return null;
   return active.getAttribute("data-tab-id") || active.getAttribute("title") || null;
 }
-function suppressMainDrawer() {
-  const wrapper = _wrapper;
-  if (!wrapper)
+function ensureRestoreGuardStyles() {
+  if (typeof document === "undefined")
     return;
-  wrapper.style.setProperty("visibility", "hidden", "important");
+  if (document.getElementById(RESTORE_GUARD_STYLE_ID))
+    return;
+  const el = document.createElement("style");
+  el.id = RESTORE_GUARD_STYLE_ID;
+  el.textContent = `
+    html.${RESTORE_PENDING_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]),
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Panel bodies anywhere — host tree, parked in shell, or mid-reparent. */
+    html.${RESTORE_PENDING_CLASS} [class*="_panelContent_"],
+    html.${RESTORE_PENDING_CLASS} [data-canvas-main-panel-content],
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > * {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+  `;
+  document.head.appendChild(el);
+}
+function isPanelBodyNode(el) {
+  if (!(el instanceof HTMLElement))
+    return false;
+  const cls = String(el.className || "");
+  if (cls.includes("_panelContent_"))
+    return true;
+  if (el.hasAttribute("data-canvas-main-panel-content"))
+    return true;
+  if (cls.includes("sidebar-ux-panel-content") && el.closest(".sidebar-ux-main-mirror-wrapper")) {
+    return true;
+  }
+  return false;
+}
+function stampPanelBodyHide() {
+  if (typeof document === "undefined")
+    return;
+  if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+    return;
+  const nodes = document.querySelectorAll('[class*="_panelContent_"],' + "[data-canvas-main-panel-content]," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *");
+  for (const node of Array.from(nodes)) {
+    const el = node;
+    el.setAttribute(RESTORE_HIDE_ATTR, "1");
+    el.style.setProperty("visibility", "hidden", "important");
+    el.style.setProperty("opacity", "0", "important");
+    el.style.setProperty("pointer-events", "none", "important");
+  }
+}
+function clearPanelBodyHide() {
+  if (typeof document === "undefined")
+    return;
+  const nodes = document.querySelectorAll(`[${RESTORE_HIDE_ATTR}]`);
+  for (const node of Array.from(nodes)) {
+    const el = node;
+    el.removeAttribute(RESTORE_HIDE_ATTR);
+    el.style.removeProperty("visibility");
+    el.style.removeProperty("opacity");
+    el.style.removeProperty("pointer-events");
+  }
+}
+function scheduleStampPanelBodyHide() {
+  if (_panelHideRaf != null)
+    return;
+  _panelHideRaf = requestAnimationFrame(() => {
+    _panelHideRaf = null;
+    stampPanelBodyHide();
+  });
+}
+function startPanelHideObserver() {
+  if (typeof document === "undefined" || _panelHideObserver)
+    return;
+  stampPanelBodyHide();
+  _panelHideObserver = new MutationObserver((mutations) => {
+    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+      return;
+    let needs = false;
+    for (const m of mutations) {
+      if (m.type === "childList") {
+        for (const n of Array.from(m.addedNodes)) {
+          if (n instanceof Element && (isPanelBodyNode(n) || n.querySelector?.('[class*="_panelContent_"], [data-canvas-main-panel-content]'))) {
+            needs = true;
+            break;
+          }
+        }
+      }
+      if (needs)
+        break;
+    }
+    if (needs)
+      scheduleStampPanelBodyHide();
+  });
+  _panelHideObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+}
+function stopPanelHideObserver() {
+  if (_panelHideObserver) {
+    _panelHideObserver.disconnect();
+    _panelHideObserver = null;
+  }
+  if (_panelHideRaf != null) {
+    cancelAnimationFrame(_panelHideRaf);
+    _panelHideRaf = null;
+  }
+}
+function armUnsuppressTimeout() {
   if (_unsuppressTimer)
     clearTimeout(_unsuppressTimer);
   _unsuppressTimer = setTimeout(() => {
@@ -4270,15 +4461,176 @@ function suppressMainDrawer() {
     dlog("main-persist: unsuppress timeout fired (restore may have failed)");
   }, UNSUPPRESS_TIMEOUT_MS);
 }
+function beginMainDrawerRestoreGuard() {
+  ensureRestoreGuardStyles();
+  document.documentElement.classList.add(RESTORE_PENDING_CLASS);
+  startPanelHideObserver();
+  stampPanelBodyHide();
+  armUnsuppressTimeout();
+}
+function suppressMainDrawer() {
+  beginMainDrawerRestoreGuard();
+  const wrapper = _wrapper;
+  if (!wrapper)
+    return;
+  wrapper.style.setProperty("visibility", "hidden", "important");
+  wrapper.style.setProperty("opacity", "0", "important");
+  stampPanelBodyHide();
+}
 function unsuppressMainDrawer() {
   if (_unsuppressTimer) {
     clearTimeout(_unsuppressTimer);
     _unsuppressTimer = null;
   }
+  stopPanelHideObserver();
+  clearPanelBodyHide();
+  document.documentElement.classList.remove(RESTORE_PENDING_CLASS);
   const wrapper = _wrapper;
-  if (!wrapper)
-    return;
-  wrapper.style.removeProperty("visibility");
+  if (wrapper) {
+    wrapper.style.removeProperty("visibility");
+    wrapper.style.removeProperty("opacity");
+  }
+}
+function isMainDrawerRestorePending() {
+  return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
+}
+function isPrimaryTabActive(targetTabId) {
+  const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+  const active = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  if (active) {
+    const id = active.getAttribute("data-tab-id") || "";
+    const title = active.getAttribute("title") || "";
+    if (id === targetTabId || title === targetTabId)
+      return true;
+    if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+      return true;
+    }
+  }
+  const mirrorActive = document.querySelector(`.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[data-tab-id="${CSS.escape(targetTabId)}"],` + `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[title="${CSS.escape(targetTabId)}"]`);
+  return !!mirrorActive;
+}
+function clickRestoredPrimaryTab(targetTabId, preferMirror) {
+  if (!targetTabId)
+    return false;
+  const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+  let tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetTabId)}"]`);
+  if (!tabBtn) {
+    tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetTabId)}"]`);
+  }
+  if (!tabBtn && targetTabId.includes(":")) {
+    const bare = targetTabId.replace(/:\d+$/, "").split(":").pop();
+    if (bare) {
+      tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(bare)}"]`);
+    }
+  }
+  if (preferMirror || document.documentElement.classList.contains("sidebar-ux-canvas-main-active")) {
+    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => {
+      const title = tabBtn?.getAttribute("title") || tabBtn?.getAttribute("aria-label") || targetTabId;
+      m.activateMainMirrorFromRestore(tabBtn, title);
+    }).catch((err) => {
+      dlog(`main-persist restore: activateMainMirrorFromRestore failed: ${err}`);
+      if (tabBtn) {
+        try {
+          tabBtn.click();
+        } catch {}
+      }
+    });
+    if (tabBtn || document.querySelector(".sidebar-ux-main-tab-mirror-btn")) {
+      return true;
+    }
+  }
+  if (!tabBtn) {
+    dlog(`main-persist restore: no button for tabId="${targetTabId}"`);
+    return false;
+  }
+  try {
+    tabBtn.click();
+    return true;
+  } catch (err) {
+    dlog(`main-persist restore: tab click threw: ${err}`);
+    return false;
+  }
+}
+function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackClickFirstHostTab = false) {
+  const run = () => {
+    if (_stopped) {
+      unsuppressMainDrawer();
+      return;
+    }
+    stampPanelBodyHide();
+    Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+      m.ensureHostContentParkedPublic();
+    }).catch(() => {});
+    if (targetTabId) {
+      if (!isPrimaryTabActive(targetTabId)) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror);
+      }
+    } else if (fallbackClickFirstHostTab) {
+      const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+      const first = sidebar?.querySelector('button[class*="tabBtn"]');
+      if (first) {
+        try {
+          first.click();
+        } catch (err) {
+          dlog(`main-persist restore: first-tab click threw: ${err}`);
+        }
+      }
+    }
+    let polls = 0;
+    let stable = 0;
+    const finish = () => {
+      stampPanelBodyHide();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          unsuppressMainDrawer();
+        });
+      });
+    };
+    const poll = () => {
+      if (_stopped) {
+        unsuppressMainDrawer();
+        return;
+      }
+      stampPanelBodyHide();
+      if (!targetTabId) {
+        finish();
+        return;
+      }
+      if (isPrimaryTabActive(targetTabId)) {
+        stable++;
+        if (stable === 1) {
+          Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+            m.ensureHostContentParkedPublic();
+          }).catch(() => {});
+        }
+        if (stable >= RESTORE_ACTIVE_STABLE_POLLS) {
+          finish();
+          return;
+        }
+      } else {
+        stable = 0;
+        if (polls % 3 === 0) {
+          clickRestoredPrimaryTab(targetTabId, preferMirror);
+          Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+            m.ensureHostContentParkedPublic();
+          }).catch(() => {});
+        }
+      }
+      polls++;
+      if (polls >= RESTORE_TAB_POLL_MAX) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror);
+        finish();
+        return;
+      }
+      setTimeout(poll, RESTORE_TAB_POLL_MS);
+    };
+    requestAnimationFrame(() => poll());
+  };
+  if (RESTORE_TAB_CLICK_MS > 0) {
+    setTimeout(run, RESTORE_TAB_CLICK_MS);
+  } else {
+    run();
+  }
 }
 function findDrawerToggleButton(wrapper) {
   const buttons = wrapper.querySelectorAll(":scope > button");
@@ -4390,6 +4742,15 @@ function startMainDrawerPersistence() {
   }
   _initObservers(drawer);
 }
+function ensureRestoredPrimaryTab(targetTabId) {
+  if (!targetTabId || _stopped)
+    return;
+  if (isPrimaryTabActive(targetTabId))
+    return;
+  const keepVisible = !!getSettings().keepTabListVisible;
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
+  clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile);
+}
 function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
   if (_stopped)
     return;
@@ -4405,38 +4766,21 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
   if (keepVisible && !isMobile) {
     Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
-      if (_stopped)
+      if (_stopped) {
+        unsuppressMainDrawer();
         return;
+      }
       if (clampedWidth !== null) {
         m.applyMainMirrorRestoredWidth(clampedWidth);
       }
       if (targetOpen) {
         m.openCanvasMainDrawer();
-        if (targetTabId) {
-          setTimeout(() => {
-            if (_stopped)
-              return;
-            const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
-            let tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetTabId)}"]`);
-            if (!tabBtn) {
-              tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetTabId)}"]`);
-            }
-            const mirrorBtn = document.querySelector(`.sidebar-ux-main-tab-mirror-btn[data-tab-id="${CSS.escape(targetTabId)}"],.sidebar-ux-main-tab-mirror-btn[title="${CSS.escape(targetTabId)}"]`);
-            const clickTarget = mirrorBtn || tabBtn;
-            if (clickTarget) {
-              try {
-                clickTarget.click();
-              } catch (err) {
-                dlog(`main-persist restore (mirror): tab click threw: ${err}`);
-              }
-            }
-          }, 100);
-        }
+        scheduleRestoreTabThenUnsuppress(targetTabId, true);
       } else {
         m.closeCanvasMainDrawer();
+        unsuppressMainDrawer();
       }
     });
-    unsuppressMainDrawer();
     return;
   }
   const currentOpen = readWrapperOpen(wrapper);
@@ -4447,27 +4791,11 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
       }
     }
-    if (targetOpen && targetTabId) {
-      const targetId = targetTabId;
-      setTimeout(() => {
-        if (_stopped)
-          return;
-        const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
-        let tabBtn = null;
-        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`);
-        if (!tabBtn) {
-          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`);
-        }
-        if (tabBtn) {
-          try {
-            tabBtn.click();
-          } catch (err) {
-            dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
-          }
-        }
-      }, 100);
+    if (targetOpen) {
+      scheduleRestoreTabThenUnsuppress(targetTabId, false);
+    } else {
+      unsuppressMainDrawer();
     }
-    unsuppressMainDrawer();
     return;
   }
   if (targetOpen) {
@@ -4477,44 +4805,17 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
       }
     }
-    const targetId = targetTabId;
-    setTimeout(() => {
-      if (_stopped)
-        return;
-      const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
-      let tabBtn = null;
-      if (targetId) {
-        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`);
-        if (!tabBtn) {
-          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`);
-        }
-      }
-      if (!tabBtn) {
-        tabBtn = sidebar?.querySelector('button[class*="tabBtn"]');
-      }
-      if (tabBtn) {
-        unsuppressMainDrawer();
-        try {
-          tabBtn.click();
-        } catch (err) {
-          dlog(`main-persist restore: tabBtn.click() threw: ${err}`);
-        }
-      } else {
-        unsuppressMainDrawer();
-      }
-    }, 100);
+    scheduleRestoreTabThenUnsuppress(targetTabId, false, true);
   } else {
     const toggleBtn = findDrawerToggleButton(wrapper);
     if (toggleBtn) {
-      unsuppressMainDrawer();
       try {
         toggleBtn.click();
       } catch (err) {
         dlog(`main-persist restore: toggleBtn.click() threw: ${err}`);
       }
-    } else {
-      unsuppressMainDrawer();
     }
+    unsuppressMainDrawer();
   }
 }
 function stopMainDrawerPersistence() {
@@ -4538,16 +4839,14 @@ function stopMainDrawerPersistence() {
     _resizeDebounce = null;
   }
   cleanupDomPoll();
+  unsuppressMainDrawer();
+  document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove();
   _wrapper = null;
   _sidebar = null;
   _lastSeenOpen = null;
   _lastSeenTabId = null;
-  if (_unsuppressTimer) {
-    clearTimeout(_unsuppressTimer);
-    _unsuppressTimer = null;
-  }
 }
-var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null;
+var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HIDE_ATTR = "data-canvas-restore-hide", RESTORE_ACTIVE_STABLE_POLLS = 1, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_persist();
   init_state();
@@ -5223,6 +5522,12 @@ async function applyLayout(layout) {
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility();
       }
+      const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
+      if (primaryTabId && layout.primary?.open !== false) {
+        Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
+          m.ensureRestoredPrimaryTab(primaryTabId);
+        });
+      }
     };
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
     if (sidebar) {
@@ -5432,6 +5737,9 @@ function loadSavedLayout() {
 }
 function applyMainDrawer(layout) {
   if (!layout || !layout.primary) {
+    Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
+      unsuppressMainDrawer2();
+    });
     return;
   }
   Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ restoreMainDrawerFromDom: restoreMainDrawerFromDom2 }) => {
@@ -5496,10 +5804,16 @@ function getLastLoadedLayout() {
 function setPanelRefresh(fn) {
   _panelRefresh = fn;
 }
+function normalizeCanvasSettings(s) {
+  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
+    return { ...s, keepTabListVisible: false };
+  }
+  return s;
+}
 function hydrateSettings(raw) {
   if (_userHasTouchedSettings)
     return;
-  _settings = mergeCanvasSettings(raw ?? null);
+  _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));
 }
 function setSettings(patch) {
   _userHasTouchedSettings = true;
@@ -5510,9 +5824,9 @@ function setSettings(patch) {
     if (v !== undefined)
       next[key] = v;
   }
-  _settings = next;
-  setDebug(next.debugMode);
-  applySettings(prev, next);
+  _settings = normalizeCanvasSettings(next);
+  setDebug(_settings.debugMode);
+  applySettings(prev, _settings);
   refreshSettingsPanel();
   persistSettings();
 }
@@ -8472,8 +8786,14 @@ var init_registry = __esm(() => {
   keepTabListVisibleFeature = {
     id: "keepTabListVisible",
     mount(_ctx2, _layout) {
-      reconcileTabListPin();
-      reconcileMainTabListPin();
+      const on = !!getSettings().keepTabListVisible && !!getSettings().moveControlsToOuterEdge;
+      if (on) {
+        reconcileTabListPin();
+        reconcileMainTabListPin();
+      } else {
+        applyTabListPin(false, { force: true });
+        applyMainTabListPin(false, { force: true });
+      }
       updateDrawerTabVisibility();
       updateChatReflow();
       return () => {
@@ -8484,8 +8804,9 @@ var init_registry = __esm(() => {
       };
     },
     apply(_prev, next) {
-      applyTabListPin(!!next.keepTabListVisible, { force: true });
-      applyMainTabListPin(!!next.keepTabListVisible, { force: true });
+      const on = !!next.keepTabListVisible && !!next.moveControlsToOuterEdge;
+      applyTabListPin(on, { force: true });
+      applyMainTabListPin(on, { force: true });
       updateDrawerTabVisibility();
       updateChatReflow();
     }
@@ -8742,15 +9063,17 @@ function buildSettingsPanelDOM() {
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
   secSidebars.appendChild(buildSettingRow({
     label: "Move tab controls to outer edge",
-    hint: "Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area.",
+    hint: "Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for “Keep tab lists visible”.",
     control: moveControlsToOuter.btn
   }));
-  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }));
-  secSidebars.appendChild(buildSettingRow({
+  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
+  const keepTabListVisibleRow = buildSettingRow({
     label: "Keep tab lists visible",
-    hint: "Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer. Panels still slide in and out from behind the list.",
-    control: keepTabListVisible.btn
-  }));
+    hint: "Requires “Move tab controls to outer edge”. Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.",
+    control: keepTabListVisible.btn,
+    disabled: !getSettings().moveControlsToOuterEdge
+  });
+  secSidebars.appendChild(keepTabListVisibleRow);
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   secSidebars.appendChild(buildSettingRow({
     label: "Drag to resize sidebars",
@@ -8829,6 +9152,12 @@ function buildSettingsPanelDOM() {
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
+    {
+      const d3 = !getSettings().moveControlsToOuterEdge;
+      keepTabListVisible.btn.disabled = d3;
+      keepTabListVisible.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      keepTabListVisibleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+    }
     for (const row of [resizeSidebars, compact]) {
       const d3 = !getSettings().secondSidebarEnabled;
       row.btn.disabled = d3;
@@ -9114,6 +9443,7 @@ init_log();
 init_fiber_scan();
 function setup(ctx) {
   setBackendCtx(ctx);
+  beginMainDrawerRestoreGuard();
   const flushOnUnload = () => {
     try {
       flushPendingSaves();
@@ -9145,7 +9475,7 @@ function setup(ctx) {
   for (const teardown of alwaysCleanups()) {
     registerCleanup(teardown);
   }
-  loadSavedLayout().then((layout) => {
+  loadSavedLayout().then(async (layout) => {
     if (layout?.version && layout.version !== CANVAS_VERSION) {
       dwarn(`Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` + `Hard-refresh (Ctrl+F5) to load the updated extension.`);
     }
@@ -9156,6 +9486,7 @@ function setup(ctx) {
     refreshSettingsPanel();
     if (getSettings().debugMode)
       installDebugEscapeHatch();
+    beginMainDrawerRestoreGuard();
     for (const feature of FEATURES) {
       feature.init?.(ctx);
     }
@@ -9192,11 +9523,16 @@ function setup(ctx) {
       teardownSecondaryDrawer();
     });
     if (layout && getSettings().secondSidebarEnabled) {
-      applyLayout(layout);
+      applyLayout(layout).catch((err) => {
+        dwarn("Canvas: applyLayout failed:", err);
+      });
     }
     applyMainDrawer(layout);
   }).catch((err) => {
     dwarn("Canvas: loadSavedLayout failed, mounting with defaults:", err);
+    try {
+      unsuppressMainDrawer();
+    } catch {}
   });
   return cleanupAll;
 }

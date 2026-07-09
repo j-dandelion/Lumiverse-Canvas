@@ -46,7 +46,8 @@ const PIN_Z_INDEX = '10000'
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
-/** Panel edge facing the chat column (outer-edge / keep-tabs-visible). */
+/** Panel edge facing the chat column (outer-edge / keep-tabs-visible).
+ *  Same primary-020 token as INNER_BORDER (tab-list ↔ panel chrome). */
 const CHAT_FACING_BORDER = '1px solid var(--lumiverse-primary-020)'
 
 /** Module state for secondary pin reparent / restore. Cleared on unpin. */

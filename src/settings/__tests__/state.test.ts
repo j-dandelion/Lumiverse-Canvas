@@ -5,7 +5,7 @@ function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
 
-import { getSettings } from '../state'
+import { getSettings, normalizeCanvasSettings, isKeepTabListVisibleEnabled } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
 // --- getSettings returns default settings ---
@@ -69,6 +69,30 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
     failed++
   }
+}
+
+// --- keepTabListVisible requires moveControlsToOuterEdge ---
+{
+  const cleared = normalizeCanvasSettings(
+    mergeCanvasSettings({ keepTabListVisible: true, moveControlsToOuterEdge: false }),
+  )
+  assertEqual(cleared.keepTabListVisible, false, 'normalize: keep off when outer edge off')
+  assertEqual(cleared.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
+  assertEqual(
+    isKeepTabListVisibleEnabled(cleared),
+    false,
+    'isKeepTabListVisibleEnabled false when outer off',
+  )
+
+  const both = normalizeCanvasSettings(
+    mergeCanvasSettings({ keepTabListVisible: true, moveControlsToOuterEdge: true }),
+  )
+  assertEqual(both.keepTabListVisible, true, 'normalize: keep stays on when outer on')
+  assertEqual(
+    isKeepTabListVisibleEnabled(both),
+    true,
+    'isKeepTabListVisibleEnabled true when both on',
+  )
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

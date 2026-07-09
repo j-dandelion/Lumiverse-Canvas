@@ -67,6 +67,20 @@ const MOUNT_QUIET_MS = 500
 // Timeout (ms) to unsuppress the wrapper even if restore fails or the
 // async LOAD_LAYOUT never arrives. Prevents a permanently hidden drawer.
 const UNSUPPRESS_TIMEOUT_MS = 3000
+// Delay before restoring the active primary tab via .click(). One frame
+// is enough for keep-tabs pin/reconcile to attach mirror buttons; panel
+// bodies stay opacity:0 until the correct tab is active, so we do not
+// need a long blank settle.
+const RESTORE_TAB_CLICK_MS = 0
+// html class + stylesheet: hide host main AND Canvas main-mirror shell
+// until primary open/tab restore finishes (prevents profile flash).
+const RESTORE_PENDING_CLASS = 'sidebar-ux-main-restore-pending'
+const RESTORE_GUARD_STYLE_ID = 'sidebar-ux-main-restore-guard'
+/** Inline stamp on every panel body we force-hide during restore. */
+const RESTORE_HIDE_ATTR = 'data-canvas-restore-hide'
+// Require one confirmed active poll then double-rAF. Body hide covers
+// any lag between tabBtnActive and panel children swap.
+const RESTORE_ACTIVE_STABLE_POLLS = 1
 
 // module-level cache, populated by the observers and read by
 // snapshotLayout() so every save path (settings-toggle, pagehide
@@ -81,6 +95,9 @@ let _stopped = true
 let _lastSeenOpen: boolean | null = null
 let _lastSeenTabId: string | null = null
 let _unsuppressTimer: ReturnType<typeof setTimeout> | null = null
+/** Re-stamps inline hide on newly mounted panel bodies during restore. */
+let _panelHideObserver: MutationObserver | null = null
+let _panelHideRaf: number | null = null
 
 /**
  * Read the current open state of the main drawer from the wrapper's
@@ -104,18 +121,136 @@ function readActiveTabId(sidebar: HTMLElement): string | null {
   return active.getAttribute('data-tab-id') || active.getAttribute('title') || null
 }
 
+function ensureRestoreGuardStyles(): void {
+  if (typeof document === 'undefined') return
+  if (document.getElementById(RESTORE_GUARD_STYLE_ID)) return
+  const el = document.createElement('style')
+  el.id = RESTORE_GUARD_STYLE_ID
+  // Hide chrome + every possible main panel body node. Host React can
+  // remount `[class*="_panelContent_"]` outside the shell (or with
+  // visibility:visible !important) during tab switches — class rules on
+  // the shell alone are not enough. Inline stamps (stampPanelBodyHide)
+  // back the same nodes.
+  el.textContent = `
+    html.${RESTORE_PENDING_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]),
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Panel bodies anywhere — host tree, parked in shell, or mid-reparent. */
+    html.${RESTORE_PENDING_CLASS} [class*="_panelContent_"],
+    html.${RESTORE_PENDING_CLASS} [data-canvas-main-panel-content],
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > * {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+  `
+  document.head.appendChild(el)
+}
+
+function isPanelBodyNode(el: Element): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  const cls = String(el.className || '')
+  if (cls.includes('_panelContent_')) return true
+  if (el.hasAttribute('data-canvas-main-panel-content')) return true
+  // Shell content slot that holds parked host panelContent.
+  if (
+    cls.includes('sidebar-ux-panel-content')
+    && el.closest('.sidebar-ux-main-mirror-wrapper')
+  ) {
+    return true
+  }
+  return false
+}
+
 /**
- * Immediately hide the main-drawer wrapper to prevent a flash of the
- * default (open) state while the async LOAD_LAYOUT round-trip resolves.
- * The wrapper is shown again by unsuppressMainDrawer() after restore
- * completes (or after a timeout safety net).
+ * Force-hide every live main panel body with inline !important styles.
+ * Survives reparenting and CSS fights better than ancestor-only rules.
+ * Safe to call repeatedly; also used from main-mirror after park.
  */
-export function suppressMainDrawer(): void {
-  const wrapper = _wrapper
-  if (!wrapper) return
-  wrapper.style.setProperty('visibility', 'hidden', 'important')
-  // Safety net: if restore never fires (backend down, timeout, etc.),
-  // unsuppress after UNSUPPRESS_TIMEOUT_MS so the drawer isn't stuck hidden.
+export function stampPanelBodyHide(): void {
+  if (typeof document === 'undefined') return
+  if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+  const nodes = document.querySelectorAll(
+    '[class*="_panelContent_"],'
+    + '[data-canvas-main-panel-content],'
+    + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,'
+    + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *',
+  )
+  for (const node of Array.from(nodes)) {
+    const el = node as HTMLElement
+    el.setAttribute(RESTORE_HIDE_ATTR, '1')
+    el.style.setProperty('visibility', 'hidden', 'important')
+    el.style.setProperty('opacity', '0', 'important')
+    el.style.setProperty('pointer-events', 'none', 'important')
+  }
+}
+
+function clearPanelBodyHide(): void {
+  if (typeof document === 'undefined') return
+  const nodes = document.querySelectorAll(`[${RESTORE_HIDE_ATTR}]`)
+  for (const node of Array.from(nodes)) {
+    const el = node as HTMLElement
+    el.removeAttribute(RESTORE_HIDE_ATTR)
+    el.style.removeProperty('visibility')
+    el.style.removeProperty('opacity')
+    el.style.removeProperty('pointer-events')
+  }
+}
+
+function scheduleStampPanelBodyHide(): void {
+  if (_panelHideRaf != null) return
+  _panelHideRaf = requestAnimationFrame(() => {
+    _panelHideRaf = null
+    stampPanelBodyHide()
+  })
+}
+
+function startPanelHideObserver(): void {
+  if (typeof document === 'undefined' || _panelHideObserver) return
+  stampPanelBodyHide()
+  _panelHideObserver = new MutationObserver((mutations) => {
+    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+    let needs = false
+    for (const m of mutations) {
+      if (m.type === 'childList') {
+        for (const n of Array.from(m.addedNodes)) {
+          if (n instanceof Element && (isPanelBodyNode(n) || n.querySelector?.('[class*="_panelContent_"], [data-canvas-main-panel-content]'))) {
+            needs = true
+            break
+          }
+        }
+      }
+      if (needs) break
+    }
+    if (needs) scheduleStampPanelBodyHide()
+  })
+  _panelHideObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  })
+}
+
+function stopPanelHideObserver(): void {
+  if (_panelHideObserver) {
+    _panelHideObserver.disconnect()
+    _panelHideObserver = null
+  }
+  if (_panelHideRaf != null) {
+    cancelAnimationFrame(_panelHideRaf)
+    _panelHideRaf = null
+  }
+}
+
+function armUnsuppressTimeout(): void {
   if (_unsuppressTimer) clearTimeout(_unsuppressTimer)
   _unsuppressTimer = setTimeout(() => {
     unsuppressMainDrawer()
@@ -124,14 +259,253 @@ export function suppressMainDrawer(): void {
 }
 
 /**
- * Restore visibility on the main-drawer wrapper after restore is done.
- * Safe to call multiple times; idempotent.
+ * Start the restore-pending visual guard early (before keep-tabs /
+ * main-mirror mounts) so the host default tab (profile) never paints
+ * for a frame. Safe to call before the main-drawer watcher attaches.
+ */
+export function beginMainDrawerRestoreGuard(): void {
+  ensureRestoreGuardStyles()
+  document.documentElement.classList.add(RESTORE_PENDING_CLASS)
+  startPanelHideObserver()
+  stampPanelBodyHide()
+  armUnsuppressTimeout()
+}
+
+/**
+ * Immediately hide the main-drawer wrapper (and main-mirror shell via
+ * RESTORE_PENDING_CLASS) to prevent a flash of the default (open /
+ * profile) state while layout restore runs.
+ * Shown again by unsuppressMainDrawer() after restore completes (or
+ * after a timeout safety net).
+ */
+export function suppressMainDrawer(): void {
+  beginMainDrawerRestoreGuard()
+  const wrapper = _wrapper
+  if (!wrapper) return
+  // Inline backup for environments where the html-class stylesheet is slow
+  // or stripped; class-based rule also covers main-mirror.
+  wrapper.style.setProperty('visibility', 'hidden', 'important')
+  wrapper.style.setProperty('opacity', '0', 'important')
+  stampPanelBodyHide()
+}
+
+/**
+ * Restore visibility on the main-drawer wrapper + main-mirror shell
+ * after restore is done. Safe to call multiple times; idempotent.
  */
 export function unsuppressMainDrawer(): void {
   if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
+  stopPanelHideObserver()
+  clearPanelBodyHide()
+  document.documentElement.classList.remove(RESTORE_PENDING_CLASS)
   const wrapper = _wrapper
-  if (!wrapper) return
-  wrapper.style.removeProperty('visibility')
+  if (wrapper) {
+    wrapper.style.removeProperty('visibility')
+    wrapper.style.removeProperty('opacity')
+  }
+}
+
+/** True while restore-pending guard is active (main-mirror park consults this). */
+export function isMainDrawerRestorePending(): boolean {
+  return typeof document !== 'undefined'
+    && document.documentElement.classList.contains(RESTORE_PENDING_CLASS)
+}
+
+/**
+ * True when the host (or mirror) already shows targetTabId as active.
+ * Accepts data-tab-id equality or title match (built-in bare ids).
+ */
+function isPrimaryTabActive(targetTabId: string): boolean {
+  const sidebar =
+    _sidebar
+    || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+  const active = sidebar?.querySelector(
+    'button.tabBtnActive, button[class*="tabBtnActive"]',
+  ) as HTMLElement | null
+  if (active) {
+    const id = active.getAttribute('data-tab-id') || ''
+    const title = active.getAttribute('title') || ''
+    if (id === targetTabId || title === targetTabId) return true
+    // Bare-id match: stored "spindle:…:tab:memory:1" vs host data-tab-id "memory"
+    if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+      return true
+    }
+  }
+  const mirrorActive = document.querySelector(
+    `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[data-tab-id="${CSS.escape(targetTabId)}"],`
+    + `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[title="${CSS.escape(targetTabId)}"]`,
+  )
+  return !!mirrorActive
+}
+
+/**
+ * Find the host button for a persisted primary tabId and activate it.
+ * Never dispatches through main-mirror onMirrorClick — that path
+ * toggle-closes when the drawer is already open on the same tab.
+ * When keep-tabs / canvas-main is active, also set the Canvas active
+ * key + open via activateMainMirrorFromRestore.
+ */
+function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boolean): boolean {
+  if (!targetTabId) return false
+  const sidebar =
+    _sidebar
+    || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+  let tabBtn =
+    sidebar?.querySelector(
+      `button[data-tab-id="${CSS.escape(targetTabId)}"]`,
+    ) as HTMLButtonElement | null
+  if (!tabBtn) {
+    tabBtn = sidebar?.querySelector(
+      `button[title="${CSS.escape(targetTabId)}"]`,
+    ) as HTMLButtonElement | null
+  }
+  // Bare-id / suffix-drift: layout may store full spindle id while host
+  // buttons use data-tab-id="profile" | "memory" etc.
+  if (!tabBtn && targetTabId.includes(':')) {
+    const bare = targetTabId.replace(/:\d+$/, '').split(':').pop()
+    if (bare) {
+      tabBtn = sidebar?.querySelector(
+        `button[data-tab-id="${CSS.escape(bare)}"]`,
+      ) as HTMLButtonElement | null
+    }
+  }
+
+  // Canvas main-mirror mode: activate via host + open helper (no mirror.click).
+  // preferMirror only means "we are in keep-tabs restore"; still use host for content.
+  if (preferMirror || document.documentElement.classList.contains('sidebar-ux-canvas-main-active')) {
+    void import('./main-tab-pin').then((m) => {
+      const title =
+        tabBtn?.getAttribute('title') ||
+        tabBtn?.getAttribute('aria-label') ||
+        targetTabId
+      m.activateMainMirrorFromRestore(tabBtn, title)
+    }).catch((err) => {
+      dlog(`main-persist restore: activateMainMirrorFromRestore failed: ${err}`)
+      // Fallback: host click only if available
+      if (tabBtn) {
+        try { tabBtn.click() } catch { /* ignore */ }
+      }
+    })
+    // Host-only path if import path will run; if no host yet, try bare host later.
+    if (tabBtn || document.querySelector('.sidebar-ux-main-tab-mirror-btn')) {
+      return true
+    }
+  }
+
+  if (!tabBtn) {
+    dlog(`main-persist restore: no button for tabId="${targetTabId}"`)
+    return false
+  }
+  try {
+    tabBtn.click()
+    return true
+  } catch (err) {
+    dlog(`main-persist restore: tab click threw: ${err}`)
+    return false
+  }
+}
+
+/** Max polls if the host is slow to honor the tab click (~1s). */
+const RESTORE_TAB_POLL_MAX = 50
+const RESTORE_TAB_POLL_MS = 16
+
+/**
+ * Activate the restored tab, keep stamping panel-body hide, reveal as
+ * soon as the active tab matches (double-rAF for paint). Body hide is
+ * the anti-flash guarantee — no multi-hundred-ms blank settle.
+ */
+function scheduleRestoreTabThenUnsuppress(
+  targetTabId: string | null,
+  preferMirror: boolean,
+  fallbackClickFirstHostTab = false,
+): void {
+  const run = () => {
+    if (_stopped) {
+      unsuppressMainDrawer()
+      return
+    }
+    stampPanelBodyHide()
+    // Force repark while still hidden — tab click may recreate panelContent
+    // under the host; repark watch is slower once restore-pending lifts.
+    void import('./main-mirror-drawer').then((m) => {
+      m.ensureHostContentParkedPublic()
+    }).catch(() => { /* mirror not loaded */ })
+
+    if (targetTabId) {
+      if (!isPrimaryTabActive(targetTabId)) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror)
+      }
+    } else if (fallbackClickFirstHostTab) {
+      const sidebar =
+        _sidebar
+        || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+      const first =
+        sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
+      if (first) {
+        try { first.click() } catch (err) {
+          dlog(`main-persist restore: first-tab click threw: ${err}`)
+        }
+      }
+    }
+
+    let polls = 0
+    let stable = 0
+    const finish = () => {
+      stampPanelBodyHide()
+      // Two paints under the guard so React can commit body children.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          unsuppressMainDrawer()
+        })
+      })
+    }
+    const poll = () => {
+      if (_stopped) {
+        unsuppressMainDrawer()
+        return
+      }
+      stampPanelBodyHide()
+      if (!targetTabId) {
+        finish()
+        return
+      }
+      if (isPrimaryTabActive(targetTabId)) {
+        stable++
+        if (stable === 1) {
+          void import('./main-mirror-drawer').then((m) => {
+            m.ensureHostContentParkedPublic()
+          }).catch(() => { /* ignore */ })
+        }
+        if (stable >= RESTORE_ACTIVE_STABLE_POLLS) {
+          finish()
+          return
+        }
+      } else {
+        stable = 0
+        // Re-click while wrong — host pendingActiveTabReset → profile.
+        if (polls % 3 === 0) {
+          clickRestoredPrimaryTab(targetTabId, preferMirror)
+          void import('./main-mirror-drawer').then((m) => {
+            m.ensureHostContentParkedPublic()
+          }).catch(() => { /* ignore */ })
+        }
+      }
+      polls++
+      if (polls >= RESTORE_TAB_POLL_MAX) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror)
+        finish()
+        return
+      }
+      setTimeout(poll, RESTORE_TAB_POLL_MS)
+    }
+    // One rAF so mirror buttons exist; no fixed 100ms blank.
+    requestAnimationFrame(() => poll())
+  }
+  if (RESTORE_TAB_CLICK_MS > 0) {
+    setTimeout(run, RESTORE_TAB_CLICK_MS)
+  } else {
+    run()
+  }
 }
 
 /**
@@ -314,6 +688,19 @@ export function startMainDrawerPersistence(): void {
 }
 
 /**
+ * Re-click the persisted primary tab if the host is not already on it.
+ * Used after secondary layout restore (assignToSecondary can shove the
+ * host back to profile). Does not toggle the restore-pending guard.
+ */
+export function ensureRestoredPrimaryTab(targetTabId: string): void {
+  if (!targetTabId || _stopped) return
+  if (isPrimaryTabActive(targetTabId)) return
+  const keepVisible = !!getSettings().keepTabListVisible
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
+  clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile)
+}
+
+/**
  * Restore the main-drawer open/close state on load by simulating a
  * click on the host's first tab button. Called from layout/persist.ts
  * after loadSavedLayout resolves.
@@ -352,51 +739,30 @@ export function restoreMainDrawerFromDom(
   // Canvas main-mirror owns open/close + width when keepTabListVisible is on
   // (desktop). Host wrapperOpen / --drawer-panel-w are headless and must not
   // drive restore — apply MAIN_MIRROR_WIDTH_VAR and open/close the shell.
+  //
+  // Stay suppressed until after the restored tab is activated: the host
+  // defaults to "profile", and opening the mirror early would flash that
+  // panel for a frame (or ~100ms) before the deferred tab click.
   const keepVisible = !!getSettings().keepTabListVisible
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
   if (keepVisible && !isMobile) {
     void import('./main-mirror-drawer').then((m) => {
-      if (_stopped) return
+      if (_stopped) {
+        unsuppressMainDrawer()
+        return
+      }
       if (clampedWidth !== null) {
         m.applyMainMirrorRestoredWidth(clampedWidth)
       }
       if (targetOpen) {
         m.openCanvasMainDrawer()
-        if (targetTabId) {
-          setTimeout(() => {
-            if (_stopped) return
-            const sidebar =
-              _sidebar
-              || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
-            let tabBtn =
-              sidebar?.querySelector(
-                `button[data-tab-id="${CSS.escape(targetTabId)}"]`,
-              ) as HTMLButtonElement | null
-            if (!tabBtn) {
-              tabBtn = sidebar?.querySelector(
-                `button[title="${CSS.escape(targetTabId)}"]`,
-              ) as HTMLButtonElement | null
-            }
-            // Prefer mirror button if present (forwards .click() to host).
-            const mirrorBtn = document.querySelector(
-              `.sidebar-ux-main-tab-mirror-btn[data-tab-id="${CSS.escape(targetTabId)}"],`
-              + `.sidebar-ux-main-tab-mirror-btn[title="${CSS.escape(targetTabId)}"]`,
-            ) as HTMLButtonElement | null
-            const clickTarget = mirrorBtn || tabBtn
-            if (clickTarget) {
-              try {
-                clickTarget.click()
-              } catch (err) {
-                dlog(`main-persist restore (mirror): tab click threw: ${err}`)
-              }
-            }
-          }, 100)
-        }
+        // Prefer mirror button; always wait for tab click before showing.
+        scheduleRestoreTabThenUnsuppress(targetTabId, true)
       } else {
         m.closeCanvasMainDrawer()
+        unsuppressMainDrawer()
       }
     })
-    unsuppressMainDrawer()
     return
   }
 
@@ -412,31 +778,13 @@ export function restoreMainDrawerFromDom(
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
       }
     }
-    // Drawer is already in the target state — still restore the active tab.
-    // Defer the click so it runs after async secondary-sidebar setup
-    // (lazy mounts + addSecondaryTabButton) finishes mutating the main
-    // sidebar DOM. Without the delay, the secondary setup overwrites
-    // the restored tab.
-    if (targetOpen && targetTabId) {
-      const targetId = targetTabId
-      setTimeout(() => {
-        if (_stopped) return
-        const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
-        let tabBtn: HTMLButtonElement | null = null
-        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
-        if (!tabBtn) {
-          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
-        }
-        if (tabBtn) {
-          try {
-            tabBtn.click()
-          } catch (err) {
-            dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
-          }
-        }
-      }, 100)
+    // Drawer is already in the target state — still restore the active tab
+    // before lifting the guard so profile does not paint first.
+    if (targetOpen) {
+      scheduleRestoreTabThenUnsuppress(targetTabId, false)
+    } else {
+      unsuppressMainDrawer()
     }
-    unsuppressMainDrawer()
     return
   }
   if (targetOpen) {
@@ -450,50 +798,23 @@ export function restoreMainDrawerFromDom(
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
       }
     }
-    // Find a tab button to click. Defer the click so it runs after
-    // async secondary-sidebar setup finishes mutating the main sidebar.
-    const targetId = targetTabId
-    setTimeout(() => {
-      if (_stopped) return
-      const sidebar = _sidebar || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
-      let tabBtn: HTMLButtonElement | null = null
-      if (targetId) {
-        tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
-        if (!tabBtn) {
-          tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetId)}"]`) as HTMLButtonElement | null
-        }
-      }
-      if (!tabBtn) {
-        tabBtn = sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
-      }
-      if (tabBtn) {
-        unsuppressMainDrawer()
-        try {
-          tabBtn.click()
-        } catch (err) {
-          dlog(`main-persist restore: tabBtn.click() threw: ${err}`)
-        }
-      } else {
-        unsuppressMainDrawer()
-      }
-    }, 100)
+    // Open by clicking the restored tab (or first host tab). Stay
+    // suppressed until after the click so the default profile panel
+    // never paints.
+    scheduleRestoreTabThenUnsuppress(targetTabId, false, true)
   } else {
     // Target state is "closed" but drawer is open. The host's
     // drawer-tab button (sibling of the drawer div inside the wrapper)
     // toggles open/close. Click it to close.
     const toggleBtn = findDrawerToggleButton(wrapper)
     if (toggleBtn) {
-      
-      unsuppressMainDrawer()
       try {
         toggleBtn.click()
       } catch (err) {
         dlog(`main-persist restore: toggleBtn.click() threw: ${err}`)
       }
-    } else {
-      
-      unsuppressMainDrawer()
     }
+    unsuppressMainDrawer()
   }
 }
 
@@ -505,9 +826,12 @@ export function stopMainDrawerPersistence(): void {
   if (_resizeObserver) { _resizeObserver.disconnect(); _resizeObserver = null }
   if (_resizeDebounce) { clearTimeout(_resizeDebounce); _resizeDebounce = null }
   cleanupDomPoll()
+  // Lift any in-flight restore guard so teardown does not leave the
+  // drawer permanently hidden.
+  unsuppressMainDrawer()
+  document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove()
   _wrapper = null
   _sidebar = null
   _lastSeenOpen = null
   _lastSeenTabId = null
-  if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
 }

@@ -222,8 +222,13 @@ const secondaryWrapper = {
 // then import the buttons module and set the wrapper. The import order
 // matters: setting the wrapper before showSecondaryTab is called ensures
 // the getter returns the stub.
-import { __setSecondaryWrapperForTest } from '../../sidebar/secondary'
+import {
+  __setSecondaryWrapperForTest,
+  setSecondarySidebarOpen,
+  isSecondarySidebarOpen,
+} from '../../sidebar/secondary'
 import { __setPinHostForTest, __resetPinStateForTest } from '../../sidebar/tab-position'
+import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../active-tab'
 __setSecondaryWrapperForTest(secondaryWrapper as unknown as HTMLElement)
 
 import { showSecondaryTab } from '../buttons'
@@ -362,6 +367,49 @@ import { showSecondaryTab } from '../buttons'
 
   pinMode = false
   __resetPinStateForTest()
+}
+
+// ============================================================
+// T15: toggle-close contract (addSecondaryTabButton click handler)
+//   When drawer is open and getActiveSecondaryTabId() === tab.id,
+//   the handler must close (not re-show). Documented via the same
+//   predicates the production handler uses.
+// ============================================================
+{
+  // Simulate open + active tab1 (what showSecondaryTab + open set).
+  setSecondarySidebarOpen(true)
+  setActiveSecondaryTabId('tab1')
+  assert(isSecondarySidebarOpen(), 'T15.a: drawer open')
+  assertEqual(getActiveSecondaryTabId(), 'tab1', 'T15.b: active is tab1')
+
+  // Handler branch: open && active === id → close
+  const shouldCloseTab1 =
+    isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab1'
+  assert(shouldCloseTab1, 'T15.c: click tab1 while open+active → close')
+
+  // Handler branch: open && active !== id → show (not close)
+  const shouldCloseTab2 =
+    isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab2'
+  assert(!shouldCloseTab2, 'T15.d: click tab2 while tab1 active → not close')
+
+  // showSecondaryTab updates active for switch path
+  showSecondaryTab('tab2')
+  assertEqual(getActiveSecondaryTabId(), 'tab2', 'T15.e: showSecondaryTab sets active')
+  assert(
+    isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab2',
+    'T15.f: after switch, tab2 is the toggle-close target',
+  )
+
+  // Closed → not close (open path)
+  setSecondarySidebarOpen(false)
+  assert(
+    !(isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab2'),
+    'T15.g: when closed, active match does not close',
+  )
+
+  // Cleanup
+  setActiveSecondaryTabId(null)
+  setSecondarySidebarOpen(false)
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

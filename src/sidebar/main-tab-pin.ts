@@ -60,6 +60,14 @@ let _reconcileRaf: number | null = null
 /** Observed host sidebar element (re-attach if Lumiverse replaces it). */
 let _observedSidebar: HTMLElement | null = null
 
+/**
+ * Last mirror tab the user activated while Canvas owns main UX.
+ * Keyed like hostButtonKey (`id__…` / `title__…`). Survives host
+ * tabBtnActive loss (headless host / repark); not cleared on drawer
+ * close (secondary `_activeSecondaryTabId` parity for toggle-close).
+ */
+let _activeMainMirrorKey: string | null = null
+
 /** Mirror button → host button. WeakMap so host GC is free. */
 const _mirrorToHost = new WeakMap<HTMLElement, HTMLElement>()
 
@@ -126,12 +134,47 @@ export function __resetMainTabPinForTest(): void {
   _enabled = false
   _reconcileRaf = null
   _observedSidebar = null
+  _activeMainMirrorKey = null
   __resetMainMirrorForTest()
   destroyMainPinHost()
 }
 
+/** Test / restore: last Canvas-owned active mirror key (or null). */
+export function getActiveMainMirrorKey(): string | null {
+  return _activeMainMirrorKey
+}
+
+/**
+ * Activate a main tab for layout restore without going through
+ * onMirrorClick (which would toggle-close if the drawer is already open
+ * on that tab). Clicks the host button for React content, sets the
+ * Canvas active key, and opens the mirror drawer.
+ */
+export function activateMainMirrorFromRestore(
+  hostBtn: HTMLElement | null,
+  title?: string,
+): void {
+  const resolvedTitle =
+    title ||
+    hostBtn?.getAttribute('title') ||
+    hostBtn?.getAttribute('aria-label') ||
+    undefined
+  if (hostBtn && hostBtn.isConnected) {
+    _activeMainMirrorKey = hostButtonKey(hostBtn)
+    try {
+      hostBtn.click()
+    } catch {
+      /* host may throw during teardown */
+    }
+  } else if (resolvedTitle) {
+    _activeMainMirrorKey = `title__${resolvedTitle}`
+  }
+  onMainMirrorTabActivated(resolvedTitle)
+}
+
 function teardownMainPin(): void {
   _enabled = false
+  _activeMainMirrorKey = null
   stopObservers()
   applyMainMirrorDrawer(false, { force: true })
   destroyMainPinHost()
@@ -437,6 +480,25 @@ function hostButtonKey(btn: HTMLElement): string {
   return `node__${btn.tagName}__${btn.className}`
 }
 
+/** Key for a mirror button (mirrors hostButtonKey from data-tab-id / title). */
+function mirrorButtonKey(mirror: HTMLElement): string {
+  const id = mirror.getAttribute('data-tab-id')
+  if (id) return `id__${id}`
+  const title = mirror.getAttribute('title') || mirror.getAttribute('aria-label') || ''
+  if (title) return `title__${title}`
+  const dataKey = mirror.getAttribute('data-mirror-key')
+  if (dataKey) return dataKey
+  return `node__${mirror.tagName}__${mirror.className}`
+}
+
+function hostHasTabBtnActive(host: HTMLElement | undefined | null): boolean {
+  if (!host) return false
+  return (
+    host.classList.contains('tabBtnActive') ||
+    String(host.className || '').includes('tabBtnActive')
+  )
+}
+
 function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
   const tabId = hostBtn.getAttribute('data-tab-id')
   if (tabId) mirror.setAttribute('data-tab-id', tabId)
@@ -449,10 +511,17 @@ function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
   }
 
   // Match secondary: no tab looks selected while the drawer is closed.
-  const hostActive =
-    hostBtn.classList.contains('tabBtnActive') ||
-    String(hostBtn.className || '').includes('tabBtnActive')
-  const showActive = hostActive && isCanvasMainOpen()
+  // While open, Canvas-owned key is exclusive — host may still mark
+  // Profile (or a previous tab) tabBtnActive during restore/repark, and
+  // OR-ing hostActive would highlight two mirrors at once.
+  // Fallback to host only when no Canvas key is set yet.
+  const key = hostButtonKey(hostBtn)
+  const hostActive = hostHasTabBtnActive(hostBtn)
+  const canvasActive =
+    _activeMainMirrorKey != null && key === _activeMainMirrorKey
+  const showActive =
+    isCanvasMainOpen() &&
+    (_activeMainMirrorKey != null ? canvasActive : hostActive)
   const wasActive = mirror.classList.contains('sidebar-ux-tab-active')
   mirror.classList.toggle('sidebar-ux-tab-active', showActive)
   if (showActive !== wasActive) {
@@ -460,6 +529,8 @@ function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
       title: mirror.getAttribute('title'),
       showActive,
       hostActive,
+      canvasActive,
+      canvasKey: _activeMainMirrorKey,
       open: isCanvasMainOpen(),
     })
   }
@@ -519,27 +590,28 @@ function onMirrorClick(ev: Event): void {
     mirror.getAttribute('aria-label') ||
     undefined
 
-  // Secondary parity: clicking the already-active tab while open closes the drawer.
+  const hostBtn = _mirrorToHost.get(mirror)
+  const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror)
+
+  // Secondary parity: clicking the already-active tab while open closes the
+  // drawer. When Canvas owns a key, that key alone decides toggle-close —
+  // do not OR host tabBtnActive (Profile can stay host-active after restore
+  // while Canvas key points at another tab; OR would close on Profile click).
+  // Fall back to host/mirror only when no Canvas key is set yet.
   const wasActive =
-    mirror.classList.contains('sidebar-ux-tab-active') ||
-    // Host may still mark active while Canvas closed (we hide highlight then).
-    (() => {
-      const host = _mirrorToHost.get(mirror)
-      if (!host) return false
-      return (
-        host.classList.contains('tabBtnActive') ||
-        String(host.className || '').includes('tabBtnActive')
-      )
-    })()
+    _activeMainMirrorKey != null
+      ? key === _activeMainMirrorKey
+      : mirror.classList.contains('sidebar-ux-tab-active') ||
+        hostHasTabBtnActive(hostBtn)
   if (isCanvasMainOpen() && wasActive) {
-    dlog('[main-mirror] click → close (active tab)', { title })
+    dlog('[main-mirror] click → close (active tab)', { title, key })
     closeCanvasMainDrawer()
     return
   }
 
-  const hostBtn = _mirrorToHost.get(mirror)
   dlog('[main-mirror] click', {
     title,
+    key,
     hostConnected: !!(hostBtn && hostBtn.isConnected),
     open: isCanvasMainOpen(),
   })
@@ -547,11 +619,14 @@ function onMirrorClick(ev: Event): void {
     reconcileMainMirror()
     const again = _mirrorToHost.get(mirror)
     if (again && again.isConnected) {
+      _activeMainMirrorKey = hostButtonKey(again)
       try {
         again.click()
       } catch {
         /* host may throw during teardown */
       }
+    } else {
+      _activeMainMirrorKey = key
     }
     onMainMirrorTabActivated(title)
     return
@@ -561,6 +636,7 @@ function onMirrorClick(ev: Event): void {
   } catch {
     /* ignore */
   }
+  _activeMainMirrorKey = key
   onMainMirrorTabActivated(title)
 }
 

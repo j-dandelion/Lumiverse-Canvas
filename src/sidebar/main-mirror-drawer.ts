@@ -56,7 +56,7 @@ let _contentRestoreNext: ChildNode | null = null
 /** Last side we mounted for — skip full remount when unchanged. */
 let _mountedSide: 'left' | 'right' | null = null
 /** Soft re-park if React pulls content back into the host tree. */
-let _reparkTimer: ReturnType<typeof setInterval> | null = null
+let _reparkTimer: ReturnType<typeof setTimeout> | null = null
 
 export function getMainMirrorWidthVar(): string {
   return MAIN_MIRROR_WIDTH_VAR
@@ -248,9 +248,12 @@ export function __resetMainMirrorForTest(): void {
 function injectHostHideStyles(): void {
   const id = 'sidebar-ux-host-main-hide'
   const css = `
-    /* Hide host main drawer chrome while Canvas owns main UX. */
+    /* Hide host main drawer chrome while Canvas owns main UX.
+     * opacity:0 is required: host panelContent often has
+     * visibility:visible and would paint through visibility:hidden alone. */
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) {
       visibility: hidden !important;
+      opacity: 0 !important;
       pointer-events: none !important;
       /* Avoid transform trapping any leftover fixed descendants. */
       transform: none !important;
@@ -258,11 +261,23 @@ function injectHostHideStyles(): void {
     }
     html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="drawerTab"] {
       visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Any host panel body still under the host tree (mid tab-switch
+     * remount before repark) must not paint through. */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]) [class*="_panelContent_"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
       pointer-events: none !important;
     }
     /*
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
+     *
+     * Skip visibility/opacity force while html.sidebar-ux-main-restore-pending
+     * (see main-persist restore guard). Otherwise visibility:visible !important
+     * paints profile content through a parent with visibility:hidden.
      */
     .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       flex: 1 1 auto;
@@ -277,6 +292,9 @@ function injectHostHideStyles(): void {
       left: auto !important;
       right: auto !important;
       bottom: auto !important;
+    }
+    html:not(.sidebar-ux-main-restore-pending)
+      .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       visibility: visible !important;
       pointer-events: auto !important;
       opacity: 1 !important;
@@ -438,19 +456,30 @@ function ensureHostContentParked(): void {
   _contentEl = hostContent
   hostContent.setAttribute(CONTENT_MARK_ATTR, '1')
 
+  const restorePending =
+    typeof document !== 'undefined'
+    && document.documentElement.classList.contains('sidebar-ux-main-restore-pending')
+
   if (hostContent.parentElement !== slot) {
     if (!_contentRestoreParent) {
       _contentRestoreParent = hostContent.parentElement
       _contentRestoreNext = hostContent.nextSibling
     }
     // Clear any leftover fixed-overlay styles from earlier approaches.
+    // During restore-pending, do NOT clear visibility/opacity — main-persist
+    // stamps those so the profile body never paints mid-tab-switch.
     const s = hostContent.style
     for (const prop of [
       'top', 'left', 'right', 'bottom', 'width', 'height',
-      'position', 'z-index', 'visibility', 'opacity', 'pointer-events',
+      'position', 'z-index',
       'margin', 'box-sizing', 'overflow', 'background',
     ]) {
       s.removeProperty(prop)
+    }
+    if (!restorePending) {
+      for (const prop of ['visibility', 'opacity', 'pointer-events']) {
+        s.removeProperty(prop)
+      }
     }
     slot.appendChild(hostContent)
     dlog('[main-mirror] parked panelContent in shell.content (secondary-style)')
@@ -464,6 +493,18 @@ function ensureHostContentParked(): void {
     wrap.style.setProperty('visibility', 'hidden', 'important')
     wrap.style.setProperty('pointer-events', 'none', 'important')
   }
+
+  // Re-apply restore hide after park (new nodes / cleared styles).
+  if (restorePending) {
+    void import('./main-persist').then((m) => {
+      m.stampPanelBodyHide()
+    }).catch(() => { /* ignore */ })
+  }
+}
+
+/** Public repark for restore path (tab click remounts host panelContent). */
+export function ensureHostContentParkedPublic(): void {
+  ensureHostContentParked()
 }
 
 function restoreHostContent(): void {
@@ -501,19 +542,29 @@ function startReparkWatch(): void {
   stopReparkWatch()
   // Lightweight poll — no MutationObserver (that fought React). If host
   // React re-inserts panelContent under the hidden wrapper, put it back.
-  _reparkTimer = setInterval(() => {
+  // Faster interval while restore-pending so tab-switch remounts don't
+  // paint profile under the host for a frame.
+  const tickMs = () =>
+    (typeof document !== 'undefined'
+      && document.documentElement.classList.contains('sidebar-ux-main-restore-pending'))
+      ? 50
+      : 500
+  const tick = () => {
+    _reparkTimer = null
     if (!_active || !_shell) return
     const el = resolveHostPanelContent()
     if (el && el.parentElement !== _shell.content) {
       dlog('[main-mirror] re-park: React moved panelContent back to host')
       ensureHostContentParked()
     }
-  }, 500)
+    _reparkTimer = setTimeout(tick, tickMs())
+  }
+  _reparkTimer = setTimeout(tick, tickMs())
 }
 
 function stopReparkWatch(): void {
   if (_reparkTimer !== null) {
-    clearInterval(_reparkTimer)
+    clearTimeout(_reparkTimer)
     _reparkTimer = null
   }
 }

@@ -297,6 +297,11 @@ export function loadSavedLayout(): Promise<any> {
  */
 export function applyMainDrawer(layout: any): void {
   if (!layout || !layout.primary) {
+    // No primary state to restore — lift the restore-pending guard so
+    // the host/mirror drawer is not left hidden until the 3s timeout.
+    import('../sidebar/main-persist').then(({ unsuppressMainDrawer }) => {
+      unsuppressMainDrawer()
+    })
     return
   }
 

@@ -252,19 +252,22 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secSidebars.appendChild(buildSettingRow({
     label: 'Move tab controls to outer edge',
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area.',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for “Keep tab lists visible”.',
     control: moveControlsToOuter.btn,
   }))
 
   const keepTabListVisible = makeToggle(
     () => getSettings().keepTabListVisible,
     (v) => setSettings({ keepTabListVisible: v }),
+    { disabled: () => !getSettings().moveControlsToOuterEdge },
   )
-  secSidebars.appendChild(buildSettingRow({
+  const keepTabListVisibleRow = buildSettingRow({
     label: 'Keep tab lists visible',
-    hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer. Panels still slide in and out from behind the list.',
+    hint: 'Requires “Move tab controls to outer edge”. Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.',
     control: keepTabListVisible.btn,
-  }))
+    disabled: !getSettings().moveControlsToOuterEdge,
+  })
+  secSidebars.appendChild(keepTabListVisibleRow)
 
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
@@ -392,9 +395,14 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     debugMode.refresh()
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
-    // Update disabled visual state for sub-features gated by the master toggle.
-    // keepTabListVisible is intentionally not gated — it also pins the main
-    // drawer mirror strip when the second sidebar is off.
+    // keepTabListVisible requires moveControlsToOuterEdge (strip on screen edge).
+    {
+      const d = !getSettings().moveControlsToOuterEdge
+      keepTabListVisible.btn.disabled = d
+      keepTabListVisible.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      keepTabListVisibleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+    }
+    // Sub-features gated by the second-drawer master toggle.
     for (const row of [resizeSidebars, compact]) {
       const d = !getSettings().secondSidebarEnabled
       row.btn.disabled = d

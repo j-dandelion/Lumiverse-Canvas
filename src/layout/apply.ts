@@ -259,6 +259,15 @@ export async function applyLayout(layout: any) {
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility()
       }
+      // Re-assert primary tab after secondary assigns. Moving tabs off main
+      // can leave the host on "profile" even if applyMainDrawer already ran.
+      const primaryTabId =
+        typeof layout.primary?.tabId === 'string' ? layout.primary.tabId : null
+      if (primaryTabId && layout.primary?.open !== false) {
+        void import('../sidebar/main-persist').then((m) => {
+          m.ensureRestoredPrimaryTab(primaryTabId)
+        })
+      }
     }
 
     // Observe the main sidebar for childList + subtree — each new tab

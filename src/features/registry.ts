@@ -364,7 +364,7 @@ const tabPositionFeature: CanvasFeature = {
   },
 }
 
-/** Keep tab list visible:
+/** Keep tab list visible (requires moveControlsToOuterEdge):
  *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
  *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
  *    forward to host tab buttons. Hidden while main drawer is open.
@@ -374,8 +374,16 @@ const tabPositionFeature: CanvasFeature = {
 const keepTabListVisibleFeature: CanvasFeature = {
   id: 'keepTabListVisible',
   mount(_ctx, _layout) {
-    reconcileTabListPin()
-    reconcileMainTabListPin()
+    // mount() only runs when keepTabListVisible is truthy at setup, but still
+    // require outer-edge (settings normalize + apply also enforce this).
+    const on = !!getSettings().keepTabListVisible && !!getSettings().moveControlsToOuterEdge
+    if (on) {
+      reconcileTabListPin()
+      reconcileMainTabListPin()
+    } else {
+      applyTabListPin(false, { force: true })
+      applyMainTabListPin(false, { force: true })
+    }
     updateDrawerTabVisibility()
     updateChatReflow()
     return () => {
@@ -386,8 +394,9 @@ const keepTabListVisibleFeature: CanvasFeature = {
     }
   },
   apply(_prev, next) {
-    applyTabListPin(!!next.keepTabListVisible, { force: true })
-    applyMainTabListPin(!!next.keepTabListVisible, { force: true })
+    const on = !!next.keepTabListVisible && !!next.moveControlsToOuterEdge
+    applyTabListPin(on, { force: true })
+    applyMainTabListPin(on, { force: true })
     updateDrawerTabVisibility()
     updateChatReflow()
   },

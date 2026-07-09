@@ -39,7 +39,7 @@ import {
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
-import { startMainDrawerPersistence, stopMainDrawerPersistence } from './sidebar/main-persist'
+import { startMainDrawerPersistence, stopMainDrawerPersistence, beginMainDrawerRestoreGuard, unsuppressMainDrawer } from './sidebar/main-persist'
 import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
@@ -50,6 +50,11 @@ import { installDebugEscapeHatch } from './debug/fiber-scan'
 
 export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
+
+  // Hide host main (and later main-mirror) immediately — do not wait for
+  // LOAD_LAYOUT. Host defaults the open drawer to "profile"; without this
+  // the default paints for the whole IPC round-trip.
+  beginMainDrawerRestoreGuard()
 
   // Force-flush any pending debounced save before the page unloads.
   // Without these, a settings change made <100ms before close is lost.
@@ -103,7 +108,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // first paint — no 68px sliver, no 500ms flicker. We also hydrate the
   // settings from the same blob so every feature mount downstream sees the
   // correct gate.
-  loadSavedLayout().then((layout) => {
+  loadSavedLayout().then(async (layout) => {
     // Version check: if the layout was saved by a different Canvas version,
     // the user is running a stale frontend bundle. Log a warning so they
     // know to hard-refresh. This is a visibility mechanism, not auto-reload.
@@ -129,6 +134,11 @@ export function setup(ctx: SpindleFrontendContext) {
     refreshSettingsPanel()
 
     if (getSettings().debugMode) installDebugEscapeHatch()
+
+    // Hide host main + main-mirror before feature mounts (keep-tabs can
+    // open the mirror with the host default "profile" tab). Lifted after
+    // applyMainDrawer activates the persisted primary.tabId.
+    beginMainDrawerRestoreGuard()
 
     // Run feature init() hooks. These run after hydrateSettings so they
     // can read the persisted toggle state, but before mount() so they
@@ -206,20 +216,22 @@ export function setup(ctx: SpindleFrontendContext) {
     // gated on secondSidebarEnabled because it touches the secondary
     // wrapper; applyMainDrawer has no such dependency.
     //
-    // IMPORTANT: applyLayout must run BEFORE applyMainDrawer because
-    // applyLayout moves tabs to the secondary sidebar, which changes
-    // the main drawer's active tab as a side effect. applyMainDrawer
-    // then restores the correct tab after those assignments are done.
-
-    // Apply the rest of the layout (tab assignments + width delta if any).
-    // Safe to call after mount: it won't double-animate the wrapper.
+    // applyLayout moves tabs to the secondary sidebar, which can reset the
+    // host active tab to "profile". Fire it first; panel bodies stay hidden
+    // until primary.tabId is active. finishRestore re-asserts primary after
+    // late assigns — no fixed wait needed here.
     if (layout && getSettings().secondSidebarEnabled) {
-      applyLayout(layout)
+      void applyLayout(layout).catch((err) => {
+        dwarn('Canvas: applyLayout failed:', err)
+      })
     }
 
     applyMainDrawer(layout)
   }).catch((err) => {
     dwarn('Canvas: loadSavedLayout failed, mounting with defaults:', err)
+    // If the restore guard was never lifted (or load failed before
+    // beginMainDrawerRestoreGuard), ensure the drawer is visible.
+    try { unsuppressMainDrawer() } catch { /* ignore */ }
   })
 
   // v1.3.0: removed the permanent ctx.onBackendMessage no-op. The previous

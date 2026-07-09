@@ -101,9 +101,9 @@ The main drawer is host-owned — Canvas can't call its API directly. Instead:
 2. **Active tab**: `MutationObserver` on the sidebar for `tabBtnActive` class movement
 3. **Width**: `ResizeObserver` with 300ms debounce
 
-**Suppress/unsuppress pattern**: On mount, the wrapper is hidden (`visibility: hidden`) to prevent a flash of the default state while the async `LOAD_LAYOUT` resolves. `unsuppressMainDrawer()` restores visibility after state is applied or after a 3s timeout.
+**Suppress/unsuppress pattern**: At the start of `setup()`, `beginMainDrawerRestoreGuard()` adds `html.sidebar-ux-main-restore-pending`. Styles + inline stamps hide host main, main-mirror shell, and every main panel body (**opacity:0** — `visibility:hidden` alone is not enough when content forces `visibility:visible`). Reveal as soon as `primary.tabId` is active (double rAF); no multi-hundred-ms blank settle. Secondary `finishRestore` re-asserts primary via `ensureRestoredPrimaryTab`. 3s safety timeout if restore never completes.
 
-**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host's tab buttons since `spindle.ui.openDrawerTab` is not available to extensions at runtime.
+**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host/mirror tab buttons since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once the correct tab is active.
 
 ## Layout Restore (`layout/apply.ts`)
 

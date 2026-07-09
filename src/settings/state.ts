@@ -60,6 +60,24 @@ export function getLastLoadedLayout(): any { return _lastLoadedLayout }
 export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh = fn }
 
 /**
+ * keepTabListVisible only makes sense with tab lists on the screen edge.
+ * Clear it whenever moveControlsToOuterEdge is off (UI gate + load safety).
+ */
+export function normalizeCanvasSettings(s: FullCanvasSettings): FullCanvasSettings {
+  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
+    return { ...s, keepTabListVisible: false }
+  }
+  return s
+}
+
+/** Effective keep-tabs flag after the outer-edge dependency. */
+export function isKeepTabListVisibleEnabled(
+  s: FullCanvasSettings = _settings,
+): boolean {
+  return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge
+}
+
+/**
  * One-shot hydration at setup time. Replaces the in-memory state with the
  * value merged from the loaded layout blob (defaults filled in by
  * mergeCanvasSettings). Does NOT call applySettings / refresh / persist —
@@ -67,7 +85,7 @@ export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh =
  */
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
   if (_userHasTouchedSettings) return
-  _settings = mergeCanvasSettings(raw ?? null)
+  _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null))
 }
 
 /**
@@ -82,11 +100,11 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     const v = patch[key]
     if (v !== undefined) (next as Record<string, unknown>)[key] = v
   }
-  _settings = next
+  _settings = normalizeCanvasSettings(next)
   // Update the in-memory DEBUG flag immediately — applySettings also does
   // this, but we want dlog() calls inside the same tick to see the new value.
-  setDebug(next.debugMode)
-  applySettings(prev, next)
+  setDebug(_settings.debugMode)
+  applySettings(prev, _settings)
   refreshSettingsPanel()
   persistSettings()
 }
