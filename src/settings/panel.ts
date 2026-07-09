@@ -259,13 +259,11 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   const keepTabListVisible = makeToggle(
     () => getSettings().keepTabListVisible,
     (v) => setSettings({ keepTabListVisible: v }),
-    { disabled: () => !getSettings().secondSidebarEnabled }
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Keep tab list visible',
-    hint: 'Pins the second drawer’s tab buttons to the screen edge so you can switch tabs even when the drawer is closed. The panel still slides in and out from behind the list.',
+    label: 'Keep tab lists visible',
+    hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer. Panels still slide in and out from behind the list.',
     control: keepTabListVisible.btn,
-    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const resizeSidebars = makeToggle(
@@ -395,7 +393,9 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
     // Update disabled visual state for sub-features gated by the master toggle.
-    for (const row of [resizeSidebars, compact, keepTabListVisible]) {
+    // keepTabListVisible is intentionally not gated — it also pins the main
+    // drawer mirror strip when the second sidebar is off.
+    for (const row of [resizeSidebars, compact]) {
       const d = !getSettings().secondSidebarEnabled
       row.btn.disabled = d
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'

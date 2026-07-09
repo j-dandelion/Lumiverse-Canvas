@@ -36,7 +36,7 @@ interface CanvasFeature {
 | `layoutPersistenceFeature` | `layoutPersistence` | Cancels in-flight saves when turned off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
-| `keepTabListVisibleFeature` | `keepTabListVisible` | Pins secondary tab list to screen edge when drawer is closed (reparents out of transformed wrapper) |
+| `keepTabListVisibleFeature` | `keepTabListVisible` | Pins tab lists when drawers are closed; on desktop, main uses a full Canvas-owned shell (host hidden) + portal |
 | `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs |
 
 **Note**: The `drawerTabDrag` feature is in the registry but has no settings panel toggle — it is enabled/disabled via the `drawerTabDrag` setting key, which is not exposed in the UI panel.
@@ -67,7 +67,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 
 **Sections:**
 1. **Chat & Layout** — chatReflow, layoutPersistence, slashCommandsEnabled
-2. **Sidebars** — moveControlsToOuterEdge, keepTabListVisible (disabled when second sidebar off), resizeSidebars, sidebarShadowsDesktop, sidebarShadowsMobile
+2. **Sidebars** — moveControlsToOuterEdge, keepTabListVisible (main + secondary; not gated on second sidebar), resizeSidebars, sidebarShadowsDesktop, sidebarShadowsMobile
 3. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state), consistentIconSize
 4. **Debug** — debugMode
 

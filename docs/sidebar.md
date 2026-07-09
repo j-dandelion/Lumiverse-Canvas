@@ -18,11 +18,22 @@ The secondary sidebar is a wrapper element with this hierarchy:
               └── .sidebar-ux-panel-content  (hosts reparented extension roots)
 ```
 
-### `keepTabListVisible` (pin)
+### `keepTabListVisible` (pin + Canvas main shell)
 
-When the setting is on (desktop only), the tab list is **reparented** onto a body-level `.sidebar-ux-tab-list-pin-host` outside the transforming wrapper. A 56px spacer stays in the drawer so the panel does not draw under the strip when open. `position: fixed` alone is not enough: the wrapper always has `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. See `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts`. Remount (`mountSecondarySidebar`) re-applies pin from settings.
+When the setting is on (desktop only):
 
-**Lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan.
+| Drawer | Strategy | Module |
+|--------|----------|--------|
+| **Secondary** | **Reparent** Canvas-owned `.sidebar-ux-tab-list` onto a body-level `.sidebar-ux-tab-list-pin-host` (`data-pin-owner="secondary"`). A 56px spacer stays in the drawer. Strip stays visible while closed. | `applyTabListPin` / `reconcileTabListPin` in `tab-position.ts` |
+| **Main** | **Headless host + Canvas shell** — hide host main wrapper (`sidebar-ux-host-main-hidden`); mount a full Canvas drawer (shared `drawer-shell.ts`) on the main side; pin its tab list (`data-pin-owner="main"`); mirror host tab buttons and forward `.click()`; reparent host panel content into the Canvas panel (portal). Visual open/close is Canvas-only — pin strip is **never** hidden because host `wrapperOpen` flipped. | `main-mirror-drawer.ts` + `main-tab-pin.ts` |
+
+Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... })` so main and secondary look the same. **No Lumiverse source changes** — host React stays in the tree as the activation/content engine.
+
+`position: fixed` alone is not enough: wrappers always have `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. Dual pin hosts are keyed by `data-pin-owner` so `sweepStrayPinHosts` never deletes the other drawer’s host.
+
+**Secondary lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan. Remount (`mountSecondarySidebar`) re-applies secondary pin from settings. Side-change also calls `reconcileMainTabListPin()` / remounts the main mirror shell.
+
+**Why not reparent the host sidebar mount:** the main sidebar is host-owned React. Moving `[data-spindle-mount="sidebar"]` would fight reconciliation. Instead Canvas hides host chrome and portals only the panel content node.
 
 ## DOM Construction (`secondary.tsx`)
 

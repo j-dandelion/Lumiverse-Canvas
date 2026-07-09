@@ -55,10 +55,12 @@ export interface CanvasSettings {
    *  No-op on mobile (mobile CSS forces column layout + bottom border). */
   moveControlsToOuterEdge?: boolean
 
-  /** When the secondary drawer is closed, keep the tab-button-list visible
-   *  at the screen edge so the user can switch tabs without opening the
-   *  drawer. Works regardless of `moveControlsToOuterEdge`. The panel still
-   *  slides in/out from behind the pinned tab list. No-op on mobile. */
+  /** When a drawer is closed, keep its tab-button-list visible at the
+   *  screen edge so the user can switch tabs without opening the drawer.
+   *  Secondary: reparents Canvas-owned tab list. Main: Canvas mirror strip
+   *  (host React nodes stay in place; clicks forward to host buttons).
+   *  Works regardless of `moveControlsToOuterEdge`. Panels still slide
+   *  in/out from behind the list. No-op on mobile. */
   keepTabListVisible?: boolean
 
   /** Show box-shadow on sidebars at min-width: 601px (desktop). */

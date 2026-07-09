@@ -35,6 +35,10 @@ export const TAB_LIST_PINNED_CLASS = 'sidebar-ux-tab-list--pinned'
  *  and slide the strip off-screen when the drawer closes. */
 export const TAB_LIST_PIN_HOST_CLASS = 'sidebar-ux-tab-list-pin-host'
 
+/** data-pin-owner attribute values for dual pin hosts (main + secondary). */
+export const PIN_OWNER_SECONDARY = 'secondary'
+export const PIN_OWNER_MAIN = 'main'
+
 /** In-flow placeholder left in the drawer while the tab list is reparented. */
 export const TAB_LIST_SPACER_CLASS = 'sidebar-ux-tab-list-spacer'
 
@@ -43,11 +47,14 @@ const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
 
-/** Module state for pin reparent / restore. Cleared on unpin. */
+/** Module state for secondary pin reparent / restore. Cleared on unpin. */
 let _pinHost: HTMLElement | null = null
 let _pinSpacer: HTMLElement | null = null
 let _restoreParent: HTMLElement | null = null
 let _restoreNext: ChildNode | null = null
+
+/** Body-level host for the main-drawer mirror strip (never reparents host React nodes). */
+let _mainPinHost: HTMLElement | null = null
 
 /**
  * Live tab list currently under the module-owned pin host, if any.
@@ -103,12 +110,78 @@ export function __setPinHostForTest(host: HTMLElement | null): void {
   _pinHost = host
 }
 
+/** Test-only: expose main pin host. */
+export function __getMainPinHostForTest(): HTMLElement | null {
+  return _mainPinHost
+}
+
+/** Test-only: inject main pin host. */
+export function __setMainPinHostForTest(host: HTMLElement | null): void {
+  _mainPinHost = host
+}
+
 /** Test-only: reset module pin state without touching a live document. */
 export function __resetPinStateForTest(): void {
   _pinHost = null
   _pinSpacer = null
   _restoreParent = null
   _restoreNext = null
+  _mainPinHost = null
+}
+
+/** Live body-level host for the main-drawer mirror pin, if any. */
+export function getMainPinHost(): HTMLElement | null {
+  return _mainPinHost
+}
+
+/**
+ * Ensure a body-level pin host for the main-drawer mirror strip on `side`.
+ * Does not reparent host React nodes — callers own the mirror children.
+ */
+export function ensureMainPinHost(side: 'left' | 'right'): HTMLElement | null {
+  if (typeof document === 'undefined' || !document.body) return null
+  if (!_mainPinHost) {
+    _mainPinHost = document.createElement('div')
+    document.body.appendChild(_mainPinHost)
+  }
+  sweepStrayPinHosts()
+  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN)
+  return _mainPinHost
+}
+
+/** Remove the main pin host and its children. Safe if already absent. */
+export function destroyMainPinHost(): void {
+  if (_mainPinHost) {
+    while (_mainPinHost.firstChild) {
+      _mainPinHost.removeChild(_mainPinHost.firstChild)
+    }
+    _mainPinHost.remove()
+    _mainPinHost = null
+  }
+  sweepStrayPinHosts()
+}
+
+/** Shared fixed-edge chrome for secondary reparent host and main mirror host. */
+function applyPinHostChrome(
+  host: HTMLElement,
+  side: 'left' | 'right',
+  owner: typeof PIN_OWNER_SECONDARY | typeof PIN_OWNER_MAIN,
+): void {
+  host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
+  host.setAttribute('data-pin-owner', owner)
+  setIfDifferent(host.style, 'position', 'fixed')
+  setIfDifferent(host.style, 'top', SAFE_TOP)
+  setIfDifferent(host.style, 'bottom', SAFE_BOTTOM)
+  setIfDifferent(host.style, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(host.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(host.style, 'pointerEvents', 'none')
+  if (side === 'right') {
+    setIfDifferent(host.style, 'right', '0')
+    setIfDifferent(host.style, 'left', '')
+  } else {
+    setIfDifferent(host.style, 'left', '0')
+    setIfDifferent(host.style, 'right', '')
+  }
 }
 
 // Structural element type — only the inline `style` is touched, so any
@@ -355,30 +428,16 @@ function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
   }
   // Drop any stray pin hosts left by lost module state / incomplete teardown.
   sweepStrayPinHosts()
-  _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
-  // Host is a non-transformed positioning shell; children take pointer events.
-  setIfDifferent(_pinHost.style, 'position', 'fixed')
-  setIfDifferent(_pinHost.style, 'top', SAFE_TOP)
-  setIfDifferent(_pinHost.style, 'bottom', SAFE_BOTTOM)
-  setIfDifferent(_pinHost.style, 'zIndex', PIN_Z_INDEX)
-  setIfDifferent(_pinHost.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
-  setIfDifferent(_pinHost.style, 'pointerEvents', 'none')
-  if (side === 'right') {
-    setIfDifferent(_pinHost.style, 'right', '0')
-    setIfDifferent(_pinHost.style, 'left', '')
-  } else {
-    setIfDifferent(_pinHost.style, 'left', '0')
-    setIfDifferent(_pinHost.style, 'right', '')
-  }
+  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY)
   return _pinHost
 }
 
-/** Remove document pin hosts that are not the module-owned `_pinHost`. */
+/** Remove document pin hosts that are not the module-owned secondary or main hosts. */
 function sweepStrayPinHosts(): void {
   if (typeof document === 'undefined' || !document.querySelectorAll) return
   const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`)
   for (const host of Array.from(hosts)) {
-    if (host !== _pinHost) {
+    if (host !== _pinHost && host !== _mainPinHost) {
       host.remove()
     }
   }
@@ -437,14 +496,7 @@ function pinTabList(tabList: HTMLElement): void {
     // After append, guarantee exclusive ownership (covers re-pin force path).
     removeOrphanTabListsFromHost(tabList)
   } else if (_pinHost) {
-    _pinHost.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
-    if (side === 'right') {
-      setIfDifferent(_pinHost.style, 'right', '0')
-      setIfDifferent(_pinHost.style, 'left', '')
-    } else {
-      setIfDifferent(_pinHost.style, 'left', '0')
-      setIfDifferent(_pinHost.style, 'right', '')
-    }
+    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY)
     removeOrphanTabListsFromHost(tabList)
   }
 

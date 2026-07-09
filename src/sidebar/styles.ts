@@ -10,6 +10,15 @@ import { injectStyles } from '../debug/styles'
 // it for persistence.
 export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
+/** Canvas main mirror drawer width (keepTabListVisible desktop mode). */
+export const MAIN_MIRROR_WIDTH_VAR = '--sidebar-ux-main-mirror-w'
+
+/** Class on host main wrapper while Canvas owns main chrome. */
+export const HOST_MAIN_HIDDEN_CLASS = 'sidebar-ux-host-main-hidden'
+
+/** DocumentElement marker while main mirror mode is active. */
+export const CANVAS_MAIN_ACTIVE_CLASS = 'sidebar-ux-canvas-main-active'
+
 /** Secondary tab-strip width in px (construction, pin, spacer, reflow). */
 export const TAB_LIST_WIDTH_PX = 56
 
@@ -160,23 +169,43 @@ export function injectDrawerTabStyles(): void {
     /* Base button color — matches main drawer .tabBtn
        (ViewportDrawer.module.css:213). */
     /* Tab-list button chrome — under secondary wrapper (unpinned) or the
-       body-level pin host (keepTabListVisible reparents out of the
-       transformed wrapper so position:fixed is viewport-relative). */
+       body-level pin host (secondary reparent + main mirror strip).
+       Main mirror buttons use .sidebar-ux-main-tab-mirror-btn (may lack
+       data-tab-id until the host tagger runs). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id],
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id],
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id],
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
       color: var(--lumiverse-text-muted);
       border-radius: 8px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 8px 4px;
+      box-sizing: border-box;
     }
     /* Label color — matches main drawer .tabLabel
        (ViewportDrawer.module.css:245). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label {
       color: var(--lumiverse-text-dim);
     }
     /* Per-tab hover — mirrors Lumiverse's .tabBtn:hover
        (ViewportDrawer.module.css:222-225). Rounded corners. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover {
       background: var(--lumiverse-primary-015);
       color: var(--lumiverse-text);
       border-radius: 8px;
@@ -186,39 +215,60 @@ export function injectDrawerTabStyles(): void {
        flash purple: without this, the SVG briefly inherits the active
        button color (primary) and transitions 0.2s back to text/white. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover svg,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id]:hover svg,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover svg,
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id]:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn:hover svg,
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active:hover svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active:hover svg {
       color: var(--lumiverse-text);
     }
     /* Smooth color transition for SVG icons (matches the tabBtn
        transition: all 0.2s ease which only covers the button). */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] svg,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id] svg,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] svg,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn svg {
       transition: color 0.2s ease;
     }
     /* Smooth color transition for labels. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label {
       transition: color 0.2s ease, opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
     }
     /* Per-tab active state — mirrors Lumiverse's .tabBtnActive
        (ViewportDrawer.module.css:227-237) exactly: box-shadow
        indicator + directional border-radius. */
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
       background: var(--lumiverse-primary-020);
       color: var(--lumiverse-primary);
       box-shadow: inset 3px 0 0 var(--lumiverse-primary);
       border-radius: 0 8px 8px 0;
     }
     .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
-    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+    .sidebar-ux-tab-list-pin-host.sidebar-ux-side-left .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
       box-shadow: inset -3px 0 0 var(--lumiverse-primary);
       border-radius: 8px 0 0 8px;
     }
     .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
-    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active .sidebar-ux-tab-label {
       color: var(--lumiverse-primary);
     }
   `)

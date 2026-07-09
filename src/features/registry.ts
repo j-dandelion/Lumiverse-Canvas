@@ -36,6 +36,7 @@ import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
+import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -362,23 +363,28 @@ const tabPositionFeature: CanvasFeature = {
   },
 }
 
-/** Keep tab list visible: reparents the secondary tab list onto a
- *  body-level pin host (outside the transformed wrapper) so it stays on
- *  the screen edge when the drawer is closed. Secondary remount also
- *  calls reconcileTabListPin() so pin survives side-change. No-op on
- *  mobile (force-unpins if styles were left from desktop). */
+/** Keep tab list visible:
+ *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
+ *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
+ *    forward to host tab buttons. Hidden while main drawer is open.
+ *  Secondary remount also calls reconcileTabListPin(); side-change calls
+ *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
+ *  No-op on mobile (force-unpins / tears down main mirror). */
 const keepTabListVisibleFeature: CanvasFeature = {
   id: 'keepTabListVisible',
   mount(_ctx, _layout) {
     reconcileTabListPin()
+    reconcileMainTabListPin()
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
+      applyMainTabListPin(false, { force: true })
       updateChatReflow()
     }
   },
   apply(_prev, next) {
     applyTabListPin(!!next.keepTabListVisible, { force: true })
+    applyMainTabListPin(!!next.keepTabListVisible, { force: true })
     updateChatReflow()
   },
 }

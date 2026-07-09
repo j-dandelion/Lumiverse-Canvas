@@ -19,6 +19,12 @@ import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { scheduleReflow } from '../chat/reflow'
 import { getSecondaryWrapper, isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
+import {
+  getMainMirrorDrawer,
+  isCanvasMainOpen,
+  isMainMirrorActive,
+  MAIN_MIRROR_WIDTH_VAR,
+} from '../sidebar/main-mirror-drawer'
 import { persistLayout } from '../layout/persist'
 import { getSettings } from '../settings/state'
 import { applyTabListPosition } from '../sidebar/tab-position'
@@ -117,54 +123,87 @@ export function createResizeHandle(
 export function mountResizeHandles(): void {
   if (isPointerResizeActive()) return // Skip resize handles on mobile
 
-  // Main sidebar resize handle — insert into the drawer (not panel, to avoid overflow: hidden clipping)
-  const mainDrawer = getMainDrawer()
-  if (mainDrawer && !mainDrawer.querySelector('.sidebar-ux-resize-handle')) {
-    const mainSide = getMainDrawerSide()
-    // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
-    //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
-    const mainDirection = mainSide === 'left' ? 'right' : 'left'
+  // Canvas main mirror drawer — when keepTabListVisible owns main chrome,
+  // put the handle on the Canvas shell and skip the host handle.
+  if (isMainMirrorActive()) {
+    const mirrorDrawer = getMainMirrorDrawer()
+    if (mirrorDrawer && !mirrorDrawer.querySelector('.sidebar-ux-resize-handle')) {
+      const mainSide = getMainDrawerSide()
+      const mainDirection = mainSide === 'left' ? 'right' : 'left'
+      const handle = createResizeHandle(
+        mainDirection,
+        (startWidth, delta) => {
+          const newWidth = clampSidebarWidth(startWidth + delta)
+          document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`)
+          scheduleReflow()
+        },
+        () => {
+          persistLayout()
+        },
+        () => isCanvasMainOpen(),
+      )
+      handle.style.cssText += `
+        ${mainSide === 'left' ? 'right' : 'left'}: -4px;
+      `
+      mirrorDrawer.appendChild(handle)
+      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+        drawer: mirrorDrawer,
+        tabList: mirrorDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement,
+        handle,
+      })
+    }
+    // Do not mount a host main handle while host is headless.
+  } else {
+    // Host main sidebar resize handle — insert into the drawer (not panel)
+    const mainDrawer = getMainDrawer()
+    if (mainDrawer && !mainDrawer.querySelector('.sidebar-ux-resize-handle')) {
+      const mainSide = getMainDrawerSide()
+      // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
+      //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
+      const mainDirection = mainSide === 'left' ? 'right' : 'left'
 
-    const handle = createResizeHandle(
-      mainDirection,
-      (startWidth, delta) => {
-        const newWidth = clampSidebarWidth(startWidth + delta)
-        const drawer = getMainDrawer()
-        const wrapper = getMainWrapper()
-        if (drawer) {
-          drawer.style.width = `${newWidth}px`
-        }
-        // Set --drawer-panel-w on the WRAPPER (React sets it there for the close transform)
-        if (wrapper) {
-          wrapper.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
-        }
-        scheduleReflow()
-      },
-      () => {
-        const width = getMainDrawerWidth()
-        persistLayout()
-      },
-      () => isMainDrawerOpen()
-    )
+      const handle = createResizeHandle(
+        mainDirection,
+        (startWidth, delta) => {
+          const newWidth = clampSidebarWidth(startWidth + delta)
+          const drawer = getMainDrawer()
+          const wrapper = getMainWrapper()
+          if (drawer) {
+            drawer.style.width = `${newWidth}px`
+          }
+          // Set --drawer-panel-w on the WRAPPER (React sets it there for the close transform)
+          if (wrapper) {
+            wrapper.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
+          }
+          scheduleReflow()
+        },
+        () => {
+          const width = getMainDrawerWidth()
+          void width
+          persistLayout()
+        },
+        () => isMainDrawerOpen()
+      )
 
-    // Position at the drawer's inner edge (facing content area)
-    // Uses CSS variable so handle tracks the correct edge if tab strip position changes
-    handle.style.cssText += `
-      ${mainSide === 'left'
-        ? `left: calc(var(--drawer-panel-w, 420px) - 4px);`
-        : `right: calc(var(--drawer-panel-w, 420px) - 4px);`}
-    `
+      // Position at the drawer's inner edge (facing content area)
+      // Uses CSS variable so handle tracks the correct edge if tab strip position changes
+      handle.style.cssText += `
+        ${mainSide === 'left'
+          ? `left: calc(var(--drawer-panel-w, 420px) - 4px);`
+          : `right: calc(var(--drawer-panel-w, 420px) - 4px);`}
+      `
 
-    // Insert handle as sibling of panel inside the drawer
-    mainDrawer.appendChild(handle)
+      // Insert handle as sibling of panel inside the drawer
+      mainDrawer.appendChild(handle)
 
-    // Apply tab list position to the main sidebar (flex-direction + border).
-    // The main handle's own position is invariant (set above) and is NOT
-    // touched here — it lives in handles.ts by design.
-    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-      mainDrawer,
-      mainTabList: getMainSidebar(),
-    })
+      // Apply tab list position to the main sidebar (flex-direction + border).
+      // The main handle's own position is invariant (set above) and is NOT
+      // touched here — it lives in handles.ts by design.
+      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+        mainDrawer,
+        mainTabList: getMainSidebar(),
+      })
+    }
   }
 
   // Secondary sidebar resize handle — insert into the secondary drawer.

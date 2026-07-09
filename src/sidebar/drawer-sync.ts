@@ -307,6 +307,9 @@ export function checkSideChanged(): void {
     // re-render. getDrawerTabs() below will do a fresh fiber walk.
     findStoreData(true)
     mountSecondarySidebar({ initialOpen: wasOpen })
+    // Reposition main-drawer mirror pin on the new main edge (does not
+    // reparent host DOM). Secondary pin is reconciled inside mount.
+    void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
     // Restore tab buttons for every tab still assigned to secondary. The
     // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
     // only builds the chrome), so without this the tab list is blank until

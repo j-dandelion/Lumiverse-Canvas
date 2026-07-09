@@ -26,11 +26,14 @@ Injected style (`sidebar-ux-reflow`):
 
 ### Margin Calculation (`updateChatReflow`)
 
-1. Read main drawer side, open state, and width
+1. Read main drawer side and width:
+   - If **Canvas main mirror** is active (`keepTabListVisible` desktop): use Canvas open state + `--sidebar-ux-main-mirror-w` when open, else `TAB_LIST_WIDTH_PX` (56). Ignore host `wrapperOpen`.
+   - Else: host open → `getMainDrawerWidth()`; host closed + pin setting → 56px
 2. Read secondary drawer open state and width (from CSS variable)
-3. Read LumiScript dock panel insets (`--spindle-dock-left`, `--spindle-dock-right`)
-4. Subtract dock insets from drawer widths (they overlap, don't double-count)
-5. Set `--sidebar-ux-chat-ml` and `--sidebar-ux-chat-mr` on the chat column
+3. When secondary is closed but `keepTabListVisible` is on and a secondary tab list exists, reserve `TAB_LIST_WIDTH_PX` (56px)
+4. Read LumiScript dock panel insets (`--spindle-dock-left`, `--spindle-dock-right`)
+5. Subtract dock insets from drawer widths (they overlap, don't double-count)
+6. Set `--sidebar-ux-chat-ml` and `--sidebar-ux-chat-mr` on the chat column
 
 ### Observer Architecture
 

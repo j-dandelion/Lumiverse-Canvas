@@ -35,7 +35,8 @@ import { injectStyles } from '../debug/styles'
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { getSettings } from '../settings/state'
-import { TAB_LIST_WIDTH_PX } from '../sidebar/styles'
+import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
+import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -116,8 +117,26 @@ export function updateChatReflow(): void {
   }
 
   const mainSide = getMainDrawerSide()
-  const mainOpen = isMainDrawerOpen()
-  const mainWidth = mainOpen ? getMainDrawerWidth() : 0
+  // When Canvas owns main chrome (keepTabListVisible desktop), reflow
+  // follows the Canvas main shell — not host wrapperOpen.
+  let mainWidth: number
+  if (isMainMirrorActive()) {
+    if (isCanvasMainOpen()) {
+      mainWidth =
+        parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) ||
+        420
+    } else {
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
+  } else {
+    const mainOpen = isMainDrawerOpen()
+    mainWidth = mainOpen ? getMainDrawerWidth() : 0
+    // When closed but the main tab list is pinned visible, still reserve
+    // the strip width (legacy path; mirror mode uses branch above).
+    if (mainWidth === 0 && getSettings().keepTabListVisible) {
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
+  }
 
   // Secondary sidebar is on the opposite side. When closed but the tab
   // list is pinned visible, still reserve the strip width so chat does
