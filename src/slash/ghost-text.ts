@@ -1,9 +1,15 @@
-// Ghost-text overlay for slash arg completion. The ghost is NOT written
-// into the textarea value — it is a fixed/absolute grey overlay painted
-// after the caret. Accept replaces the arg range via setControlledValue.
+// Ghost-text overlay for slash command-name and arg completion. The ghost
+// is NOT written into the textarea value — it is a fixed/absolute grey
+// overlay painted after the caret. Accept replaces the ghost range via
+// setControlledValue.
 //
 // Ghost is only shown when the caller has a visible suggest popup; hide
 // paths (hideSuggest, empty candidates) must call hideGhost().
+//
+// Positioning: a full-size mirror overlay sits on the textarea content box
+// with identical font/padding. The typed prefix is rendered transparent so
+// the grey suffix shares the same line box as the real text (avoids the
+// vertical drift common with caret-only top/left placement).
 import { injectStyles } from '../debug/styles'
 import { setControlledValue, setSkipNextTextChange } from './dom-utils'
 
@@ -134,7 +140,6 @@ function renderGhostOverlay(
   suffix: string,
   caretPos: number,
 ): void {
-  const coords = measureCaretPosition(ta, caretPos)
   let el = document.getElementById(GHOST_ID) as HTMLDivElement | null
   if (!el) {
     el = document.createElement('div')
@@ -143,69 +148,67 @@ function renderGhostOverlay(
     el.setAttribute('aria-hidden', 'true')
     document.body.appendChild(el)
   }
-  el.textContent = suffix
-  // Match the textarea typography so the ghost aligns with real text.
+
   const style = window.getComputedStyle(ta)
+  const taRect = ta.getBoundingClientRect()
+  const borderTop = parseFloat(style.borderTopWidth) || 0
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0
+
+  // Sit on the textarea content box (inside border). Width/height use
+  // client* so scrollbar gutters match; border-box + same padding → same
+  // wrap width as the real control.
+  el.style.left = `${taRect.left + borderLeft}px`
+  el.style.top = `${taRect.top + borderTop}px`
+  el.style.width = `${ta.clientWidth}px`
+  el.style.height = `${ta.clientHeight}px`
+  el.style.boxSizing = 'border-box'
+  el.style.margin = '0'
+  el.style.border = 'none'
+  el.style.paddingTop = style.paddingTop
+  el.style.paddingRight = style.paddingRight
+  el.style.paddingBottom = style.paddingBottom
+  el.style.paddingLeft = style.paddingLeft
+
+  // Match typography so the transparent prefix lines up with real glyphs.
   el.style.font = style.font
   el.style.fontFamily = style.fontFamily
   el.style.fontSize = style.fontSize
   el.style.fontWeight = style.fontWeight
   el.style.fontStyle = style.fontStyle
+  el.style.fontVariant = style.fontVariant
   el.style.lineHeight = style.lineHeight
   el.style.letterSpacing = style.letterSpacing
-  el.style.top = `${coords.top}px`
-  el.style.left = `${coords.left}px`
-}
+  el.style.textTransform = style.textTransform
+  el.style.textAlign = style.textAlign
+  el.style.textIndent = style.textIndent
+  el.style.wordSpacing = style.wordSpacing
+  el.style.direction = style.direction
+  el.style.whiteSpace = 'pre-wrap'
+  el.style.wordWrap = 'break-word'
+  el.style.overflowWrap = style.overflowWrap || 'break-word'
+  el.style.wordBreak = style.wordBreak
+  el.style.tabSize = style.tabSize
+  ;(el.style as CSSStyleDeclaration & { MozTabSize?: string }).MozTabSize =
+    style.getPropertyValue('tab-size') || style.tabSize
 
-/**
- * Mirror-div caret measurement. Copies font/padding/border metrics from
- * the textarea, lays out value.slice(0, pos) + a marker span, and maps
- * the marker into viewport coordinates (accounting for scroll).
- */
-function measureCaretPosition(
-  ta: HTMLTextAreaElement,
-  pos: number,
-): { top: number; left: number } {
-  const style = window.getComputedStyle(ta)
-  const mirror = document.createElement('div')
+  el.style.overflow = 'hidden'
+  el.scrollTop = ta.scrollTop
+  el.scrollLeft = ta.scrollLeft
 
-  mirror.style.font = style.font
-  mirror.style.fontFamily = style.fontFamily
-  mirror.style.fontSize = style.fontSize
-  mirror.style.fontWeight = style.fontWeight
-  mirror.style.fontStyle = style.fontStyle
-  mirror.style.lineHeight = style.lineHeight
-  mirror.style.letterSpacing = style.letterSpacing
-  mirror.style.textTransform = style.textTransform
-  mirror.style.padding = style.padding
-  mirror.style.border = style.border
-  mirror.style.boxSizing = style.boxSizing
-  mirror.style.whiteSpace = 'pre-wrap'
-  mirror.style.wordWrap = 'break-word'
-  mirror.style.overflowWrap = style.overflowWrap || 'break-word'
-  mirror.style.width = `${ta.clientWidth}px`
-  mirror.style.position = 'absolute'
-  mirror.style.visibility = 'hidden'
-  mirror.style.left = '-9999px'
-  mirror.style.top = '0'
-  mirror.style.overflow = 'hidden'
+  const clamped = Math.max(0, Math.min(caretPos, ta.value.length))
+  const before = ta.value.slice(0, clamped)
 
-  const clamped = Math.max(0, Math.min(pos, ta.value.length))
-  mirror.textContent = ta.value.slice(0, clamped)
-  const marker = document.createElement('span')
-  marker.textContent = '\u200b'
-  mirror.appendChild(marker)
-  document.body.appendChild(mirror)
+  // Transparent prefix occupies the same layout space as the real text;
+  // grey suffix continues in the same line box (vertical + horizontal).
+  const pre = document.createElement('span')
+  pre.className = 'canvas-slash-ghost-pre'
+  pre.textContent = before
 
-  const taRect = ta.getBoundingClientRect()
-  const mirrorRect = mirror.getBoundingClientRect()
-  const markerRect = marker.getBoundingClientRect()
+  const ghost = document.createElement('span')
+  ghost.className = 'canvas-slash-ghost-suffix'
+  ghost.textContent = suffix
 
-  const top = taRect.top + (markerRect.top - mirrorRect.top) - ta.scrollTop
-  const left = taRect.left + (markerRect.left - mirrorRect.left) - ta.scrollLeft
-
-  mirror.remove()
-  return { top, left }
+  el.replaceChildren(pre, ghost)
 }
 
 function injectGhostStyles(): void {
@@ -214,11 +217,15 @@ function injectGhostStyles(): void {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
       pointer-events: none;
+      user-select: none;
+      color: transparent;
+    }
+    #${GHOST_ID} .canvas-slash-ghost-pre {
+      color: transparent;
+    }
+    #${GHOST_ID} .canvas-slash-ghost-suffix {
       color: var(--lumiverse-text-muted, var(--lumiverse-text-dim, #888));
       opacity: 0.65;
-      font-family: var(--lumiverse-font-family, inherit);
-      white-space: pre;
-      user-select: none;
     }
   `)
 }

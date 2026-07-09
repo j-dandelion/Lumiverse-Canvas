@@ -8,11 +8,46 @@ function assert(cond: unknown, msg: string) {
 }
 
 import {
+  commandNameToken,
   filterPrefix,
   ghostSuffix,
   parseArgMode,
   pickActive,
 } from '../arg-completions'
+
+// --- commandNameToken ---
+
+{
+  assert(commandNameToken('hello') === null, 'no slash → null')
+  assert(commandNameToken('') === null, 'empty → null')
+
+  const bare = commandNameToken('/')
+  assert(bare !== null, '/ alone → token')
+  assert(bare!.start === 1, '/ : start 1')
+  assert(bare!.end === 1, '/ : end 1')
+  assert(bare!.typedPrefix === '', '/ : empty typedPrefix')
+
+  const pe = commandNameToken('/pe')
+  assert(pe !== null, '/pe → token')
+  assert(pe!.start === 1, '/pe : start 1')
+  assert(pe!.end === 3, '/pe : end 3')
+  assert(pe!.typedPrefix === 'pe', '/pe : typedPrefix pe')
+
+  const persona = commandNameToken('/persona')
+  assert(persona !== null, '/persona → token')
+  assert(persona!.start === 1, '/persona : start 1')
+  assert(persona!.end === 8, '/persona : end 8')
+  assert(persona!.typedPrefix === 'persona', '/persona : typedPrefix')
+
+  const withArgs = commandNameToken('/he foo')
+  assert(withArgs !== null, '/he foo → token')
+  assert(withArgs!.start === 1, '/he foo : start 1')
+  assert(withArgs!.end === 3, '/he foo : end at space')
+  assert(withArgs!.typedPrefix === 'he', '/he foo : typedPrefix he')
+
+  const cased = commandNameToken('/Pe')
+  assert(cased!.typedPrefix === 'Pe', 'preserves user casing')
+}
 
 // --- parseArgMode ---
 

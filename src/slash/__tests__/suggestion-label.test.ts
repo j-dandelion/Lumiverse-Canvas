@@ -17,12 +17,16 @@ import { extractPersonaLabel } from '../commands/persona/index'
     'bare usage without space → usage',
   )
   assert(
-    suggestionLabel({ name: 'select-all', usage: '/select all' }) === '/select all',
-    'concrete multi-token usage → usage (not /select-all)',
+    suggestionLabel({ name: 'select-all', usage: '/select-all' }) === '/select-all',
+    'hyphenated usage → usage',
   )
   assert(
-    suggestionLabel({ name: 'select-clear', usage: '/select clear' }) === '/select clear',
-    '/select clear usage preferred',
+    suggestionLabel({ name: 'select-clear', usage: '/select-clear' }) === '/select-clear',
+    'select-clear hyphenated usage → usage',
+  )
+  assert(
+    suggestionLabel({ name: 'foo', usage: '/foo bar' }) === '/foo bar',
+    'concrete multi-token usage preferred over /name',
   )
   assert(
     suggestionLabel({ name: 'select', usage: '/select <range>' }) === '/select',

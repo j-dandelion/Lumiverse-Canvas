@@ -28,7 +28,7 @@ Command handler runs with SlashContext
 
 `attachSlashRuntime(ctx)` wires everything:
 1. Creates `CommandRegistry`
-2. Registers built-in commands (`/help`, `/select`, `/newchat`, `/persona`)
+2. Registers built-in commands (`/help`, `/select`, `/new-chat`, `/persona`)
 3. Installs capture-phase intercept
 4. Mounts toast surface (Preact)
 5. Listens for `canvas:slash-register` / `canvas:slash-unregister` CustomEvents
@@ -84,15 +84,41 @@ Capture-phase handlers on `document`:
 
 ### Keydown
 - **Escape**: dismiss popup (when visible)
-- **ArrowUp/Down**: navigate popup rows (also rebinds arg ghost-text)
-- **Tab**: accept ghost if painted, else autocomplete via `suggestionLabel` (concrete `usage` without `<>` placeholders, else `/${name}`)
+- **ArrowUp/Down**: navigate popup rows (also rebinds command-name and arg ghost-text)
+- **Tab**: accept ghost if painted, else autocomplete via `suggestionLabel` (concrete `usage` without `<>` placeholders, else `/${name}`). After accept, re-runs suggest detection so arg list/ghost can open (e.g. `/pe` → Tab → `/persona ` + persona args).
 - **ArrowRight**: same as Tab, but only when the caret is at the end of the value
 - **Enter**:
-  - Popup visible: accept ghost or autocomplete + set intent
+  - Popup visible: accept ghost or autocomplete + set intent; then re-run suggest detection (same as Tab)
   - Popup hidden + parseable command: dispatch command, clear textarea
 - All keys gated on `!e.isComposing` (CJK IME support)
 
-## Arg completion + ghost text
+## Ghost text (command names + args)
+
+Grey **ghost** suffix is painted only while the suggest popup is visible
+(`ghost-text.ts`, z-index below suggest). Tab / ArrowRight (EOL) / Enter
+prefer `acceptGhost` (range replace + trailing space); click still uses
+`applySuggestion(suggestionLabel(...))`. Ghost never sends to the LLM.
+
+### Command-name mode
+
+When there is no space after the command token, or the command has no
+`getArgCompletions`:
+
+1. Matches = registry names whose `name` starts with the typed token after `/`.
+2. Zero matches → hide suggest + ghost.
+3. Ghost suffix = remainder of the **active** command `name` after the typed
+   token (case-insensitive match; name casing preserved in the suffix).
+4. Exact full name → no painted suffix; Tab falls through to `suggestionLabel`.
+5. Multi-match → ghost follows the active row (ArrowUp/Down rebinds).
+6. Accept writes `/${name} ` (name token only — not multi-word `usage` aliases).
+7. After accept (Tab / → / Enter / click), runtime re-evaluates the value:
+   commands with `getArgCompletions` open arg-mode list + ghost; commands
+   without it stay closed (free-form args).
+
+Range helpers: `commandNameToken` covers only the token after `/` through the
+first space so accept never wipes trailing args.
+
+### Arg mode (unchanged)
 
 When the textarea has a space after the command token and the looked-up
 command defines `getArgCompletions`:
@@ -100,10 +126,7 @@ command defines `getArgCompletions`:
 1. Runtime calls `getArgCompletions(argPrefix, { chatId })` (sync).
 2. Zero candidates → hide suggest + ghost.
 3. Otherwise show popup rows as synthetic defs (`usage: /cmd candidate`).
-4. Grey **ghost** suffix (active row remainder) is painted only while the
-   suggest popup is visible (`ghost-text.ts`, z-index below suggest).
-5. Tab / ArrowRight / Enter / click write the full completion + trailing
-   space via `applySuggestion` or `acceptGhost` — never sends to the LLM.
+4. Ghost suffix = remainder of the active arg candidate after `argPrefix`.
 
 Built-ins:
 
@@ -112,12 +135,14 @@ Built-ins:
   popover scrape (`hide-before-paint` MutationObserver). On warm complete
   dispatches `canvas:slash-completions-changed` so the popup refreshes.
 
-Pure helpers live in `slash/arg-completions.ts` (`parseArgMode`,
-`filterPrefix`, `ghostSuffix`, `pickActive`).
+Pure helpers live in `slash/arg-completions.ts` (`commandNameToken`,
+`parseArgMode`, `filterPrefix`, `ghostSuffix`, `pickActive`).
 
 ### Input
 - Forwards textarea value to `onTextChange` callback
-- Skips if `consumeSkipNextTextChange()` returns true (post-autocomplete)
+- Skips if `consumeSkipNextTextChange()` returns true (post-autocomplete
+  synthetic input). Accept paths then call `onTextChange` explicitly (or
+  dispatch `canvas:slash-completions-changed` from click) so arg mode can open.
 - Reconciles intent with textarea value
 
 ### Send Button Click
@@ -174,7 +199,7 @@ Source types: `'click' | 'enter-popup' | 'enter-direct' | 'tab' | 'setText'`
 ### `/help` (`slash/builtin-help.ts`)
 Lists all registered commands via `registry.list()`.
 
-### `/newchat` (`slash/commands/newchat/`)
+### `/new-chat` (`slash/commands/newchat/`)
 
 Starts a new chat with the currently selected character. Finds Lumiverse's "New Chat" button using a cascade of selector strategies (data-testid, CSS-module class substrings, ARIA labels, title attribute, and visible text content). Shows an error toast if the button cannot be found, or a success toast after clicking.
 
@@ -184,7 +209,7 @@ Switches the active persona in the current chat. Takes a persona name as argumen
 
 ### `/select` (`slash/commands/select/`)
 
-Sub-commands: `/select <range>`, `/select all`, `/select clear`
+Sub-commands: `/select <range>`, `/select-all`, `/select-clear`
 
 **Parser** (`parser.ts`): Pure arg parser. Accepts:
 - `25-100` — single range

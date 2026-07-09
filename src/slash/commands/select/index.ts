@@ -1,6 +1,6 @@
 // Canvas — `/select` slash command handler (v1.1.0).
 //
-// v1.1.0 scope: /select <range>, /select all, /select clear.
+// v1.1.0 scope: /select <range>, /select-all, /select-clear.
 // Hide/unhide/delete are deferred to v1.2.0 (see plan Task 3.3).
 //
 // Design decisions (locked in):
@@ -73,7 +73,7 @@ export function makeSelectCommands(): SlashCommandDef[] {
     {
       name: 'select-all',
       description: 'Select all loaded messages',
-      usage: '/select all',
+      usage: '/select-all',
       owner: 'canvas',
       category: 'select',
       handler: async (_args, ctx) => handleAll(ctx),
@@ -81,7 +81,7 @@ export function makeSelectCommands(): SlashCommandDef[] {
     {
       name: 'select-clear',
       description: 'Clear the current selection',
-      usage: '/select clear',
+      usage: '/select-clear',
       owner: 'canvas',
       category: 'select',
       handler: async (_args, ctx) => handleClear(ctx),

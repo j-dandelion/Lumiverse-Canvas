@@ -77,9 +77,9 @@ function findNewChatButtonInPopover(): HTMLElement | null {
 
 export function makeNewChatCommand(): SlashCommandDef {
   return {
-    name: 'newchat',
+    name: 'new-chat',
     description: 'Start a new chat with the currently selected character',
-    usage: '/newchat',
+    usage: '/new-chat',
     owner: 'canvas',
     category: 'chat',
     handler: async (_args, ctx) => {

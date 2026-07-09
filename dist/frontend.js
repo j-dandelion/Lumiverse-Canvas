@@ -4371,7 +4371,6 @@ function ghostSuffixLocal(full, typedPrefix) {
   return full.slice(typedPrefix.length);
 }
 function renderGhostOverlay(ta, suffix, caretPos) {
-  const coords = measureCaretPosition(ta, caretPos);
   let el = document.getElementById(GHOST_ID);
   if (!el) {
     el = document.createElement("div");
@@ -4380,54 +4379,52 @@ function renderGhostOverlay(ta, suffix, caretPos) {
     el.setAttribute("aria-hidden", "true");
     document.body.appendChild(el);
   }
-  el.textContent = suffix;
   const style = window.getComputedStyle(ta);
+  const taRect = ta.getBoundingClientRect();
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  el.style.left = `${taRect.left + borderLeft}px`;
+  el.style.top = `${taRect.top + borderTop}px`;
+  el.style.width = `${ta.clientWidth}px`;
+  el.style.height = `${ta.clientHeight}px`;
+  el.style.boxSizing = "border-box";
+  el.style.margin = "0";
+  el.style.border = "none";
+  el.style.paddingTop = style.paddingTop;
+  el.style.paddingRight = style.paddingRight;
+  el.style.paddingBottom = style.paddingBottom;
+  el.style.paddingLeft = style.paddingLeft;
   el.style.font = style.font;
   el.style.fontFamily = style.fontFamily;
   el.style.fontSize = style.fontSize;
   el.style.fontWeight = style.fontWeight;
   el.style.fontStyle = style.fontStyle;
+  el.style.fontVariant = style.fontVariant;
   el.style.lineHeight = style.lineHeight;
   el.style.letterSpacing = style.letterSpacing;
-  el.style.top = `${coords.top}px`;
-  el.style.left = `${coords.left}px`;
-}
-function measureCaretPosition(ta, pos) {
-  const style = window.getComputedStyle(ta);
-  const mirror = document.createElement("div");
-  mirror.style.font = style.font;
-  mirror.style.fontFamily = style.fontFamily;
-  mirror.style.fontSize = style.fontSize;
-  mirror.style.fontWeight = style.fontWeight;
-  mirror.style.fontStyle = style.fontStyle;
-  mirror.style.lineHeight = style.lineHeight;
-  mirror.style.letterSpacing = style.letterSpacing;
-  mirror.style.textTransform = style.textTransform;
-  mirror.style.padding = style.padding;
-  mirror.style.border = style.border;
-  mirror.style.boxSizing = style.boxSizing;
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.wordWrap = "break-word";
-  mirror.style.overflowWrap = style.overflowWrap || "break-word";
-  mirror.style.width = `${ta.clientWidth}px`;
-  mirror.style.position = "absolute";
-  mirror.style.visibility = "hidden";
-  mirror.style.left = "-9999px";
-  mirror.style.top = "0";
-  mirror.style.overflow = "hidden";
-  const clamped = Math.max(0, Math.min(pos, ta.value.length));
-  mirror.textContent = ta.value.slice(0, clamped);
-  const marker = document.createElement("span");
-  marker.textContent = "​";
-  mirror.appendChild(marker);
-  document.body.appendChild(mirror);
-  const taRect = ta.getBoundingClientRect();
-  const mirrorRect = mirror.getBoundingClientRect();
-  const markerRect = marker.getBoundingClientRect();
-  const top = taRect.top + (markerRect.top - mirrorRect.top) - ta.scrollTop;
-  const left = taRect.left + (markerRect.left - mirrorRect.left) - ta.scrollLeft;
-  mirror.remove();
-  return { top, left };
+  el.style.textTransform = style.textTransform;
+  el.style.textAlign = style.textAlign;
+  el.style.textIndent = style.textIndent;
+  el.style.wordSpacing = style.wordSpacing;
+  el.style.direction = style.direction;
+  el.style.whiteSpace = "pre-wrap";
+  el.style.wordWrap = "break-word";
+  el.style.overflowWrap = style.overflowWrap || "break-word";
+  el.style.wordBreak = style.wordBreak;
+  el.style.tabSize = style.tabSize;
+  el.style.MozTabSize = style.getPropertyValue("tab-size") || style.tabSize;
+  el.style.overflow = "hidden";
+  el.scrollTop = ta.scrollTop;
+  el.scrollLeft = ta.scrollLeft;
+  const clamped = Math.max(0, Math.min(caretPos, ta.value.length));
+  const before = ta.value.slice(0, clamped);
+  const pre = document.createElement("span");
+  pre.className = "canvas-slash-ghost-pre";
+  pre.textContent = before;
+  const ghost = document.createElement("span");
+  ghost.className = "canvas-slash-ghost-suffix";
+  ghost.textContent = suffix;
+  el.replaceChildren(pre, ghost);
 }
 function injectGhostStyles() {
   injectStyles(STYLE_ID, `
@@ -4435,11 +4432,15 @@ function injectGhostStyles() {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
       pointer-events: none;
+      user-select: none;
+      color: transparent;
+    }
+    #${GHOST_ID} .canvas-slash-ghost-pre {
+      color: transparent;
+    }
+    #${GHOST_ID} .canvas-slash-ghost-suffix {
       color: var(--lumiverse-text-muted, var(--lumiverse-text-dim, #888));
       opacity: 0.65;
-      font-family: var(--lumiverse-font-family, inherit);
-      white-space: pre;
-      user-select: none;
     }
   `);
 }
@@ -4514,6 +4515,7 @@ function showSuggest(textarea, options, initialActiveIndex = 0, onActiveIndexCha
         if (parsed)
           setIntent(parsed, "click");
         hideSuggest();
+        window.dispatchEvent(new CustomEvent("canvas:slash-completions-changed"));
       });
     });
     updateActiveDom();
@@ -4778,6 +4780,7 @@ function installIntercept(_ctx2, callbacks) {
         e.stopPropagation();
         e.stopImmediatePropagation();
         hideSuggest();
+        callbacks.onTextChange(ta.value);
         return;
       }
       const activeCmd = ctrl.getActiveCommand();
@@ -4792,6 +4795,7 @@ function installIntercept(_ctx2, callbacks) {
       e.stopImmediatePropagation();
       applySuggestion(ta, suggestionLabel(activeCmd));
       hideSuggest();
+      callbacks.onTextChange(ta.value);
       return;
     }
     if (e.key === "Tab") {
@@ -4815,10 +4819,12 @@ function installIntercept(_ctx2, callbacks) {
       e.stopImmediatePropagation();
       if (hasGhost() && acceptGhost(ta)) {
         hideSuggest();
+        callbacks.onTextChange(ta.value);
         return;
       }
       applySuggestion(ta, suggestionLabel(activeCmd));
       hideSuggest();
+      callbacks.onTextChange(ta.value);
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -4853,6 +4859,7 @@ function installIntercept(_ctx2, callbacks) {
             setIntent(parsed3, "enter-popup");
           hideSuggest();
           ta.focus();
+          callbacks.onTextChange(ta.value);
           return;
         }
         const label = suggestionLabel(activeCmd);
@@ -4862,6 +4869,7 @@ function installIntercept(_ctx2, callbacks) {
           setIntent(parsed2, "enter-popup");
         hideSuggest();
         ta.focus();
+        callbacks.onTextChange(ta.value);
         return;
       }
       clearIntent();
@@ -5018,6 +5026,18 @@ function makeHelpCommand(registry) {
 }
 
 // src/slash/arg-completions.ts
+function commandNameToken(text) {
+  if (!text.startsWith("/"))
+    return null;
+  const spaceIdx = text.indexOf(" ");
+  const end = spaceIdx >= 0 ? spaceIdx : text.length;
+  const start = 1;
+  return {
+    start,
+    end,
+    typedPrefix: text.slice(start, end)
+  };
+}
 function parseArgMode(text) {
   if (!text.startsWith("/"))
     return null;
@@ -5302,7 +5322,7 @@ function makeSelectCommands() {
     {
       name: "select-all",
       description: "Select all loaded messages",
-      usage: "/select all",
+      usage: "/select-all",
       owner: "canvas",
       category: "select",
       handler: async (_args, ctx) => handleAll(ctx)
@@ -5310,7 +5330,7 @@ function makeSelectCommands() {
     {
       name: "select-clear",
       description: "Clear the current selection",
-      usage: "/select clear",
+      usage: "/select-clear",
       owner: "canvas",
       category: "select",
       handler: async (_args, ctx) => handleClear(ctx)
@@ -5429,9 +5449,9 @@ function findNewChatButtonInPopover() {
 }
 function makeNewChatCommand() {
   return {
-    name: "newchat",
+    name: "new-chat",
     description: "Start a new chat with the currently selected character",
-    usage: "/newchat",
+    usage: "/new-chat",
     owner: "canvas",
     category: "chat",
     handler: async (_args, ctx) => {
@@ -6320,14 +6340,14 @@ function attachSlashRuntime(ctx) {
       window.dispatchEvent(new CustomEvent("canvas:slash-toast", { detail: { kind, text } }));
     }
   };
-  const syncGhostForArg = (ta, fullArg, argStart, argEnd, typedPrefix) => {
+  const syncGhost = (ta, fullArg, start, end, typedPrefix) => {
     if (!fullArg) {
       hideGhost();
       return;
     }
     setGhost(ta, {
       fullArg,
-      range: { start: argStart, end: argEnd },
+      range: { start, end },
       typedPrefix
     });
   };
@@ -6358,17 +6378,21 @@ function attachSlashRuntime(ctx) {
         }
         lastActiveIndex = activeIndex2;
         const rows = argCompletionRows(cmd, candidates);
-        showSuggest(ta2, rows, activeIndex2, (i3, activeCmd) => {
+        showSuggest(ta2, rows, activeIndex2, (i3, activeCmd2) => {
           lastActiveIndex = i3;
-          const fullArg2 = activeCmd?.name ?? pickActive(candidates, i3);
-          syncGhostForArg(ta2, fullArg2, argMode.argStart, argMode.argEnd, argMode.argPrefix);
+          const fullArg2 = activeCmd2?.name ?? pickActive(candidates, i3);
+          syncGhost(ta2, fullArg2, argMode.argStart, argMode.argEnd, argMode.argPrefix);
         });
         const fullArg = pickActive(candidates, activeIndex2);
-        syncGhostForArg(ta2, fullArg, argMode.argStart, argMode.argEnd, argMode.argPrefix);
+        syncGhost(ta2, fullArg, argMode.argStart, argMode.argEnd, argMode.argPrefix);
+        return;
+      }
+      if (cmd && !cmd.getArgCompletions) {
+        hideSuggest();
+        lastActiveIndex = null;
         return;
       }
     }
-    hideGhost();
     const prefix = text.split(/\s/)[0].slice(1).toLowerCase();
     const matches = registry.list().filter((c3) => c3.name.toLowerCase().startsWith(prefix));
     if (matches.length === 0) {
@@ -6385,9 +6409,20 @@ function attachSlashRuntime(ctx) {
       lastActiveIndex = null;
       return;
     }
+    const token = commandNameToken(text);
+    if (!token) {
+      hideSuggest();
+      lastActiveIndex = null;
+      return;
+    }
     const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex);
     lastActiveIndex = nextSticky;
-    showSuggest(ta, matches, activeIndex);
+    const activeCmd = matches[activeIndex] ?? null;
+    showSuggest(ta, matches, activeIndex, (i3, cmd) => {
+      lastActiveIndex = i3;
+      syncGhost(ta, cmd?.name ?? null, token.start, token.end, token.typedPrefix);
+    });
+    syncGhost(ta, activeCmd?.name ?? null, token.start, token.end, token.typedPrefix);
   };
   const detachIntercept = installIntercept(ctx, {
     onParsed: (parsed) => {

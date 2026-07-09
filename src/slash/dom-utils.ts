@@ -39,7 +39,7 @@ export function applySuggestion(
  * Label written by Tab/Enter/click/ArrowRight autocomplete.
  *
  * Prefer a concrete `usage` that has no angle-bracket placeholders
- * (e.g. `/select all`, `/persona Chris`). Placeholder usages like
+ * (e.g. `/select-all`, `/select-clear`, `/persona Chris`). Placeholder usages like
  * `/select <range>` fall back to `/${name}`.
  *
  * This is required for arg-mode synthetic rows (name is the candidate
@@ -129,7 +129,7 @@ export function isValidSlashContext(ta: HTMLTextAreaElement): boolean {
  *
  * Used by the runtime to promote a completion candidate to the active
  * row when the user has typed past the command name into the args
- * (e.g., typing `/select a` should highlight `/select all`).
+ * (e.g., typing `/foo b` should highlight a multi-token `/foo bar` usage).
  *
  * Pure function — testable without a DOM.
  */
@@ -141,12 +141,12 @@ export function findCompletionCandidateIndex(
   // command name into the args. The space is the delimiter between the
   // command name and the args, so a typed text with no space is still
   // in the command-name portion — the bare command should stay active
-  // (e.g., typing `/select` keeps `/select` highlighted, not
-  // `/select all`).
+  // (e.g., typing `/select` keeps `/select` highlighted, not a longer
+  // sibling usage).
   if (!text.includes(' ')) return -1
   // No candidate when the arg part is whitespace-only. The user hasn't
-  // typed a single arg char yet — promoting `/select ` to `/select all`
-  // is presumptuous. Promotion requires a non-whitespace arg char.
+  // typed a single arg char yet — promoting `/select ` to a multi-token
+  // sibling usage is presumptuous. Promotion requires a non-whitespace arg char.
   const argPart = text.slice(text.indexOf(' ') + 1)
   if (argPart.trim().length === 0) return -1
   const textLower = text.toLowerCase()
@@ -204,7 +204,7 @@ export function textareaHasUsage(
  * Covers:
  *   - `/select 1`     — user typing a range, not a keyword → hide
  *   - `/select 1-3`   — same
- *   - `/select all`   — complete command, no suggestions needed → hide
+ *   - `/select all`   — complete free-form args, no suggestions needed → hide
  *   - `/select all `  — same, with trailing space
  *
  * When the typed text has no space (user is still in command-name mode),

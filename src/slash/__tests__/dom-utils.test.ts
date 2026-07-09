@@ -128,15 +128,17 @@ resetSkipNextTextChange()
 // --- findCompletionCandidateIndex ---
 
 {
+  // Synthetic multi-token usage exercises promotion; real select-clear is hyphenated.
   const matches = [
     { name: 'select', usage: '/select' },
-    { name: 'select-all', usage: '/select all' },
-    { name: 'select-clear', usage: '/select clear' },
+    { name: 'select-all', usage: '/select-all' },
+    { name: 'select-clear', usage: '/select-clear' },
+    { name: 'foo', usage: '/foo bar' },
   ]
-  // /select a: typed text is a prefix of /select all → completion
+  // /foo b: typed text is a prefix of /foo bar → completion
   assert(
-    findCompletionCandidateIndex(matches, '/select a') === 1,
-    '/select a: /select all is the completion candidate (index 1)',
+    findCompletionCandidateIndex(matches, '/foo b') === 3,
+    '/foo b: /foo bar is the completion candidate (index 3)',
   )
   // /select 1-3: no usage extends it → -1
   assert(
@@ -172,10 +174,10 @@ resetSkipNextTextChange()
     findCompletionCandidateIndex([{ name: 'help', usage: '/help' }], '/help') === -1,
     '/help: usage is not strictly longer than text',
   )
-  // Case-insensitive
+  // Case-insensitive multi-token
   assert(
-    findCompletionCandidateIndex(matches, '/SELECT A') === 1,
-    '/SELECT A: case-insensitive match',
+    findCompletionCandidateIndex(matches, '/FOO B') === 3,
+    '/FOO B: case-insensitive match for /foo bar',
   )
   // No matches
   assert(
@@ -183,7 +185,7 @@ resetSkipNextTextChange()
     'empty matches: -1',
   )
   // /select (no space, command name complete): no completion candidate.
-  // The bare /select should stay active, not /select all.
+  // The bare /select should stay active, not /select-all.
   assert(
     findCompletionCandidateIndex(matches, '/select') === -1,
     '/select (no space): no completion candidate, bare /select stays active',
@@ -198,12 +200,20 @@ resetSkipNextTextChange()
     findCompletionCandidateIndex(matches, '/sel') === -1,
     '/sel (no space): no completion candidate',
   )
-  // /select all (space + complete args): no usage strictly extends it.
-  // The bare /select-all usage IS /select all (same length), so NOT
-  // strictly longer. No candidate. Default active (select) stays.
+  // /foo bar (complete multi-token usage): no usage strictly extends it.
   assert(
-    findCompletionCandidateIndex(matches, '/select all') === -1,
-    '/select all: no candidate (usage same length, not strictly longer)',
+    findCompletionCandidateIndex(matches, '/foo bar') === -1,
+    '/foo bar: no candidate (usage same length, not strictly longer)',
+  )
+  // /select-clear (no space): still command-name mode for findCompletion
+  assert(
+    findCompletionCandidateIndex(matches, '/select-clear') === -1,
+    '/select-clear (no space): no completion candidate',
+  )
+  // /select-all (no space): still command-name mode for findCompletion
+  assert(
+    findCompletionCandidateIndex(matches, '/select-all') === -1,
+    '/select-all (no space): no completion candidate',
   )
 }
 
@@ -218,7 +228,7 @@ resetSkipNextTextChange()
     '/select 1-3 + select(usage=/select): no-op (textarea extends past usage with space)',
   )
   assert(
-    textareaHasUsage(ta, { name: 'select-all', usage: '/select all' }) === false,
+    textareaHasUsage(ta, { name: 'select-all', usage: '/select-all' }) === false,
     '/select 1-3 + select-all: not no-op (different usage)',
   )
   assert(
@@ -233,8 +243,8 @@ resetSkipNextTextChange()
     '/select a + select(usage=/select): no-op (textarea extends past usage with space)',
   )
   assert(
-    textareaHasUsage(ta, { name: 'select-all', usage: '/select all' }) === false,
-    '/select a + select-all: not no-op (textarea shorter than /select all)',
+    textareaHasUsage(ta, { name: 'select-all', usage: '/select-all' }) === false,
+    '/select a + select-all: not no-op (different usage)',
   )
 }
 
@@ -258,12 +268,12 @@ resetSkipNextTextChange()
   )
 }
 
-// /select all (no trailing space) — equality with select-all usage, NOT no-op.
+// /select-all (no trailing space) — equality with select-all usage, NOT no-op.
 {
-  const ta = mockTa('/select all')
+  const ta = mockTa('/select-all')
   assert(
-    textareaHasUsage(ta, { name: 'select-all', usage: '/select all' }) === false,
-    '/select all + select-all: textarea == usage, NOT no-op (autocomplete adds space)',
+    textareaHasUsage(ta, { name: 'select-all', usage: '/select-all' }) === false,
+    '/select-all + select-all: textarea == usage, NOT no-op (autocomplete adds space)',
   )
 }
 
@@ -357,7 +367,7 @@ assert(
 )
 assert(
   shouldHideForNonMatchingArgs('/select clear', false) === true,
-  '/select clear (space, no candidate): hide',
+  '/select clear (space, free-form args, no candidate): hide',
 )
 assert(
   shouldHideForNonMatchingArgs('/select all ', false) === true,
@@ -406,8 +416,9 @@ assert(
 
 const MATCHES = [
   { name: 'select', usage: '/select' },
-  { name: 'select-all', usage: '/select all' },
-  { name: 'select-clear', usage: '/select clear' },
+  { name: 'select-all', usage: '/select-all' },
+  { name: 'select-clear', usage: '/select-clear' },
+  { name: 'foo', usage: '/foo bar' },
 ]
 
 {
@@ -423,69 +434,77 @@ const MATCHES = [
   assert(r.nextSticky === null, '/select  (whitespace arg): sticky null')
 }
 {
-  // /select a (candidate idx 1 = /select all) → activeIndex 1, sticky 1
-  const r = resolveActiveIndex(MATCHES, '/select a', null)
-  assert(r.activeIndex === 1, '/select a: activeIndex 1')
-  assert(r.nextSticky === 1, '/select a: sticky 1')
+  // /foo b (candidate idx 3 = /foo bar) → activeIndex 3, sticky 3
+  const r = resolveActiveIndex(MATCHES, '/foo b', null)
+  assert(r.activeIndex === 3, '/foo b: activeIndex 3')
+  assert(r.nextSticky === 3, '/foo b: sticky 3')
 }
 {
-  // /select al (still candidate idx 1) → activeIndex 1, sticky 1
-  const r = resolveActiveIndex(MATCHES, '/select al', null)
-  assert(r.activeIndex === 1, '/select al: activeIndex 1')
-  assert(r.nextSticky === 1, '/select al: sticky 1')
+  // /foo ba (still candidate idx 3) → activeIndex 3, sticky 3
+  const r = resolveActiveIndex(MATCHES, '/foo ba', null)
+  assert(r.activeIndex === 3, '/foo ba: activeIndex 3')
+  assert(r.nextSticky === 3, '/foo ba: sticky 3')
 }
 {
-  // /select all (no candidate, arg non-whitespace, sticky was 1) → keep sticky
-  const r = resolveActiveIndex(MATCHES, '/select all', 1)
-  assert(r.activeIndex === 1, '/select all: activeIndex kept 1')
-  assert(r.nextSticky === 1, '/select all: sticky kept 1')
+  // /foo bar (no candidate, arg non-whitespace, sticky was 3) → keep sticky
+  const r = resolveActiveIndex(MATCHES, '/foo bar', 3)
+  assert(r.activeIndex === 3, '/foo bar: activeIndex kept 3')
+  assert(r.nextSticky === 3, '/foo bar: sticky kept 3')
 }
 {
-  // /select all  (trailing space after completed arg) — arg is non-whitespace
+  // /foo bar  (trailing space after completed arg) — arg is non-whitespace
   // so sticky is preserved. (In the real runtime, shouldHideForNonMatchingArgs
   // would hide the popup before reaching resolveActiveIndex, but this tests
   // the pure function's behavior directly.)
-  const r = resolveActiveIndex(MATCHES, '/select all ', 1)
-  assert(r.activeIndex === 1, '/select all  (trailing space): sticky kept (arg non-whitespace)')
-  assert(r.nextSticky === 1, '/select all  (trailing space): sticky 1')
+  const r = resolveActiveIndex(MATCHES, '/foo bar ', 3)
+  assert(r.activeIndex === 3, '/foo bar  (trailing space): sticky kept (arg non-whitespace)')
+  assert(r.nextSticky === 3, '/foo bar  (trailing space): sticky 3')
 }
 {
-  // /select (no space, no candidate, lastSticky = 1) → activeIndex 0, sticky null
-  const r = resolveActiveIndex(MATCHES, '/select', 1)
+  // /select (no space, no candidate, lastSticky = 3) → activeIndex 0, sticky null
+  const r = resolveActiveIndex(MATCHES, '/select', 3)
   assert(r.activeIndex === 0, '/select (backspace): activeIndex 0')
   assert(r.nextSticky === null, '/select (backspace): sticky null')
 }
 {
   // Empty matches array → activeIndex 0, sticky null
-  const r = resolveActiveIndex([], '/select a', 1)
+  const r = resolveActiveIndex([], '/foo b', 3)
   assert(r.activeIndex === 0, 'empty matches: activeIndex 0')
   assert(r.nextSticky === null, 'empty matches: sticky null')
 }
 {
   // lastSticky out of range (e.g., 5, matches.length = 2) → activeIndex 0, sticky null
-  const r = resolveActiveIndex(MATCHES.slice(0, 2), '/select all', 5)
+  const r = resolveActiveIndex(MATCHES.slice(0, 2), '/foo bar', 5)
   assert(r.activeIndex === 0, 'out-of-range sticky: activeIndex 0')
   assert(r.nextSticky === null, 'out-of-range sticky: sticky null')
 }
 {
-  // Case-insensitive: /SELECT A should still resolve to the candidate
-  const r = resolveActiveIndex(MATCHES, '/SELECT A', null)
-  assert(r.activeIndex === 1, '/SELECT A: activeIndex 1 (case-insensitive)')
-  assert(r.nextSticky === 1, '/SELECT A: sticky 1')
+  // Case-insensitive: /FOO B should still resolve to the candidate
+  const r = resolveActiveIndex(MATCHES, '/FOO B', null)
+  assert(r.activeIndex === 3, '/FOO B: activeIndex 3 (case-insensitive)')
+  assert(r.nextSticky === 3, '/FOO B: sticky 3')
 }
 {
-  // lastSticky = null, text = '/select a' (no prior sticky) → activeIndex 1, sticky 1
-  const r = resolveActiveIndex(MATCHES, '/select a', null)
-  assert(r.activeIndex === 1, '/select a (null sticky): activeIndex 1')
-  assert(r.nextSticky === 1, '/select a (null sticky): sticky 1 (not null)')
+  // lastSticky = null, text = '/foo b' (no prior sticky) → activeIndex 3, sticky 3
+  const r = resolveActiveIndex(MATCHES, '/foo b', null)
+  assert(r.activeIndex === 3, '/foo b (null sticky): activeIndex 3')
+  assert(r.nextSticky === 3, '/foo b (null sticky): sticky 3 (not null)')
 }
 
 // --- suggestionLabel (smoke; full coverage in suggestion-label.test.ts) ---
 
 {
   assert(
-    suggestionLabel({ name: 'select-all', usage: '/select all' }) === '/select all',
-    'suggestionLabel prefers concrete usage with space',
+    suggestionLabel({ name: 'select-all', usage: '/select-all' }) === '/select-all',
+    'suggestionLabel prefers concrete hyphenated usage',
+  )
+  assert(
+    suggestionLabel({ name: 'select-clear', usage: '/select-clear' }) === '/select-clear',
+    'suggestionLabel prefers select-clear hyphenated usage',
+  )
+  assert(
+    suggestionLabel({ name: 'foo', usage: '/foo bar' }) === '/foo bar',
+    'suggestionLabel prefers concrete multi-token usage',
   )
   assert(
     suggestionLabel({ name: 'select', usage: '/select <range>' }) === '/select',

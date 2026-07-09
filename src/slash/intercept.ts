@@ -112,6 +112,9 @@ export function installIntercept(
         e.stopPropagation()
         e.stopImmediatePropagation()
         hideSuggest()
+        // Synthetic input was skipped; re-run so arg-mode can open
+        // (e.g. /pe → /persona  → persona list + ghost).
+        callbacks.onTextChange(ta.value)
         return
       }
       const activeCmd = ctrl.getActiveCommand()
@@ -125,6 +128,7 @@ export function installIntercept(
       e.stopImmediatePropagation()
       applySuggestion(ta, suggestionLabel(activeCmd))
       hideSuggest()
+      callbacks.onTextChange(ta.value)
       return
     }
 
@@ -162,10 +166,12 @@ export function installIntercept(
       e.stopImmediatePropagation()
       if (hasGhost() && acceptGhost(ta)) {
         hideSuggest()
+        callbacks.onTextChange(ta.value)
         return
       }
       applySuggestion(ta, suggestionLabel(activeCmd))
       hideSuggest()
+      callbacks.onTextChange(ta.value)
       return
     }
 
@@ -240,6 +246,7 @@ export function installIntercept(
           if (parsed) setIntent(parsed, 'enter-popup')
           hideSuggest()
           ta.focus()
+          callbacks.onTextChange(ta.value)
           return
         }
         const label = suggestionLabel(activeCmd)
@@ -248,6 +255,7 @@ export function installIntercept(
         if (parsed) setIntent(parsed, 'enter-popup')
         hideSuggest()
         ta.focus()
+        callbacks.onTextChange(ta.value)
         return
       }
 

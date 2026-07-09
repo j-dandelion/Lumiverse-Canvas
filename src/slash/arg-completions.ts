@@ -12,6 +12,34 @@ export interface ArgMode {
   argEnd: number
 }
 
+export interface CommandNameToken {
+  /** Inclusive start of the name token (always 1 — after `/`). */
+  start: number
+  /** Exclusive end of the name token (first space, or text.length). */
+  end: number
+  /** Typed chars after `/` within the token (user casing preserved). */
+  typedPrefix: string
+}
+
+/**
+ * Slice of the textarea value for the command name (after `/`, before the
+ * first space). Used for command-name ghost range so accept never wipes
+ * trailing args when the user has typed past the command token.
+ *
+ * Returns null when the value is not a leading-slash command.
+ */
+export function commandNameToken(text: string): CommandNameToken | null {
+  if (!text.startsWith('/')) return null
+  const spaceIdx = text.indexOf(' ')
+  const end = spaceIdx >= 0 ? spaceIdx : text.length
+  const start = 1
+  return {
+    start,
+    end,
+    typedPrefix: text.slice(start, end),
+  }
+}
+
 /**
  * Detect first-arg completion mode: text starts with `/`, has whitespace
  * after the command token. v1 treats the entire remainder (from first

@@ -15,7 +15,7 @@ import {
   shouldHideForNonMatchingArgs,
   setControlledValue,
 } from './dom-utils'
-import { parseArgMode, pickActive } from './arg-completions'
+import { commandNameToken, parseArgMode, pickActive } from './arg-completions'
 import { hideGhost, setGhost } from './ghost-text'
 import type { SlashCommandDef, SlashContext } from './types'
 
@@ -93,11 +93,12 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     },
   }
 
-  const syncGhostForArg = (
+  /** Shared ghost sync for command-name tokens and arg completions. */
+  const syncGhost = (
     ta: HTMLTextAreaElement,
     fullArg: string | null,
-    argStart: number,
-    argEnd: number,
+    start: number,
+    end: number,
     typedPrefix: string,
   ): void => {
     if (!fullArg) {
@@ -106,7 +107,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
     }
     setGhost(ta, {
       fullArg,
-      range: { start: argStart, end: argEnd },
+      range: { start, end },
       typedPrefix,
     })
   }
@@ -153,7 +154,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
         showSuggest(ta, rows, activeIndex, (i, activeCmd) => {
           lastActiveIndex = i
           const fullArg = activeCmd?.name ?? pickActive(candidates, i)
-          syncGhostForArg(
+          syncGhost(
             ta,
             fullArg,
             argMode.argStart,
@@ -163,7 +164,7 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
         })
 
         const fullArg = pickActive(candidates, activeIndex)
-        syncGhostForArg(
+        syncGhost(
           ta,
           fullArg,
           argMode.argStart,
@@ -172,10 +173,17 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
         )
         return
       }
+      // Known command, space typed, but no getArgCompletions (free-form
+      // args). Keep the command-name popup closed so Tab-completing e.g.
+      // /help does not re-open a single-row menu.
+      if (cmd && !cmd.getArgCompletions) {
+        hideSuggest()
+        lastActiveIndex = null
+        return
+      }
     }
 
-    // ── Command-name mode (or arg mode without getArgCompletions)
-    hideGhost()
+    // ── Command-name mode (or arg mode without getArgCompletions / unknown cmd)
     const prefix = text.split(/\s/)[0]!.slice(1).toLowerCase()
     const matches = registry.list()
       .filter((c) => c.name.toLowerCase().startsWith(prefix))
@@ -192,9 +200,20 @@ export function attachSlashRuntime(ctx: SpindleFrontendContext): () => void {
       lastActiveIndex = null
       return
     }
+    const token = commandNameToken(text)
+    if (!token) {
+      hideSuggest()
+      lastActiveIndex = null
+      return
+    }
     const { activeIndex, nextSticky } = resolveActiveIndex(matches, text, lastActiveIndex)
     lastActiveIndex = nextSticky
-    showSuggest(ta, matches, activeIndex)
+    const activeCmd = matches[activeIndex] ?? null
+    showSuggest(ta, matches, activeIndex, (i, cmd) => {
+      lastActiveIndex = i
+      syncGhost(ta, cmd?.name ?? null, token.start, token.end, token.typedPrefix)
+    })
+    syncGhost(ta, activeCmd?.name ?? null, token.start, token.end, token.typedPrefix)
   }
 
   const detachIntercept = installIntercept(ctx, {

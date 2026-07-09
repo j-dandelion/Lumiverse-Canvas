@@ -171,6 +171,9 @@ export function showSuggest(
         const parsed = parseCommand(label)
         if (parsed) setIntent(parsed, 'click')
         hideSuggest()
+        // applySuggestion skips the next onTextChange; re-evaluate so
+        // arg-mode list/ghost can open after completing a command name.
+        window.dispatchEvent(new CustomEvent('canvas:slash-completions-changed'))
       })
     })
     updateActiveDom()
