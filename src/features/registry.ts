@@ -139,13 +139,14 @@ const chatReflowFeature: CanvasFeature = {
 
 /** Second sidebar: the master toggle for the entire mirror-drawer feature.
  *  Initial mount reads the layout's saved width/open so the wrapper renders
- *  at the right size on the first paint. Runtime re-apply re-uses the last
- *  loaded layout to restore tab assignments. */
+ *  at the right size on the first paint (only when layoutPersistence is on).
+ *  Runtime re-apply re-uses the last loaded layout to restore tab assignments. */
 const secondSidebarFeature: CanvasFeature = {
   id: 'secondSidebarEnabled',
   mount(_ctx, layout) {
-    const initialWidth = layout?.secondary?.width
-    const initialOpen = layout?.secondary?.open === true
+    const restore = getSettings().layoutPersistence
+    const initialWidth = restore ? layout?.secondary?.width : undefined
+    const initialOpen = restore && layout?.secondary?.open === true
     mountSecondarySidebar({ initialWidth, initialOpen })
     return tearDownSecondarySidebar
   },
@@ -153,7 +154,7 @@ const secondSidebarFeature: CanvasFeature = {
     if (prev.secondSidebarEnabled === next.secondSidebarEnabled) return
     if (next.secondSidebarEnabled) {
       if (!getSecondaryWrapper()) {
-        const layout = getLastLoadedLayout()
+        const layout = getSettings().layoutPersistence ? getLastLoadedLayout() : null
         const initialWidth = layout?.secondary?.width
         const initialOpen = layout?.secondary?.open === true
         mountSecondarySidebar({ initialWidth, initialOpen })

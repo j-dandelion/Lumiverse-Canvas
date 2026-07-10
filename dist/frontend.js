@@ -5974,6 +5974,7 @@ __export(exports_persist, {
   persistOpenState: () => persistOpenState,
   persistLayout: () => persistLayout,
   loadSavedLayout: () => loadSavedLayout,
+  isPersistenceEnabled: () => isPersistenceEnabled,
   isLoadInProgress: () => isLoadInProgress,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
@@ -6132,6 +6133,12 @@ function loadSavedLayout() {
   });
 }
 function applyMainDrawer(layout) {
+  if (!isPersistenceEnabled()) {
+    Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
+      unsuppressMainDrawer2();
+    });
+    return;
+  }
   if (!layout || !layout.primary) {
     Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
       unsuppressMainDrawer2();
@@ -9055,8 +9062,9 @@ var init_registry = __esm(() => {
   secondSidebarFeature = {
     id: "secondSidebarEnabled",
     mount(_ctx2, layout) {
-      const initialWidth = layout?.secondary?.width;
-      const initialOpen = layout?.secondary?.open === true;
+      const restore = getSettings().layoutPersistence;
+      const initialWidth = restore ? layout?.secondary?.width : undefined;
+      const initialOpen = restore && layout?.secondary?.open === true;
       mountSecondarySidebar({ initialWidth, initialOpen });
       return tearDownSecondarySidebar;
     },
@@ -9065,7 +9073,7 @@ var init_registry = __esm(() => {
         return;
       if (next.secondSidebarEnabled) {
         if (!getSecondaryWrapper()) {
-          const layout = getLastLoadedLayout();
+          const layout = getSettings().layoutPersistence ? getLastLoadedLayout() : null;
           const initialWidth = layout?.secondary?.width;
           const initialOpen = layout?.secondary?.open === true;
           mountSecondarySidebar({ initialWidth, initialOpen });
@@ -9915,12 +9923,17 @@ function setup(ctx) {
     registerCleanup(() => {
       teardownSecondaryDrawer();
     });
-    if (layout && getSettings().secondSidebarEnabled) {
+    const restoreLayout = isPersistenceEnabled();
+    if (layout && restoreLayout && getSettings().secondSidebarEnabled) {
       applyLayout(layout).catch((err) => {
         dwarn("Canvas: applyLayout failed:", err);
       });
     }
-    applyMainDrawer(layout);
+    if (restoreLayout) {
+      applyMainDrawer(layout);
+    } else {
+      unsuppressMainDrawer();
+    }
   }).catch((err) => {
     dwarn("Canvas: loadSavedLayout failed, mounting with defaults:", err);
     try {

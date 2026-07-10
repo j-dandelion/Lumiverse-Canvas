@@ -193,7 +193,8 @@ export function snapshotLayout(): any {
   return result
 }
 
-function isPersistenceEnabled(): boolean {
+/** Shared gate for layout write paths and startup restore. */
+export function isPersistenceEnabled(): boolean {
   return getSettings().layoutPersistence
 }
 
@@ -296,6 +297,15 @@ export function loadSavedLayout(): Promise<any> {
  * spindle.ui API is not exposed to extensions at runtime).
  */
 export function applyMainDrawer(layout: any): void {
+  if (!isPersistenceEnabled()) {
+    // Remember-layout is off — do not restore open/tab/width; still lift
+    // the restore-pending guard so host/mirror is not left hidden.
+    import('../sidebar/main-persist').then(({ unsuppressMainDrawer }) => {
+      unsuppressMainDrawer()
+    })
+    return
+  }
+
   if (!layout || !layout.primary) {
     // No primary state to restore — lift the restore-pending guard so
     // the host/mirror drawer is not left hidden until the 3s timeout.

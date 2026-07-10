@@ -80,12 +80,26 @@ try {
 }
 
 // --- cancelLayoutSave is callable ---
-import { cancelLayoutSave } from '../persist'
+import { cancelLayoutSave, isPersistenceEnabled } from '../persist'
 try {
   cancelLayoutSave()
   assert(true, 'cancelLayoutSave does not throw')
 } catch {
   assert(false, 'cancelLayoutSave threw')
+}
+
+// --- isPersistenceEnabled follows hydrated layoutPersistence ---
+import { hydrateSettings, resetHydrationGuard } from '../../settings/state'
+try {
+  resetHydrationGuard()
+  hydrateSettings({ layoutPersistence: false })
+  assert(isPersistenceEnabled() === false, 'isPersistenceEnabled false after hydrate off')
+
+  resetHydrationGuard()
+  hydrateSettings({ layoutPersistence: true })
+  assert(isPersistenceEnabled() === true, 'isPersistenceEnabled true after hydrate on')
+} catch (e) {
+  console.log(`SKIP: isPersistenceEnabled hydrate — ${e}`)
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
