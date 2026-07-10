@@ -1,10 +1,10 @@
-// Chat-margin reflow + main-sidebar button tagging.
+// Page-margin reflow (chat + Welcome/Landing) + main-sidebar button tagging.
 //
 // Two related concerns share a single startReflowObserver lifecycle:
-//   1. Chat reflow — watch the main wrapper's class/style mutations and
-//      recompute the chat column's --sidebar-ux-chat-ml/mr CSS variables
-//      so the chat stays centered in the visible area when the main and/or
-//      secondary drawer is open.
+//   1. Page reflow — watch drawer / dock / route mutations and recompute
+//      --sidebar-ux-chat-ml/mr on document.documentElement so both the chat
+//      column and the Welcome LandingPage inset when main and/or secondary
+//      drawers (or keep-tab-list pin strips) occupy screen edges.
 //   2. Main-sidebar button tagging — watch the main sidebar for child-list
 //      changes (tab add/replace) and tag each extension tab button with a
 //      stable `data-tab-id` attribute. The id-based match is what
@@ -20,13 +20,13 @@
 // reflow state.
 //
 // On mobile (≤600px) the reflow is a complete no-op — updateChatReflow
-// early-returns after clearing any stale inline vars, the injected CSS
+// early-returns after clearing any stale root vars, the injected CSS
 // overrides the margin rule at the same breakpoint, and a matchMedia
 // change listener drops vars on cross-down and re-runs the reflow on
 // cross-up. The listener is registered in startReflowObserver and torn
 // down by the returned cleanup, mirroring the secondary drawer's
 // viewport-cross pattern in sidebar/mobile-exclusion.ts.
-import { getChatColumn, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
+import { getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
@@ -38,32 +38,33 @@ import { getSettings } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 
+/** Write a reflow margin CSS var on documentElement (stable host for
+ *  Welcome and Chat — neither route is required to be mounted). */
 export function setChatMargin(side: 'left' | 'right', px: number): void {
-  const chat = getChatColumn()
-  if (!chat) return
   const varName = side === 'left' ? '--sidebar-ux-chat-ml' : '--sidebar-ux-chat-mr'
-  chat.style.setProperty(varName, `${px}px`)
+  document.documentElement.style.setProperty(varName, `${px}px`)
 }
 
-/** Remove the two inline margin vars on the chat column. Centralized
+/** Remove the two reflow margin vars from documentElement. Centralized
  *  so the on→off path in features/registry.ts and the mobile no-op /
- *  cross-down path in this module share one source of truth. Safe to
- *  call with null. */
-export function clearChatMargins(chat: HTMLElement | null): void {
-  if (!chat) return
-  chat.style.removeProperty('--sidebar-ux-chat-ml')
-  chat.style.removeProperty('--sidebar-ux-chat-mr')
+ *  cross-down path in this module share one source of truth. */
+export function clearChatMargins(): void {
+  const root = document.documentElement
+  root.style.removeProperty('--sidebar-ux-chat-ml')
+  root.style.removeProperty('--sidebar-ux-chat-mr')
 }
 
 export function injectReflowStyles(): void {
   injectStyles('sidebar-ux-reflow', `
-    [class*="_chatColumn_"] {
+    [class*="_chatColumn_"],
+    [data-component="LandingPage"] {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
     @media (max-width: 600px) {
-      [class*="_chatColumn_"] {
+      [class*="_chatColumn_"],
+      [data-component="LandingPage"] {
         margin-left: 0 !important;
         margin-right: 0 !important;
         transition: none !important;
@@ -108,11 +109,11 @@ function getDockInsets(): { left: number; right: number } {
 export function updateChatReflow(): void {
   // Mobile: reflow is a complete no-op. The host CSS controls the
   // chat column layout at ≤600px (the drawer overlays the chat),
-  // and writing margins here would shift the column. clearChatMargins
+  // and writing margins here would shift content. clearChatMargins
   // is defense in depth: if a stale var exists from a prior desktop
   // state, drop it before returning.
   if (isMobileViewport()) {
-    clearChatMargins(getChatColumn())
+    clearChatMargins()
     return
   }
 
@@ -179,13 +180,11 @@ export function updateChatReflow(): void {
  *  margin vars. On cross-up, re-run the desktop reflow. */
 function _onMediaChangeImpl(e: MediaQueryListEvent): void {
   if (e.matches) {
-    // Cross-down into mobile: clear any stale inline vars from a
+    // Cross-down into mobile: clear any stale root vars from a
     // prior desktop state. The injected mobile CSS rule (see
-    // injectReflowStyles) keeps the chat column at margin: 0 on
-    // mobile; this ensures we don't leave our own inline vars in
-    // place that the host CSS would otherwise re-apply on the
-    // next toggle.
-    clearChatMargins(getChatColumn())
+    // injectReflowStyles) keeps consumers at margin: 0 on mobile;
+    // this ensures we don't leave our own vars in place.
+    clearChatMargins()
   } else {
     // Cross-up to desktop: recompute margins. updateChatReflow
     // reads isMobileViewport() fresh, so this is safe to call
@@ -218,32 +217,18 @@ export function startReflowObserver(): () => void {
     observer.observe(appEl, { attributes: true, attributeFilter: ['style'] })
   }
 
-  // Watch for the chat column to appear (SPA navigation adds it after
-  // initial load). The previous waitForElement approach polled for 5
-  // seconds and gave up, so a user who takes >5s to navigate to a chat
-  // (e.g. clicks drawers first, then a character on the welcome screen)
-  // never got a reflow — the margins stayed at whatever values were set
-  // on the very first mount, which is often stale by the time the chat
-  // actually loads. A MutationObserver on the App element fires
-  // immediately on child add/remove, so the reflow runs the moment the
-  // chat column enters the DOM, regardless of how long the user took.
-  // We also observe the chat column itself for attribute changes (its
-  // style is what the reflow mutates — if the host re-renders and resets
-  // the margins, we re-apply).
-  const _appElForChat = document.querySelector('[data-app-root]') as HTMLElement | null
-  if (_appElForChat && !cancelled) {
-    const _chatObserver = new MutationObserver(() => {
-      const _chat = getChatColumn()
-      if (_chat && !cancelled) {
-        scheduleReflow()
-      }
+  // Watch for SPA route changes (Welcome ↔ Chat). Reflow vars live on
+  // documentElement so they apply whether LandingPage or the chat column
+  // is mounted; re-running on childList keeps values fresh if drawer state
+  // changed while the other surface was up.
+  const _appElForRoute = document.querySelector('[data-app-root]') as HTMLElement | null
+  if (_appElForRoute && !cancelled) {
+    const _routeObserver = new MutationObserver(() => {
+      if (!cancelled) scheduleReflow()
     })
-    _chatObserver.observe(_appElForChat, { childList: true, subtree: true })
-    // If the chat column is already in the DOM at observer-mount time
-    // (e.g. setup runs after a re-enable), trigger immediately.
-    if (getChatColumn()) {
-      scheduleReflow()
-    }
+    _routeObserver.observe(_appElForRoute, { childList: true, subtree: true })
+    // If a consumer is already mounted at observer-start, reflow now.
+    scheduleReflow()
   }
 
   // Tagger observer: bundled with the reflow observer so the v1.4.2 lifecycle

@@ -236,13 +236,18 @@ function _installDom(opts: { open?: boolean; leftSide?: boolean } = {}) {
   return { chat, wrapper, body, sidebar }
 }
 
+function _rootStyle(): any {
+  return stubDocument.documentElement.style
+}
+
 function _resetAll() {
   // Wipe style registry and head
   for (const k of Object.keys(_styleElements)) delete _styleElements[k]
   _headChildren.length = 0
-  // Wipe body and querySelector
+  // Wipe body, querySelector, and documentElement reflow vars
   stubBody = new StubElement()
   stubDocument.body = stubBody
+  stubDocument.documentElement = new StubElement()
   stubQuerySelector = () => null
   // Reset matchMedia
   _resetMedia()
@@ -289,6 +294,8 @@ const css = (styleEl as any).textContent
 assert(css.includes('margin-left: 0 !important'), 'mobile rule sets margin-left: 0 !important')
 assert(css.includes('margin-right: 0 !important'), 'mobile rule sets margin-right: 0 !important')
 assert(css.includes('transition: none !important'), 'mobile rule sets transition: none !important')
+assert(css.includes('data-component="LandingPage"'), 'injected style targets LandingPage')
+assert(css.includes('[class*="_chatColumn_"]'), 'injected style still targets chat column')
 
 // --- Test 3: updateChatReflow is a no-op on mobile ---
 
@@ -297,12 +304,12 @@ const dom3 = _installDom()
 _setViewport(true)
 updateChatReflow()
 assertEqual(
-  dom3.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '',
   'updateChatReflow on mobile: --sidebar-ux-chat-ml not set (was empty before)'
 )
 assertEqual(
-  dom3.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '',
   'updateChatReflow on mobile: --sidebar-ux-chat-mr not set (was empty before)'
 )
@@ -312,17 +319,17 @@ assertEqual(
 _resetAll()
 const dom4 = _installDom()
 // Pre-set stale vars as if a prior desktop reflow had run.
-dom4.chat.style.setProperty('--sidebar-ux-chat-ml', '420px')
-dom4.chat.style.setProperty('--sidebar-ux-chat-mr', '420px')
+_rootStyle().setProperty('--sidebar-ux-chat-ml', '420px')
+_rootStyle().setProperty('--sidebar-ux-chat-mr', '420px')
 _setViewport(true)
 updateChatReflow()
 assertEqual(
-  dom4.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '',
   'updateChatReflow on mobile clears stale --sidebar-ux-chat-ml'
 )
 assertEqual(
-  dom4.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '',
   'updateChatReflow on mobile clears stale --sidebar-ux-chat-mr'
 )
@@ -338,12 +345,12 @@ updateChatReflow()
 // mainOpen=true, mainWidth=420, secondaryWidth=0.
 // Right branch: setChatMargin('right', 420), setChatMargin('left', 0).
 assertEqual(
-  dom5.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '420px',
   'updateChatReflow on desktop (main right, open) sets --sidebar-ux-chat-mr to 420px'
 )
 assertEqual(
-  dom5.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '0px',
   'updateChatReflow on desktop (main right, open) sets --sidebar-ux-chat-ml to 0px'
 )
@@ -361,22 +368,22 @@ assertEqual(_mediaListeners.length, 0, 'teardown removes the matchMedia change l
 
 _resetAll()
 const dom7 = _installDom()
-dom7.chat.style.setProperty('--sidebar-ux-chat-ml', '420px')
-dom7.chat.style.setProperty('--sidebar-ux-chat-mr', '420px')
+_rootStyle().setProperty('--sidebar-ux-chat-ml', '420px')
+_rootStyle().setProperty('--sidebar-ux-chat-mr', '420px')
 _setViewport(false) // start on desktop
 const teardown7 = startReflowObserver()
 assertEqual(_mediaListeners.length, 1, 'precondition: listener registered')
 _setViewport(true) // simulate user drag-resize to mobile
 _fireChange(true)
 assertEqual(
-  dom7.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '',
-  'cross-down clears --sidebar-ux-chat-ml on chat column'
+  'cross-down clears --sidebar-ux-chat-ml on documentElement'
 )
 assertEqual(
-  dom7.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '',
-  'cross-down clears --sidebar-ux-chat-mr on chat column'
+  'cross-down clears --sidebar-ux-chat-mr on documentElement'
 )
 teardown7()
 
@@ -387,17 +394,17 @@ const dom8 = _installDom({ open: true, leftSide: false })
 _setViewport(true) // start on mobile
 const teardown8 = startReflowObserver()
 // On mobile, updateChatReflow has already short-circuited -- vars are empty.
-assertEqual(dom8.chat.style.getPropertyValue('--sidebar-ux-chat-ml'), '',
+assertEqual(_rootStyle().getPropertyValue('--sidebar-ux-chat-ml'), '',
   'precondition: vars empty while on mobile')
 _setViewport(false) // simulate user drag-resize to desktop
 _fireChange(false)
 assertEqual(
-  dom8.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '420px',
   'cross-up re-runs updateChatReflow, sets --sidebar-ux-chat-mr to 420px'
 )
 assertEqual(
-  dom8.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '0px',
   'cross-up re-runs updateChatReflow, sets --sidebar-ux-chat-ml to 0px'
 )
@@ -420,11 +427,11 @@ _resetAll()
 const dom10 = _installDom({ open: true, leftSide: false })
 _setViewport(false)
 updateChatReflow()
-const ml1 = dom10.chat.style.getPropertyValue('--sidebar-ux-chat-ml')
-const mr1 = dom10.chat.style.getPropertyValue('--sidebar-ux-chat-mr')
+const ml1 = _rootStyle().getPropertyValue('--sidebar-ux-chat-ml')
+const mr1 = _rootStyle().getPropertyValue('--sidebar-ux-chat-mr')
 updateChatReflow()
-const ml2 = dom10.chat.style.getPropertyValue('--sidebar-ux-chat-ml')
-const mr2 = dom10.chat.style.getPropertyValue('--sidebar-ux-chat-mr')
+const ml2 = _rootStyle().getPropertyValue('--sidebar-ux-chat-ml')
+const mr2 = _rootStyle().getPropertyValue('--sidebar-ux-chat-mr')
 assertEqual(ml1, ml2, 'idempotency: second call sets same --sidebar-ux-chat-ml as first')
 assertEqual(mr1, mr2, 'idempotency: second call sets same --sidebar-ux-chat-mr as first')
 
@@ -435,12 +442,12 @@ const dom11 = _installDom()
 _setViewport(true)
 chatReflowFeature.apply!({ chatReflow: false } as any, { chatReflow: true } as any, makeStubCtx())
 assertEqual(
-  dom11.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
   '',
   'apply(off->on) at mobile: --sidebar-ux-chat-ml not set'
 )
 assertEqual(
-  dom11.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
   '',
   'apply(off->on) at mobile: --sidebar-ux-chat-mr not set'
 )
@@ -478,16 +485,51 @@ assert(stubDocument.getElementById('sidebar-ux-reflow') !== null,
   await new Promise(r => setTimeout(r, 10))
   // The rAF callback should not have run, so no chat margin vars were set
   assertEqual(
-    dom.chat.style.getPropertyValue('--sidebar-ux-chat-ml'),
+    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
     '',
     'R2: teardown cancels in-flight rAF — --sidebar-ux-chat-ml not set'
   )
   assertEqual(
-    dom.chat.style.getPropertyValue('--sidebar-ux-chat-mr'),
+    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
     '',
     'R2: teardown cancels in-flight rAF — --sidebar-ux-chat-mr not set'
   )
 })()
+
+// --- Test 12: no chat column (Welcome) still writes root vars ---
+
+_resetAll()
+// Install drawer DOM without a chat column (Welcome has Landing, not chat).
+{
+  const body = new StubElement()
+  body.className = '_body_xyz'
+  const wrapper = new StubElement()
+  wrapper.className = '_wrapper_ wrapperOpen'
+  const sidebar = new StubElement()
+  sidebar.setAttribute('data-spindle-mount', 'sidebar')
+  wrapper.appendChild(sidebar)
+  body.appendChild(wrapper)
+  stubBody = body
+  stubDocument.body = body
+  stubQuerySelector = (sel: string) => {
+    if (sel === '[data-spindle-mount="sidebar"]') return sidebar
+    if (sel.includes('_body_')) return body
+    if (sel.includes('_chatColumn_')) return null
+    return null
+  }
+}
+_setViewport(false)
+updateChatReflow()
+assertEqual(
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+  '420px',
+  'no chat column: still sets --sidebar-ux-chat-mr on documentElement'
+)
+assertEqual(
+  _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+  '0px',
+  'no chat column: still sets --sidebar-ux-chat-ml on documentElement'
+)
 
 // --- Summary ---
 

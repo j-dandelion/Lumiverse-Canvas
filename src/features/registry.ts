@@ -26,7 +26,7 @@ import { setDebug } from '../debug/log'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
-import { getChatColumn, getMainDrawer } from '../dom/lumiverse'
+import { getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
@@ -131,7 +131,7 @@ const chatReflowFeature: CanvasFeature = {
       // We don't disconnect the observer — the cleanup chain handles
       // that on extension disable.
       document.getElementById('sidebar-ux-reflow')?.remove()
-      clearChatMargins(getChatColumn())
+      clearChatMargins()
     }
   },
 }

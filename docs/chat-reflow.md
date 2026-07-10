@@ -1,8 +1,14 @@
-# Chat Reflow
+# Chat / Page Reflow
 
 ## Overview
 
-Chat reflow shifts the chat column's margins so neither sidebar covers it. When a drawer opens, the chat column is recentered in the remaining visible area.
+Page reflow shifts content margins so neither sidebar (nor keep-tab-list pin strip) covers the main surface. When a drawer opens or a pin strip stays visible, consumers recenter in the remaining area.
+
+**Consumers:**
+- Chat column: `[class*="_chatColumn_"]`
+- Welcome / Landing: `[data-component="LandingPage"]`
+
+Both sides are independent: main strip/drawer on one edge, secondary on the other (bilateral insets under keep-tab-lists).
 
 ## How It Works
 
@@ -10,13 +16,15 @@ Chat reflow shifts the chat column's margins so neither sidebar covers it. When 
 
 Injected style (`sidebar-ux-reflow`):
 ```css
-[class*="_chatColumn_"] {
+[class*="_chatColumn_"],
+[data-component="LandingPage"] {
   margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
   margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
   transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 @media (max-width: 600px) {
-  [class*="_chatColumn_"] {
+  [class*="_chatColumn_"],
+  [data-component="LandingPage"] {
     margin-left: 0 !important;
     margin-right: 0 !important;
     transition: none !important;
@@ -33,7 +41,7 @@ Injected style (`sidebar-ux-reflow`):
 3. When secondary is closed but `keepTabListVisible` is on and a secondary tab list exists, reserve `TAB_LIST_WIDTH_PX` (56px)
 4. Read LumiScript dock panel insets (`--spindle-dock-left`, `--spindle-dock-right`)
 5. Subtract dock insets from drawer widths (they overlap, don't double-count)
-6. Set `--sidebar-ux-chat-ml` and `--sidebar-ux-chat-mr` on the chat column
+6. Set `--sidebar-ux-chat-ml` and `--sidebar-ux-chat-mr` on **`document.documentElement`** (stable host for Welcome and Chat; CSS vars inherit to both consumers)
 
 ### Observer Architecture
 
@@ -41,9 +49,8 @@ Injected style (`sidebar-ux-reflow`):
 
 1. **Main wrapper observer**: `MutationObserver` on `class`/`style` attributes → fires on drawer open/close
 2. **App element observer**: `MutationObserver` on `[data-app-root]` style → fires on dock panel changes
-3. **Chat column observer**: `MutationObserver` on `[data-app-root]` childList → fires when chat appears
-4. **Chat column attribute observer**: detects host re-renders that reset margins
-5. **Viewport-cross listener**: `matchMedia('(max-width: 600px)')` → clears stale desktop vars on cross-down, re-runs on cross-up
+3. **Route observer**: `MutationObserver` on `[data-app-root]` childList → fires on SPA navigate (Welcome ↔ Chat); always schedules reflow (does not require chat column)
+4. **Viewport-cross listener**: `matchMedia('(max-width: 600px)')` → clears stale desktop vars on cross-down, re-runs on cross-up
 
 ### Scheduling
 
@@ -52,9 +59,9 @@ Injected style (`sidebar-ux-reflow`):
 ### Mobile Behavior
 
 On mobile (<=600px), reflow is a complete no-op:
-- `updateChatReflow()` early-returns after clearing stale vars
-- The injected CSS overrides margin to 0
-- Cross-down clears any leftover inline vars
+- `updateChatReflow()` early-returns after clearing stale root vars
+- The injected CSS overrides margin to 0 for both consumers
+- Cross-down clears any leftover documentElement vars
 
 ## Button Tagging
 

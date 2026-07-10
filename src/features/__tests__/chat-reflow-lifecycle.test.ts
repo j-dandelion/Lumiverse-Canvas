@@ -224,7 +224,7 @@ assert(chatReflowFeature.apply !== undefined, 'precondition: chatReflowFeature.a
 
 // --- Test 5: apply(off→on) calls updateChatReflow synchronously ---
 //
-// The chat column's CSS variables (--sidebar-ux-chat-ml/mr) must be
+// documentElement CSS variables (--sidebar-ux-chat-ml/mr) must be
 // populated immediately after apply(off→on), not deferred to the next
 // rAF tick or DOM mutation. This is the fix for the regression where
 // toggling chatReflow off→on required a sidebar close/reopen cycle.
@@ -233,32 +233,17 @@ assert(chatReflowFeature.apply !== undefined, 'precondition: chatReflowFeature.a
 // overriding document.querySelector for body-like selectors.
 
 {
-  // Save the original querySelector and restore after the test.
-  const origQS = stubDocument.querySelector
-  const chatCol = new StubElement()
-  const body = new StubElement()
-  body.querySelectorAll = (_sel: string) => {
-    if (_sel.includes('_chatColumn_')) return [chatCol]
-    return [] as any[]
-  }
-  stubDocument.querySelector = (_sel: string) => {
-    if (_sel.includes('_body_')) return body
-    return null
-  }
-
   const prev = { ...mergeCanvasSettingsStub(), chatReflow: false } as any
   const next = { ...mergeCanvasSettingsStub(), chatReflow: true } as any
   chatReflowFeature.apply!(prev, next, makeStubCtx())
 
-  // updateChatReflow() → setChatMargin() writes CSS variables on the
-  // chat column. The stub has no open drawers, so both margins are 0px.
-  // The invariant: the variables ARE set (not empty/undefined).
-  const ml = chatCol.style.getPropertyValue('--sidebar-ux-chat-ml')
-  const mr = chatCol.style.getPropertyValue('--sidebar-ux-chat-mr')
-  assert(ml !== '', 'apply(off→on) sets --sidebar-ux-chat-ml synchronously')
-  assert(mr !== '', 'apply(off→on) sets --sidebar-ux-chat-mr synchronously')
-
-  stubDocument.querySelector = origQS
+  // updateChatReflow() → setChatMargin() writes CSS variables on
+  // document.documentElement. The stub has no open drawers, so both
+  // margins are 0px. The invariant: the variables ARE set (not empty).
+  const ml = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-ml')
+  const mr = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-mr')
+  assert(ml !== '', 'apply(off→on) sets --sidebar-ux-chat-ml synchronously on documentElement')
+  assert(mr !== '', 'apply(off→on) sets --sidebar-ux-chat-mr synchronously on documentElement')
 }
 
 // --- Test 6: apply() with no change is a no-op ---

@@ -83,20 +83,6 @@ function getMainWrapper() {
   const sidebar = getMainSidebar();
   return sidebar?.closest('[class*="_wrapper_"]');
 }
-function getChatColumn() {
-  const body = document.querySelector('[class*="_body_"][data-chat-constrained]') || document.querySelector('[class*="_body_"]');
-  if (!body)
-    return null;
-  const candidates = body.querySelectorAll('[class*="_chatColumn_"]');
-  if (candidates.length === 1)
-    return candidates[0];
-  for (const el of body.children) {
-    if (el.querySelector('[class*="_chatToolbar_"]')) {
-      return el;
-    }
-  }
-  return null;
-}
 function getMainDrawerWidth() {
   const drawer = getMainDrawer();
   if (!drawer)
@@ -5029,27 +5015,25 @@ __export(exports_reflow, {
   clearChatMargins: () => clearChatMargins
 });
 function setChatMargin(side, px) {
-  const chat = getChatColumn();
-  if (!chat)
-    return;
   const varName = side === "left" ? "--sidebar-ux-chat-ml" : "--sidebar-ux-chat-mr";
-  chat.style.setProperty(varName, `${px}px`);
+  document.documentElement.style.setProperty(varName, `${px}px`);
 }
-function clearChatMargins(chat) {
-  if (!chat)
-    return;
-  chat.style.removeProperty("--sidebar-ux-chat-ml");
-  chat.style.removeProperty("--sidebar-ux-chat-mr");
+function clearChatMargins() {
+  const root = document.documentElement;
+  root.style.removeProperty("--sidebar-ux-chat-ml");
+  root.style.removeProperty("--sidebar-ux-chat-mr");
 }
 function injectReflowStyles() {
   injectStyles("sidebar-ux-reflow", `
-    [class*="_chatColumn_"] {
+    [class*="_chatColumn_"],
+    [data-component="LandingPage"] {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
     @media (max-width: 600px) {
-      [class*="_chatColumn_"] {
+      [class*="_chatColumn_"],
+      [data-component="LandingPage"] {
         margin-left: 0 !important;
         margin-right: 0 !important;
         transition: none !important;
@@ -5076,7 +5060,7 @@ function getDockInsets() {
 }
 function updateChatReflow() {
   if (isMobileViewport()) {
-    clearChatMargins(getChatColumn());
+    clearChatMargins();
     return;
   }
   const mainSide = getMainDrawerSide();
@@ -5115,7 +5099,7 @@ function updateChatReflow() {
 }
 function _onMediaChangeImpl(e) {
   if (e.matches) {
-    clearChatMargins(getChatColumn());
+    clearChatMargins();
   } else {
     updateChatReflow();
   }
@@ -5136,18 +5120,14 @@ function startReflowObserver() {
   if (appEl && !cancelled) {
     observer.observe(appEl, { attributes: true, attributeFilter: ["style"] });
   }
-  const _appElForChat = document.querySelector("[data-app-root]");
-  if (_appElForChat && !cancelled) {
-    const _chatObserver = new MutationObserver(() => {
-      const _chat = getChatColumn();
-      if (_chat && !cancelled) {
+  const _appElForRoute = document.querySelector("[data-app-root]");
+  if (_appElForRoute && !cancelled) {
+    const _routeObserver = new MutationObserver(() => {
+      if (!cancelled)
         scheduleReflow();
-      }
     });
-    _chatObserver.observe(_appElForChat, { childList: true, subtree: true });
-    if (getChatColumn()) {
-      scheduleReflow();
-    }
+    _routeObserver.observe(_appElForRoute, { childList: true, subtree: true });
+    scheduleReflow();
   }
   const stopTagObserver = startTagObserver();
   _mediaQuery2 = window.matchMedia("(max-width: 600px)");
@@ -8697,7 +8677,7 @@ var init_registry = __esm(() => {
         }
       } else {
         document.getElementById("sidebar-ux-reflow")?.remove();
-        clearChatMargins(getChatColumn());
+        clearChatMargins();
       }
     }
   };
