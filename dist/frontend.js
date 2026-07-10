@@ -30,6 +30,12 @@ function mergeCanvasSettings(saved) {
     if (saved.drawerShadowsMobile === undefined && typeof raw.sidebarShadowsMobile === "boolean") {
       out.drawerShadowsMobile = raw.sidebarShadowsMobile;
     }
+    const hasNewLayoutFacet = saved.persistDrawerOpenState !== undefined || saved.persistDrawerWidth !== undefined || saved.persistTabAssignments !== undefined;
+    if (!hasNewLayoutFacet && typeof raw.layoutPersistence === "boolean") {
+      out.persistDrawerOpenState = raw.layoutPersistence;
+      out.persistDrawerWidth = raw.layoutPersistence;
+      out.persistTabAssignments = raw.layoutPersistence;
+    }
   }
   return out;
 }
@@ -46,8 +52,10 @@ var init_types = __esm(() => {
     drawerShadowsDesktop: true,
     drawerShadowsMobile: false,
     chatReflow: true,
-    layoutPersistence: true,
     slashCommandsEnabled: true,
+    persistDrawerOpenState: true,
+    persistDrawerWidth: true,
+    persistTabAssignments: true,
     drawerTabDrag: true,
     mainDrawerTabOverrideVh: undefined,
     secondaryDrawerTabOverrideVh: undefined,
@@ -5099,9 +5107,11 @@ function ensureRestoredPrimaryTab(targetTabId) {
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
   clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile);
 }
-function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
+function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) {
   if (_stopped)
     return;
+  const restoreOpen = opts?.restoreOpen !== false;
+  const restoreWidth = opts?.restoreWidth !== false;
   const drawer = getMainDrawer();
   const wrapper = _wrapper || drawer;
   if (!wrapper) {
@@ -5109,7 +5119,7 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
     unsuppressMainDrawer();
     return;
   }
-  const clampedWidth = typeof targetWidthPx === "number" && targetWidthPx > 0 ? clampSidebarWidth(targetWidthPx) : null;
+  const clampedWidth = restoreWidth && typeof targetWidthPx === "number" && targetWidthPx > 0 ? clampSidebarWidth(targetWidthPx) : null;
   const keepVisible = !!getSettings().keepTabListVisible;
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
   if (keepVisible && !isMobile) {
@@ -5121,6 +5131,10 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
       if (clampedWidth !== null) {
         m.applyMainMirrorRestoredWidth(clampedWidth);
       }
+      if (!restoreOpen) {
+        unsuppressMainDrawer();
+        return;
+      }
       if (targetOpen) {
         m.openCanvasMainDrawer();
         scheduleRestoreTabThenUnsuppress(targetTabId, true);
@@ -5129,6 +5143,17 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx) {
         unsuppressMainDrawer();
       }
     });
+    return;
+  }
+  if (!restoreOpen) {
+    const currentOpen2 = readWrapperOpen(wrapper);
+    if (currentOpen2 && clampedWidth !== null && drawer) {
+      if (!isPointerResizeActive()) {
+        drawer.style.width = `${clampedWidth}px`;
+        wrapper.style.setProperty("--drawer-panel-w", `${clampedWidth}px`, "important");
+      }
+    }
+    unsuppressMainDrawer();
     return;
   }
   const currentOpen = readWrapperOpen(wrapper);
@@ -5787,7 +5812,11 @@ function isTabFullyRestored(tabId) {
 async function applyLayout(layout) {
   if (!layout)
     return;
-  if (layout.secondary?.width && !isMobileViewport()) {
+  const settings = getSettings();
+  const restoreWidth = !!settings.persistDrawerWidth;
+  const restoreTabs = !!settings.persistTabAssignments;
+  const restoreOpen = !!settings.persistDrawerOpenState;
+  if (restoreWidth && layout.secondary?.width && !isMobileViewport()) {
     const clamped = Math.max(200, Math.min(window.innerWidth * 0.8, layout.secondary.width));
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${clamped}px`);
     if (getSecondaryWrapper() && !isSecondarySidebarOpen()) {
@@ -5798,7 +5827,22 @@ async function applyLayout(layout) {
       }
     }
   }
-  if (layout.detachedTabs?.length) {
+  const applySecondaryOpenState = () => {
+    if (!restoreOpen)
+      return;
+    const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
+    const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
+    const savedOpen = layout.secondary?.open;
+    const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs;
+    if (mobileExcluded && isSecondarySidebarOpen()) {
+      enforceExclusionOnOpen("primary");
+    } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
+      openSecondarySidebar();
+    } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
+      closeSecondarySidebar();
+    }
+  };
+  if (restoreTabs && layout.detachedTabs?.length) {
     const stripSuffix = (id) => {
       const lastColon = id.lastIndexOf(":");
       if (lastColon <= 0)
@@ -5838,29 +5882,24 @@ async function applyLayout(layout) {
         clearTimeout(_restoreTimeoutHandle);
         _restoreTimeoutHandle = null;
       }
-      const restoredId = resolveRestoredActiveTabId();
-      if (restoredId) {
-        showSecondaryTab(restoredId);
+      if (restoreTabs) {
+        const restoredId = resolveRestoredActiveTabId();
+        if (restoredId) {
+          showSecondaryTab(restoredId);
+        }
       }
-      const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
+      applySecondaryOpenState();
       const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
-      const savedOpen = layout.secondary?.open;
-      const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs;
-      if (mobileExcluded && isSecondarySidebarOpen()) {
-        enforceExclusionOnOpen("primary");
-      } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
-        openSecondarySidebar();
-      } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
-        closeSecondarySidebar();
-      }
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility();
       }
-      const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
-      if (primaryTabId && layout.primary?.open !== false) {
-        Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
-          m.ensureRestoredPrimaryTab(primaryTabId);
-        });
+      if (restoreOpen) {
+        const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
+        if (primaryTabId && layout.primary?.open !== false) {
+          Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
+            m.ensureRestoredPrimaryTab(primaryTabId);
+          });
+        }
       }
       setRestoringFromLayout(false);
       setSuppressAutoActivation(false);
@@ -5952,6 +5991,8 @@ async function applyLayout(layout) {
       if (followUp === 0)
         finishRestore();
     }
+  } else if (restoreOpen) {
+    applySecondaryOpenState();
   }
 }
 var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4;
@@ -5963,6 +6004,7 @@ var init_apply = __esm(() => {
   init_buttons();
   init_log();
   init_mobile_exclusion();
+  init_state();
 });
 
 // src/layout/persist.ts
@@ -5974,11 +6016,16 @@ __export(exports_persist, {
   persistOpenState: () => persistOpenState,
   persistLayout: () => persistLayout,
   loadSavedLayout: () => loadSavedLayout,
+  isWidthPersistenceEnabled: () => isWidthPersistenceEnabled,
+  isTabAssignmentPersistenceEnabled: () => isTabAssignmentPersistenceEnabled,
   isPersistenceEnabled: () => isPersistenceEnabled,
+  isOpenStatePersistenceEnabled: () => isOpenStatePersistenceEnabled,
   isLoadInProgress: () => isLoadInProgress,
+  isAnyLayoutPersistenceEnabled: () => isAnyLayoutPersistenceEnabled,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
   cancelLayoutSave: () => cancelLayoutSave,
+  buildPersistedLayout: () => buildPersistedLayout,
   applyMainDrawer: () => applyMainDrawer,
   applyLayout: () => applyLayout,
   CANVAS_VERSION: () => CANVAS_VERSION
@@ -6002,7 +6049,7 @@ function flushPendingSaves() {
   const backendCtx = getBackendCtx();
   if (!backendCtx)
     return;
-  if (!isPersistenceEnabled())
+  if (!isAnyLayoutPersistenceEnabled())
     return;
   if (_loadInProgress)
     return;
@@ -6011,7 +6058,7 @@ function flushPendingSaves() {
     _saveLayoutTimer = null;
   }
   cancelSettingsSave();
-  const layout = { ...snapshotLayout(), settings: getSettings() };
+  const layout = { ...buildPersistedLayout(), settings: getSettings() };
   backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
 }
 function setMainDrawerState(open, tabId) {
@@ -6063,14 +6110,51 @@ function snapshotLayout() {
   };
   return result;
 }
+function isOpenStatePersistenceEnabled() {
+  return !!getSettings().persistDrawerOpenState;
+}
+function isWidthPersistenceEnabled() {
+  return !!getSettings().persistDrawerWidth;
+}
+function isTabAssignmentPersistenceEnabled() {
+  return !!getSettings().persistTabAssignments;
+}
+function isAnyLayoutPersistenceEnabled() {
+  const s = getSettings();
+  return !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments);
+}
 function isPersistenceEnabled() {
-  return getSettings().layoutPersistence;
+  return isAnyLayoutPersistenceEnabled();
+}
+function buildPersistedLayout() {
+  const live = snapshotLayout();
+  const last = getLastLoadedLayout();
+  const base = {
+    primary: last?.primary ?? { open: false, width: 420 },
+    secondary: last?.secondary ?? { open: false, width: 420 },
+    detachedTabs: last?.detachedTabs ?? []
+  };
+  const s = getSettings();
+  return {
+    version: live.version,
+    primary: {
+      open: s.persistDrawerOpenState ? live.primary.open : base.primary.open ?? false,
+      width: s.persistDrawerWidth ? live.primary.width : base.primary.width ?? 420,
+      tabId: s.persistDrawerOpenState ? live.primary.tabId : base.primary.tabId ?? null
+    },
+    secondary: {
+      open: s.persistDrawerOpenState ? live.secondary.open : base.secondary.open ?? false,
+      width: s.persistDrawerWidth ? live.secondary.width : base.secondary.width ?? 420,
+      activeTabId: s.persistTabAssignments ? live.secondary.activeTabId : base.secondary.activeTabId
+    },
+    detachedTabs: s.persistTabAssignments ? live.detachedTabs : base.detachedTabs ?? []
+  };
 }
 function persistOpenState() {
   const backendCtx = getBackendCtx();
   if (!backendCtx)
     return;
-  if (!isPersistenceEnabled())
+  if (!isAnyLayoutPersistenceEnabled())
     return;
   if (_loadInProgress)
     return;
@@ -6079,14 +6163,14 @@ function persistOpenState() {
     _saveLayoutTimer = null;
   }
   cancelSettingsSave();
-  const layout = { ...snapshotLayout(), settings: getSettings() };
+  const layout = { ...buildPersistedLayout(), settings: getSettings() };
   backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
 }
 function persistLayout() {
   const backendCtx = getBackendCtx();
   if (!backendCtx)
     return;
-  if (!isPersistenceEnabled())
+  if (!isAnyLayoutPersistenceEnabled())
     return;
   if (_loadInProgress)
     return;
@@ -6096,7 +6180,7 @@ function persistLayout() {
   cancelSettingsSave();
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null;
-    const layout = { ...snapshotLayout(), settings: getSettings() };
+    const layout = { ...buildPersistedLayout(), settings: getSettings() };
     backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
   }, 500);
 }
@@ -6133,7 +6217,9 @@ function loadSavedLayout() {
   });
 }
 function applyMainDrawer(layout) {
-  if (!isPersistenceEnabled()) {
+  const restoreOpen = isOpenStatePersistenceEnabled();
+  const restoreWidth = isWidthPersistenceEnabled();
+  if (!restoreOpen && !restoreWidth) {
     Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
       unsuppressMainDrawer2();
     });
@@ -6146,7 +6232,7 @@ function applyMainDrawer(layout) {
     return;
   }
   Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ restoreMainDrawerFromDom: restoreMainDrawerFromDom2 }) => {
-    restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, typeof layout.primary.width === "number" ? layout.primary.width : undefined);
+    restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, restoreWidth && typeof layout.primary.width === "number" ? layout.primary.width : undefined, { restoreOpen, restoreWidth });
   });
 }
 var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
@@ -6255,9 +6341,9 @@ function persistSettings() {
   }
   _saveSettingsTimer = setTimeout(() => {
     _saveSettingsTimer = null;
-    const layoutSnapshot = _settings.layoutPersistence ? snapshotLayout() : _lastLoadedLayout ?? { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] };
+    const layoutSnapshot = buildPersistedLayout();
     const layout = { ...layoutSnapshot, settings: _settings };
-    dlog(`persistSettings: debounced firing (layoutPersistence=${_settings.layoutPersistence}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`);
+    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, tabs=${_settings.persistTabAssignments}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`);
     backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
   }, 100);
 }
@@ -8933,6 +9019,16 @@ var init_drawer_tab_position = __esm(() => {
 });
 
 // src/features/registry.ts
+function makeLayoutFacetFeature(id) {
+  return {
+    id,
+    apply(prev, next) {
+      if (prev[id] === true && next[id] === false) {
+        cancelLayoutSave();
+      }
+    }
+  };
+}
 function makeSlashFeature(attach) {
   let active = null;
   const slashFeature = {
@@ -9001,7 +9097,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, consistentIconSizeFeature, shadowsDesktopFeature, shadowsMobileFeature, layoutPersistenceFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, consistentIconSizeFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, persistTabAssignmentsFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_log();
@@ -9062,9 +9158,9 @@ var init_registry = __esm(() => {
   secondSidebarFeature = {
     id: "secondSidebarEnabled",
     mount(_ctx2, layout) {
-      const restore = getSettings().layoutPersistence;
-      const initialWidth = restore ? layout?.secondary?.width : undefined;
-      const initialOpen = restore && layout?.secondary?.open === true;
+      const s3 = getSettings();
+      const initialWidth = s3.persistDrawerWidth ? layout?.secondary?.width : undefined;
+      const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true);
       mountSecondarySidebar({ initialWidth, initialOpen });
       return tearDownSecondarySidebar;
     },
@@ -9073,11 +9169,13 @@ var init_registry = __esm(() => {
         return;
       if (next.secondSidebarEnabled) {
         if (!getSecondaryWrapper()) {
-          const layout = getSettings().layoutPersistence ? getLastLoadedLayout() : null;
-          const initialWidth = layout?.secondary?.width;
-          const initialOpen = layout?.secondary?.open === true;
+          const s3 = getSettings();
+          const anyFacet = !!(s3.persistDrawerOpenState || s3.persistDrawerWidth || s3.persistTabAssignments);
+          const layout = anyFacet ? getLastLoadedLayout() : null;
+          const initialWidth = s3.persistDrawerWidth ? layout?.secondary?.width : undefined;
+          const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true);
           mountSecondarySidebar({ initialWidth, initialOpen });
-          if (layout)
+          if (layout && anyFacet)
             applyLayout(layout);
         }
       } else {
@@ -9170,14 +9268,9 @@ var init_registry = __esm(() => {
       }
     }
   };
-  layoutPersistenceFeature = {
-    id: "layoutPersistence",
-    apply(prev, next) {
-      if (prev.layoutPersistence === true && next.layoutPersistence === false) {
-        cancelLayoutSave();
-      }
-    }
-  };
+  persistDrawerOpenStateFeature = makeLayoutFacetFeature("persistDrawerOpenState");
+  persistDrawerWidthFeature = makeLayoutFacetFeature("persistDrawerWidth");
+  persistTabAssignmentsFeature = makeLayoutFacetFeature("persistTabAssignments");
   _slashImpl = makeSlashFeature(attachSlashRuntime);
   slashFeature = _slashImpl.feature;
   tabPositionFeature = {
@@ -9235,7 +9328,9 @@ var init_registry = __esm(() => {
     consistentIconSizeFeature,
     shadowsDesktopFeature,
     shadowsMobileFeature,
-    layoutPersistenceFeature,
+    persistDrawerOpenStateFeature,
+    persistDrawerWidthFeature,
+    persistTabAssignmentsFeature,
     slashFeature,
     tabPositionFeature,
     keepTabListVisibleFeature,
@@ -9449,24 +9544,37 @@ function buildSettingsPanelDOM() {
     sec.appendChild(h3);
     return sec;
   };
-  const sec1 = section("Chat & Layout");
+  const sec1 = section("Chat");
   const chat = makeToggle(() => getSettings().chatReflow, (v3) => setSettings({ chatReflow: v3 }));
   sec1.appendChild(buildSettingRow({
     label: "Center the chat in the visible area",
     hint: "Shifts the chat column by the open-drawer widths so neither drawer covers it.",
     control: chat.btn
   }));
-  const persist = makeToggle(() => getSettings().layoutPersistence, (v3) => setSettings({ layoutPersistence: v3 }));
-  sec1.appendChild(buildSettingRow({
-    label: "Remember layout across sessions",
-    hint: "Persists open/closed state, widths, and tab assignments to layout.json.",
-    control: persist.btn
-  }));
   const slash = makeToggle(() => getSettings().slashCommandsEnabled, (v3) => setSettings({ slashCommandsEnabled: v3 }));
   sec1.appendChild(buildSettingRow({
     label: "Enable slash commands",
     hint: "When on, typing / in the chat input opens the slash-command menu.",
     control: slash.btn
+  }));
+  const secLayout = section("Layout");
+  const persistOpen = makeToggle(() => getSettings().persistDrawerOpenState, (v3) => setSettings({ persistDrawerOpenState: v3 }));
+  secLayout.appendChild(buildSettingRow({
+    label: "Remember drawer open/close state",
+    hint: "Main + second drawer open/closed (and main active tab) across sessions.",
+    control: persistOpen.btn
+  }));
+  const persistWidth = makeToggle(() => getSettings().persistDrawerWidth, (v3) => setSettings({ persistDrawerWidth: v3 }));
+  secLayout.appendChild(buildSettingRow({
+    label: "Remember resized drawer width",
+    hint: "Main + second drawer widths across sessions.",
+    control: persistWidth.btn
+  }));
+  const persistTabs = makeToggle(() => getSettings().persistTabAssignments, (v3) => setSettings({ persistTabAssignments: v3 }));
+  secLayout.appendChild(buildSettingRow({
+    label: "Remember tab assignments",
+    hint: "Which tabs live in the second drawer across sessions.",
+    control: persistTabs.btn
   }));
   const secSidebars = section("Drawers");
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
@@ -9541,6 +9649,7 @@ function buildSettingsPanelDOM() {
     control: debugMode.btn
   }));
   root.appendChild(sec1);
+  root.appendChild(secLayout);
   root.appendChild(secSidebars);
   root.appendChild(sec2);
   root.appendChild(sec4);
@@ -9552,7 +9661,9 @@ function buildSettingsPanelDOM() {
     compact.refresh();
     iconSize.refresh();
     chat.refresh();
-    persist.refresh();
+    persistOpen.refresh();
+    persistWidth.refresh();
+    persistTabs.refresh();
     slash.refresh();
     debugMode.refresh();
     shadowsDesktop.refresh();
@@ -9923,13 +10034,17 @@ function setup(ctx) {
     registerCleanup(() => {
       teardownSecondaryDrawer();
     });
-    const restoreLayout = isPersistenceEnabled();
-    if (layout && restoreLayout && getSettings().secondSidebarEnabled) {
+    const s3 = getSettings();
+    const restoreOpen = !!s3.persistDrawerOpenState;
+    const restoreWidth = !!s3.persistDrawerWidth;
+    const restoreTabs = !!s3.persistTabAssignments;
+    const restoreAny = restoreOpen || restoreWidth || restoreTabs;
+    if (layout && restoreAny && s3.secondSidebarEnabled) {
       applyLayout(layout).catch((err) => {
         dwarn("Canvas: applyLayout failed:", err);
       });
     }
-    if (restoreLayout) {
+    if (restoreOpen || restoreWidth) {
       applyMainDrawer(layout);
     } else {
       unsuppressMainDrawer();

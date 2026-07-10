@@ -88,16 +88,49 @@ try {
   assert(false, 'cancelLayoutSave threw')
 }
 
-// --- isPersistenceEnabled follows hydrated layoutPersistence ---
+// --- isPersistenceEnabled follows hydrated layout facets ---
 import { hydrateSettings, resetHydrationGuard } from '../../settings/state'
+import {
+  isOpenStatePersistenceEnabled,
+  isWidthPersistenceEnabled,
+  isTabAssignmentPersistenceEnabled,
+} from '../persist'
 try {
   resetHydrationGuard()
-  hydrateSettings({ layoutPersistence: false })
-  assert(isPersistenceEnabled() === false, 'isPersistenceEnabled false after hydrate off')
+  hydrateSettings({
+    persistDrawerOpenState: false,
+    persistDrawerWidth: false,
+    persistTabAssignments: false,
+  })
+  assert(isPersistenceEnabled() === false, 'isPersistenceEnabled false when all facets off')
+  assert(isOpenStatePersistenceEnabled() === false, 'open facet false')
+  assert(isWidthPersistenceEnabled() === false, 'width facet false')
+  assert(isTabAssignmentPersistenceEnabled() === false, 'tabs facet false')
 
   resetHydrationGuard()
-  hydrateSettings({ layoutPersistence: true })
-  assert(isPersistenceEnabled() === true, 'isPersistenceEnabled true after hydrate on')
+  hydrateSettings({
+    persistDrawerOpenState: true,
+    persistDrawerWidth: false,
+    persistTabAssignments: false,
+  })
+  assert(isPersistenceEnabled() === true, 'isPersistenceEnabled true when any facet on')
+  assert(isOpenStatePersistenceEnabled() === true, 'open facet true')
+  assert(isWidthPersistenceEnabled() === false, 'width facet still false')
+
+  // Legacy layoutPersistence migration (via merge in hydrate)
+  resetHydrationGuard()
+  hydrateSettings({ layoutPersistence: false } as any)
+  assert(isPersistenceEnabled() === false, 'legacy layoutPersistence:false → all facets off')
+  assert(isOpenStatePersistenceEnabled() === false, 'legacy false → open off')
+  assert(isWidthPersistenceEnabled() === false, 'legacy false → width off')
+  assert(isTabAssignmentPersistenceEnabled() === false, 'legacy false → tabs off')
+
+  resetHydrationGuard()
+  hydrateSettings({ layoutPersistence: true } as any)
+  assert(isPersistenceEnabled() === true, 'legacy layoutPersistence:true → any on')
+  assert(isOpenStatePersistenceEnabled() === true, 'legacy true → open on')
+  assert(isWidthPersistenceEnabled() === true, 'legacy true → width on')
+  assert(isTabAssignmentPersistenceEnabled() === true, 'legacy true → tabs on')
 } catch (e) {
   console.log(`SKIP: isPersistenceEnabled hydrate — ${e}`)
 }

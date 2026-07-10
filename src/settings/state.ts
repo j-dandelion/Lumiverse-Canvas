@@ -21,7 +21,7 @@
 import { mergeCanvasSettings, type CanvasSettings } from '../types'
 import { setDebug, dlog } from '../debug/log'
 import { applySettings } from './panel'
-import { getBackendCtx, snapshotLayout, isLoadInProgress } from '../layout/persist'
+import { getBackendCtx, buildPersistedLayout, isLoadInProgress } from '../layout/persist'
 
 type FullCanvasSettings = Required<CanvasSettings>
 export type { FullCanvasSettings }
@@ -130,15 +130,12 @@ export function persistSettings(): void {
   _saveSettingsTimer = setTimeout(() => {
     _saveSettingsTimer = null
     // Persist via the same SAVE_LAYOUT IPC; the settings field rides on the
-    // existing layout blob. When layoutPersistence is ON, we snapshot the
-    // live drawer state. When OFF, we preserve the last loaded layout so
-    // toggling persistence off then on again does not lose the user's
-    // layout — only the settings field is updated.
-    const layoutSnapshot = _settings.layoutPersistence
-      ? snapshotLayout()
-      : (_lastLoadedLayout ?? { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 }, detachedTabs: [] })
+    // existing layout blob. Geometry uses buildPersistedLayout: live values
+    // for enabled facets, last-loaded freeze for disabled facets (so turning
+    // a facet off does not clobber its disk value with live state).
+    const layoutSnapshot = buildPersistedLayout()
     const layout = { ...layoutSnapshot, settings: _settings }
-    dlog(`persistSettings: debounced firing (layoutPersistence=${_settings.layoutPersistence}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
+    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, tabs=${_settings.persistTabAssignments}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 100)
 }

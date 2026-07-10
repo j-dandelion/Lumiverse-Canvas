@@ -854,8 +854,11 @@ export function restoreMainDrawerFromDom(
   targetOpen: boolean,
   targetTabId: string | null,
   targetWidthPx?: number,
+  opts?: { restoreOpen?: boolean; restoreWidth?: boolean },
 ): void {
   if (_stopped) return
+  const restoreOpen = opts?.restoreOpen !== false
+  const restoreWidth = opts?.restoreWidth !== false
   const drawer = getMainDrawer()
   const wrapper = _wrapper || (drawer as HTMLElement | null)
   if (!wrapper) {
@@ -873,7 +876,7 @@ export function restoreMainDrawerFromDom(
   // independently. Setting the variable with !important on mobile
   // decouples the wrapper transform from the actual drawer width,
   // causing a ~80px peek when the user closes the sidebar.
-  const clampedWidth = (typeof targetWidthPx === 'number' && targetWidthPx > 0)
+  const clampedWidth = (restoreWidth && typeof targetWidthPx === 'number' && targetWidthPx > 0)
     ? clampSidebarWidth(targetWidthPx)
     : null
 
@@ -895,6 +898,11 @@ export function restoreMainDrawerFromDom(
       if (clampedWidth !== null) {
         m.applyMainMirrorRestoredWidth(clampedWidth)
       }
+      if (!restoreOpen) {
+        // Width-only: leave open/close alone; still lift the guard.
+        unsuppressMainDrawer()
+        return
+      }
       if (targetOpen) {
         m.openCanvasMainDrawer()
         // Prefer mirror button; always wait for tab click before showing.
@@ -904,6 +912,19 @@ export function restoreMainDrawerFromDom(
         unsuppressMainDrawer()
       }
     })
+    return
+  }
+
+  if (!restoreOpen) {
+    // Width-only: apply width if currently open; do not click open/close.
+    const currentOpen = readWrapperOpen(wrapper)
+    if (currentOpen && clampedWidth !== null && drawer) {
+      if (!isPointerResizeActive()) {
+        drawer.style.width = `${clampedWidth}px`
+        wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
+      }
+    }
+    unsuppressMainDrawer()
     return
   }
 

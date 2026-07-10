@@ -28,7 +28,9 @@ Canvas persists the full UI state (drawer open/close, widths, tab assignments, s
     "secondSidebarEnabled": true,
     "resizeSidebars": true,
     "chatReflow": true,
-    "layoutPersistence": true,
+    "persistDrawerOpenState": true,
+    "persistDrawerWidth": true,
+    "persistTabAssignments": true,
     "slashCommandsEnabled": true,
     "debugMode": false,
     ...
@@ -68,6 +70,20 @@ Builds the current layout from in-memory state:
   - **Canvas main mirror** (`keepTabListVisible` desktop): `html.sidebar-ux-canvas-main-open` for open + `--sidebar-ux-main-mirror-w` for width (host wrapper is headless; measuring it freezes stale open/width)
 - `secondary`: reads `isSecondarySidebarOpen()`, CSS variable for width, `getActiveSecondaryTabId()` for active tab
 - `detachedTabs`: maps secondary assignments to `{ tabId, tabTitle, sidebar }`
+
+### Layout facets (settings)
+
+Three independent toggles replace the old single `layoutPersistence` flag:
+
+| Setting | Restores / writes |
+|---------|-------------------|
+| `persistDrawerOpenState` | `primary.open`, `primary.tabId`, `secondary.open` |
+| `persistDrawerWidth` | `primary.width`, `secondary.width` |
+| `persistTabAssignments` | `detachedTabs`, `secondary.activeTabId` |
+
+**Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it.
+
+**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → all three on; false → all three off).
 
 ### `loadSavedLayout()`
 
@@ -126,6 +142,6 @@ Restores the secondary sidebar state:
 
 ## Settings Persistence
 
-Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with both `snapshotLayout()` and `getSettings()`.
+Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with `buildPersistedLayout()` geometry plus `getSettings()`.
 
-When `layoutPersistence` is OFF, `persistSettings` records a clean snapshot (everything closed, no detached tabs).
+When all layout facets are OFF, geometry fields come from the last-loaded layout (or closed defaults), so re-enabling a facet later does not lose the previous disk state.

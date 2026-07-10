@@ -9,9 +9,9 @@
 // full re-mount.
 //
 // Section structure:
-//   - Chat & Layout (chatReflow, layoutPersistence)
-//   - Second Sidebar (master + 5 sub-features gated by the master)
-//   - Debug (debugMode)
+//   - Chat (chatReflow, slashCommandsEnabled)
+//   - Layout (persistDrawerOpenState, persistDrawerWidth, persistTabAssignments)
+//   - Drawers / Second drawer / Debug
 //
 // All toggles call setSettings({ field: value }) from settings/state.ts.
 // The "live-apply" effect chain runs through applySettings below.
@@ -204,8 +204,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     return sec
   }
 
-  // --- Section: Chat & Layout (now at the top) ---
-  const sec1 = section('Chat & Layout')
+  // --- Section: Chat ---
+  const sec1 = section('Chat')
 
   const chat = makeToggle(
     () => getSettings().chatReflow,
@@ -217,16 +217,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: chat.btn,
   }))
 
-  const persist = makeToggle(
-    () => getSettings().layoutPersistence,
-    (v) => setSettings({ layoutPersistence: v })
-  )
-  sec1.appendChild(buildSettingRow({
-    label: 'Remember layout across sessions',
-    hint: 'Persists open/closed state, widths, and tab assignments to layout.json.',
-    control: persist.btn,
-  }))
-
   const slash = makeToggle(
     () => getSettings().slashCommandsEnabled,
     (v) => setSettings({ slashCommandsEnabled: v })
@@ -235,6 +225,39 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     label: 'Enable slash commands',
     hint: 'When on, typing / in the chat input opens the slash-command menu.',
     control: slash.btn,
+  }))
+
+  // --- Section: Layout ---
+  const secLayout = section('Layout')
+
+  const persistOpen = makeToggle(
+    () => getSettings().persistDrawerOpenState,
+    (v) => setSettings({ persistDrawerOpenState: v })
+  )
+  secLayout.appendChild(buildSettingRow({
+    label: 'Remember drawer open/close state',
+    hint: 'Main + second drawer open/closed (and main active tab) across sessions.',
+    control: persistOpen.btn,
+  }))
+
+  const persistWidth = makeToggle(
+    () => getSettings().persistDrawerWidth,
+    (v) => setSettings({ persistDrawerWidth: v })
+  )
+  secLayout.appendChild(buildSettingRow({
+    label: 'Remember resized drawer width',
+    hint: 'Main + second drawer widths across sessions.',
+    control: persistWidth.btn,
+  }))
+
+  const persistTabs = makeToggle(
+    () => getSettings().persistTabAssignments,
+    (v) => setSettings({ persistTabAssignments: v })
+  )
+  secLayout.appendChild(buildSettingRow({
+    label: 'Remember tab assignments',
+    hint: 'Which tabs live in the second drawer across sessions.',
+    control: persistTabs.btn,
   }))
 
   // --- Section: Drawers ---
@@ -363,6 +386,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   }))
 
   root.appendChild(sec1)
+  root.appendChild(secLayout)
   root.appendChild(secSidebars)
   root.appendChild(sec2)
   root.appendChild(sec4)
@@ -378,7 +402,9 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     compact.refresh()
     iconSize.refresh()
     chat.refresh()
-    persist.refresh()
+    persistOpen.refresh()
+    persistWidth.refresh()
+    persistTabs.refresh()
     slash.refresh()
     debugMode.refresh()
     shadowsDesktop.refresh()

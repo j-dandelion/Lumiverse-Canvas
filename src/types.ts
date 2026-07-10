@@ -69,12 +69,9 @@ export interface CanvasSettings {
   /** Show box-shadow on drawers at max-width: 600px (mobile). */
   drawerShadowsMobile?: boolean
 
-  // --- Chat & Layout ---
+  // --- Chat ---
   /** Center the chat column in the visible area (set --canvas-chat-ml/mr). */
   chatReflow?: boolean
-
-  /** Persist open/closed state, widths, and tab assignments to layout.json. */
-  layoutPersistence?: boolean
 
   /** Master switch for the Canvas slash-command system. When off, the
    *  intercept, suggest popup, toast surface, and runtime command
@@ -83,6 +80,16 @@ export interface CanvasSettings {
    *  behavior; toggling requires a page reload only if the user wants
    *  to clear an in-flight popup (the live-apply path hides it). */
   slashCommandsEnabled?: boolean
+
+  // --- Layout ---
+  /** Remember main + secondary drawer open/close (+ primary active tab) across sessions. */
+  persistDrawerOpenState?: boolean
+
+  /** Remember resized main + secondary drawer widths across sessions. */
+  persistDrawerWidth?: boolean
+
+  /** Remember secondary tab assignments (+ secondary activeTabId) across sessions. */
+  persistTabAssignments?: boolean
 
   // --- Drawer Tab Drag ---
   /** Enable click/tap-and-drag on sidebar drawer tabs to reposition them
@@ -124,10 +131,13 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   keepTabListVisible: false,
   drawerShadowsDesktop: true,
   drawerShadowsMobile: false,
-  // Chat & Layout
+  // Chat
   chatReflow: true,
-  layoutPersistence: true,
   slashCommandsEnabled: true,
+  // Layout
+  persistDrawerOpenState: true,
+  persistDrawerWidth: true,
+  persistTabAssignments: true,
   // Drawer Tab Drag
   drawerTabDrag: true,
   mainDrawerTabOverrideVh: undefined as unknown as number,
@@ -157,6 +167,17 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     }
     if (saved.drawerShadowsMobile === undefined && typeof raw.sidebarShadowsMobile === 'boolean') {
       out.drawerShadowsMobile = raw.sidebarShadowsMobile
+    }
+    // Legacy single layoutPersistence → three layout facets. Only when none of
+    // the new keys are present on disk (new keys win; missing new keys keep defaults).
+    const hasNewLayoutFacet =
+      saved.persistDrawerOpenState !== undefined
+      || saved.persistDrawerWidth !== undefined
+      || saved.persistTabAssignments !== undefined
+    if (!hasNewLayoutFacet && typeof raw.layoutPersistence === 'boolean') {
+      out.persistDrawerOpenState = raw.layoutPersistence
+      out.persistDrawerWidth = raw.layoutPersistence
+      out.persistTabAssignments = raw.layoutPersistence
     }
   }
   return out

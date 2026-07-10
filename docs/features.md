@@ -33,7 +33,9 @@ interface CanvasFeature {
 | `consistentIconSizeFeature` | `consistentIconSize` | Forces 20x20 icon size in secondary tab list |
 | `shadowsDesktopFeature` | `drawerShadowsDesktop` | Box-shadow on drawers (>=601px) |
 | `shadowsMobileFeature` | `drawerShadowsMobile` | Box-shadow on drawers (<=600px) |
-| `layoutPersistenceFeature` | `layoutPersistence` | Cancels in-flight saves when turned off |
+| `persistDrawerOpenStateFeature` | `persistDrawerOpenState` | Cancels in-flight save when open facet turns off |
+| `persistDrawerWidthFeature` | `persistDrawerWidth` | Cancels in-flight save when width facet turns off |
+| `persistTabAssignmentsFeature` | `persistTabAssignments` | Cancels in-flight save when tabs facet turns off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `keepTabListVisibleFeature` | `keepTabListVisible` | Pins tab lists when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
@@ -66,10 +68,11 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 Built once, mounted into Lumiverse's per-extension settings host. In-place re-render via a `refresh` closure — no full re-mount on toggle.
 
 **Sections:**
-1. **Chat & Layout** — chatReflow, layoutPersistence, slashCommandsEnabled
-2. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
-3. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state), consistentIconSize
-4. **Debug** — debugMode
+1. **Chat** — chatReflow, slashCommandsEnabled
+2. **Layout** — persistDrawerOpenState, persistDrawerWidth, persistTabAssignments
+3. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state), consistentIconSize
+5. **Debug** — debugMode
 
 ### Settings Diff Dispatch (`applySettings`)
 

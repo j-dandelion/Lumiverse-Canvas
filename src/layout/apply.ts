@@ -21,6 +21,7 @@ import {
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
+import { getSettings } from '../settings/state'
 
 // Restore machinery: a MutationObserver on the main sidebar catches new
 // tab buttons as extensions register (childList + subtree). Each fire
@@ -91,6 +92,11 @@ function isTabFullyRestored(tabId: string): boolean {
 export async function applyLayout(layout: any) {
   if (!layout) return
 
+  const settings = getSettings()
+  const restoreWidth = !!settings.persistDrawerWidth
+  const restoreTabs = !!settings.persistTabAssignments
+  const restoreOpen = !!settings.persistDrawerOpenState
+
   // Restore secondary sidebar width — clamp to viewport so the closed
   // transform fully hides the sidebar on narrow screens. Mirrors the
   // clamp in restoreMainDrawerFromDom (main-persist.ts) and the
@@ -100,7 +106,7 @@ export async function applyLayout(layout: any) {
   // the CSS variable to keep it in sync with the 100vw inline width.
   // If we overwrote it here with the desktop-saved width, getClosedTransformPx()
   // would produce a short close offset and the drawer would peek.
-  if (layout.secondary?.width && !isMobileViewport()) {
+  if (restoreWidth && layout.secondary?.width && !isMobileViewport()) {
     const clamped = Math.max(200, Math.min(window.innerWidth * 0.8, layout.secondary.width))
     document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${clamped}px`)
     // Phase 3 (finding #13): createSecondarySidebar already initialized the
@@ -127,8 +133,24 @@ export async function applyLayout(layout: any) {
     }
   }
 
+  /** Apply secondary open/close from layout (open facet only). */
+  const applySecondaryOpenState = () => {
+    if (!restoreOpen) return
+    const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
+    const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0
+    const savedOpen = layout.secondary?.open
+    const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs
+    if (mobileExcluded && isSecondarySidebarOpen()) {
+      enforceExclusionOnOpen('primary')
+    } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
+      openSecondarySidebar()
+    } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
+      closeSecondarySidebar()
+    }
+  }
+
   // Restore tab assignments
-  if (layout.detachedTabs?.length) {
+  if (restoreTabs && layout.detachedTabs?.length) {
     // Wait for extension tabs to register, then restore.
     // Phase 2: match by stable tabId only. Title fallback was removed because
     // tabTitle can drift across sessions (e.g. "LumiBooks" → "LumiBooks v2")
@@ -220,36 +242,31 @@ export async function applyLayout(layout: any) {
       // Prefer the persisted active secondary tab (with suffix-drift heal).
       // Old layouts without activeTabId fall back to the first detached tab.
       // Keep suppress true through this call so concurrent assigns cannot steal.
-      const restoredId = resolveRestoredActiveTabId()
-      if (restoredId) {
-        showSecondaryTab(restoredId)
+      if (restoreTabs) {
+        const restoredId = resolveRestoredActiveTabId()
+        if (restoredId) {
+          showSecondaryTab(restoredId)
+        }
       }
       // Safety net for the case where applyLayout is called WITHOUT a
       // prior mountSecondarySidebar(layout) — re-apply open/closed state.
       // Mobile exclusion: don't reopen the secondary if the primary is
       // open on mobile.
-      const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
+      applySecondaryOpenState()
       const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0
-      const savedOpen = layout.secondary?.open
-      const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs
-      if (mobileExcluded && isSecondarySidebarOpen()) {
-        enforceExclusionOnOpen('primary')
-      } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
-        openSecondarySidebar()
-      } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
-        closeSecondarySidebar()
-      }
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility()
       }
-      // Re-assert primary tab after secondary assigns. Moving tabs off main
-      // can leave the host on "profile" even if applyMainDrawer already ran.
-      const primaryTabId =
-        typeof layout.primary?.tabId === 'string' ? layout.primary.tabId : null
-      if (primaryTabId && layout.primary?.open !== false) {
-        void import('../sidebar/main-persist').then((m) => {
-          m.ensureRestoredPrimaryTab(primaryTabId)
-        })
+      // Re-assert primary tab after secondary assigns (open facet owns primary.tabId).
+      // Moving tabs off main can leave the host on "profile" even if applyMainDrawer already ran.
+      if (restoreOpen) {
+        const primaryTabId =
+          typeof layout.primary?.tabId === 'string' ? layout.primary.tabId : null
+        if (primaryTabId && layout.primary?.open !== false) {
+          void import('../sidebar/main-persist').then((m) => {
+            m.ensureRestoredPrimaryTab(primaryTabId)
+          })
+        }
       }
       setRestoringFromLayout(false)
       setSuppressAutoActivation(false)
@@ -373,5 +390,8 @@ export async function applyLayout(layout: any) {
       const followUp = attemptRestore()
       if (followUp === 0) finishRestore()
     }
+  } else if (restoreOpen) {
+    // Tabs facet off (or no detached tabs): still restore secondary open/close.
+    applySecondaryOpenState()
   }
 }

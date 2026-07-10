@@ -139,14 +139,14 @@ const chatReflowFeature: CanvasFeature = {
 
 /** Second sidebar: the master toggle for the entire mirror-drawer feature.
  *  Initial mount reads the layout's saved width/open so the wrapper renders
- *  at the right size on the first paint (only when layoutPersistence is on).
+ *  at the right size on the first paint (gated per layout facet).
  *  Runtime re-apply re-uses the last loaded layout to restore tab assignments. */
 const secondSidebarFeature: CanvasFeature = {
   id: 'secondSidebarEnabled',
   mount(_ctx, layout) {
-    const restore = getSettings().layoutPersistence
-    const initialWidth = restore ? layout?.secondary?.width : undefined
-    const initialOpen = restore && layout?.secondary?.open === true
+    const s = getSettings()
+    const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
+    const initialOpen = !!(s.persistDrawerOpenState && layout?.secondary?.open === true)
     mountSecondarySidebar({ initialWidth, initialOpen })
     return tearDownSecondarySidebar
   },
@@ -154,11 +154,13 @@ const secondSidebarFeature: CanvasFeature = {
     if (prev.secondSidebarEnabled === next.secondSidebarEnabled) return
     if (next.secondSidebarEnabled) {
       if (!getSecondaryWrapper()) {
-        const layout = getSettings().layoutPersistence ? getLastLoadedLayout() : null
-        const initialWidth = layout?.secondary?.width
-        const initialOpen = layout?.secondary?.open === true
+        const s = getSettings()
+        const anyFacet = !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments)
+        const layout = anyFacet ? getLastLoadedLayout() : null
+        const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
+        const initialOpen = !!(s.persistDrawerOpenState && layout?.secondary?.open === true)
         mountSecondarySidebar({ initialWidth, initialOpen })
-        if (layout) applyLayout(layout)
+        if (layout && anyFacet) applyLayout(layout)
       }
     } else {
       tearDownSecondarySidebar()
@@ -264,17 +266,23 @@ const shadowsMobileFeature: CanvasFeature = {
   },
 }
 
-/** Layout persistence: when the user turns the toggle off, cancel any
- *  in-flight debounced save so a queued mutation doesn't sneak the current
- *  drawer state onto disk under the new "off" settings. */
-const layoutPersistenceFeature: CanvasFeature = {
-  id: 'layoutPersistence',
-  apply(prev, next) {
-    if (prev.layoutPersistence === true && next.layoutPersistence === false) {
-      cancelLayoutSave()
-    }
-  },
+/** Layout facet: cancel in-flight debounced save when a facet turns off so
+ *  a queued mutation doesn't write live values for a disabled facet. */
+function makeLayoutFacetFeature(
+  id: 'persistDrawerOpenState' | 'persistDrawerWidth' | 'persistTabAssignments',
+): CanvasFeature {
+  return {
+    id,
+    apply(prev, next) {
+      if (prev[id] === true && next[id] === false) {
+        cancelLayoutSave()
+      }
+    },
+  }
 }
+const persistDrawerOpenStateFeature = makeLayoutFacetFeature('persistDrawerOpenState')
+const persistDrawerWidthFeature = makeLayoutFacetFeature('persistDrawerWidth')
+const persistTabAssignmentsFeature = makeLayoutFacetFeature('persistTabAssignments')
 
 /** Slash commands: mount/unmount the entire runtime. Owns its own
  *  always-on teardown (slashAlwaysCleanup) so a runtime-mounted slash
@@ -425,7 +433,9 @@ export const FEATURES: readonly CanvasFeature[] = [
   consistentIconSizeFeature,
   shadowsDesktopFeature,
   shadowsMobileFeature,
-  layoutPersistenceFeature,
+  persistDrawerOpenStateFeature,
+  persistDrawerWidthFeature,
+  persistTabAssignmentsFeature,
   slashFeature,
   tabPositionFeature,
   keepTabListVisibleFeature,

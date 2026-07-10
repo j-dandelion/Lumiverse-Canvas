@@ -30,7 +30,7 @@ import {
 } from '../sidebar/styles'
 import { getTabAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
-import { getSettings, cancelSettingsSave } from '../settings/state'
+import { getSettings, cancelSettingsSave, getLastLoadedLayout } from '../settings/state'
 
 export { applyLayout } from './apply'
 
@@ -78,7 +78,7 @@ export function cancelLayoutSave(): void {
 export function flushPendingSaves(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!isAnyLayoutPersistenceEnabled()) return
   if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
@@ -88,7 +88,7 @@ export function flushPendingSaves(): void {
   // below, and a second post from the settings callback would be a duplicate
   // write that could race the one we're about to send.
   cancelSettingsSave()
-  const layout = { ...snapshotLayout(), settings: getSettings() }
+  const layout = { ...buildPersistedLayout(), settings: getSettings() }
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
@@ -193,9 +193,60 @@ export function snapshotLayout(): any {
   return result
 }
 
-/** Shared gate for layout write paths and startup restore. */
+/** Facet gates for independent layout persistence toggles. */
+export function isOpenStatePersistenceEnabled(): boolean {
+  return !!getSettings().persistDrawerOpenState
+}
+export function isWidthPersistenceEnabled(): boolean {
+  return !!getSettings().persistDrawerWidth
+}
+export function isTabAssignmentPersistenceEnabled(): boolean {
+  return !!getSettings().persistTabAssignments
+}
+
+/** Any geometry facet on — enables layout write paths (with merge). */
+export function isAnyLayoutPersistenceEnabled(): boolean {
+  const s = getSettings()
+  return !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments)
+}
+
+/** Shared gate alias: true when any layout facet is enabled. */
 export function isPersistenceEnabled(): boolean {
-  return getSettings().layoutPersistence
+  return isAnyLayoutPersistenceEnabled()
+}
+
+/**
+ * Live snapshot for enabled facets; freeze last-loaded (or defaults) for
+ * disabled facets. SAVE_LAYOUT replaces the whole blob, so partial write
+ * means merge — never omit keys.
+ */
+export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
+  const live = snapshotLayout()
+  const last = getLastLoadedLayout()
+  const base = {
+    primary: last?.primary ?? { open: false, width: 420 },
+    secondary: last?.secondary ?? { open: false, width: 420 },
+    detachedTabs: last?.detachedTabs ?? [],
+  }
+  const s = getSettings()
+  return {
+    version: live.version,
+    primary: {
+      open: s.persistDrawerOpenState ? live.primary.open : (base.primary.open ?? false),
+      width: s.persistDrawerWidth ? live.primary.width : (base.primary.width ?? 420),
+      tabId: s.persistDrawerOpenState
+        ? live.primary.tabId
+        : ((base.primary as { tabId?: string | null }).tabId ?? null),
+    },
+    secondary: {
+      open: s.persistDrawerOpenState ? live.secondary.open : (base.secondary.open ?? false),
+      width: s.persistDrawerWidth ? live.secondary.width : (base.secondary.width ?? 420),
+      activeTabId: s.persistTabAssignments
+        ? live.secondary.activeTabId
+        : (base.secondary as { activeTabId?: string | null }).activeTabId,
+    },
+    detachedTabs: s.persistTabAssignments ? live.detachedTabs : (base.detachedTabs ?? []),
+  }
 }
 
 /**
@@ -209,7 +260,7 @@ export function isPersistenceEnabled(): boolean {
 export function persistOpenState(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!isAnyLayoutPersistenceEnabled()) return
   if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
@@ -220,7 +271,7 @@ export function persistOpenState(): void {
   // will carry the latest settings, so the older settings-bearing snapshot
   // must not be allowed to clobber it.
   cancelSettingsSave()
-  const layout = { ...snapshotLayout(), settings: getSettings() }
+  const layout = { ...buildPersistedLayout(), settings: getSettings() }
   backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
 }
 
@@ -232,7 +283,7 @@ export function persistOpenState(): void {
 export function persistLayout(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
-  if (!isPersistenceEnabled()) return
+  if (!isAnyLayoutPersistenceEnabled()) return
   if (_loadInProgress) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
@@ -243,7 +294,7 @@ export function persistLayout(): void {
   cancelSettingsSave()
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
-    const layout = { ...snapshotLayout(), settings: getSettings() }
+    const layout = { ...buildPersistedLayout(), settings: getSettings() }
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
   }, 500)
 }
@@ -286,19 +337,22 @@ export function loadSavedLayout(): Promise<any> {
 }
 
 /**
- * Restore the main drawer's open/close + active tab from the saved
- * layout. Independent of applyLayout (which is gated on
- * secondSidebarEnabled) — the main drawer is host-owned, so its
- * restore is feature-gated only on the master layoutPersistence
- * toggle.
+ * Restore the main drawer's open/close + active tab and/or width from
+ * the saved layout. Independent of applyLayout (which is gated on
+ * secondSidebarEnabled) — the main drawer is host-owned.
+ *
+ * Open/tab and width are gated separately via layout facet settings.
  *
  * Delegates to restoreMainDrawerFromDom() in sidebar/main-persist.ts,
  * which simulates a tab-button click to open the drawer (the host's
  * spindle.ui API is not exposed to extensions at runtime).
  */
 export function applyMainDrawer(layout: any): void {
-  if (!isPersistenceEnabled()) {
-    // Remember-layout is off — do not restore open/tab/width; still lift
+  const restoreOpen = isOpenStatePersistenceEnabled()
+  const restoreWidth = isWidthPersistenceEnabled()
+
+  if (!restoreOpen && !restoreWidth) {
+    // No main-drawer facets on — do not restore open/tab/width; still lift
     // the restore-pending guard so host/mirror is not left hidden.
     import('../sidebar/main-persist').then(({ unsuppressMainDrawer }) => {
       unsuppressMainDrawer()
@@ -323,7 +377,8 @@ export function applyMainDrawer(layout: any): void {
     restoreMainDrawerFromDom(
       layout.primary.open === true,
       typeof layout.primary.tabId === 'string' ? layout.primary.tabId : null,
-      typeof layout.primary.width === 'number' ? layout.primary.width : undefined,
+      restoreWidth && typeof layout.primary.width === 'number' ? layout.primary.width : undefined,
+      { restoreOpen, restoreWidth },
     )
   })
 }

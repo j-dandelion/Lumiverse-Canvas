@@ -28,7 +28,7 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyMainDrawer, loadSavedLayout, isPersistenceEnabled, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave } from './layout/persist'
+import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave } from './layout/persist'
 import { getTabAssignments, deleteTabAssignment } from './tabs/assignment'
 import { removeSecondaryTabButton } from './tabs/buttons'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
@@ -208,25 +208,29 @@ export function setup(ctx: SpindleFrontendContext) {
       teardownSecondaryDrawer()
     })
 
-    // Layout geometry restore is gated on layoutPersistence.
+    // Layout geometry restore is gated per facet (open/width/tabs).
     // loadSavedLayout + hydrateSettings still run so settings toggles are
-    // correct. When persistence is on, main-drawer restore is independent
-    // of secondSidebarEnabled (host-owned drawer). applyLayout is also
-    // gated on secondSidebarEnabled because it touches the secondary wrapper.
+    // correct. Main-drawer restore (open and/or width) is independent of
+    // secondSidebarEnabled (host-owned drawer). applyLayout is also gated
+    // on secondSidebarEnabled because it touches the secondary wrapper.
     //
     // applyLayout moves tabs to the secondary sidebar, which can reset the
     // host active tab to "profile". Fire it first; panel bodies stay hidden
     // until primary.tabId is active. finishRestore re-asserts primary after
     // late assigns — no fixed wait needed here.
-    const restoreLayout = isPersistenceEnabled()
+    const s = getSettings()
+    const restoreOpen = !!s.persistDrawerOpenState
+    const restoreWidth = !!s.persistDrawerWidth
+    const restoreTabs = !!s.persistTabAssignments
+    const restoreAny = restoreOpen || restoreWidth || restoreTabs
 
-    if (layout && restoreLayout && getSettings().secondSidebarEnabled) {
+    if (layout && restoreAny && s.secondSidebarEnabled) {
       void applyLayout(layout).catch((err) => {
         dwarn('Canvas: applyLayout failed:', err)
       })
     }
 
-    if (restoreLayout) {
+    if (restoreOpen || restoreWidth) {
       applyMainDrawer(layout)
     } else {
       // beginMainDrawerRestoreGuard already ran; do not leave drawer suppressed.

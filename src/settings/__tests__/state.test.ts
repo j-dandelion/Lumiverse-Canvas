@@ -20,7 +20,9 @@ assert(typeof settings.mirrorCompactPosition === 'boolean', 'mirrorCompactPositi
 assert(typeof settings.showTabLabels === 'string', 'showTabLabels is string')
 assert(typeof settings.consistentIconSize === 'boolean', 'consistentIconSize is boolean')
 assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
-assert(typeof settings.layoutPersistence === 'boolean', 'layoutPersistence is boolean')
+assert(typeof settings.persistDrawerOpenState === 'boolean', 'persistDrawerOpenState is boolean')
+assert(typeof settings.persistDrawerWidth === 'boolean', 'persistDrawerWidth is boolean')
+assert(typeof settings.persistTabAssignments === 'boolean', 'persistTabAssignments is boolean')
 assert(typeof settings.slashCommandsEnabled === 'boolean', 'slashCommandsEnabled is boolean')
 assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
 assert(typeof settings.drawerShadowsDesktop === 'boolean', 'drawerShadowsDesktop is boolean')
@@ -85,6 +87,38 @@ assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects ex
   } as any)
   assertEqual(newWins.drawerShadowsDesktop, true, 'new key wins over legacy sidebarShadowsDesktop')
   assertEqual(newWins.drawerShadowsMobile, false, 'new key wins over legacy sidebarShadowsMobile')
+}
+
+// Legacy layoutPersistence → three layout facets
+{
+  const fromNull = mergeCanvasSettings(null)
+  assertEqual(fromNull.persistDrawerOpenState, true, 'default persistDrawerOpenState true')
+  assertEqual(fromNull.persistDrawerWidth, true, 'default persistDrawerWidth true')
+  assertEqual(fromNull.persistTabAssignments, true, 'default persistTabAssignments true')
+
+  const legacyOff = mergeCanvasSettings({ layoutPersistence: false } as any)
+  assertEqual(legacyOff.persistDrawerOpenState, false, 'legacy layoutPersistence:false → open false')
+  assertEqual(legacyOff.persistDrawerWidth, false, 'legacy layoutPersistence:false → width false')
+  assertEqual(legacyOff.persistTabAssignments, false, 'legacy layoutPersistence:false → tabs false')
+
+  const legacyOn = mergeCanvasSettings({ layoutPersistence: true } as any)
+  assertEqual(legacyOn.persistDrawerOpenState, true, 'legacy layoutPersistence:true → open true')
+  assertEqual(legacyOn.persistDrawerWidth, true, 'legacy layoutPersistence:true → width true')
+  assertEqual(legacyOn.persistTabAssignments, true, 'legacy layoutPersistence:true → tabs true')
+
+  const newOnly = mergeCanvasSettings({ persistDrawerWidth: false })
+  assertEqual(newOnly.persistDrawerWidth, false, 'new key persistDrawerWidth false')
+  assertEqual(newOnly.persistDrawerOpenState, true, 'missing new keys keep default open true')
+  assertEqual(newOnly.persistTabAssignments, true, 'missing new keys keep default tabs true')
+
+  const newWins = mergeCanvasSettings({
+    persistDrawerOpenState: false,
+    persistDrawerWidth: true,
+    layoutPersistence: true,
+  } as any)
+  assertEqual(newWins.persistDrawerOpenState, false, 'new open key wins over legacy')
+  assertEqual(newWins.persistDrawerWidth, true, 'new width key used')
+  assertEqual(newWins.persistTabAssignments, true, 'missing new tab key keeps default (legacy ignored when any new present)')
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
