@@ -30,7 +30,9 @@ import {
 } from '../sidebar/styles'
 import { getTabAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
-import { getSettings, cancelSettingsSave, getLastLoadedLayout } from '../settings/state'
+import {
+  getSettings, cancelSettingsSave, getLastLoadedLayout, setLastLoadedLayout,
+} from '../settings/state'
 
 export { applyLayout } from './apply'
 
@@ -75,6 +77,24 @@ export function cancelLayoutSave(): void {
  * ctx is wired (returns early). Safe to call when persistence is disabled
  * (returns early).
  */
+/**
+ * Post SAVE_LAYOUT and keep `_lastLoadedLayout` aligned with disk.
+ * Facet freeze (buildPersistedLayout for disabled facets) reads last-loaded;
+ * without this sync, re-enabling "Remember tab assignments" falsely reports
+ * drift after a successful save/load cycle.
+ */
+function writeLayoutToBackend(layout: any): void {
+  const backendCtx = getBackendCtx()
+  if (!backendCtx) return
+  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+  setLastLoadedLayout(layout)
+}
+
+/** Update freeze base to the current merged layout without requiring IPC. */
+export function syncLastLoadedFromPersistedLayout(): void {
+  setLastLoadedLayout({ ...buildPersistedLayout(), settings: getSettings() })
+}
+
 export function flushPendingSaves(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) return
@@ -89,7 +109,7 @@ export function flushPendingSaves(): void {
   // write that could race the one we're about to send.
   cancelSettingsSave()
   const layout = { ...buildPersistedLayout(), settings: getSettings() }
-  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+  writeLayoutToBackend(layout)
 }
 
 // Authoritative main-drawer state, updated by the watcher's onDrawerChange
@@ -272,7 +292,7 @@ export function persistOpenState(): void {
   // must not be allowed to clobber it.
   cancelSettingsSave()
   const layout = { ...buildPersistedLayout(), settings: getSettings() }
-  backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+  writeLayoutToBackend(layout)
 }
 
 /**
@@ -295,7 +315,7 @@ export function persistLayout(): void {
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
     const layout = { ...buildPersistedLayout(), settings: getSettings() }
-    backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+    writeLayoutToBackend(layout)
   }, 500)
 }
 

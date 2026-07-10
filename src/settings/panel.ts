@@ -18,6 +18,7 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } from '../settings/state'
+import { requestPersistTabAssignments } from './persist-tabs-toggle'
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
@@ -252,7 +253,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
 
   const persistTabs = makeToggle(
     () => getSettings().persistTabAssignments,
-    (v) => setSettings({ persistTabAssignments: v })
+    (v) => requestPersistTabAssignments(v),
   )
   secLayout.appendChild(buildSettingRow({
     label: 'Remember tab assignments',

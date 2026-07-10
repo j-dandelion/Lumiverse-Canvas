@@ -6079,6 +6079,7 @@ var init_apply = __esm(() => {
 // src/layout/persist.ts
 var exports_persist = {};
 __export(exports_persist, {
+  syncLastLoadedFromPersistedLayout: () => syncLastLoadedFromPersistedLayout,
   snapshotLayout: () => snapshotLayout,
   setMainDrawerState: () => setMainDrawerState,
   setBackendCtx: () => setBackendCtx,
@@ -6114,6 +6115,16 @@ function cancelLayoutSave() {
     _saveLayoutTimer = null;
   }
 }
+function writeLayoutToBackend(layout) {
+  const backendCtx = getBackendCtx();
+  if (!backendCtx)
+    return;
+  backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
+  setLastLoadedLayout(layout);
+}
+function syncLastLoadedFromPersistedLayout() {
+  setLastLoadedLayout({ ...buildPersistedLayout(), settings: getSettings() });
+}
 function flushPendingSaves() {
   const backendCtx = getBackendCtx();
   if (!backendCtx)
@@ -6128,7 +6139,7 @@ function flushPendingSaves() {
   }
   cancelSettingsSave();
   const layout = { ...buildPersistedLayout(), settings: getSettings() };
-  backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
+  writeLayoutToBackend(layout);
 }
 function setMainDrawerState(open, tabId) {
   _mainDrawerOpen = open;
@@ -6233,7 +6244,7 @@ function persistOpenState() {
   }
   cancelSettingsSave();
   const layout = { ...buildPersistedLayout(), settings: getSettings() };
-  backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
+  writeLayoutToBackend(layout);
 }
 function persistLayout() {
   const backendCtx = getBackendCtx();
@@ -6250,7 +6261,7 @@ function persistLayout() {
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null;
     const layout = { ...buildPersistedLayout(), settings: getSettings() };
-    backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
+    writeLayoutToBackend(layout);
   }, 500);
 }
 function loadSavedLayout() {
@@ -6414,6 +6425,7 @@ function persistSettings() {
     const layout = { ...layoutSnapshot, settings: _settings };
     dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, tabs=${_settings.persistTabAssignments}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`);
     backendCtx.sendToBackend({ type: "SAVE_LAYOUT", layout });
+    setLastLoadedLayout(layout);
   }, 100);
 }
 function cancelSettingsSave() {
@@ -6429,6 +6441,323 @@ var init_state = __esm(() => {
   init_panel();
   init_persist();
   _settings = mergeCanvasSettings(null);
+});
+
+// src/layout/tab-assignments-diff.ts
+function normalizeActiveTabId(active) {
+  return active ?? null;
+}
+function extractSecondaryTabIds(slice) {
+  const tabs = slice?.detachedTabs;
+  if (!Array.isArray(tabs))
+    return [];
+  return tabs.map((t) => t.tabId);
+}
+function tabAssignmentsEqual(live, saved) {
+  const liveIds = extractSecondaryTabIds(live);
+  const savedIds = extractSecondaryTabIds(saved);
+  if (liveIds.length !== savedIds.length)
+    return false;
+  const savedSet = new Set(savedIds);
+  for (const id of liveIds) {
+    if (!savedSet.has(id))
+      return false;
+  }
+  if (savedSet.size !== liveIds.length)
+    return false;
+  const liveActive = normalizeActiveTabId(live?.secondary?.activeTabId);
+  const savedActive = normalizeActiveTabId(saved?.secondary?.activeTabId);
+  return liveActive === savedActive;
+}
+
+// src/settings/tab-assignments-conflict.ts
+function injectConflictStyles() {
+  injectStyles(STYLE_ID2, `
+    #${HOST_ID} {
+      position: fixed;
+      inset: 0;
+      z-index: 11050;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      box-sizing: border-box;
+      font-family: var(--lumiverse-font-family, sans-serif);
+      animation: canvas-tab-assign-conflict-fade 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-backdrop {
+      position: absolute;
+      inset: 0;
+      background: color-mix(in srgb, var(--lumiverse-fill-heavy, rgba(0,0,0,0.45)) 85%, transparent);
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-card {
+      position: relative;
+      z-index: 1;
+      width: min(380px, 100%);
+      background: var(--lumiverse-bg-elevated, var(--lumiverse-bg-deep, #1a1a1a));
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius-md, 12px);
+      box-shadow: var(--lumiverse-shadow-md, 0 12px 32px rgba(0,0,0,0.5));
+      padding: 16px;
+      box-sizing: border-box;
+      animation: canvas-tab-assign-conflict-in 120ms ease-out;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-title {
+      margin: 0;
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--lumiverse-text);
+      padding-top: 4px;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-close {
+      width: 32px;
+      height: 32px;
+      flex-shrink: 0;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      color: var(--lumiverse-text-muted);
+      cursor: pointer;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-close:hover {
+      background: var(--lumiverse-fill, rgba(255,255,255,0.06));
+      color: var(--lumiverse-text);
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-option {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 8px;
+      background: var(--lumiverse-bg-050, transparent);
+      color: var(--lumiverse-text);
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-option:hover:not(:disabled) {
+      background: var(--lumiverse-primary-020, rgba(66,165,245,0.12));
+      border-color: var(--lumiverse-primary, #42a5f5);
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-option:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-option-label {
+      font-size: calc(13px * var(--lumiverse-font-scale, 1));
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--lumiverse-text);
+    }
+    #${HOST_ID} .canvas-tab-assign-conflict-option-hint {
+      margin-top: 2px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.35;
+      color: var(--lumiverse-text-muted);
+    }
+    @keyframes canvas-tab-assign-conflict-fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes canvas-tab-assign-conflict-in {
+      from { opacity: 0; transform: scale(0.92); }
+      to { opacity: 1; transform: scale(1); }
+    }
+  `);
+}
+function makeOptionButton(label, hint) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "canvas-tab-assign-conflict-option";
+  const labelEl = document.createElement("div");
+  labelEl.className = "canvas-tab-assign-conflict-option-label";
+  labelEl.textContent = label;
+  const hintEl = document.createElement("div");
+  hintEl.className = "canvas-tab-assign-conflict-option-hint";
+  hintEl.textContent = hint;
+  btn.appendChild(labelEl);
+  btn.appendChild(hintEl);
+  return btn;
+}
+function cleanupListeners() {
+  if (_onKeyDown) {
+    document.removeEventListener("keydown", _onKeyDown);
+    _onKeyDown = null;
+  }
+}
+function hideTabAssignmentsConflictDialog() {
+  cleanupListeners();
+  _busy = false;
+  if (_host) {
+    _host.remove();
+    _host = null;
+  }
+}
+function showTabAssignmentsConflictDialog(handlers) {
+  hideTabAssignmentsConflictDialog();
+  injectConflictStyles();
+  _busy = false;
+  const host = document.createElement("div");
+  host.id = HOST_ID;
+  host.setAttribute("role", "dialog");
+  host.setAttribute("aria-modal", "true");
+  host.setAttribute("aria-labelledby", "canvas-tab-assign-conflict-title");
+  const backdrop = document.createElement("div");
+  backdrop.className = "canvas-tab-assign-conflict-backdrop";
+  backdrop.addEventListener("click", () => {
+    if (_busy)
+      return;
+    handlers.onDismiss();
+  });
+  const card = document.createElement("div");
+  card.className = "canvas-tab-assign-conflict-card";
+  card.addEventListener("click", (e) => e.stopPropagation());
+  const header = document.createElement("div");
+  header.className = "canvas-tab-assign-conflict-header";
+  const title = document.createElement("h3");
+  title.id = "canvas-tab-assign-conflict-title";
+  title.className = "canvas-tab-assign-conflict-title";
+  title.textContent = "Tab assignments differ";
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "canvas-tab-assign-conflict-close";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+  closeBtn.addEventListener("click", () => {
+    if (_busy)
+      return;
+    handlers.onDismiss();
+  });
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  const options = document.createElement("div");
+  options.className = "canvas-tab-assign-conflict-options";
+  const saveBtn = makeOptionButton("Save current", "Write this session's tab arrangement to storage, then turn remember on.");
+  const loadBtn = makeOptionButton("Load previous", "Restore the last saved tab arrangement, then turn remember on.");
+  const setBusy = (busy) => {
+    _busy = busy;
+    saveBtn.disabled = busy;
+    loadBtn.disabled = busy;
+    closeBtn.disabled = busy;
+  };
+  saveBtn.addEventListener("click", () => {
+    if (_busy)
+      return;
+    setBusy(true);
+    Promise.resolve(handlers.onSaveCurrent()).finally(() => {
+      if (_host === host)
+        setBusy(false);
+    });
+  });
+  loadBtn.addEventListener("click", () => {
+    if (_busy)
+      return;
+    setBusy(true);
+    Promise.resolve(handlers.onLoadPrevious()).finally(() => {
+      if (_host === host)
+        setBusy(false);
+    });
+  });
+  options.appendChild(saveBtn);
+  options.appendChild(loadBtn);
+  card.appendChild(header);
+  card.appendChild(options);
+  host.appendChild(backdrop);
+  host.appendChild(card);
+  _onKeyDown = (e) => {
+    if (e.key !== "Escape")
+      return;
+    if (_busy)
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onDismiss();
+  };
+  document.addEventListener("keydown", _onKeyDown);
+  document.body.appendChild(host);
+  _host = host;
+  closeBtn.focus();
+}
+var HOST_ID = "canvas-tab-assignments-conflict", STYLE_ID2 = "canvas-tab-assignments-conflict-styles", _host = null, _onKeyDown = null, _busy = false;
+var init_tab_assignments_conflict = () => {};
+
+// src/settings/persist-tabs-toggle.ts
+function enableAndSaveCurrent() {
+  setSettings({ persistTabAssignments: true });
+  flushPendingSaves();
+  syncLastLoadedFromPersistedLayout();
+  hideTabAssignmentsConflictDialog();
+}
+async function enableAndLoadPrevious() {
+  const saved = getLastLoadedLayout();
+  if (!saved) {
+    setSettings({ persistTabAssignments: true });
+    hideTabAssignmentsConflictDialog();
+    return;
+  }
+  setSettings({ persistTabAssignments: true });
+  cancelSettingsSave();
+  cancelLayoutSave();
+  try {
+    await applyLayout(saved);
+  } finally {
+    flushPendingSaves();
+    syncLastLoadedFromPersistedLayout();
+    hideTabAssignmentsConflictDialog();
+  }
+}
+function requestPersistTabAssignments(next) {
+  if (!next) {
+    if (getSettings().persistTabAssignments) {
+      flushPendingSaves();
+      syncLastLoadedFromPersistedLayout();
+    }
+    setSettings({ persistTabAssignments: false });
+    hideTabAssignmentsConflictDialog();
+    return;
+  }
+  if (getSettings().persistTabAssignments) {
+    return;
+  }
+  const live = snapshotLayout();
+  const saved = getLastLoadedLayout();
+  if (!saved || tabAssignmentsEqual(live, saved)) {
+    setSettings({ persistTabAssignments: true });
+    return;
+  }
+  showTabAssignmentsConflictDialog({
+    onSaveCurrent: () => {
+      enableAndSaveCurrent();
+    },
+    onLoadPrevious: () => enableAndLoadPrevious(),
+    onDismiss: () => {
+      hideTabAssignmentsConflictDialog();
+    }
+  });
+}
+var init_persist_tabs_toggle = __esm(() => {
+  init_persist();
+  init_state();
+  init_tab_assignments_conflict();
 });
 
 // src/debug/fiber-scan.ts
@@ -6815,7 +7144,7 @@ function renderGhostOverlay(ta, suffix, caretPos) {
   el.replaceChildren(pre, ghost);
 }
 function injectGhostStyles() {
-  injectStyles(STYLE_ID2, `
+  injectStyles(STYLE_ID3, `
     #${GHOST_ID} {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
@@ -6832,7 +7161,7 @@ function injectGhostStyles() {
     }
   `);
 }
-var GHOST_ID = "canvas-slash-ghost", STYLE_ID2 = "canvas-slash-ghost-styles", _ctx = null;
+var GHOST_ID = "canvas-slash-ghost", STYLE_ID3 = "canvas-slash-ghost-styles", _ctx = null;
 var init_ghost_text = () => {};
 
 // src/slash/suggest.ts
@@ -7017,7 +7346,7 @@ function applyTextareaAriaBaseline(textarea) {
   }
 }
 function injectSuggestStyles() {
-  injectStyles(STYLE_ID3, `
+  injectStyles(STYLE_ID4, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
@@ -7114,7 +7443,7 @@ function escapeHtml2(s) {
 function escapeAttr(s) {
   return escapeHtml2(s);
 }
-var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID3 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
+var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID4 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
   init_ghost_text();
   init_intent();
@@ -8646,7 +8975,7 @@ function unmountToastSurface() {
   toasts = [];
 }
 function injectToastStyles() {
-  injectStyles(STYLE_ID4, `
+  injectStyles(STYLE_ID5, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -8680,7 +9009,7 @@ function injectToastStyles() {
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
   `);
 }
-var STYLE_ID4 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
+var STYLE_ID5 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
 var init_toast = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -9624,7 +9953,7 @@ function buildSettingsPanelDOM() {
     hint: "Persist drawer widths across sessions.",
     control: persistWidth.btn
   }));
-  const persistTabs = makeToggle(() => getSettings().persistTabAssignments, (v3) => setSettings({ persistTabAssignments: v3 }));
+  const persistTabs = makeToggle(() => getSettings().persistTabAssignments, (v3) => requestPersistTabAssignments(v3));
   secLayout.appendChild(buildSettingRow({
     label: "Remember tab assignments",
     hint: "Persist arrangement of tabs across sessions (between main and second drawer).",
@@ -9767,6 +10096,7 @@ function applySettings(prev, next) {
 var _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
 var init_panel = __esm(() => {
   init_state();
+  init_persist_tabs_toggle();
   init_log();
   init_registry();
 });

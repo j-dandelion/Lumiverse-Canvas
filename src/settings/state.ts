@@ -137,6 +137,8 @@ export function persistSettings(): void {
     const layout = { ...layoutSnapshot, settings: _settings }
     dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, tabs=${_settings.persistTabAssignments}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
+    // Keep freeze base aligned with disk (same as layout/persist write paths).
+    setLastLoadedLayout(layout)
   }, 100)
 }
 
