@@ -4,9 +4,9 @@
 //   1. Chat reflow — watch the main wrapper's class/style mutations and
 //      recompute the chat column's --sidebar-ux-chat-ml/mr CSS variables
 //      so the chat stays centered in the visible area when the main and/or
-//      secondary drawer is open. Welcome/Landing is NOT a reflow consumer;
-//      keep-tabs page bounds live in sidebar/strip-gutter.ts (strip width
-//      only, static CSS).
+//      secondary drawer is open (or pin strips under keep-tabs). Welcome/
+//      Landing is NOT a reflow consumer; keep-tabs Welcome bounds live in
+//      sidebar/strip-gutter.ts (strip width only, static CSS on LandingPage).
 //   2. Main-sidebar button tagging — watch the main sidebar for child-list
 //      changes (tab add/replace) and tag each extension tab button with a
 //      stable `data-tab-id` attribute. The id-based match is what
@@ -17,9 +17,10 @@
 // only happens when CanvasSettings.chatReflow is on.
 //
 // Policy vs keep-tabs (see docs/chat-reflow.md):
-//   - keepTabListVisible ON → reflow no-ops (strip gutters own page bounds;
-//     open drawers overlay).
-//   - keepTabListVisible OFF → classic open-drawer widths on the chat column.
+//   - keepTabListVisible OFF → classic host open-drawer widths on chat.
+//   - keepTabListVisible ON → main-mirror open width / closed pin-strip
+//     reserve; secondary open width / strip reserve. Strip gutters own
+//     Welcome only (do not override chat margins).
 //
 // On mobile (≤600px) the reflow is a complete no-op — updateChatReflow
 // early-returns after clearing any stale inline vars, the injected CSS
@@ -30,13 +31,15 @@
 // viewport-cross pattern in sidebar/mobile-exclusion.ts.
 import { getChatColumn, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
-import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR } from '../sidebar/secondary'
+import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { isKeepTabListVisibleEnabled } from '../settings/state'
+import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
+import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -48,7 +51,7 @@ export function setChatMargin(side: 'left' | 'right', px: number): void {
 /** Remove the two reflow margin vars from the chat column (if present)
  *  and any leftover documentElement props from the former Welcome-reflow
  *  path. Centralized so the on→off path in features/registry.ts and the
- *  mobile / keep-tabs no-op paths share one source of truth. */
+ *  mobile no-op path share one source of truth. */
 export function clearChatMargins(): void {
   const chat = getChatColumn()
   if (chat) {
@@ -125,20 +128,40 @@ export function updateChatReflow(): void {
     return
   }
 
-  // Keep-tabs owns page bounds via strip gutters (strip width only).
-  // Open drawers overlay; do not paint full-drawer chat margins.
-  if (isKeepTabListVisibleEnabled()) {
-    clearChatMargins()
-    return
+  const mainSide = getMainDrawerSide()
+  // When Canvas owns main chrome (keepTabListVisible desktop), reflow
+  // follows the Canvas main shell — not host wrapperOpen.
+  let mainWidth: number
+  if (isMainMirrorActive()) {
+    if (isCanvasMainOpen()) {
+      mainWidth =
+        parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) ||
+        420
+    } else {
+      // Closed mirror: permanent pin strip still occupies the edge.
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
+  } else {
+    const mainOpen = isMainDrawerOpen()
+    mainWidth = mainOpen ? getMainDrawerWidth() : 0
+    // Legacy pin path: closed host drawer but strip still visible.
+    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
   }
 
-  const mainSide = getMainDrawerSide()
-  const mainOpen = isMainDrawerOpen()
-  const mainWidth = mainOpen ? getMainDrawerWidth() : 0
-
-  const secondaryWidth = isSecondarySidebarOpen()
+  // Secondary is opposite main. Open → live width; keep-tabs closed with
+  // a secondary pin strip → reserve strip so chat does not sit under buttons.
+  let secondaryWidth = isSecondarySidebarOpen()
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
+  if (
+    secondaryWidth === 0 &&
+    isKeepTabListVisibleEnabled() &&
+    getSecondaryTabList()
+  ) {
+    secondaryWidth = TAB_LIST_WIDTH_PX
+  }
 
   // Account for the LumiScript dock panel widths. The dock panel and the
   // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with

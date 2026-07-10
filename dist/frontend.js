@@ -946,14 +946,13 @@ function getDockInsets() {
 }
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
-    /* Static keep-tabs chrome — no transition (not chat reflow). */
-    html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
+    /* Static keep-tabs chrome for Welcome only — no transition.
+       Chat column is owned by chat reflow (higher-churn open/close margins). */
     html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
       margin-left: var(${STRIP_L_VAR}, 0px) !important;
       margin-right: var(${STRIP_R_VAR}, 0px) !important;
     }
     @media (max-width: 600px) {
-      html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
       html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
         margin-left: 0 !important;
         margin-right: 0 !important;
@@ -5212,14 +5211,25 @@ function updateChatReflow() {
     clearChatMargins();
     return;
   }
-  if (isKeepTabListVisibleEnabled()) {
-    clearChatMargins();
-    return;
-  }
   const mainSide = getMainDrawerSide();
-  const mainOpen = isMainDrawerOpen();
-  const mainWidth = mainOpen ? getMainDrawerWidth() : 0;
-  const secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  let mainWidth;
+  if (isMainMirrorActive()) {
+    if (isCanvasMainOpen()) {
+      mainWidth = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420;
+    } else {
+      mainWidth = TAB_LIST_WIDTH_PX;
+    }
+  } else {
+    const mainOpen = isMainDrawerOpen();
+    mainWidth = mainOpen ? getMainDrawerWidth() : 0;
+    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
+      mainWidth = TAB_LIST_WIDTH_PX;
+    }
+  }
+  let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  if (secondaryWidth === 0 && isKeepTabListVisibleEnabled() && getSecondaryTabList()) {
+    secondaryWidth = TAB_LIST_WIDTH_PX;
+  }
   const dockInsets = getDockInsets2();
   let rightMargin;
   let leftMargin;
@@ -5300,6 +5310,8 @@ var init_reflow = __esm(() => {
   init_wait_for();
   init_mobile_exclusion();
   init_state();
+  init_styles();
+  init_main_mirror_drawer();
 });
 
 // src/sidebar/secondary.tsx

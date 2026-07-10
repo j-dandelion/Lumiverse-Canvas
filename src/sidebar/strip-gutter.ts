@@ -1,13 +1,11 @@
-// Keep-tabs strip gutters — permanent page bounds between pin strips.
+// Keep-tabs strip gutters — permanent Welcome/Landing bounds between pin strips.
 //
-// When keepTabListVisible is on (desktop), content (chat + Welcome) is inset
-// by pin-strip width only (TAB_LIST_WIDTH_PX). Open drawers overlay that area;
-// they do not expand page bounds. This is stable CSS chrome owned by keep-tabs,
-// not chat reflow (no open/close rAF margin dance for Welcome).
+// When keepTabListVisible is on (desktop), Welcome/Landing is inset by pin-strip
+// width only (TAB_LIST_WIDTH_PX). Open drawers overlay Welcome; they do not
+// expand Landing page bounds. Chat column margins are owned by chat reflow
+// (open-drawer + closed-strip reserve under keep-tabs) — see chat/reflow.ts.
 //
-// Consumers use static CSS (no transition). Prefer a single host shell when a
-// safe common parent exists; until then dual leaf selectors match chat column
-// and LandingPage so both routes share the same strip bounds.
+// Consumers use static CSS (no transition) on LandingPage only.
 
 import { injectStyles } from '../debug/styles'
 import { getMainDrawerSide } from '../store'
@@ -41,14 +39,13 @@ export function injectStripGutterStyles(): void {
   injectStyles(
     STYLE_ID,
     `
-    /* Static keep-tabs chrome — no transition (not chat reflow). */
-    html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
+    /* Static keep-tabs chrome for Welcome only — no transition.
+       Chat column is owned by chat reflow (higher-churn open/close margins). */
     html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
       margin-left: var(${STRIP_L_VAR}, 0px) !important;
       margin-right: var(${STRIP_R_VAR}, 0px) !important;
     }
     @media (max-width: 600px) {
-      html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
       html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
         margin-left: 0 !important;
         margin-right: 0 !important;

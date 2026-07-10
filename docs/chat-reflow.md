@@ -1,20 +1,20 @@
 # Chat Reflow & Keep-tabs Strip Gutters
 
-Two separate systems own page/chat insets. Do not merge them.
+Two separate systems own different surfaces. Do not merge them.
 
 | System | Setting | What it does | Consumers |
 |--------|---------|--------------|-----------|
-| **Strip gutters** | `keepTabListVisible` (+ outer-edge) | Permanent page bounds = **pin-strip width only** (56px). Open drawers **overlay**. | Chat column + Welcome/Landing via static CSS |
-| **Chat reflow** | `chatReflow` | Open-drawer margins on the **chat column** only (with transition). | `[class*="_chatColumn_"]` only |
+| **Strip gutters** | `keepTabListVisible` (+ outer-edge) | Permanent **Welcome/Landing** bounds = **pin-strip width only** (56px). Open drawers **overlay** Welcome. | `[data-component="LandingPage"]` via static CSS |
+| **Chat reflow** | `chatReflow` | Open-drawer (and keep-tabs closed-strip) margins on the **chat column** only (with transition). | `[class*="_chatColumn_"]` only |
 
 ## Policy matrix
 
 | keepTabListVisible (desktop) | chatReflow | Strip gutters | Chat reflow |
 |------------------------------|------------|---------------|-------------|
 | OFF | OFF | none | none |
-| OFF | ON | none | Classic open-drawer widths on chat column |
-| ON | OFF | strip on active pin edges | none |
-| ON | ON | strip owns page bounds | **no-op** (clears chat margins) |
+| OFF | ON | none | Classic host open-drawer widths on chat column |
+| ON | OFF | strip on Landing pin edges | none (chat may sit under pin strips) |
+| ON | ON | strip on Landing only | **Active**: mirror open width / closed strip reserve; secondary open or strip |
 
 Mobile (≤600px): both clear / no-op.
 
@@ -32,12 +32,11 @@ When keep-tabs is effective on desktop:
 2. Opposite edge → 56 only if a secondary tab list exists
 3. Map to left/right from main drawer side
 4. Dock composition: `extra = max(0, stripBase - dockInset)` per side (overlap, not sum)
-5. **Never** use open-drawer / mirror open width
+5. **Never** use open-drawer / mirror open width (Welcome only)
 
 ### CSS
 
 ```css
-html.sidebar-ux-strip-gutters [class*="_chatColumn_"],
 html.sidebar-ux-strip-gutters [data-component="LandingPage"] {
   margin-left: var(--sidebar-ux-strip-l, 0px) !important;
   margin-right: var(--sidebar-ux-strip-r, 0px) !important;
@@ -45,7 +44,7 @@ html.sidebar-ux-strip-gutters [data-component="LandingPage"] {
 }
 ```
 
-Vars live on `document.documentElement`. Dual leaf selectors are intentional keep-tabs chrome (not reflow proliferation): both routes share the same strip bounds without a drawer open/close observer loop.
+Vars live on `document.documentElement`. Chat is **not** a strip-gutter consumer so reflow CSS is not overridden by the more-specific strip selector.
 
 ### When updated
 
@@ -76,12 +75,12 @@ Welcome/Landing is **not** a reflow consumer.
 ### Margin calculation (`updateChatReflow`)
 
 1. Mobile → clear + return  
-2. Keep-tabs effective → clear chat margins + return (strip gutters own bounds)  
-3. Else classic:  
-   - Main open → live drawer width; closed → 0  
-   - Secondary open → `--sidebar-ux-secondary-w`; closed → 0  
-   - Subtract dock insets per side  
-   - Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
+2. Main width:  
+   - **Main mirror active** (keep-tabs): open → `MAIN_MIRROR_WIDTH_VAR` (fallback 420); closed → `TAB_LIST_WIDTH_PX`  
+   - **Else**: host `isMainDrawerOpen` ? live width : 0; if keep-tabs effective and still 0 → strip reserve  
+3. Secondary: open → `--sidebar-ux-secondary-w` (fallback 420); if closed + keep-tabs + secondary list → strip reserve  
+4. Subtract dock insets per side  
+5. Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
 
 ### Observers
 
@@ -92,6 +91,8 @@ Welcome/Landing is **not** a reflow consumer.
 3. App childList → when chat column appears (SPA navigate into chat)  
 4. matchMedia 600px → clear on cross-down, recompute on cross-up  
 5. Button tagger (co-located lifecycle)
+
+Also: secondary open/close, main-mirror `bumpReflow()`, keep-tabs apply, and feature toggle call `updateChatReflow()` directly.
 
 `scheduleReflow()` coalesces via `requestAnimationFrame`.
 

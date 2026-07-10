@@ -208,7 +208,7 @@ const styleEl = stubDocument.getElementById('sidebar-ux-strip-gutter')
 assert(styleEl !== null, 'injectStripGutterStyles inserts style tag')
 const css = (styleEl as any).textContent as string
 assert(css.includes('LandingPage'), 'strip gutter CSS targets LandingPage')
-assert(css.includes('_chatColumn_'), 'strip gutter CSS targets chat column')
+assert(!css.includes('_chatColumn_'), 'strip gutter CSS does not own chat column (reflow does)')
 assert(!css.includes('transition:'), 'strip gutter CSS has no transition: property')
 
 function _hydrate(patch: { keepTabListVisible?: boolean; moveControlsToOuterEdge?: boolean }) {

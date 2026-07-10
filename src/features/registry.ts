@@ -369,8 +369,8 @@ const tabPositionFeature: CanvasFeature = {
  *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
  *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
  *    forward to host tab buttons. Hidden while main drawer is open.
- *  - Strip gutters: permanent page bounds (strip width only) for chat +
- *    Welcome; open drawers overlay. Not chat reflow.
+ *  - Strip gutters: permanent Welcome/Landing bounds (strip width only);
+ *    open drawers overlay Welcome. Chat margins stay with chat reflow.
  *  Secondary remount also calls reconcileTabListPin(); side-change calls
  *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
  *  No-op on mobile (force-unpins / tears down main mirror). */
@@ -389,7 +389,7 @@ const keepTabListVisibleFeature: CanvasFeature = {
     }
     updateDrawerTabVisibility()
     updateStripGutters()
-    // Clear any chat-reflow margins so strip gutters alone own page bounds.
+    // Recompute chat reflow (mirror open width / closed strip reserve).
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
