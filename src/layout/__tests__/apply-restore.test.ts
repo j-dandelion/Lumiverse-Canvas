@@ -71,7 +71,11 @@ import { drawerObserver } from '../../sidebar/drawer-observer'
 import {
   getTabAssignments, hasTabAssignment, deleteTabAssignment,
 } from '../../tabs/assignment'
-import { __setSecondaryWrapperForTest } from '../../sidebar/secondary'
+import {
+  __setSecondaryWrapperForTest,
+  isSecondarySidebarOpen,
+  setSecondarySidebarOpen,
+} from '../../sidebar/secondary'
 import { __setDrawerTabsForTest, __setStoreSnapshotForTest } from '../../store'
 import { applyLayout, setRestoreTimeoutMs, cancelApplyLayoutInterval } from '../apply'
 import {
@@ -133,14 +137,70 @@ function buildFakePanelContent() {
   return { el, _children }
 }
 
-function buildFakeSecondaryWrapper() {
+function makeClassList(initial: string[] = []) {
+  const set = new Set(initial)
+  return {
+    _set: set,
+    add(c: string) { set.add(c) },
+    remove(c: string) { set.delete(c) },
+    contains(c: string) { return set.has(c) },
+    toggle(c: string, force?: boolean) {
+      if (force === true) { set.add(c); return true }
+      if (force === false) { set.delete(c); return false }
+      if (set.has(c)) { set.delete(c); return false }
+      set.add(c)
+      return true
+    },
+  }
+}
+
+function buildFakeSecondaryWrapper(opts?: { withTabList?: Array<{ tabId: string }> }) {
   const { el: panelContent } = buildFakePanelContent()
+  const tabButtons: any[] = (opts?.withTabList ?? []).map((t) => {
+    const btn: any = {
+      tagName: 'BUTTON',
+      classList: makeClassList(),
+      style: {} as Record<string, string>,
+      _attrs: { 'data-tab-id': t.tabId } as Record<string, string>,
+      getAttribute(name: string) { return btn._attrs[name] ?? null },
+      setAttribute(name: string, value: string) { btn._attrs[name] = value },
+      querySelector(_sel: string) { return null },
+    }
+    return btn
+  })
+  const tabList: any = opts?.withTabList
+    ? {
+        tagName: 'DIV',
+        className: 'sidebar-ux-tab-list',
+        querySelector(sel: string) {
+          if (sel.startsWith('[data-tab-id=')) {
+            const m = sel.match(/\[data-tab-id="(.+?)"\]/)
+            if (m) {
+              const id = m[1].replace(/\\(.)/g, '$1')
+              return tabButtons.find((b) => b.getAttribute('data-tab-id') === id) ?? null
+            }
+          }
+          return null
+        },
+        querySelectorAll(sel: string) {
+          if (sel === 'button[data-tab-id]' || sel === 'button.sidebar-ux-tab-active') {
+            if (sel === 'button.sidebar-ux-tab-active') {
+              return tabButtons.filter((b) => b.classList.contains('sidebar-ux-tab-active'))
+            }
+            return tabButtons
+          }
+          return []
+        },
+        appendChild(child: any) { tabButtons.push(child) },
+      }
+    : null
   const wrapper: any = {
     tagName: 'DIV',
     _attrs: {} as Record<string, string>,
     style: { transform: '', setProperty(_k: string, _v: string) {} },
     querySelector(sel: string) {
       if (sel === '.sidebar-ux-panel-content') return panelContent
+      if (sel === '.sidebar-ux-tab-list') return tabList
       return null
     },
     querySelectorAll(_sel: string) { return [] },
@@ -154,7 +214,7 @@ function buildFakeSecondaryWrapper() {
     contains(_node: any) { return false },
     setProperty(name: string, value: string) { wrapper.style[name] = value },
   }
-  return { wrapper, panelContent }
+  return { wrapper, panelContent, tabList, tabButtons }
 }
 
 function buildFakeSidebar(buttons: Array<{ tabId: string; title: string }>) {
@@ -203,13 +263,19 @@ function buildFakeSidebar(buttons: Array<{ tabId: string; title: string }>) {
 // Test helpers
 // =====================================================================
 
-function setupEnv(tabs: Array<{ id: string; title: string; extensionId?: string }>) {
-  const { wrapper, panelContent } = buildFakeSecondaryWrapper()
+function setupEnv(
+  tabs: Array<{ id: string; title: string; extensionId?: string }>,
+  opts?: { withTabList?: boolean },
+) {
+  const { wrapper, panelContent, tabButtons } = buildFakeSecondaryWrapper(
+    opts?.withTabList ? { withTabList: tabs.map((t) => ({ tabId: t.id })) } : undefined,
+  )
   const sidebar = buildFakeSidebar(tabs.map(t => ({ tabId: t.id, title: t.title })))
 
   _fakeSidebar = sidebar
   _fakeSecondaryWrapper = wrapper
   __setSecondaryWrapperForTest(wrapper)
+  setSecondarySidebarOpen(false)
   __setDrawerTabsForTest(tabs.map(t => ({
     id: t.id,
     extensionId: t.extensionId ?? 'test-ext-uuid',
@@ -223,7 +289,7 @@ function setupEnv(tabs: Array<{ id: string; title: string; extensionId?: string 
     spindle: { ui: { getBuiltInTabRoot: () => undefined, requestTabLocation: () => {} }, containers: {} },
   } as any
 
-  return { wrapper, panelContent, sidebar }
+  return { wrapper, panelContent, sidebar, tabButtons }
 }
 
 function cleanup() {
@@ -233,6 +299,7 @@ function cleanup() {
   for (const [key] of getTabAssignments()) deleteTabAssignment(key)
   ;(drawerObserver as any).tabs.clear()
   __setSecondaryWrapperForTest(null)
+  setSecondarySidebarOpen(false)
   __setDrawerTabsForTest(null)
   __setStoreSnapshotForTest(null)
   _capturedObservers.length = 0
@@ -662,6 +729,42 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   assertEqual(getActiveSecondaryTabId(), 'tab:lore:1', 'T14: active tab set by finishRestore')
   const elapsed = Date.now() - t0
   assert(elapsed < 1000, `T14: finished well under safety timeout (elapsed ${elapsed}ms)`)
+
+  cleanup()
+}
+
+// =====================================================================
+// T15: Closed secondary restore — activeTabId restored, no button highlight
+// Hard refresh with keep-tabs strip + secondary.open:false: finishRestore
+// used to call showSecondaryTab (paint active) then skip close (already
+// closed), leaving a highlighted tab on the closed strip.
+// =====================================================================
+{
+  const { tabButtons } = setupEnv(
+    [{ id: 'tab:ext:1', title: 'Lorebook' }],
+    { withTabList: true },
+  )
+  setRestoreTimeoutMs(50)
+  setSecondarySidebarOpen(false)
+
+  const layout = {
+    secondary: { open: false, width: 300, activeTabId: 'tab:ext:1' },
+    detachedTabs: [{ tabId: 'tab:ext:1' }],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  assert(!isRestoringFromLayout(), 'T15: restore finished')
+  assert(!isSecondarySidebarOpen(), 'T15: drawer stays closed')
+  assertEqual(getActiveSecondaryTabId(), 'tab:ext:1', 'T15: activeTabId restored for reopen')
+  const anyActive = tabButtons.some((b: any) => b.classList.contains('sidebar-ux-tab-active'))
+  assert(!anyActive, 'T15: no tab button highlighted while closed')
 
   cleanup()
 }

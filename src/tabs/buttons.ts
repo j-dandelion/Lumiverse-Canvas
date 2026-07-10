@@ -315,6 +315,22 @@ export function updateDrawerTabVisibility(): void {
   drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
 }
 
+/**
+ * Remove the visual active highlight from all secondary tab buttons.
+ * Does not clear `getActiveSecondaryTabId()` — memory of the last active
+ * tab is retained for reopen / restore. Used when the drawer closes and
+ * after layout restore finishes with the drawer closed (finishRestore
+ * calls showSecondaryTab then applySecondaryOpenState; the open-state
+ * path is a no-op when already closed, so highlight would otherwise stick).
+ */
+export function clearSecondaryTabButtonActive(): void {
+  const tabList = getSecondaryTabList()
+  if (!tabList) return
+  for (const btn of tabList.querySelectorAll('button.sidebar-ux-tab-active')) {
+    btn.classList.remove('sidebar-ux-tab-active')
+  }
+}
+
 export function showSecondaryTab(tabId: string): void {
   // Record which tab is now active.
   setActiveSecondaryTabId(tabId)

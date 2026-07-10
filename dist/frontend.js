@@ -2836,6 +2836,14 @@ function updateDrawerTabVisibility() {
   const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === "secondary");
   drawerTab.style.display = hasSecondaryTabs ? "flex" : "none";
 }
+function clearSecondaryTabButtonActive() {
+  const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
+  for (const btn of tabList.querySelectorAll("button.sidebar-ux-tab-active")) {
+    btn.classList.remove("sidebar-ux-tab-active");
+  }
+}
 function showSecondaryTab(tabId) {
   setActiveSecondaryTabId(tabId);
   persistLayout();
@@ -5918,6 +5926,9 @@ async function applyLayout(layout) {
         }
       }
       applySecondaryOpenState();
+      if (!isSecondarySidebarOpen()) {
+        clearSecondaryTabButtonActive();
+      }
       const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility();

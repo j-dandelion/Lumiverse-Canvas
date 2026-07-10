@@ -18,6 +18,7 @@ import {
 } from '../sidebar/secondary-drawer'
 import {
   hideMainTabButton, showSecondaryTab, findMainTabButton, updateDrawerTabVisibility,
+  clearSecondaryTabButtonActive,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
@@ -255,6 +256,15 @@ export async function applyLayout(layout: any) {
       // Mobile exclusion: don't reopen the secondary if the primary is
       // open on mobile.
       applySecondaryOpenState()
+      // showSecondaryTab always paints sidebar-ux-tab-active. applySecondaryOpenState
+      // only calls closeSecondarySidebar when the drawer is currently open — when
+      // mount already left it closed (saved open:false / keep-tabs strip), the
+      // close path never runs and a tab stays highlighted on the closed strip.
+      // Match closeSecondarySidebar: no button looks selected while closed;
+      // activeTabId remains for the next open/click.
+      if (!isSecondarySidebarOpen()) {
+        clearSecondaryTabButtonActive()
+      }
       const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0
       if (_hasDetachedTabs) {
         updateDrawerTabVisibility()
