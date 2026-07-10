@@ -133,6 +133,7 @@ import {
 } from '../strip-gutter'
 import { TAB_LIST_WIDTH_PX } from '../styles'
 import { __setSecondaryWrapperForTest } from '../secondary'
+import { clearTabAssignments, setTabAssignment } from '../../tabs/assignment'
 
 function _setViewport(mobile: boolean) {
   _mediaMatches = mobile
@@ -169,8 +170,11 @@ function _installDom(opts: {
     tabList.className = 'sidebar-ux-tab-list'
     sec.appendChild(tabList)
     __setSecondaryWrapperForTest(sec as any)
+    // Gutter secondary base keys off assignments, not list node presence.
+    setTabAssignment('strip-gutter-stub-tab', 'secondary')
   } else {
     __setSecondaryWrapperForTest(null)
+    clearTabAssignments()
   }
 
   stubDocument.body = wrapper
@@ -195,6 +199,7 @@ function _resetAll() {
   _mediaInnerWidth = 1280
   StubObserver.instances = []
   __setSecondaryWrapperForTest(null)
+  clearTabAssignments()
   clearStripGutters()
   resetHydrationGuard()
   hydrateSettings({ keepTabListVisible: false, moveControlsToOuterEdge: false })
@@ -251,7 +256,7 @@ assertEqual(
   'main right, no secondary: left = 0',
 )
 
-// main left + secondary → both sides
+// main left + secondary (with assignments) → both sides
 _resetAll()
 _installDom({ leftSide: true, secondaryList: true })
 _hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
@@ -265,6 +270,28 @@ assertEqual(
   stubDocument.documentElement.style.getPropertyValue(STRIP_R_VAR),
   `${TAB_LIST_WIDTH_PX}px`,
   'main left + secondary: right = strip',
+)
+
+// secondary list mounted but zero assignments → no secondary gutter
+_resetAll()
+_installDom({ leftSide: true, secondaryList: true })
+clearTabAssignments()
+_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+assertEqual(
+  computeStripGutters().right,
+  0,
+  'empty secondary (list present): secondary base = 0',
+)
+assertEqual(
+  computeStripGutters().left,
+  TAB_LIST_WIDTH_PX,
+  'empty secondary: main strip still reserved',
+)
+updateStripGutters()
+assertEqual(
+  stubDocument.documentElement.style.getPropertyValue(STRIP_R_VAR),
+  '0px',
+  'empty secondary: --sidebar-ux-strip-r = 0px',
 )
 
 // dock wider than strip → 0 extra on that side

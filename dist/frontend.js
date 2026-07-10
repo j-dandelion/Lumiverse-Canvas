@@ -939,548 +939,30 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
-// src/sidebar/strip-gutter.ts
-var exports_strip_gutter = {};
-__export(exports_strip_gutter, {
-  updateStripGutters: () => updateStripGutters,
-  injectStripGutterStyles: () => injectStripGutterStyles,
-  computeStripGutters: () => computeStripGutters,
-  clearStripGutters: () => clearStripGutters,
-  STRIP_R_VAR: () => STRIP_R_VAR,
-  STRIP_L_VAR: () => STRIP_L_VAR,
-  STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS
-});
-function getDockInsets() {
-  const appEl = document.querySelector("[data-app-root]");
-  if (!appEl)
-    return { left: 0, right: 0 };
-  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
-  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
-  return { left, right };
+// src/sidebar/cleanup.ts
+function registerCleanup(fn) {
+  _cleanupFns.push(fn);
 }
-function injectStripGutterStyles() {
-  injectStyles(STYLE_ID, `
-    /* Static keep-tabs chrome for Welcome only — no transition.
-       Chat column is owned by chat reflow (higher-churn open/close margins). */
-    html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
-      margin-left: var(${STRIP_L_VAR}, 0px) !important;
-      margin-right: var(${STRIP_R_VAR}, 0px) !important;
-    }
-    @media (max-width: 600px) {
-      html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
-        margin-left: 0 !important;
-        margin-right: 0 !important;
-      }
-    }
-  `);
-}
-function stopStripGutterObservers() {
-  if (_dockObserver) {
-    _dockObserver.disconnect();
-    _dockObserver = null;
-  }
-  if (_mediaQuery && _onMediaChange) {
-    _mediaQuery.removeEventListener("change", _onMediaChange);
-  }
-  _mediaQuery = null;
-  _onMediaChange = null;
-}
-function clearStripGutterVars() {
-  const root = document.documentElement;
-  root.classList.remove(STRIP_GUTTER_CLASS);
-  root.style.removeProperty(STRIP_L_VAR);
-  root.style.removeProperty(STRIP_R_VAR);
-}
-function ensureStripGutterObservers() {
-  if (!_dockObserver) {
-    const appEl = document.querySelector("[data-app-root]");
-    if (appEl) {
-      _dockObserver = new MutationObserver(() => {
-        updateStripGutters();
-      });
-      _dockObserver.observe(appEl, { attributes: true, attributeFilter: ["style"] });
+function cleanupAll() {
+  for (const fn of _cleanupFns) {
+    try {
+      fn();
+    } catch (err) {
+      dwarn("Cleanup error:", err);
     }
   }
-  if (!_mediaQuery) {
-    _mediaQuery = window.matchMedia("(max-width: 600px)");
-    _onMediaChange = (e) => {
-      if (e.matches) {
-        clearStripGutterVars();
-      } else {
-        updateStripGutters();
-      }
-    };
-    _mediaQuery.addEventListener("change", _onMediaChange);
+  _cleanupFns.length = 0;
+  try {
+    clearTabAssignments();
+  } catch (err) {
+    dwarn("clearTabAssignments error:", err);
   }
 }
-function computeStripGutters() {
-  const mainSide = getMainDrawerSide();
-  const mainBase = TAB_LIST_WIDTH_PX;
-  const secondaryBase = getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
-  let leftBase = 0;
-  let rightBase = 0;
-  if (mainSide === "left") {
-    leftBase = mainBase;
-    rightBase = secondaryBase;
-  } else {
-    rightBase = mainBase;
-    leftBase = secondaryBase;
-  }
-  const dock = getDockInsets();
-  return {
-    left: Math.max(0, leftBase - dock.left),
-    right: Math.max(0, rightBase - dock.right)
-  };
-}
-function clearStripGutters() {
-  clearStripGutterVars();
-  stopStripGutterObservers();
-}
-function updateStripGutters() {
-  if (isMobileViewport()) {
-    clearStripGutterVars();
-    return;
-  }
-  if (!isKeepTabListVisibleEnabled()) {
-    clearStripGutters();
-    return;
-  }
-  injectStripGutterStyles();
-  ensureStripGutterObservers();
-  const { left, right } = computeStripGutters();
-  const root = document.documentElement;
-  root.classList.add(STRIP_GUTTER_CLASS);
-  root.style.setProperty(STRIP_L_VAR, `${left}px`);
-  root.style.setProperty(STRIP_R_VAR, `${right}px`);
-}
-var STRIP_GUTTER_CLASS = "sidebar-ux-strip-gutters", STRIP_L_VAR = "--sidebar-ux-strip-l", STRIP_R_VAR = "--sidebar-ux-strip-r", STYLE_ID = "sidebar-ux-strip-gutter", _dockObserver = null, _mediaQuery = null, _onMediaChange = null;
-var init_strip_gutter = __esm(() => {
-  init_store();
-  init_state();
-  init_mobile_exclusion();
-  init_secondary();
-  init_styles();
-});
-
-// src/sidebar/tab-position.ts
-var exports_tab_position = {};
-__export(exports_tab_position, {
-  reconcileTabListPin: () => reconcileTabListPin,
-  isTabListPinned: () => isTabListPinned,
-  getTabListPosition: () => getTabListPosition,
-  getPinnedTabList: () => getPinnedTabList,
-  getMainPinHost: () => getMainPinHost,
-  ensureMainPinHost: () => ensureMainPinHost,
-  destroyMainPinHost: () => destroyMainPinHost,
-  clearPinnedTabListChrome: () => clearPinnedTabListChrome,
-  applyTabListPosition: () => applyTabListPosition,
-  applyTabListPin: () => applyTabListPin,
-  applyPinnedTabListChrome: () => applyPinnedTabListChrome,
-  __setPinHostForTest: () => __setPinHostForTest,
-  __setMainPinHostForTest: () => __setMainPinHostForTest,
-  __resetPinStateForTest: () => __resetPinStateForTest,
-  __getPinHostForTest: () => __getPinHostForTest,
-  __getMainPinHostForTest: () => __getMainPinHostForTest,
-  TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
-  TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
-  TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
-  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
-  PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
-  PIN_OWNER_MAIN: () => PIN_OWNER_MAIN
-});
-function getPinnedTabList() {
-  if (!_pinHost)
-    return null;
-  const kids = _pinHost.children;
-  if (kids && kids.length) {
-    let last = null;
-    for (let i = 0;i < kids.length; i++) {
-      const c = kids[i];
-      if (isTabListElement(c))
-        last = c;
-    }
-    if (last)
-      return last;
-  }
-  return _pinHost.querySelector?.(".sidebar-ux-tab-list") ?? null;
-}
-function isTabListElement(el) {
-  if (!el)
-    return false;
-  const cn = el.className;
-  if (typeof cn === "string") {
-    const tokens = cn.split(/\s+/).filter(Boolean);
-    if (tokens.includes("sidebar-ux-tab-list") || tokens.includes(TAB_LIST_PINNED_CLASS)) {
-      return true;
-    }
-  }
-  const cls = el.classList;
-  if (typeof cls?.contains === "function") {
-    return cls.contains("sidebar-ux-tab-list") || cls.contains(TAB_LIST_PINNED_CLASS);
-  }
-  return false;
-}
-function __getPinHostForTest() {
-  return _pinHost;
-}
-function __setPinHostForTest(host) {
-  _pinHost = host;
-}
-function __getMainPinHostForTest() {
-  return _mainPinHost;
-}
-function __setMainPinHostForTest(host) {
-  _mainPinHost = host;
-}
-function __resetPinStateForTest() {
-  _pinHost = null;
-  _pinSpacer = null;
-  _restoreParent = null;
-  _restoreNext = null;
-  _mainPinHost = null;
-}
-function getMainPinHost() {
-  return _mainPinHost;
-}
-function ensureMainPinHost(side) {
-  if (typeof document === "undefined" || !document.body)
-    return null;
-  if (!_mainPinHost) {
-    _mainPinHost = document.createElement("div");
-    document.body.appendChild(_mainPinHost);
-  }
-  sweepStrayPinHosts();
-  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN);
-  return _mainPinHost;
-}
-function destroyMainPinHost() {
-  if (_mainPinHost) {
-    while (_mainPinHost.firstChild) {
-      _mainPinHost.removeChild(_mainPinHost.firstChild);
-    }
-    _mainPinHost.remove();
-    _mainPinHost = null;
-  }
-  sweepStrayPinHosts();
-}
-function applyPinHostChrome(host, side, owner) {
-  host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
-  host.setAttribute("data-pin-owner", owner);
-  setIfDifferent(host.style, "position", "fixed");
-  setIfDifferent(host.style, "top", SAFE_TOP);
-  setIfDifferent(host.style, "bottom", SAFE_BOTTOM);
-  setIfDifferent(host.style, "zIndex", PIN_Z_INDEX);
-  setIfDifferent(host.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(host.style, "pointerEvents", "none");
-  if (side === "right") {
-    setIfDifferent(host.style, "right", "0");
-    setIfDifferent(host.style, "left", "");
-  } else {
-    setIfDifferent(host.style, "left", "0");
-    setIfDifferent(host.style, "right", "");
-  }
-}
-function setIfDifferent(el, prop, val) {
-  if (el[prop] !== val) {
-    el[prop] = val;
-  }
-}
-function applyFlexAndBorder(drawer, tabList, wantFlex) {
-  setIfDifferent(drawer.style, "flexDirection", wantFlex);
-  const wantBorder = wantFlex === "row" ? "right" : "left";
-  setIfDifferent(tabList.style, "borderTop", "none");
-  setIfDifferent(tabList.style, "borderBottom", "none");
-  if (wantBorder === "right") {
-    setIfDifferent(tabList.style, "borderRight", "1px solid var(--lumiverse-primary-020)");
-    setIfDifferent(tabList.style, "borderLeft", "none");
-  } else {
-    setIfDifferent(tabList.style, "borderLeft", "1px solid var(--lumiverse-primary-020)");
-    setIfDifferent(tabList.style, "borderRight", "none");
-  }
-}
-function applyPanelChatBorder(panel, drawerSide, enabled) {
-  const chatSide = drawerSide === "left" ? "right" : "left";
-  if (enabled) {
-    if (chatSide === "right") {
-      setIfDifferent(panel.style, "borderRight", CHAT_FACING_BORDER);
-      setIfDifferent(panel.style, "borderLeft", "none");
-    } else {
-      setIfDifferent(panel.style, "borderLeft", CHAT_FACING_BORDER);
-      setIfDifferent(panel.style, "borderRight", "none");
-    }
-  } else {
-    setIfDifferent(panel.style, "borderRight", "none");
-    setIfDifferent(panel.style, "borderLeft", "none");
-  }
-  setIfDifferent(panel.style, "borderTop", "none");
-  setIfDifferent(panel.style, "borderBottom", "none");
-}
-function wantsChatFacingPanelBorder(outerEdgeEnabled) {
-  return outerEdgeEnabled || !!getSettings().keepTabListVisible;
-}
-function applyTabListPosition(enabled, opts) {
-  if (isMobileViewport())
-    return;
-  const side = getMainDrawerSide();
-  const chatBorder = wantsChatFacingPanelBorder(enabled);
-  const drawer = opts?.drawer ?? getSecondaryDrawer();
-  const tabList = opts?.tabList ?? getSecondaryTabList();
-  const panel = opts?.panel ?? getSecondaryPanel();
-  if (drawer && tabList) {
-    const pinned = typeof tabList.classList?.contains === "function" && tabList.classList.contains(TAB_LIST_PINNED_CLASS);
-    const secondaryDrawerSide = side === "left" ? "right" : "left";
-    if (!pinned) {
-      const defaultFlex = secondaryDrawerSide === "left" ? "row-reverse" : "row";
-      const toggledFlex = secondaryDrawerSide === "left" ? "row" : "row-reverse";
-      const wantFlex = enabled ? toggledFlex : defaultFlex;
-      applyFlexAndBorder(drawer, tabList, wantFlex);
-    }
-    if (panel)
-      applyPanelChatBorder(panel, secondaryDrawerSide, chatBorder);
-  }
-  const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
-  const mainTabList = opts?.mainTabList ?? getMainSidebar();
-  const mainPanel = opts?.mainPanel ?? getMainPanel();
-  if (mainDrawer && mainTabList) {
-    const mainDefaultFlex = side === "left" ? "row-reverse" : "row";
-    const mainToggledFlex = side === "left" ? "row" : "row-reverse";
-    const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex;
-    applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex);
-    if (mainPanel)
-      applyPanelChatBorder(mainPanel, side, chatBorder);
-  }
-}
-function getTabListPosition(opts) {
-  const empty = {
-    drawerDir: "",
-    tabListBorderLeft: "",
-    tabListBorderRight: "",
-    handleLeft: "",
-    handleRight: "",
-    mainDrawerDir: "",
-    mainTabListBorderLeft: "",
-    mainTabListBorderRight: ""
-  };
-  const drawer = opts?.drawer ?? null;
-  const tabList = opts?.tabList ?? null;
-  const handle = opts?.handle ?? null;
-  const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
-  const mainTabList = opts?.mainTabList ?? getMainSidebar();
-  return {
-    drawerDir: drawer?.style.flexDirection || "",
-    tabListBorderLeft: tabList?.style.borderLeft || "",
-    tabListBorderRight: tabList?.style.borderRight || "",
-    handleLeft: handle?.style.left || "",
-    handleRight: handle?.style.right || "",
-    mainDrawerDir: mainDrawer?.style.flexDirection || "",
-    mainTabListBorderLeft: mainTabList?.style.borderLeft || "",
-    mainTabListBorderRight: mainTabList?.style.borderRight || ""
-  };
-}
-function isTabListPinned(tabList) {
-  const el = tabList ?? getSecondaryTabList() ?? getPinnedTabList();
-  return !!el?.classList.contains(TAB_LIST_PINNED_CLASS);
-}
-function reconcileTabListPin() {
-  if (isMobileViewport()) {
-    applyTabListPin(false, { force: true });
-    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-    return;
-  }
-  applyTabListPin(!!getSettings().keepTabListVisible, { force: true });
-  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-}
-function applyTabListPin(enabled, opts) {
-  if (isMobileViewport()) {
-    if (enabled && !opts?.force)
-      return;
-    const el = getSecondaryTabList() ?? getPinnedTabList();
-    if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
-      unpinTabList(el);
-    }
-    return;
-  }
-  if (!enabled) {
-    const el = getSecondaryTabList() ?? getPinnedTabList();
-    const hasPinState = !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer;
-    if (!hasPinState) {
-      if (opts?.force)
-        destroyPinChrome();
-      return;
-    }
-    unpinTabList(el);
-    return;
-  }
-  const tabList = getSecondaryTabList();
-  if (!tabList)
-    return;
-  const isPinned = tabList.classList.contains(TAB_LIST_PINNED_CLASS);
-  if (isPinned && !opts?.force)
-    return;
-  pinTabList(tabList);
-}
-function secondarySide() {
-  return getMainDrawerSide() === "left" ? "right" : "left";
-}
-function ensurePinHost(side) {
-  if (typeof document === "undefined" || !document.body)
-    return null;
-  if (!_pinHost) {
-    _pinHost = document.createElement("div");
-    document.body.appendChild(_pinHost);
-  }
-  sweepStrayPinHosts();
-  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
-  return _pinHost;
-}
-function sweepStrayPinHosts() {
-  if (typeof document === "undefined" || !document.querySelectorAll)
-    return;
-  const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`);
-  for (const host of Array.from(hosts)) {
-    if (host !== _pinHost && host !== _mainPinHost) {
-      host.remove();
-    }
-  }
-}
-function removeOrphanTabListsFromHost(keep) {
-  if (!_pinHost)
-    return;
-  const kids = _pinHost.children ? Array.from(_pinHost.children) : Array.from(_pinHost.childNodes).filter((c) => c.nodeType === 1 || isTabListElement(c));
-  for (const child of kids) {
-    if (child === keep)
-      continue;
-    if (isTabListElement(child)) {
-      _pinHost.removeChild(child);
-    }
-  }
-}
-function applyPinnedTabListChrome(tabList, side) {
-  const innerBorderSide = side === "right" ? "left" : "right";
-  tabList.classList.add(TAB_LIST_PINNED_CLASS);
-  setIfDifferent(tabList.style, "position", "fixed");
-  setIfDifferent(tabList.style, "top", SAFE_TOP);
-  setIfDifferent(tabList.style, "bottom", SAFE_BOTTOM);
-  setIfDifferent(tabList.style, "zIndex", PIN_Z_INDEX);
-  setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(tabList.style, "pointerEvents", "auto");
-  if (side === "right") {
-    setIfDifferent(tabList.style, "right", "0");
-    setIfDifferent(tabList.style, "left", "");
-  } else {
-    setIfDifferent(tabList.style, "left", "0");
-    setIfDifferent(tabList.style, "right", "");
-  }
-  if (innerBorderSide === "right") {
-    setIfDifferent(tabList.style, "borderRight", INNER_BORDER);
-    setIfDifferent(tabList.style, "borderLeft", "none");
-  } else {
-    setIfDifferent(tabList.style, "borderLeft", INNER_BORDER);
-    setIfDifferent(tabList.style, "borderRight", "none");
-  }
-}
-function clearPinnedTabListChrome(tabList) {
-  tabList.classList.remove(TAB_LIST_PINNED_CLASS);
-  setIfDifferent(tabList.style, "position", "");
-  setIfDifferent(tabList.style, "top", "");
-  setIfDifferent(tabList.style, "bottom", "");
-  setIfDifferent(tabList.style, "left", "");
-  setIfDifferent(tabList.style, "right", "");
-  setIfDifferent(tabList.style, "zIndex", "");
-  setIfDifferent(tabList.style, "pointerEvents", "");
-  setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(tabList.style, "borderLeft", "");
-  setIfDifferent(tabList.style, "borderRight", "");
-}
-function pinTabList(tabList) {
-  const drawer = getSecondaryDrawer();
-  const panel = getSecondaryPanel();
-  const side = secondarySide();
-  const parent = tabList.parentElement;
-  if (parent && parent !== _pinHost) {
-    _restoreParent = parent;
-    _restoreNext = tabList.nextSibling;
-    if (!_pinSpacer) {
-      _pinSpacer = document.createElement("div");
-      _pinSpacer.className = TAB_LIST_SPACER_CLASS;
-      _pinSpacer.setAttribute("aria-hidden", "true");
-      setIfDifferent(_pinSpacer.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-      setIfDifferent(_pinSpacer.style, "flexShrink", "0");
-    }
-    if (_pinSpacer.parentElement !== parent) {
-      parent.insertBefore(_pinSpacer, _restoreNext);
-    }
-    const host = ensurePinHost(side);
-    if (host && tabList.parentElement !== host) {
-      removeOrphanTabListsFromHost(tabList);
-      host.appendChild(tabList);
-    }
-    removeOrphanTabListsFromHost(tabList);
-  } else if (_pinHost) {
-    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
-    removeOrphanTabListsFromHost(tabList);
-  }
-  applyPinnedTabListChrome(tabList, side);
-  if (drawer) {
-    setIfDifferent(drawer.style, "flexDirection", "");
-  }
-  if (panel) {
-    applyPanelChatBorder(panel, side, true);
-  }
-}
-function unpinTabList(tabList) {
-  if (tabList) {
-    clearPinnedTabListChrome(tabList);
-    if (_restoreParent && tabList.parentElement === _pinHost) {
-      if (_pinSpacer?.parentElement === _restoreParent) {
-        _restoreParent.insertBefore(tabList, _pinSpacer);
-      } else if (_restoreNext && _restoreNext.parentNode === _restoreParent) {
-        _restoreParent.insertBefore(tabList, _restoreNext);
-      } else {
-        const panel = getSecondaryPanel();
-        if (panel && panel.parentElement === _restoreParent) {
-          _restoreParent.insertBefore(tabList, panel);
-        } else {
-          _restoreParent.appendChild(tabList);
-        }
-      }
-    }
-  }
-  destroyPinChrome();
-  applyTabListPosition(getSettings().moveControlsToOuterEdge);
-}
-function destroyPinChrome() {
-  if (_pinSpacer) {
-    _pinSpacer.remove();
-    _pinSpacer = null;
-  }
-  _restoreParent = null;
-  _restoreNext = null;
-  if (_pinHost) {
-    if (_pinHost.childNodes.length > 0) {
-      const drawer = getSecondaryDrawer();
-      const panel = getSecondaryPanel();
-      while (_pinHost.firstChild) {
-        const child = _pinHost.removeChild(_pinHost.firstChild);
-        if (drawer && panel) {
-          drawer.insertBefore(child, panel);
-        } else if (drawer) {
-          drawer.appendChild(child);
-        }
-      }
-    }
-    _pinHost.remove();
-    _pinHost = null;
-  }
-  sweepStrayPinHosts();
-}
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
-var init_tab_position = __esm(() => {
-  init_store();
-  init_state();
-  init_mobile_exclusion();
-  init_secondary();
-  init_styles();
+var _cleanupFns;
+var init_cleanup = __esm(() => {
+  init_log();
+  init_assignment();
+  _cleanupFns = [];
 });
 
 // src/tabs/active-tab.ts
@@ -1531,1280 +1013,6 @@ function setActiveSecondaryTabId(tabId) {
 var _activeSecondaryTabId = null;
 var init_active_tab = __esm(() => {
   init_store();
-});
-
-// src/tabs/activation-handoff.ts
-async function captureSourceList(side, h) {
-  if (side === "primary") {
-    const _findStore = h?.findStoreData ?? findStoreData;
-    const _getTabs = h?.getDrawerTabs ?? getDrawerTabs;
-    const _getSidebar = h?.getMainSidebar ?? getMainSidebar;
-    const mainSidebar = _getSidebar();
-    const domIds = [];
-    if (mainSidebar) {
-      const btns2 = mainSidebar.querySelectorAll("button[data-tab-id]");
-      for (const btn of btns2) {
-        const id = btn.getAttribute("data-tab-id");
-        if (id)
-          domIds.push(id);
-      }
-    }
-    _findStore(true);
-    const storeIds = _getTabs().map((t) => t.id).filter(Boolean);
-    const merged = [];
-    const seen = new Set;
-    for (const id of domIds) {
-      if (!seen.has(id)) {
-        merged.push(id);
-        seen.add(id);
-      }
-    }
-    for (const id of storeIds) {
-      if (!seen.has(id)) {
-        merged.push(id);
-        seen.add(id);
-      }
-    }
-    if (merged.length === 0) {
-      await new Promise((r) => requestAnimationFrame(() => r()));
-      const retrySidebar = _getSidebar();
-      if (retrySidebar) {
-        const btns2 = retrySidebar.querySelectorAll("button[data-tab-id]");
-        for (const btn of btns2) {
-          const id = btn.getAttribute("data-tab-id");
-          if (id && !seen.has(id)) {
-            merged.push(id);
-            seen.add(id);
-          }
-        }
-      }
-    }
-    const _getSidebarForFilter = h?.getMainSidebar ?? getMainSidebar;
-    const mainSidebarEl = _getSidebarForFilter();
-    if (mainSidebarEl) {
-      const filtered = [];
-      const filteredOut = [];
-      for (const id of merged) {
-        const btn = mainSidebarEl.querySelector(`button[data-tab-id="${id}"]`);
-        if (btn && btn.style.display === "none") {
-          filteredOut.push(id);
-          continue;
-        }
-        filtered.push(id);
-      }
-      return filtered;
-    }
-    return merged;
-  }
-  const list = getSecondaryTabList();
-  const btns = list ? list.querySelectorAll("button[data-tab-id]") : document.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
-  return Array.from(btns).map((b) => b.getAttribute("data-tab-id")).filter(Boolean);
-}
-async function isMovedTabActiveInSource(tabId, side, h, preMoveSourceActiveTab) {
-  if (preMoveSourceActiveTab !== undefined) {
-    return preMoveSourceActiveTab;
-  }
-  if (side === "primary") {
-    await new Promise((r) => Promise.resolve().then(() => r()));
-    return (h?.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer)(tabId);
-  }
-  return (h?.getActiveSecondaryTabId ?? getActiveSecondaryTabId)() === tabId;
-}
-function pickSourceReplacement(tabId, sourceList) {
-  const idx = sourceList.indexOf(tabId);
-  if (idx === -1)
-    return sourceList.length > 0 ? sourceList[0] : null;
-  if (idx > 0)
-    return sourceList[idx - 1];
-  if (idx < sourceList.length - 1)
-    return sourceList[idx + 1];
-  return null;
-}
-async function activateInPrimary(tabId, h) {
-  const _findBtn = h?.findMainTabButton ?? findMainTabButton;
-  const _findStore = h?.findStoreData ?? findStoreData;
-  const _getTabs = h?.getDrawerTabs ?? getDrawerTabs;
-  const _getPanel = h?.getMainPanelContent ?? getMainPanelContent;
-  let resolvedId = tabId;
-  const directBtn = _findBtn(tabId);
-  if (!directBtn) {
-    _findStore(true);
-    const tabs = _getTabs();
-    const bySegment = tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
-    if (bySegment) {
-      resolvedId = bySegment.id;
-    }
-  }
-  const mainBtn = directBtn ?? _findBtn(resolvedId);
-  if (mainBtn) {
-    mainBtn.click();
-    const stickSidebar = (h?.getMainSidebar ?? getMainSidebar)();
-    let stickObserver = null;
-    if (stickSidebar && typeof MutationObserver !== "undefined") {
-      stickObserver = new MutationObserver(() => {
-        const currentActive = stickSidebar.querySelector('button[class*="tabBtnActive"]');
-        const currentActiveId = currentActive?.getAttribute("data-tab-id");
-        if (currentActiveId && currentActiveId !== resolvedId) {
-          if (stickObserver) {
-            stickObserver.disconnect();
-            stickObserver = null;
-          }
-          mainBtn.click();
-        }
-      });
-      stickObserver.observe(stickSidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
-      setTimeout(() => {
-        if (stickObserver) {
-          stickObserver.disconnect();
-          stickObserver = null;
-        }
-      }, 200);
-    }
-    await new Promise((resolve) => {
-      setTimeout(() => {
-        const active = mainBtn.className.includes("tabBtnActive");
-        const wUiForCheck = getHostBridge()?.ui;
-        const rootForCheck = wUiForCheck?.getBuiltInTabRoot?.(resolvedId);
-        const mainPanelContentForCheck = _getPanel();
-        const rootInMain = rootForCheck && mainPanelContentForCheck ? mainPanelContentForCheck.contains(rootForCheck) : null;
-        const rootChildCount = rootForCheck ? rootForCheck.children.length : null;
-        const rootComputedDisplay = rootForCheck ? getComputedStyle(rootForCheck).display : null;
-        const rootRect = rootForCheck ? rootForCheck.getBoundingClientRect() : null;
-        if (!active) {
-          mainBtn.click();
-        }
-        if (active && rootInMain === false && rootForCheck && mainPanelContentForCheck) {
-          if (!mainPanelContentForCheck.contains(rootForCheck)) {
-            mainPanelContentForCheck.appendChild(rootForCheck);
-          }
-        }
-        resolve();
-      }, 100);
-    });
-    const title = mainBtn.getAttribute("title") || mainBtn.getAttribute("aria-label") || undefined;
-    adoptMainMirrorHostActivation(mainBtn, title);
-  }
-}
-function activateInSecondary(tabId, h) {
-  if (!h) {
-    showSecondaryTab(tabId);
-    return;
-  }
-  const _setSecondaryTabId = h?.setActiveSecondaryTabId ?? setActiveSecondaryTabId;
-  _setSecondaryTabId(tabId);
-  const secondaryContent = document.querySelector(".sidebar-ux-panel-content");
-  if (secondaryContent) {
-    const movedRoots = Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]:not([data-canvas-secondary])"));
-    for (const root of movedRoots) {
-      const tid = root.getAttribute("data-canvas-moved") || "";
-      if (tid === tabId) {
-        root.setAttribute("data-canvas-active", "");
-      } else {
-        root.removeAttribute("data-canvas-active");
-      }
-    }
-  }
-}
-async function runHandoff({ tabId, source, destination, sourceList, preMoveSourceActiveTab, _testHooks: h }) {
-  const wasActive = await isMovedTabActiveInSource(tabId, source, h, preMoveSourceActiveTab);
-  const replacementId = pickSourceReplacement(tabId, sourceList);
-  const isMobile = (h?.isMobileViewport ?? isMobileViewport)();
-  dlog(`[canvas-debug] HANDOFF_DECIDE movedTab=${tabId} source=${source} destination=${destination} ` + `wasActive=${wasActive} replacement=${replacementId ?? "NONE"} mobile=${isMobile} ` + `activateSource=${wasActive && replacementId !== null} activateDestination=${!isMobile}`);
-  const above = replacementId !== null ? sourceList.indexOf(replacementId) < sourceList.indexOf(tabId) ? replacementId : null : null;
-  const below = replacementId !== null ? sourceList.indexOf(replacementId) > sourceList.indexOf(tabId) ? replacementId : null : null;
-  dlog(`[canvas-debug] HANDOFF_REPLACE_PICK source=${source} movedTab=${tabId} ` + `above=${above ?? "NONE"} below=${below ?? "NONE"} picked=${replacementId ?? "NONE"}`);
-  if (wasActive && replacementId !== null) {
-    try {
-      if (source === "primary") {
-        await activateInPrimary(replacementId, h);
-      } else {
-        activateInSecondary(replacementId, h);
-      }
-    } catch (err) {
-      dlog(`[canvas-debug] HANDOFF_ERROR gate=source source=${source} replacement=${replacementId} err=${err}`);
-    }
-  }
-  if (!isMobile) {
-    dlog(`[canvas-debug] HANDOFF_DEST_ACTIVATE destination=${destination} tabId=${tabId} ` + `method=${destination === "primary" ? "click-main-button" : "setActiveSecondaryTabId+data-canvas-active"} ` + `skippedMobile=${isMobile}`);
-    try {
-      if (destination === "primary") {
-        await activateInPrimary(tabId, h);
-      } else {
-        activateInSecondary(tabId, h);
-      }
-    } catch (err) {
-      dlog(`[canvas-debug] HANDOFF_ERROR gate=destination destination=${destination} tabId=${tabId} err=${err}`);
-    }
-  }
-}
-var init_activation_handoff = __esm(() => {
-  init_log();
-  init_mobile_exclusion();
-  init_secondary();
-  init_main_tab_pin();
-  init_active_tab();
-  init_buttons();
-  init_store();
-});
-
-// src/tabs/builtin-move.ts
-var exports_builtin_move = {};
-__export(exports_builtin_move, {
-  moveBuiltInTabToSecondaryContainer: () => moveBuiltInTabToSecondaryContainer
-});
-async function moveBuiltInTabToSecondaryContainer(opts) {
-  const { tabId, deferActivation = false } = opts;
-  const bridge = getHostBridge();
-  const ui = bridge?.ui;
-  if (!ui?.getBuiltInTabRoot || !ui.requestTabLocation) {
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=BRIDGE_MISSING ` + `hasGetBuiltInTabRoot=${!!ui?.getBuiltInTabRoot} hasRequestTabLocation=${!!ui?.requestTabLocation}`);
-    return;
-  }
-  let root = opts.root;
-  if (!root) {
-    root = ui.getBuiltInTabRoot(tabId);
-  }
-  if (!root) {
-    const { ensureBuiltInTabActiveInMain } = await Promise.resolve().then(() => (init_assignment(), exports_assignment));
-    await ensureBuiltInTabActiveInMain(tabId, {
-      getBuiltInTabRoot: (id) => ui.getBuiltInTabRoot?.(id),
-      dlog
-    });
-    await new Promise((r) => requestAnimationFrame(() => r()));
-    root = ui.getBuiltInTabRoot(tabId);
-    if (!root) {
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
-      dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId });
-      return;
-    }
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
-  } else {
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_BRIDGE_ROOT tab=${tabId} branch=ROOT_READY via=opts-or-getBuiltInTabRoot`);
-  }
-  root.setAttribute("data-canvas-moved", tabId);
-  if (!deferActivation) {
-    root.setAttribute("data-canvas-active", "");
-  }
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} branch=REQUEST_TAB_LOCATION`);
-  ui.requestTabLocation(tabId, {
-    kind: "container",
-    containerId: "canvas-secondary-drawer"
-  });
-  const afterLoc = ui.getTabLocation?.(tabId) ?? null;
-  watchForContainerPass3Reset(bridge, tabId, root, afterLoc);
-  return root;
-}
-function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
-  queueMicrotask(() => {
-    try {
-      const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
-      const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-      const rootInContainer = typeof microContainer?.contains === "function" ? microContainer.contains(builtInRoot) : false;
-      if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
-        dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to main-drawer because the target container is missing from Lumiverse's containers store. Fix: ensure the secondary drawer's panel content element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx — the call exists but may be failing silently.)`);
-      }
-    } catch {}
-  });
-}
-var init_builtin_move = __esm(() => {
-  init_log();
-  init_secondary();
-});
-
-// src/sidebar/cleanup.ts
-function registerCleanup(fn) {
-  _cleanupFns.push(fn);
-}
-function cleanupAll() {
-  for (const fn of _cleanupFns) {
-    try {
-      fn();
-    } catch (err) {
-      dwarn("Cleanup error:", err);
-    }
-  }
-  _cleanupFns.length = 0;
-  try {
-    clearTabAssignments();
-  } catch (err) {
-    dwarn("clearTabAssignments error:", err);
-  }
-}
-var _cleanupFns;
-var init_cleanup = __esm(() => {
-  init_log();
-  init_assignment();
-  _cleanupFns = [];
-});
-
-// src/sidebar/drawer-observer.ts
-class DrawerObserver {
-  observer = null;
-  tabs = new Map;
-  tabHandlers = [];
-  unregHandlers = [];
-  start() {
-    const sidebar = getMainSidebar();
-    if (!sidebar) {
-      console.warn("[DrawerObserver] main sidebar not found");
-      return;
-    }
-    this.scanExistingTabs(sidebar);
-    this.observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "childList") {
-          for (const node of mutation.addedNodes) {
-            if (node instanceof HTMLElement) {
-              this.handleAddedNode(node);
-            }
-          }
-          for (const node of mutation.removedNodes) {
-            if (node instanceof HTMLElement) {
-              this.handleRemovedNode(node);
-            }
-          }
-        }
-      }
-    });
-    this.observer.observe(sidebar, { childList: true, subtree: true });
-    registerCleanup(() => this.stop());
-  }
-  stop() {
-    if (this.observer) {
-      this.observer.disconnect();
-      this.observer = null;
-    }
-    this.tabs.clear();
-  }
-  onTabRegistered(handler) {
-    this.tabHandlers.push(handler);
-    return () => {
-      const idx = this.tabHandlers.indexOf(handler);
-      if (idx >= 0)
-        this.tabHandlers.splice(idx, 1);
-    };
-  }
-  onTabUnregistered(handler) {
-    this.unregHandlers.push(handler);
-    return () => {
-      const idx = this.unregHandlers.indexOf(handler);
-      if (idx >= 0)
-        this.unregHandlers.splice(idx, 1);
-    };
-  }
-  getTab(tabId) {
-    return this.tabs.get(tabId) || null;
-  }
-  getAllTabs() {
-    return Array.from(this.tabs.values());
-  }
-  scanExistingTabs(sidebar) {
-    const buttons = sidebar.querySelectorAll("[data-tab-id]");
-    for (const btn of buttons) {
-      if (btn instanceof HTMLElement) {
-        this.registerTab(btn);
-      }
-    }
-  }
-  handleAddedNode(node) {
-    if (node.hasAttribute?.("data-tab-id")) {
-      this.registerTab(node);
-    }
-    const buttons = node.querySelectorAll?.("[data-tab-id]");
-    if (buttons) {
-      for (const btn of buttons) {
-        if (btn instanceof HTMLElement) {
-          this.registerTab(btn);
-        }
-      }
-    }
-  }
-  handleRemovedNode(node) {
-    if (node instanceof HTMLElement && node.hasAttribute?.("data-tab-id")) {
-      const tabId = node.getAttribute("data-tab-id") || "";
-      if (this.tabs.has(tabId)) {
-        this.tabs.delete(tabId);
-        for (const h of this.unregHandlers)
-          h(tabId);
-      }
-    }
-    const buttons = node.querySelectorAll?.("[data-tab-id]");
-    if (buttons) {
-      for (const btn of buttons) {
-        if (btn instanceof HTMLElement) {
-          const tabId = btn.getAttribute("data-tab-id") || "";
-          if (this.tabs.has(tabId)) {
-            this.tabs.delete(tabId);
-            for (const h of this.unregHandlers)
-              h(tabId);
-          }
-        }
-      }
-    }
-  }
-  registerTab(button) {
-    const tabId = button.getAttribute("data-tab-id") || "";
-    if (!tabId || this.tabs.has(tabId))
-      return;
-    const parts = tabId.split(":");
-    const extensionId = parts[2] || "unknown";
-    const tab = {
-      tabId,
-      button,
-      extensionId,
-      title: button.getAttribute("title") || button.textContent?.trim() || ""
-    };
-    this.tabs.set(tabId, tab);
-    for (const h of this.tabHandlers)
-      h(tab);
-  }
-}
-var drawerObserver;
-var init_drawer_observer = __esm(() => {
-  init_cleanup();
-  drawerObserver = new DrawerObserver;
-});
-
-// src/sidebar/secondary-drawer.ts
-var exports_secondary_drawer = {};
-__export(exports_secondary_drawer, {
-  unassignFromSecondary: () => unassignFromSecondary,
-  teardownSecondaryDrawer: () => teardownSecondaryDrawer,
-  setSuppressAutoActivation: () => setSuppressAutoActivation,
-  setRestoringFromLayout: () => setRestoringFromLayout,
-  isSuppressAutoActivation: () => isSuppressAutoActivation,
-  isRestoringFromLayout: () => isRestoringFromLayout,
-  initSecondaryDrawer: () => initSecondaryDrawer,
-  getSecondaryDrawerState: () => getSecondaryDrawerState,
-  getActiveSecondaryTab: () => getActiveSecondaryTab,
-  assignToSecondary: () => assignToSecondary,
-  activateSecondaryTab: () => activateSecondaryTab
-});
-function setRestoringFromLayout(value) {
-  _restoringFromLayout = value;
-}
-function isRestoringFromLayout() {
-  return _restoringFromLayout;
-}
-function setSuppressAutoActivation(value) {
-  _suppressAutoActivation = value;
-}
-function isSuppressAutoActivation() {
-  return _suppressAutoActivation;
-}
-function findStoreTab(tabIdOrTitle) {
-  findStoreData(true);
-  const tabs = getDrawerTabs();
-  return tabs.find((t) => t.id === tabIdOrTitle) || tabs.find((t) => t.title === tabIdOrTitle) || null;
-}
-function initSecondaryDrawer(_ctx) {
-  drawerObserver.onTabUnregistered((tabId) => {
-    if (getTabAssignments().has(tabId)) {
-      if (_restoringFromLayout)
-        return;
-      deleteTabAssignment(tabId);
-      removeSecondaryTabButton(tabId);
-      persistLayout();
-      if (_activeTabId === tabId) {
-        _activeTabId = null;
-        _state = getTabAssignments().size > 0 ? "open" : "closed";
-        if (_state === "closed") {
-          closeSecondarySidebar();
-          updateDrawerTabVisibility();
-        }
-      }
-    }
-  });
-}
-async function assignToSecondary(tabId) {
-  const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
-  let tab = drawerObserver.getTab(tabId);
-  let iconSvg;
-  let iconUrl;
-  let shortName;
-  if (!tab) {
-    const storeTab = findStoreTab(tabId);
-    if (!storeTab) {
-      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} not found in DrawerObserver or store`);
-      return;
-    }
-    const button = findMainTabButton(storeTab.title);
-    if (!button) {
-      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} found in store but no main sidebar button (title="${storeTab.title}")`);
-      return;
-    }
-    tab = {
-      tabId: storeTab.id,
-      button,
-      extensionId: storeTab.extensionId,
-      title: storeTab.title
-    };
-    iconSvg = storeTab.iconSvg;
-    iconUrl = storeTab.iconUrl;
-    shortName = storeTab.shortName;
-  } else {
-    iconSvg = tab.button.querySelector("svg")?.outerHTML;
-  }
-  const resolvedId = tab.tabId;
-  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
-  const _isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
-  if (_isExtensionTab) {
-    setTabAssignment(resolvedId, "secondary");
-    hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar();
-      _state = "open";
-    }
-    const _secondaryContentEarly = document.querySelector(".sidebar-ux-panel-content");
-    const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
-    const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
-    if (_existingRoot) {
-      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: tab.title || _storeTabForButton?.title || resolvedId,
-        root: _existingRoot,
-        iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg,
-        shortName: shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName
-      });
-      updateDrawerTabVisibility();
-    } else {
-      const _secondaryWrapper = getSecondaryWrapper();
-      const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-      const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-      if (_storeTab?.root && _secondaryContent) {
-        const _root = _storeTab.root;
-        if (_root.parentElement !== _secondaryContent) {
-          _secondaryContent.appendChild(_root);
-        }
-        _root.setAttribute("data-canvas-moved", resolvedId);
-        if (!deferActivation) {
-          for (const _child of Array.from(_secondaryContent.children)) {
-            if (_child instanceof HTMLElement) {
-              if (_child === _root) {
-                _child.setAttribute("data-canvas-active", "");
-              } else {
-                _child.removeAttribute("data-canvas-active");
-              }
-            }
-          }
-        }
-        addSecondaryTabButton({
-          id: resolvedId,
-          title: tab.title || _storeTab.title || resolvedId,
-          root: _root,
-          iconSvg: tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg,
-          shortName: readMainButtonShortName(tab.button) || _storeTab.shortName
-        });
-        updateDrawerTabVisibility();
-      }
-    }
-    if (!isMobileViewport() && !deferActivation) {
-      _activeTabId = resolvedId;
-      _state = "tab_active";
-      setActiveSecondaryTabId(resolvedId);
-    }
-    const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !deferActivation) {
-      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
-    }
-  } else {
-    const _secondaryWrapper = getSecondaryWrapper();
-    const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-    const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-    const wSpindle = getHostBridge();
-    const wSpindleUi = wSpindle?.ui;
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` + `hasSecondaryContent=${!!_secondaryContent}`);
-    const _alreadyInSecondary = _secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`);
-    if (_alreadyInSecondary) {
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
-      const _title2 = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: _title2,
-        root: _alreadyInSecondary,
-        iconSvg: tab.button?.querySelector("svg")?.outerHTML || _alreadyInSecondary.querySelector("svg")?.outerHTML,
-        shortName: readMainButtonShortName(tab.button) || _storeTab?.shortName
-      });
-      updateDrawerTabVisibility();
-      setTabAssignment(resolvedId, "secondary");
-      hideMainTabButton(resolvedId);
-      if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-        await openSecondarySidebar();
-        if (!deferActivation) {
-          _state = "tab_active";
-          _activeTabId = resolvedId;
-          setActiveSecondaryTabId(resolvedId);
-        }
-      }
-      const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-      if (_headerTitle2 && !deferActivation)
-        _headerTitle2.textContent = _title2;
-      if (!isMobileViewport() && !deferActivation) {
-        showSecondaryTab(resolvedId);
-      }
-      persistLayout();
-      return;
-    }
-    if (!_secondaryContent) {
-      dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
-        tabId,
-        resolvedId
-      });
-      return;
-    }
-    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` + `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
-    let _root;
-    let _placedViaHost = false;
-    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
-      _root = await moveBuiltInTabToSecondaryContainer2({
-        tabId,
-        deferActivation,
-        root: bridgeRoot
-      });
-      _placedViaHost = !!_root;
-    }
-    if (!_root && _storeTab?.root) {
-      _root = _storeTab.root;
-      if (_root.parentElement !== _secondaryContent) {
-        _secondaryContent.appendChild(_root);
-      }
-      _root.setAttribute("data-canvas-moved", resolvedId);
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
-    }
-    if (!_root) {
-      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
-        dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).", {
-          tabId,
-          resolvedId
-        });
-      }
-      return;
-    }
-    if (!deferActivation && _secondaryContent) {
-      for (const _child of Array.from(_secondaryContent.children)) {
-        if (_child instanceof HTMLElement) {
-          if (_child === _root || _child.getAttribute("data-canvas-moved") === resolvedId) {
-            _child.setAttribute("data-canvas-active", "");
-          } else if (_child.hasAttribute("data-canvas-moved")) {
-            _child.removeAttribute("data-canvas-active");
-          }
-        }
-      }
-    }
-    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-    const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root.querySelector("svg")?.outerHTML;
-    const _shortName = readMainButtonShortName(tab.button) || _storeTab?.shortName;
-    addSecondaryTabButton({
-      id: resolvedId,
-      title: _title,
-      root: _root,
-      iconSvg: _iconSvg,
-      shortName: _shortName
-    });
-    updateDrawerTabVisibility();
-    setTabAssignment(resolvedId, "secondary");
-    hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar();
-      if (!deferActivation) {
-        _state = "tab_active";
-        _activeTabId = resolvedId;
-        setActiveSecondaryTabId(resolvedId);
-      }
-    }
-    const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !deferActivation)
-      _headerTitle.textContent = _title;
-    if (_placedViaHost) {
-      try {
-        const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-        if (m.isMainMirrorActive())
-          m.ensureHostContentParkedPublic();
-      } catch {}
-    }
-  }
-  if (!isMobileViewport() && !deferActivation) {
-    showSecondaryTab(resolvedId);
-  }
-  persistLayout();
-}
-async function unassignFromSecondary(tabId) {
-  dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`);
-  let resolvedShowId = tabId;
-  let resolvedExtId;
-  findStoreData(true);
-  const _tabs = getDrawerTabs();
-  const _bySegment = _tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
-  if (_bySegment) {
-    resolvedShowId = _bySegment.id;
-    resolvedExtId = _bySegment.extensionId;
-  } else {
-    const storeTab = findStoreTab(tabId);
-    if (storeTab) {
-      resolvedShowId = storeTab.id;
-      resolvedExtId = storeTab.extensionId;
-    } else {
-      dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map((t) => ({ id: t.id, title: t.title })));
-    }
-  }
-  const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-  if (_secondaryContentForUnassign) {
-    const _movedRoot = _secondaryContentForUnassign.querySelector(`[data-canvas-moved="${CSS.escape(resolvedShowId)}"]:not([data-canvas-secondary])`);
-    if (_movedRoot) {
-      const _mainContent = document.querySelector('[class*="_panelContent_"]');
-      if (_mainContent && _movedRoot.parentElement !== _mainContent) {
-        _mainContent.appendChild(_movedRoot);
-      }
-      _movedRoot.removeAttribute("data-canvas-moved");
-      _movedRoot.removeAttribute("data-canvas-active");
-    }
-  }
-  deleteTabAssignment(tabId);
-  if (resolvedShowId !== tabId) {
-    deleteTabAssignment(resolvedShowId);
-  }
-  removeSecondaryTabButton(tabId);
-  if (getActiveSecondaryTabId() === tabId) {
-    showSecondaryTab(null);
-  }
-  showMainTabButton(resolvedShowId);
-  if (getTabAssignments().size === 0) {
-    _state = "closed";
-    _activeTabId = null;
-    closeSecondarySidebar();
-    updateDrawerTabVisibility();
-  }
-  persistLayout();
-}
-function activateSecondaryTab(tabId) {
-  _activeTabId = tabId;
-  _state = "tab_active";
-  showSecondaryTab(tabId);
-}
-function getActiveSecondaryTab() {
-  return _activeTabId;
-}
-function getSecondaryDrawerState() {
-  return _state;
-}
-function teardownSecondaryDrawer() {
-  _state = "closed";
-  _activeTabId = null;
-}
-var _state = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
-var init_secondary_drawer = __esm(() => {
-  init_drawer_observer();
-  init_buttons();
-  init_assignment();
-  init_active_tab();
-  init_persist();
-  init_secondary();
-  init_store();
-  init_log();
-  init_mobile_exclusion();
-});
-
-// src/tabs/assignment.ts
-var exports_assignment = {};
-__export(exports_assignment, {
-  setTabAssignment: () => setTabAssignment,
-  setActiveSecondaryTabId: () => setActiveSecondaryTabId,
-  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
-  hasTabAssignment: () => hasTabAssignment,
-  getTabSidebar: () => getTabSidebar,
-  getTabAssignments: () => getTabAssignments,
-  getActiveSecondaryTabId: () => getActiveSecondaryTabId,
-  ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
-  deleteTabAssignment: () => deleteTabAssignment,
-  clearTabAssignments: () => clearTabAssignments,
-  assignTab: () => assignTab
-});
-function getTabAssignments() {
-  return _tabAssignments;
-}
-function hasTabAssignment(tabId) {
-  return _tabAssignments.has(tabId);
-}
-function clearTabAssignments() {
-  _tabAssignments.clear();
-}
-function setTabAssignment(tabId, panelId) {
-  _tabAssignments.set(tabId, panelId);
-}
-function deleteTabAssignment(tabId) {
-  _tabAssignments.delete(tabId);
-}
-function getTabSidebar(tabId) {
-  return _tabAssignments.get(tabId) || "primary";
-}
-function armMainDrawerActiveRestore(tabId) {
-  if (isMobileViewport())
-    return;
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return;
-  const restoreBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  const restoreActiveId = restoreBtn?.getAttribute("data-tab-id") ?? null;
-  if (!restoreBtn || !restoreActiveId || restoreActiveId === tabId)
-    return;
-  let observer = new MutationObserver(() => {
-    if (observer) {
-      observer.disconnect();
-      observer = null;
-    }
-    restoreBtn.click();
-  });
-  observer.observe(sidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
-  setTimeout(() => {
-    if (observer) {
-      observer.disconnect();
-      observer = null;
-    }
-  }, 200);
-}
-async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
-  const _isActive = h.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer;
-  const _findBtn = h.findMainTabButton ?? findMainTabButton;
-  const _isMobile = h.isMobileViewport ?? isMobileViewport;
-  const _getRoot = h.getBuiltInTabRoot ?? (() => {
-    return;
-  });
-  const _dlog = h.dlog ?? (() => {});
-  _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`);
-  const _isActiveResult = _isActive(tabId);
-  if (_isActiveResult)
-    return;
-  const _isMobileResult = _isMobile();
-  if (_isMobileResult) {
-    _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`);
-    return;
-  }
-  const btn = _findBtn(tabId);
-  if (!btn) {
-    _dlog(`[tabmove] ensure-active: main button-not-found for "${tabId}", ` + `relying on host lazy-mount`);
-    return;
-  }
-  _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
-  btn.click();
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  const root = _getRoot(tabId);
-  _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? "null"}`);
-  if (!root) {
-    _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
-  }
-}
-function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
-  const mainBtn = findMainTabButton(tabId);
-  const title = bridge.ui.getBuiltInTabTitle?.(tabId) || mainBtn?.getAttribute("title") || tabId;
-  const iconSvg = mainBtn?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
-  const shortName = readMainButtonShortName(mainBtn);
-  addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName });
-}
-async function assignTab(tabId, sidebar) {
-  if (sidebar === "secondary") {
-    const _preClickSidebar = getMainSidebar();
-    const _preClickActiveBtn = _preClickSidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-    const _origActiveTabId = _preClickActiveBtn?.getAttribute("data-tab-id") || _preClickActiveBtn?.getAttribute("title") || null;
-    const preMoveSourceList = await captureSourceList("primary");
-    const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
-    const bridge = getHostBridge();
-    if (bridge?.ui.getBuiltInTabRoot && bridge.ui.requestTabLocation) {
-      if (preMoveActiveTab)
-        armMainDrawerActiveRestore(tabId);
-      let _restoreObserver = null;
-      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
-        _restoreObserver = new MutationObserver(() => {
-          const active = _preClickSidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-          const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
-          if (activeId && activeId !== _origActiveTabId) {
-            _preClickActiveBtn.click();
-          }
-        });
-        _restoreObserver.observe(_preClickSidebar, {
-          attributes: true,
-          attributeFilter: ["class"],
-          subtree: true
-        });
-      }
-      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
-      const builtInRoot = await moveBuiltInTabToSecondaryContainer2({ tabId });
-      if (_restoreObserver) {
-        await new Promise((r) => requestAnimationFrame(() => r()));
-        _restoreObserver.disconnect();
-        _restoreObserver = null;
-      }
-      if (builtInRoot) {
-        setTabAssignment(tabId, "secondary");
-        hideMainTabButton(tabId);
-        addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
-        updateDrawerTabVisibility();
-        if (!isSecondarySidebarOpen() && !isMobileViewport())
-          openSecondarySidebar();
-        await runHandoff({
-          tabId,
-          source: "primary",
-          destination: "secondary",
-          sourceList: preMoveSourceList,
-          preMoveSourceActiveTab: preMoveActiveTab
-        });
-        try {
-          const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-          if (m.isMainMirrorActive())
-            m.ensureHostContentParkedPublic();
-        } catch {}
-        persistLayout();
-        return;
-      }
-    }
-    if (!bridge) {
-      dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`);
-    }
-    const { assignToSecondary: assignToSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-    await assignToSecondary2(tabId);
-    await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
-  } else {
-    const bridge = getHostBridge();
-    if (bridge?.ui.getBuiltInTabRoot?.(tabId) && bridge.ui.requestTabLocation) {
-      bridge.ui.requestTabLocation(tabId, { kind: "main-drawer" });
-    }
-    const { unassignFromSecondary: unassignFromSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-    const preMoveSourceList = await captureSourceList("secondary");
-    const preMoveActiveTab = getActiveSecondaryTabId() === tabId;
-    await unassignFromSecondary2(tabId);
-    await runHandoff({ tabId, source: "secondary", destination: "primary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
-  }
-}
-var _tabAssignments;
-var init_assignment = __esm(() => {
-  init_log();
-  init_mobile_exclusion();
-  init_secondary();
-  init_buttons();
-  init_persist();
-  init_activation_handoff();
-  init_active_tab();
-  _tabAssignments = new Map;
-});
-
-// src/sidebar/drawer-sync.ts
-var exports_drawer_sync = {};
-__export(exports_drawer_sync, {
-  syncSecondaryTabLabels: () => syncSecondaryTabLabels,
-  syncDrawerTabSettings: () => syncDrawerTabSettings,
-  stopSideChangeWatcher: () => stopSideChangeWatcher,
-  stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
-  stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
-  stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
-  startSideChangeWatcher: () => startSideChangeWatcher,
-  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
-  isShowTabLabels: () => isShowTabLabels,
-  checkSideChanged: () => checkSideChanged
-});
-function isShowTabLabels() {
-  const mode = getSettings().showTabLabels;
-  if (mode === "show")
-    return true;
-  if (mode === "hide")
-    return false;
-  const store = getStoreSnapshot();
-  if (store) {
-    const snapshot = asDrawerStore(store);
-    if (snapshot.drawerSettings) {
-      return !!snapshot.drawerSettings.showTabLabels;
-    }
-  }
-  const sidebar = getMainSidebar();
-  if (sidebar) {
-    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]');
-    if (labeledBtn)
-      return true;
-  }
-  return false;
-}
-function syncDrawerTabSettings() {
-  if (_syncPending)
-    return;
-  _syncPending = true;
-  requestAnimationFrame(() => {
-    _syncPending = false;
-    _runSyncDrawerTabSettings();
-  });
-}
-function _runSyncDrawerTabSettings() {
-  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
-  const mainMirrorWrapperEarly = getMainMirrorWrapper();
-  if (!drawerTab && !mainMirrorWrapperEarly)
-    return;
-  let mainDrawerTab = null;
-  const mainWrapper = getMainWrapper();
-  if (mainWrapper) {
-    mainDrawerTab = mainWrapper.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
-  }
-  if (!mainDrawerTab) {
-    mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
-  }
-  if (!mainDrawerTab) {
-    requestAnimationFrame(() => _runSyncDrawerTabSettings());
-    return;
-  }
-  const w = mainDrawerTab.offsetWidth;
-  const h = mainDrawerTab.offsetHeight;
-  if (w < 16 || w > 120 || h < 16 || h > 400) {
-    dlog(`[drawer-sync] main drawer tab dimensions look wrong (w=${w} h=${h}), skipping mirror`);
-    return;
-  }
-  if (!_mainDrawerTabResizeObserver) {
-    _mainDrawerTabResizeObserver = new ResizeObserver(() => {
-      syncDrawerTabSettings();
-    });
-    _mainDrawerTabResizeObserver.observe(mainDrawerTab);
-    registerCleanup(stopDrawerTabResizeWatcher);
-  }
-  if (!_mainDrawerTabClassObserver) {
-    _mainDrawerTabClassObserver = new MutationObserver(() => {
-      syncDrawerTabSettings();
-    });
-    _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["class"] });
-    registerCleanup(stopDrawerTabClassObserver);
-  }
-  if (!_mainDrawerTabStyleObserver) {
-    _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      syncDrawerTabSettings();
-    });
-    _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
-    registerCleanup(stopDrawerTabStyleObserver);
-  }
-  const secondaryWrapper = getSecondaryWrapper();
-  const mainMirrorWrapper = getMainMirrorWrapper();
-  const mainStyle = getComputedStyle(mainDrawerTab);
-  const newVars = [
-    `${mainDrawerTab.offsetWidth}px`,
-    `${mainDrawerTab.offsetHeight}px`,
-    mainStyle.paddingTop,
-    mainStyle.paddingRight,
-    mainStyle.paddingBottom,
-    mainStyle.paddingLeft,
-    mainStyle.gap,
-    `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`
-  ].join("|");
-  if (newVars !== _lastWrittenDrawerTabVars) {
-    _lastWrittenDrawerTabVars = newVars;
-    const parts = newVars.split("|");
-    const stamp = (wrapper) => {
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
-    };
-    if (secondaryWrapper)
-      stamp(secondaryWrapper);
-    if (mainMirrorWrapper)
-      stamp(mainMirrorWrapper);
-  } else {
-    if (mainMirrorWrapper && !mainMirrorWrapper.style.getPropertyValue("--sidebar-ux-drawer-tab-w")) {
-      const parts = newVars.split("|");
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
-    }
-  }
-  const mainParent = mainDrawerTab.parentElement;
-  const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0;
-  const mainMarginStyle = mainDrawerTab.style.marginTop;
-  const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
-  if (_lastKnownVerticalPos !== posVh) {
-    const settings = getSettings();
-    if (settings.mirrorCompactPosition) {
-      if (drawerTab)
-        drawerTab.style.marginTop = `${posVh}vh`;
-      const mainMirrorTab2 = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
-      if (mainMirrorTab2)
-        mainMirrorTab2.style.marginTop = `${posVh}vh`;
-    } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
-      if (drawerTab)
-        drawerTab.style.marginTop = "";
-    }
-    _lastKnownVerticalPos = posVh;
-  }
-  if (drawerTab) {
-    drawerTab.classList.toggle("sidebar-ux-drawer-tab--active", isSecondarySidebarOpen());
-  }
-  const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
-  if (mainMirrorTab && isMainMirrorActive()) {
-    mainMirrorTab.classList.toggle("sidebar-ux-drawer-tab--active", isCanvasMainOpen());
-  }
-  syncSecondaryTabLabels();
-}
-function syncSecondaryTabLabels() {
-  const showLabels = isShowTabLabels();
-  const cacheKey = showLabels ? "show" : "hide";
-  if (cacheKey === _lastWrittenLabelsKey)
-    return;
-  _lastWrittenLabelsKey = cacheKey;
-  const roots = [];
-  const secondary = getSecondaryWrapper();
-  if (secondary)
-    roots.push(secondary);
-  const mainMirror = getMainMirrorWrapper();
-  if (mainMirror)
-    roots.push(mainMirror);
-  if (typeof document.querySelectorAll === "function") {
-    for (const host of Array.from(document.querySelectorAll(".sidebar-ux-tab-list-pin-host"))) {
-      roots.push(host);
-    }
-  }
-  for (const root of roots) {
-    const labels = root.querySelectorAll(".sidebar-ux-tab-label");
-    for (const label of labels) {
-      label.style.opacity = showLabels ? "1" : "0";
-      label.style.height = showLabels ? "auto" : "0";
-      label.style.marginTop = showLabels ? "1px" : "0";
-      const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
-      if (btn) {
-        btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
-        btn.style.height = showLabels ? "56px" : "48px";
-      }
-    }
-  }
-}
-function checkSideChanged() {
-  const currentSide = getMainDrawerSide();
-  if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    const wasOpen = isSecondarySidebarOpen();
-    unmountSecondarySidebar();
-    _lastWrittenDrawerTabVars = null;
-    _lastWrittenLabelsKey = null;
-    _lastKnownVerticalPos = null;
-    stopDrawerTabResizeWatcher();
-    stopDrawerTabClassObserver();
-    stopDrawerTabStyleObserver();
-    findStoreData(true);
-    mountSecondarySidebar({ initialOpen: wasOpen });
-    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
-    restoreSecondaryTabButtons();
-    Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
-      for (const [tabId, side] of getTabAssignments()) {
-        if (side === "secondary")
-          assignToSecondary2(tabId).catch(() => {});
-      }
-    });
-    updateDrawerTabVisibility();
-    const activeTabId = getActiveSecondaryTabId();
-    if (activeTabId !== null) {
-      const assignments = getTabAssignments();
-      if (assignments.get(activeTabId) === "secondary") {
-        showSecondaryTab(activeTabId);
-      }
-    }
-  }
-  _lastKnownSide = currentSide;
-  syncDrawerTabSettings();
-}
-function restoreSecondaryTabButtons() {
-  const tabs = getDrawerTabs();
-  for (const [tabId, sidebar] of getTabAssignments()) {
-    if (sidebar !== "secondary")
-      continue;
-    let tab = tabs && tabs.find((t) => t.id === tabId);
-    if (!tab && tabs) {
-      const stripSuffix = (id) => {
-        const lastColon = id.lastIndexOf(":");
-        if (lastColon <= 0)
-          return id;
-        const tail = id.slice(lastColon + 1);
-        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
-      };
-      const storedPrefix = stripSuffix(tabId);
-      const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
-      if (candidates.length === 1) {
-        tab = candidates[0];
-        dlog(`restoreSecondaryTabButtons: suffix-drift fallback matched stored "${tabId}" -> live "${tab.id}"`);
-      }
-    }
-    if (tab) {
-      addSecondaryTabButton(tab);
-      continue;
-    }
-    const mainBtn = findMainTabButton(tabId);
-    if (mainBtn) {
-      const id = mainBtn.getAttribute("data-tab-id") || tabId;
-      const title = mainBtn.getAttribute("title") || tabId;
-      const svg = mainBtn.querySelector("svg")?.outerHTML;
-      addSecondaryTabButton({
-        id,
-        title,
-        root: undefined,
-        iconSvg: svg
-      });
-      dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`);
-    } else {
-      dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`);
-    }
-  }
-}
-function startSideChangeWatcher() {
-  if (_sideObserver !== null)
-    return;
-  _lastKnownSide = getMainDrawerSide();
-  const wrapper = getMainWrapper();
-  if (!wrapper) {
-    dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
-    return;
-  }
-  _sideObserver = new MutationObserver(() => {
-    checkSideChanged();
-  });
-  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
-  registerCleanup(() => stopSideChangeWatcher());
-}
-function stopSideChangeWatcher() {
-  if (_sideObserver === null)
-    return;
-  _sideObserver.disconnect();
-  _sideObserver = null;
-}
-function stopDrawerTabResizeWatcher() {
-  if (_mainDrawerTabResizeObserver) {
-    _mainDrawerTabResizeObserver.disconnect();
-    _mainDrawerTabResizeObserver = null;
-  }
-}
-function stopDrawerTabClassObserver() {
-  if (_mainDrawerTabClassObserver) {
-    _mainDrawerTabClassObserver.disconnect();
-    _mainDrawerTabClassObserver = null;
-  }
-}
-function stopDrawerTabStyleObserver() {
-  if (_mainDrawerTabStyleObserver) {
-    _mainDrawerTabStyleObserver.disconnect();
-    _mainDrawerTabStyleObserver = null;
-  }
-}
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null;
-var init_drawer_sync = __esm(() => {
-  init_store();
-  init_log();
-  init_secondary();
-  init_main_mirror_drawer();
-  init_assignment();
-  init_cleanup();
-  init_state();
-  init_buttons();
-  init_active_tab();
 });
 
 // src/tabs/tab-context-menu.ts
@@ -2923,222 +1131,127 @@ var init_tab_context_menu = __esm(() => {
   init_assignment();
 });
 
-// src/tabs/buttons.ts
-function hideMainTabButton(tabId) {
-  if (_hideMainTabButtonOverride) {
-    _hideMainTabButtonOverride(tabId);
-    return;
-  }
-  const btn = findMainTabButton(tabId);
-  if (btn)
-    btn.style.display = "none";
+// src/sidebar/strip-gutter.ts
+var exports_strip_gutter = {};
+__export(exports_strip_gutter, {
+  updateStripGutters: () => updateStripGutters,
+  injectStripGutterStyles: () => injectStripGutterStyles,
+  computeStripGutters: () => computeStripGutters,
+  clearStripGutters: () => clearStripGutters,
+  STRIP_R_VAR: () => STRIP_R_VAR,
+  STRIP_L_VAR: () => STRIP_L_VAR,
+  STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS
+});
+function getDockInsets() {
+  const appEl = document.querySelector("[data-app-root]");
+  if (!appEl)
+    return { left: 0, right: 0 };
+  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
+  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
+  return { left, right };
 }
-function showMainTabButton(tabId) {
-  if (_showMainTabButtonOverride) {
-    _showMainTabButtonOverride(tabId);
-    return;
-  }
-  const btn = findMainTabButton(tabId);
-  if (btn)
-    btn.style.display = "";
-}
-function findMainTabButton(tabId) {
-  const sidebar = getMainSidebar();
-  if (!sidebar) {
-    dwarn("findMainTabButton: no sidebar found");
-    return null;
-  }
-  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`);
-  if (byId)
-    return byId;
-  const byTitle = sidebar.querySelector(`button[title="${cssEscape(tabId)}"]`);
-  if (byTitle) {
-    byTitle.setAttribute("data-tab-id", tabId);
-    return byTitle;
-  }
-  const tabs = getDrawerTabs();
-  const tab = tabs.find((t) => t.id === tabId);
-  if (!tab) {
-    dwarn(`findMainTabButton: no tab in store for id="${tabId}", known tabs=`, tabs.map((t) => ({ id: t.id, title: t.title })));
-    return null;
-  }
-  const buttons = sidebar.querySelectorAll("button[title]");
-  for (const btn of buttons) {
-    if (btn.getAttribute("title") === tab.title) {
-      btn.setAttribute("data-tab-id", tab.id);
-      return btn;
+function injectStripGutterStyles() {
+  injectStyles(STYLE_ID, `
+    /* Static keep-tabs chrome for Welcome only — no transition.
+       Chat column is owned by chat reflow (higher-churn open/close margins). */
+    html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
+      margin-left: var(${STRIP_L_VAR}, 0px) !important;
+      margin-right: var(${STRIP_R_VAR}, 0px) !important;
     }
-  }
-  dwarn(`findMainTabButton: no button for id="${tabId}" (title="${tab.title}") found among ${buttons.length} buttons`);
-  return null;
-}
-function cssEscape(value) {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/(["\\])/g, "\\$1");
-}
-function isSettingsButton(btn) {
-  const cls = (btn.className || "").toString();
-  if (cls.includes("tabBtnSettings"))
-    return true;
-  const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
-  const title = (btn.getAttribute("title") || "").toLowerCase();
-  if (aria.includes("settings") || aria.includes("preferences"))
-    return true;
-  if (title.includes("settings") || title.includes("preferences"))
-    return true;
-  return false;
-}
-function findSafeFallbackButton(sidebar) {
-  const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
-  return allButtons.find((b) => b.style.display !== "none" && b.className.includes("tabBtn") && !b.className.includes("tabBtnExtension") && !isSettingsButton(b)) ?? null;
-}
-function deriveShortName(title, shortName) {
-  if (shortName)
-    return shortName;
-  return title.length > 8 ? title.slice(0, 7) + "…" : title;
-}
-function readMainButtonShortName(mainBtn) {
-  if (!mainBtn)
-    return;
-  const label = mainBtn.querySelector('span[class*="tabLabel"]');
-  if (label && label.textContent)
-    return label.textContent.trim();
-  return;
-}
-function addSecondaryTabButton(tab) {
-  const tabList = getSecondaryTabList();
-  const _bareId = tab.id.includes(":") ? tab.id.replace(/:\d+$/, "").split(":").pop() ?? tab.id : tab.id;
-  const alreadyHasButton = !!(tabList && (tabList.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`) || tabList.querySelector(`[data-tab-id="${CSS.escape(_bareId)}"]`)));
-  if (!tabList || alreadyHasButton)
-    return;
-  const showLabels = isShowTabLabels();
-  dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`);
-  const btn = document.createElement("button");
-  btn.setAttribute("data-tab-id", tab.id);
-  btn.setAttribute("title", tab.title);
-  if (showLabels)
-    btn.classList.add("sidebar-ux-tab-labeled");
-  btn.style.cssText = `
-    width: 100%;
-    height: ${showLabels ? "56px" : "48px"};
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  `;
-  const iconWrap = document.createElement("span");
-  if (tab.iconSvg) {
-    iconWrap.innerHTML = tab.iconSvg;
-  } else if (tab.iconUrl) {
-    const img = document.createElement("img");
-    img.src = tab.iconUrl;
-    img.alt = "";
-    img.width = 20;
-    img.height = 20;
-    img.style.borderRadius = "2px";
-    iconWrap.appendChild(img);
-  } else {
-    iconWrap.innerHTML = PUZZLE_ICON_SVG;
-  }
-  btn.appendChild(iconWrap);
-  const labelSpan = document.createElement("span");
-  labelSpan.className = "sidebar-ux-tab-label";
-  labelSpan.textContent = deriveShortName(tab.title, tab.shortName);
-  labelSpan.style.cssText = `
-    opacity: ${showLabels ? "1" : "0"};
-    height: ${showLabels ? "auto" : "0"};
-    margin-top: ${showLabels ? "1px" : "0"};
-    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
-  `;
-  btn.appendChild(labelSpan);
-  btn.addEventListener("click", () => {
-    if (isSecondarySidebarOpen()) {
-      if (getActiveSecondaryTabId() === tab.id) {
-        closeSecondarySidebar();
-      } else {
-        showSecondaryTab(tab.id);
+    @media (max-width: 600px) {
+      html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
       }
-    } else {
-      openSecondarySidebar();
-      showSecondaryTab(tab.id);
     }
-  });
-  btn.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn);
-  });
-  tabList.appendChild(btn);
+  `);
 }
-function removeSecondaryTabButton(tabId) {
-  const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
-  btn?.remove();
+function stopStripGutterObservers() {
+  if (_dockObserver) {
+    _dockObserver.disconnect();
+    _dockObserver = null;
+  }
+  if (_mediaQuery && _onMediaChange) {
+    _mediaQuery.removeEventListener("change", _onMediaChange);
+  }
+  _mediaQuery = null;
+  _onMediaChange = null;
 }
-function updateDrawerTabVisibility() {
-  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
-  if (!drawerTab)
+function clearStripGutterVars() {
+  const root = document.documentElement;
+  root.classList.remove(STRIP_GUTTER_CLASS);
+  root.style.removeProperty(STRIP_L_VAR);
+  root.style.removeProperty(STRIP_R_VAR);
+}
+function ensureStripGutterObservers() {
+  if (!_dockObserver) {
+    const appEl = document.querySelector("[data-app-root]");
+    if (appEl) {
+      _dockObserver = new MutationObserver(() => {
+        updateStripGutters();
+      });
+      _dockObserver.observe(appEl, { attributes: true, attributeFilter: ["style"] });
+    }
+  }
+  if (!_mediaQuery) {
+    _mediaQuery = window.matchMedia("(max-width: 600px)");
+    _onMediaChange = (e) => {
+      if (e.matches) {
+        clearStripGutterVars();
+      } else {
+        updateStripGutters();
+      }
+    };
+    _mediaQuery.addEventListener("change", _onMediaChange);
+  }
+}
+function computeStripGutters() {
+  const mainSide = getMainDrawerSide();
+  const mainBase = TAB_LIST_WIDTH_PX;
+  const secondaryBase = hasSecondaryAssignedTabs() ? TAB_LIST_WIDTH_PX : 0;
+  let leftBase = 0;
+  let rightBase = 0;
+  if (mainSide === "left") {
+    leftBase = mainBase;
+    rightBase = secondaryBase;
+  } else {
+    rightBase = mainBase;
+    leftBase = secondaryBase;
+  }
+  const dock = getDockInsets();
+  return {
+    left: Math.max(0, leftBase - dock.left),
+    right: Math.max(0, rightBase - dock.right)
+  };
+}
+function clearStripGutters() {
+  clearStripGutterVars();
+  stopStripGutterObservers();
+}
+function updateStripGutters() {
+  if (isMobileViewport()) {
+    clearStripGutterVars();
     return;
-  if (getSettings().keepTabListVisible) {
-    drawerTab.style.display = "none";
+  }
+  if (!isKeepTabListVisibleEnabled()) {
+    clearStripGutters();
     return;
   }
-  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === "secondary");
-  drawerTab.style.display = hasSecondaryTabs ? "flex" : "none";
+  injectStripGutterStyles();
+  ensureStripGutterObservers();
+  const { left, right } = computeStripGutters();
+  const root = document.documentElement;
+  root.classList.add(STRIP_GUTTER_CLASS);
+  root.style.setProperty(STRIP_L_VAR, `${left}px`);
+  root.style.setProperty(STRIP_R_VAR, `${right}px`);
 }
-function showSecondaryTab(tabId) {
-  setActiveSecondaryTabId(tabId);
-  persistLayout();
-  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-  const movedRoots = secondaryContent ? Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]")) : [];
-  let activeTitle = findMainTabButton(tabId)?.getAttribute("title") || "";
-  for (const root of movedRoots) {
-    const tid = root.getAttribute("data-canvas-moved") || "";
-    if (tid === tabId) {
-      root.setAttribute("data-canvas-active", "");
-      const mainBtn = findMainTabButton(tid);
-      if (mainBtn)
-        activeTitle = mainBtn.getAttribute("title") || "";
-    } else {
-      root.removeAttribute("data-canvas-active");
-    }
-  }
-  if (activeTitle) {
-    const title = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-    if (title)
-      title.textContent = activeTitle;
-  }
-  const allBtns = getSecondaryTabList()?.querySelectorAll("button[data-tab-id]");
-  if (allBtns) {
-    for (const btn of allBtns) {
-      const isActive = btn.getAttribute("data-tab-id") === tabId;
-      btn.classList.toggle("sidebar-ux-tab-active", isActive);
-      btn.style.color = "";
-      btn.style.background = "";
-      btn.style.boxShadow = "";
-      btn.style.borderRadius = "";
-      const label = btn.querySelector(".sidebar-ux-tab-label");
-      if (label)
-        label.style.color = "";
-    }
-  }
-}
-var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null;
-var init_buttons = __esm(() => {
+var STRIP_GUTTER_CLASS = "sidebar-ux-strip-gutters", STRIP_L_VAR = "--sidebar-ux-strip-l", STRIP_R_VAR = "--sidebar-ux-strip-r", STYLE_ID = "sidebar-ux-strip-gutter", _dockObserver = null, _mediaQuery = null, _onMediaChange = null;
+var init_strip_gutter = __esm(() => {
   init_store();
-  init_log();
-  init_drawer_sync();
-  init_secondary();
   init_state();
   init_assignment();
-  init_tab_context_menu();
-  init_persist();
+  init_mobile_exclusion();
+  init_styles();
 });
 
 // src/sidebar/main-tab-pin.ts
@@ -3698,6 +1811,1906 @@ var init_main_tab_pin = __esm(() => {
   init_buttons();
   init_tab_context_menu();
   _mirrorToHost = new WeakMap;
+});
+
+// src/sidebar/drawer-observer.ts
+class DrawerObserver {
+  observer = null;
+  tabs = new Map;
+  tabHandlers = [];
+  unregHandlers = [];
+  start() {
+    const sidebar = getMainSidebar();
+    if (!sidebar) {
+      console.warn("[DrawerObserver] main sidebar not found");
+      return;
+    }
+    this.scanExistingTabs(sidebar);
+    this.observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") {
+          for (const node of mutation.addedNodes) {
+            if (node instanceof HTMLElement) {
+              this.handleAddedNode(node);
+            }
+          }
+          for (const node of mutation.removedNodes) {
+            if (node instanceof HTMLElement) {
+              this.handleRemovedNode(node);
+            }
+          }
+        }
+      }
+    });
+    this.observer.observe(sidebar, { childList: true, subtree: true });
+    registerCleanup(() => this.stop());
+  }
+  stop() {
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    this.tabs.clear();
+  }
+  onTabRegistered(handler) {
+    this.tabHandlers.push(handler);
+    return () => {
+      const idx = this.tabHandlers.indexOf(handler);
+      if (idx >= 0)
+        this.tabHandlers.splice(idx, 1);
+    };
+  }
+  onTabUnregistered(handler) {
+    this.unregHandlers.push(handler);
+    return () => {
+      const idx = this.unregHandlers.indexOf(handler);
+      if (idx >= 0)
+        this.unregHandlers.splice(idx, 1);
+    };
+  }
+  getTab(tabId) {
+    return this.tabs.get(tabId) || null;
+  }
+  getAllTabs() {
+    return Array.from(this.tabs.values());
+  }
+  scanExistingTabs(sidebar) {
+    const buttons = sidebar.querySelectorAll("[data-tab-id]");
+    for (const btn of buttons) {
+      if (btn instanceof HTMLElement) {
+        this.registerTab(btn);
+      }
+    }
+  }
+  handleAddedNode(node) {
+    if (node.hasAttribute?.("data-tab-id")) {
+      this.registerTab(node);
+    }
+    const buttons = node.querySelectorAll?.("[data-tab-id]");
+    if (buttons) {
+      for (const btn of buttons) {
+        if (btn instanceof HTMLElement) {
+          this.registerTab(btn);
+        }
+      }
+    }
+  }
+  handleRemovedNode(node) {
+    if (node instanceof HTMLElement && node.hasAttribute?.("data-tab-id")) {
+      const tabId = node.getAttribute("data-tab-id") || "";
+      if (this.tabs.has(tabId)) {
+        this.tabs.delete(tabId);
+        for (const h of this.unregHandlers)
+          h(tabId);
+      }
+    }
+    const buttons = node.querySelectorAll?.("[data-tab-id]");
+    if (buttons) {
+      for (const btn of buttons) {
+        if (btn instanceof HTMLElement) {
+          const tabId = btn.getAttribute("data-tab-id") || "";
+          if (this.tabs.has(tabId)) {
+            this.tabs.delete(tabId);
+            for (const h of this.unregHandlers)
+              h(tabId);
+          }
+        }
+      }
+    }
+  }
+  registerTab(button) {
+    const tabId = button.getAttribute("data-tab-id") || "";
+    if (!tabId || this.tabs.has(tabId))
+      return;
+    const parts = tabId.split(":");
+    const extensionId = parts[2] || "unknown";
+    const tab = {
+      tabId,
+      button,
+      extensionId,
+      title: button.getAttribute("title") || button.textContent?.trim() || ""
+    };
+    this.tabs.set(tabId, tab);
+    for (const h of this.tabHandlers)
+      h(tab);
+  }
+}
+var drawerObserver;
+var init_drawer_observer = __esm(() => {
+  init_cleanup();
+  drawerObserver = new DrawerObserver;
+});
+
+// src/tabs/builtin-move.ts
+var exports_builtin_move = {};
+__export(exports_builtin_move, {
+  moveBuiltInTabToSecondaryContainer: () => moveBuiltInTabToSecondaryContainer
+});
+async function moveBuiltInTabToSecondaryContainer(opts) {
+  const { tabId, deferActivation = false } = opts;
+  const bridge = getHostBridge();
+  const ui = bridge?.ui;
+  if (!ui?.getBuiltInTabRoot || !ui.requestTabLocation) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=BRIDGE_MISSING ` + `hasGetBuiltInTabRoot=${!!ui?.getBuiltInTabRoot} hasRequestTabLocation=${!!ui?.requestTabLocation}`);
+    return;
+  }
+  let root = opts.root;
+  if (!root) {
+    root = ui.getBuiltInTabRoot(tabId);
+  }
+  if (!root) {
+    const { ensureBuiltInTabActiveInMain } = await Promise.resolve().then(() => (init_assignment(), exports_assignment));
+    await ensureBuiltInTabActiveInMain(tabId, {
+      getBuiltInTabRoot: (id) => ui.getBuiltInTabRoot?.(id),
+      dlog
+    });
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    root = ui.getBuiltInTabRoot(tabId);
+    if (!root) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
+      dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId });
+      return;
+    }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
+  } else {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_BRIDGE_ROOT tab=${tabId} branch=ROOT_READY via=opts-or-getBuiltInTabRoot`);
+  }
+  root.setAttribute("data-canvas-moved", tabId);
+  if (!deferActivation) {
+    root.setAttribute("data-canvas-active", "");
+  }
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} branch=REQUEST_TAB_LOCATION`);
+  ui.requestTabLocation(tabId, {
+    kind: "container",
+    containerId: "canvas-secondary-drawer"
+  });
+  const afterLoc = ui.getTabLocation?.(tabId) ?? null;
+  watchForContainerPass3Reset(bridge, tabId, root, afterLoc);
+  return root;
+}
+function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
+  queueMicrotask(() => {
+    try {
+      const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
+      const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+      const rootInContainer = typeof microContainer?.contains === "function" ? microContainer.contains(builtInRoot) : false;
+      if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
+        dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to main-drawer because the target container is missing from Lumiverse's containers store. Fix: ensure the secondary drawer's panel content element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx — the call exists but may be failing silently.)`);
+      }
+    } catch {}
+  });
+}
+var init_builtin_move = __esm(() => {
+  init_log();
+  init_secondary();
+});
+
+// src/sidebar/secondary-drawer.ts
+var exports_secondary_drawer = {};
+__export(exports_secondary_drawer, {
+  unassignFromSecondary: () => unassignFromSecondary,
+  teardownSecondaryDrawer: () => teardownSecondaryDrawer,
+  setSuppressAutoActivation: () => setSuppressAutoActivation,
+  setRestoringFromLayout: () => setRestoringFromLayout,
+  isSuppressAutoActivation: () => isSuppressAutoActivation,
+  isRestoringFromLayout: () => isRestoringFromLayout,
+  initSecondaryDrawer: () => initSecondaryDrawer,
+  getSecondaryDrawerState: () => getSecondaryDrawerState,
+  getActiveSecondaryTab: () => getActiveSecondaryTab,
+  assignToSecondary: () => assignToSecondary,
+  activateSecondaryTab: () => activateSecondaryTab
+});
+function setRestoringFromLayout(value) {
+  _restoringFromLayout = value;
+}
+function isRestoringFromLayout() {
+  return _restoringFromLayout;
+}
+function setSuppressAutoActivation(value) {
+  _suppressAutoActivation = value;
+}
+function isSuppressAutoActivation() {
+  return _suppressAutoActivation;
+}
+function findStoreTab(tabIdOrTitle) {
+  findStoreData(true);
+  const tabs = getDrawerTabs();
+  return tabs.find((t) => t.id === tabIdOrTitle) || tabs.find((t) => t.title === tabIdOrTitle) || null;
+}
+function initSecondaryDrawer(_ctx) {
+  drawerObserver.onTabUnregistered((tabId) => {
+    if (getTabAssignments().has(tabId)) {
+      if (_restoringFromLayout)
+        return;
+      deleteTabAssignment(tabId);
+      removeSecondaryTabButton(tabId);
+      persistLayout();
+      if (_activeTabId === tabId) {
+        _activeTabId = null;
+        _state = getTabAssignments().size > 0 ? "open" : "closed";
+        if (_state === "closed") {
+          closeSecondarySidebar();
+          updateDrawerTabVisibility();
+        }
+      }
+    }
+  });
+}
+async function assignToSecondary(tabId) {
+  const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
+  let tab = drawerObserver.getTab(tabId);
+  let iconSvg;
+  let iconUrl;
+  let shortName;
+  if (!tab) {
+    const storeTab = findStoreTab(tabId);
+    if (!storeTab) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} not found in DrawerObserver or store`);
+      return;
+    }
+    const button = findMainTabButton(storeTab.title);
+    if (!button) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} found in store but no main sidebar button (title="${storeTab.title}")`);
+      return;
+    }
+    tab = {
+      tabId: storeTab.id,
+      button,
+      extensionId: storeTab.extensionId,
+      title: storeTab.title
+    };
+    iconSvg = storeTab.iconSvg;
+    iconUrl = storeTab.iconUrl;
+    shortName = storeTab.shortName;
+  } else {
+    iconSvg = tab.button.querySelector("svg")?.outerHTML;
+  }
+  const resolvedId = tab.tabId;
+  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
+  const _isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
+  if (_isExtensionTab) {
+    setTabAssignment(resolvedId, "secondary");
+    hideMainTabButton(resolvedId);
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+      await openSecondarySidebar();
+      _state = "open";
+    }
+    const _secondaryContentEarly = document.querySelector(".sidebar-ux-panel-content");
+    const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
+    const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
+    if (_existingRoot) {
+      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: tab.title || _storeTabForButton?.title || resolvedId,
+        root: _existingRoot,
+        iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg,
+        shortName: shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName
+      });
+      updateDrawerTabVisibility();
+    } else {
+      const _secondaryWrapper = getSecondaryWrapper();
+      const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+      const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+      if (_storeTab?.root && _secondaryContent) {
+        const _root = _storeTab.root;
+        if (_root.parentElement !== _secondaryContent) {
+          _secondaryContent.appendChild(_root);
+        }
+        _root.setAttribute("data-canvas-moved", resolvedId);
+        if (!deferActivation) {
+          for (const _child of Array.from(_secondaryContent.children)) {
+            if (_child instanceof HTMLElement) {
+              if (_child === _root) {
+                _child.setAttribute("data-canvas-active", "");
+              } else {
+                _child.removeAttribute("data-canvas-active");
+              }
+            }
+          }
+        }
+        addSecondaryTabButton({
+          id: resolvedId,
+          title: tab.title || _storeTab.title || resolvedId,
+          root: _root,
+          iconSvg: tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg,
+          shortName: readMainButtonShortName(tab.button) || _storeTab.shortName
+        });
+        updateDrawerTabVisibility();
+      }
+    }
+    if (!isMobileViewport() && !deferActivation) {
+      _activeTabId = resolvedId;
+      _state = "tab_active";
+      setActiveSecondaryTabId(resolvedId);
+    }
+    const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+    if (_headerTitle && !deferActivation) {
+      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
+    }
+  } else {
+    const _secondaryWrapper = getSecondaryWrapper();
+    const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+    const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+    const wSpindle = getHostBridge();
+    const wSpindleUi = wSpindle?.ui;
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` + `hasSecondaryContent=${!!_secondaryContent}`);
+    const _alreadyInSecondary = _secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`);
+    if (_alreadyInSecondary) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
+      const _title2 = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
+      addSecondaryTabButton({
+        id: resolvedId,
+        title: _title2,
+        root: _alreadyInSecondary,
+        iconSvg: tab.button?.querySelector("svg")?.outerHTML || _alreadyInSecondary.querySelector("svg")?.outerHTML,
+        shortName: readMainButtonShortName(tab.button) || _storeTab?.shortName
+      });
+      updateDrawerTabVisibility();
+      setTabAssignment(resolvedId, "secondary");
+      hideMainTabButton(resolvedId);
+      if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+        await openSecondarySidebar();
+        if (!deferActivation) {
+          _state = "tab_active";
+          _activeTabId = resolvedId;
+          setActiveSecondaryTabId(resolvedId);
+        }
+      }
+      const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
+      if (_headerTitle2 && !deferActivation)
+        _headerTitle2.textContent = _title2;
+      if (!isMobileViewport() && !deferActivation) {
+        showSecondaryTab(resolvedId);
+      }
+      persistLayout();
+      return;
+    }
+    if (!_secondaryContent) {
+      dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
+        tabId,
+        resolvedId
+      });
+      return;
+    }
+    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` + `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
+    let _root;
+    let _placedViaHost = false;
+    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+      _root = await moveBuiltInTabToSecondaryContainer2({
+        tabId,
+        deferActivation,
+        root: bridgeRoot
+      });
+      _placedViaHost = !!_root;
+    }
+    if (!_root && _storeTab?.root) {
+      _root = _storeTab.root;
+      if (_root.parentElement !== _secondaryContent) {
+        _secondaryContent.appendChild(_root);
+      }
+      _root.setAttribute("data-canvas-moved", resolvedId);
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
+    }
+    if (!_root) {
+      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
+        dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).", {
+          tabId,
+          resolvedId
+        });
+      }
+      return;
+    }
+    if (!deferActivation && _secondaryContent) {
+      for (const _child of Array.from(_secondaryContent.children)) {
+        if (_child instanceof HTMLElement) {
+          if (_child === _root || _child.getAttribute("data-canvas-moved") === resolvedId) {
+            _child.setAttribute("data-canvas-active", "");
+          } else if (_child.hasAttribute("data-canvas-moved")) {
+            _child.removeAttribute("data-canvas-active");
+          }
+        }
+      }
+    }
+    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
+    const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root.querySelector("svg")?.outerHTML;
+    const _shortName = readMainButtonShortName(tab.button) || _storeTab?.shortName;
+    addSecondaryTabButton({
+      id: resolvedId,
+      title: _title,
+      root: _root,
+      iconSvg: _iconSvg,
+      shortName: _shortName
+    });
+    updateDrawerTabVisibility();
+    setTabAssignment(resolvedId, "secondary");
+    hideMainTabButton(resolvedId);
+    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+      await openSecondarySidebar();
+      if (!deferActivation) {
+        _state = "tab_active";
+        _activeTabId = resolvedId;
+        setActiveSecondaryTabId(resolvedId);
+      }
+    }
+    const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
+    if (_headerTitle && !deferActivation)
+      _headerTitle.textContent = _title;
+    if (_placedViaHost) {
+      try {
+        const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        if (m.isMainMirrorActive())
+          m.ensureHostContentParkedPublic();
+      } catch {}
+    }
+  }
+  if (!isMobileViewport() && !deferActivation) {
+    showSecondaryTab(resolvedId);
+  }
+  persistLayout();
+}
+async function unassignFromSecondary(tabId) {
+  dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`);
+  let resolvedShowId = tabId;
+  let resolvedExtId;
+  findStoreData(true);
+  const _tabs = getDrawerTabs();
+  const _bySegment = _tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
+  if (_bySegment) {
+    resolvedShowId = _bySegment.id;
+    resolvedExtId = _bySegment.extensionId;
+  } else {
+    const storeTab = findStoreTab(tabId);
+    if (storeTab) {
+      resolvedShowId = storeTab.id;
+      resolvedExtId = storeTab.extensionId;
+    } else {
+      dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map((t) => ({ id: t.id, title: t.title })));
+    }
+  }
+  const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  if (_secondaryContentForUnassign) {
+    const _movedRoot = _secondaryContentForUnassign.querySelector(`[data-canvas-moved="${CSS.escape(resolvedShowId)}"]:not([data-canvas-secondary])`);
+    if (_movedRoot) {
+      const _mainContent = document.querySelector('[class*="_panelContent_"]');
+      if (_mainContent && _movedRoot.parentElement !== _mainContent) {
+        _mainContent.appendChild(_movedRoot);
+      }
+      _movedRoot.removeAttribute("data-canvas-moved");
+      _movedRoot.removeAttribute("data-canvas-active");
+    }
+  }
+  deleteTabAssignment(tabId);
+  if (resolvedShowId !== tabId) {
+    deleteTabAssignment(resolvedShowId);
+  }
+  removeSecondaryTabButton(tabId);
+  if (getActiveSecondaryTabId() === tabId) {
+    showSecondaryTab(null);
+  }
+  showMainTabButton(resolvedShowId);
+  if (getTabAssignments().size === 0) {
+    _state = "closed";
+    _activeTabId = null;
+    closeSecondarySidebar();
+    updateDrawerTabVisibility();
+  }
+  persistLayout();
+}
+function activateSecondaryTab(tabId) {
+  _activeTabId = tabId;
+  _state = "tab_active";
+  showSecondaryTab(tabId);
+}
+function getActiveSecondaryTab() {
+  return _activeTabId;
+}
+function getSecondaryDrawerState() {
+  return _state;
+}
+function teardownSecondaryDrawer() {
+  _state = "closed";
+  _activeTabId = null;
+}
+var _state = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
+var init_secondary_drawer = __esm(() => {
+  init_drawer_observer();
+  init_buttons();
+  init_assignment();
+  init_active_tab();
+  init_persist();
+  init_secondary();
+  init_store();
+  init_log();
+  init_mobile_exclusion();
+});
+
+// src/sidebar/drawer-sync.ts
+var exports_drawer_sync = {};
+__export(exports_drawer_sync, {
+  syncSecondaryTabLabels: () => syncSecondaryTabLabels,
+  syncDrawerTabSettings: () => syncDrawerTabSettings,
+  stopSideChangeWatcher: () => stopSideChangeWatcher,
+  stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
+  stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
+  stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
+  startSideChangeWatcher: () => startSideChangeWatcher,
+  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
+  isShowTabLabels: () => isShowTabLabels,
+  checkSideChanged: () => checkSideChanged
+});
+function isShowTabLabels() {
+  const mode = getSettings().showTabLabels;
+  if (mode === "show")
+    return true;
+  if (mode === "hide")
+    return false;
+  const store = getStoreSnapshot();
+  if (store) {
+    const snapshot = asDrawerStore(store);
+    if (snapshot.drawerSettings) {
+      return !!snapshot.drawerSettings.showTabLabels;
+    }
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar) {
+    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]');
+    if (labeledBtn)
+      return true;
+  }
+  return false;
+}
+function syncDrawerTabSettings() {
+  if (_syncPending)
+    return;
+  _syncPending = true;
+  requestAnimationFrame(() => {
+    _syncPending = false;
+    _runSyncDrawerTabSettings();
+  });
+}
+function _runSyncDrawerTabSettings() {
+  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
+  const mainMirrorWrapperEarly = getMainMirrorWrapper();
+  if (!drawerTab && !mainMirrorWrapperEarly)
+    return;
+  let mainDrawerTab = null;
+  const mainWrapper = getMainWrapper();
+  if (mainWrapper) {
+    mainDrawerTab = mainWrapper.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
+  }
+  if (!mainDrawerTab) {
+    mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
+  }
+  if (!mainDrawerTab) {
+    requestAnimationFrame(() => _runSyncDrawerTabSettings());
+    return;
+  }
+  const w = mainDrawerTab.offsetWidth;
+  const h = mainDrawerTab.offsetHeight;
+  if (w < 16 || w > 120 || h < 16 || h > 400) {
+    dlog(`[drawer-sync] main drawer tab dimensions look wrong (w=${w} h=${h}), skipping mirror`);
+    return;
+  }
+  if (!_mainDrawerTabResizeObserver) {
+    _mainDrawerTabResizeObserver = new ResizeObserver(() => {
+      syncDrawerTabSettings();
+    });
+    _mainDrawerTabResizeObserver.observe(mainDrawerTab);
+    registerCleanup(stopDrawerTabResizeWatcher);
+  }
+  if (!_mainDrawerTabClassObserver) {
+    _mainDrawerTabClassObserver = new MutationObserver(() => {
+      syncDrawerTabSettings();
+    });
+    _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["class"] });
+    registerCleanup(stopDrawerTabClassObserver);
+  }
+  if (!_mainDrawerTabStyleObserver) {
+    _mainDrawerTabStyleObserver = new MutationObserver(() => {
+      syncDrawerTabSettings();
+    });
+    _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
+    registerCleanup(stopDrawerTabStyleObserver);
+  }
+  const secondaryWrapper = getSecondaryWrapper();
+  const mainMirrorWrapper = getMainMirrorWrapper();
+  const mainStyle = getComputedStyle(mainDrawerTab);
+  const newVars = [
+    `${mainDrawerTab.offsetWidth}px`,
+    `${mainDrawerTab.offsetHeight}px`,
+    mainStyle.paddingTop,
+    mainStyle.paddingRight,
+    mainStyle.paddingBottom,
+    mainStyle.paddingLeft,
+    mainStyle.gap,
+    `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`
+  ].join("|");
+  if (newVars !== _lastWrittenDrawerTabVars) {
+    _lastWrittenDrawerTabVars = newVars;
+    const parts = newVars.split("|");
+    const stamp = (wrapper) => {
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
+      wrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
+    };
+    if (secondaryWrapper)
+      stamp(secondaryWrapper);
+    if (mainMirrorWrapper)
+      stamp(mainMirrorWrapper);
+  } else {
+    if (mainMirrorWrapper && !mainMirrorWrapper.style.getPropertyValue("--sidebar-ux-drawer-tab-w")) {
+      const parts = newVars.split("|");
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
+      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
+    }
+  }
+  const mainParent = mainDrawerTab.parentElement;
+  const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0;
+  const mainMarginStyle = mainDrawerTab.style.marginTop;
+  const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
+  if (_lastKnownVerticalPos !== posVh) {
+    const settings = getSettings();
+    if (settings.mirrorCompactPosition) {
+      if (drawerTab)
+        drawerTab.style.marginTop = `${posVh}vh`;
+      const mainMirrorTab2 = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+      if (mainMirrorTab2)
+        mainMirrorTab2.style.marginTop = `${posVh}vh`;
+    } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
+      if (drawerTab)
+        drawerTab.style.marginTop = "";
+    }
+    _lastKnownVerticalPos = posVh;
+  }
+  if (drawerTab) {
+    drawerTab.classList.toggle("sidebar-ux-drawer-tab--active", isSecondarySidebarOpen());
+  }
+  const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+  if (mainMirrorTab && isMainMirrorActive()) {
+    mainMirrorTab.classList.toggle("sidebar-ux-drawer-tab--active", isCanvasMainOpen());
+  }
+  syncSecondaryTabLabels();
+}
+function syncSecondaryTabLabels() {
+  const showLabels = isShowTabLabels();
+  const cacheKey = showLabels ? "show" : "hide";
+  if (cacheKey === _lastWrittenLabelsKey)
+    return;
+  _lastWrittenLabelsKey = cacheKey;
+  const roots = [];
+  const secondary = getSecondaryWrapper();
+  if (secondary)
+    roots.push(secondary);
+  const mainMirror = getMainMirrorWrapper();
+  if (mainMirror)
+    roots.push(mainMirror);
+  if (typeof document.querySelectorAll === "function") {
+    for (const host of Array.from(document.querySelectorAll(".sidebar-ux-tab-list-pin-host"))) {
+      roots.push(host);
+    }
+  }
+  for (const root of roots) {
+    const labels = root.querySelectorAll(".sidebar-ux-tab-label");
+    for (const label of labels) {
+      label.style.opacity = showLabels ? "1" : "0";
+      label.style.height = showLabels ? "auto" : "0";
+      label.style.marginTop = showLabels ? "1px" : "0";
+      const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
+      if (btn) {
+        btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
+        btn.style.height = showLabels ? "56px" : "48px";
+      }
+    }
+  }
+}
+function checkSideChanged() {
+  const currentSide = getMainDrawerSide();
+  if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
+    const wasOpen = isSecondarySidebarOpen();
+    unmountSecondarySidebar();
+    _lastWrittenDrawerTabVars = null;
+    _lastWrittenLabelsKey = null;
+    _lastKnownVerticalPos = null;
+    stopDrawerTabResizeWatcher();
+    stopDrawerTabClassObserver();
+    stopDrawerTabStyleObserver();
+    findStoreData(true);
+    mountSecondarySidebar({ initialOpen: wasOpen });
+    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
+    restoreSecondaryTabButtons();
+    Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
+      for (const [tabId, side] of getTabAssignments()) {
+        if (side === "secondary")
+          assignToSecondary2(tabId).catch(() => {});
+      }
+    });
+    updateDrawerTabVisibility();
+    const activeTabId = getActiveSecondaryTabId();
+    if (activeTabId !== null) {
+      const assignments = getTabAssignments();
+      if (assignments.get(activeTabId) === "secondary") {
+        showSecondaryTab(activeTabId);
+      }
+    }
+  }
+  _lastKnownSide = currentSide;
+  syncDrawerTabSettings();
+}
+function restoreSecondaryTabButtons() {
+  const tabs = getDrawerTabs();
+  for (const [tabId, sidebar] of getTabAssignments()) {
+    if (sidebar !== "secondary")
+      continue;
+    let tab = tabs && tabs.find((t) => t.id === tabId);
+    if (!tab && tabs) {
+      const stripSuffix = (id) => {
+        const lastColon = id.lastIndexOf(":");
+        if (lastColon <= 0)
+          return id;
+        const tail = id.slice(lastColon + 1);
+        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
+      };
+      const storedPrefix = stripSuffix(tabId);
+      const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
+      if (candidates.length === 1) {
+        tab = candidates[0];
+        dlog(`restoreSecondaryTabButtons: suffix-drift fallback matched stored "${tabId}" -> live "${tab.id}"`);
+      }
+    }
+    if (tab) {
+      addSecondaryTabButton(tab);
+      continue;
+    }
+    const mainBtn = findMainTabButton(tabId);
+    if (mainBtn) {
+      const id = mainBtn.getAttribute("data-tab-id") || tabId;
+      const title = mainBtn.getAttribute("title") || tabId;
+      const svg = mainBtn.querySelector("svg")?.outerHTML;
+      addSecondaryTabButton({
+        id,
+        title,
+        root: undefined,
+        iconSvg: svg
+      });
+      dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`);
+    } else {
+      dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`);
+    }
+  }
+}
+function startSideChangeWatcher() {
+  if (_sideObserver !== null)
+    return;
+  _lastKnownSide = getMainDrawerSide();
+  const wrapper = getMainWrapper();
+  if (!wrapper) {
+    dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
+    return;
+  }
+  _sideObserver = new MutationObserver(() => {
+    checkSideChanged();
+  });
+  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
+  registerCleanup(() => stopSideChangeWatcher());
+}
+function stopSideChangeWatcher() {
+  if (_sideObserver === null)
+    return;
+  _sideObserver.disconnect();
+  _sideObserver = null;
+}
+function stopDrawerTabResizeWatcher() {
+  if (_mainDrawerTabResizeObserver) {
+    _mainDrawerTabResizeObserver.disconnect();
+    _mainDrawerTabResizeObserver = null;
+  }
+}
+function stopDrawerTabClassObserver() {
+  if (_mainDrawerTabClassObserver) {
+    _mainDrawerTabClassObserver.disconnect();
+    _mainDrawerTabClassObserver = null;
+  }
+}
+function stopDrawerTabStyleObserver() {
+  if (_mainDrawerTabStyleObserver) {
+    _mainDrawerTabStyleObserver.disconnect();
+    _mainDrawerTabStyleObserver = null;
+  }
+}
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null;
+var init_drawer_sync = __esm(() => {
+  init_store();
+  init_log();
+  init_secondary();
+  init_main_mirror_drawer();
+  init_assignment();
+  init_cleanup();
+  init_state();
+  init_buttons();
+  init_active_tab();
+});
+
+// src/tabs/buttons.ts
+function hideMainTabButton(tabId) {
+  if (_hideMainTabButtonOverride) {
+    _hideMainTabButtonOverride(tabId);
+    return;
+  }
+  const btn = findMainTabButton(tabId);
+  if (btn)
+    btn.style.display = "none";
+}
+function showMainTabButton(tabId) {
+  if (_showMainTabButtonOverride) {
+    _showMainTabButtonOverride(tabId);
+    return;
+  }
+  const btn = findMainTabButton(tabId);
+  if (btn)
+    btn.style.display = "";
+}
+function findMainTabButton(tabId) {
+  const sidebar = getMainSidebar();
+  if (!sidebar) {
+    dwarn("findMainTabButton: no sidebar found");
+    return null;
+  }
+  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`);
+  if (byId)
+    return byId;
+  const byTitle = sidebar.querySelector(`button[title="${cssEscape(tabId)}"]`);
+  if (byTitle) {
+    byTitle.setAttribute("data-tab-id", tabId);
+    return byTitle;
+  }
+  const tabs = getDrawerTabs();
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) {
+    dwarn(`findMainTabButton: no tab in store for id="${tabId}", known tabs=`, tabs.map((t) => ({ id: t.id, title: t.title })));
+    return null;
+  }
+  const buttons = sidebar.querySelectorAll("button[title]");
+  for (const btn of buttons) {
+    if (btn.getAttribute("title") === tab.title) {
+      btn.setAttribute("data-tab-id", tab.id);
+      return btn;
+    }
+  }
+  dwarn(`findMainTabButton: no button for id="${tabId}" (title="${tab.title}") found among ${buttons.length} buttons`);
+  return null;
+}
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/(["\\])/g, "\\$1");
+}
+function isSettingsButton(btn) {
+  const cls = (btn.className || "").toString();
+  if (cls.includes("tabBtnSettings"))
+    return true;
+  const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
+  const title = (btn.getAttribute("title") || "").toLowerCase();
+  if (aria.includes("settings") || aria.includes("preferences"))
+    return true;
+  if (title.includes("settings") || title.includes("preferences"))
+    return true;
+  return false;
+}
+function findSafeFallbackButton(sidebar) {
+  const allButtons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
+  return allButtons.find((b) => b.style.display !== "none" && b.className.includes("tabBtn") && !b.className.includes("tabBtnExtension") && !isSettingsButton(b)) ?? null;
+}
+function deriveShortName(title, shortName) {
+  if (shortName)
+    return shortName;
+  return title.length > 8 ? title.slice(0, 7) + "…" : title;
+}
+function readMainButtonShortName(mainBtn) {
+  if (!mainBtn)
+    return;
+  const label = mainBtn.querySelector('span[class*="tabLabel"]');
+  if (label && label.textContent)
+    return label.textContent.trim();
+  return;
+}
+function addSecondaryTabButton(tab) {
+  const tabList = getSecondaryTabList();
+  const _bareId = tab.id.includes(":") ? tab.id.replace(/:\d+$/, "").split(":").pop() ?? tab.id : tab.id;
+  const alreadyHasButton = !!(tabList && (tabList.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`) || tabList.querySelector(`[data-tab-id="${CSS.escape(_bareId)}"]`)));
+  if (!tabList || alreadyHasButton)
+    return;
+  const showLabels = isShowTabLabels();
+  dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`);
+  const btn = document.createElement("button");
+  btn.setAttribute("data-tab-id", tab.id);
+  btn.setAttribute("title", tab.title);
+  if (showLabels)
+    btn.classList.add("sidebar-ux-tab-labeled");
+  btn.style.cssText = `
+    width: 100%;
+    height: ${showLabels ? "56px" : "48px"};
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  `;
+  const iconWrap = document.createElement("span");
+  if (tab.iconSvg) {
+    iconWrap.innerHTML = tab.iconSvg;
+  } else if (tab.iconUrl) {
+    const img = document.createElement("img");
+    img.src = tab.iconUrl;
+    img.alt = "";
+    img.width = 20;
+    img.height = 20;
+    img.style.borderRadius = "2px";
+    iconWrap.appendChild(img);
+  } else {
+    iconWrap.innerHTML = PUZZLE_ICON_SVG;
+  }
+  btn.appendChild(iconWrap);
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "sidebar-ux-tab-label";
+  labelSpan.textContent = deriveShortName(tab.title, tab.shortName);
+  labelSpan.style.cssText = `
+    opacity: ${showLabels ? "1" : "0"};
+    height: ${showLabels ? "auto" : "0"};
+    margin-top: ${showLabels ? "1px" : "0"};
+    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
+  `;
+  btn.appendChild(labelSpan);
+  btn.addEventListener("click", () => {
+    if (isSecondarySidebarOpen()) {
+      if (getActiveSecondaryTabId() === tab.id) {
+        closeSecondarySidebar();
+      } else {
+        showSecondaryTab(tab.id);
+      }
+    } else {
+      openSecondarySidebar();
+      showSecondaryTab(tab.id);
+    }
+  });
+  btn.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn);
+  });
+  tabList.appendChild(btn);
+  Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
+}
+function removeSecondaryTabButton(tabId) {
+  const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
+  btn?.remove();
+  Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
+}
+function updateDrawerTabVisibility() {
+  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
+  if (!drawerTab)
+    return;
+  if (getSettings().keepTabListVisible) {
+    drawerTab.style.display = "none";
+    return;
+  }
+  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === "secondary");
+  drawerTab.style.display = hasSecondaryTabs ? "flex" : "none";
+}
+function showSecondaryTab(tabId) {
+  setActiveSecondaryTabId(tabId);
+  persistLayout();
+  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  const movedRoots = secondaryContent ? Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]")) : [];
+  let activeTitle = findMainTabButton(tabId)?.getAttribute("title") || "";
+  for (const root of movedRoots) {
+    const tid = root.getAttribute("data-canvas-moved") || "";
+    if (tid === tabId) {
+      root.setAttribute("data-canvas-active", "");
+      const mainBtn = findMainTabButton(tid);
+      if (mainBtn)
+        activeTitle = mainBtn.getAttribute("title") || "";
+    } else {
+      root.removeAttribute("data-canvas-active");
+    }
+  }
+  if (activeTitle) {
+    const title = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+    if (title)
+      title.textContent = activeTitle;
+  }
+  const allBtns = getSecondaryTabList()?.querySelectorAll("button[data-tab-id]");
+  if (allBtns) {
+    for (const btn of allBtns) {
+      const isActive = btn.getAttribute("data-tab-id") === tabId;
+      btn.classList.toggle("sidebar-ux-tab-active", isActive);
+      btn.style.color = "";
+      btn.style.background = "";
+      btn.style.boxShadow = "";
+      btn.style.borderRadius = "";
+      const label = btn.querySelector(".sidebar-ux-tab-label");
+      if (label)
+        label.style.color = "";
+    }
+  }
+}
+var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null;
+var init_buttons = __esm(() => {
+  init_store();
+  init_log();
+  init_drawer_sync();
+  init_secondary();
+  init_state();
+  init_assignment();
+  init_tab_context_menu();
+  init_persist();
+});
+
+// src/tabs/activation-handoff.ts
+async function captureSourceList(side, h) {
+  if (side === "primary") {
+    const _findStore = h?.findStoreData ?? findStoreData;
+    const _getTabs = h?.getDrawerTabs ?? getDrawerTabs;
+    const _getSidebar = h?.getMainSidebar ?? getMainSidebar;
+    const mainSidebar = _getSidebar();
+    const domIds = [];
+    if (mainSidebar) {
+      const btns2 = mainSidebar.querySelectorAll("button[data-tab-id]");
+      for (const btn of btns2) {
+        const id = btn.getAttribute("data-tab-id");
+        if (id)
+          domIds.push(id);
+      }
+    }
+    _findStore(true);
+    const storeIds = _getTabs().map((t) => t.id).filter(Boolean);
+    const merged = [];
+    const seen = new Set;
+    for (const id of domIds) {
+      if (!seen.has(id)) {
+        merged.push(id);
+        seen.add(id);
+      }
+    }
+    for (const id of storeIds) {
+      if (!seen.has(id)) {
+        merged.push(id);
+        seen.add(id);
+      }
+    }
+    if (merged.length === 0) {
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      const retrySidebar = _getSidebar();
+      if (retrySidebar) {
+        const btns2 = retrySidebar.querySelectorAll("button[data-tab-id]");
+        for (const btn of btns2) {
+          const id = btn.getAttribute("data-tab-id");
+          if (id && !seen.has(id)) {
+            merged.push(id);
+            seen.add(id);
+          }
+        }
+      }
+    }
+    const _getSidebarForFilter = h?.getMainSidebar ?? getMainSidebar;
+    const mainSidebarEl = _getSidebarForFilter();
+    if (mainSidebarEl) {
+      const filtered = [];
+      const filteredOut = [];
+      for (const id of merged) {
+        const btn = mainSidebarEl.querySelector(`button[data-tab-id="${id}"]`);
+        if (btn && btn.style.display === "none") {
+          filteredOut.push(id);
+          continue;
+        }
+        filtered.push(id);
+      }
+      return filtered;
+    }
+    return merged;
+  }
+  const list = getSecondaryTabList();
+  const btns = list ? list.querySelectorAll("button[data-tab-id]") : document.querySelectorAll(".sidebar-ux-tab-list button[data-tab-id]");
+  return Array.from(btns).map((b) => b.getAttribute("data-tab-id")).filter(Boolean);
+}
+async function isMovedTabActiveInSource(tabId, side, h, preMoveSourceActiveTab) {
+  if (preMoveSourceActiveTab !== undefined) {
+    return preMoveSourceActiveTab;
+  }
+  if (side === "primary") {
+    await new Promise((r) => Promise.resolve().then(() => r()));
+    return (h?.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer)(tabId);
+  }
+  return (h?.getActiveSecondaryTabId ?? getActiveSecondaryTabId)() === tabId;
+}
+function pickSourceReplacement(tabId, sourceList) {
+  const idx = sourceList.indexOf(tabId);
+  if (idx === -1)
+    return sourceList.length > 0 ? sourceList[0] : null;
+  if (idx > 0)
+    return sourceList[idx - 1];
+  if (idx < sourceList.length - 1)
+    return sourceList[idx + 1];
+  return null;
+}
+async function activateInPrimary(tabId, h) {
+  const _findBtn = h?.findMainTabButton ?? findMainTabButton;
+  const _findStore = h?.findStoreData ?? findStoreData;
+  const _getTabs = h?.getDrawerTabs ?? getDrawerTabs;
+  const _getPanel = h?.getMainPanelContent ?? getMainPanelContent;
+  let resolvedId = tabId;
+  const directBtn = _findBtn(tabId);
+  if (!directBtn) {
+    _findStore(true);
+    const tabs = _getTabs();
+    const bySegment = tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
+    if (bySegment) {
+      resolvedId = bySegment.id;
+    }
+  }
+  const mainBtn = directBtn ?? _findBtn(resolvedId);
+  if (mainBtn) {
+    mainBtn.click();
+    const stickSidebar = (h?.getMainSidebar ?? getMainSidebar)();
+    let stickObserver = null;
+    if (stickSidebar && typeof MutationObserver !== "undefined") {
+      stickObserver = new MutationObserver(() => {
+        const currentActive = stickSidebar.querySelector('button[class*="tabBtnActive"]');
+        const currentActiveId = currentActive?.getAttribute("data-tab-id");
+        if (currentActiveId && currentActiveId !== resolvedId) {
+          if (stickObserver) {
+            stickObserver.disconnect();
+            stickObserver = null;
+          }
+          mainBtn.click();
+        }
+      });
+      stickObserver.observe(stickSidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
+      setTimeout(() => {
+        if (stickObserver) {
+          stickObserver.disconnect();
+          stickObserver = null;
+        }
+      }, 200);
+    }
+    await new Promise((resolve) => {
+      setTimeout(() => {
+        const active = mainBtn.className.includes("tabBtnActive");
+        const wUiForCheck = getHostBridge()?.ui;
+        const rootForCheck = wUiForCheck?.getBuiltInTabRoot?.(resolvedId);
+        const mainPanelContentForCheck = _getPanel();
+        const rootInMain = rootForCheck && mainPanelContentForCheck ? mainPanelContentForCheck.contains(rootForCheck) : null;
+        const rootChildCount = rootForCheck ? rootForCheck.children.length : null;
+        const rootComputedDisplay = rootForCheck ? getComputedStyle(rootForCheck).display : null;
+        const rootRect = rootForCheck ? rootForCheck.getBoundingClientRect() : null;
+        if (!active) {
+          mainBtn.click();
+        }
+        if (active && rootInMain === false && rootForCheck && mainPanelContentForCheck) {
+          if (!mainPanelContentForCheck.contains(rootForCheck)) {
+            mainPanelContentForCheck.appendChild(rootForCheck);
+          }
+        }
+        resolve();
+      }, 100);
+    });
+    const title = mainBtn.getAttribute("title") || mainBtn.getAttribute("aria-label") || undefined;
+    adoptMainMirrorHostActivation(mainBtn, title);
+  }
+}
+function activateInSecondary(tabId, h) {
+  if (!h) {
+    showSecondaryTab(tabId);
+    return;
+  }
+  const _setSecondaryTabId = h?.setActiveSecondaryTabId ?? setActiveSecondaryTabId;
+  _setSecondaryTabId(tabId);
+  const secondaryContent = document.querySelector(".sidebar-ux-panel-content");
+  if (secondaryContent) {
+    const movedRoots = Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]:not([data-canvas-secondary])"));
+    for (const root of movedRoots) {
+      const tid = root.getAttribute("data-canvas-moved") || "";
+      if (tid === tabId) {
+        root.setAttribute("data-canvas-active", "");
+      } else {
+        root.removeAttribute("data-canvas-active");
+      }
+    }
+  }
+}
+async function runHandoff({ tabId, source, destination, sourceList, preMoveSourceActiveTab, _testHooks: h }) {
+  const wasActive = await isMovedTabActiveInSource(tabId, source, h, preMoveSourceActiveTab);
+  const replacementId = pickSourceReplacement(tabId, sourceList);
+  const isMobile = (h?.isMobileViewport ?? isMobileViewport)();
+  dlog(`[canvas-debug] HANDOFF_DECIDE movedTab=${tabId} source=${source} destination=${destination} ` + `wasActive=${wasActive} replacement=${replacementId ?? "NONE"} mobile=${isMobile} ` + `activateSource=${wasActive && replacementId !== null} activateDestination=${!isMobile}`);
+  const above = replacementId !== null ? sourceList.indexOf(replacementId) < sourceList.indexOf(tabId) ? replacementId : null : null;
+  const below = replacementId !== null ? sourceList.indexOf(replacementId) > sourceList.indexOf(tabId) ? replacementId : null : null;
+  dlog(`[canvas-debug] HANDOFF_REPLACE_PICK source=${source} movedTab=${tabId} ` + `above=${above ?? "NONE"} below=${below ?? "NONE"} picked=${replacementId ?? "NONE"}`);
+  if (wasActive && replacementId !== null) {
+    try {
+      if (source === "primary") {
+        await activateInPrimary(replacementId, h);
+      } else {
+        activateInSecondary(replacementId, h);
+      }
+    } catch (err) {
+      dlog(`[canvas-debug] HANDOFF_ERROR gate=source source=${source} replacement=${replacementId} err=${err}`);
+    }
+  }
+  if (!isMobile) {
+    dlog(`[canvas-debug] HANDOFF_DEST_ACTIVATE destination=${destination} tabId=${tabId} ` + `method=${destination === "primary" ? "click-main-button" : "setActiveSecondaryTabId+data-canvas-active"} ` + `skippedMobile=${isMobile}`);
+    try {
+      if (destination === "primary") {
+        await activateInPrimary(tabId, h);
+      } else {
+        activateInSecondary(tabId, h);
+      }
+    } catch (err) {
+      dlog(`[canvas-debug] HANDOFF_ERROR gate=destination destination=${destination} tabId=${tabId} err=${err}`);
+    }
+  }
+}
+var init_activation_handoff = __esm(() => {
+  init_log();
+  init_mobile_exclusion();
+  init_secondary();
+  init_main_tab_pin();
+  init_active_tab();
+  init_buttons();
+  init_store();
+});
+
+// src/tabs/assignment.ts
+var exports_assignment = {};
+__export(exports_assignment, {
+  setTabAssignment: () => setTabAssignment,
+  setActiveSecondaryTabId: () => setActiveSecondaryTabId,
+  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
+  hasTabAssignment: () => hasTabAssignment,
+  hasSecondaryAssignedTabs: () => hasSecondaryAssignedTabs,
+  getTabSidebar: () => getTabSidebar,
+  getTabAssignments: () => getTabAssignments,
+  getActiveSecondaryTabId: () => getActiveSecondaryTabId,
+  ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
+  deleteTabAssignment: () => deleteTabAssignment,
+  clearTabAssignments: () => clearTabAssignments,
+  assignTab: () => assignTab
+});
+function getTabAssignments() {
+  return _tabAssignments;
+}
+function hasTabAssignment(tabId) {
+  return _tabAssignments.has(tabId);
+}
+function clearTabAssignments() {
+  _tabAssignments.clear();
+}
+function hasSecondaryAssignedTabs() {
+  for (const side of _tabAssignments.values()) {
+    if (side === "secondary")
+      return true;
+  }
+  return false;
+}
+function setTabAssignment(tabId, panelId) {
+  _tabAssignments.set(tabId, panelId);
+}
+function deleteTabAssignment(tabId) {
+  _tabAssignments.delete(tabId);
+}
+function getTabSidebar(tabId) {
+  return _tabAssignments.get(tabId) || "primary";
+}
+function armMainDrawerActiveRestore(tabId) {
+  if (isMobileViewport())
+    return;
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const restoreBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  const restoreActiveId = restoreBtn?.getAttribute("data-tab-id") ?? null;
+  if (!restoreBtn || !restoreActiveId || restoreActiveId === tabId)
+    return;
+  let observer = new MutationObserver(() => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+    restoreBtn.click();
+  });
+  observer.observe(sidebar, { attributes: true, attributeFilter: ["class"], subtree: true });
+  setTimeout(() => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  }, 200);
+}
+async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
+  const _isActive = h.isTabActiveInMainDrawer ?? isTabActiveInMainDrawer;
+  const _findBtn = h.findMainTabButton ?? findMainTabButton;
+  const _isMobile = h.isMobileViewport ?? isMobileViewport;
+  const _getRoot = h.getBuiltInTabRoot ?? (() => {
+    return;
+  });
+  const _dlog = h.dlog ?? (() => {});
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_BEGIN tab=${tabId} isActive=${_isActive(tabId)} mobile=${_isMobile()}`);
+  const _isActiveResult = _isActive(tabId);
+  if (_isActiveResult)
+    return;
+  const _isMobileResult = _isMobile();
+  if (_isMobileResult) {
+    _dlog(`[tabmove] ensure-active: mobile, skipping pre-activation for "${tabId}"`);
+    return;
+  }
+  const btn = _findBtn(tabId);
+  if (!btn) {
+    _dlog(`[tabmove] ensure-active: main button-not-found for "${tabId}", ` + `relying on host lazy-mount`);
+    return;
+  }
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
+  btn.click();
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  const root = _getRoot(tabId);
+  _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? "null"}`);
+  if (!root) {
+    _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
+  }
+}
+function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
+  const mainBtn = findMainTabButton(tabId);
+  const title = bridge.ui.getBuiltInTabTitle?.(tabId) || mainBtn?.getAttribute("title") || tabId;
+  const iconSvg = mainBtn?.querySelector("svg")?.outerHTML ?? builtInRoot.querySelector("svg")?.outerHTML;
+  const shortName = readMainButtonShortName(mainBtn);
+  addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName });
+}
+async function assignTab(tabId, sidebar) {
+  if (sidebar === "secondary") {
+    const _preClickSidebar = getMainSidebar();
+    const _preClickActiveBtn = _preClickSidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const _origActiveTabId = _preClickActiveBtn?.getAttribute("data-tab-id") || _preClickActiveBtn?.getAttribute("title") || null;
+    const preMoveSourceList = await captureSourceList("primary");
+    const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
+    const bridge = getHostBridge();
+    if (bridge?.ui.getBuiltInTabRoot && bridge.ui.requestTabLocation) {
+      if (preMoveActiveTab)
+        armMainDrawerActiveRestore(tabId);
+      let _restoreObserver = null;
+      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
+        _restoreObserver = new MutationObserver(() => {
+          const active = _preClickSidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+          const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
+          if (activeId && activeId !== _origActiveTabId) {
+            _preClickActiveBtn.click();
+          }
+        });
+        _restoreObserver.observe(_preClickSidebar, {
+          attributes: true,
+          attributeFilter: ["class"],
+          subtree: true
+        });
+      }
+      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+      const builtInRoot = await moveBuiltInTabToSecondaryContainer2({ tabId });
+      if (_restoreObserver) {
+        await new Promise((r) => requestAnimationFrame(() => r()));
+        _restoreObserver.disconnect();
+        _restoreObserver = null;
+      }
+      if (builtInRoot) {
+        setTabAssignment(tabId, "secondary");
+        hideMainTabButton(tabId);
+        addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
+        updateDrawerTabVisibility();
+        if (!isSecondarySidebarOpen() && !isMobileViewport())
+          openSecondarySidebar();
+        await runHandoff({
+          tabId,
+          source: "primary",
+          destination: "secondary",
+          sourceList: preMoveSourceList,
+          preMoveSourceActiveTab: preMoveActiveTab
+        });
+        try {
+          const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+          if (m.isMainMirrorActive())
+            m.ensureHostContentParkedPublic();
+        } catch {}
+        persistLayout();
+        return;
+      }
+    }
+    if (!bridge) {
+      dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`);
+    }
+    const { assignToSecondary: assignToSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
+    await assignToSecondary2(tabId);
+    await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
+  } else {
+    const bridge = getHostBridge();
+    if (bridge?.ui.getBuiltInTabRoot?.(tabId) && bridge.ui.requestTabLocation) {
+      bridge.ui.requestTabLocation(tabId, { kind: "main-drawer" });
+    }
+    const { unassignFromSecondary: unassignFromSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
+    const preMoveSourceList = await captureSourceList("secondary");
+    const preMoveActiveTab = getActiveSecondaryTabId() === tabId;
+    await unassignFromSecondary2(tabId);
+    await runHandoff({ tabId, source: "secondary", destination: "primary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
+  }
+}
+var _tabAssignments;
+var init_assignment = __esm(() => {
+  init_log();
+  init_mobile_exclusion();
+  init_secondary();
+  init_buttons();
+  init_persist();
+  init_activation_handoff();
+  init_active_tab();
+  _tabAssignments = new Map;
+});
+
+// src/sidebar/tab-position.ts
+var exports_tab_position = {};
+__export(exports_tab_position, {
+  reconcileTabListPin: () => reconcileTabListPin,
+  isTabListPinned: () => isTabListPinned,
+  getTabListPosition: () => getTabListPosition,
+  getPinnedTabList: () => getPinnedTabList,
+  getMainPinHost: () => getMainPinHost,
+  ensureMainPinHost: () => ensureMainPinHost,
+  destroyMainPinHost: () => destroyMainPinHost,
+  clearPinnedTabListChrome: () => clearPinnedTabListChrome,
+  applyTabListPosition: () => applyTabListPosition,
+  applyTabListPin: () => applyTabListPin,
+  applyPinnedTabListChrome: () => applyPinnedTabListChrome,
+  __setPinHostForTest: () => __setPinHostForTest,
+  __setMainPinHostForTest: () => __setMainPinHostForTest,
+  __resetPinStateForTest: () => __resetPinStateForTest,
+  __getPinHostForTest: () => __getPinHostForTest,
+  __getMainPinHostForTest: () => __getMainPinHostForTest,
+  TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
+  TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
+  TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
+  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
+  PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
+  PIN_OWNER_MAIN: () => PIN_OWNER_MAIN
+});
+function getPinnedTabList() {
+  if (!_pinHost)
+    return null;
+  const kids = _pinHost.children;
+  if (kids && kids.length) {
+    let last = null;
+    for (let i = 0;i < kids.length; i++) {
+      const c = kids[i];
+      if (isTabListElement(c))
+        last = c;
+    }
+    if (last)
+      return last;
+  }
+  return _pinHost.querySelector?.(".sidebar-ux-tab-list") ?? null;
+}
+function isTabListElement(el) {
+  if (!el)
+    return false;
+  const cn = el.className;
+  if (typeof cn === "string") {
+    const tokens = cn.split(/\s+/).filter(Boolean);
+    if (tokens.includes("sidebar-ux-tab-list") || tokens.includes(TAB_LIST_PINNED_CLASS)) {
+      return true;
+    }
+  }
+  const cls = el.classList;
+  if (typeof cls?.contains === "function") {
+    return cls.contains("sidebar-ux-tab-list") || cls.contains(TAB_LIST_PINNED_CLASS);
+  }
+  return false;
+}
+function __getPinHostForTest() {
+  return _pinHost;
+}
+function __setPinHostForTest(host) {
+  _pinHost = host;
+}
+function __getMainPinHostForTest() {
+  return _mainPinHost;
+}
+function __setMainPinHostForTest(host) {
+  _mainPinHost = host;
+}
+function __resetPinStateForTest() {
+  _pinHost = null;
+  _pinSpacer = null;
+  _restoreParent = null;
+  _restoreNext = null;
+  _mainPinHost = null;
+}
+function getMainPinHost() {
+  return _mainPinHost;
+}
+function ensureMainPinHost(side) {
+  if (typeof document === "undefined" || !document.body)
+    return null;
+  if (!_mainPinHost) {
+    _mainPinHost = document.createElement("div");
+    document.body.appendChild(_mainPinHost);
+  }
+  sweepStrayPinHosts();
+  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN);
+  return _mainPinHost;
+}
+function destroyMainPinHost() {
+  if (_mainPinHost) {
+    while (_mainPinHost.firstChild) {
+      _mainPinHost.removeChild(_mainPinHost.firstChild);
+    }
+    _mainPinHost.remove();
+    _mainPinHost = null;
+  }
+  sweepStrayPinHosts();
+}
+function applyPinHostChrome(host, side, owner) {
+  host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
+  host.setAttribute("data-pin-owner", owner);
+  setIfDifferent(host.style, "position", "fixed");
+  setIfDifferent(host.style, "top", SAFE_TOP);
+  setIfDifferent(host.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(host.style, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(host.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(host.style, "pointerEvents", "none");
+  if (side === "right") {
+    setIfDifferent(host.style, "right", "0");
+    setIfDifferent(host.style, "left", "");
+  } else {
+    setIfDifferent(host.style, "left", "0");
+    setIfDifferent(host.style, "right", "");
+  }
+}
+function setIfDifferent(el, prop, val) {
+  if (el[prop] !== val) {
+    el[prop] = val;
+  }
+}
+function applyFlexAndBorder(drawer, tabList, wantFlex) {
+  setIfDifferent(drawer.style, "flexDirection", wantFlex);
+  const wantBorder = wantFlex === "row" ? "right" : "left";
+  setIfDifferent(tabList.style, "borderTop", "none");
+  setIfDifferent(tabList.style, "borderBottom", "none");
+  if (wantBorder === "right") {
+    setIfDifferent(tabList.style, "borderRight", "1px solid var(--lumiverse-primary-020)");
+    setIfDifferent(tabList.style, "borderLeft", "none");
+  } else {
+    setIfDifferent(tabList.style, "borderLeft", "1px solid var(--lumiverse-primary-020)");
+    setIfDifferent(tabList.style, "borderRight", "none");
+  }
+}
+function applyPanelChatBorder(panel, drawerSide, enabled) {
+  const chatSide = drawerSide === "left" ? "right" : "left";
+  if (enabled) {
+    if (chatSide === "right") {
+      setIfDifferent(panel.style, "borderRight", CHAT_FACING_BORDER);
+      setIfDifferent(panel.style, "borderLeft", "none");
+    } else {
+      setIfDifferent(panel.style, "borderLeft", CHAT_FACING_BORDER);
+      setIfDifferent(panel.style, "borderRight", "none");
+    }
+  } else {
+    setIfDifferent(panel.style, "borderRight", "none");
+    setIfDifferent(panel.style, "borderLeft", "none");
+  }
+  setIfDifferent(panel.style, "borderTop", "none");
+  setIfDifferent(panel.style, "borderBottom", "none");
+}
+function wantsChatFacingPanelBorder(outerEdgeEnabled) {
+  return outerEdgeEnabled || !!getSettings().keepTabListVisible;
+}
+function applyTabListPosition(enabled, opts) {
+  if (isMobileViewport())
+    return;
+  const side = getMainDrawerSide();
+  const chatBorder = wantsChatFacingPanelBorder(enabled);
+  const drawer = opts?.drawer ?? getSecondaryDrawer();
+  const tabList = opts?.tabList ?? getSecondaryTabList();
+  const panel = opts?.panel ?? getSecondaryPanel();
+  if (drawer && tabList) {
+    const pinned = typeof tabList.classList?.contains === "function" && tabList.classList.contains(TAB_LIST_PINNED_CLASS);
+    const secondaryDrawerSide = side === "left" ? "right" : "left";
+    if (!pinned) {
+      const defaultFlex = secondaryDrawerSide === "left" ? "row-reverse" : "row";
+      const toggledFlex = secondaryDrawerSide === "left" ? "row" : "row-reverse";
+      const wantFlex = enabled ? toggledFlex : defaultFlex;
+      applyFlexAndBorder(drawer, tabList, wantFlex);
+    }
+    if (panel)
+      applyPanelChatBorder(panel, secondaryDrawerSide, chatBorder);
+  }
+  const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
+  const mainTabList = opts?.mainTabList ?? getMainSidebar();
+  const mainPanel = opts?.mainPanel ?? getMainPanel();
+  if (mainDrawer && mainTabList) {
+    const mainDefaultFlex = side === "left" ? "row-reverse" : "row";
+    const mainToggledFlex = side === "left" ? "row" : "row-reverse";
+    const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex;
+    applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex);
+    if (mainPanel)
+      applyPanelChatBorder(mainPanel, side, chatBorder);
+  }
+}
+function getTabListPosition(opts) {
+  const empty = {
+    drawerDir: "",
+    tabListBorderLeft: "",
+    tabListBorderRight: "",
+    handleLeft: "",
+    handleRight: "",
+    mainDrawerDir: "",
+    mainTabListBorderLeft: "",
+    mainTabListBorderRight: ""
+  };
+  const drawer = opts?.drawer ?? null;
+  const tabList = opts?.tabList ?? null;
+  const handle = opts?.handle ?? null;
+  const mainDrawer = opts?.mainDrawer ?? getMainDrawer();
+  const mainTabList = opts?.mainTabList ?? getMainSidebar();
+  return {
+    drawerDir: drawer?.style.flexDirection || "",
+    tabListBorderLeft: tabList?.style.borderLeft || "",
+    tabListBorderRight: tabList?.style.borderRight || "",
+    handleLeft: handle?.style.left || "",
+    handleRight: handle?.style.right || "",
+    mainDrawerDir: mainDrawer?.style.flexDirection || "",
+    mainTabListBorderLeft: mainTabList?.style.borderLeft || "",
+    mainTabListBorderRight: mainTabList?.style.borderRight || ""
+  };
+}
+function isTabListPinned(tabList) {
+  const el = tabList ?? getSecondaryTabList() ?? getPinnedTabList();
+  return !!el?.classList.contains(TAB_LIST_PINNED_CLASS);
+}
+function reconcileTabListPin() {
+  if (isMobileViewport()) {
+    applyTabListPin(false, { force: true });
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+    return;
+  }
+  const want = !!getSettings().keepTabListVisible && hasSecondaryAssignedTabs();
+  applyTabListPin(want, { force: true });
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+}
+function applyTabListPin(enabled, opts) {
+  if (isMobileViewport()) {
+    if (enabled && !opts?.force)
+      return;
+    const el = getSecondaryTabList() ?? getPinnedTabList();
+    if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
+      unpinTabList(el);
+    }
+    return;
+  }
+  const wantPin = enabled && hasSecondaryAssignedTabs();
+  if (!wantPin) {
+    const el = getSecondaryTabList() ?? getPinnedTabList();
+    const hasPinState = !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer;
+    if (!hasPinState) {
+      if (opts?.force)
+        destroyPinChrome();
+      return;
+    }
+    unpinTabList(el);
+    return;
+  }
+  const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
+  const isPinned = tabList.classList.contains(TAB_LIST_PINNED_CLASS);
+  if (isPinned && !opts?.force)
+    return;
+  pinTabList(tabList);
+}
+function secondarySide() {
+  return getMainDrawerSide() === "left" ? "right" : "left";
+}
+function ensurePinHost(side) {
+  if (typeof document === "undefined" || !document.body)
+    return null;
+  if (!_pinHost) {
+    _pinHost = document.createElement("div");
+    document.body.appendChild(_pinHost);
+  }
+  sweepStrayPinHosts();
+  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
+  return _pinHost;
+}
+function sweepStrayPinHosts() {
+  if (typeof document === "undefined" || !document.querySelectorAll)
+    return;
+  const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`);
+  for (const host of Array.from(hosts)) {
+    if (host !== _pinHost && host !== _mainPinHost) {
+      host.remove();
+    }
+  }
+}
+function removeOrphanTabListsFromHost(keep) {
+  if (!_pinHost)
+    return;
+  const kids = _pinHost.children ? Array.from(_pinHost.children) : Array.from(_pinHost.childNodes).filter((c) => c.nodeType === 1 || isTabListElement(c));
+  for (const child of kids) {
+    if (child === keep)
+      continue;
+    if (isTabListElement(child)) {
+      _pinHost.removeChild(child);
+    }
+  }
+}
+function applyPinnedTabListChrome(tabList, side) {
+  const innerBorderSide = side === "right" ? "left" : "right";
+  tabList.classList.add(TAB_LIST_PINNED_CLASS);
+  setIfDifferent(tabList.style, "position", "fixed");
+  setIfDifferent(tabList.style, "top", SAFE_TOP);
+  setIfDifferent(tabList.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(tabList.style, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(tabList.style, "pointerEvents", "auto");
+  if (side === "right") {
+    setIfDifferent(tabList.style, "right", "0");
+    setIfDifferent(tabList.style, "left", "");
+  } else {
+    setIfDifferent(tabList.style, "left", "0");
+    setIfDifferent(tabList.style, "right", "");
+  }
+  if (innerBorderSide === "right") {
+    setIfDifferent(tabList.style, "borderRight", INNER_BORDER);
+    setIfDifferent(tabList.style, "borderLeft", "none");
+  } else {
+    setIfDifferent(tabList.style, "borderLeft", INNER_BORDER);
+    setIfDifferent(tabList.style, "borderRight", "none");
+  }
+}
+function clearPinnedTabListChrome(tabList) {
+  tabList.classList.remove(TAB_LIST_PINNED_CLASS);
+  setIfDifferent(tabList.style, "position", "");
+  setIfDifferent(tabList.style, "top", "");
+  setIfDifferent(tabList.style, "bottom", "");
+  setIfDifferent(tabList.style, "left", "");
+  setIfDifferent(tabList.style, "right", "");
+  setIfDifferent(tabList.style, "zIndex", "");
+  setIfDifferent(tabList.style, "pointerEvents", "");
+  setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(tabList.style, "borderLeft", "");
+  setIfDifferent(tabList.style, "borderRight", "");
+}
+function pinTabList(tabList) {
+  const drawer = getSecondaryDrawer();
+  const panel = getSecondaryPanel();
+  const side = secondarySide();
+  const parent = tabList.parentElement;
+  if (parent && parent !== _pinHost) {
+    _restoreParent = parent;
+    _restoreNext = tabList.nextSibling;
+    if (!_pinSpacer) {
+      _pinSpacer = document.createElement("div");
+      _pinSpacer.className = TAB_LIST_SPACER_CLASS;
+      _pinSpacer.setAttribute("aria-hidden", "true");
+      setIfDifferent(_pinSpacer.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+      setIfDifferent(_pinSpacer.style, "flexShrink", "0");
+    }
+    if (_pinSpacer.parentElement !== parent) {
+      parent.insertBefore(_pinSpacer, _restoreNext);
+    }
+    const host = ensurePinHost(side);
+    if (host && tabList.parentElement !== host) {
+      removeOrphanTabListsFromHost(tabList);
+      host.appendChild(tabList);
+    }
+    removeOrphanTabListsFromHost(tabList);
+  } else if (_pinHost) {
+    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
+    removeOrphanTabListsFromHost(tabList);
+  }
+  applyPinnedTabListChrome(tabList, side);
+  if (drawer) {
+    setIfDifferent(drawer.style, "flexDirection", "");
+  }
+  if (panel) {
+    applyPanelChatBorder(panel, side, true);
+  }
+}
+function unpinTabList(tabList) {
+  if (tabList) {
+    clearPinnedTabListChrome(tabList);
+    if (_restoreParent && tabList.parentElement === _pinHost) {
+      if (_pinSpacer?.parentElement === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _pinSpacer);
+      } else if (_restoreNext && _restoreNext.parentNode === _restoreParent) {
+        _restoreParent.insertBefore(tabList, _restoreNext);
+      } else {
+        const panel = getSecondaryPanel();
+        if (panel && panel.parentElement === _restoreParent) {
+          _restoreParent.insertBefore(tabList, panel);
+        } else {
+          _restoreParent.appendChild(tabList);
+        }
+      }
+    }
+  }
+  destroyPinChrome();
+  applyTabListPosition(getSettings().moveControlsToOuterEdge);
+}
+function destroyPinChrome() {
+  if (_pinSpacer) {
+    _pinSpacer.remove();
+    _pinSpacer = null;
+  }
+  _restoreParent = null;
+  _restoreNext = null;
+  if (_pinHost) {
+    if (_pinHost.childNodes.length > 0) {
+      const drawer = getSecondaryDrawer();
+      const panel = getSecondaryPanel();
+      while (_pinHost.firstChild) {
+        const child = _pinHost.removeChild(_pinHost.firstChild);
+        if (drawer && panel) {
+          drawer.insertBefore(child, panel);
+        } else if (drawer) {
+          drawer.appendChild(child);
+        }
+      }
+    }
+    _pinHost.remove();
+    _pinHost = null;
+  }
+  sweepStrayPinHosts();
+}
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
+var init_tab_position = __esm(() => {
+  init_store();
+  init_state();
+  init_assignment();
+  init_mobile_exclusion();
+  init_secondary();
+  init_styles();
 });
 
 // src/sidebar/panel-header-sync.ts

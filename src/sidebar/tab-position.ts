@@ -18,6 +18,7 @@
 import { getMainDrawerSide } from '../store'
 import { getMainDrawer, getMainSidebar, getMainPanel } from '../dom/lumiverse'
 import { getSettings } from '../settings/state'
+import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
 import { TAB_LIST_WIDTH_PX } from './styles'
@@ -375,7 +376,10 @@ export function reconcileTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
-  applyTabListPin(!!getSettings().keepTabListVisible, { force: true })
+  // Keep-tabs only pins secondary when it has tabs — empty strip must not show.
+  const want =
+    !!getSettings().keepTabListVisible && hasSecondaryAssignedTabs()
+  applyTabListPin(want, { force: true })
   // Side-change / remount: remap strip gutters to the current main side.
   void import('./strip-gutter').then((m) => m.updateStripGutters())
 }
@@ -409,7 +413,10 @@ export function applyTabListPin(
     return
   }
 
-  if (!enabled) {
+  // Empty secondary: never pin (would show a blank 56px edge strip).
+  const wantPin = enabled && hasSecondaryAssignedTabs()
+
+  if (!wantPin) {
     const el = getSecondaryTabList() ?? getPinnedTabList()
     const hasPinState =
       !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer

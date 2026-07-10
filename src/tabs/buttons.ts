@@ -287,6 +287,8 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   })
 
   tabList.appendChild(btn)
+  // Keep-tabs pin tracks secondary assignment count — re-evaluate after first tab.
+  void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
 
 export function removeSecondaryTabButton(tabId: string): void {
@@ -296,6 +298,8 @@ export function removeSecondaryTabButton(tabId: string): void {
     getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ??
     getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`)
   btn?.remove()
+  // Last tab removed: unpin empty secondary strip under keep-tabs.
+  void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
 
 export function updateDrawerTabVisibility(): void {

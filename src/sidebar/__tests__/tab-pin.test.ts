@@ -202,9 +202,15 @@ import {
   __resetPinStateForTest,
 } from '../tab-position'
 import { __setSecondaryWrapperForTest, getSecondaryTabList } from '../secondary'
+import {
+  clearTabAssignments,
+  setTabAssignment,
+  deleteTabAssignment,
+} from '../../tabs/assignment'
 
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
+const STUB_SECONDARY_TAB = 'stub-secondary-tab'
 
 function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   // Ensure getters can find the tree, then clear module pin state.
@@ -214,6 +220,9 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
     addEventListener() {},
     removeEventListener() {},
   })
+  // Pin enable requires at least one secondary assignment.
+  clearTabAssignments()
+  setTabAssignment(STUB_SECONDARY_TAB, 'secondary')
   applyTabListPin(false, { force: true })
 
   while (bodyStub.firstChild) bodyStub.removeChild(bodyStub.firstChild!)
@@ -486,6 +495,35 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   while (bodyStub.firstChild) bodyStub.removeChild(bodyStub.firstChild!)
   wireDefaultTree()
   __setSecondaryWrapperForTest(secondaryWrapper as any)
+}
+
+// C16: pin enable with zero secondary assignments is a no-op
+{
+  resetStubs('right')
+  clearTabAssignments()
+  applyTabListPin(true)
+  assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C16: empty secondary not pinned')
+  assertEqual(__getPinHostForTest(), null, 'C16: no pin host when empty')
+}
+
+// C17: pin with tabs → clear assignments → reconcile unpins
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  assert(stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C17: pre — pinned with tabs')
+  clearTabAssignments()
+  reconcileTabListPin()
+  assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C17: unpinned after empty reconcile')
+  assertEqual(__getPinHostForTest(), null, 'C17: pin host destroyed after empty reconcile')
+}
+
+// C18: delete last assignment then reconcile (same as last-tab move)
+{
+  resetStubs('right')
+  applyTabListPin(true)
+  deleteTabAssignment(STUB_SECONDARY_TAB)
+  reconcileTabListPin()
+  assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C18: unpinned after last delete')
 }
 
 console.log(`PASS: ${passed}`)

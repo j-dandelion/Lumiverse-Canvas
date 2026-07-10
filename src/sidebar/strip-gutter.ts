@@ -10,8 +10,8 @@
 import { injectStyles } from '../debug/styles'
 import { getMainDrawerSide } from '../store'
 import { isKeepTabListVisibleEnabled } from '../settings/state'
+import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
-import { getSecondaryTabList } from './secondary'
 import { TAB_LIST_WIDTH_PX } from './styles'
 
 /** html class while strip gutters are active. */
@@ -104,7 +104,8 @@ function ensureStripGutterObservers(): void {
 export function computeStripGutters(): { left: number; right: number } {
   const mainSide = getMainDrawerSide()
   const mainBase = TAB_LIST_WIDTH_PX
-  const secondaryBase = getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0
+  // List node always exists once secondary is mounted; only reserve when tabs exist.
+  const secondaryBase = hasSecondaryAssignedTabs() ? TAB_LIST_WIDTH_PX : 0
 
   let leftBase = 0
   let rightBase = 0

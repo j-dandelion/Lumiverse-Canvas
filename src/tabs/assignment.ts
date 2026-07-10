@@ -37,6 +37,14 @@ export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { retu
 export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
 export function clearTabAssignments(): void { _tabAssignments.clear() }
 
+/** True when at least one tab is assigned to the secondary drawer. */
+export function hasSecondaryAssignedTabs(): boolean {
+  for (const side of _tabAssignments.values()) {
+    if (side === 'secondary') return true
+  }
+  return false
+}
+
 /** Encapsulated mutation: set a tab assignment without exposing the mutable Map. */
 export function setTabAssignment(tabId: string, panelId: 'primary' | 'secondary'): void {
   _tabAssignments.set(tabId, panelId)
