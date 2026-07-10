@@ -306,7 +306,7 @@ import { updateChatReflow } from '../reflow'
 
 {
   _resetAll()
-  _installDom({ open: false })  // DOM: closed
+  const { chat } = _installDom({ open: false })  // DOM: closed
   // Pre-populate the stale store cache. Simulates the post-15-clicks
   // state where the cache was just refreshed while the drawer was
   // still open.
@@ -320,8 +320,9 @@ import { updateChatReflow } from '../reflow'
   // With the DOM showing closed, both margins should be 0 regardless
   // of the stale store. Pre-fix: --sidebar-ux-chat-mr would be '420px'
   // because isMainDrawerOpen returned the cached true.
-  const ml = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-ml')
-  const mr = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-mr')
+  // Vars live on the chat column (not documentElement).
+  const ml = chat.style.getPropertyValue('--sidebar-ux-chat-ml')
+  const mr = chat.style.getPropertyValue('--sidebar-ux-chat-mr')
   assertEqual(ml, '0px', 'end-to-end: --sidebar-ux-chat-ml = 0px (not 420px) with stale store drawerOpen: true')
   assertEqual(mr, '0px', 'end-to-end: --sidebar-ux-chat-mr = 0px (not 420px) with stale store drawerOpen: true')
 }

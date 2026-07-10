@@ -209,8 +209,8 @@ function _installDom(opts: {
   return { chat, wrapper, body, sidebar, appEl }
 }
 
-function _rootStyle(): any {
-  return stubDocument.documentElement.style
+function _chatStyle(chat: StubElement): any {
+  return chat.style
 }
 
 function _resetAll() {
@@ -238,12 +238,12 @@ import { updateChatReflow } from '../reflow'
   // dockInsets = { left: 0, right: 0 }
   // rightMargin = max(0, 420 - 0) = 420, leftMargin = max(0, 0 - 0) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '420px',
     'test 1: no dock panel — --sidebar-ux-chat-mr = 420px (baseline)'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 1: no dock panel — --sidebar-ux-chat-ml = 0px (baseline)'
   )
@@ -257,12 +257,12 @@ import { updateChatReflow } from '../reflow'
   updateChatReflow()
   // dockInsets = { left: 0, right: 0 } (variables not set on appEl)
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '420px',
     'test 2: app root exists, no dock insets — --sidebar-ux-chat-mr = 420px'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 2: app root exists, no dock insets — --sidebar-ux-chat-ml = 0px'
   )
@@ -285,12 +285,12 @@ import { updateChatReflow } from '../reflow'
   // rightMargin = max(0, 420 - 300) = 120
   // leftMargin = max(0, 0 - 0) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '120px',
     'test 3: dock right=300 + drawer right=420 — --sidebar-ux-chat-mr = 120px (subtracted)'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 3: dock right=300 + drawer right=420 — --sidebar-ux-chat-ml = 0px'
   )
@@ -309,7 +309,7 @@ import { updateChatReflow } from '../reflow'
   updateChatReflow()
   // rightMargin = max(0, 420 - 500) = max(0, -80) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '0px',
     'test 4: dock right=500 > drawer right=420 — --sidebar-ux-chat-mr clamped to 0px'
   )
@@ -331,12 +331,12 @@ import { updateChatReflow } from '../reflow'
   // leftMargin = max(0, 420 - 300) = 120
   // rightMargin = max(0, 0 - 0) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '120px',
     'test 5: dock left=300 + drawer left=420 — --sidebar-ux-chat-ml = 120px (subtracted)'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '0px',
     'test 5: dock left=300 + drawer left=420 — --sidebar-ux-chat-mr = 0px'
   )
@@ -360,12 +360,12 @@ import { updateChatReflow } from '../reflow'
   // rightMargin = max(0, 420 - 0) = 420  (no subtraction on right side)
   // leftMargin = max(0, 0 - 300) = 0  (clamped)
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '420px',
     'test 6: dock left=300 (opposite side) — --sidebar-ux-chat-mr = 420px (no subtraction)'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 6: dock left=300 (opposite side) — --sidebar-ux-chat-ml = 0px (clamped)'
   )
@@ -398,12 +398,12 @@ import { updateChatReflow } from '../reflow'
   // rightMargin = max(0, 420 - 100) = 320
   // leftMargin = max(0, 0 - 200) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '320px',
     'test 7: dock right=100 + drawer right=420 — --sidebar-ux-chat-mr = 320px'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 7: dock left=200 + no secondary — --sidebar-ux-chat-ml = 0px (clamped)'
   )
@@ -423,7 +423,7 @@ import { updateChatReflow } from '../reflow'
   // mainOpen=false, mainWidth=0
   // rightMargin = max(0, 0 - 300) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '0px',
     'test 8: drawer closed + dock right=300 — --sidebar-ux-chat-mr = 0px'
   )
@@ -442,7 +442,7 @@ import { updateChatReflow } from '../reflow'
   updateChatReflow()
   // rightMargin = max(0, 420 - 420) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '0px',
     'test 9: dock right=420 == drawer right=420 — --sidebar-ux-chat-mr = 0px (exactly absorbed)'
   )
@@ -463,12 +463,12 @@ import { updateChatReflow } from '../reflow'
   // rightMargin = max(0, 420 - 250) = 170
   // leftMargin = max(0, 0 - 150) = 0
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-mr'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
     '170px',
     'test 10: dock right=250 — --sidebar-ux-chat-mr = 170px'
   )
   assertEqual(
-    _rootStyle().getPropertyValue('--sidebar-ux-chat-ml'),
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
     '0px',
     'test 10: dock left=150, no secondary — --sidebar-ux-chat-ml = 0px'
   )

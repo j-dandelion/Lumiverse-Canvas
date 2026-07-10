@@ -1,72 +1,106 @@
-# Chat / Page Reflow
+# Chat Reflow & Keep-tabs Strip Gutters
 
-## Overview
+Two separate systems own page/chat insets. Do not merge them.
 
-Page reflow shifts content margins so neither sidebar (nor keep-tab-list pin strip) covers the main surface. When a drawer opens or a pin strip stays visible, consumers recenter in the remaining area.
+| System | Setting | What it does | Consumers |
+|--------|---------|--------------|-----------|
+| **Strip gutters** | `keepTabListVisible` (+ outer-edge) | Permanent page bounds = **pin-strip width only** (56px). Open drawers **overlay**. | Chat column + Welcome/Landing via static CSS |
+| **Chat reflow** | `chatReflow` | Open-drawer margins on the **chat column** only (with transition). | `[class*="_chatColumn_"]` only |
 
-**Consumers:**
-- Chat column: `[class*="_chatColumn_"]`
-- Welcome / Landing: `[data-component="LandingPage"]`
+## Policy matrix
 
-Both sides are independent: main strip/drawer on one edge, secondary on the other (bilateral insets under keep-tab-lists).
+| keepTabListVisible (desktop) | chatReflow | Strip gutters | Chat reflow |
+|------------------------------|------------|---------------|-------------|
+| OFF | OFF | none | none |
+| OFF | ON | none | Classic open-drawer widths on chat column |
+| ON | OFF | strip on active pin edges | none |
+| ON | ON | strip owns page bounds | **no-op** (clears chat margins) |
 
-## How It Works
+Mobile (≤600px): both clear / no-op.
 
-### CSS Injection
+---
 
-Injected style (`sidebar-ux-reflow`):
+## Strip gutters (`src/sidebar/strip-gutter.ts`)
+
+Owned by **keep tab lists visible**, not by chat reflow.
+
+### Behavior
+
+When keep-tabs is effective on desktop:
+
+1. Main edge → reserve `TAB_LIST_WIDTH_PX` (56)
+2. Opposite edge → 56 only if a secondary tab list exists
+3. Map to left/right from main drawer side
+4. Dock composition: `extra = max(0, stripBase - dockInset)` per side (overlap, not sum)
+5. **Never** use open-drawer / mirror open width
+
+### CSS
+
 ```css
-[class*="_chatColumn_"],
-[data-component="LandingPage"] {
+html.sidebar-ux-strip-gutters [class*="_chatColumn_"],
+html.sidebar-ux-strip-gutters [data-component="LandingPage"] {
+  margin-left: var(--sidebar-ux-strip-l, 0px) !important;
+  margin-right: var(--sidebar-ux-strip-r, 0px) !important;
+  /* no transition — stable chrome, not reflow lag */
+}
+```
+
+Vars live on `document.documentElement`. Dual leaf selectors are intentional keep-tabs chrome (not reflow proliferation): both routes share the same strip bounds without a drawer open/close observer loop.
+
+### When updated
+
+- keep-tabs mount / apply / teardown  
+- secondary list create/destroy  
+- main side change (pin reconcile)  
+- dock style changes on `[data-app-root]`  
+- viewport cross 600px  
+
+Not observed: drawer/mirror open width.
+
+---
+
+## Chat reflow (`src/chat/reflow.ts`)
+
+### CSS injection
+
+```css
+[class*="_chatColumn_"] {
   margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
   margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
   transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
-@media (max-width: 600px) {
-  [class*="_chatColumn_"],
-  [data-component="LandingPage"] {
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    transition: none !important;
-  }
-}
 ```
 
-### Margin Calculation (`updateChatReflow`)
+Welcome/Landing is **not** a reflow consumer.
 
-1. Read main drawer side and width:
-   - If **Canvas main mirror** is active (`keepTabListVisible` desktop): use Canvas open state + `--sidebar-ux-main-mirror-w` when open, else `TAB_LIST_WIDTH_PX` (56). Ignore host `wrapperOpen`.
-   - Else: host open → `getMainDrawerWidth()`; host closed + pin setting → 56px
-2. Read secondary drawer open state and width (from CSS variable)
-3. When secondary is closed but `keepTabListVisible` is on and a secondary tab list exists, reserve `TAB_LIST_WIDTH_PX` (56px)
-4. Read LumiScript dock panel insets (`--spindle-dock-left`, `--spindle-dock-right`)
-5. Subtract dock insets from drawer widths (they overlap, don't double-count)
-6. Set `--sidebar-ux-chat-ml` and `--sidebar-ux-chat-mr` on **`document.documentElement`** (stable host for Welcome and Chat; CSS vars inherit to both consumers)
+### Margin calculation (`updateChatReflow`)
 
-### Observer Architecture
+1. Mobile → clear + return  
+2. Keep-tabs effective → clear chat margins + return (strip gutters own bounds)  
+3. Else classic:  
+   - Main open → live drawer width; closed → 0  
+   - Secondary open → `--sidebar-ux-secondary-w`; closed → 0  
+   - Subtract dock insets per side  
+   - Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
 
-`startReflowObserver()` installs:
+### Observers
 
-1. **Main wrapper observer**: `MutationObserver` on `class`/`style` attributes → fires on drawer open/close
-2. **App element observer**: `MutationObserver` on `[data-app-root]` style → fires on dock panel changes
-3. **Route observer**: `MutationObserver` on `[data-app-root]` childList → fires on SPA navigate (Welcome ↔ Chat); always schedules reflow (does not require chat column)
-4. **Viewport-cross listener**: `matchMedia('(max-width: 600px)')` → clears stale desktop vars on cross-down, re-runs on cross-up
+`startReflowObserver()` (gated on `chatReflow`):
 
-### Scheduling
+1. Main wrapper class/style → open/close  
+2. App style → dock insets  
+3. App childList → when chat column appears (SPA navigate into chat)  
+4. matchMedia 600px → clear on cross-down, recompute on cross-up  
+5. Button tagger (co-located lifecycle)
 
-`scheduleReflow()` coalesces via `requestAnimationFrame` — multiple observers firing in the same tick produce only one `updateChatReflow()` call.
+`scheduleReflow()` coalesces via `requestAnimationFrame`.
 
-### Mobile Behavior
+### Mobile
 
-On mobile (<=600px), reflow is a complete no-op:
-- `updateChatReflow()` early-returns after clearing stale root vars
-- The injected CSS overrides margin to 0 for both consumers
-- Cross-down clears any leftover documentElement vars
+- Early-return + clear  
+- Injected CSS zeros margins at ≤600px  
+- Cross-down clears leftover chat vars  
 
-## Button Tagging
+### Button tagging
 
-Co-located with reflow because they share the same lifecycle (gated on `chatReflow` setting).
-
-`tagMainSidebarButtons()` walks the store's `drawerTabs` and sets `data-tab-id` on extension tab buttons by title-matching. This enables the fast id-based `findMainTabButton` lookup.
-
-`startTagObserver()` installs a `MutationObserver` on the sidebar for childList+subtree, re-tagging on tab add/replace. Initial tag pass runs once the sidebar is in the DOM.
+Co-located with reflow (same `chatReflow` lifecycle). `tagMainSidebarButtons()` / `startTagObserver()` tag extension tab buttons with `data-tab-id`.

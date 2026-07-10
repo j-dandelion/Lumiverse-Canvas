@@ -372,9 +372,12 @@ export function isTabListPinned(tabList?: Element | null): boolean {
 export function reconcileTabListPin(): void {
   if (isMobileViewport()) {
     applyTabListPin(false, { force: true })
+    void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
   applyTabListPin(!!getSettings().keepTabListVisible, { force: true })
+  // Side-change / remount: remap strip gutters to the current main side.
+  void import('./strip-gutter').then((m) => m.updateStripGutters())
 }
 
 /**

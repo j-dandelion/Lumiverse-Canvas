@@ -83,6 +83,20 @@ function getMainWrapper() {
   const sidebar = getMainSidebar();
   return sidebar?.closest('[class*="_wrapper_"]');
 }
+function getChatColumn() {
+  const body = document.querySelector('[class*="_body_"][data-chat-constrained]') || document.querySelector('[class*="_body_"]');
+  if (!body)
+    return null;
+  const candidates = body.querySelectorAll('[class*="_chatColumn_"]');
+  if (candidates.length === 1)
+    return candidates[0];
+  for (const el of body.children) {
+    if (el.querySelector('[class*="_chatToolbar_"]')) {
+      return el;
+    }
+  }
+  return null;
+}
 function getMainDrawerWidth() {
   const drawer = getMainDrawer();
   if (!drawer)
@@ -911,6 +925,130 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
+// src/sidebar/strip-gutter.ts
+var exports_strip_gutter = {};
+__export(exports_strip_gutter, {
+  updateStripGutters: () => updateStripGutters,
+  injectStripGutterStyles: () => injectStripGutterStyles,
+  computeStripGutters: () => computeStripGutters,
+  clearStripGutters: () => clearStripGutters,
+  STRIP_R_VAR: () => STRIP_R_VAR,
+  STRIP_L_VAR: () => STRIP_L_VAR,
+  STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS
+});
+function getDockInsets() {
+  const appEl = document.querySelector("[data-app-root]");
+  if (!appEl)
+    return { left: 0, right: 0 };
+  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
+  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
+  return { left, right };
+}
+function injectStripGutterStyles() {
+  injectStyles(STYLE_ID, `
+    /* Static keep-tabs chrome — no transition (not chat reflow). */
+    html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
+    html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
+      margin-left: var(${STRIP_L_VAR}, 0px) !important;
+      margin-right: var(${STRIP_R_VAR}, 0px) !important;
+    }
+    @media (max-width: 600px) {
+      html.${STRIP_GUTTER_CLASS} [class*="_chatColumn_"],
+      html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+      }
+    }
+  `);
+}
+function stopStripGutterObservers() {
+  if (_dockObserver) {
+    _dockObserver.disconnect();
+    _dockObserver = null;
+  }
+  if (_mediaQuery && _onMediaChange) {
+    _mediaQuery.removeEventListener("change", _onMediaChange);
+  }
+  _mediaQuery = null;
+  _onMediaChange = null;
+}
+function clearStripGutterVars() {
+  const root = document.documentElement;
+  root.classList.remove(STRIP_GUTTER_CLASS);
+  root.style.removeProperty(STRIP_L_VAR);
+  root.style.removeProperty(STRIP_R_VAR);
+}
+function ensureStripGutterObservers() {
+  if (!_dockObserver) {
+    const appEl = document.querySelector("[data-app-root]");
+    if (appEl) {
+      _dockObserver = new MutationObserver(() => {
+        updateStripGutters();
+      });
+      _dockObserver.observe(appEl, { attributes: true, attributeFilter: ["style"] });
+    }
+  }
+  if (!_mediaQuery) {
+    _mediaQuery = window.matchMedia("(max-width: 600px)");
+    _onMediaChange = (e) => {
+      if (e.matches) {
+        clearStripGutterVars();
+      } else {
+        updateStripGutters();
+      }
+    };
+    _mediaQuery.addEventListener("change", _onMediaChange);
+  }
+}
+function computeStripGutters() {
+  const mainSide = getMainDrawerSide();
+  const mainBase = TAB_LIST_WIDTH_PX;
+  const secondaryBase = getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
+  let leftBase = 0;
+  let rightBase = 0;
+  if (mainSide === "left") {
+    leftBase = mainBase;
+    rightBase = secondaryBase;
+  } else {
+    rightBase = mainBase;
+    leftBase = secondaryBase;
+  }
+  const dock = getDockInsets();
+  return {
+    left: Math.max(0, leftBase - dock.left),
+    right: Math.max(0, rightBase - dock.right)
+  };
+}
+function clearStripGutters() {
+  clearStripGutterVars();
+  stopStripGutterObservers();
+}
+function updateStripGutters() {
+  if (isMobileViewport()) {
+    clearStripGutterVars();
+    return;
+  }
+  if (!isKeepTabListVisibleEnabled()) {
+    clearStripGutters();
+    return;
+  }
+  injectStripGutterStyles();
+  ensureStripGutterObservers();
+  const { left, right } = computeStripGutters();
+  const root = document.documentElement;
+  root.classList.add(STRIP_GUTTER_CLASS);
+  root.style.setProperty(STRIP_L_VAR, `${left}px`);
+  root.style.setProperty(STRIP_R_VAR, `${right}px`);
+}
+var STRIP_GUTTER_CLASS = "sidebar-ux-strip-gutters", STRIP_L_VAR = "--sidebar-ux-strip-l", STRIP_R_VAR = "--sidebar-ux-strip-r", STYLE_ID = "sidebar-ux-strip-gutter", _dockObserver = null, _mediaQuery = null, _onMediaChange = null;
+var init_strip_gutter = __esm(() => {
+  init_store();
+  init_state();
+  init_mobile_exclusion();
+  init_secondary();
+  init_styles();
+});
+
 // src/sidebar/tab-position.ts
 var exports_tab_position = {};
 __export(exports_tab_position, {
@@ -1133,9 +1271,11 @@ function isTabListPinned(tabList) {
 function reconcileTabListPin() {
   if (isMobileViewport()) {
     applyTabListPin(false, { force: true });
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
   applyTabListPin(!!getSettings().keepTabListVisible, { force: true });
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
 }
 function applyTabListPin(enabled, opts) {
   if (isMobileViewport()) {
@@ -2970,17 +3110,20 @@ function applyMainTabListPin(enabled, opts) {
 function reconcileMainTabListPin() {
   if (isMobileViewport()) {
     applyMainTabListPin(false, { force: true });
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
   reconcileMainMirrorDrawer();
   const on = !!getSettings().keepTabListVisible;
   if (!on) {
     teardownMainPin();
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
   _enabled = true;
   ensureObservers();
   reconcileMainMirror();
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
 }
 function isMainTabListPinActive() {
   return _enabled && isMainMirrorActive();
@@ -4917,7 +5060,7 @@ function enforceExclusionOnOpen(which) {
   }
 }
 function startMobileExclusion() {
-  _mediaQuery = window.matchMedia("(max-width: 600px)");
+  _mediaQuery2 = window.matchMedia("(max-width: 600px)");
   function _updateDrawerWidth() {
     cancelWrapperAnimation();
     const wrapper2 = getSecondaryWrapper();
@@ -4935,7 +5078,7 @@ function startMobileExclusion() {
       wrapper2.style.transform = isSecondarySidebarOpen() ? "translateX(0)" : `translateX(${closedPx}px)`;
     }
   }
-  _onMediaChange = (e) => {
+  _onMediaChange2 = (e) => {
     if (e.matches) {
       _updateDrawerWidth();
       if (isSecondarySidebarOpen()) {
@@ -4956,7 +5099,7 @@ function startMobileExclusion() {
       Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
     }
   };
-  _mediaQuery.addEventListener("change", _onMediaChange);
+  _mediaQuery2.addEventListener("change", _onMediaChange2);
   const _onResize = () => {
     if (!isMobileViewport())
       return;
@@ -4987,16 +5130,16 @@ function startMobileExclusion() {
       _resizeRafId = null;
     }
     window.removeEventListener("resize", _onResize);
-    if (_mediaQuery && _onMediaChange) {
-      _mediaQuery.removeEventListener("change", _onMediaChange);
+    if (_mediaQuery2 && _onMediaChange2) {
+      _mediaQuery2.removeEventListener("change", _onMediaChange2);
     }
-    _mediaQuery = null;
-    _onMediaChange = null;
+    _mediaQuery2 = null;
+    _onMediaChange2 = null;
     document.getElementById("canvas-ux-secondary-mobile")?.remove();
     document.body.classList.remove(BODY_CLASS_PRIMARY, BODY_CLASS_SECONDARY);
   };
 }
-var _desktopCssVarValue = null, _resizeRafId = null, _lastDiagLog = 0, DIAG_THROTTLE_MS = 500, BODY_CLASS_PRIMARY = "canvas-ux-mobile-primary-open", BODY_CLASS_SECONDARY = "canvas-ux-mobile-secondary-open", _mediaQuery = null, _onMediaChange = null;
+var _desktopCssVarValue = null, _resizeRafId = null, _lastDiagLog = 0, DIAG_THROTTLE_MS = 500, BODY_CLASS_PRIMARY = "canvas-ux-mobile-primary-open", BODY_CLASS_SECONDARY = "canvas-ux-mobile-secondary-open", _mediaQuery2 = null, _onMediaChange2 = null;
 var init_mobile_exclusion = __esm(() => {
   init_log();
   init_main_persist();
@@ -5015,25 +5158,31 @@ __export(exports_reflow, {
   clearChatMargins: () => clearChatMargins
 });
 function setChatMargin(side, px) {
+  const chat = getChatColumn();
+  if (!chat)
+    return;
   const varName = side === "left" ? "--sidebar-ux-chat-ml" : "--sidebar-ux-chat-mr";
-  document.documentElement.style.setProperty(varName, `${px}px`);
+  chat.style.setProperty(varName, `${px}px`);
 }
 function clearChatMargins() {
+  const chat = getChatColumn();
+  if (chat) {
+    chat.style.removeProperty("--sidebar-ux-chat-ml");
+    chat.style.removeProperty("--sidebar-ux-chat-mr");
+  }
   const root = document.documentElement;
   root.style.removeProperty("--sidebar-ux-chat-ml");
   root.style.removeProperty("--sidebar-ux-chat-mr");
 }
 function injectReflowStyles() {
   injectStyles("sidebar-ux-reflow", `
-    [class*="_chatColumn_"],
-    [data-component="LandingPage"] {
+    [class*="_chatColumn_"] {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
     @media (max-width: 600px) {
-      [class*="_chatColumn_"],
-      [data-component="LandingPage"] {
+      [class*="_chatColumn_"] {
         margin-left: 0 !important;
         margin-right: 0 !important;
         transition: none !important;
@@ -5050,7 +5199,7 @@ function scheduleReflow() {
     updateChatReflow();
   });
 }
-function getDockInsets() {
+function getDockInsets2() {
   const appEl = document.querySelector("[data-app-root]");
   if (!appEl)
     return { left: 0, right: 0 };
@@ -5063,26 +5212,15 @@ function updateChatReflow() {
     clearChatMargins();
     return;
   }
+  if (isKeepTabListVisibleEnabled()) {
+    clearChatMargins();
+    return;
+  }
   const mainSide = getMainDrawerSide();
-  let mainWidth;
-  if (isMainMirrorActive()) {
-    if (isCanvasMainOpen()) {
-      mainWidth = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420;
-    } else {
-      mainWidth = TAB_LIST_WIDTH_PX;
-    }
-  } else {
-    const mainOpen = isMainDrawerOpen();
-    mainWidth = mainOpen ? getMainDrawerWidth() : 0;
-    if (mainWidth === 0 && getSettings().keepTabListVisible) {
-      mainWidth = TAB_LIST_WIDTH_PX;
-    }
-  }
-  let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
-  if (secondaryWidth === 0 && getSettings().keepTabListVisible && getSecondaryTabList()) {
-    secondaryWidth = TAB_LIST_WIDTH_PX;
-  }
-  const dockInsets = getDockInsets();
+  const mainOpen = isMainDrawerOpen();
+  const mainWidth = mainOpen ? getMainDrawerWidth() : 0;
+  const secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  const dockInsets = getDockInsets2();
   let rightMargin;
   let leftMargin;
   if (mainSide === "left") {
@@ -5107,7 +5245,7 @@ function _onMediaChangeImpl(e) {
 function startReflowObserver() {
   injectReflowStyles();
   let cancelled = false;
-  const observer = new MutationObserver((mutations) => {
+  const observer = new MutationObserver(() => {
     scheduleReflow();
   });
   waitForElement(getMainWrapper, "main wrapper").then((wrapper) => {
@@ -5120,35 +5258,41 @@ function startReflowObserver() {
   if (appEl && !cancelled) {
     observer.observe(appEl, { attributes: true, attributeFilter: ["style"] });
   }
-  const _appElForRoute = document.querySelector("[data-app-root]");
-  if (_appElForRoute && !cancelled) {
-    const _routeObserver = new MutationObserver(() => {
-      if (!cancelled)
+  let _chatObserver = null;
+  const _appElForChat = document.querySelector("[data-app-root]");
+  if (_appElForChat && !cancelled) {
+    _chatObserver = new MutationObserver(() => {
+      if (!cancelled && getChatColumn()) {
         scheduleReflow();
+      }
     });
-    _routeObserver.observe(_appElForRoute, { childList: true, subtree: true });
-    scheduleReflow();
+    _chatObserver.observe(_appElForChat, { childList: true, subtree: true });
+    if (getChatColumn()) {
+      scheduleReflow();
+    }
   }
   const stopTagObserver = startTagObserver();
-  _mediaQuery2 = window.matchMedia("(max-width: 600px)");
-  _onMediaChange2 = _onMediaChangeImpl;
-  _mediaQuery2.addEventListener("change", _onMediaChange2);
+  _mediaQuery3 = window.matchMedia("(max-width: 600px)");
+  _onMediaChange3 = _onMediaChangeImpl;
+  _mediaQuery3.addEventListener("change", _onMediaChange3);
   return () => {
     cancelled = true;
     observer.disconnect();
+    _chatObserver?.disconnect();
+    _chatObserver = null;
     if (_reflowRaf !== null) {
       cancelAnimationFrame(_reflowRaf);
       _reflowRaf = null;
     }
     stopTagObserver();
-    if (_mediaQuery2 && _onMediaChange2) {
-      _mediaQuery2.removeEventListener("change", _onMediaChange2);
+    if (_mediaQuery3 && _onMediaChange3) {
+      _mediaQuery3.removeEventListener("change", _onMediaChange3);
     }
-    _mediaQuery2 = null;
-    _onMediaChange2 = null;
+    _mediaQuery3 = null;
+    _onMediaChange3 = null;
   };
 }
-var _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
+var _reflowRaf = null, _mediaQuery3 = null, _onMediaChange3 = null;
 var init_reflow = __esm(() => {
   init_store();
   init_secondary();
@@ -5156,8 +5300,6 @@ var init_reflow = __esm(() => {
   init_wait_for();
   init_mobile_exclusion();
   init_state();
-  init_styles();
-  init_main_mirror_drawer();
 });
 
 // src/sidebar/secondary.tsx
@@ -5297,6 +5439,7 @@ function mountSecondarySidebar(options) {
     handle: _secondaryWrapper.querySelector(".sidebar-ux-resize-handle")
   });
   reconcileTabListPin();
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
   if (options?.initialOpen === true) {
     _secondarySidebarOpen = true;
   }
@@ -5358,6 +5501,7 @@ function tearDownSecondarySidebar() {
   _secondarySidebarOpen = false;
   setMobileOpenClass("secondary", false);
   updateChatReflow();
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
   const handles = document.querySelectorAll(".sidebar-ux-resize-handle");
   for (const h of Array.from(handles)) {
     if (h.parentElement && h.parentElement.classList.contains("sidebar-ux-drawer")) {
@@ -5839,6 +5983,9 @@ function normalizeCanvasSettings(s) {
   }
   return s;
 }
+function isKeepTabListVisibleEnabled(s = _settings) {
+  return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge;
+}
 function hydrateSettings(raw) {
   if (_userHasTouchedSettings)
     return;
@@ -6283,7 +6430,7 @@ function renderGhostOverlay(ta, suffix, caretPos) {
   el.replaceChildren(pre, ghost);
 }
 function injectGhostStyles() {
-  injectStyles(STYLE_ID, `
+  injectStyles(STYLE_ID2, `
     #${GHOST_ID} {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
@@ -6300,7 +6447,7 @@ function injectGhostStyles() {
     }
   `);
 }
-var GHOST_ID = "canvas-slash-ghost", STYLE_ID = "canvas-slash-ghost-styles", _ctx = null;
+var GHOST_ID = "canvas-slash-ghost", STYLE_ID2 = "canvas-slash-ghost-styles", _ctx = null;
 var init_ghost_text = () => {};
 
 // src/slash/suggest.ts
@@ -6485,7 +6632,7 @@ function applyTextareaAriaBaseline(textarea) {
   }
 }
 function injectSuggestStyles() {
-  injectStyles(STYLE_ID2, `
+  injectStyles(STYLE_ID3, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
@@ -6582,7 +6729,7 @@ function escapeHtml2(s) {
 function escapeAttr(s) {
   return escapeHtml2(s);
 }
-var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID2 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
+var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID3 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
   init_ghost_text();
   init_intent();
@@ -8114,7 +8261,7 @@ function unmountToastSurface() {
   toasts = [];
 }
 function injectToastStyles() {
-  injectStyles(STYLE_ID3, `
+  injectStyles(STYLE_ID4, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -8148,7 +8295,7 @@ function injectToastStyles() {
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
   `);
 }
-var STYLE_ID3 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
+var STYLE_ID4 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
 var init_toast = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -8640,6 +8787,7 @@ var init_registry = __esm(() => {
   init_toast();
   init_tab_position();
   init_main_tab_pin();
+  init_strip_gutter();
   init_buttons();
   init_drawer_tab_position();
   debugFeature = {
@@ -8824,11 +8972,13 @@ var init_registry = __esm(() => {
         applyMainTabListPin(false, { force: true });
       }
       updateDrawerTabVisibility();
+      updateStripGutters();
       updateChatReflow();
       return () => {
         applyTabListPin(false, { force: true });
         applyMainTabListPin(false, { force: true });
         updateDrawerTabVisibility();
+        clearStripGutters();
         updateChatReflow();
       };
     },
@@ -8837,6 +8987,11 @@ var init_registry = __esm(() => {
       applyTabListPin(on, { force: true });
       applyMainTabListPin(on, { force: true });
       updateDrawerTabVisibility();
+      if (on) {
+        updateStripGutters();
+      } else {
+        clearStripGutters();
+      }
       updateChatReflow();
     }
   };

@@ -110,17 +110,21 @@ export function applyMainTabListPin(
 export function reconcileMainTabListPin(): void {
   if (isMobileViewport()) {
     applyMainTabListPin(false, { force: true })
+    void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
   reconcileMainMirrorDrawer()
   const on = !!getSettings().keepTabListVisible
   if (!on) {
     teardownMainPin()
+    void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
   _enabled = true
   ensureObservers()
   reconcileMainMirror()
+  // Side-change remaps main/secondary strip gutters to left/right.
+  void import('./strip-gutter').then((m) => m.updateStripGutters())
 }
 
 /** True when main pin / mirror mode is enabled (setting applied, not mobile). */

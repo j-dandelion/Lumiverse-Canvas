@@ -291,6 +291,8 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   // Re-apply pin after construction/remount. Setting can stay true across a
   // side-change remount while the fresh DOM is unpinned.
   reconcileTabListPin()
+  // Secondary list presence affects opposite-edge keep-tabs strip gutter.
+  void import('./strip-gutter').then((m) => m.updateStripGutters())
   // Phase 3: sync the in-flight state to the initial layout so a hard-refresh
   // with secondary open doesn't trip the "no transition needed" check inside
   // openSecondarySidebar() on the first user click.
@@ -419,6 +421,8 @@ export function tearDownSecondarySidebar(): void {
   setMobileOpenClass('secondary', false)
   // Clear stale chat margins left by the now-removed secondary drawer.
   updateChatReflow()
+  // Opposite-edge strip gutter drops when secondary list is gone.
+  void import('./strip-gutter').then((m) => m.updateStripGutters())
   // Drop any in-flight resize handle bound to the wrapper, so a re-mount
   // creates a fresh one.
   const handles = document.querySelectorAll('.sidebar-ux-resize-handle')

@@ -37,6 +37,7 @@ import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
 import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
+import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
@@ -368,6 +369,8 @@ const tabPositionFeature: CanvasFeature = {
  *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
  *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
  *    forward to host tab buttons. Hidden while main drawer is open.
+ *  - Strip gutters: permanent page bounds (strip width only) for chat +
+ *    Welcome; open drawers overlay. Not chat reflow.
  *  Secondary remount also calls reconcileTabListPin(); side-change calls
  *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
  *  No-op on mobile (force-unpins / tears down main mirror). */
@@ -385,11 +388,14 @@ const keepTabListVisibleFeature: CanvasFeature = {
       applyMainTabListPin(false, { force: true })
     }
     updateDrawerTabVisibility()
+    updateStripGutters()
+    // Clear any chat-reflow margins so strip gutters alone own page bounds.
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
       applyMainTabListPin(false, { force: true })
       updateDrawerTabVisibility()
+      clearStripGutters()
       updateChatReflow()
     }
   },
@@ -398,6 +404,11 @@ const keepTabListVisibleFeature: CanvasFeature = {
     applyTabListPin(on, { force: true })
     applyMainTabListPin(on, { force: true })
     updateDrawerTabVisibility()
+    if (on) {
+      updateStripGutters()
+    } else {
+      clearStripGutters()
+    }
     updateChatReflow()
   },
 }

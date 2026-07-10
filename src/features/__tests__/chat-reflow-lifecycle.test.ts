@@ -55,9 +55,11 @@ class StubObserver {
 class StubElement {
   tagName = 'DIV'
   id = ''
+  className = ''
   textContent = ''
   _style: Record<string, string> = {}
-  appendChild(_child: any) {}
+  _children: StubElement[] = []
+  appendChild(c: any) { this._children.push(c) }
   remove() {}
   setAttribute(_n: string, _v: string) {}
   get style(): any {
@@ -70,14 +72,18 @@ class StubElement {
     }
   }
   get classList() { return { add: () => {}, remove: () => {}, contains: () => false } }
-  get children() { return [] as any[] }
-  get firstChild() { return null }
-  get childNodes() { return [] as any[] }
+  get children() { return this._children as any[] }
+  get firstChild() { return this._children[0] ?? null }
+  get childNodes() { return this._children as any[] }
   get offsetWidth() { return 100 }
   get offsetHeight() { return 30 }
   get parentElement() { return null }
   querySelector(_sel: string) { return null }
-  querySelectorAll(_sel: string) { return [] as any[] }
+  querySelectorAll(sel: string): any[] {
+    const sub = sel.match(/\[class\*="([^"]+)"\]/)?.[1]
+    if (!sub) return []
+    return this._children.filter((c) => c.className && c.className.includes(sub))
+  }
   removeChild(_child: any) {}
   getAttribute(_n: string) { return null }
   addEventListener(_e: string, _h: any) {}
@@ -224,7 +230,7 @@ assert(chatReflowFeature.apply !== undefined, 'precondition: chatReflowFeature.a
 
 // --- Test 5: apply(off→on) calls updateChatReflow synchronously ---
 //
-// documentElement CSS variables (--sidebar-ux-chat-ml/mr) must be
+// Chat-column CSS variables (--sidebar-ux-chat-ml/mr) must be
 // populated immediately after apply(off→on), not deferred to the next
 // rAF tick or DOM mutation. This is the fix for the regression where
 // toggling chatReflow off→on required a sidebar close/reopen cycle.
@@ -233,17 +239,28 @@ assert(chatReflowFeature.apply !== undefined, 'precondition: chatReflowFeature.a
 // overriding document.querySelector for body-like selectors.
 
 {
+  const body = new StubElement()
+  body.className = '_body_xyz'
+  const chat = new StubElement()
+  chat.className = '_chatColumn_abc'
+  body.appendChild(chat)
+  stubDocument.querySelector = (sel: string) => {
+    if (sel.includes('_body_')) return body
+    if (sel.includes('_chatColumn_')) return chat
+    return null
+  }
+
   const prev = { ...mergeCanvasSettingsStub(), chatReflow: false } as any
   const next = { ...mergeCanvasSettingsStub(), chatReflow: true } as any
   chatReflowFeature.apply!(prev, next, makeStubCtx())
 
-  // updateChatReflow() → setChatMargin() writes CSS variables on
-  // document.documentElement. The stub has no open drawers, so both
-  // margins are 0px. The invariant: the variables ARE set (not empty).
-  const ml = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-ml')
-  const mr = stubDocument.documentElement.style.getPropertyValue('--sidebar-ux-chat-mr')
-  assert(ml !== '', 'apply(off→on) sets --sidebar-ux-chat-ml synchronously on documentElement')
-  assert(mr !== '', 'apply(off→on) sets --sidebar-ux-chat-mr synchronously on documentElement')
+  // updateChatReflow() → setChatMargin() writes CSS variables on the
+  // chat column. The stub has no open drawers, so both margins are 0px.
+  // The invariant: the variables ARE set (not empty).
+  const ml = chat.style.getPropertyValue('--sidebar-ux-chat-ml')
+  const mr = chat.style.getPropertyValue('--sidebar-ux-chat-mr')
+  assert(ml !== '', 'apply(off→on) sets --sidebar-ux-chat-ml synchronously on chat column')
+  assert(mr !== '', 'apply(off→on) sets --sidebar-ux-chat-mr synchronously on chat column')
 }
 
 // --- Test 6: apply() with no change is a no-op ---
