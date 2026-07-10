@@ -183,6 +183,18 @@ class StubElement {
       fn({ preventDefault() {}, stopPropagation() {}, currentTarget: this })
     }
   }
+  /** Fire a contextmenu event (used by M9c Settings / assignment menu tests). */
+  contextmenu(clientX = 10, clientY = 20) {
+    for (const fn of this._listeners['contextmenu'] || []) {
+      fn({
+        preventDefault() {},
+        stopPropagation() {},
+        currentTarget: this,
+        clientX,
+        clientY,
+      })
+    }
+  }
   getBoundingClientRect() {
     return { width: 420, height: 800, top: 0, left: 0, right: 420, bottom: 800, x: 0, y: 0, toJSON() {} }
   }
@@ -369,6 +381,7 @@ import {
   __resetMainTabPinForTest,
 } from '../main-tab-pin'
 import { isCanvasMainOpen } from '../main-mirror-drawer'
+import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 
 /** Collect mirror buttons from the list (nested under main/bottom sections). */
 function collectMirrorButtons(list: StubElement): StubElement[] {
@@ -392,6 +405,7 @@ import {
   __getMainPinHostForTest,
 } from '../tab-position'
 import { __setSecondaryWrapperForTest } from '../secondary'
+import { setTabAssignment, deleteTabAssignment } from '../../tabs/assignment'
 
 // Secondary tree stubs (minimal for dual-host test)
 const secDrawer = new StubElement()
@@ -536,6 +550,8 @@ function resetAll() {
   }
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
 
+  // Secondary pin is gated on hasSecondaryAssignedTabs() (keep-tabs empty strip).
+  setTabAssignment('m4-sec-tab', 'secondary')
   applyTabListPin(true, { force: true })
   applyMainTabListPin(true, { force: true })
 
@@ -543,14 +559,17 @@ function resetAll() {
   const mainHost = __getMainPinHostForTest() as StubElement | null
   assert(!!secHost, 'M4: secondary host')
   assert(!!mainHost, 'M4: main host')
-  assert(secHost !== mainHost, 'M4: distinct hosts')
-  assertEqual(secHost!.getAttribute('data-pin-owner'), PIN_OWNER_SECONDARY, 'M4: sec owner')
-  assertEqual(mainHost!.getAttribute('data-pin-owner'), PIN_OWNER_MAIN, 'M4: main owner')
+  if (secHost && mainHost) {
+    assert(secHost !== mainHost, 'M4: distinct hosts')
+    assertEqual(secHost.getAttribute('data-pin-owner'), PIN_OWNER_SECONDARY, 'M4: sec owner')
+    assertEqual(mainHost.getAttribute('data-pin-owner'), PIN_OWNER_MAIN, 'M4: main owner')
+  }
 
   // Force re-ensure main host (runs sweep) — secondary must survive
   ensureMainPinHost('right')
   assert(!!__getPinHostForTest(), 'M4: secondary host survives main ensure')
   assert(!!__getMainPinHostForTest(), 'M4: main host survives')
+  deleteTabAssignment('m4-sec-tab')
 }
 
 // M5: disable clears main host only
@@ -561,6 +580,7 @@ function resetAll() {
     return []
   }
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
+  setTabAssignment('m5-sec-tab', 'secondary')
   applyTabListPin(true, { force: true })
   applyMainTabListPin(true, { force: true })
   applyMainTabListPin(false, { force: true })
@@ -568,6 +588,7 @@ function resetAll() {
   assertEqual(getMainPinHost(), null, 'M5: main host gone')
   assert(!isMainTabListPinActive(), 'M5: inactive')
   assert(!!__getPinHostForTest(), 'M5: secondary host remains')
+  deleteTabAssignment('m5-sec-tab')
 }
 
 // M6: mobile no-op
@@ -704,6 +725,46 @@ function resetAll() {
   applyMainTabListPin(true, { force: true })
 
   assertEqual(getActiveMainMirrorKey(), null, 'M9b: heal does not adopt Settings key')
+}
+
+// M9c: Settings right-click must not open "Move to second drawer" assignment menu.
+// Profile control still opens the menu.
+{
+  resetAll()
+  const menuCalls: Array<{ tabId: string; title: string }> = []
+  __setShowAssignmentMenuForTest((_x, _y, tabId, tabTitle) => {
+    menuCalls.push({ tabId, title: tabTitle })
+  })
+  try {
+    mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+      if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+      return []
+    }
+    const profile = makeHostBtn('profile', 'Profile', false)
+    const settings = makeHostBtn('settings', 'Settings', false)
+    settings.removeAttribute('data-tab-id')
+    settings.setAttribute('title', 'Settings')
+    settings.setAttribute('aria-label', 'Settings')
+    mainSidebar.appendChild(profile)
+    mainSidebar.appendChild(settings)
+    applyMainTabListPin(true, { force: true })
+
+    const host = getMainPinHost() as unknown as StubElement
+    const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+    const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))!
+    const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))!
+    const profileMirror = mainSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
+    const settingsMirror = bottomSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
+
+    settingsMirror.contextmenu(12, 34)
+    assertEqual(menuCalls.length, 0, 'M9c: Settings contextmenu does not open assignment menu')
+
+    profileMirror.contextmenu(56, 78)
+    assertEqual(menuCalls.length, 1, 'M9c: Profile contextmenu opens assignment menu')
+    assertEqual(menuCalls[0]?.tabId, 'profile', 'M9c: Profile menu tabId')
+  } finally {
+    __setShowAssignmentMenuForTest(null)
+  }
 }
 
 // M10: toggle-close — click already-active tab while open closes drawer

@@ -481,23 +481,65 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
     }
   }
 
-  // Move reparented root back to the main panel. The selector
-  // :not([data-canvas-secondary]) excludes wrapper-owned roots (legacy);
-  // reparented extension roots have data-canvas-moved but NOT
+  // Move reparented root back to the main panel and clear Canvas markers.
+  // The selector :not([data-canvas-secondary]) excludes wrapper-owned roots
+  // (legacy); reparented extension roots have data-canvas-moved but NOT
   // data-canvas-secondary, so they match correctly.
+  //
+  // Dual-id lookup: built-ins often tag with bare tabId (builtin-move) while
+  // resolvedShowId may be a composite store id. Host requestTabLocation may
+  // also reparent out of secondary before we run — still clear residual
+  // data-canvas-moved / data-canvas-active so main-mirror CSS cannot hide
+  // the panel body (inactive tabs lack data-canvas-active).
   const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+  let _movedRoot: HTMLElement | null = null
   if (_secondaryContentForUnassign) {
-    const _movedRoot = _secondaryContentForUnassign.querySelector(
-      `[data-canvas-moved="${CSS.escape(resolvedShowId)}"]:not([data-canvas-secondary])`
-    ) as HTMLElement | null
+    const idsToTry = resolvedShowId !== tabId
+      ? [resolvedShowId, tabId]
+      : [resolvedShowId]
+    for (const id of idsToTry) {
+      _movedRoot = _secondaryContentForUnassign.querySelector(
+        `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
+      ) as HTMLElement | null
+      if (_movedRoot) break
+    }
     if (_movedRoot) {
-      // Find the main panel content and move the root back
+      // Extension reparent path only: root still under secondary content.
       const _mainContent = document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
       if (_mainContent && _movedRoot.parentElement !== _mainContent) {
         _mainContent.appendChild(_movedRoot)
       }
       _movedRoot.removeAttribute('data-canvas-moved')
       _movedRoot.removeAttribute('data-canvas-active')
+    }
+  }
+
+  // Fallback: host already moved the root (or id mismatch left it outside
+  // secondary). Clear Canvas attrs only — never raw-reparent built-ins.
+  if (!_movedRoot) {
+    const bridgeRoot =
+      (getHostBridge()?.ui.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined) ||
+      (resolvedShowId !== tabId
+        ? (getHostBridge()?.ui.getBuiltInTabRoot?.(resolvedShowId) as HTMLElement | undefined)
+        : undefined)
+    let residual: HTMLElement | null =
+      bridgeRoot && bridgeRoot.getAttribute?.('data-canvas-moved') != null
+        ? bridgeRoot
+        : null
+    if (!residual && typeof document !== 'undefined') {
+      const idsToTry = resolvedShowId !== tabId
+        ? [resolvedShowId, tabId]
+        : [resolvedShowId]
+      for (const id of idsToTry) {
+        residual = document.querySelector(
+          `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
+        ) as HTMLElement | null
+        if (residual) break
+      }
+    }
+    if (residual) {
+      residual.removeAttribute('data-canvas-moved')
+      residual.removeAttribute('data-canvas-active')
     }
   }
 

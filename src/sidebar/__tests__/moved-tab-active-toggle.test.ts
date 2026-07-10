@@ -1,10 +1,13 @@
-// Regression test: injectDrawerTabStyles() injects a CSS rule
-// `[data-canvas-moved]:not([data-canvas-active]) { display: none !important; }`
+// Regression test: injectDrawerTabStyles() injects a CSS rule scoped to the
+// secondary shell:
+// `.sidebar-ux-secondary-wrapper .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) { display: none !important; }`
 // that hides inactive moved tabs without touching the extension's inline
 // `display` style. This replaces the old v1.6.5 approach which stamped
 // `display: none !important` / `removeProperty('display')` directly on
 // moved roots, breaking extensions like Creator Notes HTML Renderer that
 // set `display: flex` on tab.root.
+// Secondary-only scope is required so main-mirror parked panelContent does
+// not hide roots that still carry stale data-canvas-moved after move-back.
 
 let passed = 0
 let failed = 0
@@ -69,6 +72,10 @@ function findStyleById(id: string): StubStyleElement | null {
   assert(css.includes('[data-canvas-moved]'), 'T1: CSS contains [data-canvas-moved] selector')
   assert(css.includes('[data-canvas-active]'), 'T1: CSS contains [data-canvas-active] selector')
   assert(css.includes('display: none !important'), 'T1: CSS contains display: none !important')
+  assert(
+    css.includes('.sidebar-ux-secondary-wrapper .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active])'),
+    'T1: CSS hide rule is scoped to secondary wrapper (not shared panel-content alone)',
+  )
 }
 
 // ============================================================
@@ -84,9 +91,8 @@ function findStyleById(id: string): StubStyleElement | null {
 }
 
 // ============================================================
-// Test 3: The injected CSS rule uses the correct selector
-//         `[data-canvas-moved]:not([data-canvas-active])` and sets
-//         `display: none !important`.
+// Test 3: The injected CSS rule uses the secondary-scoped selector
+//         and sets `display: none !important`.
 //
 //         JSDOM in Bun's test runner does not expose cssRules on
 //         style elements, so we fall back to verifying the rule text
@@ -97,17 +103,24 @@ function findStyleById(id: string): StubStyleElement | null {
   assert(found !== null, 'T3: style element found for rule inspection')
 
   const css = found?.textContent ?? ''
+  const scopedSelector =
+    '.sidebar-ux-secondary-wrapper .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active])'
 
-  // Verify the selector — the :not pseudo-class must be present
-  assert(css.includes('[data-canvas-moved]:not([data-canvas-active])'),
-    'T3: raw CSS includes [data-canvas-moved]:not([data-canvas-active]) selector')
+  assert(css.includes(scopedSelector),
+    'T3: raw CSS includes secondary-scoped moved-tab hide selector')
+
+  // Must not use the unscoped shared-class form as the hide rule alone
+  // (that would hide content under main-mirror's .sidebar-ux-panel-content).
+  const unscopedOnly = css.includes('.sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active])')
+    && !css.includes(scopedSelector)
+  assert(!unscopedOnly, 'T3: hide rule is not unscoped to shared .sidebar-ux-panel-content alone')
 
   // Verify the declaration
   assert(css.includes('display: none !important'),
     'T3: raw CSS includes "display: none !important" declaration')
 
   // Verify the rule is properly scoped with { }
-  const selectorIdx = css.indexOf('[data-canvas-moved]:not([data-canvas-active])')
+  const selectorIdx = css.indexOf(scopedSelector)
   const openBraceIdx = css.indexOf('{', selectorIdx)
   const closeBraceIdx = css.indexOf('}', openBraceIdx)
   assert(selectorIdx >= 0 && openBraceIdx > selectorIdx && closeBraceIdx > openBraceIdx,
@@ -117,14 +130,6 @@ function findStyleById(id: string): StubStyleElement | null {
   const ruleBody = css.substring(openBraceIdx + 1, closeBraceIdx)
   assert(ruleBody.includes('display: none !important'),
     'T3: display: none !important is inside the rule block')
-
-  // NOTE: Bun's JSDOM does not expose cssRules, so we verify via textContent.
-  // If cssRules becomes available in the future, we could tighten this:
-  //
-  //   const sheet = found?.sheet
-  //   const rules = Array.from(sheet?.cssRules ?? [])
-  //   const match = rules.find(r => r instanceof CSSStyleRule && r.selectorText === '[data-canvas-moved]:not([data-canvas-active])')
-  //   assert(match !== undefined, 'T3: cssRules contains the expected CSSStyleRule')
 }
 
 // ============================================================

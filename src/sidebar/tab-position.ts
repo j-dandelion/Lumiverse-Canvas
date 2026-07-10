@@ -407,7 +407,7 @@ export function applyTabListPin(
     // Never pin on mobile; still clear pin if present (viewport cross-down).
     if (enabled && !opts?.force) return
     const el = getSecondaryTabList() ?? getPinnedTabList()
-    if (el?.classList.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
+    if (el?.classList?.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {
       unpinTabList(el)
     }
     return
@@ -419,7 +419,7 @@ export function applyTabListPin(
   if (!wantPin) {
     const el = getSecondaryTabList() ?? getPinnedTabList()
     const hasPinState =
-      !!el?.classList.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer
+      !!el?.classList?.contains(TAB_LIST_PINNED_CLASS) || !!_pinHost || !!_pinSpacer
     if (!hasPinState) {
       if (opts?.force) destroyPinChrome()
       return

@@ -741,6 +741,20 @@ function onMirrorContextMenu(ev: Event): void {
   e.preventDefault()
   e.stopPropagation()
   const mirror = e.currentTarget as HTMLElement
+
+  // Settings is host chrome only (same as onMirrorClick) — never open the
+  // assignment menu ("Move to second drawer"). Host sidebar path already
+  // skips Settings in context-menu/index.ts.
+  const hostBtn = _mirrorToHost.get(mirror)
+  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null
+  const isSettings =
+    (settingsHost != null && isSettingsButton(settingsHost)) ||
+    isSettingsButton(mirror)
+  if (isSettings) {
+    dlog('[main-mirror] contextmenu → settings (no assignment menu)')
+    return
+  }
+
   const tabId =
     mirror.getAttribute('data-tab-id') ||
     mirror.getAttribute('title') ||

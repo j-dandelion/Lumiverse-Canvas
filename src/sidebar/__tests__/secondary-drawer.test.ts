@@ -21,9 +21,33 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
 // Configurable fake sidebar — set by setupExtTest for findMainTabButton
 let _fakeSidebar: any = null
+function _makeClassList() {
+  return {
+    _classes: [] as string[],
+    add(cls: string) { this._classes.push(cls) },
+    remove(cls: string) { this._classes = this._classes.filter(c => c !== cls) },
+    contains(cls: string) { return this._classes.includes(cls) },
+    toggle(cls: string, force?: boolean) {
+      const has = this._classes.includes(cls)
+      const shouldAdd = force !== undefined ? force : !has
+      if (shouldAdd && !has) this._classes.push(cls)
+      if (!shouldAdd && has) this._classes = this._classes.filter(c => c !== cls)
+      return shouldAdd
+    },
+  }
+}
+const _documentElement = {
+  classList: _makeClassList(),
+  style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+}
 ;(globalThis as any).document = {
+  documentElement: _documentElement,
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeSidebar
+    if (sel.startsWith('[data-canvas-moved=')) {
+      // Residual attr fallback in unassign — no global registry in tests
+      return null
+    }
     return null
   },
   querySelectorAll() { return [] },
@@ -40,19 +64,7 @@ let _fakeSidebar: any = null
       width: 0,
       height: 0,
       children: [] as any[],
-      classList: {
-        _classes: [] as string[],
-        add(cls: string) { this._classes.push(cls) },
-        remove(cls: string) { this._classes = this._classes.filter(c => c !== cls) },
-        contains(cls: string) { return this._classes.includes(cls) },
-        toggle(cls: string, force?: boolean) {
-          const has = this._classes.includes(cls)
-          const shouldAdd = force !== undefined ? force : !has
-          if (shouldAdd && !has) this._classes.push(cls)
-          if (!shouldAdd && has) this._classes = this._classes.filter(c => c !== cls)
-          return shouldAdd
-        },
-      },
+      classList: _makeClassList(),
       setAttribute(name: string, value: string) { this._attrs[name] = value },
       getAttribute(name: string) { return this._attrs[name] ?? null },
       setProperty(name: string, value: string, _imp?: string) { this.style[name] = value },
@@ -691,6 +703,39 @@ async function testExtT4() {
 }
 
 // =====================================================================
+// T3b: Host already moved root out of secondary — still clear stale
+// data-canvas-moved / data-canvas-active (inactive tabs lack active).
+// =====================================================================
+async function testUnassignClearsStaleAttrsWhenRootOutsideSecondary() {
+  const tabId = 'memory-stale'
+  setupTest({ tabId, tabTitle: 'Memory' })
+  try {
+    const root = (globalThis as any).window.spindle.ui.getBuiltInTabRoot(tabId) as {
+      setAttribute: (n: string, v: string) => void
+      getAttribute: (n: string) => string | null
+    }
+    // Simulate inactive secondary tab after host requestTabLocation(main-drawer):
+    // attrs remain, root no longer under secondary content.
+    root.setAttribute('data-canvas-moved', tabId)
+    // intentionally no data-canvas-active
+    const { setTabAssignment } = await import('../../tabs/assignment')
+    setTabAssignment(tabId, 'secondary')
+
+    const { unassignFromSecondary } = await import('../secondary-drawer')
+    await unassignFromSecondary(tabId)
+
+    assert(
+      root.getAttribute('data-canvas-moved') == null,
+      'T3b: data-canvas-moved cleared when root already outside secondary',
+    )
+    assert(
+      root.getAttribute('data-canvas-active') == null,
+      'T3b: data-canvas-active cleared when root already outside secondary',
+    )
+  } finally { restoreTest() }
+}
+
+// =====================================================================
 // T5: Cleanup-on-disable — teardownSecondaryDrawer clears state
 // =====================================================================
 async function testExtT5() {
@@ -802,6 +847,7 @@ async function main() {
   await testExtT1()
   await testExtT2()
   await testExtT3()
+  await testUnassignClearsStaleAttrsWhenRootOutsideSecondary()
   await testExtT4()
   await testExtT5()
   await testExtT6()
