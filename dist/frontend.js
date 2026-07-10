@@ -2821,12 +2821,9 @@ function showAssignmentMenu(x, y, tabId, tabTitle, originatingTarget) {
   const currentSidebar = getTabSidebar(tabId);
   let label;
   let targetSidebar;
-  if (currentSidebar === "secondary" && isSecondarySidebarOpen()) {
+  if (currentSidebar === "secondary") {
     label = "Move to main drawer";
     targetSidebar = "primary";
-  } else if (currentSidebar === "secondary" && !isSecondarySidebarOpen()) {
-    label = "Open in second drawer";
-    targetSidebar = "secondary";
   } else {
     label = "Move to second drawer";
     targetSidebar = "secondary";
@@ -2917,7 +2914,6 @@ function createAssignmentContextMenuItem(label, onClick, opts) {
 var _showAssignmentMenuOverride = null, _contextMenu = null, _lastContextMenuTarget = null;
 var init_tab_context_menu = __esm(() => {
   init_assignment();
-  init_secondary();
 });
 
 // src/tabs/buttons.ts
@@ -9628,7 +9624,6 @@ init_secondary_drawer();
 // src/context-menu/index.ts
 init_store();
 init_assignment();
-init_secondary();
 init_state();
 init_tab_context_menu();
 init_buttons();
@@ -9690,12 +9685,9 @@ function stopObserver() {
 function injectCanvasItem(menu, info) {
   let label;
   let targetSidebar;
-  if (info.currentSidebar === "secondary" && isSecondarySidebarOpen()) {
+  if (info.currentSidebar === "secondary") {
     label = "Move to main drawer";
     targetSidebar = "primary";
-  } else if (info.currentSidebar === "secondary" && !isSecondarySidebarOpen()) {
-    label = "Open in second drawer";
-    targetSidebar = "secondary";
   } else {
     label = "Move to second drawer";
     targetSidebar = "secondary";

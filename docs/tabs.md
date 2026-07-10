@@ -112,7 +112,7 @@ Detection heuristics for Lumiverse's menu: last child of body, DIV, position:fix
 Canvas-owned context menu for secondary tabs:
 - `showAssignmentMenu(x, y, tabId, tabTitle)` — shows the menu at coordinates
 - `hideAssignmentMenu()` — removes the menu
-- Items: "Move to main drawer" / "Open in second drawer"
+- Items: "Move to main drawer" (secondary tabs) / "Move to second drawer" (primary tabs)
 - Styling matches Lumiverse's theme variables
 
 ## Visibility Observer (`tabs/visibility-observer.ts`)

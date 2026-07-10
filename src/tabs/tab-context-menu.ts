@@ -9,7 +9,6 @@
 // management logic.
 
 import { getTabSidebar } from '../tabs/assignment'
-import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { injectStyles } from '../debug/styles'
 
 // Test seam for showAssignmentMenu — allows tests to override the real implementation
@@ -50,12 +49,10 @@ export function showAssignmentMenu(
   const currentSidebar = getTabSidebar(tabId)
   let label: string
   let targetSidebar: 'primary' | 'secondary'
-  if (currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
+  // Label/target from assignment only (not drawer open/closed).
+  if (currentSidebar === 'secondary') {
     label = 'Move to main drawer'
     targetSidebar = 'primary'
-  } else if (currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in second drawer'
-    targetSidebar = 'secondary'
   } else {
     label = 'Move to second drawer'
     targetSidebar = 'secondary'

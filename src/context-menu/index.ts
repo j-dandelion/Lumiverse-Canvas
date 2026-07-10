@@ -22,7 +22,6 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar, assignTab } from '../tabs/assignment'
-import { isSecondarySidebarOpen } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 import { isSettingsButton } from '../tabs/buttons'
@@ -108,15 +107,13 @@ function stopObserver(): void {
 // --- Injection: append Canvas item into Lumiverse's rendered menu ---
 
 function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
-  // Derive the move label from the tab's current sidebar position.
+  // Derive the move label from the tab's current sidebar assignment only
+  // (open/closed state does not change the move action).
   let label: string
   let targetSidebar: 'primary' | 'secondary'
-  if (info.currentSidebar === 'secondary' && isSecondarySidebarOpen()) {
+  if (info.currentSidebar === 'secondary') {
     label = 'Move to main drawer'
     targetSidebar = 'primary'
-  } else if (info.currentSidebar === 'secondary' && !isSecondarySidebarOpen()) {
-    label = 'Open in second drawer'
-    targetSidebar = 'secondary'
   } else {
     label = 'Move to second drawer'
     targetSidebar = 'secondary'
