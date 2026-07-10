@@ -25,6 +25,7 @@ import {
   isMainMirrorActive,
   onMainMirrorTabActivated,
   reconcileMainMirrorDrawer,
+  setCanvasMainTitle,
   __resetMainMirrorForTest,
 } from './main-mirror-drawer'
 import {
@@ -176,6 +177,48 @@ export function activateMainMirrorFromRestore(
   onMainMirrorTabActivated(resolvedTitle)
 }
 
+/**
+ * Align Canvas main-mirror chrome with a host primary activation that
+ * did not go through onMirrorClick (handoff, host-driven, heal).
+ * No-op when main pin/mirror mode is off.
+ *
+ * @param opts.open default true — opens drawer + parks via onMainMirrorTabActivated.
+ *   Pass false for reconcile heal (title only; do not force-open mid-reconcile).
+ */
+export function adoptMainMirrorHostActivation(
+  hostBtn: HTMLElement | null,
+  title?: string,
+  opts?: { open?: boolean },
+): void {
+  if (!_enabled || !isMainMirrorActive()) return
+
+  const resolvedTitle =
+    title ||
+    hostBtn?.getAttribute('title') ||
+    hostBtn?.getAttribute('aria-label') ||
+    undefined
+
+  if (hostBtn && hostBtn.isConnected) {
+    _activeMainMirrorKey = hostButtonKey(hostBtn)
+  } else if (resolvedTitle) {
+    _activeMainMirrorKey = `title__${resolvedTitle}`
+  }
+
+  const shouldOpen = opts?.open !== false
+  if (shouldOpen) {
+    onMainMirrorTabActivated(resolvedTitle)
+  } else if (resolvedTitle) {
+    setCanvasMainTitle(resolvedTitle)
+  }
+
+  scheduleReconcile()
+  dlog('[main-mirror] adopt host activation', {
+    key: _activeMainMirrorKey,
+    title: resolvedTitle,
+    open: shouldOpen,
+  })
+}
+
 function teardownMainPin(): void {
   _enabled = false
   _activeMainMirrorKey = null
@@ -233,6 +276,30 @@ function reconcileMainMirror(): void {
   const regularButtons = hostButtons.filter((b) => !isSettingsButton(b))
   const settingsButtons = hostButtons.filter((b) => isSettingsButton(b))
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)))
+
+  // When the Canvas-owned active key no longer maps to any host button
+  // (tab moved off primary), heal to host tabBtnActive or clear key so
+  // syncMirrorFromHost can fall back. Does not run while the restored
+  // key still exists in wantedKeys (preserves exclusive dual-active guard).
+  if (_activeMainMirrorKey != null && !wantedKeys.has(_activeMainMirrorKey)) {
+    const hostActiveBtn =
+      hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
+    const prevKey = _activeMainMirrorKey
+    if (hostActiveBtn) {
+      _activeMainMirrorKey = hostButtonKey(hostActiveBtn)
+      const t =
+        hostActiveBtn.getAttribute('title') ||
+        hostActiveBtn.getAttribute('aria-label') ||
+        ''
+      if (t) setCanvasMainTitle(t)
+    } else {
+      _activeMainMirrorKey = null
+    }
+    dlog('[main-mirror] stale active key healed', {
+      prevKey,
+      nextKey: _activeMainMirrorKey,
+    })
+  }
 
   // Drop stale mirrors anywhere under the list (main + bottom + legacy flat).
   for (const btn of Array.from(

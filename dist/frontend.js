@@ -1674,6 +1674,8 @@ async function activateInPrimary(tabId, h) {
         resolve();
       }, 100);
     });
+    const title = mainBtn.getAttribute("title") || mainBtn.getAttribute("aria-label") || undefined;
+    adoptMainMirrorHostActivation(mainBtn, title);
   }
 }
 function activateInSecondary(tabId, h) {
@@ -1732,6 +1734,7 @@ var init_activation_handoff = __esm(() => {
   init_log();
   init_mobile_exclusion();
   init_secondary();
+  init_main_tab_pin();
   init_active_tab();
   init_buttons();
   init_store();
@@ -3142,6 +3145,7 @@ __export(exports_main_tab_pin, {
   isMainTabListPinActive: () => isMainTabListPinActive,
   getActiveMainMirrorKey: () => getActiveMainMirrorKey,
   applyMainTabListPin: () => applyMainTabListPin,
+  adoptMainMirrorHostActivation: () => adoptMainMirrorHostActivation,
   activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
   __resetMainTabPinForTest: () => __resetMainTabPinForTest,
   MAIN_MIRROR_LIST_MAIN_CLASS: () => MAIN_MIRROR_LIST_MAIN_CLASS,
@@ -3214,6 +3218,28 @@ function activateMainMirrorFromRestore(hostBtn, title) {
   }
   onMainMirrorTabActivated(resolvedTitle);
 }
+function adoptMainMirrorHostActivation(hostBtn, title, opts) {
+  if (!_enabled || !isMainMirrorActive())
+    return;
+  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
+  if (hostBtn && hostBtn.isConnected) {
+    _activeMainMirrorKey = hostButtonKey(hostBtn);
+  } else if (resolvedTitle) {
+    _activeMainMirrorKey = `title__${resolvedTitle}`;
+  }
+  const shouldOpen = opts?.open !== false;
+  if (shouldOpen) {
+    onMainMirrorTabActivated(resolvedTitle);
+  } else if (resolvedTitle) {
+    setCanvasMainTitle(resolvedTitle);
+  }
+  scheduleReconcile();
+  dlog("[main-mirror] adopt host activation", {
+    key: _activeMainMirrorKey,
+    title: resolvedTitle,
+    open: shouldOpen
+  });
+}
 function teardownMainPin() {
   _enabled = false;
   _activeMainMirrorKey = null;
@@ -3262,6 +3288,22 @@ function reconcileMainMirror() {
   const regularButtons = hostButtons.filter((b) => !isSettingsButton(b));
   const settingsButtons = hostButtons.filter((b) => isSettingsButton(b));
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)));
+  if (_activeMainMirrorKey != null && !wantedKeys.has(_activeMainMirrorKey)) {
+    const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
+    const prevKey = _activeMainMirrorKey;
+    if (hostActiveBtn) {
+      _activeMainMirrorKey = hostButtonKey(hostActiveBtn);
+      const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
+      if (t)
+        setCanvasMainTitle(t);
+    } else {
+      _activeMainMirrorKey = null;
+    }
+    dlog("[main-mirror] stale active key healed", {
+      prevKey,
+      nextKey: _activeMainMirrorKey
+    });
+  }
   for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
     const key = btn.getAttribute("data-mirror-key") || "";
     if (!wantedKeys.has(key)) {

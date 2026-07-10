@@ -20,6 +20,7 @@
 import { dlog } from '../debug/log'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { getSecondaryTabList } from '../sidebar/secondary'
+import { adoptMainMirrorHostActivation } from '../sidebar/main-tab-pin'
 import {
   isTabActiveInMainDrawer,
   getActiveSecondaryTabId,
@@ -320,6 +321,15 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
         resolve()
       }, 100)
     })
+
+    // Align main-mirror chrome (header + exclusive active key) after host
+    // activation outside onMirrorClick (handoff both directions). No-op
+    // when keep-tabs / mirror mode is off.
+    const title =
+      mainBtn.getAttribute('title') ||
+      mainBtn.getAttribute('aria-label') ||
+      undefined
+    adoptMainMirrorHostActivation(mainBtn, title)
   } else {
   }
 }

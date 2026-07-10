@@ -361,6 +361,7 @@ import {
   isMainTabListPinActive,
   getActiveMainMirrorKey,
   activateMainMirrorFromRestore,
+  adoptMainMirrorHostActivation,
   MAIN_MIRROR_LIST_CLASS,
   MAIN_MIRROR_BTN_CLASS,
   MAIN_MIRROR_LIST_MAIN_CLASS,
@@ -756,6 +757,116 @@ function resetAll() {
   assert(isCanvasMainOpen(), 'M11: Profile click switches (stays open), not close')
   assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M11: canvas key updates to profile')
   assertEqual(profile.clickCount, profileClicksBefore + 1, 'M11: Profile host clicked on switch')
+}
+
+// M12: stale key heal after tab moves off primary (mirror button gone, host
+// replacement tabBtnActive). Reconcile must adopt host active + highlight.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  applyMainTabListPin(true, { force: true })
+
+  const list0 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const memoryMirror0 = collectMirrorButtons(list0).find(
+    (m) => m.getAttribute('data-tab-id') === 'memory',
+  )!
+  memoryMirror0.click()
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M12: key = memory after click')
+
+  // Simulate move: remove Memory host button; Profile becomes host-active.
+  mainSidebar.removeChild(memory)
+  memory.isConnected = false
+  profile.classList.add('tabBtnActive')
+  profile.className = 'tabBtn tabBtnActive'
+  applyMainTabListPin(true, { force: true })
+
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M12: key healed to profile')
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mirrors = collectMirrorButtons(list)
+  assertEqual(mirrors.length, 1, 'M12: only profile mirror remains')
+  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M12: remaining mirror is profile')
+  assert(
+    mirrors[0].classList.contains('sidebar-ux-tab-active'),
+    'M12: profile mirror highlighted after heal',
+  )
+}
+
+// M13: exclusive key while both host buttons still present — heal must NOT
+// steal highlight to host tabBtnActive Profile when canvas key is Memory.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  applyMainTabListPin(true, { force: true })
+
+  activateMainMirrorFromRestore(memory as unknown as HTMLElement, 'Memory')
+  applyMainTabListPin(true, { force: true })
+
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M13: key stays memory after reconcile')
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mirrors = collectMirrorButtons(list)
+  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
+  assert(
+    !profileMirror.classList.contains('sidebar-ux-tab-active'),
+    'M13: Profile not active (exclusive canvas key)',
+  )
+  assert(
+    memoryMirror.classList.contains('sidebar-ux-tab-active'),
+    'M13: Memory alone active',
+  )
+}
+
+// M14: adoptMainMirrorHostActivation switches key without requiring host class first
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  applyMainTabListPin(true, { force: true })
+
+  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
+  assert(isCanvasMainOpen(), 'M14: adopt opens drawer')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M14: key = profile after adopt')
+
+  adoptMainMirrorHostActivation(memory as unknown as HTMLElement, 'Memory')
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M14: key switches to memory')
+  assert(isCanvasMainOpen(), 'M14: still open after second adopt')
+
+  // open: false does not force-open after close
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const profileMirror = collectMirrorButtons(list).find(
+    (m) => m.getAttribute('data-tab-id') === 'profile',
+  )!
+  // Close via toggle
+  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
+  profileMirror.click() // active → close
+  assert(!isCanvasMainOpen(), 'M14: closed after toggle')
+  adoptMainMirrorHostActivation(memory as unknown as HTMLElement, 'Memory', { open: false })
+  assert(!isCanvasMainOpen(), 'M14: open:false does not reopen')
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M14: key still updates with open:false')
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)
