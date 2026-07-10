@@ -146,7 +146,14 @@ const secondSidebarFeature: CanvasFeature = {
   mount(_ctx, layout) {
     const s = getSettings()
     const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
-    const initialOpen = !!(s.persistDrawerOpenState && layout?.secondary?.open === true)
+    // Do not first-paint open when tab assignments will not be restored (empty drawer).
+    const hasTabsToRestore =
+      !!s.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0
+    const initialOpen = !!(
+      s.persistDrawerOpenState &&
+      layout?.secondary?.open === true &&
+      hasTabsToRestore
+    )
     mountSecondarySidebar({ initialWidth, initialOpen })
     return tearDownSecondarySidebar
   },
@@ -158,7 +165,13 @@ const secondSidebarFeature: CanvasFeature = {
         const anyFacet = !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments)
         const layout = anyFacet ? getLastLoadedLayout() : null
         const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
-        const initialOpen = !!(s.persistDrawerOpenState && layout?.secondary?.open === true)
+        const hasTabsToRestore =
+          !!s.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0
+        const initialOpen = !!(
+          s.persistDrawerOpenState &&
+          layout?.secondary?.open === true &&
+          hasTabsToRestore
+        )
         mountSecondarySidebar({ initialWidth, initialOpen })
         if (layout && anyFacet) applyLayout(layout)
       }

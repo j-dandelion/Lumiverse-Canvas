@@ -9,7 +9,7 @@ import {
   openSecondarySidebar, closeSecondarySidebar,
 } from '../sidebar/secondary'
 import {
-  hasTabAssignment, setTabAssignment,
+  hasTabAssignment, setTabAssignment, getTabAssignments,
 } from '../tabs/assignment'
 import {
   assignToSecondary,
@@ -137,15 +137,17 @@ export async function applyLayout(layout: any) {
   const applySecondaryOpenState = () => {
     if (!restoreOpen) return
     const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
-    const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0
-    const savedOpen = layout.secondary?.open
-    const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs
+    const savedOpen = layout.secondary?.open === true
+    // Live assignments only: disk detachedTabs may still exist when tabs facet is frozen off.
+    const hasSecondaryTabs = getTabAssignments().size > 0
+    const shouldBeOpen = savedOpen && hasSecondaryTabs
     if (mobileExcluded && isSecondarySidebarOpen()) {
       enforceExclusionOnOpen('primary')
-    } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
+    } else if (shouldBeOpen && !isSecondarySidebarOpen()) {
       openSecondarySidebar()
-    } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
+    } else if (!shouldBeOpen && isSecondarySidebarOpen()) {
       closeSecondarySidebar()
+      updateDrawerTabVisibility()
     }
   }
 

@@ -83,7 +83,7 @@ Three independent toggles replace the old single `layoutPersistence` flag:
 
 **Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it.
 
-**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → all three on; false → all three off).
+**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → all three on; false → all three off). Secondary open restore also requires at least one live secondary tab assignment (tabs facet + restored map); open facet alone does not show an empty second drawer.
 
 ### `loadSavedLayout()`
 

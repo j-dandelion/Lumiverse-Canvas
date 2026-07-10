@@ -5846,15 +5846,16 @@ async function applyLayout(layout) {
     if (!restoreOpen)
       return;
     const mobileExcluded = isMobileViewport() && isMainDrawerOpen();
-    const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
-    const savedOpen = layout.secondary?.open;
-    const _shouldBeOpen = savedOpen !== undefined ? savedOpen === true : _hasDetachedTabs;
+    const savedOpen = layout.secondary?.open === true;
+    const hasSecondaryTabs = getTabAssignments().size > 0;
+    const shouldBeOpen = savedOpen && hasSecondaryTabs;
     if (mobileExcluded && isSecondarySidebarOpen()) {
       enforceExclusionOnOpen("primary");
-    } else if (_shouldBeOpen && !isSecondarySidebarOpen()) {
+    } else if (shouldBeOpen && !isSecondarySidebarOpen()) {
       openSecondarySidebar();
-    } else if (!_shouldBeOpen && isSecondarySidebarOpen()) {
+    } else if (!shouldBeOpen && isSecondarySidebarOpen()) {
       closeSecondarySidebar();
+      updateDrawerTabVisibility();
     }
   };
   if (restoreTabs && layout.detachedTabs?.length) {
@@ -9175,7 +9176,8 @@ var init_registry = __esm(() => {
     mount(_ctx2, layout) {
       const s3 = getSettings();
       const initialWidth = s3.persistDrawerWidth ? layout?.secondary?.width : undefined;
-      const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true);
+      const hasTabsToRestore = !!s3.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0;
+      const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true && hasTabsToRestore);
       mountSecondarySidebar({ initialWidth, initialOpen });
       return tearDownSecondarySidebar;
     },
@@ -9188,7 +9190,8 @@ var init_registry = __esm(() => {
           const anyFacet = !!(s3.persistDrawerOpenState || s3.persistDrawerWidth || s3.persistTabAssignments);
           const layout = anyFacet ? getLastLoadedLayout() : null;
           const initialWidth = s3.persistDrawerWidth ? layout?.secondary?.width : undefined;
-          const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true);
+          const hasTabsToRestore = !!s3.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0;
+          const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true && hasTabsToRestore);
           mountSecondarySidebar({ initialWidth, initialOpen });
           if (layout && anyFacet)
             applyLayout(layout);
