@@ -236,7 +236,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secLayout.appendChild(buildSettingRow({
     label: 'Remember drawer open/close state',
-    hint: 'Main + second drawer open/closed (and main active tab) across sessions.',
+    hint: 'Persist drawer open/closed state (and main active tab) across sessions.',
     control: persistOpen.btn,
   }))
 
@@ -246,7 +246,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secLayout.appendChild(buildSettingRow({
     label: 'Remember resized drawer width',
-    hint: 'Main + second drawer widths across sessions.',
+    hint: 'Persist drawer widths across sessions.',
     control: persistWidth.btn,
   }))
 
@@ -256,7 +256,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secLayout.appendChild(buildSettingRow({
     label: 'Remember tab assignments',
-    hint: 'Which tabs live in the second drawer across sessions.',
+    hint: 'Persist arrangement of tabs across sessions (between main and second drawer).',
     control: persistTabs.btn,
   }))
 

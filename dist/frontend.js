@@ -9561,19 +9561,19 @@ function buildSettingsPanelDOM() {
   const persistOpen = makeToggle(() => getSettings().persistDrawerOpenState, (v3) => setSettings({ persistDrawerOpenState: v3 }));
   secLayout.appendChild(buildSettingRow({
     label: "Remember drawer open/close state",
-    hint: "Main + second drawer open/closed (and main active tab) across sessions.",
+    hint: "Persist drawer open/closed state (and main active tab) across sessions.",
     control: persistOpen.btn
   }));
   const persistWidth = makeToggle(() => getSettings().persistDrawerWidth, (v3) => setSettings({ persistDrawerWidth: v3 }));
   secLayout.appendChild(buildSettingRow({
     label: "Remember resized drawer width",
-    hint: "Main + second drawer widths across sessions.",
+    hint: "Persist drawer widths across sessions.",
     control: persistWidth.btn
   }));
   const persistTabs = makeToggle(() => getSettings().persistTabAssignments, (v3) => setSettings({ persistTabAssignments: v3 }));
   secLayout.appendChild(buildSettingRow({
     label: "Remember tab assignments",
-    hint: "Which tabs live in the second drawer across sessions.",
+    hint: "Persist arrangement of tabs across sessions (between main and second drawer).",
     control: persistTabs.btn
   }));
   const secSidebars = section("Drawers");
