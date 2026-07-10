@@ -24,10 +24,11 @@ import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-excl
 
 // Restore machinery: a MutationObserver on the main sidebar catches new
 // tab buttons as extensions register (childList + subtree). Each fire
-// re-runs the per-tab restore attempt, and the loop ends when all tabs
-// are fully restored or the safety timeout elapses. Replaces the
-// setInterval(500ms, 20 attempts) polling loop that was needed because
-// polling can't tell when Lumiverse re-renders.
+// re-runs the per-tab restore attempt. Built-in assigns are async and
+// reparent into the *secondary* panel, which does not mutate main
+// sidebar childList — so each assignToSecondary also re-checks on
+// settle (see kickAssign). The loop ends when all tabs are fully
+// restored or the safety timeout elapses.
 //
 // Test seam: setRestoreTimeoutMs() lets tests shrink the 10s default to
 // 100ms (or any value). Used by the layout-restore tests.
@@ -175,65 +176,12 @@ export async function applyLayout(layout: any) {
     setRestoringFromLayout(true)
     setSuppressAutoActivation(true)
 
-    // One pass of restore work. Returns the number of tabs that still need
-    // more work. The observer callback calls this; the timeout also calls
-    // it to drain any remaining work. assignToSecondary is async; we
-    // fire-and-forget it and let the next observer/timeout tick check
-    // progress via isTabFullyRestored.
-    const attemptRestore = (): number => {
-      let remaining = 0
-      for (let i = 0; i < layout.detachedTabs.length; i++) {
-        const dt = layout.detachedTabs[i]
-        const _alreadyAssigned = hasTabAssignment(dt.tabId)
-        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false
-        if (_alreadyAssigned && _fullyRestored) continue
-        remaining++
-        // Try exact match first
-        const tabs = getDrawerTabs()
-        let tab = tabs.find(t => t.id === dt.tabId)
-        if (!tab) {
-          // Exact match missed — try stripped-suffix match
-          const storedPrefix = stripSuffix(dt.tabId)
-          const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
-          if (candidates.length === 1) {
-            tab = candidates[0]
-            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`)
-            // Self-heal: rewrite the in-memory layout so the next persistLayout
-            // call stores the live id. Also heal secondary.activeTabId when it
-            // pointed at the drifted stored id (exact or same stripped prefix).
-            const prevId = dt.tabId
-            layout.detachedTabs[i] = { ...dt, tabId: tab.id }
-            const savedActive = layout.secondary?.activeTabId as string | undefined
-            if (
-              savedActive &&
-              (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))
-            ) {
-              layout.secondary = { ...layout.secondary, activeTabId: tab.id }
-            }
-          } else if (candidates.length > 1) {
-            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`)
-          }
-        }
-        if (tab) {
-          assignToSecondary(tab.id).catch((err) => {
-            dwarn(`applyLayout: assignToSecondary(${tab.id}) failed:`, err)
-          })
-        } else {
-          const mainBtn = findMainTabButton(dt.tabId)
-          if (mainBtn) {
-            const liveTabId = mainBtn.getAttribute('data-tab-id') || dt.tabId
-            assignToSecondary(liveTabId).catch((err) => {
-              dwarn(`applyLayout: LumiScript fallback assignToSecondary(${liveTabId}) failed:`, err)
-            })
-            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`)
-          } else {
-            const knownIds = tabs.map(t => t.id)
-            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(', ')}. Layout may be stale.`)
-          }
-        }
-      }
-      return remaining
-    }
+    // Once-guard: finishRestore can be reached from observer, assign
+    // settle, initial/follow-up passes, and the safety timeout.
+    let _restoreFinished = false
+    // Dedup in-flight assigns so observer/settle re-checks do not stack
+    // concurrent assignToSecondary for the same tab id.
+    const _assigningIds = new Set<string>()
 
     /** Resolve which secondary tab should be active after restore. */
     const resolveRestoredActiveTabId = (): string | null => {
@@ -259,6 +207,8 @@ export async function applyLayout(layout: any) {
     // picks the active tab (authoritative), re-applies open/closed state,
     // then releases restore/suppress guards.
     const finishRestore = () => {
+      if (_restoreFinished) return
+      _restoreFinished = true
       if (_restoreObserver !== null) {
         _restoreObserver.disconnect()
         _restoreObserver = null
@@ -305,9 +255,85 @@ export async function applyLayout(layout: any) {
       setSuppressAutoActivation(false)
     }
 
+    // Kick assignToSecondary once per id. On settle, re-check completion:
+    // built-in tabs reparent into the secondary panel and never mutate
+    // main sidebar childList, so the MutationObserver alone would leave
+    // activation deferred until the 10s safety timeout.
+    const kickAssign = (tabId: string): void => {
+      if (_restoreFinished || _assigningIds.has(tabId)) return
+      _assigningIds.add(tabId)
+      assignToSecondary(tabId)
+        .catch((err) => {
+          dwarn(`applyLayout: assignToSecondary(${tabId}) failed:`, err)
+        })
+        .finally(() => {
+          _assigningIds.delete(tabId)
+          if (_restoreFinished) return
+          const remaining = attemptRestore()
+          if (remaining === 0) finishRestore()
+        })
+    }
+
+    // One pass of restore work. Returns the number of tabs that still need
+    // more work. Observer, assign settle, and the safety timeout all call
+    // this; progress is measured via isTabFullyRestored.
+    const attemptRestore = (): number => {
+      if (_restoreFinished) return 0
+      let remaining = 0
+      for (let i = 0; i < layout.detachedTabs.length; i++) {
+        const dt = layout.detachedTabs[i]
+        const _alreadyAssigned = hasTabAssignment(dt.tabId)
+        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false
+        if (_alreadyAssigned && _fullyRestored) continue
+        remaining++
+        // Try exact match first
+        const tabs = getDrawerTabs()
+        let tab = tabs.find(t => t.id === dt.tabId)
+        if (!tab) {
+          // Exact match missed — try stripped-suffix match
+          const storedPrefix = stripSuffix(dt.tabId)
+          const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
+          if (candidates.length === 1) {
+            tab = candidates[0]
+            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`)
+            // Self-heal: rewrite the in-memory layout so the next persistLayout
+            // call stores the live id. Also heal secondary.activeTabId when it
+            // pointed at the drifted stored id (exact or same stripped prefix).
+            const prevId = dt.tabId
+            layout.detachedTabs[i] = { ...dt, tabId: tab.id }
+            const savedActive = layout.secondary?.activeTabId as string | undefined
+            if (
+              savedActive &&
+              (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))
+            ) {
+              layout.secondary = { ...layout.secondary, activeTabId: tab.id }
+            }
+          } else if (candidates.length > 1) {
+            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`)
+          }
+        }
+        if (tab) {
+          kickAssign(tab.id)
+        } else {
+          const mainBtn = findMainTabButton(dt.tabId)
+          if (mainBtn) {
+            const liveTabId = mainBtn.getAttribute('data-tab-id') || dt.tabId
+            kickAssign(liveTabId)
+            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`)
+          } else {
+            const knownIds = tabs.map(t => t.id)
+            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(', ')}. Layout may be stale.`)
+          }
+        }
+      }
+      return remaining
+    }
+
     // Observe the main sidebar for childList + subtree — each new tab
     // button (extension registration) fires the observer and re-runs
     // the restore pass. End condition checked after each fire.
+    // Assign-settle (kickAssign.finally) covers completion when work
+    // only mutates the secondary panel.
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]')
     if (sidebar) {
       _restoreObserver = new MutationObserver(() => {
@@ -317,7 +343,7 @@ export async function applyLayout(layout: any) {
       _restoreObserver.observe(sidebar, { childList: true, subtree: true })
     } else {
       // Sidebar not present yet (early layout application). Drain work
-      // on a 100ms microtask + safety timeout so the observer doesn't
+      // on a microtask + safety timeout so the observer doesn't
       // sit silent if the sidebar never appears.
       queueMicrotask(() => {
         const remaining = attemptRestore()
@@ -342,8 +368,8 @@ export async function applyLayout(layout: any) {
       // assignToSecondary may complete synchronously when the drawer is
       // already open (the await openSecondarySidebar path is skipped). The
       // first pass already fired it — a second pass catches the
-      // now-fully-restored tabs without waiting for the observer (which
-      // only watches the main sidebar) or the 10s safety timeout.
+      // now-fully-restored tabs without waiting for the observer or timeout.
+      // Async assigns still finish via kickAssign.finally.
       const followUp = attemptRestore()
       if (followUp === 0) finishRestore()
     }

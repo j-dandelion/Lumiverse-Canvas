@@ -5461,53 +5461,8 @@ async function applyLayout(layout) {
     };
     setRestoringFromLayout(true);
     setSuppressAutoActivation(true);
-    const attemptRestore = () => {
-      let remaining = 0;
-      for (let i = 0;i < layout.detachedTabs.length; i++) {
-        const dt = layout.detachedTabs[i];
-        const _alreadyAssigned = hasTabAssignment(dt.tabId);
-        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false;
-        if (_alreadyAssigned && _fullyRestored)
-          continue;
-        remaining++;
-        const tabs = getDrawerTabs();
-        let tab = tabs.find((t) => t.id === dt.tabId);
-        if (!tab) {
-          const storedPrefix = stripSuffix(dt.tabId);
-          const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
-          if (candidates.length === 1) {
-            tab = candidates[0];
-            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
-            const prevId = dt.tabId;
-            layout.detachedTabs[i] = { ...dt, tabId: tab.id };
-            const savedActive = layout.secondary?.activeTabId;
-            if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
-              layout.secondary = { ...layout.secondary, activeTabId: tab.id };
-            }
-          } else if (candidates.length > 1) {
-            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
-          }
-        }
-        if (tab) {
-          assignToSecondary(tab.id).catch((err) => {
-            dwarn(`applyLayout: assignToSecondary(${tab.id}) failed:`, err);
-          });
-        } else {
-          const mainBtn = findMainTabButton(dt.tabId);
-          if (mainBtn) {
-            const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
-            assignToSecondary(liveTabId).catch((err) => {
-              dwarn(`applyLayout: LumiScript fallback assignToSecondary(${liveTabId}) failed:`, err);
-            });
-            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`);
-          } else {
-            const knownIds = tabs.map((t) => t.id);
-            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(", ")}. Layout may be stale.`);
-          }
-        }
-      }
-      return remaining;
-    };
+    let _restoreFinished = false;
+    const _assigningIds = new Set;
     const resolveRestoredActiveTabId = () => {
       const saved = layout.secondary?.activeTabId;
       if (saved) {
@@ -5525,6 +5480,9 @@ async function applyLayout(layout) {
       return fallback?.tabId ?? null;
     };
     const finishRestore = () => {
+      if (_restoreFinished)
+        return;
+      _restoreFinished = true;
       if (_restoreObserver !== null) {
         _restoreObserver.disconnect();
         _restoreObserver = null;
@@ -5559,6 +5517,66 @@ async function applyLayout(layout) {
       }
       setRestoringFromLayout(false);
       setSuppressAutoActivation(false);
+    };
+    const kickAssign = (tabId) => {
+      if (_restoreFinished || _assigningIds.has(tabId))
+        return;
+      _assigningIds.add(tabId);
+      assignToSecondary(tabId).catch((err) => {
+        dwarn(`applyLayout: assignToSecondary(${tabId}) failed:`, err);
+      }).finally(() => {
+        _assigningIds.delete(tabId);
+        if (_restoreFinished)
+          return;
+        const remaining = attemptRestore();
+        if (remaining === 0)
+          finishRestore();
+      });
+    };
+    const attemptRestore = () => {
+      if (_restoreFinished)
+        return 0;
+      let remaining = 0;
+      for (let i = 0;i < layout.detachedTabs.length; i++) {
+        const dt = layout.detachedTabs[i];
+        const _alreadyAssigned = hasTabAssignment(dt.tabId);
+        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false;
+        if (_alreadyAssigned && _fullyRestored)
+          continue;
+        remaining++;
+        const tabs = getDrawerTabs();
+        let tab = tabs.find((t) => t.id === dt.tabId);
+        if (!tab) {
+          const storedPrefix = stripSuffix(dt.tabId);
+          const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
+          if (candidates.length === 1) {
+            tab = candidates[0];
+            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
+            const prevId = dt.tabId;
+            layout.detachedTabs[i] = { ...dt, tabId: tab.id };
+            const savedActive = layout.secondary?.activeTabId;
+            if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
+              layout.secondary = { ...layout.secondary, activeTabId: tab.id };
+            }
+          } else if (candidates.length > 1) {
+            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
+          }
+        }
+        if (tab) {
+          kickAssign(tab.id);
+        } else {
+          const mainBtn = findMainTabButton(dt.tabId);
+          if (mainBtn) {
+            const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
+            kickAssign(liveTabId);
+            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`);
+          } else {
+            const knownIds = tabs.map((t) => t.id);
+            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(", ")}. Layout may be stale.`);
+          }
+        }
+      }
+      return remaining;
     };
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
     if (sidebar) {

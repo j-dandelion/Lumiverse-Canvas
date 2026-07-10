@@ -634,6 +634,39 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 }
 
 // =====================================================================
+// T14: Async assign settles without main-sidebar observer → finish early
+// Regression for hard-refresh built-in restore: reparent mutates the
+// secondary panel only, so the main childList observer never re-fires.
+// finishRestore must run from assign settle, not the 10s safety timeout.
+// =====================================================================
+{
+  setupEnv([{ id: 'tab:lore:1', title: 'Lorebook' }])
+  // Long timeout — if we finish via timeout, the test fails the timing assert.
+  setRestoreTimeoutMs(5000)
+
+  const layout = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:lore:1' },
+    detachedTabs: [{ tabId: 'tab:lore:1' }],
+  }
+
+  const t0 = Date.now()
+  await applyLayout(layout)
+  // Let assignToSecondary async reparent complete. Do NOT fire the
+  // MutationObserver — that is the production blind spot.
+  await tick()
+  await tick()
+
+  assert(hasTabAssignment('tab:lore:1'), 'T14: tab assigned after async assign')
+  assert(!isRestoringFromLayout(), 'T14: guard cleared via assign settle (no observer fire)')
+  assert(!isSuppressAutoActivation(), 'T14: suppress cleared via assign settle')
+  assertEqual(getActiveSecondaryTabId(), 'tab:lore:1', 'T14: active tab set by finishRestore')
+  const elapsed = Date.now() - t0
+  assert(elapsed < 1000, `T14: finished well under safety timeout (elapsed ${elapsed}ms)`)
+
+  cleanup()
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
