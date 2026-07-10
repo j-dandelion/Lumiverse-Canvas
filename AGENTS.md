@@ -2,9 +2,27 @@
 
 Canvas is a Spindle extension for Lumiverse (an AI chat frontend) that adds a second sidebar drawer, chat reflow, drag-to-resize, slash commands, and more. It is a pure-frontend TypeScript extension running in the browser.
 
+## WORKFLOW.md (session catch-up)
+
+`WORKFLOW.md` at the repo root is the **current work-state** file: focus, just finished, open items, landmark commits, how to verify. It is **local-only** (listed in `.gitignore`) so it can stay blunt and up-to-date without polluting git history.
+
+**When starting work in this repo:** read `WORKFLOW.md` first (if present) for what has been happening lately, then use `docs/README.md` for durable architecture. Prefer WORKFLOW over stale session memory for WIP.
+
+**When finishing a major round of work**, update `WORKFLOW.md` before you stop (same turn as the wrap-up commit or handoff). A major round means: a feature/epic slice landed, a multi-commit fix arc, a release prep, or enough change that the next agent would otherwise re-discover context from git log alone.
+
+Update at least:
+
+1. **Last updated** (date)
+2. **Current focus** — one short paragraph of what is active now
+3. **Just finished** — what this round achieved (commits/PR refs if useful)
+4. **Open / next** — unchecked items, known bugs, intentional deferrals
+5. Landmark commits / key files if the epic moved
+
+Do **not** commit `WORKFLOW.md`. Do commit durable docs under `docs/` when behavior stabilizes. Skip updating WORKFLOW for tiny one-off typo/build-only chores with no change to focus or open items.
+
 ## Documentation
 
-You MUST start with the docs folder at `/docs/README.md` — it has a reading order and quick reference for the entire codebase.
+You MUST start with the docs folder at `/docs/README.md` — it has a reading order and quick reference for the entire codebase. (For *current* WIP, prefer `WORKFLOW.md` when it exists.)
 
 ```
 docs/
