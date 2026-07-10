@@ -85,7 +85,7 @@ const debugFeature: CanvasFeature = {
   },
 }
 
-/** Chat reflow: shifts the chat column so neither sidebar covers it.
+/** Chat reflow: shifts the chat column so neither drawer covers it.
  *  The MutationObserver on the main wrapper (in startReflowObserver) is
  *  the only path that catches the *main sidebar's* open/close events —
  *  the secondary sidebar calls updateChatReflow() directly from its
@@ -227,17 +227,17 @@ const consistentIconSizeFeature: CanvasFeature = {
   },
 }
 
-/** Sidebar shadows: desktop variant (>=601px). */
+/** Drawer shadows: desktop variant (>=601px). */
 const shadowsDesktopFeature: CanvasFeature = {
-  id: 'sidebarShadowsDesktop',
+  id: 'drawerShadowsDesktop',
   init() {
-    if (!getSettings().sidebarShadowsDesktop) {
+    if (!getSettings().drawerShadowsDesktop) {
       injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
     }
   },
   apply(prev, next) {
-    if (prev.sidebarShadowsDesktop === next.sidebarShadowsDesktop) return
-    if (next.sidebarShadowsDesktop) {
+    if (prev.drawerShadowsDesktop === next.drawerShadowsDesktop) return
+    if (next.drawerShadowsDesktop) {
       document.getElementById(SHADOW_DISABLE_DESKTOP_ID)?.remove()
     } else {
       injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss('min', 601))
@@ -245,17 +245,17 @@ const shadowsDesktopFeature: CanvasFeature = {
   },
 }
 
-/** Sidebar shadows: mobile variant (<=600px). */
+/** Drawer shadows: mobile variant (<=600px). */
 const shadowsMobileFeature: CanvasFeature = {
-  id: 'sidebarShadowsMobile',
+  id: 'drawerShadowsMobile',
   init() {
-    if (!getSettings().sidebarShadowsMobile) {
+    if (!getSettings().drawerShadowsMobile) {
       injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))
     }
   },
   apply(prev, next) {
-    if (prev.sidebarShadowsMobile === next.sidebarShadowsMobile) return
-    if (next.sidebarShadowsMobile) {
+    if (prev.drawerShadowsMobile === next.drawerShadowsMobile) return
+    if (next.drawerShadowsMobile) {
       document.getElementById(SHADOW_DISABLE_MOBILE_ID)?.remove()
     } else {
       injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss('max', 600))

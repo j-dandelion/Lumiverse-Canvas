@@ -23,6 +23,13 @@ function mergeCanvasSettings(saved) {
       if (v !== undefined)
         out[key] = v;
     }
+    const raw = saved;
+    if (saved.drawerShadowsDesktop === undefined && typeof raw.sidebarShadowsDesktop === "boolean") {
+      out.drawerShadowsDesktop = raw.sidebarShadowsDesktop;
+    }
+    if (saved.drawerShadowsMobile === undefined && typeof raw.sidebarShadowsMobile === "boolean") {
+      out.drawerShadowsMobile = raw.sidebarShadowsMobile;
+    }
   }
   return out;
 }
@@ -36,8 +43,8 @@ var init_types = __esm(() => {
     consistentIconSize: true,
     moveControlsToOuterEdge: false,
     keepTabListVisible: false,
-    sidebarShadowsDesktop: true,
-    sidebarShadowsMobile: false,
+    drawerShadowsDesktop: true,
+    drawerShadowsMobile: false,
     chatReflow: true,
     layoutPersistence: true,
     slashCommandsEnabled: true,
@@ -9084,16 +9091,16 @@ var init_registry = __esm(() => {
     }
   };
   shadowsDesktopFeature = {
-    id: "sidebarShadowsDesktop",
+    id: "drawerShadowsDesktop",
     init() {
-      if (!getSettings().sidebarShadowsDesktop) {
+      if (!getSettings().drawerShadowsDesktop) {
         injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss("min", 601));
       }
     },
     apply(prev, next) {
-      if (prev.sidebarShadowsDesktop === next.sidebarShadowsDesktop)
+      if (prev.drawerShadowsDesktop === next.drawerShadowsDesktop)
         return;
-      if (next.sidebarShadowsDesktop) {
+      if (next.drawerShadowsDesktop) {
         document.getElementById(SHADOW_DISABLE_DESKTOP_ID)?.remove();
       } else {
         injectStyles(SHADOW_DISABLE_DESKTOP_ID, shadowDisableCss("min", 601));
@@ -9101,16 +9108,16 @@ var init_registry = __esm(() => {
     }
   };
   shadowsMobileFeature = {
-    id: "sidebarShadowsMobile",
+    id: "drawerShadowsMobile",
     init() {
-      if (!getSettings().sidebarShadowsMobile) {
+      if (!getSettings().drawerShadowsMobile) {
         injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss("max", 600));
       }
     },
     apply(prev, next) {
-      if (prev.sidebarShadowsMobile === next.sidebarShadowsMobile)
+      if (prev.drawerShadowsMobile === next.drawerShadowsMobile)
         return;
-      if (next.sidebarShadowsMobile) {
+      if (next.drawerShadowsMobile) {
         document.getElementById(SHADOW_DISABLE_MOBILE_ID)?.remove();
       } else {
         injectStyles(SHADOW_DISABLE_MOBILE_ID, shadowDisableCss("max", 600));
@@ -9400,7 +9407,7 @@ function buildSettingsPanelDOM() {
   const chat = makeToggle(() => getSettings().chatReflow, (v3) => setSettings({ chatReflow: v3 }));
   sec1.appendChild(buildSettingRow({
     label: "Center the chat in the visible area",
-    hint: "Shifts the chat column by the open-drawer widths so neither sidebar covers it.",
+    hint: "Shifts the chat column by the open-drawer widths so neither drawer covers it.",
     control: chat.btn
   }));
   const persist = makeToggle(() => getSettings().layoutPersistence, (v3) => setSettings({ layoutPersistence: v3 }));
@@ -9432,21 +9439,21 @@ function buildSettingsPanelDOM() {
   secSidebars.appendChild(keepTabListVisibleRow);
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   secSidebars.appendChild(buildSettingRow({
-    label: "Drag to resize sidebars",
+    label: "Drag to resize drawers",
     hint: "Adds a 4px grab handle on the inner edge of both drawers.",
     control: resizeSidebars.btn,
     disabled: !getSettings().secondSidebarEnabled
   }));
-  const shadowsDesktop = makeToggle(() => getSettings().sidebarShadowsDesktop, (v3) => setSettings({ sidebarShadowsDesktop: v3 }));
+  const shadowsDesktop = makeToggle(() => getSettings().drawerShadowsDesktop, (v3) => setSettings({ drawerShadowsDesktop: v3 }));
   secSidebars.appendChild(buildSettingRow({
-    label: "Sidebar shadows (desktop)",
-    hint: "Show box-shadow on sidebars when the viewport is wider than 600px.",
+    label: "Drawer shadows (desktop)",
+    hint: "Show box-shadow on drawers when the viewport is wider than 600px.",
     control: shadowsDesktop.btn
   }));
-  const shadowsMobile = makeToggle(() => getSettings().sidebarShadowsMobile, (v3) => setSettings({ sidebarShadowsMobile: v3 }));
+  const shadowsMobile = makeToggle(() => getSettings().drawerShadowsMobile, (v3) => setSettings({ drawerShadowsMobile: v3 }));
   secSidebars.appendChild(buildSettingRow({
-    label: "Sidebar shadows (mobile)",
-    hint: "Show box-shadow on sidebars when the viewport is 600px or narrower.",
+    label: "Drawer shadows (mobile)",
+    hint: "Show box-shadow on drawers when the viewport is 600px or narrower.",
     control: shadowsMobile.btn
   }));
   const sec2 = section("Second drawer");

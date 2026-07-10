@@ -48,7 +48,7 @@ export interface CanvasSettings {
   /** Force 20×20 icon size in the secondary tab list. */
   consistentIconSize?: boolean
 
-  // --- Sidebars ---
+  // --- Drawers ---
   /** Move the tab-button column to the screen-edge side of the secondary
    *  sidebar (desktop/tablet only). The border stays between the tab list
    *  and the panel; the resize handle stays on the chat-facing edge.
@@ -63,11 +63,11 @@ export interface CanvasSettings {
    *  Panels still slide in/out from behind the list. No-op on mobile. */
   keepTabListVisible?: boolean
 
-  /** Show box-shadow on sidebars at min-width: 601px (desktop). */
-  sidebarShadowsDesktop?: boolean
+  /** Show box-shadow on drawers at min-width: 601px (desktop). */
+  drawerShadowsDesktop?: boolean
 
-  /** Show box-shadow on sidebars at max-width: 600px (mobile). */
-  sidebarShadowsMobile?: boolean
+  /** Show box-shadow on drawers at max-width: 600px (mobile). */
+  drawerShadowsMobile?: boolean
 
   // --- Chat & Layout ---
   /** Center the chat column in the visible area (set --canvas-chat-ml/mr). */
@@ -119,11 +119,11 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   showTabLabels: 'follow',
   consistentIconSize: true,
-  // Sidebars
+  // Drawers
   moveControlsToOuterEdge: false,
   keepTabListVisible: false,
-  sidebarShadowsDesktop: true,
-  sidebarShadowsMobile: false,
+  drawerShadowsDesktop: true,
+  drawerShadowsMobile: false,
   // Chat & Layout
   chatReflow: true,
   layoutPersistence: true,
@@ -148,6 +148,15 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     for (const key of Object.keys(out) as Array<keyof CanvasSettings>) {
       const v = saved[key]
       if (v !== undefined) (out as Record<string, unknown>)[key] = v
+    }
+    // Legacy keys from pre-drawerShadows rename (layout.json may still hold these).
+    // New keys win when both are present; only map legacy when the new key is absent.
+    const raw = saved as Record<string, unknown>
+    if (saved.drawerShadowsDesktop === undefined && typeof raw.sidebarShadowsDesktop === 'boolean') {
+      out.drawerShadowsDesktop = raw.sidebarShadowsDesktop
+    }
+    if (saved.drawerShadowsMobile === undefined && typeof raw.sidebarShadowsMobile === 'boolean') {
+      out.drawerShadowsMobile = raw.sidebarShadowsMobile
     }
   }
   return out

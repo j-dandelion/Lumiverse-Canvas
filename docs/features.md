@@ -31,8 +31,8 @@ interface CanvasFeature {
 | `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers |
 | `drawerSyncFeature` | `mirrorCompactPosition` | Mirrors main drawer's compact mode + vertical position |
 | `consistentIconSizeFeature` | `consistentIconSize` | Forces 20x20 icon size in secondary tab list |
-| `shadowsDesktopFeature` | `sidebarShadowsDesktop` | Box-shadow on sidebars (>=601px) |
-| `shadowsMobileFeature` | `sidebarShadowsMobile` | Box-shadow on sidebars (<=600px) |
+| `shadowsDesktopFeature` | `drawerShadowsDesktop` | Box-shadow on drawers (>=601px) |
+| `shadowsMobileFeature` | `drawerShadowsMobile` | Box-shadow on drawers (<=600px) |
 | `layoutPersistenceFeature` | `layoutPersistence` | Cancels in-flight saves when turned off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
@@ -67,7 +67,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 
 **Sections:**
 1. **Chat & Layout** — chatReflow, layoutPersistence, slashCommandsEnabled
-2. **Sidebars** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, sidebarShadowsDesktop, sidebarShadowsMobile
+2. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
 3. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state), consistentIconSize
 4. **Debug** — debugMode
 

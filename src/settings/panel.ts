@@ -152,12 +152,6 @@ function injectPanelStyles() {
       background: var(--lumiverse-primary);
       color: white;
     }
-    .sidebar-ux-panel-footer {
-      margin-top: 18px;
-      font-size: calc(11px * var(--lumiverse-font-scale, 1));
-      color: var(--lumiverse-text-dim);
-      text-align: center;
-    }
   `)
 }
 
@@ -219,7 +213,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   sec1.appendChild(buildSettingRow({
     label: 'Center the chat in the visible area',
-    hint: 'Shifts the chat column by the open-drawer widths so neither sidebar covers it.',
+    hint: 'Shifts the chat column by the open-drawer widths so neither drawer covers it.',
     control: chat.btn,
   }))
 
@@ -239,12 +233,12 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   sec1.appendChild(buildSettingRow({
     label: 'Enable slash commands',
-    hint: 'When on, typing / in the chat input opens the slash-command menu. When off, / is treated as plain text and no command parsing runs.',
+    hint: 'When on, typing / in the chat input opens the slash-command menu.',
     control: slash.btn,
   }))
 
-  // --- Section: Sidebars ---
-  const secSidebars = section('Sidebars')
+  // --- Section: Drawers ---
+  const secSidebars = section('Drawers')
 
   const moveControlsToOuter = makeToggle(
     () => getSettings().moveControlsToOuterEdge,
@@ -275,29 +269,29 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     { disabled: () => !getSettings().secondSidebarEnabled }
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Drag to resize sidebars',
+    label: 'Drag to resize drawers',
     hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
     control: resizeSidebars.btn,
     disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const shadowsDesktop = makeToggle(
-    () => getSettings().sidebarShadowsDesktop,
-    (v) => setSettings({ sidebarShadowsDesktop: v })
+    () => getSettings().drawerShadowsDesktop,
+    (v) => setSettings({ drawerShadowsDesktop: v })
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Sidebar shadows (desktop)',
-    hint: 'Show box-shadow on sidebars when the viewport is wider than 600px.',
+    label: 'Drawer shadows (desktop)',
+    hint: 'Show box-shadow on drawers when the viewport is wider than 600px.',
     control: shadowsDesktop.btn,
   }))
 
   const shadowsMobile = makeToggle(
-    () => getSettings().sidebarShadowsMobile,
-    (v) => setSettings({ sidebarShadowsMobile: v })
+    () => getSettings().drawerShadowsMobile,
+    (v) => setSettings({ drawerShadowsMobile: v })
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Sidebar shadows (mobile)',
-    hint: 'Show box-shadow on sidebars when the viewport is 600px or narrower.',
+    label: 'Drawer shadows (mobile)',
+    hint: 'Show box-shadow on drawers when the viewport is 600px or narrower.',
     control: shadowsMobile.btn,
   }))
 
@@ -368,16 +362,10 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: debugMode.btn,
   }))
 
-  // Footer
-  const footer = document.createElement('div')
-  footer.className = 'sidebar-ux-panel-footer'
-  footer.textContent = 'Canvas settings persist to layout.json (300ms debounce).'
-
   root.appendChild(sec1)
   root.appendChild(secSidebars)
   root.appendChild(sec2)
   root.appendChild(sec4)
-  root.appendChild(footer)
 
   // Live-update wiring: setSettings calls this via the registered panel
   // refresh closure (setPanelRefresh in settings/state) so we don't have to

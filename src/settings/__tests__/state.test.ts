@@ -23,15 +23,15 @@ assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
 assert(typeof settings.layoutPersistence === 'boolean', 'layoutPersistence is boolean')
 assert(typeof settings.slashCommandsEnabled === 'boolean', 'slashCommandsEnabled is boolean')
 assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
-assert(typeof settings.sidebarShadowsDesktop === 'boolean', 'sidebarShadowsDesktop is boolean')
-assert(typeof settings.sidebarShadowsMobile === 'boolean', 'sidebarShadowsMobile is boolean')
+assert(typeof settings.drawerShadowsDesktop === 'boolean', 'drawerShadowsDesktop is boolean')
+assert(typeof settings.drawerShadowsMobile === 'boolean', 'drawerShadowsMobile is boolean')
 
 // Check specific defaults
 assertEqual(settings.secondSidebarEnabled, true, 'secondSidebarEnabled defaults to true')
 assertEqual(settings.debugMode, false, 'debugMode defaults to false')
 assertEqual(settings.showTabLabels, 'follow', 'showTabLabels defaults to follow')
-assertEqual(settings.sidebarShadowsDesktop, true, 'sidebarShadowsDesktop defaults to true')
-assertEqual(settings.sidebarShadowsMobile, false, 'sidebarShadowsMobile defaults to false')
+assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults to true')
+assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
 
 // --- mergeCanvasSettings merges correctly ---
@@ -63,6 +63,29 @@ assert(slashDefault.slashCommandsEnabled === true, 'mergeCanvasSettings default 
 const slashOff = mergeCanvasSettings({ slashCommandsEnabled: false })
 assertEqual(slashOff.slashCommandsEnabled, false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false')
 assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false (assert)')
+
+// Legacy sidebarShadows* → drawerShadows* migration
+{
+  const legacyOnly = mergeCanvasSettings({
+    sidebarShadowsDesktop: false,
+    sidebarShadowsMobile: true,
+  } as any)
+  assertEqual(legacyOnly.drawerShadowsDesktop, false, 'legacy sidebarShadowsDesktop maps to drawerShadowsDesktop')
+  assertEqual(legacyOnly.drawerShadowsMobile, true, 'legacy sidebarShadowsMobile maps to drawerShadowsMobile')
+
+  const newOnly = mergeCanvasSettings({ drawerShadowsDesktop: false })
+  assertEqual(newOnly.drawerShadowsDesktop, false, 'new key drawerShadowsDesktop is used as-is')
+  assertEqual(newOnly.drawerShadowsMobile, false, 'unmentioned drawerShadowsMobile keeps default')
+
+  const newWins = mergeCanvasSettings({
+    drawerShadowsDesktop: true,
+    drawerShadowsMobile: false,
+    sidebarShadowsDesktop: false,
+    sidebarShadowsMobile: true,
+  } as any)
+  assertEqual(newWins.drawerShadowsDesktop, true, 'new key wins over legacy sidebarShadowsDesktop')
+  assertEqual(newWins.drawerShadowsMobile, false, 'new key wins over legacy sidebarShadowsMobile')
+}
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
