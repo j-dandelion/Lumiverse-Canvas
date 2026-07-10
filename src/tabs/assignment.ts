@@ -7,12 +7,12 @@
 // compatibility — it toggles display:none on roots that are already in
 // the secondary content area.
 import { getMainSidebar } from '../dom/lumiverse'
-import { dlog, dwarn } from '../debug/log'
+import { dwarn } from '../debug/log'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { getSecondaryWrapper, isSecondarySidebarOpen, openSecondarySidebar } from '../sidebar/secondary'
+import { isSecondarySidebarOpen, openSecondarySidebar } from '../sidebar/secondary'
 import {
-  hideMainTabButton, showMainTabButton, findMainTabButton,
-  addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, showSecondaryTab,
+  hideMainTabButton, findMainTabButton,
+  addSecondaryTabButton, updateDrawerTabVisibility,
   readMainButtonShortName,
 } from '../tabs/buttons'
 import { persistLayout } from '../layout/persist'
@@ -165,36 +165,6 @@ export async function ensureBuiltInTabActiveInMain(
 }
 
 /**
- * Warn if ContainerTabContent's Pass 3 reset undid our move. Pass 3
- * fires on the next React commit (~microtask) and reverts tabLocations
- * to main-drawer when the target container is missing from the host's
- * containers store. The microtask read-back catches the reset.
- */
-function watchForContainerPass3Reset(
-  bridge: NonNullable<ReturnType<typeof getHostBridge>>,
-  tabId: string,
-  builtInRoot: HTMLElement,
-  afterLoc: { kind: string; containerId?: string } | null,
-): void {
-  queueMicrotask(() => {
-    const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null
-    const microContainer = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
-    const rootInContainer = microContainer?.contains(builtInRoot) ?? false
-    if (afterLoc?.kind === 'container' && microLoc?.kind === 'main-drawer') {
-      dwarn(
-        `[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ` +
-        `${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to ` +
-        `main-drawer because the target container is missing from Lumiverse's ` +
-        `containers store. Fix: ensure the secondary drawer's panel content ` +
-        `element is registered via bridge.containers.registerContainer BEFORE ` +
-        `the move. (See secondary.tsx:308 — the call exists but may be failing silently.)`
-      )
-    }
-    void rootInContainer
-  })
-}
-
-/**
  * Build the secondary tab button for a moved built-in tab. Title, icon,
  * and short name are resolved from the bridge + main button.
  */
@@ -215,32 +185,9 @@ function addBuiltInSecondaryButton(
 
 export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary'): Promise<void> {
   if (sidebar === 'secondary') {
-    // BUG: Lorebook dropdown empty after move without pre-activation.
-    // Lumiverse only renders the active built-in's root
-    // (src/sidebar/secondary-drawer.ts:266-275). The Lorebook component
-    // fetches its dropdown data on mount; a never-activated tab has no
-    // root, so reparenting an absent root into secondary yields an empty
-    // dropdown. Pre-activate so Lumiverse mounts the root + the useEffect
-    // fires; subsequent `getBuiltInTabRoot(tabId)` will return a mounted
-    // root and the built-in branch will handle the move normally
-    // (requestTabLocation reparents a mounted React fiber, preserving
-    // the fetched data).
-    //
-    // Caveat: clicking a main-sidebar tab *can* trigger a Lumiverse
-    // re-render that destroys the main sidebar (see comment at
-    // src/sidebar/secondary-drawer.ts:266-275). In the user's specific
-    // workflow (stay-on-same-side swap) this is benign — the existing
-    // addSecondaryTabButton path at assignment.ts:177-181 already
-    // survives the same re-render on the working "open in main first"
-    // path.
-    // Capture the original active tab BEFORE ensureBuiltInTabActiveInMain
-    // clicks the target tab button. After the click, the target IS active,
-    // so preMoveActiveTab would always be true — defeating the guard on
-    // armMainDrawerActiveRestore and causing the handoff to treat every
-    // move as an active-tab move.
-    //
-    // Also capture the original active button element so we can restore it
-    // after requestTabLocation's pendingActiveTabReset effect fires.
+    // Capture the original active tab BEFORE any ensureBuiltInTabActiveInMain
+    // click. After that click the target IS active, which would defeat
+    // armMainDrawerActiveRestore and handoff preMoveActiveTab.
     const _preClickSidebar = getMainSidebar()
     const _preClickActiveBtn = _preClickSidebar?.querySelector(
       'button.tabBtnActive, button[class*="tabBtnActive"]'
@@ -251,52 +198,14 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
     const preMoveSourceList = await captureSourceList('primary')
     const preMoveActiveTab = isTabActiveInMainDrawer(tabId)
 
-    // Try to get the root WITHOUT activating the tab first. Only call
-    // ensureBuiltInTabActiveInMain (which clicks the tab button) if the
-    // root doesn't exist yet. This avoids the flicker where the target
-    // tab is momentarily shown as active in the main drawer.
     const bridge = getHostBridge()
-    let builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId)
-    if (!builtInRoot) {
-      await ensureBuiltInTabActiveInMain(tabId)
-      // rAF: let the panel's detached React root commit so loadBooks() fires.
-      await new Promise<void>(r => requestAnimationFrame(() => r()))
-      builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId)
-    }
-    // Built-in tabs: delegate to the host's requestTabLocation API.
-    // Extension tabs fall through to SecondaryDrawer.assignToSecondary.
-    if (builtInRoot && bridge) {
-      // Tag the built-in root BEFORE the host's async move. The
-      // data-canvas-moved/active attributes travel with the root when
-      // the host reparents it. The CSS rule that hides inactive moved
-      // roots is scoped to `.sidebar-ux-panel-content` so the
-      // attributes have no effect while the root is still in main.
-      // This is what allows showSecondaryTab to drop the F14 safety
-      // net and the F15 deferred-activation observer.
-      builtInRoot.setAttribute('data-canvas-moved', tabId)
-      builtInRoot.setAttribute('data-canvas-active', '')
-      // Only arm the restore observer when moving the ACTIVE tab. For
-      // non-selected tabs, the observer interferes with the handoff
-      // flow — its class-change listener fires during ensureBuiltInTab
-      // ActiveInMain's click and restores the original active tab,
-      // but the subsequent requestTabLocation + pendingActiveTabReset
-      // then overrides it to a different tab, leaving the main drawer
-      // on the wrong tab.
+    // Built-in tabs: host requestTabLocation only (never raw DOM reparent).
+    // Shared with assignToSecondary via moveBuiltInTabToSecondaryContainer.
+    if (bridge?.ui.getBuiltInTabRoot && bridge.ui.requestTabLocation) {
       if (preMoveActiveTab) armMainDrawerActiveRestore(tabId)
 
-      // rAF #2: defer requestTabLocation until AFTER the panel's first
-      // useEffect has run loadBooks() with isVisible=true. Without this,
-      // requestTabLocation → moveTabTo → pendingActiveTabReset fires
-      // before the detached React root commits, resetting drawerTab and
-      // causing isVisible=false on the panel's first render.
-      await new Promise<void>(r => requestAnimationFrame(() => r()))
-
       // Arm a MutationObserver to catch Lumiverse's pendingActiveTabReset
-      // before it renders. That useEffect resets drawerTab to the first
-      // non-moved tab (usually profile) when any tab leaves main-drawer,
-      // even for non-selected moves. The observer fires synchronously on
-      // class attribute changes, so we can revert the click in the same
-      // microtask — no visible flicker.
+      // for non-selected moves (resets drawerTab to first non-moved tab).
       let _restoreObserver: MutationObserver | null = null
       if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
         _restoreObserver = new MutationObserver(() => {
@@ -317,41 +226,38 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
         })
       }
 
-      bridge.ui.requestTabLocation!(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' })
-      const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null
-      watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc)
+      const { moveBuiltInTabToSecondaryContainer } = await import('./builtin-move')
+      const builtInRoot = await moveBuiltInTabToSecondaryContainer({ tabId })
 
-      // Disconnect the observer after one frame — by then any pending
-      // reset has fired and been reverted (or was never triggered).
       if (_restoreObserver) {
         await new Promise<void>(r => requestAnimationFrame(() => r()))
         _restoreObserver.disconnect()
         _restoreObserver = null
       }
 
-      // UI side effects: the data-layer move above is invisible to the user
-      // without these. See [[orchestrator/canvas-v1-6-6-built-in-move-diagnose]]
-      // phase 9 for the symptom history.
-      setTabAssignment(tabId, 'secondary')
-      hideMainTabButton(tabId)
-      addBuiltInSecondaryButton(bridge, tabId, builtInRoot)
-      updateDrawerTabVisibility()
-      // On mobile, do not auto-open the destination drawer. Otherwise
-      // enforceExclusionOnOpen inside openSecondarySidebar clicks the
-      // source (currently-open) drawer's toggle button closed. The user
-      // stays in the source drawer; runHandoff Part B already activates
-      // a neighbor in the source on mobile (activation-handoff.ts:11-13).
-      // Destination drawer can be opened manually.
-      if (!isSecondarySidebarOpen() && !isMobileViewport()) openSecondarySidebar()
-      await runHandoff({tabId, source: 'primary', destination: 'secondary', sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab})
-
-      persistLayout()
-      return
+      if (builtInRoot) {
+        setTabAssignment(tabId, 'secondary')
+        hideMainTabButton(tabId)
+        addBuiltInSecondaryButton(bridge, tabId, builtInRoot)
+        updateDrawerTabVisibility()
+        if (!isSecondarySidebarOpen() && !isMobileViewport()) openSecondarySidebar()
+        await runHandoff({
+          tabId,
+          source: 'primary',
+          destination: 'secondary',
+          sourceList: preMoveSourceList,
+          preMoveSourceActiveTab: preMoveActiveTab,
+        })
+        try {
+          const m = await import('../sidebar/main-mirror-drawer')
+          if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
+        } catch { /* ignore */ }
+        persistLayout()
+        return
+      }
+      // Bridge present but root unavailable — fall through as extension path.
     }
-    // No bridge, or bridge present but tab isn't a built-in. Treat as
-    // extension. SecondaryDrawer's early-guard handles reparented
-    // extension tabs; built-in tabs the host doesn't recognize wouldn't
-    // have been moveable in the first place, so this is a no-op for them.
+
     if (!bridge) {
       dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`)
     }

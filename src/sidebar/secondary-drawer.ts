@@ -18,7 +18,6 @@ import {
   readMainButtonShortName,
 } from '../tabs/buttons'
 import {
-  ensureBuiltInTabActiveInMain,
   getTabAssignments, setTabAssignment, deleteTabAssignment,
 } from '../tabs/assignment'
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
@@ -283,84 +282,25 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     }
   } else {
     // === BUILT-IN TAB PATH ===
-    // Try the fallback FIRST. If it fails (store not ready, root not found,
-    // wrapper not ready), return without setting the assignment. The polling
-    // loop's hasTabAssignment check will return false, and the loop will
-    // retry on the next tick when the store is more likely to be loaded.
+    // Built-in roots are host React-managed. NEVER raw-appendChild them out of
+    // main panelContent (main-mirror parks that node; stealing its child crashes
+    // the host error boundary). Always place via requestTabLocation — shared
+    // helper: moveBuiltInTabToSecondaryContainer (tabs/builtin-move.ts).
     const _secondaryWrapper = getSecondaryWrapper()
     const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
     const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} hasSecondaryContent=${!!_secondaryContent}`)
+    const wSpindle = getHostBridge()
+    const wSpindleUi = wSpindle?.ui
+    dlog(
+      `[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` +
+      `hasSecondaryContent=${!!_secondaryContent}`,
+    )
 
-    // DOM-based root lookup fallback. The Zustand store may not have loaded
-    // the tab yet (Lumiverse populates the store asynchronously — the main
-    // button is created first, the store entry is added later). Search the
-    // main panel content for the root directly. Match by data-tab-id,
-    // data-tab-title, or text content containing the tab title.
-    //
-    // BUILT-IN TAB LIMITATION (pre-fix history, now obsolete):
-    //   Lumiverse only renders the ACTIVE tab's root in the main panel
-    //   content. For built-in tabs (extensionId="unknown"), the only
-    //   way to get a mounted root is to make the tab active — which
-    //   used to require clicking the main button. Clicking was
-    //   destructive: it triggered a Lumiverse re-render that destroyed
-    //   the main sidebar, which cascaded into the 2s checkSideChanged
-    //   watcher re-creating the secondary on the wrong side. So we
-    //   originally did NOT click, and built-in tabs that were not
-    //   currently-active could not be restored on hard-refresh.
-    //
-    // Current approach: a built-in tab is "mounted" via the host bridge's
-    //   getBuiltInTabRoot(tabId) which calls ensureRegistryRoot(tabId)
-    //   (frontend/src/lib/drawer-tab-registry.tsx:409). That lazily
-    //   mounts the panel on first request — without requiring it to be
-    //   active in the main drawer. The LAZY_MOUNT_OK branch below
-    //   calls ensureBuiltInTabActiveInMain (the same helper used by
-    //   the cold-boot right-click path) to trigger the panel's data
-    //   fetch before requestTabLocation moves the root into the
-    //   secondary container. End state matches the cold-boot case
-    //   the user already accepts: main drawer open with empty
-    //   content, secondary drawer open with the built-in populated.
-    //   Extension tabs use storeTab.root which is populated
-    //   independently of the DOM.
-    let _root: HTMLElement | undefined = _storeTab?.root
-    if (!_root && !_isExtensionTab) {
-      // For built-in tabs, try the DOM as a last resort. This will only
-      // succeed if the tab happens to be the currently-active tab (e.g.,
-      // when the user activates it in main first, then we move it).
-      const _mainContent = document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
-      const _firstChild = _mainContent?.children[0] as HTMLElement | undefined
-      if (_mainContent) {
-        // Match by data attributes (works only for the currently-active tab)
-        for (const _child of Array.from(_mainContent.children)) {
-          if (_child.getAttribute('data-tab-id') === resolvedId ||
-              _child.getAttribute('data-tab-title') === tab.title ||
-              (_child.textContent?.includes(tab.title ?? '') ?? false)) {
-            _root = _child as HTMLElement
-            break
-          }
-        }
-        // If the first child IS the tab we're looking for (rare — only when
-        // the user happened to leave this tab active in main), take it.
-        if (!_root && _mainContent.children.length > 0 &&
-            (_firstChild?.getAttribute('data-tab-id') === resolvedId ||
-             _firstChild?.getAttribute('data-tab-title') === tab.title)) {
-          _root = _firstChild
-        }
-      }
-    }
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!_root} rootTagId=${_root?.getAttribute('data-tab-id') ?? 'null'}`)
-
-    const wSpindle = getHostBridge();
-    const wSpindleUi = wSpindle?.ui;
-
-    // Early exit: if this tab is already reparented to the secondary
-    // content, skip the root-finding + ensureBuiltInTabActiveInMain path.
-    // Without this guard, every openSecondarySidebar re-runs assignToSecondary
-    // for all assigned tabs, and the built-in path's ensureBuiltInTabActiveInMain
-    // clicks a main sidebar button — which opens the main drawer and switches
-    // to the clicked tab (then pendingActiveTabReset resets to Profile).
+    // Early exit: already reparented to secondary — button + state only.
+    // Without this guard, openSecondarySidebar re-runs ensureBuiltInTabActiveInMain
+    // and fights pendingActiveTabReset.
     const _alreadyInSecondary = _secondaryContent?.querySelector(
-      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`
+      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`,
     ) as HTMLElement | null
     if (_alreadyInSecondary) {
       dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`)
@@ -392,102 +332,73 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       return
     }
 
-    if (!_root || !_secondaryContent) {
-      // For built-in tabs with a host bridge available, attempt a lazy
-      // mount via the host's drawer-tab-registry and then request
-      // placement into the secondary drawer. This mirrors the runtime
-      // move pattern in src/tabs/assignment.ts:273-411.
-      if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-        // Warm-boot fix: trigger the Lorebook panel's data fetch
-        // (loadBooks) before the root is moved to the container. The
-        // panel's useEffect (frontend/src/components/panels/world-book/
-        // WorldBookPanel.tsx:165-178) is gated on
-        //   isVisible = drawerOpen && drawerTab === 'lorebook'
-        // and the Lumiverse store starts at drawerOpen=false on every
-        // page load (Lumiverse doesn't persist drawer state).
-        // Without this pre-activation, the panel mounts via
-        // ensureRegistryRoot with isVisible=false and the dropdown
-        // stays empty.
-        //
-        // The cold-boot right-click "Move to second drawer" path
-        // (src/tabs/assignment.ts) does the same pre-activation and
-        // it works because the synthetic click on the main drawer
-        // button triggers Lumiverse's React onClick handler, which
-        // sets drawerOpen=true and mounts the panel as the active
-        // tab. We use the same helper here on warm-boot for symmetry.
-        // End state matches the cold-boot case the user already
-        // accepts: main drawer open with empty content, secondary
-        // drawer open with Lorebook populated.
-        // Extra rAF: ensureBuiltInTabActiveInMain only awaits one rAF
-        // for Lumiverse's React onClick handler to commit drawerOpen=
-        // true + drawerTab='lorebook' on the main app's React tree.
-        // WorldBookPanel mounts via ensureRegistryRoot on a SEPARATE
-        // detached React root (Lumiverse frontend/src/lib/drawer-tab-
-        // registry.tsx:105-116) whose commit is scheduled async by the
-        // React 18 scheduler (~1-5ms typical). One extra rAF (~16ms)
-        // gives that detached root time to commit and run its first
-        // useEffect WITH isVisible=true, so loadBooks() fires (panel
-        // gate: drawerOpen && drawerTab === 'lorebook', see
-        // Lumiverse frontend/src/components/panels/world-book/
-        // WorldBookPanel.tsx:165-178).
-        await ensureBuiltInTabActiveInMain(resolvedId)
-        await new Promise<void>((r) => requestAnimationFrame(() => r()))
-        const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId) as HTMLElement | undefined;
-        if (!_lazyRoot) {
-          dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`)
-          dwarn('[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.', { tabId, resolvedId });
-          return
-        }
-        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`)
-        _root = _lazyRoot;
-        // Second rAF: defer requestTabLocation (which calls moveTabTo
-        // → pendingActiveTabReset → ViewportDrawer resets drawerTab
-        // to a fallback, see Lumiverse frontend/src/store/slices/
-        // spindle-placement.ts:389-401 and components/panels/
-        // ViewportDrawer.tsx:117-123) until AFTER the panel's first
-        // useEffect has already run. If loadBooks() fires once with
-        // isVisible=true, then the reset to drawerTab='profile' flips
-        // isVisible=false but wasVisibleRef.current is now true, so
-        // no refetch (no duplicate XHR). The dropdown stays populated
-        // from the first fetch.
-        await new Promise<void>((r) => requestAnimationFrame(() => r()))
-        wSpindleUi.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' });
-      } else {
-        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`)
-        if (!_isExtensionTab) {
-          dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).', {
-            tabId,
-            resolvedId,
-          })
-        }
-        return
+    if (!_secondaryContent) {
+      dwarn('[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.', {
+        tabId,
+        resolvedId,
+      })
+      return
+    }
+
+    // Prefer host registry + requestTabLocation. Never scrape panelContent via
+    // textContent (Profile-under-main-mirror crash). Host built-ins go through
+    // moveBuiltInTabToSecondaryContainer. Fallback: store-provided root reparent
+    // for dock-panel-shaped entries that lack extensionId (LumiScript) and have
+    // no host registry root — same as extension appendChild ownership.
+    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
+    dlog(
+      `[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` +
+      `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute('data-tab-id') ?? 'null'} via=getBuiltInTabRoot`,
+    )
+
+    let _root: HTMLElement | undefined
+    let _placedViaHost = false
+
+    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+      const { moveBuiltInTabToSecondaryContainer } = await import('../tabs/builtin-move')
+      _root = await moveBuiltInTabToSecondaryContainer({
+        tabId,
+        deferActivation,
+        root: bridgeRoot,
+      })
+      _placedViaHost = !!_root
+    }
+
+    if (!_root && _storeTab?.root) {
+      // Store-root reparent only (no panelContent textContent scrape).
+      _root = _storeTab.root
+      if (_root.parentElement !== _secondaryContent) {
+        _secondaryContent.appendChild(_root)
       }
+      _root.setAttribute('data-canvas-moved', resolvedId)
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`)
     }
 
-    // Move root to secondary panel (no-op if already there)
-    if (_root.parentElement !== _secondaryContent) {
-      _secondaryContent.appendChild(_root)
+    if (!_root) {
+      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
+        dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).', {
+          tabId,
+          resolvedId,
+        })
+      }
+      return
     }
-    _root.setAttribute('data-canvas-moved', resolvedId)
 
-    // Set this root active, deactivate all other moved roots.
-    // During restore / suppress, leave data-canvas-active alone so
-    // finishRestore → showSecondaryTab is the sole content switcher.
-    if (!deferActivation) {
+    // During restore, leave data-canvas-active alone so finishRestore wins.
+    if (!deferActivation && _secondaryContent) {
       for (const _child of Array.from(_secondaryContent.children)) {
         if (_child instanceof HTMLElement) {
-          if (_child === _root) {
+          if (_child === _root || _child.getAttribute('data-canvas-moved') === resolvedId) {
             _child.setAttribute('data-canvas-active', '')
-          } else {
+          } else if (_child.hasAttribute('data-canvas-moved')) {
             _child.removeAttribute('data-canvas-active')
           }
         }
       }
     }
 
-    // Add a secondary tab button
-    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-    const _iconSvg = tab.button?.querySelector('svg')?.outerHTML || _root?.querySelector('svg')?.outerHTML
+    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId
+    const _iconSvg = tab.button?.querySelector('svg')?.outerHTML || _root.querySelector('svg')?.outerHTML
     const _shortName = readMainButtonShortName(tab.button as Element) || _storeTab?.shortName
     addSecondaryTabButton({
       id: resolvedId,
@@ -498,12 +409,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
     })
     updateDrawerTabVisibility()
 
-    // No "hide main panel content" or "click another tab" code here.
-    // We don't click anything in the built-in path (clicking is destructive —
-    // it triggers a re-render cascade). The main panel just shows whatever
-    // was already there (usually Profile), which is fine.
-
-    // Set assignment AFTER successful fallback
     setTabAssignment(resolvedId, 'secondary')
     hideMainTabButton(resolvedId)
     if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
@@ -515,9 +420,16 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       }
     }
 
-    // Update panel header title
     const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
     if (_headerTitle && !deferActivation) _headerTitle.textContent = _title
+
+    // Host may remount panelContent under the hidden wrapper after host move.
+    if (_placedViaHost) {
+      try {
+        const m = await import('./main-mirror-drawer')
+        if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
+      } catch { /* ignore */ }
+    }
   }
 
   // Ensure the tab button is visually highlighted. addSecondaryTabButton

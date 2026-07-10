@@ -1730,6 +1730,71 @@ var init_activation_handoff = __esm(() => {
   init_store();
 });
 
+// src/tabs/builtin-move.ts
+var exports_builtin_move = {};
+__export(exports_builtin_move, {
+  moveBuiltInTabToSecondaryContainer: () => moveBuiltInTabToSecondaryContainer
+});
+async function moveBuiltInTabToSecondaryContainer(opts) {
+  const { tabId, deferActivation = false } = opts;
+  const bridge = getHostBridge();
+  const ui = bridge?.ui;
+  if (!ui?.getBuiltInTabRoot || !ui.requestTabLocation) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=BRIDGE_MISSING ` + `hasGetBuiltInTabRoot=${!!ui?.getBuiltInTabRoot} hasRequestTabLocation=${!!ui?.requestTabLocation}`);
+    return;
+  }
+  let root = opts.root;
+  if (!root) {
+    root = ui.getBuiltInTabRoot(tabId);
+  }
+  if (!root) {
+    const { ensureBuiltInTabActiveInMain } = await Promise.resolve().then(() => (init_assignment(), exports_assignment));
+    await ensureBuiltInTabActiveInMain(tabId, {
+      getBuiltInTabRoot: (id) => ui.getBuiltInTabRoot?.(id),
+      dlog
+    });
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    root = ui.getBuiltInTabRoot(tabId);
+    if (!root) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
+      dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId });
+      return;
+    }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
+  } else {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_BRIDGE_ROOT tab=${tabId} branch=ROOT_READY via=opts-or-getBuiltInTabRoot`);
+  }
+  root.setAttribute("data-canvas-moved", tabId);
+  if (!deferActivation) {
+    root.setAttribute("data-canvas-active", "");
+  }
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} branch=REQUEST_TAB_LOCATION`);
+  ui.requestTabLocation(tabId, {
+    kind: "container",
+    containerId: "canvas-secondary-drawer"
+  });
+  const afterLoc = ui.getTabLocation?.(tabId) ?? null;
+  watchForContainerPass3Reset(bridge, tabId, root, afterLoc);
+  return root;
+}
+function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
+  queueMicrotask(() => {
+    try {
+      const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
+      const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+      const rootInContainer = typeof microContainer?.contains === "function" ? microContainer.contains(builtInRoot) : false;
+      if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
+        dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to main-drawer because the target container is missing from Lumiverse's containers store. Fix: ensure the secondary drawer's panel content element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx — the call exists but may be failing silently.)`);
+      }
+    } catch {}
+  });
+}
+var init_builtin_move = __esm(() => {
+  init_log();
+  init_secondary();
+});
+
 // src/sidebar/cleanup.ts
 function registerCleanup(fn) {
   _cleanupFns.push(fn);
@@ -2031,26 +2096,9 @@ async function assignToSecondary(tabId) {
     const _secondaryWrapper = getSecondaryWrapper();
     const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
     const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} hasSecondaryContent=${!!_secondaryContent}`);
-    let _root = _storeTab?.root;
-    if (!_root && !_isExtensionTab) {
-      const _mainContent = document.querySelector('[class*="_panelContent_"]');
-      const _firstChild = _mainContent?.children[0];
-      if (_mainContent) {
-        for (const _child of Array.from(_mainContent.children)) {
-          if (_child.getAttribute("data-tab-id") === resolvedId || _child.getAttribute("data-tab-title") === tab.title || (_child.textContent?.includes(tab.title ?? "") ?? false)) {
-            _root = _child;
-            break;
-          }
-        }
-        if (!_root && _mainContent.children.length > 0 && (_firstChild?.getAttribute("data-tab-id") === resolvedId || _firstChild?.getAttribute("data-tab-title") === tab.title)) {
-          _root = _firstChild;
-        }
-      }
-    }
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!_root} rootTagId=${_root?.getAttribute("data-tab-id") ?? "null"}`);
     const wSpindle = getHostBridge();
     const wSpindleUi = wSpindle?.ui;
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` + `hasSecondaryContent=${!!_secondaryContent}`);
     const _alreadyInSecondary = _secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`);
     if (_alreadyInSecondary) {
       dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
@@ -2082,48 +2130,56 @@ async function assignToSecondary(tabId) {
       persistLayout();
       return;
     }
-    if (!_root || !_secondaryContent) {
-      if (_secondaryContent && !_root && wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-        await ensureBuiltInTabActiveInMain(resolvedId);
-        await new Promise((r) => requestAnimationFrame(() => r()));
-        const _lazyRoot = wSpindleUi.getBuiltInTabRoot(tabId);
-        if (!_lazyRoot) {
-          dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
-          dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId, resolvedId });
-          return;
-        }
-        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
-        _root = _lazyRoot;
-        await new Promise((r) => requestAnimationFrame(() => r()));
-        wSpindleUi.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
-      } else {
-        dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${resolvedId} branch=BRIDGE_MISSING hasGetBuiltInTabRoot=${!!wSpindleUi?.getBuiltInTabRoot} hasRequestTabLocation=${!!wSpindleUi?.requestTabLocation} hasSecondaryContent=${!!_secondaryContent}`);
-        if (!_isExtensionTab) {
-          dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (root not in DOM, not in store, host bridge missing).", {
-            tabId,
-            resolvedId
-          });
-        }
-        return;
+    if (!_secondaryContent) {
+      dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
+        tabId,
+        resolvedId
+      });
+      return;
+    }
+    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` + `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
+    let _root;
+    let _placedViaHost = false;
+    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+      _root = await moveBuiltInTabToSecondaryContainer2({
+        tabId,
+        deferActivation,
+        root: bridgeRoot
+      });
+      _placedViaHost = !!_root;
+    }
+    if (!_root && _storeTab?.root) {
+      _root = _storeTab.root;
+      if (_root.parentElement !== _secondaryContent) {
+        _secondaryContent.appendChild(_root);
       }
+      _root.setAttribute("data-canvas-moved", resolvedId);
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
     }
-    if (_root.parentElement !== _secondaryContent) {
-      _secondaryContent.appendChild(_root);
+    if (!_root) {
+      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
+        dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).", {
+          tabId,
+          resolvedId
+        });
+      }
+      return;
     }
-    _root.setAttribute("data-canvas-moved", resolvedId);
-    if (!deferActivation) {
+    if (!deferActivation && _secondaryContent) {
       for (const _child of Array.from(_secondaryContent.children)) {
         if (_child instanceof HTMLElement) {
-          if (_child === _root) {
+          if (_child === _root || _child.getAttribute("data-canvas-moved") === resolvedId) {
             _child.setAttribute("data-canvas-active", "");
-          } else {
+          } else if (_child.hasAttribute("data-canvas-moved")) {
             _child.removeAttribute("data-canvas-active");
           }
         }
       }
     }
     const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-    const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root?.querySelector("svg")?.outerHTML;
+    const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root.querySelector("svg")?.outerHTML;
     const _shortName = readMainButtonShortName(tab.button) || _storeTab?.shortName;
     addSecondaryTabButton({
       id: resolvedId,
@@ -2146,6 +2202,13 @@ async function assignToSecondary(tabId) {
     const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
     if (_headerTitle && !deferActivation)
       _headerTitle.textContent = _title;
+    if (_placedViaHost) {
+      try {
+        const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        if (m.isMainMirrorActive())
+          m.ensureHostContentParkedPublic();
+      } catch {}
+    }
   }
   if (!isMobileViewport() && !deferActivation) {
     showSecondaryTab(resolvedId);
@@ -2317,16 +2380,6 @@ async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
     _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
   }
 }
-function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
-  queueMicrotask(() => {
-    const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
-    const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-    const rootInContainer = microContainer?.contains(builtInRoot) ?? false;
-    if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
-      dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ` + `${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to ` + `main-drawer because the target container is missing from Lumiverse's ` + `containers store. Fix: ensure the secondary drawer's panel content ` + `element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx:308 — the call exists but may be failing silently.)`);
-    }
-  });
-}
 function addBuiltInSecondaryButton(bridge, tabId, builtInRoot) {
   const mainBtn = findMainTabButton(tabId);
   const title = bridge.ui.getBuiltInTabTitle?.(tabId) || mainBtn?.getAttribute("title") || tabId;
@@ -2342,18 +2395,9 @@ async function assignTab(tabId, sidebar) {
     const preMoveSourceList = await captureSourceList("primary");
     const preMoveActiveTab = isTabActiveInMainDrawer(tabId);
     const bridge = getHostBridge();
-    let builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
-    if (!builtInRoot) {
-      await ensureBuiltInTabActiveInMain(tabId);
-      await new Promise((r) => requestAnimationFrame(() => r()));
-      builtInRoot = bridge?.ui.getBuiltInTabRoot?.(tabId);
-    }
-    if (builtInRoot && bridge) {
-      builtInRoot.setAttribute("data-canvas-moved", tabId);
-      builtInRoot.setAttribute("data-canvas-active", "");
+    if (bridge?.ui.getBuiltInTabRoot && bridge.ui.requestTabLocation) {
       if (preMoveActiveTab)
         armMainDrawerActiveRestore(tabId);
-      await new Promise((r) => requestAnimationFrame(() => r()));
       let _restoreObserver = null;
       if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
         _restoreObserver = new MutationObserver(() => {
@@ -2369,23 +2413,35 @@ async function assignTab(tabId, sidebar) {
           subtree: true
         });
       }
-      bridge.ui.requestTabLocation(tabId, { kind: "container", containerId: "canvas-secondary-drawer" });
-      const afterLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
-      watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc);
+      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+      const builtInRoot = await moveBuiltInTabToSecondaryContainer2({ tabId });
       if (_restoreObserver) {
         await new Promise((r) => requestAnimationFrame(() => r()));
         _restoreObserver.disconnect();
         _restoreObserver = null;
       }
-      setTabAssignment(tabId, "secondary");
-      hideMainTabButton(tabId);
-      addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
-      updateDrawerTabVisibility();
-      if (!isSecondarySidebarOpen() && !isMobileViewport())
-        openSecondarySidebar();
-      await runHandoff({ tabId, source: "primary", destination: "secondary", sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab });
-      persistLayout();
-      return;
+      if (builtInRoot) {
+        setTabAssignment(tabId, "secondary");
+        hideMainTabButton(tabId);
+        addBuiltInSecondaryButton(bridge, tabId, builtInRoot);
+        updateDrawerTabVisibility();
+        if (!isSecondarySidebarOpen() && !isMobileViewport())
+          openSecondarySidebar();
+        await runHandoff({
+          tabId,
+          source: "primary",
+          destination: "secondary",
+          sourceList: preMoveSourceList,
+          preMoveSourceActiveTab: preMoveActiveTab
+        });
+        try {
+          const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+          if (m.isMainMirrorActive())
+            m.ensureHostContentParkedPublic();
+        } catch {}
+        persistLayout();
+        return;
+      }
     }
     if (!bridge) {
       dwarn(`[tabmove] no host bridge; tabId="${tabId}" treated as extension. Built-in move requires the spindle loader.`);

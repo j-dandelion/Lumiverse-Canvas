@@ -157,12 +157,14 @@ Two paths depending on tab type:
 7. Create secondary tab button via `addSecondaryTabButton`
 8. Persist layout
 
-**Built-in tabs (Characters, History, Lorebook):**
-1. Resolve via host bridge: `bridge.ui.getBuiltInTabRoot(tabId)`
-2. Pre-activate: `ensureBuiltInTabActiveInMain(tabId)` — triggers Lumiverse to mount the panel
-3. Request host to move: `bridge.ui.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' })`
-4. Create secondary tab button
-5. Persist layout
+**Built-in tabs (Characters, History, Lorebook, Profile):**
+1. Prefer shared helper `moveBuiltInTabToSecondaryContainer` (`tabs/builtin-move.ts`) — also used by `assignTab`
+2. Resolve via host bridge: `bridge.ui.getBuiltInTabRoot(tabId)`; if missing, `ensureBuiltInTabActiveInMain` + rAF, then re-read root
+3. **Never** raw-`appendChild` a host registry root out of main `panelContent` (main-mirror parks that node; stealing its child crashes the host React boundary). **Never** match roots via `textContent.includes(title)`
+4. Place via host API: `bridge.ui.requestTabLocation(tabId, { kind: 'container', containerId: 'canvas-secondary-drawer' })`
+5. Canvas UI only: assignment map, hide main button, secondary tab button, optional repark of main-mirror `panelContent`
+6. Fallback: if host bridge cannot place the tab but the Zustand store has a `root` (dock-panel-shaped LumiScript entries without `extensionId`), reparent that store root only — same ownership model as extensions
+7. Persist layout
 
 ### Moving a Tab Back to Primary (`unassignFromSecondary`)
 
