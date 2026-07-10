@@ -2001,7 +2001,7 @@ async function assignToSecondary(tabId) {
       await openSecondarySidebar();
       _state = "open";
     }
-    const _secondaryContentEarly = document.querySelector(".sidebar-ux-panel-content");
+    const _secondaryContentEarly = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
     const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
     const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
     if (_existingRoot) {
@@ -5866,6 +5866,16 @@ var init_secondary = __esm(() => {
 });
 
 // src/layout/apply.ts
+function isLayoutRestoreActive() {
+  return _layoutRestoreActive;
+}
+function resolveRestoreDone() {
+  const done = _restoreDone;
+  _restoreDone = null;
+  _layoutRestoreActive = false;
+  if (done)
+    done();
+}
 function cancelApplyLayoutInterval() {
   if (_restoreObserver !== null) {
     _restoreObserver.disconnect();
@@ -5877,11 +5887,12 @@ function cancelApplyLayoutInterval() {
   }
   setRestoringFromLayout(false);
   setSuppressAutoActivation(false);
+  resolveRestoreDone();
 }
 function isTabFullyRestored(tabId) {
   if (!hasTabAssignment(tabId))
     return false;
-  const _secondaryContent = document.querySelector(".sidebar-ux-panel-content");
+  const _secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
   if (!_secondaryContent)
     return false;
   const _bareId = tabId.includes(":") ? tabId.replace(/:\d+$/, "").split(":").pop() ?? tabId : tabId;
@@ -5896,6 +5907,7 @@ function isTabFullyRestored(tabId) {
 async function applyLayout(layout) {
   if (!layout)
     return;
+  cancelApplyLayoutInterval();
   const settings = getSettings();
   const restoreWidth = !!settings.persistDrawerWidth;
   const restoreTabs = !!settings.persistTabAssignments;
@@ -5927,163 +5939,226 @@ async function applyLayout(layout) {
       updateDrawerTabVisibility();
     }
   };
-  if (restoreTabs && layout.detachedTabs?.length) {
-    const stripSuffix = (id) => {
-      const lastColon = id.lastIndexOf(":");
-      if (lastColon <= 0)
-        return id;
-      const tail = id.slice(lastColon + 1);
-      return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
-    };
-    setRestoringFromLayout(true);
-    setSuppressAutoActivation(true);
-    let _restoreFinished = false;
-    const _assigningIds = new Set;
-    const resolveRestoredActiveTabId = () => {
-      const saved = layout.secondary?.activeTabId;
-      if (saved) {
-        if (hasTabAssignment(saved))
-          return saved;
-        const prefix = stripSuffix(saved);
-        const matches = layout.detachedTabs.map((dt) => dt.tabId).filter((id) => hasTabAssignment(id) && stripSuffix(id) === prefix);
-        if (matches.length === 1) {
-          if (layout.secondary)
-            layout.secondary.activeTabId = matches[0];
-          return matches[0];
+  if (restoreTabs) {
+    return new Promise((resolve) => {
+      _restoreDone = resolve;
+      _layoutRestoreActive = true;
+      const stripSuffix = (id) => {
+        const lastColon = id.lastIndexOf(":");
+        if (lastColon <= 0)
+          return id;
+        const tail = id.slice(lastColon + 1);
+        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
+      };
+      setRestoringFromLayout(true);
+      setSuppressAutoActivation(true);
+      let _restoreFinished = false;
+      const _assigningIds = new Set;
+      const _settledIds = new Set;
+      const resolveRestoredActiveTabId = () => {
+        const detached = layout.detachedTabs ?? [];
+        const saved = layout.secondary?.activeTabId;
+        if (saved) {
+          if (hasTabAssignment(saved))
+            return saved;
+          const prefix = stripSuffix(saved);
+          const matches = detached.map((dt) => dt.tabId).filter((id) => hasTabAssignment(id) && stripSuffix(id) === prefix);
+          if (matches.length === 1) {
+            if (layout.secondary)
+              layout.secondary.activeTabId = matches[0];
+            return matches[0];
+          }
         }
-      }
-      const fallback = layout.detachedTabs.find((dt) => hasTabAssignment(dt.tabId));
-      return fallback?.tabId ?? null;
-    };
-    const finishRestore = () => {
-      if (_restoreFinished)
-        return;
-      _restoreFinished = true;
-      if (_restoreObserver !== null) {
-        _restoreObserver.disconnect();
-        _restoreObserver = null;
-      }
-      if (_restoreTimeoutHandle !== null) {
-        clearTimeout(_restoreTimeoutHandle);
-        _restoreTimeoutHandle = null;
-      }
-      if (restoreTabs) {
-        const restoredId = resolveRestoredActiveTabId();
-        if (restoredId) {
-          showSecondaryTab(restoredId);
-        }
-      }
-      applySecondaryOpenState();
-      if (!isSecondarySidebarOpen()) {
-        clearSecondaryTabButtonActive();
-      }
-      const _hasDetachedTabs = (layout.detachedTabs?.length ?? 0) > 0;
-      if (_hasDetachedTabs) {
-        updateDrawerTabVisibility();
-      }
-      if (restoreOpen) {
-        const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
-        if (primaryTabId && layout.primary?.open !== false) {
-          Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
-            m.ensureRestoredPrimaryTab(primaryTabId);
-          });
-        }
-      }
-      setRestoringFromLayout(false);
-      setSuppressAutoActivation(false);
-    };
-    const kickAssign = (tabId) => {
-      if (_restoreFinished || _assigningIds.has(tabId))
-        return;
-      _assigningIds.add(tabId);
-      assignToSecondary(tabId).catch((err) => {
-        dwarn(`applyLayout: assignToSecondary(${tabId}) failed:`, err);
-      }).finally(() => {
-        _assigningIds.delete(tabId);
+        const fallback = detached.find((dt) => hasTabAssignment(dt.tabId));
+        return fallback?.tabId ?? null;
+      };
+      const finishRestore = () => {
         if (_restoreFinished)
           return;
-        const remaining = attemptRestore();
-        if (remaining === 0)
-          finishRestore();
-      });
-    };
-    const attemptRestore = () => {
-      if (_restoreFinished)
-        return 0;
-      let remaining = 0;
-      for (let i = 0;i < layout.detachedTabs.length; i++) {
-        const dt = layout.detachedTabs[i];
-        const _alreadyAssigned = hasTabAssignment(dt.tabId);
-        const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(dt.tabId) : false;
-        if (_alreadyAssigned && _fullyRestored)
-          continue;
-        remaining++;
-        const tabs = getDrawerTabs();
-        let tab = tabs.find((t) => t.id === dt.tabId);
-        if (!tab) {
-          const storedPrefix = stripSuffix(dt.tabId);
-          const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
+        _restoreFinished = true;
+        if (_restoreObserver !== null) {
+          _restoreObserver.disconnect();
+          _restoreObserver = null;
+        }
+        if (_restoreTimeoutHandle !== null) {
+          clearTimeout(_restoreTimeoutHandle);
+          _restoreTimeoutHandle = null;
+        }
+        if (restoreTabs) {
+          const restoredId = resolveRestoredActiveTabId();
+          if (restoredId) {
+            showSecondaryTab(restoredId);
+          }
+        }
+        applySecondaryOpenState();
+        if (!isSecondarySidebarOpen()) {
+          clearSecondaryTabButtonActive();
+        }
+        updateDrawerTabVisibility();
+        if (restoreOpen) {
+          const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
+          if (primaryTabId && layout.primary?.open !== false) {
+            Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
+              m.ensureRestoredPrimaryTab(primaryTabId);
+            });
+          }
+        }
+        setRestoringFromLayout(false);
+        setSuppressAutoActivation(false);
+        resolveRestoreDone();
+      };
+      const unassignUnwantedSecondary = async () => {
+        const wantedList = (layout.detachedTabs ?? []).map((dt) => dt.tabId).filter(Boolean);
+        const liveSecondary = new Set;
+        for (const [id, panel] of getTabAssignments()) {
+          if (panel === "secondary")
+            liveSecondary.add(id);
+        }
+        if (liveSecondary.size === 0)
+          return;
+        const keep = new Set;
+        for (const wanted of wantedList) {
+          if (liveSecondary.has(wanted)) {
+            keep.add(wanted);
+            continue;
+          }
+          const prefix = stripSuffix(wanted);
+          const candidates = [...liveSecondary].filter((id) => stripSuffix(id) === prefix);
           if (candidates.length === 1) {
-            tab = candidates[0];
-            dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
-            const prevId = dt.tabId;
-            layout.detachedTabs[i] = { ...dt, tabId: tab.id };
-            const savedActive = layout.secondary?.activeTabId;
-            if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
-              layout.secondary = { ...layout.secondary, activeTabId: tab.id };
+            keep.add(candidates[0]);
+          }
+        }
+        const extras = [...liveSecondary].filter((id) => !keep.has(id));
+        for (const id of extras) {
+          if (!hasTabAssignment(id))
+            continue;
+          try {
+            await unassignFromSecondary(id);
+            dlog(`applyLayout: unassigned extra secondary tab "${id}" (not in saved layout)`);
+          } catch (err) {
+            dwarn(`applyLayout: unassignFromSecondary(${id}) failed:`, err);
+          }
+        }
+      };
+      const kickAssign = (tabId) => {
+        if (_restoreFinished || _assigningIds.has(tabId) || _settledIds.has(tabId))
+          return;
+        _assigningIds.add(tabId);
+        assignToSecondary(tabId).catch((err) => {
+          dwarn(`applyLayout: assignToSecondary(${tabId}) failed:`, err);
+        }).finally(() => {
+          _assigningIds.delete(tabId);
+          _settledIds.add(tabId);
+          if (_restoreFinished)
+            return;
+          const remaining = attemptRestore();
+          if (remaining === 0)
+            finishRestore();
+        });
+      };
+      const attemptRestore = () => {
+        if (_restoreFinished)
+          return 0;
+        const detached = layout.detachedTabs ?? [];
+        if (detached.length === 0)
+          return 0;
+        let remaining = 0;
+        for (let i = 0;i < detached.length; i++) {
+          const dt = detached[i];
+          const liveIdForCheck = (() => {
+            return dt.tabId;
+          })();
+          const _alreadyAssigned = hasTabAssignment(liveIdForCheck);
+          const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(liveIdForCheck) : false;
+          if (_alreadyAssigned && _fullyRestored)
+            continue;
+          remaining++;
+          if (_settledIds.has(liveIdForCheck) || _assigningIds.has(liveIdForCheck))
+            continue;
+          const tabs = getDrawerTabs();
+          let tab = tabs.find((t) => t.id === dt.tabId);
+          if (!tab) {
+            const storedPrefix = stripSuffix(dt.tabId);
+            const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
+            if (candidates.length === 1) {
+              tab = candidates[0];
+              dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
+              const prevId = dt.tabId;
+              layout.detachedTabs[i] = { ...dt, tabId: tab.id };
+              const savedActive = layout.secondary?.activeTabId;
+              if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
+                layout.secondary = { ...layout.secondary, activeTabId: tab.id };
+              }
+            } else if (candidates.length > 1) {
+              dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
             }
-          } else if (candidates.length > 1) {
-            dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
           }
-        }
-        if (tab) {
-          kickAssign(tab.id);
-        } else {
-          const mainBtn = findMainTabButton(dt.tabId);
-          if (mainBtn) {
-            const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
-            kickAssign(liveTabId);
-            dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`);
+          if (tab) {
+            kickAssign(tab.id);
           } else {
-            const knownIds = tabs.map((t) => t.id);
-            dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(", ")}. Layout may be stale.`);
+            const mainBtn = findMainTabButton(dt.tabId);
+            if (mainBtn) {
+              const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
+              kickAssign(liveTabId);
+              dlog(`applyLayout: LumiScript fallback matched stored "${dt.tabId}" via main button → live "${liveTabId}"`);
+            } else {
+              const knownIds = tabs.map((t) => t.id);
+              dwarn(`applyLayout: stored detached tabId "${dt.tabId}" not found in store or DOM (and no suffix-drift match). Known ids: ${knownIds.join(", ")}. Layout may be stale.`);
+            }
           }
         }
-      }
-      return remaining;
-    };
-    const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
-    if (sidebar) {
-      _restoreObserver = new MutationObserver(() => {
-        const remaining = attemptRestore();
-        if (remaining === 0)
+        return remaining;
+      };
+      const startAssignPhase = () => {
+        if (_restoreFinished)
+          return;
+        const detachedLen = layout.detachedTabs?.length ?? 0;
+        if (detachedLen === 0) {
           finishRestore();
-      });
-      _restoreObserver.observe(sidebar, { childList: true, subtree: true });
-    } else {
-      queueMicrotask(() => {
-        const remaining = attemptRestore();
-        if (remaining === 0)
+          return;
+        }
+        const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
+        if (sidebar) {
+          _restoreObserver = new MutationObserver(() => {
+            _settledIds.clear();
+            const remaining = attemptRestore();
+            if (remaining === 0)
+              finishRestore();
+          });
+          _restoreObserver.observe(sidebar, { childList: true, subtree: true });
+        } else {
+          queueMicrotask(() => {
+            if (_restoreFinished)
+              return;
+            const remaining = attemptRestore();
+            if (remaining === 0)
+              finishRestore();
+          });
+        }
+        _restoreTimeoutHandle = setTimeout(() => {
+          attemptRestore();
           finishRestore();
+        }, _restoreTimeoutMs);
+        const initialRemaining = attemptRestore();
+        if (initialRemaining === 0) {
+          finishRestore();
+        } else {
+          const followUp = attemptRestore();
+          if (followUp === 0)
+            finishRestore();
+        }
+      };
+      unassignUnwantedSecondary().catch((err) => {
+        dwarn("applyLayout: unassignUnwantedSecondary failed:", err);
+      }).then(() => {
+        startAssignPhase();
       });
-    }
-    _restoreTimeoutHandle = setTimeout(() => {
-      attemptRestore();
-      finishRestore();
-    }, _restoreTimeoutMs);
-    const initialRemaining = attemptRestore();
-    if (initialRemaining === 0) {
-      finishRestore();
-    } else {
-      const followUp = attemptRestore();
-      if (followUp === 0)
-        finishRestore();
-    }
+    });
   } else if (restoreOpen) {
     applySecondaryOpenState();
   }
 }
-var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4;
+var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4, _restoreDone = null, _layoutRestoreActive = false;
 var init_apply = __esm(() => {
   init_store();
   init_secondary();
@@ -6110,6 +6185,7 @@ __export(exports_persist, {
   isPersistenceEnabled: () => isPersistenceEnabled,
   isOpenStatePersistenceEnabled: () => isOpenStatePersistenceEnabled,
   isLoadInProgress: () => isLoadInProgress,
+  isLayoutRestoreActive: () => isLayoutRestoreActive,
   isAnyLayoutPersistenceEnabled: () => isAnyLayoutPersistenceEnabled,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
@@ -6257,6 +6333,8 @@ function persistOpenState() {
     return;
   if (_loadInProgress)
     return;
+  if (isLayoutRestoreActive())
+    return;
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
     _saveLayoutTimer = null;
@@ -6273,12 +6351,16 @@ function persistLayout() {
     return;
   if (_loadInProgress)
     return;
+  if (isLayoutRestoreActive())
+    return;
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
   }
   cancelSettingsSave();
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null;
+    if (isLayoutRestoreActive())
+      return;
     const layout = { ...buildPersistedLayout(), settings: getSettings() };
     writeLayoutToBackend(layout);
   }, 500);
@@ -6342,6 +6424,7 @@ var init_persist = __esm(() => {
   init_assignment();
   init_active_tab();
   init_state();
+  init_apply();
   init_apply();
 });
 
@@ -6738,6 +6821,8 @@ async function enableAndLoadPrevious() {
   cancelLayoutSave();
   try {
     await applyLayout(saved);
+  } catch (err) {
+    dwarn("[persist-tabs] Load previous applyLayout failed:", err);
   } finally {
     flushPendingSaves();
     syncLastLoadedFromPersistedLayout();
@@ -6777,6 +6862,7 @@ var init_persist_tabs_toggle = __esm(() => {
   init_persist();
   init_state();
   init_tab_assignments_conflict();
+  init_log();
 });
 
 // src/debug/fiber-scan.ts

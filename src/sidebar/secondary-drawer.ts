@@ -206,7 +206,9 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 
     // Check if root is already reparented (data-canvas-moved set).
     // applyLayout's restore pass or a duplicate call can hit this.
-    const _secondaryContentEarly = document.querySelector('.sidebar-ux-panel-content')
+    // Scope to secondary wrapper — shared class also exists on main-mirror.
+    const _secondaryContentEarly =
+      getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') ?? null
     const _bareIdEarly = resolvedId.includes(':')
       ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
       : resolvedId

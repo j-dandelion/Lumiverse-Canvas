@@ -19,6 +19,7 @@ import {
   hideTabAssignmentsConflictDialog,
   showTabAssignmentsConflictDialog,
 } from './tab-assignments-conflict'
+import { dwarn } from '../debug/log'
 
 function enableAndSaveCurrent(): void {
   setSettings({ persistTabAssignments: true })
@@ -44,7 +45,12 @@ async function enableAndLoadPrevious(): Promise<void> {
   cancelLayoutSave()
 
   try {
+    // applyLayout now awaits finishRestore (or safety timeout) so we do not
+    // flush SAVE_LAYOUT over still-live tabs mid-assign — that race could
+    // thrash storage IPC and leave disk wrong after "Load previous".
     await applyLayout(saved)
+  } catch (err) {
+    dwarn('[persist-tabs] Load previous applyLayout failed:', err)
   } finally {
     flushPendingSaves()
     // Post-restore live may heal tabIds; freeze base must match what is now

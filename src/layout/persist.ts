@@ -34,7 +34,8 @@ import {
   getSettings, cancelSettingsSave, getLastLoadedLayout, setLastLoadedLayout,
 } from '../settings/state'
 
-export { applyLayout } from './apply'
+export { applyLayout, isLayoutRestoreActive } from './apply'
+import { isLayoutRestoreActive } from './apply'
 
 // Stub value — build.sh injects the real version from package.json via sed before bundling.
 export const CANVAS_VERSION = ''
@@ -282,6 +283,8 @@ export function persistOpenState(): void {
   if (!backendCtx) return
   if (!isAnyLayoutPersistenceEnabled()) return
   if (_loadInProgress) return
+  // Mid-restore assigns/unassigns must not thrash SAVE_LAYOUT (Load previous).
+  if (isLayoutRestoreActive()) return
   if (_saveLayoutTimer !== null) {
     // A debounced persistLayout is in flight; cancel it so we don't double-write.
     clearTimeout(_saveLayoutTimer)
@@ -305,6 +308,8 @@ export function persistLayout(): void {
   if (!backendCtx) return
   if (!isAnyLayoutPersistenceEnabled()) return
   if (_loadInProgress) return
+  // Mid-restore assigns call persistLayout; defer until finishRestore + flush.
+  if (isLayoutRestoreActive()) return
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
   }
@@ -314,6 +319,7 @@ export function persistLayout(): void {
   cancelSettingsSave()
   _saveLayoutTimer = setTimeout(() => {
     _saveLayoutTimer = null
+    if (isLayoutRestoreActive()) return
     const layout = { ...buildPersistedLayout(), settings: getSettings() }
     writeLayoutToBackend(layout)
   }, 500)

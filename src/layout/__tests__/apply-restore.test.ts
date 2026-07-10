@@ -29,9 +29,25 @@ let _fakeSecondaryWrapper: any = null
   },
   querySelectorAll(_sel: string) { return [] },
   documentElement: {
-    style: { setProperty(_k: string, _v: string) {} },
+    style: { setProperty(_k: string, _v: string) {}, removeProperty(_k: string) {} },
+    classList: {
+      add() {},
+      remove() {},
+      contains() { return false },
+      toggle() { return false },
+    },
   },
-  body: { appendChild() {} },
+  body: { appendChild() {}, removeChild() {} },
+  createElement(_tag: string) {
+    return {
+      style: {},
+      classList: { add() {}, remove() {}, contains() { return false } },
+      setAttribute() {},
+      getAttribute() { return null },
+      appendChild() {},
+      remove() {},
+    }
+  },
 }
 ;(globalThis as any).CSS = {
   escape(s: string) { if (s == null) return ''; return s.replace(/([^\w-])/g, '\\$1') },
@@ -69,7 +85,7 @@ const _capturedObservers: CapturedObserver[] = []
 // =====================================================================
 import { drawerObserver } from '../../sidebar/drawer-observer'
 import {
-  getTabAssignments, hasTabAssignment, deleteTabAssignment,
+  getTabAssignments, hasTabAssignment, deleteTabAssignment, setTabAssignment,
 } from '../../tabs/assignment'
 import {
   __setSecondaryWrapperForTest,
@@ -376,6 +392,8 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 
 // =====================================================================
 // T3: Safety timeout fires and clears the guard (tabs never available)
+// applyLayout now awaits finishRestore, so the promise resolves only after
+// the safety timeout when tabs never appear.
 // =====================================================================
 {
   setupEnv([])
@@ -386,17 +404,16 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
     detachedTabs: [{ tabId: 'tab:ext:1' }],
   }
 
+  assert(!isRestoringFromLayout(), 'T3a: guard false before applyLayout')
   await applyLayout(layout)
-  assert(isRestoringFromLayout(), 'T3: guard is true (no tabs to restore)')
-
-  await new Promise(resolve => setTimeout(resolve, 150))
-  assert(!isRestoringFromLayout(), 'T3: guard cleared after safety timeout')
+  assert(!isRestoringFromLayout(), 'T3: guard cleared after applyLayout awaits safety timeout')
 
   cleanup()
 }
 
 // =====================================================================
 // T4: MutationObserver callback restores tabs when they appear
+// Start applyLayout without awaiting completion so we can inject store mid-flight.
 // =====================================================================
 {
   // Start with empty store but sidebar has buttons ready
@@ -419,7 +436,8 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
     detachedTabs: [{ tabId: 'tab:ext:1' }],
   }
 
-  await applyLayout(layout)
+  const layoutPromise = applyLayout(layout)
+  await tick()
   assert(isRestoringFromLayout(), 'T4: guard is true (tab not in store)')
   assert(!hasTabAssignment('tab:ext:1'), 'T4: no assignment yet')
 
@@ -449,7 +467,7 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   if (_capturedObservers.length > 0) {
     try { _capturedObservers[0].cb() } catch (e) { console.error('T4: 2nd observer threw:', e) }
   }
-  await tick()
+  await layoutPromise
   assert(!isRestoringFromLayout(), 'T4: guard cleared after all tabs restored')
 
   cleanup()
@@ -460,14 +478,15 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 // =====================================================================
 {
   setupEnv([])
-  setRestoreTimeoutMs(50)
+  setRestoreTimeoutMs(5000)
 
   const layout = {
     secondary: { open: true, width: 300 },
     detachedTabs: [{ tabId: 'tab:ext:1' }],
   }
 
-  await applyLayout(layout)
+  const layoutPromise = applyLayout(layout)
+  await tick()
   assert(isRestoringFromLayout(), 'T5: guard is true (restore in flight)')
   assert(isSuppressAutoActivation(), 'T5: suppress is true during restore')
 
@@ -477,15 +496,14 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   assert(!isRestoringFromLayout(), 'T5: restoring guard cleared after cancel')
   assert(!isSuppressAutoActivation(), 'T5: suppress cleared after cancel')
 
-  // Wait past the safety timeout — the timeout should NOT re-arm restore
-  await new Promise(resolve => setTimeout(resolve, 150))
-  assert(!isRestoringFromLayout(), 'T5: still cleared after timeout window')
+  await layoutPromise
+  assert(!isRestoringFromLayout(), 'T5: still cleared after applyLayout promise settles')
 
   cleanup()
 }
 
 // =====================================================================
-// T6: setRestoringFromLayout guard — false before applyLayout, true during
+// T6: setRestoringFromLayout guard — false before applyLayout, cleared after await
 // =====================================================================
 {
   assert(!isRestoringFromLayout(), 'T6a: guard is false before any applyLayout')
@@ -499,19 +517,11 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   }
 
   await applyLayout(layout)
-  await tick()
-
-  // Fire observer to trigger isTabFullyRestored check
-  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
-    _capturedObservers[0].cb()
-  }
-  await new Promise(resolve => setTimeout(resolve, 100))
-
-  assert(!isRestoringFromLayout(), 'T6b: guard cleared after finishRestore')
+  assert(!isRestoringFromLayout(), 'T6b: guard cleared after applyLayout awaits finishRestore')
 
   cleanup()
 
-  // Now test: empty store → guard stays true until timeout
+  // Empty store → await waits for safety timeout, then guard is clear
   setupEnv([])
   setRestoreTimeoutMs(50)
 
@@ -521,10 +531,7 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   }
 
   await applyLayout(layout2)
-  assert(isRestoringFromLayout(), 'T6c: guard is true when restore in flight')
-
-  await new Promise(resolve => setTimeout(resolve, 150))
-  assert(!isRestoringFromLayout(), 'T6d: guard cleared after timeout')
+  assert(!isRestoringFromLayout(), 'T6c: guard cleared after applyLayout awaits timeout path')
 
   cleanup()
 }
@@ -765,6 +772,100 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
   assertEqual(getActiveSecondaryTabId(), 'tab:ext:1', 'T15: activeTabId restored for reopen')
   const anyActive = tabButtons.some((b: any) => b.classList.contains('sidebar-ux-tab-active'))
   assert(!anyActive, 'T15: no tab button highlighted while closed')
+
+  cleanup()
+}
+
+// =====================================================================
+// T16: Load previous replace — live secondary tab not in saved layout
+// is unassigned (moved back to main). Previously applyLayout only assigned
+// saved detachedTabs and left extras on secondary (merge, not replace).
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:keep:1', title: 'Keep On Secondary' },
+    { id: 'tab:extra:1', title: 'Should Return To Main' },
+  ])
+  setRestoreTimeoutMs(50)
+  // Simulate live state after user moved extra tab to secondary while facet was off.
+  setTabAssignment('tab:keep:1', 'secondary')
+  setTabAssignment('tab:extra:1', 'secondary')
+
+  const layout = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:keep:1' },
+    detachedTabs: [{ tabId: 'tab:keep:1' }],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 80))
+
+  assert(!isRestoringFromLayout(), 'T16: restore finished')
+  assert(hasTabAssignment('tab:keep:1'), 'T16: saved secondary tab still assigned')
+  assert(!hasTabAssignment('tab:extra:1'), 'T16: extra live secondary tab unassigned (back to main)')
+
+  cleanup()
+}
+
+// =====================================================================
+// T17: Load previous with empty detachedTabs — all live secondary cleared
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:only:1', title: 'Only Secondary' },
+  ])
+  setRestoreTimeoutMs(50)
+  setTabAssignment('tab:only:1', 'secondary')
+
+  const layout = {
+    secondary: { open: false, width: 300 },
+    detachedTabs: [],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  await tick()
+  await new Promise(resolve => setTimeout(resolve, 80))
+
+  assert(!isRestoringFromLayout(), 'T17: restore finished')
+  assert(!hasTabAssignment('tab:only:1'), 'T17: empty saved layout unassigns all secondary tabs')
+
+  cleanup()
+}
+
+// =====================================================================
+// T18: Suffix-drift keep — live secondary with different :N than saved
+// is not unassigned as an "extra" (same stripped prefix, unique match).
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:drift:2', title: 'Drifted Tab' },
+  ])
+  setRestoreTimeoutMs(50)
+  setTabAssignment('tab:drift:2', 'secondary')
+
+  const layout = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:drift:1' },
+    detachedTabs: [{ tabId: 'tab:drift:1' }],
+  }
+
+  await applyLayout(layout)
+  await tick()
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 80))
+
+  assert(!isRestoringFromLayout(), 'T18: restore finished')
+  // After heal, either live id or healed id should remain secondary.
+  const stillSecondary =
+    hasTabAssignment('tab:drift:2') || hasTabAssignment('tab:drift:1')
+  assert(stillSecondary, 'T18: suffix-drift secondary tab kept (not unassigned as extra)')
 
   cleanup()
 }
