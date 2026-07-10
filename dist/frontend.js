@@ -1015,122 +1015,6 @@ var init_active_tab = __esm(() => {
   init_store();
 });
 
-// src/tabs/tab-context-menu.ts
-function hideAssignmentMenu() {
-  if (_contextMenu) {
-    _contextMenu.remove();
-    _contextMenu = null;
-  }
-  _lastContextMenuTarget = null;
-}
-function showAssignmentMenu(x, y, tabId, tabTitle, originatingTarget) {
-  if (_showAssignmentMenuOverride) {
-    _showAssignmentMenuOverride(x, y, tabId, tabTitle, originatingTarget);
-    return;
-  }
-  if (!_contextMenu) {
-    _contextMenu = createAssignmentContextMenu();
-    document.body.appendChild(_contextMenu);
-  }
-  _contextMenu.innerHTML = "";
-  const currentSidebar = getTabSidebar(tabId);
-  let label;
-  let targetSidebar;
-  if (currentSidebar === "secondary") {
-    label = "Move to main drawer";
-    targetSidebar = "primary";
-  } else {
-    label = "Move to second drawer";
-    targetSidebar = "secondary";
-  }
-  const item = createAssignmentContextMenuItem(label, () => {
-    Promise.resolve().then(() => (init_assignment(), exports_assignment)).then((m) => m.assignTab(tabId, targetSidebar));
-  });
-  _contextMenu.appendChild(item);
-  _contextMenu.style.left = `${x}px`;
-  _contextMenu.style.top = `${y}px`;
-  _contextMenu.style.display = "block";
-  _lastContextMenuTarget = originatingTarget ?? null;
-  requestAnimationFrame(() => {
-    const rect = _contextMenu.getBoundingClientRect();
-    if (rect.right > window.innerWidth) {
-      _contextMenu.style.left = `${window.innerWidth - rect.width - 8}px`;
-    }
-    if (rect.bottom > window.innerHeight) {
-      _contextMenu.style.top = `${window.innerHeight - rect.height - 8}px`;
-    }
-  });
-}
-function createAssignmentContextMenu() {
-  injectAssignmentContextMenuStyles();
-  const menu = document.createElement("div");
-  menu.className = "canvas-tab-context-menu";
-  menu.style.cssText = `
-    position: fixed;
-    z-index: 11000;
-    min-width: 180px;
-    padding: 4px;
-    background: var(--lumiverse-bg-deep);
-    border: 1px solid var(--lumiverse-border);
-    border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
-    animation: contextMenuIn 120ms ease-out forwards;
-    transform-origin: top left;
-    display: none;
-  `;
-  return menu;
-}
-function injectAssignmentContextMenuStyles() {
-  injectStyles("canvas-ux-context-menu-styles", `
-    @keyframes contextMenuIn {
-      from { opacity: 0; transform: scale(0.92); }
-      to   { opacity: 1; transform: scale(1); }
-    }
-    @media not (pointer: coarse) {
-      body[data-glass] .canvas-tab-context-menu {
-        background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
-        backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-      }
-    }
-  `);
-}
-function createAssignmentContextMenuItem(label, onClick, opts) {
-  const item = document.createElement("button");
-  item.style.cssText = `
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 12px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: ${opts?.danger ? "var(--lumiverse-error, #e54545)" : "var(--lumiverse-text)"};
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 120ms ease;
-    text-align: left;
-  `;
-  item.textContent = label;
-  item.addEventListener("mouseenter", () => {
-    item.style.background = opts?.danger ? "var(--lumiverse-danger-015)" : "var(--lumiverse-fill, rgba(255, 255, 255, 0.06))";
-  });
-  item.addEventListener("mouseleave", () => {
-    item.style.background = "none";
-  });
-  item.addEventListener("click", (e) => {
-    e.stopPropagation();
-    onClick();
-    hideAssignmentMenu();
-  });
-  return item;
-}
-var _showAssignmentMenuOverride = null, _contextMenu = null, _lastContextMenuTarget = null;
-var init_tab_context_menu = __esm(() => {
-  init_assignment();
-});
-
 // src/sidebar/strip-gutter.ts
 var exports_strip_gutter = {};
 __export(exports_strip_gutter, {
@@ -1752,26 +1636,41 @@ function onMirrorContextMenu(ev) {
   e.preventDefault();
   e.stopPropagation();
   const mirror = e.currentTarget;
-  const hostBtn = _mirrorToHost.get(mirror);
+  let hostBtn = _mirrorToHost.get(mirror);
   const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null;
   const isSettings = settingsHost != null && isSettingsButton(settingsHost) || isSettingsButton(mirror);
   if (isSettings) {
-    dlog("[main-mirror] contextmenu → settings (no assignment menu)");
+    dlog("[main-mirror] contextmenu → settings (no host forward)");
     return;
   }
-  const tabId = mirror.getAttribute("data-tab-id") || mirror.getAttribute("title") || mirror.getAttribute("aria-label") || "";
-  const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || tabId;
-  if (!tabId) {
-    dwarn("[main-mirror] contextmenu: no tabId/title on mirror button");
+  if (!hostBtn || !hostBtn.isConnected) {
+    reconcileMainMirror();
+    hostBtn = _mirrorToHost.get(mirror);
+  }
+  if (!hostBtn || !hostBtn.isConnected) {
+    dwarn("[main-mirror] contextmenu: no connected host twin", {
+      title: mirror.getAttribute("title")
+    });
     return;
   }
-  dlog("[main-mirror] contextmenu", {
-    tabId,
-    title,
+  dlog("[main-mirror] contextmenu → host forward", {
+    title: hostBtn.getAttribute("title") || mirror.getAttribute("title"),
     x: e.clientX,
     y: e.clientY
   });
-  showAssignmentMenu(e.clientX, e.clientY, tabId, title, mirror);
+  try {
+    hostBtn.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      button: 2,
+      buttons: 2
+    }));
+  } catch (err) {
+    dwarn("[main-mirror] contextmenu: host dispatch failed", err);
+  }
 }
 function ensureObservers() {
   const sidebar = getMainSidebar();
@@ -1816,7 +1715,6 @@ var init_main_tab_pin = __esm(() => {
   init_main_mirror_drawer();
   init_tab_position();
   init_buttons();
-  init_tab_context_menu();
   _mirrorToHost = new WeakMap;
 });
 
@@ -2692,6 +2590,127 @@ var init_drawer_sync = __esm(() => {
   init_state();
   init_buttons();
   init_active_tab();
+});
+
+// src/tabs/tab-context-menu.ts
+function hideAssignmentMenu() {
+  if (_contextMenu) {
+    _contextMenu.remove();
+    _contextMenu = null;
+  }
+  _lastContextMenuTarget = null;
+}
+function showAssignmentMenu(x, y, tabId, tabTitle, originatingTarget) {
+  if (_showAssignmentMenuOverride) {
+    _showAssignmentMenuOverride(x, y, tabId, tabTitle, originatingTarget);
+    return;
+  }
+  const currentSidebar = getTabSidebar(tabId);
+  let label;
+  let targetSidebar;
+  if (currentSidebar === "secondary") {
+    label = "Move to main drawer";
+    targetSidebar = "primary";
+  } else {
+    label = "Move to second drawer";
+    targetSidebar = "secondary";
+  }
+  if (targetSidebar === "secondary" && !getSettings().secondSidebarEnabled) {
+    hideAssignmentMenu();
+    return;
+  }
+  if (!_contextMenu) {
+    _contextMenu = createAssignmentContextMenu();
+    document.body.appendChild(_contextMenu);
+  }
+  _contextMenu.innerHTML = "";
+  const item = createAssignmentContextMenuItem(label, () => {
+    Promise.resolve().then(() => (init_assignment(), exports_assignment)).then((m) => m.assignTab(tabId, targetSidebar));
+  });
+  _contextMenu.appendChild(item);
+  _contextMenu.style.left = `${x}px`;
+  _contextMenu.style.top = `${y}px`;
+  _contextMenu.style.display = "block";
+  _lastContextMenuTarget = originatingTarget ?? null;
+  requestAnimationFrame(() => {
+    const rect = _contextMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      _contextMenu.style.left = `${window.innerWidth - rect.width - 8}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+      _contextMenu.style.top = `${window.innerHeight - rect.height - 8}px`;
+    }
+  });
+}
+function createAssignmentContextMenu() {
+  injectAssignmentContextMenuStyles();
+  const menu = document.createElement("div");
+  menu.className = "canvas-tab-context-menu";
+  menu.style.cssText = `
+    position: fixed;
+    z-index: 11000;
+    min-width: 180px;
+    padding: 4px;
+    background: var(--lumiverse-bg-deep);
+    border: 1px solid var(--lumiverse-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    animation: contextMenuIn 120ms ease-out forwards;
+    transform-origin: top left;
+    display: none;
+  `;
+  return menu;
+}
+function injectAssignmentContextMenuStyles() {
+  injectStyles("canvas-ux-context-menu-styles", `
+    @keyframes contextMenuIn {
+      from { opacity: 0; transform: scale(0.92); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    @media not (pointer: coarse) {
+      body[data-glass] .canvas-tab-context-menu {
+        background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent) !important;
+        backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+      }
+    }
+  `);
+}
+function createAssignmentContextMenuItem(label, onClick, opts) {
+  const item = document.createElement("button");
+  item.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: ${opts?.danger ? "var(--lumiverse-error, #e54545)" : "var(--lumiverse-text)"};
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 120ms ease;
+    text-align: left;
+  `;
+  item.textContent = label;
+  item.addEventListener("mouseenter", () => {
+    item.style.background = opts?.danger ? "var(--lumiverse-danger-015)" : "var(--lumiverse-fill, rgba(255, 255, 255, 0.06))";
+  });
+  item.addEventListener("mouseleave", () => {
+    item.style.background = "none";
+  });
+  item.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+    hideAssignmentMenu();
+  });
+  return item;
+}
+var _showAssignmentMenuOverride = null, _contextMenu = null, _lastContextMenuTarget = null;
+var init_tab_context_menu = __esm(() => {
+  init_assignment();
+  init_state();
 });
 
 // src/tabs/buttons.ts
@@ -10262,7 +10281,7 @@ function startContextMenuListener() {
       return;
     }
     if (tabBtn.classList.contains("sidebar-ux-main-tab-mirror-btn")) {
-      dlog("[tabmove] docCtxCapture: main-mirror btn — Canvas menu handles it");
+      dlog("[tabmove] docCtxCapture: main-mirror btn — host forward handles it");
       _pendingTabInfo = null;
       return;
     }

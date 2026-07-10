@@ -34,7 +34,6 @@ import {
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
 import { isSettingsButton } from '../tabs/buttons'
-import { showAssignmentMenu } from '../tabs/tab-context-menu'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -735,46 +734,61 @@ function onMirrorClick(ev: Event): void {
   onMainMirrorTabActivated(title)
 }
 
-/** Right-click on mirror tabs → Canvas assignment menu (secondary parity). */
+/**
+ * Right-click on mirror tabs → forward to host twin so Lumiverse opens its
+ * ContextMenu (Configure tabs, Hide/Show labels). Canvas injects "Move to
+ * second drawer" via context-menu/index.ts on the synthetic host path
+ * (gated by secondSidebarEnabled). Settings is never forwarded.
+ */
 function onMirrorContextMenu(ev: Event): void {
   const e = ev as MouseEvent
   e.preventDefault()
   e.stopPropagation()
   const mirror = e.currentTarget as HTMLElement
 
-  // Settings is host chrome only (same as onMirrorClick) — never open the
-  // assignment menu ("Move to second drawer"). Host sidebar path already
-  // skips Settings in context-menu/index.ts.
-  const hostBtn = _mirrorToHost.get(mirror)
+  // Settings is host chrome only (same as onMirrorClick) — never forward
+  // contextmenu / open move menu. Host inject path also skips Settings.
+  let hostBtn = _mirrorToHost.get(mirror)
   const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null
   const isSettings =
     (settingsHost != null && isSettingsButton(settingsHost)) ||
     isSettingsButton(mirror)
   if (isSettings) {
-    dlog('[main-mirror] contextmenu → settings (no assignment menu)')
+    dlog('[main-mirror] contextmenu → settings (no host forward)')
     return
   }
 
-  const tabId =
-    mirror.getAttribute('data-tab-id') ||
-    mirror.getAttribute('title') ||
-    mirror.getAttribute('aria-label') ||
-    ''
-  const title =
-    mirror.getAttribute('title') ||
-    mirror.getAttribute('aria-label') ||
-    tabId
-  if (!tabId) {
-    dwarn('[main-mirror] contextmenu: no tabId/title on mirror button')
+  if (!hostBtn || !hostBtn.isConnected) {
+    reconcileMainMirror()
+    hostBtn = _mirrorToHost.get(mirror)
+  }
+  if (!hostBtn || !hostBtn.isConnected) {
+    dwarn('[main-mirror] contextmenu: no connected host twin', {
+      title: mirror.getAttribute('title'),
+    })
     return
   }
-  dlog('[main-mirror] contextmenu', {
-    tabId,
-    title,
+
+  dlog('[main-mirror] contextmenu → host forward', {
+    title: hostBtn.getAttribute('title') || mirror.getAttribute('title'),
     x: e.clientX,
     y: e.clientY,
   })
-  showAssignmentMenu(e.clientX, e.clientY, tabId, title, mirror)
+  try {
+    hostBtn.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        button: 2,
+        buttons: 2,
+      }),
+    )
+  } catch (err) {
+    dwarn('[main-mirror] contextmenu: host dispatch failed', err)
+  }
 }
 
 function ensureObservers(): void {

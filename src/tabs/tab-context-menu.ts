@@ -9,6 +9,7 @@
 // management logic.
 
 import { getTabSidebar } from '../tabs/assignment'
+import { getSettings } from '../settings/state'
 import { injectStyles } from '../debug/styles'
 
 // Test seam for showAssignmentMenu — allows tests to override the real implementation
@@ -40,12 +41,7 @@ export function showAssignmentMenu(
     _showAssignmentMenuOverride(x, y, tabId, tabTitle, originatingTarget)
     return
   }
-  if (!_contextMenu) {
-    _contextMenu = createAssignmentContextMenu()
-    document.body.appendChild(_contextMenu)
-  }
 
-  _contextMenu.innerHTML = ''
   const currentSidebar = getTabSidebar(tabId)
   let label: string
   let targetSidebar: 'primary' | 'secondary'
@@ -57,6 +53,20 @@ export function showAssignmentMenu(
     label = 'Move to second drawer'
     targetSidebar = 'secondary'
   }
+
+  // Defense in depth: host inject already gates this; mirror used to bypass
+  // via this menu. Secondary → main is always allowed.
+  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) {
+    hideAssignmentMenu()
+    return
+  }
+
+  if (!_contextMenu) {
+    _contextMenu = createAssignmentContextMenu()
+    document.body.appendChild(_contextMenu)
+  }
+
+  _contextMenu.innerHTML = ''
 
   const item = createAssignmentContextMenuItem(label, () => {
     // Lazy-import assignTab to avoid circular dependency at module load time.

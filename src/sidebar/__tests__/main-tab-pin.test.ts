@@ -81,6 +81,8 @@ class StubElement {
   childNodes: StubElement[] = []
   isConnected = true
   clickCount = 0
+  /** Synthetic contextmenu events received via dispatchEvent (M9c host-forward). */
+  contextmenuDispatches: Array<{ clientX: number; clientY: number }> = []
   private _listeners: Record<string, Function[]> = {}
 
   classList = {
@@ -183,7 +185,32 @@ class StubElement {
       fn({ preventDefault() {}, stopPropagation() {}, currentTarget: this })
     }
   }
-  /** Fire a contextmenu event (used by M9c Settings / assignment menu tests). */
+  /**
+   * Programmatic event dispatch (production onMirrorContextMenu uses this on
+   * the host twin). Tracks contextmenu for M9c assertions.
+   */
+  dispatchEvent(ev: { type?: string; clientX?: number; clientY?: number }): boolean {
+    if (ev?.type === 'contextmenu') {
+      this.contextmenuDispatches.push({
+        clientX: ev.clientX ?? 0,
+        clientY: ev.clientY ?? 0,
+      })
+    }
+    const type = ev?.type
+    if (type && this._listeners[type]) {
+      for (const fn of this._listeners[type]) {
+        fn({
+          ...ev,
+          preventDefault() {},
+          stopPropagation() {},
+          currentTarget: this,
+          target: this,
+        })
+      }
+    }
+    return true
+  }
+  /** Fire a contextmenu event on this element (mirror listener tests). */
   contextmenu(clientX = 10, clientY = 20) {
     for (const fn of this._listeners['contextmenu'] || []) {
       fn({
@@ -357,6 +384,30 @@ const _raf = (fn: FrameRequestCallback) => {
   removeEventListener() {},
   requestAnimationFrame: _raf,
   cancelAnimationFrame() {},
+}
+
+// MouseEvent for onMirrorContextMenu host-forward (bun stub env has no DOM events).
+if (typeof (globalThis as any).MouseEvent === 'undefined') {
+  ;(globalThis as any).MouseEvent = class MouseEvent {
+    type: string
+    bubbles: boolean
+    cancelable: boolean
+    view: unknown
+    clientX: number
+    clientY: number
+    button: number
+    buttons: number
+    constructor(type: string, init: Record<string, unknown> = {}) {
+      this.type = type
+      this.bubbles = !!init.bubbles
+      this.cancelable = !!init.cancelable
+      this.view = init.view
+      this.clientX = (init.clientX as number) ?? 0
+      this.clientY = (init.clientY as number) ?? 0
+      this.button = (init.button as number) ?? 0
+      this.buttons = (init.buttons as number) ?? 0
+    }
+  }
 }
 
 // requestAnimationFrame on global
@@ -727,8 +778,9 @@ function resetAll() {
   assertEqual(getActiveMainMirrorKey(), null, 'M9b: heal does not adopt Settings key')
 }
 
-// M9c: Settings right-click must not open "Move to second drawer" assignment menu.
-// Profile control still opens the menu.
+// M9c: Settings right-click must not host-forward or open assignment menu.
+// Profile right-click forwards synthetic contextmenu to the host twin (host
+// ContextMenu + inject path) — never showAssignmentMenu.
 {
   resetAll()
   const menuCalls: Array<{ tabId: string; title: string }> = []
@@ -756,12 +808,20 @@ function resetAll() {
     const profileMirror = mainSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
     const settingsMirror = bottomSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
 
+    profile.contextmenuDispatches = []
+    settings.contextmenuDispatches = []
+
     settingsMirror.contextmenu(12, 34)
     assertEqual(menuCalls.length, 0, 'M9c: Settings contextmenu does not open assignment menu')
+    assertEqual(settings.contextmenuDispatches.length, 0, 'M9c: Settings does not host-forward')
+    assertEqual(profile.contextmenuDispatches.length, 0, 'M9c: Settings path does not dispatch on Profile')
 
     profileMirror.contextmenu(56, 78)
-    assertEqual(menuCalls.length, 1, 'M9c: Profile contextmenu opens assignment menu')
-    assertEqual(menuCalls[0]?.tabId, 'profile', 'M9c: Profile menu tabId')
+    assertEqual(menuCalls.length, 0, 'M9c: Profile does not open Canvas assignment menu')
+    assertEqual(profile.contextmenuDispatches.length, 1, 'M9c: Profile host-forwards contextmenu')
+    assertEqual(profile.contextmenuDispatches[0]?.clientX, 56, 'M9c: Profile forward clientX')
+    assertEqual(profile.contextmenuDispatches[0]?.clientY, 78, 'M9c: Profile forward clientY')
+    assertEqual(settings.contextmenuDispatches.length, 0, 'M9c: Profile path does not dispatch on Settings')
   } finally {
     __setShowAssignmentMenuForTest(null)
   }

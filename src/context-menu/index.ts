@@ -226,11 +226,12 @@ export function startContextMenuListener(): void {
     // Both built-in tabs and extension tabs get the move option.
     if (isSettingsButton(tabBtn)) { _pendingTabInfo = null; return }
 
-    // Main-mirror strip buttons are Canvas-owned (outside host React). They
-    // use showAssignmentMenu via their own contextmenu listener — do not
-    // start the Lumiverse-menu injector for them (host menu never opens).
+    // Main-mirror strip buttons are Canvas-owned (outside host React).
+    // onMirrorContextMenu forwards a synthetic contextmenu to the host twin;
+    // inject runs on that host path. Skip the original mirror event so we
+    // do not set/clear pending before the forward.
     if (tabBtn.classList.contains('sidebar-ux-main-tab-mirror-btn')) {
-      dlog('[tabmove] docCtxCapture: main-mirror btn — Canvas menu handles it')
+      dlog('[tabmove] docCtxCapture: main-mirror btn — host forward handles it')
       _pendingTabInfo = null
       return
     }
