@@ -285,7 +285,8 @@ function reconcileMainMirror(): void {
     const hostActiveBtn =
       hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
     const prevKey = _activeMainMirrorKey
-    if (hostActiveBtn) {
+    // Settings is host chrome only — never adopt as Canvas active tab / header.
+    if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
       _activeMainMirrorKey = hostButtonKey(hostActiveBtn)
       const t =
         hostActiveBtn.getAttribute('title') ||
@@ -663,6 +664,29 @@ function onMirrorClick(ev: Event): void {
 
   const hostBtn = _mirrorToHost.get(mirror)
   const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror)
+
+  // Settings is host chrome only (opens Lumiverse settings). Never treat as a
+  // Canvas main-mirror tab: no active key, header title, open, or toggle-close.
+  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null
+  const isSettings =
+    (settingsHost != null && isSettingsButton(settingsHost)) ||
+    isSettingsButton(mirror)
+  if (isSettings) {
+    dlog('[main-mirror] click → settings (host only, no canvas tab)', { key })
+    let target = settingsHost
+    if (!target || !target.isConnected) {
+      reconcileMainMirror()
+      target = _mirrorToHost.get(mirror) ?? null
+    }
+    if (target && target.isConnected) {
+      try {
+        target.click()
+      } catch {
+        /* host may throw during teardown */
+      }
+    }
+    return
+  }
 
   // Secondary parity: clicking the already-active tab while open closes the
   // drawer. When Canvas owns a key, that key alone decides toggle-close —

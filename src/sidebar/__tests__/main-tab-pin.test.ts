@@ -654,9 +654,56 @@ function resetAll() {
   assertEqual(mainMirrors[0].getAttribute('data-tab-id'), 'profile', 'M9: profile id')
   assertEqual(bottomMirrors.length, 1, 'M9: settings in bottom section')
   assertEqual(bottomMirrors[0].getAttribute('title'), 'Settings', 'M9: settings title')
-  // Click still forwards
+  // Click forwards to host but does not activate Canvas chrome (no key/open).
+  assertEqual(getActiveMainMirrorKey(), null, 'M9: no active key before settings click')
+  assert(!isCanvasMainOpen(), 'M9: drawer closed before settings click')
   bottomMirrors[0].click()
   assertEqual(settings.clickCount, 1, 'M9: settings click forwards to host')
+  assertEqual(getActiveMainMirrorKey(), null, 'M9: settings does not set active key')
+  assert(!isCanvasMainOpen(), 'M9: settings does not open drawer')
+
+  // With a real tab open, Settings still only forwards — keeps key + open.
+  mainMirrors[0].click()
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M9: profile activates')
+  assert(isCanvasMainOpen(), 'M9: profile opens drawer')
+  bottomMirrors[0].click()
+  assertEqual(settings.clickCount, 2, 'M9: second settings click still forwards')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M9: settings leaves profile key')
+  assert(isCanvasMainOpen(), 'M9: settings leaves drawer open')
+}
+
+// M9b: stale-key heal must not adopt Settings as Canvas active tab / title.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const memory = makeHostBtn('memory', 'Memory', false)
+  const settings = makeHostBtn('settings', 'Settings', false)
+  settings.removeAttribute('data-tab-id')
+  settings.setAttribute('title', 'Settings')
+  settings.setAttribute('aria-label', 'Settings')
+  mainSidebar.appendChild(memory)
+  mainSidebar.appendChild(settings)
+  applyMainTabListPin(true, { force: true })
+
+  const list0 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const memoryMirror = collectMirrorButtons(list0).find(
+    (m) => m.getAttribute('data-tab-id') === 'memory',
+  )!
+  memoryMirror.click()
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M9b: key = memory after click')
+
+  // Memory leaves primary; only Settings remains and is host-active.
+  mainSidebar.removeChild(memory)
+  memory.isConnected = false
+  settings.classList.add('tabBtnActive')
+  settings.className = 'tabBtn tabBtnActive'
+  applyMainTabListPin(true, { force: true })
+
+  assertEqual(getActiveMainMirrorKey(), null, 'M9b: heal does not adopt Settings key')
 }
 
 // M10: toggle-close — click already-active tab while open closes drawer

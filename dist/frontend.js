@@ -3294,7 +3294,7 @@ function reconcileMainMirror() {
   if (_activeMainMirrorKey != null && !wantedKeys.has(_activeMainMirrorKey)) {
     const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
     const prevKey = _activeMainMirrorKey;
-    if (hostActiveBtn) {
+    if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
       _activeMainMirrorKey = hostButtonKey(hostActiveBtn);
       const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
       if (t)
@@ -3586,6 +3586,22 @@ function onMirrorClick(ev) {
   const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || undefined;
   const hostBtn = _mirrorToHost.get(mirror);
   const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror);
+  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null;
+  const isSettings = settingsHost != null && isSettingsButton(settingsHost) || isSettingsButton(mirror);
+  if (isSettings) {
+    dlog("[main-mirror] click → settings (host only, no canvas tab)", { key });
+    let target = settingsHost;
+    if (!target || !target.isConnected) {
+      reconcileMainMirror();
+      target = _mirrorToHost.get(mirror) ?? null;
+    }
+    if (target && target.isConnected) {
+      try {
+        target.click();
+      } catch {}
+    }
+    return;
+  }
   const wasActive = _activeMainMirrorKey != null ? key === _activeMainMirrorKey : mirror.classList.contains("sidebar-ux-tab-active") || hostHasTabBtnActive(hostBtn);
   if (isCanvasMainOpen() && wasActive) {
     dlog("[main-mirror] click → close (active tab)", { title, key });
