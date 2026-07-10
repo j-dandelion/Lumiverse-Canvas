@@ -78,9 +78,15 @@ const RESTORE_PENDING_CLASS = 'sidebar-ux-main-restore-pending'
 const RESTORE_GUARD_STYLE_ID = 'sidebar-ux-main-restore-guard'
 /** Inline stamp on every panel body we force-hide during restore. */
 const RESTORE_HIDE_ATTR = 'data-canvas-restore-hide'
-// Require one confirmed active poll then double-rAF. Body hide covers
-// any lag between tabBtnActive and panel children swap.
-const RESTORE_ACTIVE_STABLE_POLLS = 1
+// Host tabBtnActive must hold for this many consecutive polls before we
+// consider chrome "host-ready". Mirror-only active must NOT count (Canvas
+// paints mirror highlight before React commits panel children).
+const RESTORE_HOST_STABLE_POLLS = 2
+// After host is stable: require panel-body mutation quiescence this long
+// (ms) before lifting the restore guard. Fallback settle if no mutations
+// (already-correct tab / empty panel).
+const RESTORE_CONTENT_QUIET_MS = 40
+const RESTORE_CONTENT_FALLBACK_MS = 50
 
 // module-level cache, populated by the observers and read by
 // snapshotLayout() so every save path (settings-toggle, pagehide
@@ -98,6 +104,10 @@ let _unsuppressTimer: ReturnType<typeof setTimeout> | null = null
 /** Re-stamps inline hide on newly mounted panel bodies during restore. */
 let _panelHideObserver: MutationObserver | null = null
 let _panelHideRaf: number | null = null
+/** Watches parked panel body children during restore tab settle. */
+let _contentSettleObserver: MutationObserver | null = null
+let _contentQuietTimer: ReturnType<typeof setTimeout> | null = null
+let _contentFallbackTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Read the current open state of the main drawer from the wrapper's
@@ -295,6 +305,7 @@ export function suppressMainDrawer(): void {
  */
 export function unsuppressMainDrawer(): void {
   if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
+  stopContentSettleWatch()
   stopPanelHideObserver()
   clearPanelBodyHide()
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS)
@@ -312,30 +323,124 @@ export function isMainDrawerRestorePending(): boolean {
 }
 
 /**
- * True when the host (or mirror) already shows targetTabId as active.
- * Accepts data-tab-id equality or title match (built-in bare ids).
+ * True when the **host** sidebar marks targetTabId as active via
+ * `tabBtnActive`. Does **not** consult Canvas mirror chrome — mirror
+ * highlight is set synchronously in activateMainMirrorFromRestore and
+ * would unsuppress before React commits panel children.
+ *
+ * Accepts data-tab-id equality, title match, or bare-id suffix match
+ * (stored "spindle:…:tab:memory:1" vs host data-tab-id "memory").
  */
-function isPrimaryTabActive(targetTabId: string): boolean {
+export function isHostPrimaryTabActive(targetTabId: string): boolean {
   const sidebar =
     _sidebar
     || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
   const active = sidebar?.querySelector(
     'button.tabBtnActive, button[class*="tabBtnActive"]',
   ) as HTMLElement | null
-  if (active) {
-    const id = active.getAttribute('data-tab-id') || ''
-    const title = active.getAttribute('title') || ''
-    if (id === targetTabId || title === targetTabId) return true
-    // Bare-id match: stored "spindle:…:tab:memory:1" vs host data-tab-id "memory"
-    if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
-      return true
-    }
+  if (!active) return false
+  const id = active.getAttribute('data-tab-id') || ''
+  const title = active.getAttribute('title') || ''
+  if (id === targetTabId || title === targetTabId) return true
+  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+    return true
   }
-  const mirrorActive = document.querySelector(
-    `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[data-tab-id="${CSS.escape(targetTabId)}"],`
-    + `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[title="${CSS.escape(targetTabId)}"]`,
-  )
-  return !!mirrorActive
+  return false
+}
+
+/** Resolve the parked / live main panel body for content-settle watch. */
+function resolveMainPanelBody(): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  const marked = document.querySelector(
+    '[data-canvas-main-panel-content]',
+  ) as HTMLElement | null
+  if (marked) return marked
+  const shellPanel = document.querySelector(
+    '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content [class*="_panelContent_"],'
+    + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [data-canvas-main-panel-content],'
+    + '.sidebar-ux-main-mirror-wrapper [class*="_panelContent_"]',
+  ) as HTMLElement | null
+  if (shellPanel) return shellPanel
+  return document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
+}
+
+function stopContentSettleWatch(): void {
+  if (_contentSettleObserver) {
+    _contentSettleObserver.disconnect()
+    _contentSettleObserver = null
+  }
+  if (_contentQuietTimer != null) {
+    clearTimeout(_contentQuietTimer)
+    _contentQuietTimer = null
+  }
+  if (_contentFallbackTimer != null) {
+    clearTimeout(_contentFallbackTimer)
+    _contentFallbackTimer = null
+  }
+}
+
+/**
+ * Prefer a stable parent for content settle: React may remount
+ * `_panelContent_` under the shell, so observing a detached old node
+ * would never see the real swap.
+ */
+function resolveContentSettleRoot(): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  const shellSlot = document.querySelector(
+    '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content',
+  ) as HTMLElement | null
+  if (shellSlot) return shellSlot
+  const panel = resolveMainPanelBody()
+  if (panel?.parentElement instanceof HTMLElement) return panel.parentElement
+  return panel
+}
+
+/**
+ * Watch panel-body childList mutations after host tab is active.
+ * Sets contentSettled via callbacks when mutations quiet or fallback
+ * timeout fires (already-correct tab with no swap).
+ */
+function startContentSettleWatch(
+  onSettled: (reason: 'mutation-quiet' | 'fallback') => void,
+): void {
+  stopContentSettleWatch()
+  let settled = false
+  const settle = (reason: 'mutation-quiet' | 'fallback') => {
+    if (settled) return
+    settled = true
+    stopContentSettleWatch()
+    onSettled(reason)
+  }
+
+  const root = resolveContentSettleRoot()
+  if (!root) {
+    // No panel node yet — fall back shortly; repark may create it.
+    _contentFallbackTimer = setTimeout(() => settle('fallback'), RESTORE_CONTENT_FALLBACK_MS)
+    return
+  }
+
+  let sawMutation = false
+  _contentSettleObserver = new MutationObserver(() => {
+    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+    sawMutation = true
+    if (_contentQuietTimer != null) clearTimeout(_contentQuietTimer)
+    if (_contentFallbackTimer != null) {
+      clearTimeout(_contentFallbackTimer)
+      _contentFallbackTimer = null
+    }
+    _contentQuietTimer = setTimeout(() => settle('mutation-quiet'), RESTORE_CONTENT_QUIET_MS)
+    // Re-stamp + repark if React remounts mid-switch
+    stampPanelBodyHide()
+    void import('./main-mirror-drawer').then((m) => {
+      m.ensureHostContentParkedPublic()
+    }).catch(() => { /* ignore */ })
+  })
+  _contentSettleObserver.observe(root, { childList: true, subtree: true })
+
+  // Already-correct tab / no child swap: unsuppress after short settle.
+  _contentFallbackTimer = setTimeout(() => {
+    if (!sawMutation) settle('fallback')
+  }, RESTORE_CONTENT_FALLBACK_MS)
 }
 
 /**
@@ -410,9 +515,11 @@ const RESTORE_TAB_POLL_MAX = 50
 const RESTORE_TAB_POLL_MS = 16
 
 /**
- * Activate the restored tab, keep stamping panel-body hide, reveal as
- * soon as the active tab matches (double-rAF for paint). Body hide is
- * the anti-flash guarantee — no multi-hundred-ms blank settle.
+ * Activate the restored tab, keep stamping panel-body hide, reveal only
+ * after **host** tabBtnActive matches and panel body has settled
+ * (mutation quiet or short fallback). Mirror chrome alone must not
+ * unsuppress — activateMainMirrorFromRestore paints highlight before
+ * React commits children.
  */
 function scheduleRestoreTabThenUnsuppress(
   targetTabId: string | null,
@@ -432,7 +539,9 @@ function scheduleRestoreTabThenUnsuppress(
     }).catch(() => { /* mirror not loaded */ })
 
     if (targetTabId) {
-      if (!isPrimaryTabActive(targetTabId)) {
+      // Always drive restore click when host is not on target. Mirror-only
+      // "active" does not skip the click (host may still be Profile).
+      if (!isHostPrimaryTabActive(targetTabId)) {
         clickRestoredPrimaryTab(targetTabId, preferMirror)
       }
     } else if (fallbackClickFirstHostTab) {
@@ -450,13 +559,43 @@ function scheduleRestoreTabThenUnsuppress(
 
     let polls = 0
     let stable = 0
-    const finish = () => {
+    let contentSettled = false
+    let watchingContent = false
+    let finished = false
+    const finish = (reason: string) => {
+      if (finished) return
+      finished = true
+      stopContentSettleWatch()
       stampPanelBodyHide()
-      // Two paints under the guard so React can commit body children.
+      dlog(`main-persist restore: unsuppress (${reason})`)
+      // Two paints under the guard after content is ready.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           unsuppressMainDrawer()
         })
+      })
+    }
+    const tryFinish = () => {
+      if (finished) return
+      if (!targetTabId) {
+        finish('no-target-tab')
+        return
+      }
+      if (stable >= RESTORE_HOST_STABLE_POLLS && contentSettled) {
+        finish('host-active+content-settled')
+      }
+    }
+    const beginContentWatch = () => {
+      if (watchingContent || finished) return
+      watchingContent = true
+      void import('./main-mirror-drawer').then((m) => {
+        m.ensureHostContentParkedPublic()
+      }).catch(() => { /* ignore */ })
+      stampPanelBodyHide()
+      startContentSettleWatch((settleReason) => {
+        contentSettled = true
+        dlog(`main-persist restore: content settled (${settleReason})`)
+        tryFinish()
       })
     }
     const poll = () => {
@@ -464,24 +603,24 @@ function scheduleRestoreTabThenUnsuppress(
         unsuppressMainDrawer()
         return
       }
+      if (finished) return
       stampPanelBodyHide()
       if (!targetTabId) {
-        finish()
+        finish('no-target-tab')
         return
       }
-      if (isPrimaryTabActive(targetTabId)) {
+      if (isHostPrimaryTabActive(targetTabId)) {
         stable++
         if (stable === 1) {
-          void import('./main-mirror-drawer').then((m) => {
-            m.ensureHostContentParkedPublic()
-          }).catch(() => { /* ignore */ })
+          beginContentWatch()
         }
-        if (stable >= RESTORE_ACTIVE_STABLE_POLLS) {
-          finish()
-          return
-        }
+        tryFinish()
+        if (finished) return
       } else {
         stable = 0
+        contentSettled = false
+        watchingContent = false
+        stopContentSettleWatch()
         // Re-click while wrong — host pendingActiveTabReset → profile.
         if (polls % 3 === 0) {
           clickRestoredPrimaryTab(targetTabId, preferMirror)
@@ -493,7 +632,7 @@ function scheduleRestoreTabThenUnsuppress(
       polls++
       if (polls >= RESTORE_TAB_POLL_MAX) {
         clickRestoredPrimaryTab(targetTabId, preferMirror)
-        finish()
+        finish(contentSettled ? 'poll-max-content-ok' : 'poll-max')
         return
       }
       setTimeout(poll, RESTORE_TAB_POLL_MS)
@@ -694,7 +833,9 @@ export function startMainDrawerPersistence(): void {
  */
 export function ensureRestoredPrimaryTab(targetTabId: string): void {
   if (!targetTabId || _stopped) return
-  if (isPrimaryTabActive(targetTabId)) return
+  // Host-only: mirror chrome can claim active while host is still Profile
+  // after secondary assign resets the host tab.
+  if (isHostPrimaryTabActive(targetTabId)) return
   const keepVisible = !!getSettings().keepTabListVisible
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
   clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile)

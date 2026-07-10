@@ -4460,6 +4460,7 @@ __export(exports_main_persist, {
   stampPanelBodyHide: () => stampPanelBodyHide,
   restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
   isMainDrawerRestorePending: () => isMainDrawerRestorePending,
+  isHostPrimaryTabActive: () => isHostPrimaryTabActive,
   findDrawerToggleButton: () => findDrawerToggleButton,
   ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
   cleanupDomPoll: () => cleanupDomPoll,
@@ -4619,6 +4620,7 @@ function unsuppressMainDrawer() {
     clearTimeout(_unsuppressTimer);
     _unsuppressTimer = null;
   }
+  stopContentSettleWatch();
   stopPanelHideObserver();
   clearPanelBodyHide();
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS);
@@ -4631,20 +4633,93 @@ function unsuppressMainDrawer() {
 function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
 }
-function isPrimaryTabActive(targetTabId) {
+function isHostPrimaryTabActive(targetTabId) {
   const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
   const active = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  if (active) {
-    const id = active.getAttribute("data-tab-id") || "";
-    const title = active.getAttribute("title") || "";
-    if (id === targetTabId || title === targetTabId)
-      return true;
-    if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
-      return true;
-    }
+  if (!active)
+    return false;
+  const id = active.getAttribute("data-tab-id") || "";
+  const title = active.getAttribute("title") || "";
+  if (id === targetTabId || title === targetTabId)
+    return true;
+  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+    return true;
   }
-  const mirrorActive = document.querySelector(`.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[data-tab-id="${CSS.escape(targetTabId)}"],` + `.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active[title="${CSS.escape(targetTabId)}"]`);
-  return !!mirrorActive;
+  return false;
+}
+function resolveMainPanelBody() {
+  if (typeof document === "undefined")
+    return null;
+  const marked = document.querySelector("[data-canvas-main-panel-content]");
+  if (marked)
+    return marked;
+  const shellPanel = document.querySelector('.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content [class*="_panelContent_"],' + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [data-canvas-main-panel-content]," + '.sidebar-ux-main-mirror-wrapper [class*="_panelContent_"]');
+  if (shellPanel)
+    return shellPanel;
+  return document.querySelector('[class*="_panelContent_"]');
+}
+function stopContentSettleWatch() {
+  if (_contentSettleObserver) {
+    _contentSettleObserver.disconnect();
+    _contentSettleObserver = null;
+  }
+  if (_contentQuietTimer != null) {
+    clearTimeout(_contentQuietTimer);
+    _contentQuietTimer = null;
+  }
+  if (_contentFallbackTimer != null) {
+    clearTimeout(_contentFallbackTimer);
+    _contentFallbackTimer = null;
+  }
+}
+function resolveContentSettleRoot() {
+  if (typeof document === "undefined")
+    return null;
+  const shellSlot = document.querySelector(".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content");
+  if (shellSlot)
+    return shellSlot;
+  const panel = resolveMainPanelBody();
+  if (panel?.parentElement instanceof HTMLElement)
+    return panel.parentElement;
+  return panel;
+}
+function startContentSettleWatch(onSettled) {
+  stopContentSettleWatch();
+  let settled = false;
+  const settle = (reason) => {
+    if (settled)
+      return;
+    settled = true;
+    stopContentSettleWatch();
+    onSettled(reason);
+  };
+  const root = resolveContentSettleRoot();
+  if (!root) {
+    _contentFallbackTimer = setTimeout(() => settle("fallback"), RESTORE_CONTENT_FALLBACK_MS);
+    return;
+  }
+  let sawMutation = false;
+  _contentSettleObserver = new MutationObserver(() => {
+    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+      return;
+    sawMutation = true;
+    if (_contentQuietTimer != null)
+      clearTimeout(_contentQuietTimer);
+    if (_contentFallbackTimer != null) {
+      clearTimeout(_contentFallbackTimer);
+      _contentFallbackTimer = null;
+    }
+    _contentQuietTimer = setTimeout(() => settle("mutation-quiet"), RESTORE_CONTENT_QUIET_MS);
+    stampPanelBodyHide();
+    Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+      m.ensureHostContentParkedPublic();
+    }).catch(() => {});
+  });
+  _contentSettleObserver.observe(root, { childList: true, subtree: true });
+  _contentFallbackTimer = setTimeout(() => {
+    if (!sawMutation)
+      settle("fallback");
+  }, RESTORE_CONTENT_FALLBACK_MS);
 }
 function clickRestoredPrimaryTab(targetTabId, preferMirror) {
   if (!targetTabId)
@@ -4699,7 +4774,7 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
       m.ensureHostContentParkedPublic();
     }).catch(() => {});
     if (targetTabId) {
-      if (!isPrimaryTabActive(targetTabId)) {
+      if (!isHostPrimaryTabActive(targetTabId)) {
         clickRestoredPrimaryTab(targetTabId, preferMirror);
       }
     } else if (fallbackClickFirstHostTab) {
@@ -4715,12 +4790,45 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
     }
     let polls = 0;
     let stable = 0;
-    const finish = () => {
+    let contentSettled = false;
+    let watchingContent = false;
+    let finished = false;
+    const finish = (reason) => {
+      if (finished)
+        return;
+      finished = true;
+      stopContentSettleWatch();
       stampPanelBodyHide();
+      dlog(`main-persist restore: unsuppress (${reason})`);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           unsuppressMainDrawer();
         });
+      });
+    };
+    const tryFinish = () => {
+      if (finished)
+        return;
+      if (!targetTabId) {
+        finish("no-target-tab");
+        return;
+      }
+      if (stable >= RESTORE_HOST_STABLE_POLLS && contentSettled) {
+        finish("host-active+content-settled");
+      }
+    };
+    const beginContentWatch = () => {
+      if (watchingContent || finished)
+        return;
+      watchingContent = true;
+      Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+        m.ensureHostContentParkedPublic();
+      }).catch(() => {});
+      stampPanelBodyHide();
+      startContentSettleWatch((settleReason) => {
+        contentSettled = true;
+        dlog(`main-persist restore: content settled (${settleReason})`);
+        tryFinish();
       });
     };
     const poll = () => {
@@ -4728,24 +4836,26 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
         unsuppressMainDrawer();
         return;
       }
+      if (finished)
+        return;
       stampPanelBodyHide();
       if (!targetTabId) {
-        finish();
+        finish("no-target-tab");
         return;
       }
-      if (isPrimaryTabActive(targetTabId)) {
+      if (isHostPrimaryTabActive(targetTabId)) {
         stable++;
         if (stable === 1) {
-          Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
-            m.ensureHostContentParkedPublic();
-          }).catch(() => {});
+          beginContentWatch();
         }
-        if (stable >= RESTORE_ACTIVE_STABLE_POLLS) {
-          finish();
+        tryFinish();
+        if (finished)
           return;
-        }
       } else {
         stable = 0;
+        contentSettled = false;
+        watchingContent = false;
+        stopContentSettleWatch();
         if (polls % 3 === 0) {
           clickRestoredPrimaryTab(targetTabId, preferMirror);
           Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
@@ -4756,7 +4866,7 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
       polls++;
       if (polls >= RESTORE_TAB_POLL_MAX) {
         clickRestoredPrimaryTab(targetTabId, preferMirror);
-        finish();
+        finish(contentSettled ? "poll-max-content-ok" : "poll-max");
         return;
       }
       setTimeout(poll, RESTORE_TAB_POLL_MS);
@@ -4882,7 +4992,7 @@ function startMainDrawerPersistence() {
 function ensureRestoredPrimaryTab(targetTabId) {
   if (!targetTabId || _stopped)
     return;
-  if (isPrimaryTabActive(targetTabId))
+  if (isHostPrimaryTabActive(targetTabId))
     return;
   const keepVisible = !!getSettings().keepTabListVisible;
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
@@ -4983,7 +5093,7 @@ function stopMainDrawerPersistence() {
   _lastSeenOpen = null;
   _lastSeenTabId = null;
 }
-var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HIDE_ATTR = "data-canvas-restore-hide", RESTORE_ACTIVE_STABLE_POLLS = 1, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HIDE_ATTR = "data-canvas-restore-hide", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_persist();
   init_state();
@@ -9199,12 +9309,6 @@ function injectPanelStyles() {
       background: var(--lumiverse-primary);
       color: white;
     }
-    .sidebar-ux-panel-footer {
-      margin-top: 18px;
-      font-size: calc(11px * var(--lumiverse-font-scale, 1));
-      color: var(--lumiverse-text-dim);
-      text-align: center;
-    }
   `);
 }
 function buildSettingsPanelDOM() {
@@ -9252,10 +9356,10 @@ function buildSettingsPanelDOM() {
   const slash = makeToggle(() => getSettings().slashCommandsEnabled, (v3) => setSettings({ slashCommandsEnabled: v3 }));
   sec1.appendChild(buildSettingRow({
     label: "Enable slash commands",
-    hint: "When on, typing / in the chat input opens the slash-command menu. When off, / is treated as plain text and no command parsing runs.",
+    hint: "When on, typing / in the chat input opens the slash-command menu.",
     control: slash.btn
   }));
-  const secSidebars = section("Sidebars");
+  const secSidebars = section("Drawers");
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
   secSidebars.appendChild(buildSettingRow({
     label: "Move tab controls to outer edge",
@@ -9327,14 +9431,10 @@ function buildSettingsPanelDOM() {
     hint: "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.",
     control: debugMode.btn
   }));
-  const footer = document.createElement("div");
-  footer.className = "sidebar-ux-panel-footer";
-  footer.textContent = "Canvas settings persist to layout.json (300ms debounce).";
   root.appendChild(sec1);
   root.appendChild(secSidebars);
   root.appendChild(sec2);
   root.appendChild(sec4);
-  root.appendChild(footer);
   const refresh = () => {
     master.refresh();
     moveControlsToOuter.refresh();

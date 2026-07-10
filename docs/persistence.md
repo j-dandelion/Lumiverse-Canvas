@@ -101,9 +101,11 @@ The main drawer is host-owned — Canvas can't call its API directly. Instead:
 2. **Active tab**: `MutationObserver` on the sidebar for `tabBtnActive` class movement
 3. **Width**: `ResizeObserver` with 300ms debounce
 
-**Suppress/unsuppress pattern**: At the start of `setup()`, `beginMainDrawerRestoreGuard()` adds `html.sidebar-ux-main-restore-pending`. Styles + inline stamps hide host main, main-mirror shell, and every main panel body (**opacity:0** — `visibility:hidden` alone is not enough when content forces `visibility:visible`). Reveal as soon as `primary.tabId` is active (double rAF); no multi-hundred-ms blank settle. Secondary `finishRestore` re-asserts primary via `ensureRestoredPrimaryTab`. 3s safety timeout if restore never completes.
+**Suppress/unsuppress pattern**: At the start of `setup()`, `beginMainDrawerRestoreGuard()` adds `html.sidebar-ux-main-restore-pending`. Styles + inline stamps hide host main, main-mirror shell, and every main panel body (**opacity:0** — `visibility:hidden` alone is not enough when content forces `visibility:visible`).
 
-**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host/mirror tab buttons since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once the correct tab is active.
+**Unsuppress readiness** (main-mirror and host): lift the guard only when the **host** sidebar has `tabBtnActive` for the saved `primary.tabId` **and** the parked panel body has settled (childList mutation quiescence, or a short fallback if the tab was already correct / empty). Canvas mirror chrome (`_activeMainMirrorKey` / `sidebar-ux-tab-active` on mirror buttons) is **not** a restore-ready signal — `activateMainMirrorFromRestore` paints header + highlight before React commits panel children. Secondary `finishRestore` re-asserts primary via `ensureRestoredPrimaryTab` (also host-only). 3s safety timeout if restore never completes.
+
+**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host tab (with Canvas active-key update under keep-tabs) since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once host active + content settle.
 
 ## Layout Restore (`layout/apply.ts`)
 
