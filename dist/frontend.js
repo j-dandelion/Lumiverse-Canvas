@@ -9561,7 +9561,7 @@ function buildSettingsPanelDOM() {
   const persistOpen = makeToggle(() => getSettings().persistDrawerOpenState, (v3) => setSettings({ persistDrawerOpenState: v3 }));
   secLayout.appendChild(buildSettingRow({
     label: "Remember drawer open/close state",
-    hint: "Persist drawer open/closed state (and main active tab) across sessions.",
+    hint: "Persist drawer open/closed state (and active tab) across sessions.",
     control: persistOpen.btn
   }));
   const persistWidth = makeToggle(() => getSettings().persistDrawerWidth, (v3) => setSettings({ persistDrawerWidth: v3 }));

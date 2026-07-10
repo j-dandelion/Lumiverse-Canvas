@@ -236,7 +236,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secLayout.appendChild(buildSettingRow({
     label: 'Remember drawer open/close state',
-    hint: 'Persist drawer open/closed state (and main active tab) across sessions.',
+    hint: 'Persist drawer open/closed state (and active tab) across sessions.',
     control: persistOpen.btn,
   }))
 
