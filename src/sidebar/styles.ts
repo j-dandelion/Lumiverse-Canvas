@@ -290,9 +290,8 @@ export function injectDrawerTabStyles(): void {
     }
   `)
 
-  // Icon-size styles — separate injection so the consistentIconSize toggle
-  // can remove/re-inject without affecting the rest of the drawer tab styles.
-  // Covers secondary (data-tab-id) and main-mirror buttons.
+  // Icon-size styles — always-on with drawer tab styles (id kept for a stable
+  // style element). Covers secondary (data-tab-id) and main-mirror buttons.
   injectStyles('sidebar-ux-icon-size-styles', `
     .sidebar-ux-tab-list button[data-tab-id] > span > svg,
     .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn > span > svg {

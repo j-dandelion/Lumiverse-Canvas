@@ -362,16 +362,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   })
   sec2.appendChild(showLabelsRow)
 
-  const iconSize = makeToggle(
-    () => getSettings().consistentIconSize,
-    (v) => setSettings({ consistentIconSize: v })
-  )
-  sec2.appendChild(buildSettingRow({
-    label: 'Force 20×20 icon size on tab buttons',
-    hint: 'Fixes tabs that ship icons without intrinsic dimensions (some extensions render at 0×0 by default).',
-    control: iconSize.btn,
-  }))
-
   // --- Section: Debug ---
   const sec4 = section('Debug')
 
@@ -400,7 +390,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     keepTabListVisible.refresh()
     resizeSidebars.refresh()
     compact.refresh()
-    iconSize.refresh()
     chat.refresh()
     persistOpen.refresh()
     persistWidth.refresh()

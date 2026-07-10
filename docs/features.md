@@ -30,7 +30,6 @@ interface CanvasFeature {
 | `secondSidebarFeature` | `secondSidebarEnabled` | Master toggle for the secondary drawer |
 | `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers |
 | `drawerSyncFeature` | `mirrorCompactPosition` | Mirrors main drawer's compact mode + vertical position |
-| `consistentIconSizeFeature` | `consistentIconSize` | Forces 20x20 icon size in secondary tab list |
 | `shadowsDesktopFeature` | `drawerShadowsDesktop` | Box-shadow on drawers (>=601px) |
 | `shadowsMobileFeature` | `drawerShadowsMobile` | Box-shadow on drawers (<=600px) |
 | `persistDrawerOpenStateFeature` | `persistDrawerOpenState` | Cancels in-flight save when open facet turns off |
@@ -71,7 +70,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth, persistTabAssignments
 3. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
-4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state), consistentIconSize
+4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state)
 5. **Debug** — debugMode
 
 ### Settings Diff Dispatch (`applySettings`)

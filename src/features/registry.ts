@@ -28,7 +28,7 @@ import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMar
 import { registerCleanup } from '../sidebar/cleanup'
 import { getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
-import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper, injectDrawerTabStyles } from '../sidebar/secondary'
+import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../layout/persist'
@@ -210,22 +210,6 @@ const drawerSyncFeature: CanvasFeature = {
     }
     if (prev.showTabLabels !== next.showTabLabels) {
       syncSecondaryTabLabels()
-    }
-  },
-}
-
-/** Consistent icon size: 20×20 icons in the secondary tab list. */
-const consistentIconSizeFeature: CanvasFeature = {
-  id: 'consistentIconSize',
-  mount() {
-    if (getSettings().consistentIconSize) injectDrawerTabStyles()
-  },
-  apply(prev, next) {
-    if (prev.consistentIconSize === next.consistentIconSize) return
-    if (!next.consistentIconSize) {
-      document.getElementById('sidebar-ux-icon-size-styles')?.remove()
-    } else {
-      injectDrawerTabStyles()
     }
   },
 }
@@ -430,7 +414,6 @@ export const FEATURES: readonly CanvasFeature[] = [
   secondSidebarFeature,
   resizeSidebarsFeature,
   drawerSyncFeature,
-  consistentIconSizeFeature,
   shadowsDesktopFeature,
   shadowsMobileFeature,
   persistDrawerOpenStateFeature,

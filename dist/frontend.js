@@ -46,7 +46,6 @@ var init_types = __esm(() => {
     resizeSidebars: true,
     mirrorCompactPosition: true,
     showTabLabels: "follow",
-    consistentIconSize: true,
     moveControlsToOuterEdge: false,
     keepTabListVisible: false,
     drawerShadowsDesktop: true,
@@ -9097,7 +9096,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, consistentIconSizeFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, persistTabAssignmentsFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, persistTabAssignmentsFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_log();
@@ -9218,22 +9217,6 @@ var init_registry = __esm(() => {
       }
     }
   };
-  consistentIconSizeFeature = {
-    id: "consistentIconSize",
-    mount() {
-      if (getSettings().consistentIconSize)
-        injectDrawerTabStyles();
-    },
-    apply(prev, next) {
-      if (prev.consistentIconSize === next.consistentIconSize)
-        return;
-      if (!next.consistentIconSize) {
-        document.getElementById("sidebar-ux-icon-size-styles")?.remove();
-      } else {
-        injectDrawerTabStyles();
-      }
-    }
-  };
   shadowsDesktopFeature = {
     id: "drawerShadowsDesktop",
     init() {
@@ -9325,7 +9308,6 @@ var init_registry = __esm(() => {
     secondSidebarFeature,
     resizeSidebarsFeature,
     drawerSyncFeature,
-    consistentIconSizeFeature,
     shadowsDesktopFeature,
     shadowsMobileFeature,
     persistDrawerOpenStateFeature,
@@ -9635,12 +9617,6 @@ function buildSettingsPanelDOM() {
     disabled: !getSettings().secondSidebarEnabled
   });
   sec2.appendChild(showLabelsRow);
-  const iconSize = makeToggle(() => getSettings().consistentIconSize, (v3) => setSettings({ consistentIconSize: v3 }));
-  sec2.appendChild(buildSettingRow({
-    label: "Force 20×20 icon size on tab buttons",
-    hint: "Fixes tabs that ship icons without intrinsic dimensions (some extensions render at 0×0 by default).",
-    control: iconSize.btn
-  }));
   const sec4 = section("Debug");
   const debugMode = makeToggle(() => getSettings().debugMode, (v3) => setSettings({ debugMode: v3 }));
   sec4.appendChild(buildSettingRow({
@@ -9659,7 +9635,6 @@ function buildSettingsPanelDOM() {
     keepTabListVisible.refresh();
     resizeSidebars.refresh();
     compact.refresh();
-    iconSize.refresh();
     chat.refresh();
     persistOpen.refresh();
     persistWidth.refresh();

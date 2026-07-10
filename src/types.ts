@@ -45,9 +45,6 @@ export interface CanvasSettings {
    *  (read from the store); 'show' = always visible; 'hide' = never visible. */
   showTabLabels?: 'follow' | 'show' | 'hide'
 
-  /** Force 20×20 icon size in the secondary tab list. */
-  consistentIconSize?: boolean
-
   // --- Drawers ---
   /** Move the tab-button column to the screen-edge side of the secondary
    *  sidebar (desktop/tablet only). The border stays between the tab list
@@ -125,7 +122,6 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   resizeSidebars: true,
   mirrorCompactPosition: true,
   showTabLabels: 'follow',
-  consistentIconSize: true,
   // Drawers
   moveControlsToOuterEdge: false,
   keepTabListVisible: false,

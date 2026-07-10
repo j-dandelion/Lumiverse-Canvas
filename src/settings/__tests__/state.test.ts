@@ -18,7 +18,6 @@ assert(typeof settings.secondSidebarEnabled === 'boolean', 'secondSidebarEnabled
 assert(typeof settings.resizeSidebars === 'boolean', 'resizeSidebars is boolean')
 assert(typeof settings.mirrorCompactPosition === 'boolean', 'mirrorCompactPosition is boolean')
 assert(typeof settings.showTabLabels === 'string', 'showTabLabels is string')
-assert(typeof settings.consistentIconSize === 'boolean', 'consistentIconSize is boolean')
 assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
 assert(typeof settings.persistDrawerOpenState === 'boolean', 'persistDrawerOpenState is boolean')
 assert(typeof settings.persistDrawerWidth === 'boolean', 'persistDrawerWidth is boolean')
