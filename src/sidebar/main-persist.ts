@@ -76,8 +76,6 @@ const RESTORE_TAB_CLICK_MS = 0
 // until primary open/tab restore finishes (prevents profile flash).
 const RESTORE_PENDING_CLASS = 'sidebar-ux-main-restore-pending'
 const RESTORE_GUARD_STYLE_ID = 'sidebar-ux-main-restore-guard'
-/** Inline stamp on every panel body we force-hide during restore. */
-const RESTORE_HIDE_ATTR = 'data-canvas-restore-hide'
 // Host tabBtnActive must hold for this many consecutive polls before we
 // consider chrome "host-ready". Mirror-only active must NOT count (Canvas
 // paints mirror highlight before React commits panel children).
@@ -139,8 +137,9 @@ function ensureRestoreGuardStyles(): void {
   // Hide chrome + every possible main panel body node. Host React can
   // remount `[class*="_panelContent_"]` outside the shell (or with
   // visibility:visible !important) during tab switches — class rules on
-  // the shell alone are not enough. Inline stamps (stampPanelBodyHide)
-  // back the same nodes.
+  // the shell alone are not enough. stampPanelBodyHide + _panelHideObserver
+  // re-stamp panel bodies that escape the cascade (no separate wrapper
+  // inline hide or data-canvas-restore-hide marker).
   el.textContent = `
     html.${RESTORE_PENDING_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]),
     html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper {
@@ -181,23 +180,25 @@ function isPanelBodyNode(el: Element): boolean {
   return false
 }
 
+/** Selector for panel bodies that stampPanelBodyHide may style. */
+const PANEL_BODY_HIDE_SELECTOR =
+  '[class*="_panelContent_"],'
+  + '[data-canvas-main-panel-content],'
+  + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,'
+  + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *'
+
 /**
  * Force-hide every live main panel body with inline !important styles.
  * Survives reparenting and CSS fights better than ancestor-only rules.
  * Safe to call repeatedly; also used from main-mirror after park.
+ * Clear uses the same selector (no separate data-attr marker).
  */
 export function stampPanelBodyHide(): void {
   if (typeof document === 'undefined') return
   if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
-  const nodes = document.querySelectorAll(
-    '[class*="_panelContent_"],'
-    + '[data-canvas-main-panel-content],'
-    + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,'
-    + '.sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *',
-  )
+  const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR)
   for (const node of Array.from(nodes)) {
     const el = node as HTMLElement
-    el.setAttribute(RESTORE_HIDE_ATTR, '1')
     el.style.setProperty('visibility', 'hidden', 'important')
     el.style.setProperty('opacity', '0', 'important')
     el.style.setProperty('pointer-events', 'none', 'important')
@@ -206,10 +207,9 @@ export function stampPanelBodyHide(): void {
 
 function clearPanelBodyHide(): void {
   if (typeof document === 'undefined') return
-  const nodes = document.querySelectorAll(`[${RESTORE_HIDE_ATTR}]`)
+  const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR)
   for (const node of Array.from(nodes)) {
     const el = node as HTMLElement
-    el.removeAttribute(RESTORE_HIDE_ATTR)
     el.style.removeProperty('visibility')
     el.style.removeProperty('opacity')
     el.style.removeProperty('pointer-events')
@@ -282,26 +282,22 @@ export function beginMainDrawerRestoreGuard(): void {
 }
 
 /**
- * Immediately hide the main-drawer wrapper (and main-mirror shell via
+ * Immediately hide the main drawer (and main-mirror shell via
  * RESTORE_PENDING_CLASS) to prevent a flash of the default (open /
  * profile) state while layout restore runs.
  * Shown again by unsuppressMainDrawer() after restore completes (or
  * after a timeout safety net).
+ *
+ * Hide stack is intentionally thin: html class CSS + stampPanelBodyHide
+ * on panel bodies + _panelHideObserver. No per-wrapper inline hide.
  */
 export function suppressMainDrawer(): void {
   beginMainDrawerRestoreGuard()
-  const wrapper = _wrapper
-  if (!wrapper) return
-  // Inline backup for environments where the html-class stylesheet is slow
-  // or stripped; class-based rule also covers main-mirror.
-  wrapper.style.setProperty('visibility', 'hidden', 'important')
-  wrapper.style.setProperty('opacity', '0', 'important')
   stampPanelBodyHide()
 }
 
 /**
- * Restore visibility on the main-drawer wrapper + main-mirror shell
- * after restore is done. Safe to call multiple times; idempotent.
+ * Restore visibility after restore is done. Safe to call multiple times; idempotent.
  */
 export function unsuppressMainDrawer(): void {
   if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
@@ -309,11 +305,6 @@ export function unsuppressMainDrawer(): void {
   stopPanelHideObserver()
   clearPanelBodyHide()
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS)
-  const wrapper = _wrapper
-  if (wrapper) {
-    wrapper.style.removeProperty('visibility')
-    wrapper.style.removeProperty('opacity')
-  }
 }
 
 /** True while restore-pending guard is active (main-mirror park consults this). */
@@ -342,7 +333,8 @@ export function isHostPrimaryTabActive(targetTabId: string): boolean {
   const id = active.getAttribute('data-tab-id') || ''
   const title = active.getAttribute('title') || ''
   if (id === targetTabId || title === targetTabId) return true
-  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+  // `:tab:${id}:` is covered by the broader `:tab:${id}` includes check.
+  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}`))) {
     return true
   }
   return false
@@ -520,6 +512,13 @@ const RESTORE_TAB_POLL_MS = 16
  * (mutation quiet or short fallback). Mirror chrome alone must not
  * unsuppress — activateMainMirrorFromRestore paints highlight before
  * React commits children.
+ *
+ * Optimizations (Issue 13):
+ * - Mirror module import hoisted once per run(), not per polls%3 tick.
+ * - In mirror mode, per-tick stampPanelBodyHide is skipped (CSS guard
+ *   class already covers the wrapper + panel bodies; stamp once on
+ *   enter and at settle).
+ * - Phase split: host wrong → cheap re-click; host correct → settle.
  */
 function scheduleRestoreTabThenUnsuppress(
   targetTabId: string | null,
@@ -531,12 +530,33 @@ function scheduleRestoreTabThenUnsuppress(
       unsuppressMainDrawer()
       return
     }
-    stampPanelBodyHide()
-    // Force repark while still hidden — tab click may recreate panelContent
-    // under the host; repark watch is slower once restore-pending lifts.
+
+    // Hoist the mirror module import once — avoids per-tick dynamic import.
+    let mirrorMod: typeof import('./main-mirror-drawer') | null = null
+    let mirrorLoaded = false
     void import('./main-mirror-drawer').then((m) => {
+      mirrorMod = m
+      mirrorLoaded = true
+      // Force repark while still hidden — tab click may recreate panelContent
+      // under the host; repark watch is slower once restore-pending lifts.
       m.ensureHostContentParkedPublic()
     }).catch(() => { /* mirror not loaded */ })
+
+    const reparkIfNeeded = () => {
+      if (mirrorLoaded && mirrorMod) {
+        mirrorMod.ensureHostContentParkedPublic()
+      }
+    }
+
+    // Detect mirror mode: the restore-pending CSS guard covers the wrapper
+    // via class rules, so per-tick inline stamp is redundant in mirror mode.
+    const isMirrorMode = preferMirror
+      || document.documentElement.classList.contains('sidebar-ux-canvas-main-active')
+
+    // Stamp once at entry (host mode needs it; mirror mode is covered by CSS).
+    if (!isMirrorMode) {
+      stampPanelBodyHide()
+    }
 
     if (targetTabId) {
       // Always drive restore click when host is not on target. Mirror-only
@@ -566,7 +586,10 @@ function scheduleRestoreTabThenUnsuppress(
       if (finished) return
       finished = true
       stopContentSettleWatch()
-      stampPanelBodyHide()
+      // Final stamp before reveal (host mode).
+      if (!isMirrorMode) {
+        stampPanelBodyHide()
+      }
       dlog(`main-persist restore: unsuppress (${reason})`)
       // Two paints under the guard after content is ready.
       requestAnimationFrame(() => {
@@ -588,10 +611,11 @@ function scheduleRestoreTabThenUnsuppress(
     const beginContentWatch = () => {
       if (watchingContent || finished) return
       watchingContent = true
-      void import('./main-mirror-drawer').then((m) => {
-        m.ensureHostContentParkedPublic()
-      }).catch(() => { /* ignore */ })
-      stampPanelBodyHide()
+      reparkIfNeeded()
+      // Stamp once when entering settle phase (host mode).
+      if (!isMirrorMode) {
+        stampPanelBodyHide()
+      }
       startContentSettleWatch((settleReason) => {
         contentSettled = true
         dlog(`main-persist restore: content settled (${settleReason})`)
@@ -604,12 +628,12 @@ function scheduleRestoreTabThenUnsuppress(
         return
       }
       if (finished) return
-      stampPanelBodyHide()
       if (!targetTabId) {
         finish('no-target-tab')
         return
       }
       if (isHostPrimaryTabActive(targetTabId)) {
+        // Phase: host correct → settle content.
         stable++
         if (stable === 1) {
           beginContentWatch()
@@ -617,6 +641,7 @@ function scheduleRestoreTabThenUnsuppress(
         tryFinish()
         if (finished) return
       } else {
+        // Phase: host wrong → cheap re-click (no stamp needed in mirror mode).
         stable = 0
         contentSettled = false
         watchingContent = false
@@ -624,9 +649,7 @@ function scheduleRestoreTabThenUnsuppress(
         // Re-click while wrong — host pendingActiveTabReset → profile.
         if (polls % 3 === 0) {
           clickRestoredPrimaryTab(targetTabId, preferMirror)
-          void import('./main-mirror-drawer').then((m) => {
-            m.ensureHostContentParkedPublic()
-          }).catch(() => { /* ignore */ })
+          reparkIfNeeded()
         }
       }
       polls++

@@ -18,10 +18,14 @@
 // exports. Those functions move to settings/panel (Task #2) and
 // layout/persist (Task #4) respectively.
 
-import { mergeCanvasSettings, type CanvasSettings } from '../types'
+import {
+  mergeCanvasSettings,
+  normalizeCanvasSettingsFields,
+  type CanvasSettings,
+} from '../types'
 import { setDebug, dlog } from '../debug/log'
 import { applySettings } from './panel'
-import { getBackendCtx, buildPersistedLayout, isLoadInProgress } from '../layout/persist'
+import { getBackendCtx, buildPersistedLayout, isLoadInProgress, isLayoutRestoreActive } from '../layout/persist'
 
 type FullCanvasSettings = Required<CanvasSettings>
 export type { FullCanvasSettings }
@@ -62,12 +66,10 @@ export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh =
 /**
  * keepTabListVisible only makes sense with tab lists on the screen edge.
  * Clear it whenever moveControlsToOuterEdge is off (UI gate + load safety).
+ * Implementation lives in types (mergeCanvasSettings applies the same rule).
  */
 export function normalizeCanvasSettings(s: FullCanvasSettings): FullCanvasSettings {
-  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false }
-  }
-  return s
+  return normalizeCanvasSettingsFields(s)
 }
 
 /** Effective keep-tabs flag after the outer-edge dependency. */
@@ -124,6 +126,9 @@ export function persistSettings(): void {
   const backendCtx = getBackendCtx()
   if (!backendCtx) { dlog('persistSettings: no backendCtx, skipping'); return }
   if (isLoadInProgress()) { dlog('persistSettings: load in progress, skipping'); return }
+  // Symmetrical with persistLayout / persistOpenState — avoid mid-restore SAVE thrash
+  // (e.g. unrelated setSettings during Load previous await applyLayout).
+  if (isLayoutRestoreActive()) { dlog('persistSettings: layout restore active, skipping'); return }
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }

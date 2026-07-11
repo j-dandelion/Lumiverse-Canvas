@@ -38,6 +38,11 @@ import {
   CANVAS_MAIN_ACTIVE_CLASS,
   CANVAS_MAIN_OPEN_CLASS,
 } from './styles'
+import { persistOpenState } from '../layout/persist'
+import { updateChatReflow } from '../chat/reflow'
+import { mountResizeHandles } from '../resize/handles'
+import { syncDrawerTabSettings } from './drawer-sync'
+import { resetPanelHeaderSyncCache, syncPanelHeaderFromMain } from './panel-header-sync'
 
 export { MAIN_MIRROR_WIDTH_VAR }
 
@@ -57,6 +62,10 @@ let _contentRestoreNext: ChildNode | null = null
 let _mountedSide: 'left' | 'right' | null = null
 /** Soft re-park if React pulls content back into the host tree. */
 let _reparkTimer: ReturnType<typeof setTimeout> | null = null
+/** Consecutive ticks where content was already parked — idle-stop threshold. */
+let _reparkIdleCount = 0
+/** After this many consecutive idle ticks, stop repark watch. */
+const REPARK_IDLE_STOP_COUNT = 10
 
 export function getMainMirrorWidthVar(): string {
   return MAIN_MIRROR_WIDTH_VAR
@@ -157,17 +166,17 @@ export function reconcileMainMirrorDrawer(opts?: { initialOpen?: boolean }): voi
 }
 
 function bumpReflow(): void {
-  void import('../chat/reflow').then((m) => m.updateChatReflow())
+  updateChatReflow()
 }
 
 function bumpResizeHandles(): void {
-  void import('../resize/handles').then((m) => m.mountResizeHandles())
+  mountResizeHandles()
 }
 
 function persistCanvasMainOpenState(): void {
   // Same write path as secondary open/close — snapshot reads open class +
   // MAIN_MIRROR_WIDTH_VAR while canvas-main mode is active.
-  void import('../layout/persist').then((m) => m.persistOpenState())
+  persistOpenState()
 }
 
 /**
@@ -197,7 +206,7 @@ export function openCanvasMainDrawer(): void {
   _shell.drawerTab.classList.add('sidebar-ux-drawer-tab--active')
   // Content is a child of the shell — one animateWrapper moves chrome + content.
   animateWrapper(_shell.wrapper, 0)
-  void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
+  void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => { dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`) })
   bumpReflow()
   persistCanvasMainOpenState()
 }
@@ -243,6 +252,11 @@ export function onMainMirrorTabActivated(title?: string): void {
 
 export function __resetMainMirrorForTest(): void {
   teardownMainMirror()
+}
+
+/** Test accessor: current repark idle count. */
+export function __getReparkIdleCountForTest(): number {
+  return _reparkIdleCount
 }
 
 function injectHostHideStyles(): void {
@@ -376,12 +390,10 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     openCanvasMainDrawer()
   }
 
-  void import('./drawer-sync').then((m) => m.syncDrawerTabSettings())
+  syncDrawerTabSettings()
   // Stamp host panel-header metrics onto this shell (secondary + main-mirror).
-  void import('./panel-header-sync').then((m) => {
-    m.resetPanelHeaderSyncCache()
-    m.syncPanelHeaderFromMain(() => _shell?.wrapper ?? null)
-  })
+  resetPanelHeaderSyncCache()
+  syncPanelHeaderFromMain(() => _shell?.wrapper ?? null)
   bumpResizeHandles()
   bumpReflow()
 }
@@ -498,7 +510,7 @@ function ensureHostContentParked(): void {
   if (restorePending) {
     void import('./main-persist').then((m) => {
       m.stampPanelBodyHide()
-    }).catch(() => { /* ignore */ })
+    }).catch((err) => { dwarn(`[main-mirror] stampPanelBodyHide failed: ${err}`) })
   }
 }
 
@@ -540,10 +552,13 @@ function restoreHostContent(): void {
 
 function startReparkWatch(): void {
   stopReparkWatch()
+  _reparkIdleCount = 0
   // Lightweight poll — no MutationObserver (that fought React). If host
   // React re-inserts panelContent under the hidden wrapper, put it back.
   // Faster interval while restore-pending so tab-switch remounts don't
   // paint profile under the host for a frame.
+  // Stops after REPARK_IDLE_STOP_COUNT consecutive ticks where content
+  // was already correctly parked (no React re-insertion).
   const tickMs = () =>
     (typeof document !== 'undefined'
       && document.documentElement.classList.contains('sidebar-ux-main-restore-pending'))
@@ -556,10 +571,22 @@ function startReparkWatch(): void {
     if (el && el.parentElement !== _shell.content) {
       dlog('[main-mirror] re-park: React moved panelContent back to host')
       ensureHostContentParked()
+      _reparkIdleCount = 0
+    } else {
+      _reparkIdleCount++
+      if (_reparkIdleCount >= REPARK_IDLE_STOP_COUNT) {
+        dlog('[main-mirror] repark watch idle-stopped')
+        return
+      }
     }
     _reparkTimer = setTimeout(tick, tickMs())
   }
   _reparkTimer = setTimeout(tick, tickMs())
+}
+
+/** Re-arm repark watch (e.g. after restore-pending begins or tab click). */
+export function restartReparkWatch(): void {
+  if (_active && _shell) startReparkWatch()
 }
 
 function stopReparkWatch(): void {
@@ -567,6 +594,7 @@ function stopReparkWatch(): void {
     clearTimeout(_reparkTimer)
     _reparkTimer = null
   }
+  _reparkIdleCount = 0
 }
 
 function clearHostWrapperInline(): void {

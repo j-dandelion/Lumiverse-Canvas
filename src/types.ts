@@ -143,10 +143,27 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
 }
 
 /**
+ * keepTabListVisible only makes sense with tab lists on the screen edge.
+ * Clear it whenever moveControlsToOuterEdge is off (load safety + merge path).
+ * Idempotent — safe to call after already-normalized settings.
+ */
+export function normalizeCanvasSettingsFields(
+  s: Required<CanvasSettings>,
+): Required<CanvasSettings> {
+  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
+    return { ...s, keepTabListVisible: false }
+  }
+  return s
+}
+
+/**
  * Merge a (possibly partial) saved settings blob with the defaults. Every
  * missing field gets the default. Callers should always use this instead of
  * reading `layout.settings` directly, so new fields added in future versions
  * gracefully appear at their default value.
+ *
+ * Always returns a normalized full settings object (keep-tabs outer-edge
+ * invariant enforced here so future callers cannot skip it).
  */
 export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): Required<CanvasSettings> {
   const out = { ...DEFAULT_CANVAS_SETTINGS }
@@ -176,5 +193,5 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
       out.persistTabAssignments = raw.layoutPersistence
     }
   }
-  return out
+  return normalizeCanvasSettingsFields(out)
 }

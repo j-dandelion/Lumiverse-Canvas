@@ -9,7 +9,9 @@ const ok = (c: unknown, m: string) =>
 const helperSrc = readFileSync(join(process.cwd(), 'src/tabs/builtin-move.ts'), 'utf8')
 const secDrawerSrc = readFileSync(join(process.cwd(), 'src/sidebar/secondary-drawer.ts'), 'utf8')
 
-const builtinIdx = secDrawerSrc.indexOf('=== BUILT-IN TAB PATH ===')
+// After finalizeAssignToSecondary refactor, built-in placement lives in
+// assignBuiltInTabToSecondary (was an inline `=== BUILT-IN TAB PATH ===` block).
+const builtinIdx = secDrawerSrc.indexOf('async function assignBuiltInTabToSecondary')
 ok(builtinIdx !== -1, 'T-WARM-WIRE-0: built-in branch marker present')
 if (builtinIdx !== -1) {
   const after = secDrawerSrc.slice(builtinIdx, builtinIdx + 10000)
@@ -23,7 +25,7 @@ if (builtinIdx !== -1) {
     'T-WARM-WIRE-0: no textContent title scrape for built-in roots',
   )
   ok(
-    after.includes('STORE_ROOT') || after.includes('_storeTab?.root'),
+    after.includes('STORE_ROOT') || after.includes('storeTab?.root'),
     'T-WARM-WIRE-0: store-root fallback retained for dock-panel / LumiScript',
   )
 }

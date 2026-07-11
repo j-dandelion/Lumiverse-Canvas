@@ -33,6 +33,8 @@ import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import {
   getSettings, cancelSettingsSave, getLastLoadedLayout, setLastLoadedLayout,
 } from '../settings/state'
+import { dwarn } from '../debug/log'
+import { parseLayoutBlob } from './parse-layout'
 
 export { applyLayout, isLayoutRestoreActive } from './apply'
 import { isLayoutRestoreActive } from './apply'
@@ -167,15 +169,35 @@ function readPrimaryOpen(): boolean {
   return _mainDrawerOpen
 }
 
+/** Last positive primary width — closed host drawers measure 0, not "failed". */
+let _lastKnownPrimaryWidth: number | null = null
+
 function readPrimaryWidth(): number {
   if (isCanvasMainModeDom()) {
     const fromVar = parseFloat(
       document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR),
     )
-    if (isFinite(fromVar) && fromVar > 0) return fromVar
+    if (isFinite(fromVar) && fromVar > 0) {
+      _lastKnownPrimaryWidth = fromVar
+      return fromVar
+    }
+    // Mirror closed / var unset: prefer last-known over default 420.
+    if (_lastKnownPrimaryWidth != null && _lastKnownPrimaryWidth > 0) {
+      return _lastKnownPrimaryWidth
+    }
+    return 420
   }
   const hostW = getMainDrawerWidth()
-  return hostW > 0 ? hostW : 420
+  if (hostW > 0) {
+    _lastKnownPrimaryWidth = hostW
+    return hostW
+  }
+  // Host drawer closed legitimately measures 0 — do not snapshot 420 over a
+  // previously measured user width (facet-freeze path would lock the wrong value).
+  if (_lastKnownPrimaryWidth != null && _lastKnownPrimaryWidth > 0) {
+    return _lastKnownPrimaryWidth
+  }
+  return 420
 }
 
 /**
@@ -377,21 +399,46 @@ export function applyMainDrawer(layout: any): void {
   const restoreOpen = isOpenStatePersistenceEnabled()
   const restoreWidth = isWidthPersistenceEnabled()
 
+  // Validation boundary — malformed blobs must not throw mid-restore.
+  if (layout != null) {
+    const parsed = parseLayoutBlob(layout)
+    if (!parsed) {
+      dwarn('applyMainDrawer: layout blob failed validation; unsuppress only')
+      import('../sidebar/main-persist')
+        .then(({ unsuppressMainDrawer }) => {
+          unsuppressMainDrawer()
+        })
+        .catch((err) => {
+          dwarn('applyMainDrawer: unsuppressMainDrawer failed:', err)
+        })
+      return
+    }
+    layout = parsed
+  }
+
   if (!restoreOpen && !restoreWidth) {
     // No main-drawer facets on — do not restore open/tab/width; still lift
     // the restore-pending guard so host/mirror is not left hidden.
-    import('../sidebar/main-persist').then(({ unsuppressMainDrawer }) => {
-      unsuppressMainDrawer()
-    })
+    import('../sidebar/main-persist')
+      .then(({ unsuppressMainDrawer }) => {
+        unsuppressMainDrawer()
+      })
+      .catch((err) => {
+        dwarn('applyMainDrawer: unsuppressMainDrawer failed:', err)
+      })
     return
   }
 
   if (!layout || !layout.primary) {
     // No primary state to restore — lift the restore-pending guard so
     // the host/mirror drawer is not left hidden until the 3s timeout.
-    import('../sidebar/main-persist').then(({ unsuppressMainDrawer }) => {
-      unsuppressMainDrawer()
-    })
+    import('../sidebar/main-persist')
+      .then(({ unsuppressMainDrawer }) => {
+        unsuppressMainDrawer()
+      })
+      .catch((err) => {
+        dwarn('applyMainDrawer: unsuppressMainDrawer failed:', err)
+      })
     return
   }
 
@@ -399,14 +446,26 @@ export function applyMainDrawer(layout: any): void {
   // We import lazily to avoid circular deps (main-persist imports
   // persist, and this function is only ever called from setup.ts's
   // loadSavedLayout callback — long after module init).
-  import('../sidebar/main-persist').then(({ restoreMainDrawerFromDom }) => {
-    restoreMainDrawerFromDom(
-      layout.primary.open === true,
-      typeof layout.primary.tabId === 'string' ? layout.primary.tabId : null,
-      restoreWidth && typeof layout.primary.width === 'number' ? layout.primary.width : undefined,
-      { restoreOpen, restoreWidth },
-    )
-  })
+  import('../sidebar/main-persist')
+    .then(({ restoreMainDrawerFromDom }) => {
+      restoreMainDrawerFromDom(
+        layout.primary.open === true,
+        typeof layout.primary.tabId === 'string' ? layout.primary.tabId : null,
+        restoreWidth && typeof layout.primary.width === 'number' ? layout.primary.width : undefined,
+        { restoreOpen, restoreWidth },
+      )
+    })
+    .catch((err) => {
+      dwarn('applyMainDrawer: restoreMainDrawerFromDom failed:', err)
+      // Best-effort: lift guard so drawer is not stuck until 3s safety net only.
+      import('../sidebar/main-persist')
+        .then(({ unsuppressMainDrawer }) => {
+          unsuppressMainDrawer()
+        })
+        .catch((e2) => {
+          dwarn('applyMainDrawer: unsuppress after restore failure also failed:', e2)
+        })
+    })
 }
 
 

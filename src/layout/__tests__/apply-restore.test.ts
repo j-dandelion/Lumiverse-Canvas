@@ -871,6 +871,60 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 }
 
 // =====================================================================
+// T19: Cancel race — second applyLayout mid-restore must not let the
+// prior kickAssign.finally clobber the new restore's suppress flags.
+// Issue 1: generation token short-circuits finishRestore from the old call.
+// =====================================================================
+{
+  setupEnv([
+    { id: 'tab:a:1', title: 'Tab A' },
+    { id: 'tab:b:1', title: 'Tab B' },
+  ])
+  setRestoreTimeoutMs(5000)
+
+  const layout1 = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:a:1' },
+    detachedTabs: [{ tabId: 'tab:a:1' }],
+  }
+  const layout2 = {
+    secondary: { open: true, width: 300, activeTabId: 'tab:b:1' },
+    detachedTabs: [{ tabId: 'tab:b:1' }],
+  }
+
+  // Start first restore; kickAssign may be in flight (async assignToSecondary).
+  const p1 = applyLayout(layout1)
+  // Immediate second applyLayout — cancels first (bumps generation) before
+  // p1's assign.finally can finishRestore into the new call's flags.
+  const p2 = applyLayout(layout2)
+
+  await tick()
+  // Mid-flight: either p2 still restoring, or already finished — suppress
+  // must not be stuck false while restore is active.
+  const midRestoring = isRestoringFromLayout()
+  const midSuppress = isSuppressAutoActivation()
+  if (midRestoring) {
+    assert(midSuppress, 'T19: suppress stays armed while second restore is active')
+  }
+
+  // Drain async assigns + observer.
+  await tick()
+  await tick()
+  if (isRestoringFromLayout() && _capturedObservers.length > 0) {
+    _capturedObservers[0].cb()
+  }
+  await new Promise(resolve => setTimeout(resolve, 120))
+  await Promise.all([p1, p2])
+
+  assert(!isRestoringFromLayout(), 'T19: guards clear after both promises settle')
+  assert(!isSuppressAutoActivation(), 'T19: suppress clear after both promises settle')
+  // Second layout wins for tab set (replace unassigns extras).
+  assert(hasTabAssignment('tab:b:1'), 'T19: second layout tab assigned')
+  assert(!hasTabAssignment('tab:a:1'), 'T19: first layout tab not left secondary')
+
+  cleanup()
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

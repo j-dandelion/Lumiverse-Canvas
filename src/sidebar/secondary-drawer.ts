@@ -29,7 +29,7 @@ import { dlog, dwarn } from '../debug/log'
 import { getHostBridge } from '../dom/host-bridge'
 import { isMobileViewport } from './mobile-exclusion'
 
-export type SecondaryDrawerState = 'closed' | 'mounting' | 'open' | 'tab_active'
+export type SecondaryDrawerState = 'closed' | 'open' | 'tab_active'
 
 let _state: SecondaryDrawerState = 'closed'
 let _activeTabId: string | null = null
@@ -127,17 +127,355 @@ export function initSecondaryDrawer(_ctx: SpindleFrontendContext): void {
 }
 
 /**
+ * Shared post-placement finalize for assignToSecondary branches.
+ * Consolidates setTabAssignment → hideMainTabButton → addSecondaryTabButton →
+ * updateDrawerTabVisibility → (optional open) → header → showSecondaryTab →
+ * persistLayout that used to be copy-pasted across extension/built-in paths.
+ *
+ * Extension path wires assignment *before* open (and may open first), then
+ * calls this with `wireAssignment: false` and `openOnClosed: false`.
+ * Built-in path places root first, then calls this with defaults.
+ */
+async function finalizeAssignToSecondary(opts: {
+  resolvedId: string
+  title: string
+  root: HTMLElement
+  iconSvg?: string
+  shortName?: string
+  deferActivation: boolean
+  /** When true (default), setTabAssignment + hideMainTabButton. */
+  wireAssignment?: boolean
+  /**
+   * When true (default), open secondary if closed (subject to mobile/restore).
+   * Extension path opens earlier and passes false.
+   */
+  openOnClosed?: boolean
+  /**
+   * When true (default for extension semantics), set drawer active state when
+   * !mobile && !defer even if already open. Built-in only sets active on open
+   * (pass false); showSecondaryTab still runs via showActive.
+   */
+  setActiveWhenReady?: boolean
+  /**
+   * When true (default), paint showSecondaryTab + persistLayout.
+   * Built-in early-return uses true; leave true for all current callers.
+   */
+  showAndPersist?: boolean
+}): Promise<void> {
+  const {
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment = true,
+    openOnClosed = true,
+    setActiveWhenReady = true,
+    showAndPersist = true,
+  } = opts
+
+  addSecondaryTabButton({
+    id: resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+  })
+  updateDrawerTabVisibility()
+
+  if (wireAssignment) {
+    setTabAssignment(resolvedId, 'secondary')
+    hideMainTabButton(resolvedId)
+  }
+
+  if (
+    openOnClosed
+    && _state === 'closed'
+    && !isSecondarySidebarOpen()
+    && !isMobileViewport()
+    && !isRestoringFromLayout()
+  ) {
+    await openSecondarySidebar()
+    // Built-in: only promote to tab_active when not deferring.
+    // Extension open path sets `_state = 'open'` earlier (openOnClosed false).
+    if (!deferActivation) {
+      _state = 'tab_active'
+      _activeTabId = resolvedId
+      setActiveSecondaryTabId(resolvedId)
+    }
+  } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
+    _activeTabId = resolvedId
+    _state = 'tab_active'
+    setActiveSecondaryTabId(resolvedId)
+  }
+
+  const headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
+  if (headerTitle && !deferActivation) {
+    headerTitle.textContent = title
+  }
+
+  if (showAndPersist) {
+    // showSecondaryTab applies sidebar-ux-tab-active; suppressed during restore
+    // so finishRestore remains authoritative for the active tab.
+    if (!isMobileViewport() && !deferActivation) {
+      showSecondaryTabDisplay(resolvedId)
+    }
+    persistLayout()
+  }
+}
+
+type AssignCtx = {
+  tabId: string
+  tab: ObservedTab
+  resolvedId: string
+  iconSvg?: string
+  shortName?: string
+  deferActivation: boolean
+}
+
+/**
+ * Extension tabs: reparent store root via appendChild (preserves instance state).
+ * Assignment is wired before open so a failed reparent still records secondary.
+ */
+async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
+  const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx
+
+  setTabAssignment(resolvedId, 'secondary')
+  hideMainTabButton(resolvedId)
+  // On mobile, do not auto-open during assign (would enforceExclusionOnOpen).
+  // During layout restore, skip auto-open so finishRestore decides open state.
+  if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+    await openSecondarySidebar()
+    _state = 'open'
+  }
+
+  // Scope to secondary wrapper — shared class also exists on main-mirror.
+  const secondaryContent =
+    getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') ?? null
+  const bareId = resolvedId.includes(':')
+    ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
+    : resolvedId
+  const existingRoot = (secondaryContent?.querySelector(
+    `[data-canvas-moved="${CSS.escape(resolvedId)}"]`,
+  ) ?? secondaryContent?.querySelector(
+    `[data-canvas-moved="${CSS.escape(bareId)}"]`,
+  )) as HTMLElement | null
+
+  if (existingRoot) {
+    const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: tab.title || storeTabForButton?.title || resolvedId,
+      root: existingRoot,
+      iconSvg: iconSvg
+        || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
+        || storeTabForButton?.iconSvg,
+      shortName: shortName || readMainButtonShortName(tab.button as Element) || storeTabForButton?.shortName,
+      deferActivation,
+      wireAssignment: false,
+      openOnClosed: false,
+      setActiveWhenReady: true,
+    })
+    return
+  }
+
+  // PRIMARY PATH: reparent the extension's primary DOM root into secondary.
+  const secondaryWrapper = getSecondaryWrapper()
+  const secondaryContentMain = secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+  if (storeTab?.root && secondaryContentMain) {
+    const root = storeTab.root
+    if (root.parentElement !== secondaryContentMain) {
+      secondaryContentMain.appendChild(root)
+    }
+    root.setAttribute('data-canvas-moved', resolvedId)
+    // During restore / suppress, leave data-canvas-active alone so
+    // finishRestore → showSecondaryTab is the sole content switcher.
+    if (!deferActivation) {
+      for (const child of Array.from(secondaryContentMain.children)) {
+        if (child instanceof HTMLElement) {
+          if (child === root) {
+            child.setAttribute('data-canvas-active', '')
+          } else {
+            child.removeAttribute('data-canvas-active')
+          }
+        }
+      }
+    }
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: tab.title || storeTab.title || resolvedId,
+      root,
+      iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab.iconSvg,
+      shortName: readMainButtonShortName(tab.button as Element) || storeTab.shortName,
+      deferActivation,
+      wireAssignment: false,
+      openOnClosed: false,
+      setActiveWhenReady: true,
+    })
+    return
+  }
+
+  // Placement failed (no root) — still paint active/header/persist for assignment.
+  if (!isMobileViewport() && !deferActivation) {
+    _activeTabId = resolvedId
+    _state = 'tab_active'
+    setActiveSecondaryTabId(resolvedId)
+  }
+  const headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
+  if (headerTitle && !deferActivation) {
+    headerTitle.textContent = tab.title || resolvedId
+  }
+  if (!isMobileViewport() && !deferActivation) {
+    showSecondaryTabDisplay(resolvedId)
+  }
+  persistLayout()
+}
+
+/**
+ * Built-in tabs: host React-managed roots — place via requestTabLocation
+ * (moveBuiltInTabToSecondaryContainer). Never raw-appendChild out of main
+ * panelContent (main-mirror parks that node).
+ */
+async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
+  const { tabId, tab, resolvedId, deferActivation } = ctx
+  const secondaryWrapper = getSecondaryWrapper()
+  const secondaryContent = secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+  const wSpindle = getHostBridge()
+  const wSpindleUi = wSpindle?.ui
+  dlog(
+    `[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!storeTab} ` +
+    `hasSecondaryContent=${!!secondaryContent}`,
+  )
+
+  // Early exit: already reparented — dual-id (bare vs composite tags).
+  let alreadyInSecondary: HTMLElement | null = null
+  if (secondaryContent) {
+    const idsToTry = resolvedId !== tabId ? [resolvedId, tabId] : [resolvedId]
+    for (const id of idsToTry) {
+      alreadyInSecondary = secondaryContent.querySelector(
+        `[data-canvas-moved="${CSS.escape(id)}"]`,
+      ) as HTMLElement | null
+      if (alreadyInSecondary) break
+    }
+  }
+  if (alreadyInSecondary) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`)
+    const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title,
+      root: alreadyInSecondary,
+      iconSvg: tab.button?.querySelector('svg')?.outerHTML || alreadyInSecondary.querySelector('svg')?.outerHTML,
+      shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
+      deferActivation,
+      wireAssignment: true,
+      openOnClosed: true,
+      // Built-in: only set tab_active when we open; otherwise show path only.
+      setActiveWhenReady: false,
+    })
+    return
+  }
+
+  if (!secondaryContent) {
+    dwarn('[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.', {
+      tabId,
+      resolvedId,
+    })
+    return
+  }
+
+  const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
+  dlog(
+    `[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` +
+    `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute('data-tab-id') ?? 'null'} via=getBuiltInTabRoot`,
+  )
+
+  let root: HTMLElement | undefined
+  let placedViaHost = false
+
+  if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+    const { moveBuiltInTabToSecondaryContainer } = await import('../tabs/builtin-move')
+    root = await moveBuiltInTabToSecondaryContainer({
+      tabId,
+      deferActivation,
+      root: bridgeRoot,
+    })
+    placedViaHost = !!root
+  }
+
+  if (!root && storeTab?.root) {
+    root = storeTab.root
+    if (root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(root)
+    }
+    root.setAttribute('data-canvas-moved', resolvedId)
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`)
+  }
+
+  if (!root) {
+    if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
+      dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).', {
+        tabId,
+        resolvedId,
+      })
+    }
+    return
+  }
+
+  // During restore, leave data-canvas-active alone so finishRestore wins.
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContent.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root || child.getAttribute('data-canvas-moved') === resolvedId) {
+          child.setAttribute('data-canvas-active', '')
+        } else if (child.hasAttribute('data-canvas-moved')) {
+          child.removeAttribute('data-canvas-active')
+        }
+      }
+    }
+  }
+
+  const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId
+  const iconSvg = tab.button?.querySelector('svg')?.outerHTML || root.querySelector('svg')?.outerHTML
+  const shortName = readMainButtonShortName(tab.button as Element) || storeTab?.shortName
+
+  // Host may remount panelContent under the hidden wrapper after host move.
+  if (placedViaHost) {
+    try {
+      const m = await import('./main-mirror-drawer')
+      if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
+    } catch { /* ignore */ }
+  }
+
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment: true,
+    openOnClosed: true,
+    setActiveWhenReady: false,
+  })
+}
+
+/**
  * Assign a tab to the secondary drawer. Extension tabs are reparented
  * via DOM appendChild (preserving state); built-in tabs (Characters,
- * History) use the display-toggle path directly.
+ * History) use host requestTabLocation / store-root placement.
  *
  * Tab resolution: DrawerObserver first (built-in path), then Lumiverse's
  * store (extension path). Extension tab buttons in Lumiverse's
  * ViewportDrawer.tsx:247-273 don't carry `data-tab-id`, so DrawerObserver
- * can't register them — we fall back to the Zustand store snapshot, which
- * has all tabs. The store's DrawerTab carries `iconSvg`/`iconUrl` and a
- * `root` content element directly, so the secondary tab button can use
- * those without re-querying the DOM.
+ * can't register them — we fall back to the Zustand store snapshot.
+ *
+ * Public entry is a thin resolver + dispatcher; placement lives in
+ * assignExtensionTabToSecondary / assignBuiltInTabToSecondary with shared
+ * finalizeAssignToSecondary for the post-placement tail.
  */
 export async function assignToSecondary(tabId: string): Promise<void> {
   // Snapshot at entry so fire-and-forget async tails still defer activation
@@ -149,7 +487,6 @@ export async function assignToSecondary(tabId: string): Promise<void> {
 
   let tab = drawerObserver.getTab(tabId)
   let iconSvg: string | undefined
-  let iconUrl: string | undefined
   let shortName: string | undefined
 
   if (!tab) {
@@ -172,283 +509,21 @@ export async function assignToSecondary(tabId: string): Promise<void> {
       title: storeTab.title,
     }
     iconSvg = storeTab.iconSvg
-    iconUrl = storeTab.iconUrl
     shortName = storeTab.shortName
   } else {
     iconSvg = tab.button.querySelector('svg')?.outerHTML
   }
 
-  // Use the resolved tabId (real id, not the title fallback) for all
-  // state/button operations so persistence and id resolution are keyed
-  // consistently across move-loops.
   const resolvedId = tab.tabId
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
 
-  // Determine if this is an extension tab (has a UUID extensionId) vs a
-  // built-in tab (extensionId is 'unknown' or empty, parsed from composite
-  // id parts[2] when the id has no UUID prefix).
-  const _isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
-
-  if (_isExtensionTab) {
-    // === EXTENSION TAB PATH ===
-    setTabAssignment(resolvedId, 'secondary')
-    hideMainTabButton(resolvedId)
-    // On mobile, do not auto-open the drawer during assignToSecondary.
-    // This is invoked from assignTab's extension path; auto-opening
-    // would trigger enforceExclusionOnOpen and close the source drawer.
-    // (See assignment.ts:172 for the built-in-path equivalent.)
-    // During layout restore, skip auto-open so finishRestore (apply.ts)
-    // makes the authoritative open/closed decision without flicker.
-    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar()
-      _state = 'open'
-    }
-
-    // Check if root is already reparented (data-canvas-moved set).
-    // applyLayout's restore pass or a duplicate call can hit this.
-    // Scope to secondary wrapper — shared class also exists on main-mirror.
-    const _secondaryContentEarly =
-      getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') ?? null
-    const _bareIdEarly = resolvedId.includes(':')
-      ? (resolvedId.replace(/:\d+$/, '').split(':').pop() ?? resolvedId)
-      : resolvedId
-    const _existingRoot = (_secondaryContentEarly?.querySelector(
-      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`
-    ) ?? _secondaryContentEarly?.querySelector(
-      `[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`
-    )) as HTMLElement | null
-
-    if (_existingRoot) {
-      // Root already reparented — just create the button if missing and
-      // refresh state. addSecondaryTabButton is idempotent.
-      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: tab.title || _storeTabForButton?.title || resolvedId,
-        root: _existingRoot,
-        iconSvg: iconSvg
-          || (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML
-          || _storeTabForButton?.iconSvg,
-        shortName: shortName || readMainButtonShortName(tab.button as Element) || _storeTabForButton?.shortName,
-      })
-      updateDrawerTabVisibility()
-    } else {
-      // PRIMARY PATH: reparent the extension's primary DOM root into
-      // the secondary drawer. Preserves state, avoids duplicate instances.
-      const _secondaryWrapper = getSecondaryWrapper()
-      const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
-      const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-      if (_storeTab?.root && _secondaryContent) {
-        const _root = _storeTab.root
-        if (_root.parentElement !== _secondaryContent) {
-          _secondaryContent.appendChild(_root)
-        }
-        _root.setAttribute('data-canvas-moved', resolvedId)
-        // During restore / suppress, leave data-canvas-active alone so
-        // finishRestore → showSecondaryTab is the sole content switcher.
-        if (!deferActivation) {
-          for (const _child of Array.from(_secondaryContent.children)) {
-            if (_child instanceof HTMLElement) {
-              if (_child === _root) {
-                _child.setAttribute('data-canvas-active', '')
-              } else {
-                _child.removeAttribute('data-canvas-active')
-              }
-            }
-          }
-        }
-        addSecondaryTabButton({
-          id: resolvedId,
-          title: tab.title || _storeTab.title || resolvedId,
-          root: _root,
-          iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || _storeTab.iconSvg,
-          shortName: readMainButtonShortName(tab.button as Element) || _storeTab.shortName,
-        })
-        updateDrawerTabVisibility()
-      }
-    }
-
-    // Refresh active state and header (idempotent — safe on both paths).
-    // On mobile, skip state activation when the drawer wasn't opened —
-    // the user stays in the source drawer; destination opens manually.
-    // Suppressed during openSecondarySidebar's re-assignment loop and
-    // layout restore so the authoritative showSecondaryTab call wins.
-    if (!isMobileViewport() && !deferActivation) {
-      _activeTabId = resolvedId
-      _state = 'tab_active'
-      setActiveSecondaryTabId(resolvedId)
-    }
-    const _headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle && !deferActivation) {
-      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute('data-tab-title') || resolvedId
-    }
+  const ctx: AssignCtx = { tabId, tab, resolvedId, iconSvg, shortName, deferActivation }
+  const isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
+  if (isExtensionTab) {
+    await assignExtensionTabToSecondary(ctx)
   } else {
-    // === BUILT-IN TAB PATH ===
-    // Built-in roots are host React-managed. NEVER raw-appendChild them out of
-    // main panelContent (main-mirror parks that node; stealing its child crashes
-    // the host error boundary). Always place via requestTabLocation — shared
-    // helper: moveBuiltInTabToSecondaryContainer (tabs/builtin-move.ts).
-    const _secondaryWrapper = getSecondaryWrapper()
-    const _secondaryContent = _secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
-    const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-    const wSpindle = getHostBridge()
-    const wSpindleUi = wSpindle?.ui
-    dlog(
-      `[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` +
-      `hasSecondaryContent=${!!_secondaryContent}`,
-    )
-
-    // Early exit: already reparented to secondary — button + state only.
-    // Without this guard, openSecondarySidebar re-runs ensureBuiltInTabActiveInMain
-    // and fights pendingActiveTabReset.
-    const _alreadyInSecondary = _secondaryContent?.querySelector(
-      `[data-canvas-moved="${CSS.escape(resolvedId)}"]`,
-    ) as HTMLElement | null
-    if (_alreadyInSecondary) {
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`)
-      const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: _title,
-        root: _alreadyInSecondary,
-        iconSvg: tab.button?.querySelector('svg')?.outerHTML || _alreadyInSecondary.querySelector('svg')?.outerHTML,
-        shortName: readMainButtonShortName(tab.button as Element) || _storeTab?.shortName,
-      })
-      updateDrawerTabVisibility()
-      setTabAssignment(resolvedId, 'secondary')
-      hideMainTabButton(resolvedId)
-      if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-        await openSecondarySidebar()
-        if (!deferActivation) {
-          _state = 'tab_active'
-          _activeTabId = resolvedId
-          setActiveSecondaryTabId(resolvedId)
-        }
-      }
-      const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-      if (_headerTitle && !deferActivation) _headerTitle.textContent = _title
-      if (!isMobileViewport() && !deferActivation) {
-        showSecondaryTabDisplay(resolvedId)
-      }
-      persistLayout()
-      return
-    }
-
-    if (!_secondaryContent) {
-      dwarn('[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.', {
-        tabId,
-        resolvedId,
-      })
-      return
-    }
-
-    // Prefer host registry + requestTabLocation. Never scrape panelContent via
-    // textContent (Profile-under-main-mirror crash). Host built-ins go through
-    // moveBuiltInTabToSecondaryContainer. Fallback: store-provided root reparent
-    // for dock-panel-shaped entries that lack extensionId (LumiScript) and have
-    // no host registry root — same as extension appendChild ownership.
-    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
-    dlog(
-      `[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` +
-      `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute('data-tab-id') ?? 'null'} via=getBuiltInTabRoot`,
-    )
-
-    let _root: HTMLElement | undefined
-    let _placedViaHost = false
-
-    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-      const { moveBuiltInTabToSecondaryContainer } = await import('../tabs/builtin-move')
-      _root = await moveBuiltInTabToSecondaryContainer({
-        tabId,
-        deferActivation,
-        root: bridgeRoot,
-      })
-      _placedViaHost = !!_root
-    }
-
-    if (!_root && _storeTab?.root) {
-      // Store-root reparent only (no panelContent textContent scrape).
-      _root = _storeTab.root
-      if (_root.parentElement !== _secondaryContent) {
-        _secondaryContent.appendChild(_root)
-      }
-      _root.setAttribute('data-canvas-moved', resolvedId)
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`)
-    }
-
-    if (!_root) {
-      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
-        dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).', {
-          tabId,
-          resolvedId,
-        })
-      }
-      return
-    }
-
-    // During restore, leave data-canvas-active alone so finishRestore wins.
-    if (!deferActivation && _secondaryContent) {
-      for (const _child of Array.from(_secondaryContent.children)) {
-        if (_child instanceof HTMLElement) {
-          if (_child === _root || _child.getAttribute('data-canvas-moved') === resolvedId) {
-            _child.setAttribute('data-canvas-active', '')
-          } else if (_child.hasAttribute('data-canvas-moved')) {
-            _child.removeAttribute('data-canvas-active')
-          }
-        }
-      }
-    }
-
-    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId
-    const _iconSvg = tab.button?.querySelector('svg')?.outerHTML || _root.querySelector('svg')?.outerHTML
-    const _shortName = readMainButtonShortName(tab.button as Element) || _storeTab?.shortName
-    addSecondaryTabButton({
-      id: resolvedId,
-      title: _title,
-      root: _root,
-      iconSvg: _iconSvg,
-      shortName: _shortName,
-    })
-    updateDrawerTabVisibility()
-
-    setTabAssignment(resolvedId, 'secondary')
-    hideMainTabButton(resolvedId)
-    if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar()
-      if (!deferActivation) {
-        _state = 'tab_active'
-        _activeTabId = resolvedId
-        setActiveSecondaryTabId(resolvedId)
-      }
-    }
-
-    const _headerTitle = _secondaryWrapper?.querySelector('.sidebar-ux-panel-title')
-    if (_headerTitle && !deferActivation) _headerTitle.textContent = _title
-
-    // Host may remount panelContent under the hidden wrapper after host move.
-    if (_placedViaHost) {
-      try {
-        const m = await import('./main-mirror-drawer')
-        if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
-      } catch { /* ignore */ }
-    }
+    await assignBuiltInTabToSecondary(ctx)
   }
-
-  // Ensure the tab button is visually highlighted. addSecondaryTabButton
-  // creates the button without the active class — only showSecondaryTab
-  // applies sidebar-ux-tab-active. Called here rather than relying on
-  // finishRestore (apply.ts) because that path may run before the button
-  // exists (assignToSecondary is async) or may not run at all if the
-  // observer never fires (extensions already registered).
-  //
-  // Suppressed during openSecondarySidebar re-assignment and layout restore
-  // (entry-captured deferActivation) so late async assigns cannot overwrite
-  // the authoritative active tab after finishRestore.
-  if (!isMobileViewport() && !deferActivation) {
-    showSecondaryTabDisplay(resolvedId)
-  }
-
-  persistLayout()
 }
 
 /**
