@@ -14,6 +14,7 @@ import {
   findMainTabButton,
   hideMainTabButton,
   showMainTabButton,
+  clearSecondaryTabButtonActive,
   updateDrawerTabVisibility,
   readMainButtonShortName,
 } from '../tabs/buttons'
@@ -627,8 +628,11 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
     deleteTabAssignment(resolvedShowId)
   }
   removeSecondaryTabButton(tabId)
-  if (getActiveSecondaryTabId() === tabId) {
-    showSecondaryTabDisplay(null as any)
+  const activeId = getActiveSecondaryTabId()
+  if (activeId === tabId || activeId === resolvedShowId) {
+    _activeTabId = null
+    setActiveSecondaryTabId(null)
+    clearSecondaryTabButtonActive()
   }
   showMainTabButton(resolvedShowId)
 

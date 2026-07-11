@@ -209,6 +209,9 @@ export function openCanvasMainDrawer(): void {
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => { dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`) })
   bumpReflow()
   persistCanvasMainOpenState()
+  // Re-arm repark watch: drawer open can trigger React re-renders that
+  // reinsert panelContent into the host tree after the watch idle-stopped.
+  restartReparkWatch()
 }
 
 export function closeCanvasMainDrawer(): void {
@@ -248,6 +251,9 @@ export function onMainMirrorTabActivated(title?: string): void {
   ensureHostContentParked()
   openCanvasMainDrawer()
   requestAnimationFrame(() => ensureHostContentParked())
+  // Re-arm repark watch: tab clicks trigger React re-renders that can
+  // reinsert panelContent into the host tree after the watch idle-stopped.
+  restartReparkWatch()
 }
 
 export function __resetMainMirrorForTest(): void {

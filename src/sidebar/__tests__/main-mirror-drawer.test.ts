@@ -180,6 +180,7 @@ const {
   applyMainMirrorDrawer,
   openCanvasMainDrawer,
   closeCanvasMainDrawer,
+  onMainMirrorTabActivated,
 } = await import('../main-mirror-drawer')
 
 export {}
@@ -261,6 +262,95 @@ export {}
   // T9 left it active
   applyMainMirrorDrawer(false)
   assert(!isMainMirrorActive(), 'T10: inactive after apply(false)')
+}
+
+// --- T11: openCanvasMainDrawer re-arms repark watch after idle-stop ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'T11 setup: active after apply(true)')
+
+  // Sync setTimeout stub causes all ticks to fire immediately.
+  // After mount, the repark watch ticks until idle-stop (≥10 idle ticks).
+  const idleCountAfterMount = __getReparkIdleCountForTest()
+  assert(
+    idleCountAfterMount >= 10,
+    `T11 setup: repark watch idle-stopped (idle=${idleCountAfterMount})`,
+  )
+
+  // Switch to a deferred timer so the restart's ticks are captured but
+  // NOT fired. This lets us observe the intermediate state proving the
+  // watch was actually reset.
+  let capturedTick: Function | null = null
+  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
+    capturedTick = fn
+    return 0 as any
+  }
+
+  openCanvasMainDrawer()
+
+  // The watch was restarted: _reparkIdleCount was reset to 0 by
+  // startReparkWatch, but the deferred ticks haven't fired yet.
+  assertEqual(
+    __getReparkIdleCountForTest(), 0,
+    'T11: openCanvasMainDrawer restarted repark watch (idle reset to 0)',
+  )
+
+  // Restore sync timers and advance the captured tick to prove the
+  // watch actually re-ran its idle cycle.
+  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
+    fn()
+    return 0 as any
+  }
+  // capturedTick was assigned inside the deferred stub's callback; TS cannot
+  // prove it ran, so cast to bypass the narrowing to never.
+  ;(capturedTick as (() => void) | null)?.()
+
+  const idleAfterAdvance = __getReparkIdleCountForTest()
+  assert(
+    idleAfterAdvance >= 10,
+    `T11: repark watch re-idled after restart (idle=${idleAfterAdvance})`,
+  )
+}
+
+// --- T12: onMainMirrorTabActivated re-arms repark watch after idle-stop ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'T12 setup: active after apply(true)')
+
+  const idleBefore = __getReparkIdleCountForTest()
+  assert(idleBefore >= 10, `T12 setup: repark watch idle-stopped (idle=${idleBefore})`)
+
+  // Deferred timer: capture the restart's tick without firing it.
+  let capturedTick: Function | null = null
+  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
+    capturedTick = fn
+    return 0 as any
+  }
+
+  onMainMirrorTabActivated('Test Tab')
+
+  // Idle count reset to 0 proves the watch was restarted.
+  assertEqual(
+    __getReparkIdleCountForTest(), 0,
+    'T12: onMainMirrorTabActivated restarted repark watch (idle reset to 0)',
+  )
+
+  // Advance captured tick with sync timers to prove watch re-ran.
+  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
+    fn()
+    return 0 as any
+  }
+  ;(capturedTick as (() => void) | null)?.()
+
+  const idleAfterAdvance = __getReparkIdleCountForTest()
+  assert(
+    idleAfterAdvance >= 10,
+    `T12: repark watch re-idled after restart (idle=${idleAfterAdvance})`,
+  )
 }
 
 console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)

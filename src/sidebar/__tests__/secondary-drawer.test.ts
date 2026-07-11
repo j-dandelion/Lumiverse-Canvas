@@ -109,6 +109,7 @@ function restoreMatchMedia() {
 // =====================================================================
 import { drawerObserver } from '../drawer-observer'
 import { getTabAssignments, deleteTabAssignment } from '../../tabs/assignment'
+import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../../tabs/active-tab'
 import { __setSecondaryWrapperForTest } from '../secondary'
 import { __setDrawerTabsForTest, __setStoreSnapshotForTest } from '../../store'
 import { teardownSecondaryDrawer } from '../secondary-drawer'
@@ -833,6 +834,37 @@ async function testBuiltinMobileNoAutoOpen() {
 }
 
 // =====================================================================
+// T-COMPARE: unassignFromSecondary clears active tab for composite IDs
+//
+// Regression: getActiveSecondaryTabId() may hold a composite ID
+// (e.g. "spindle:uuid:tab:html_preview:1") while unassignFromSecondary
+// receives the bare "html_preview". The old code compared only against
+// the bare input, so the active highlight was never cleared.
+// =====================================================================
+async function testUnassignCompositeActiveClear() {
+  const compositeId = 'spindle:abc123:tab:ext-tab-compare:1'
+  const bareId = 'ext-tab-compare'
+  const env = setupExtTest({ tabId: compositeId, tabTitle: 'Compare Tab' })
+  try {
+    const { assignToSecondary, unassignFromSecondary } = await import('../secondary-drawer')
+    await assignToSecondary(compositeId)
+
+    // Simulate the active tab being set to the composite ID (as
+    // assignToSecondary does via setActiveSecondaryTabId(resolvedId)).
+    setActiveSecondaryTabId(compositeId)
+    assertEqual(getActiveSecondaryTabId(), compositeId,
+      'T-COMPARE setup: active tab is composite ID')
+
+    // Unassign with the bare ID (what the wrapper button sends).
+    await unassignFromSecondary(bareId)
+
+    // Active tab should be cleared — the old code would miss this.
+    assertEqual(getActiveSecondaryTabId(), null,
+      'T-COMPARE: active tab cleared after unassign with bare ID')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -856,6 +888,9 @@ async function main() {
   // Mobile auto-open guard tests
   await testExtMobileNoAutoOpen()
   await testBuiltinMobileNoAutoOpen()
+
+  // Composite ID active-clear regression test
+  await testUnassignCompositeActiveClear()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)
