@@ -30,6 +30,7 @@ import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
 import { getTabAssignments } from './assignment'
 import { commitConfigureDraft, type CommitResult } from './configure-commit'
+import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 // ── Module state ──
@@ -145,26 +146,22 @@ function injectModalStyles(): void {
 
     /* ── Close X (absolute, host CloseButton style) ── */
     .canvas-configure-tabs-close {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      z-index: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       padding: 0;
-      border: 1px solid var(--lumiverse-border, #333);
-      border-radius: var(--lumiverse-radius, 8px);
-      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.1));
-      color: var(--lumiverse-text-dim, #888);
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--lumiverse-text-muted, #888);
       cursor: pointer;
       flex-shrink: 0;
+      transition: background 0.15s ease, color 0.15s ease;
     }
     .canvas-configure-tabs-close:hover {
       background: var(--lumiverse-fill, rgba(255,255,255,0.06));
-      border-color: var(--lumiverse-border, #555);
       color: var(--lumiverse-text, #eee);
     }
     .canvas-configure-tabs-close svg {
@@ -178,18 +175,25 @@ function injectModalStyles(): void {
       align-items: flex-start;
       flex-direction: column;
       gap: 4px;
-      padding: 16px 20px 12px;
+      padding: 16px 20px 12px 20px;
       border-bottom: 1px solid var(--lumiverse-border, #333);
     }
     .canvas-configure-tabs-header-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
       width: 100%;
+    }
+    .canvas-configure-tabs-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-header h2 {
       margin: 0;
-      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-size: calc(16px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
       color: var(--lumiverse-text, #eee);
       letter-spacing: -0.01em;
@@ -216,11 +220,29 @@ function injectModalStyles(): void {
       background: var(--lumiverse-fill-strong, rgba(255,255,255,0.12));
     }
 
+    /* ── Second-drawer enable toggle (compact label + switch) ── */
+    .canvas-configure-tabs-second-drawer-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .canvas-configure-tabs-second-drawer-toggle-label {
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      color: var(--lumiverse-text-dim, #888);
+      white-space: nowrap;
+      user-select: none;
+      cursor: pointer;
+    }
+    .canvas-configure-tabs-second-drawer-toggle-label:hover {
+      color: var(--lumiverse-text, #eee);
+    }
+
     /* ── Body (host .body: flex column with gap, overflow-y auto) ── */
     .canvas-configure-tabs-body {
       display: flex;
       flex-direction: row;
-      gap: 14px;
+      gap: 7px;
       flex: 1;
       min-height: 0;
       padding: 12px 20px 20px;
@@ -267,6 +289,9 @@ function injectModalStyles(): void {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
+      /* Keep cards clear of the scrollbar track (not underlay). */
+      scrollbar-gutter: stable;
+      padding-right: 10px;
     }
 
     /* ── Drag overlay clone (follows pointer) ── */
@@ -517,6 +542,9 @@ function injectModalStyles(): void {
       .canvas-configure-tabs-dialog {
         width: min(100vw - 16px, 720px);
       }
+      .canvas-configure-tabs-header-row {
+        flex-wrap: wrap;
+      }
       .canvas-configure-tabs-header {
         padding-left: 12px;
         padding-right: 12px;
@@ -735,8 +763,10 @@ interface ModalProps {
   secondaryTabs: CatalogTab[]
   commitError: string | null
   committing: boolean
+  secondDrawerEnabled: boolean
   onSwapSide: () => void
   onToggleHide: (tabId: string, hidden: boolean) => void
+  onToggleSecondDrawer: () => void
   onCancel: () => void
   onDone: () => void
 }
@@ -745,7 +775,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
   const {
     draft, catalog, primaryTabs, secondaryTabs,
     commitError, committing,
-    onSwapSide, onToggleHide,
+    secondDrawerEnabled,
+    onSwapSide, onToggleHide, onToggleSecondDrawer,
     onCancel, onDone,
   } = props
 
@@ -989,27 +1020,43 @@ function ConfigureTabsModalInner(props: ModalProps) {
       }}
     >
       <div class="canvas-configure-tabs-dialog" onClick={(e) => e.stopPropagation()}>
-        {/* Close X */}
-        <button
-          class="canvas-configure-tabs-close"
-          type="button"
-          title="Close"
-          onClick={() => onCancel()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-
-        {/* Header (host column layout) */}
+        {/* Header (host column layout); close sits in the title row so it
+            vertically centers with h2 + Swap drawers (not absolute top-right). */}
         <div class="canvas-configure-tabs-header">
           <div class="canvas-configure-tabs-header-row">
             <h2>Configure Tabs</h2>
-            <button class="canvas-configure-tabs-swap-btn" onClick={onSwapSide}>
-              Swap drawers
-            </button>
+            <div class="canvas-configure-tabs-header-actions">
+              <div class="canvas-configure-tabs-second-drawer-toggle">
+                <span
+                  class="canvas-configure-tabs-second-drawer-toggle-label"
+                  onClick={() => onToggleSecondDrawer()}
+                >
+                  Enable second drawer
+                </span>
+                <button
+                  class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleSecondDrawer()
+                  }}
+                />
+              </div>
+              <button class="canvas-configure-tabs-swap-btn" onClick={onSwapSide}>
+                Swap drawer locations
+              </button>
+              <button
+                class="canvas-configure-tabs-close"
+                type="button"
+                title="Close"
+                onClick={() => onCancel()}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
           </div>
           <p class="canvas-configure-tabs-subtitle">Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.</p>
         </div>
@@ -1143,6 +1190,7 @@ function renderModal(
       secondaryTabs={secondary}
       commitError={commitError}
       committing={committing}
+      secondDrawerEnabled={getSettings().secondSidebarEnabled}
       onSwapSide={() => {
         if (!_draftRef) return
         const next = swapDrawerSide(_draftRef)
@@ -1154,6 +1202,18 @@ function renderModal(
         const next = setHidden(_draftRef, tabId, hidden)
         _draftRef = next
         renderModal(next, catalog, null, false)
+      }}
+      onToggleSecondDrawer={() => {
+        if (getSettings().secondSidebarEnabled) {
+          // Turning off: close modal without confirm (intentional teardown)
+          // so stopConfigureTabsIntercept will be a no-op.
+          unmountModal()
+          setSettings({ secondSidebarEnabled: false })
+        } else {
+          // Turning on: modal needs to be openable — re-enable the setting.
+          // The modal is already open, so re-render to reflect the new state.
+          setSettings({ secondSidebarEnabled: true })
+        }
       }}
       onCancel={() => {
         closeConfigureTabsModal()

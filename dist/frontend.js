@@ -10819,26 +10819,22 @@ function injectModalStyles() {
 
     /* ── Close X (absolute, host CloseButton style) ── */
     .canvas-configure-tabs-close {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      z-index: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       padding: 0;
-      border: 1px solid var(--lumiverse-border, #333);
-      border-radius: var(--lumiverse-radius, 8px);
-      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.1));
-      color: var(--lumiverse-text-dim, #888);
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--lumiverse-text-muted, #888);
       cursor: pointer;
       flex-shrink: 0;
+      transition: background 0.15s ease, color 0.15s ease;
     }
     .canvas-configure-tabs-close:hover {
       background: var(--lumiverse-fill, rgba(255,255,255,0.06));
-      border-color: var(--lumiverse-border, #555);
       color: var(--lumiverse-text, #eee);
     }
     .canvas-configure-tabs-close svg {
@@ -10852,18 +10848,25 @@ function injectModalStyles() {
       align-items: flex-start;
       flex-direction: column;
       gap: 4px;
-      padding: 16px 20px 12px;
+      padding: 16px 20px 12px 20px;
       border-bottom: 1px solid var(--lumiverse-border, #333);
     }
     .canvas-configure-tabs-header-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
       width: 100%;
+    }
+    .canvas-configure-tabs-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-header h2 {
       margin: 0;
-      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-size: calc(16px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
       color: var(--lumiverse-text, #eee);
       letter-spacing: -0.01em;
@@ -10890,11 +10893,29 @@ function injectModalStyles() {
       background: var(--lumiverse-fill-strong, rgba(255,255,255,0.12));
     }
 
+    /* ── Second-drawer enable toggle (compact label + switch) ── */
+    .canvas-configure-tabs-second-drawer-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .canvas-configure-tabs-second-drawer-toggle-label {
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      color: var(--lumiverse-text-dim, #888);
+      white-space: nowrap;
+      user-select: none;
+      cursor: pointer;
+    }
+    .canvas-configure-tabs-second-drawer-toggle-label:hover {
+      color: var(--lumiverse-text, #eee);
+    }
+
     /* ── Body (host .body: flex column with gap, overflow-y auto) ── */
     .canvas-configure-tabs-body {
       display: flex;
       flex-direction: row;
-      gap: 14px;
+      gap: 7px;
       flex: 1;
       min-height: 0;
       padding: 12px 20px 20px;
@@ -10941,6 +10962,9 @@ function injectModalStyles() {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
+      /* Keep cards clear of the scrollbar track (not underlay). */
+      scrollbar-gutter: stable;
+      padding-right: 10px;
     }
 
     /* ── Drag overlay clone (follows pointer) ── */
@@ -11191,6 +11215,9 @@ function injectModalStyles() {
       .canvas-configure-tabs-dialog {
         width: min(100vw - 16px, 720px);
       }
+      .canvas-configure-tabs-header-row {
+        flex-wrap: wrap;
+      }
       .canvas-configure-tabs-header {
         padding-left: 12px;
         padding-right: 12px;
@@ -11363,8 +11390,10 @@ function ConfigureTabsModalInner(props) {
     secondaryTabs,
     commitError,
     committing,
+    secondDrawerEnabled,
     onSwapSide,
     onToggleHide,
+    onToggleSecondDrawer,
     onCancel,
     onDone
   } = props;
@@ -11612,35 +11641,6 @@ function ConfigureTabsModalInner(props) {
       class: "canvas-configure-tabs-dialog",
       onClick: (e3) => e3.stopPropagation(),
       children: [
-        /* @__PURE__ */ u3("button", {
-          class: "canvas-configure-tabs-close",
-          type: "button",
-          title: "Close",
-          onClick: () => onCancel(),
-          onPointerDown: (e3) => e3.stopPropagation(),
-          children: /* @__PURE__ */ u3("svg", {
-            viewBox: "0 0 24 24",
-            fill: "none",
-            stroke: "currentColor",
-            "stroke-width": "2",
-            "stroke-linecap": "round",
-            "stroke-linejoin": "round",
-            children: [
-              /* @__PURE__ */ u3("line", {
-                x1: "18",
-                y1: "6",
-                x2: "6",
-                y2: "18"
-              }, undefined, false, undefined, this),
-              /* @__PURE__ */ u3("line", {
-                x1: "6",
-                y1: "6",
-                x2: "18",
-                y2: "18"
-              }, undefined, false, undefined, this)
-            ]
-          }, undefined, true, undefined, this)
-        }, undefined, false, undefined, this),
         /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-header",
           children: [
@@ -11650,11 +11650,62 @@ function ConfigureTabsModalInner(props) {
                 /* @__PURE__ */ u3("h2", {
                   children: "Configure Tabs"
                 }, undefined, false, undefined, this),
-                /* @__PURE__ */ u3("button", {
-                  class: "canvas-configure-tabs-swap-btn",
-                  onClick: onSwapSide,
-                  children: "Swap drawers"
-                }, undefined, false, undefined, this)
+                /* @__PURE__ */ u3("div", {
+                  class: "canvas-configure-tabs-header-actions",
+                  children: [
+                    /* @__PURE__ */ u3("div", {
+                      class: "canvas-configure-tabs-second-drawer-toggle",
+                      children: [
+                        /* @__PURE__ */ u3("span", {
+                          class: "canvas-configure-tabs-second-drawer-toggle-label",
+                          onClick: () => onToggleSecondDrawer(),
+                          children: "Enable second drawer"
+                        }, undefined, false, undefined, this),
+                        /* @__PURE__ */ u3("button", {
+                          class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
+                          onClick: (e3) => {
+                            e3.stopPropagation();
+                            onToggleSecondDrawer();
+                          }
+                        }, undefined, false, undefined, this)
+                      ]
+                    }, undefined, true, undefined, this),
+                    /* @__PURE__ */ u3("button", {
+                      class: "canvas-configure-tabs-swap-btn",
+                      onClick: onSwapSide,
+                      children: "Swap drawer locations"
+                    }, undefined, false, undefined, this),
+                    /* @__PURE__ */ u3("button", {
+                      class: "canvas-configure-tabs-close",
+                      type: "button",
+                      title: "Close",
+                      onClick: () => onCancel(),
+                      onPointerDown: (e3) => e3.stopPropagation(),
+                      children: /* @__PURE__ */ u3("svg", {
+                        viewBox: "0 0 24 24",
+                        fill: "none",
+                        stroke: "currentColor",
+                        "stroke-width": "2",
+                        "stroke-linecap": "round",
+                        "stroke-linejoin": "round",
+                        children: [
+                          /* @__PURE__ */ u3("line", {
+                            x1: "18",
+                            y1: "6",
+                            x2: "6",
+                            y2: "18"
+                          }, undefined, false, undefined, this),
+                          /* @__PURE__ */ u3("line", {
+                            x1: "6",
+                            y1: "6",
+                            x2: "18",
+                            y2: "18"
+                          }, undefined, false, undefined, this)
+                        ]
+                      }, undefined, true, undefined, this)
+                    }, undefined, false, undefined, this)
+                  ]
+                }, undefined, true, undefined, this)
               ]
             }, undefined, true, undefined, this),
             /* @__PURE__ */ u3("p", {
@@ -11755,6 +11806,7 @@ function renderModal(draft, catalog, commitError, committing) {
     secondaryTabs: secondary,
     commitError,
     committing,
+    secondDrawerEnabled: getSettings().secondSidebarEnabled,
     onSwapSide: () => {
       if (!_draftRef)
         return;
@@ -11768,6 +11820,14 @@ function renderModal(draft, catalog, commitError, committing) {
       const next = setHidden(_draftRef, tabId, hidden);
       _draftRef = next;
       renderModal(next, catalog, null, false);
+    },
+    onToggleSecondDrawer: () => {
+      if (getSettings().secondSidebarEnabled) {
+        unmountModal();
+        setSettings({ secondSidebarEnabled: false });
+      } else {
+        setSettings({ secondSidebarEnabled: true });
+      }
     },
     onCancel: () => {
       closeConfigureTabsModal();
@@ -11808,6 +11868,7 @@ var init_configure_modal = __esm(() => {
   init_store();
   init_assignment();
   init_configure_commit();
+  init_state();
   init_log();
   init_jsxRuntime_module();
   BUILTIN_ICON_SVGS = {
