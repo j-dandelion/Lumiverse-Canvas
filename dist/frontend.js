@@ -10778,7 +10778,7 @@ function injectModalStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 16px;
       width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
       height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
       background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
@@ -10820,14 +10820,14 @@ function injectModalStyles() {
     /* ── Close X (absolute, host CloseButton style) ── */
     .canvas-configure-tabs-close {
       position: absolute;
-      top: 12px;
-      right: 12px;
+      top: 10px;
+      right: 10px;
       z-index: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 32px;
-      height: 32px;
+      width: 28px;
+      height: 28px;
       padding: 0;
       border: 1px solid var(--lumiverse-border, #333);
       border-radius: var(--lumiverse-radius, 8px);
@@ -10852,7 +10852,7 @@ function injectModalStyles() {
       align-items: flex-start;
       flex-direction: column;
       gap: 4px;
-      padding: 22px 24px 16px;
+      padding: 16px 20px 12px;
       border-bottom: 1px solid var(--lumiverse-border, #333);
     }
     .canvas-configure-tabs-header-row {
@@ -10863,25 +10863,25 @@ function injectModalStyles() {
     }
     .canvas-configure-tabs-header h2 {
       margin: 0;
-      font-size: calc(16px * var(--lumiverse-font-scale, 1));
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
       color: var(--lumiverse-text, #eee);
       letter-spacing: -0.01em;
     }
     .canvas-configure-tabs-subtitle {
-      margin: 6px 0 0;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      margin: 4px 0 0;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       color: var(--lumiverse-text-dim, #888);
     }
     .canvas-configure-tabs-swap-btn {
       flex-shrink: 0;
-      padding: 6px 14px;
+      padding: 5px 12px;
       border: 1px solid var(--lumiverse-border, #333);
       border-radius: 6px;
       background: var(--lumiverse-fill, rgba(255,255,255,0.06));
       color: var(--lumiverse-text, #eee);
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
       font-family: inherit;
       cursor: pointer;
       white-space: nowrap;
@@ -10894,10 +10894,10 @@ function injectModalStyles() {
     .canvas-configure-tabs-body {
       display: flex;
       flex-direction: row;
-      gap: 18px;
+      gap: 14px;
       flex: 1;
       min-height: 0;
-      padding: 16px 24px 24px;
+      padding: 12px 20px 20px;
       max-height: min(70vh, 760px);
       overflow-y: auto;
     }
@@ -10907,7 +10907,7 @@ function injectModalStyles() {
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
       min-width: 0;
       width: 50%;
     }
@@ -10920,7 +10920,7 @@ function injectModalStyles() {
     }
     .canvas-configure-tabs-section-title {
       margin: 0;
-      font-size: calc(13px * var(--lumiverse-font-scale, 1));
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
       letter-spacing: 0.04em;
       text-transform: uppercase;
@@ -10928,16 +10928,16 @@ function injectModalStyles() {
     }
     .canvas-configure-tabs-section-desc {
       margin: 0;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       color: var(--lumiverse-text-dim, #888);
     }
 
-    /* ── Tab list (host .list: gap 10px, no extra padding) ── */
+    /* ── Tab list (host .list: gap 8px, no extra padding) ── */
     .canvas-configure-tabs-list {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
       flex: 1;
       min-height: 0;
       overflow-y: auto;
@@ -10953,8 +10953,8 @@ function injectModalStyles() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 12px 14px;
+      gap: 10px;
+      padding: 10px 12px;
       border: 1px solid var(--lumiverse-border, #333);
       border-radius: 14px;
       background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
@@ -10972,8 +10972,8 @@ function injectModalStyles() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 12px 14px;
+      gap: 10px;
+      padding: 10px 12px;
       border: 1px solid var(--lumiverse-border, #333);
       border-radius: 14px;
       background: color-mix(in srgb, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)) 92%, white 8%);
@@ -10997,8 +10997,8 @@ function injectModalStyles() {
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      width: 24px;
-      height: 32px;
+      width: 22px;
+      height: 28px;
       padding: 0;
       border: none;
       background: transparent;
@@ -11026,21 +11026,21 @@ function injectModalStyles() {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 34px;
-      height: 34px;
+      width: 30px;
+      height: 30px;
       flex-shrink: 0;
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--lumiverse-primary-015, rgba(74, 158, 255, 0.15));
       color: var(--lumiverse-primary, #4a9eff);
       overflow: hidden;
     }
     .canvas-configure-tabs-icon-wrap svg {
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
     }
     .canvas-configure-tabs-icon-wrap img {
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       object-fit: contain;
     }
 
@@ -11048,7 +11048,7 @@ function injectModalStyles() {
     .canvas-configure-tabs-row-info {
       display: flex;
       align-items: flex-start;
-      gap: 12px;
+      gap: 10px;
       min-width: 0;
       flex: 1 1 auto;
     }
@@ -11060,11 +11060,11 @@ function injectModalStyles() {
     .canvas-configure-tabs-row-title-wrap {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
     }
     .canvas-configure-tabs-row-title {
-      font-size: calc(14px * var(--lumiverse-font-scale, 1));
+      font-size: calc(13px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       color: var(--lumiverse-text, #eee);
     }
@@ -11072,11 +11072,11 @@ function injectModalStyles() {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 2px 8px;
+      padding: 1px 6px;
       border-radius: 999px;
       background: var(--lumiverse-primary-015, rgba(74, 158, 255, 0.15));
       color: var(--lumiverse-primary, #4a9eff);
-      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
       letter-spacing: 0.03em;
       text-transform: uppercase;
@@ -11086,8 +11086,8 @@ function injectModalStyles() {
       color: var(--lumiverse-text-secondary, #aaa);
     }
     .canvas-configure-tabs-row-description {
-      margin: 4px 0 0;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      margin: 2px 0 0;
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       color: var(--lumiverse-text-dim, #888);
     }
@@ -11130,10 +11130,10 @@ function injectModalStyles() {
 
     /* ── Empty column hint ── */
     .canvas-configure-tabs-empty {
-      padding: 32px 16px;
+      padding: 24px 16px;
       text-align: center;
       color: var(--lumiverse-text-muted, #666);
-      font-size: calc(13px * var(--lumiverse-font-scale, 1));
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
     }
 
     /* ── Footer ── */
@@ -11142,16 +11142,16 @@ function injectModalStyles() {
       align-items: center;
       justify-content: flex-end;
       gap: 8px;
-      padding: 12px 24px;
+      padding: 10px 20px;
       border-top: 1px solid var(--lumiverse-border, #333);
     }
     .canvas-configure-tabs-btn {
-      padding: 8px 20px;
+      padding: 6px 16px;
       border-radius: 8px;
       border: 1px solid var(--lumiverse-border, #333);
       background: var(--lumiverse-fill, rgba(255,255,255,0.06));
       color: var(--lumiverse-text, #eee);
-      font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
       font-family: inherit;
       cursor: pointer;
     }
@@ -11171,9 +11171,9 @@ function injectModalStyles() {
       cursor: not-allowed;
     }
     .canvas-configure-tabs-error {
-      padding: 8px 24px;
+      padding: 6px 20px;
       color: var(--lumiverse-error, #e54545);
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       text-align: right;
     }
 
@@ -11192,16 +11192,16 @@ function injectModalStyles() {
         width: min(100vw - 16px, 720px);
       }
       .canvas-configure-tabs-header {
-        padding-left: 14px;
-        padding-right: 14px;
-        padding-top: 18px;
-        padding-bottom: 14px;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 14px;
+        padding-bottom: 10px;
       }
       .canvas-configure-tabs-body {
-        padding-left: 14px;
-        padding-right: 14px;
-        padding-top: 14px;
-        padding-bottom: 18px;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 12px;
+        padding-bottom: 14px;
       }
       .canvas-configure-tabs-row {
         align-items: flex-start;
@@ -11209,7 +11209,7 @@ function injectModalStyles() {
     }
     @media (max-width: 480px) {
       .canvas-configure-tabs-overlay {
-        padding: 12px;
+        padding: 10px;
       }
     }
   `;
