@@ -169,7 +169,7 @@ export async function applyLayout(layout: any): Promise<void> {
   // resize-handle bounds (resize/handles.ts).
   //
   // On mobile (≤600px), skip this entirely: mobile-exclusion.ts manages
-  // the CSS variable to keep it in sync with the 100vw inline width.
+  // the CSS variable to keep it in sync with the window.innerWidth inline width.
   // If we overwrote it here with the desktop-saved width, getClosedTransformPx()
   // would produce a short close offset and the drawer would peek.
   if (restoreWidth && layout.secondary?.width && !isMobileViewport()) {

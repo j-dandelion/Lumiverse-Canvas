@@ -657,6 +657,11 @@ function injectDrawerTabStyles() {
       flex-shrink: 0;
     }
   `);
+  injectStyles("sidebar-ux-shadow-close-suppress", `
+    .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
+      box-shadow: none !important;
+    }
+  `);
   injectStyles("canvas-ux-secondary-mobile", SECONDARY_MOBILE_CSS);
   injectStyles("canvas-moved-active-toggle", `
     .sidebar-ux-secondary-wrapper .sidebar-ux-panel-content [data-canvas-moved]:not([data-canvas-active]) {
@@ -748,6 +753,16 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     display: none !important;
     pointer-events: none !important;
   }
+    /* Host main drawer on mobile: oversize by 1px to match the +1px oversize
+     on Canvas secondary drawers.  Under fractional zoom/AA the host's
+     --app-scaled-viewport-width resolves ~1px short of the visual viewport,
+     leaving a 1px underfill gap when the drawer is open (translateX(0)).
+     Adding 1px to the width via calc() fills that gap.
+     The extra 1px is harmless on desktop (@media >600px scoped below). */
+  [class*="wrapperLeft"],
+  [class*="wrapperRight"] {
+    --drawer-panel-w: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px) !important;
+  }
   /* Backdrop: full-viewport overlay that darkens the screen (including the
      safe area at the top) when the secondary drawer is open on mobile.
      Mirrors Lumiverse's main-drawer .backdrop element
@@ -775,7 +790,7 @@ var init_styles = () => {};
 
 // src/sidebar/drawer-shell.ts
 function closedTransformPx(side, widthPx) {
-  const w = Math.ceil(widthPx);
+  const w = Math.ceil(widthPx) + 1;
   return side === "left" ? -w : w;
 }
 function readWidthCssVar(varName, fallback = 420) {
@@ -787,6 +802,13 @@ function readWidthCssVar(varName, fallback = 420) {
     return isFinite(n) && n > 0 ? n : fallback;
   } catch {
     return fallback;
+  }
+}
+function readUiScale() {
+  try {
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale")) || 1;
+  } catch {
+    return 1;
   }
 }
 function createDrawerShell(options) {
@@ -807,9 +829,10 @@ function createDrawerShell(options) {
   const wrapper = document.createElement("div");
   wrapper.className = `${wrapperClass} sidebar-ux-side-${side}`;
   wrapper.setAttribute("data-drawer-owner", owner);
+  wrapper.dataset.drawerOpen = initialOpen ? "true" : "false";
   const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(widthCssVar));
   const rawWidth = initialWidth && initialWidth > 0 ? initialWidth : isFinite(cssVarWidth) && cssVarWidth > 0 ? cssVarWidth : defaultWidth;
-  const initWidth = fullViewportWidth ? window.innerWidth : Math.ceil(clampSidebarWidth(rawWidth));
+  const initWidth = fullViewportWidth ? Math.round(window.innerWidth / readUiScale()) : Math.ceil(clampSidebarWidth(rawWidth));
   document.documentElement.style.setProperty(widthCssVar, `${initWidth}px`);
   const initWrapperTransform = initialOpen ? "translateX(0)" : `translateX(${closedTransformPx(side, initWidth)}px)`;
   wrapper.style.cssText = `
@@ -840,7 +863,7 @@ function createDrawerShell(options) {
   const drawer = document.createElement("div");
   drawer.className = "sidebar-ux-drawer";
   drawer.style.cssText = `
-    width: ${fullViewportWidth ? "100vw" : `var(${widthCssVar}, ${defaultWidth}px)`};
+    width: ${fullViewportWidth ? "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)" : `var(${widthCssVar}, ${defaultWidth}px)`};
     height: 100%;
     position: relative;
     display: flex;
@@ -5464,7 +5487,14 @@ function syncCssVarToDrawerWidth() {
     if (isFinite(current) && _desktopCssVarValue === null) {
       _desktopCssVarValue = current;
     }
-    el.style.setProperty(SECONDARY_WIDTH_VAR, `${window.innerWidth}px`);
+    const drawer = getSecondaryDrawer();
+    const measured = drawer?.offsetWidth ?? 0;
+    if (measured > 0) {
+      el.style.setProperty(SECONDARY_WIDTH_VAR, `${measured}px`);
+    } else {
+      const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale")) || 1;
+      el.style.setProperty(SECONDARY_WIDTH_VAR, `${Math.round(window.innerWidth / uiScale)}px`);
+    }
   } else {
     if (_desktopCssVarValue !== null) {
       el.style.setProperty(SECONDARY_WIDTH_VAR, `${_desktopCssVarValue}px`);
@@ -5529,7 +5559,7 @@ function startMobileExclusion() {
     if (!drawer)
       return;
     if (isMobileViewport()) {
-      drawer.style.width = "100vw";
+      drawer.style.width = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)";
     } else {
       drawer.style.width = `var(${SECONDARY_WIDTH_VAR}, 420px)`;
     }
@@ -5850,6 +5880,7 @@ function openSecondarySidebar() {
   enforceExclusionOnOpen("secondary");
   animateWrapper(_secondaryWrapper, 0);
   _secondarySidebarOpen = true;
+  _secondaryWrapper.dataset.drawerOpen = "true";
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
   syncPanelHeaderFromMain2();
@@ -5867,6 +5898,7 @@ function closeSecondarySidebar(options) {
     return;
   animateWrapper(_secondaryWrapper, getClosedTransformPx());
   _secondarySidebarOpen = false;
+  _secondaryWrapper.dataset.drawerOpen = "false";
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
   syncPanelHeaderFromMain2();
@@ -5892,7 +5924,9 @@ function closeSecondarySidebar(options) {
 }
 function getClosedTransformPx() {
   const secondarySide2 = getMainDrawerSide() === "left" ? "right" : "left";
-  const w = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420));
+  const measured = getSecondaryDrawer()?.offsetWidth ?? 0;
+  const fromVar = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420));
+  const w = Math.max(measured, fromVar);
   return closedTransformPx(secondarySide2, w);
 }
 function mountSecondarySidebar(options) {

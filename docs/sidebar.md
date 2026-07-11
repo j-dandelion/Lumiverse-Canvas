@@ -31,7 +31,7 @@ Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... 
 
 **Drawer side (left/right):** shell anchor, pin host, closed transform (`−width` left / `+width` right), resize handle, and chat reflow all follow `getMainDrawerSide()`. Side-change remounts via `checkSideChanged` → `reconcileMainTabListPin`.
 
-`position: fixed` alone is not enough: wrappers always have `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. Dual pin hosts are keyed by `data-pin-owner` so `sweepStrayPinHosts` never deletes the other drawer’s host.
+`position: fixed` alone is not enough: wrappers always have `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. Dual pin hosts are keyed by `data-pin-owner` so `sweepStrayPinHosts` never deletes the other drawer's host.
 
 **Secondary lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan. Remount (`mountSecondarySidebar`) re-applies secondary pin from settings. Side-change also calls `reconcileMainTabListPin()` / remounts the main mirror shell.
 
@@ -55,7 +55,7 @@ Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... 
 
 3. **Drawer** (`div.sidebar-ux-drawer`):
    - `position: relative` (for resize handle positioning)
-   - `width: var(--sidebar-ux-secondary-w, 420px)` or `100vw` on mobile
+   - `width: var(--sidebar-ux-secondary-w, 420px)` or `window.innerWidth px` on mobile
    - `isolation: isolate`
    - Contains sidebar (tab list) + panel
 
@@ -214,7 +214,7 @@ On mobile (viewport <= 600px):
 - Only one sidebar can be open at a time
 - Opening one closes the other (mutual exclusion)
 - Body classes (`canvas-ux-mobile-primary-open`, `canvas-ux-mobile-secondary-open`) control which drawer tab is visible
-- CSS forces the drawer to full width (100vw)
+- CSS forces the drawer to full viewport width (window.innerWidth px)
 - Tab list becomes horizontal (flex-direction: row)
 - Viewport-cross detection: `matchMedia` listener handles 600px boundary crossing
 - CSS variable sync: `--sidebar-ux-secondary-w` is overwritten on mobile to match `window.innerWidth`

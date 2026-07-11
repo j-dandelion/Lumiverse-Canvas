@@ -15,14 +15,15 @@ import { getMainWrapper } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
 import { dlog } from '../debug/log'
 import { findDrawerToggleButton } from './main-persist'
-import { isSecondarySidebarOpen, closeSecondarySidebar, getSecondaryWrapper, getClosedTransformPx, SECONDARY_WIDTH_VAR } from './secondary'
+import { isSecondarySidebarOpen, closeSecondarySidebar, getSecondaryWrapper, getSecondaryDrawer, getClosedTransformPx, SECONDARY_WIDTH_VAR } from './secondary'
 import { cancelWrapperAnimation } from './animation'
 
 // Saved desktop value of --sidebar-ux-secondary-w.  On mobile, the CSS
-// variable is overwritten with `window.innerWidth` so the close-transform
-// matches the 100vw drawer.  Without save/restore, crossing back to
-// desktop reads the mobile value, sets the drawer's inline width to it,
-// and the stale wrapper translateX no longer matches → 30-60px peek.
+// variable is overwritten to match the (scaled) viewport width so the
+// close-transform matches the full-viewport drawer width.  Without
+// save/restore, crossing back to desktop reads the mobile value, sets the
+// drawer's inline width to it, and the stale wrapper translateX no longer
+// matches → 30-60px peek.
 let _desktopCssVarValue: number | null = null
 
 // Resize coalescing + diagnostics — see startMobileExclusion()
@@ -32,17 +33,15 @@ let _lastDiagLog = 0
 /**
  * Sync --sidebar-ux-secondary-w to match the drawer's actual rendered width.
  *
- * On mobile the drawer is forced to 100vw (inline !important, which beats
- * stylesheet !important), but getClosedTransformPx() reads the CSS variable
- * to compute the close offset.  If the variable still holds the
- * desktop-saved width (e.g. 249px), the transform is 249px while the
+ * On mobile the drawer is forced to a host-aligned viewport width via CSS
+ * (var(--app-scaled-viewport-width, ...)), but getClosedTransformPx() reads
+ * the CSS variable to compute the close offset.  If the variable still holds
+ * the desktop-saved width (e.g. 249px), the transform is 249px while the
  * drawer is 360px → 111px "peek" on the right.
  *
- * Fix: overwrite the variable on mobile so both values agree.
- * On desktop, restore the saved value so the persisted width takes effect
- * again (clearing the override would leave the drawer's inline width
- * pointing at a removed variable → fallback 420px instead of the actual
- * saved width).
+ * Fix: measure the rendered drawer and overwrite the variable on mobile so
+ * both values agree.  On desktop, restore the saved value so the persisted
+ * width takes effect again.
  */
 function syncCssVarToDrawerWidth(): void {
   const el = document.documentElement
@@ -52,7 +51,19 @@ function syncCssVarToDrawerWidth(): void {
     if (isFinite(current) && _desktopCssVarValue === null) {
       _desktopCssVarValue = current
     }
-    el.style.setProperty(SECONDARY_WIDTH_VAR, `${window.innerWidth}px`)
+    // Prefer measured offsetWidth (reflects the actual rendered size after
+    // CSS host-aligned width resolves).  Fall back to un-scaled innerWidth
+    // if the drawer isn't mounted yet.
+    const drawer = getSecondaryDrawer()
+    const measured = drawer?.offsetWidth ?? 0
+    if (measured > 0) {
+      el.style.setProperty(SECONDARY_WIDTH_VAR, `${measured}px`)
+    } else {
+      const uiScale = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale')
+      ) || 1
+      el.style.setProperty(SECONDARY_WIDTH_VAR, `${Math.round(window.innerWidth / uiScale)}px`)
+    }
   } else {
     // Desktop: restore the saved value so the drawer width and close
     // transform stay in sync.  If nothing was saved (e.g. extension
@@ -156,13 +167,14 @@ export function startMobileExclusion(): () => void {
   _mediaQuery = window.matchMedia('(max-width: 600px)')
 
   /** Update the secondary drawer's inline width based on viewport.
-  *  On mobile, force 100vw (CSS can't override inline !important).
-  *  On desktop, restore the CSS-variable-based width so the drawer
-  *  matches the persisted value (syncCssVarToDrawerWidth restores the
-  *  saved desktop var, so var(--sidebar-ux-secondary-w) resolves correctly).
-  *  Also syncs --sidebar-ux-secondary-w so getClosedTransformPx() matches,
-  *  and updates the wrapper's translateX to match the new CSS var so the
-  *  closed transform stays in sync with the drawer's actual width. */
+   *  On mobile, force the host-aligned scaled viewport width via CSS var
+   *  (not raw window.innerWidth px — the host zooms Canvas shells appended
+   *  to body, so innerWidth is already in device-px and must be un-scaled).
+   *  On desktop, restore the CSS-variable-based width so the drawer matches
+   *  the persisted value.  Also syncs --sidebar-ux-secondary-w so
+   *  getClosedTransformPx() matches, and updates the wrapper's translateX
+   *  to match the new CSS var so the closed transform stays in sync with
+   *  the drawer's actual width. */
   function _updateDrawerWidth(): void {
    // Stop any in-flight rAF so it can't overwrite the transform we're about to set
    cancelWrapperAnimation()
@@ -170,7 +182,10 @@ export function startMobileExclusion(): () => void {
    const drawer = wrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
    if (!drawer) return
    if (isMobileViewport()) {
-     drawer.style.width = '100vw'
+     // Host-aligned scaled viewport width — matches Lumiverse's own
+     // ViewportDrawer mobile width.  NOT raw window.innerWidth px,
+     // because the host applies zoom to body children.
+     drawer.style.width = 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'
    } else {
      // Restore the CSS-variable-based width.  syncCssVarToDrawerWidth()
      // (called below) restores the saved desktop value to the CSS var,
@@ -244,8 +259,8 @@ export function startMobileExclusion(): () => void {
   // One-shot reconciliation on mount: sync drawer width and CSS variable
   // to match the viewport. On mobile, this overwrites the CSS var (which
   // still holds the desktop-saved value from createSecondarySidebar) with
-  // window.innerWidth so getClosedTransformPx() matches the 100vw drawer —
-  // preventing the 60-100px peek on hard-refresh at mobile.
+  // the measured/host-aligned width so getClosedTransformPx() matches the
+  // drawer width — preventing the 60-100px peek on hard-refresh at mobile.
   if (isMobileViewport()) {
     _updateDrawerWidth()
   }

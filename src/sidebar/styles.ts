@@ -80,6 +80,16 @@ const SECONDARY_MOBILE_CSS = `
     display: none !important;
     pointer-events: none !important;
   }
+    /* Host main drawer on mobile: oversize by 1px to match the +1px oversize
+     on Canvas secondary drawers.  Under fractional zoom/AA the host's
+     --app-scaled-viewport-width resolves ~1px short of the visual viewport,
+     leaving a 1px underfill gap when the drawer is open (translateX(0)).
+     Adding 1px to the width via calc() fills that gap.
+     The extra 1px is harmless on desktop (@media >600px scoped below). */
+  [class*="wrapperLeft"],
+  [class*="wrapperRight"] {
+    --drawer-panel-w: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px) !important;
+  }
   /* Backdrop: full-viewport overlay that darkens the screen (including the
      safe area at the top) when the secondary drawer is open on mobile.
      Mirrors Lumiverse's main-drawer .backdrop element
@@ -300,6 +310,19 @@ export function injectDrawerTabStyles(): void {
       flex-shrink: 0;
     }
   `)
+
+  // Closed-drawer shadow suppression: when the secondary drawer is off-screen
+  // (translateX ≠ 0), its box-shadow must not bleed into the viewport —
+  // even with the +1px overshoot, shadow spread can extend 4–24px past the
+  // element edge.  The data-drawer-open attribute is toggled by open/close
+  // in secondary.tsx; the inline `box-shadow` style on the drawer element
+  // is always present, so we need !important to override it.
+  injectStyles('sidebar-ux-shadow-close-suppress', `
+    .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
+      box-shadow: none !important;
+    }
+  `)
+
   // Mobile CSS — scoped to @media (max-width: 600px)
   injectStyles('canvas-ux-secondary-mobile', SECONDARY_MOBILE_CSS)
   // Hide inactive moved tabs via a CSS rule keyed on data attributes, so we

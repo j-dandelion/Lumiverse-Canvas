@@ -185,6 +185,7 @@ export function openSecondarySidebar() {
   // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
   animateWrapper(_secondaryWrapper!, 0)
   _secondarySidebarOpen = true
+  _secondaryWrapper.dataset.drawerOpen = 'true'
   syncDrawerTabSettings()
   updateDrawerTabVisibility()
   // Re-sync the panel header in case the main header changed since the
@@ -220,6 +221,7 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   // left at -width.
   animateWrapper(_secondaryWrapper!, getClosedTransformPx())
   _secondarySidebarOpen = false
+  _secondaryWrapper.dataset.drawerOpen = 'false'
   syncDrawerTabSettings()
   updateDrawerTabVisibility()
   // Mirror the open-path sync: in case the main header changed while the
@@ -272,11 +274,14 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
  * when the user moved the main to the right).
  */
 export function getClosedTransformPx(): number {
-  // Secondary is opposite the main drawer. Map main side → secondary
-  // anchor side, then use the shared closed-transform helper.
   const secondarySide: 'left' | 'right' =
     getMainDrawerSide() === 'left' ? 'right' : 'left'
-  const w = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420))
+  // Prefer measured drawer width when available — the CSS var may lag
+  // behind the actual rendered width after viewport or dimension changes
+  // (especially on mobile where we use a host-aligned CSS var for width).
+  const measured = getSecondaryDrawer()?.offsetWidth ?? 0
+  const fromVar = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420))
+  const w = Math.max(measured, fromVar)
   return closedTransformPx(secondarySide, w)
 }
 
@@ -438,4 +443,3 @@ export function tearDownSecondarySidebar(): void {
   _stopPanelHeaderObservers()
   resetPanelHeaderSyncCache()
 }
-

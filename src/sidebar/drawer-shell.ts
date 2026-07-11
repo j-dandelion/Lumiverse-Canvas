@@ -53,9 +53,15 @@ export interface DrawerShell {
  * Closed-state translateX for a shell anchored on `side` with width `w`.
  * - left anchor → slide further left (−w)
  * - right anchor → slide further right (+w)
+ *
+ * +1px overshoot: kills subpixel / hairline peeks at the closed edge under
+ * device-pixel zoom or AA.  Host uses CSS % for its closed transform (always
+ * matches rendered size) so it doesn't need this; Canvas uses JS px so even
+ * when `widthPx` is an integer the browser may raster the edge 1px into the
+ * viewport under fractional device-pixel ratios.
  */
 export function closedTransformPx(side: 'left' | 'right', widthPx: number): number {
-  const w = Math.ceil(widthPx)
+  const w = Math.ceil(widthPx) + 1
   return side === 'left' ? -w : w
 }
 
@@ -68,6 +74,17 @@ export function readWidthCssVar(varName: string, fallback = 420): number {
     return isFinite(n) && n > 0 ? n : fallback
   } catch {
     return fallback
+  }
+}
+
+/** Read the Lumiverse UI zoom scale (1 if undefined / unparseable). */
+function readUiScale(): number {
+  try {
+    return parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale')
+    ) || 1
+  } catch {
+    return 1
   }
 }
 
@@ -98,6 +115,7 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
   const wrapper = document.createElement('div')
   wrapper.className = `${wrapperClass} sidebar-ux-side-${side}`
   wrapper.setAttribute('data-drawer-owner', owner)
+  wrapper.dataset.drawerOpen = initialOpen ? 'true' : 'false'
 
   const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(widthCssVar))
   const rawWidth =
@@ -107,8 +125,12 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
         ? cssVarWidth
         : defaultWidth
 
+  // On mobile (fullViewportWidth) the host zooms its children, so raw
+  // window.innerWidth is already in device-px and must be un-scaled to
+  // CSS px.  Use the host-aligned CSS var for the drawer width; for the
+  // CSS var (used by JS transform) compute a px approximation.
   const initWidth = fullViewportWidth
-    ? window.innerWidth
+    ? Math.round(window.innerWidth / readUiScale())
     : Math.ceil(clampSidebarWidth(rawWidth))
 
   document.documentElement.style.setProperty(widthCssVar, `${initWidth}px`)
@@ -150,7 +172,9 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
   const drawer = document.createElement('div')
   drawer.className = 'sidebar-ux-drawer'
   drawer.style.cssText = `
-    width: ${fullViewportWidth ? '100vw' : `var(${widthCssVar}, ${defaultWidth}px)`};
+    width: ${fullViewportWidth
+      ? 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'
+      : `var(${widthCssVar}, ${defaultWidth}px)`};
     height: 100%;
     position: relative;
     display: flex;
