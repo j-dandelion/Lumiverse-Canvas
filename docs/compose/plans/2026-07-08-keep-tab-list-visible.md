@@ -265,7 +265,7 @@ import { applyTabListPosition, applyTabListPin } from '../sidebar/tab-position'
 Insert after line 363 (the closing `}` of `tabPositionFeature`):
 
 ```typescript
-/** Keep tab list visible: pins the secondary drawer's tab-button-list to
+/** Keep tab controls visible: pins the secondary drawer's tab-button-list to
  *  the screen edge so the user can switch tabs even when the drawer is
  *  closed. The panel still slides in/out from behind the pinned list.
  *  No-op on mobile (mobile CSS handles the tab list separately).
@@ -345,7 +345,7 @@ In `src/settings/panel.ts`, after the `moveControlsToOuterEdge` toggle (line 257
     (v) => setSettings({ keepTabListVisible: v })
   )
   secSidebars.appendChild(buildSettingRow({
-    label: 'Keep tab list visible',
+    label: 'Keep tab controls visible',
     hint: 'Pins the tab buttons to the screen edge so you can switch tabs even when the second drawer is closed. The panel still slides in and out from behind the list.',
     control: keepTabListVisible.btn,
   }))
@@ -382,7 +382,7 @@ Expected: No errors.
 
 ```bash
 git add src/settings/panel.ts
-git commit -m "feat: add Keep tab list visible toggle to settings panel"
+git commit -m "feat: add Keep tab controls visible toggle to settings panel"
 ```
 
 ---

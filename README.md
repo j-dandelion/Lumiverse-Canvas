@@ -15,7 +15,7 @@ Convenient tweaks and features to enhance your Lumiverse UI!
 
 ## Coming soon™
 - Change size of tabs easily
-- Keep tabs visible when drawer is closed
+- Keep tab controls visible when drawer is closed
 - Drag to reorder tab buttons
 - Layout system (try different layouts, save and load)
 - Drawers on top/bottom of screen

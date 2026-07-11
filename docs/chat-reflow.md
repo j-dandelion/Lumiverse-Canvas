@@ -22,7 +22,7 @@ Mobile (≤600px): both clear / no-op.
 
 ## Strip gutters (`src/sidebar/strip-gutter.ts`)
 
-Owned by **keep tab lists visible**, not by chat reflow.
+Owned by **keep tab controls visible**, not by chat reflow.
 
 ### Behavior
 

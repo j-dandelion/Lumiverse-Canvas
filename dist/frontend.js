@@ -10426,13 +10426,13 @@ function buildSettingsPanelDOM() {
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
   secSidebars.appendChild(buildSettingRow({
     label: "Move tab controls to outer edge",
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab lists visible".',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab controls visible".',
     control: moveControlsToOuter.btn
   }));
   const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
   const keepTabListVisibleRow = buildSettingRow({
-    label: "Keep tab lists visible",
-    hint: 'Requires "Move tab controls to outer edge". Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.',
+    label: "Keep tab controls visible",
+    hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.',
     control: keepTabListVisible.btn,
     disabled: !getSettings().moveControlsToOuterEdge
   });
@@ -10440,7 +10440,7 @@ function buildSettingsPanelDOM() {
   const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().keepTabListVisible });
   const hideDrawerTabToggleRow = buildSettingRow({
     label: "Hide drawer open/close buttons",
-    hint: 'Requires "Keep tab lists visible". Hides edge open/close controls on desktop for the second drawer and the Canvas main drawer. The pinned tab strip is the open/close chrome. Does not affect mobile. Does not change the host main control when keep-tabs is off.',
+    hint: 'Hides the small button that open/closes the drawer. Requires "Keep tab controls visible".',
     control: hideDrawerTabToggle.btn,
     disabled: !getSettings().keepTabListVisible
   });

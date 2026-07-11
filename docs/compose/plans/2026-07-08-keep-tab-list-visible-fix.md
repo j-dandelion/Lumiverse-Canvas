@@ -246,7 +246,7 @@ If Task 1 already force-unpins on any mobile call to `applyTabListPin`, Task 5 i
 
 **Settings UX:**
 
-- Gate “Keep tab list visible” like resize: `{ disabled: () => !getSettings().secondSidebarEnabled }` and disable the row control when master toggle is off.
+- Gate “Keep tab controls visible” like resize: `{ disabled: () => !getSettings().secondSidebarEnabled }` and disable the row control when master toggle is off.
 - Optional: move row under “Second drawer” section if that improves discoverability (product call; default = gate in place under Sidebars).
 
 **Docs:**
@@ -271,7 +271,7 @@ Run after Tasks 1–5, before calling the feature done:
 
 1. Second sidebar on, desktop wide viewport.
 2. Assign ≥2 tabs to secondary; leave drawer closed.
-3. Enable **Keep tab list visible** → strip visible; click tabs → content switches (panel may open per existing policy).
+3. Enable **Keep tab controls visible** → strip visible; click tabs → content switches (panel may open per existing policy).
 4. Open drawer → panel fully readable; resize handle still usable.
 5. Toggle **Move controls to outer edge** → pin still correct.
 6. Flip main drawer side → remount → pin still correct.

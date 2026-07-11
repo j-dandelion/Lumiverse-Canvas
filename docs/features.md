@@ -37,7 +37,7 @@ interface CanvasFeature {
 | `persistTabAssignmentsFeature` | `persistTabAssignments` | Cancels in-flight save when tabs facet turns off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
-| `keepTabListVisibleFeature` | `keepTabListVisible` | Pins tab lists when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
+| `keepTabListVisibleFeature` | `keepTabListVisible` | Keep tab controls visible when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `keepTabListVisible`) |
 | `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs |
 

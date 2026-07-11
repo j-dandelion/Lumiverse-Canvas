@@ -1,4 +1,4 @@
-// Main-drawer "keep tab list visible" — mirror buttons + orchestration.
+// Main-drawer "keep tab controls visible" — mirror buttons + orchestration.
 //
 // When keepTabListVisible is on (desktop), Canvas owns the full main drawer
 // chrome via main-mirror-drawer.ts (headless host + shell + portal). This

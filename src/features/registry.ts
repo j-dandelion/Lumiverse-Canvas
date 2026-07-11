@@ -372,7 +372,7 @@ const tabPositionFeature: CanvasFeature = {
   },
 }
 
-/** Keep tab list visible (requires moveControlsToOuterEdge):
+/** Keep tab controls visible (requires moveControlsToOuterEdge):
  *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
  *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
  *    forward to host tab buttons. Hidden while main drawer is open.
