@@ -15,6 +15,12 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
 // src/types.ts
+function normalizeCanvasSettingsFields(s) {
+  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
+    return { ...s, keepTabListVisible: false };
+  }
+  return s;
+}
 function mergeCanvasSettings(saved) {
   const out = { ...DEFAULT_CANVAS_SETTINGS };
   if (saved && typeof saved === "object") {
@@ -37,7 +43,7 @@ function mergeCanvasSettings(saved) {
       out.persistTabAssignments = raw.layoutPersistence;
     }
   }
-  return out;
+  return normalizeCanvasSettingsFields(out);
 }
 var DEFAULT_CANVAS_SETTINGS;
 var init_types = __esm(() => {
@@ -63,6 +69,17 @@ var init_types = __esm(() => {
 });
 
 // src/dom/lumiverse.ts
+var exports_lumiverse = {};
+__export(exports_lumiverse, {
+  getMainWrapper: () => getMainWrapper,
+  getMainSidebar: () => getMainSidebar,
+  getMainPanelHeader: () => getMainPanelHeader,
+  getMainPanelContent: () => getMainPanelContent,
+  getMainPanel: () => getMainPanel,
+  getMainDrawerWidth: () => getMainDrawerWidth,
+  getMainDrawer: () => getMainDrawer,
+  getChatColumn: () => getChatColumn
+});
 function getMainSidebar() {
   return document.querySelector('[data-spindle-mount="sidebar"]');
 }
@@ -1962,11 +1979,234 @@ function initSecondaryDrawer(_ctx) {
     }
   });
 }
+async function finalizeAssignToSecondary(opts) {
+  const {
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment = true,
+    openOnClosed = true,
+    setActiveWhenReady = true,
+    showAndPersist = true
+  } = opts;
+  addSecondaryTabButton({
+    id: resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName
+  });
+  updateDrawerTabVisibility();
+  if (wireAssignment) {
+    setTabAssignment(resolvedId, "secondary");
+    hideMainTabButton(resolvedId);
+  }
+  if (openOnClosed && _state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+    await openSecondarySidebar();
+    if (!deferActivation) {
+      _state = "tab_active";
+      _activeTabId = resolvedId;
+      setActiveSecondaryTabId(resolvedId);
+    }
+  } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
+    _activeTabId = resolvedId;
+    _state = "tab_active";
+    setActiveSecondaryTabId(resolvedId);
+  }
+  const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+  if (headerTitle && !deferActivation) {
+    headerTitle.textContent = title;
+  }
+  if (showAndPersist) {
+    if (!isMobileViewport() && !deferActivation) {
+      showSecondaryTab(resolvedId);
+    }
+    persistLayout();
+  }
+}
+async function assignExtensionTabToSecondary(ctx) {
+  const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx;
+  setTabAssignment(resolvedId, "secondary");
+  hideMainTabButton(resolvedId);
+  if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+    await openSecondarySidebar();
+    _state = "open";
+  }
+  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
+  const bareId = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
+  const existingRoot = secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(bareId)}"]`);
+  if (existingRoot) {
+    const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: tab.title || storeTabForButton?.title || resolvedId,
+      root: existingRoot,
+      iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || storeTabForButton?.iconSvg,
+      shortName: shortName || readMainButtonShortName(tab.button) || storeTabForButton?.shortName,
+      deferActivation,
+      wireAssignment: false,
+      openOnClosed: false,
+      setActiveWhenReady: true
+    });
+    return;
+  }
+  const secondaryWrapper = getSecondaryWrapper();
+  const secondaryContentMain = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+  if (storeTab?.root && secondaryContentMain) {
+    const root = storeTab.root;
+    if (root.parentElement !== secondaryContentMain) {
+      secondaryContentMain.appendChild(root);
+    }
+    root.setAttribute("data-canvas-moved", resolvedId);
+    if (!deferActivation) {
+      for (const child of Array.from(secondaryContentMain.children)) {
+        if (child instanceof HTMLElement) {
+          if (child === root) {
+            child.setAttribute("data-canvas-active", "");
+          } else {
+            child.removeAttribute("data-canvas-active");
+          }
+        }
+      }
+    }
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: tab.title || storeTab.title || resolvedId,
+      root,
+      iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab.iconSvg,
+      shortName: readMainButtonShortName(tab.button) || storeTab.shortName,
+      deferActivation,
+      wireAssignment: false,
+      openOnClosed: false,
+      setActiveWhenReady: true
+    });
+    return;
+  }
+  if (!isMobileViewport() && !deferActivation) {
+    _activeTabId = resolvedId;
+    _state = "tab_active";
+    setActiveSecondaryTabId(resolvedId);
+  }
+  const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+  if (headerTitle && !deferActivation) {
+    headerTitle.textContent = tab.title || resolvedId;
+  }
+  if (!isMobileViewport() && !deferActivation) {
+    showSecondaryTab(resolvedId);
+  }
+  persistLayout();
+}
+async function assignBuiltInTabToSecondary(ctx) {
+  const { tabId, tab, resolvedId, deferActivation } = ctx;
+  const secondaryWrapper = getSecondaryWrapper();
+  const secondaryContent = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+  const wSpindle = getHostBridge();
+  const wSpindleUi = wSpindle?.ui;
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!storeTab} ` + `hasSecondaryContent=${!!secondaryContent}`);
+  let alreadyInSecondary = null;
+  if (secondaryContent) {
+    const idsToTry = resolvedId !== tabId ? [resolvedId, tabId] : [resolvedId];
+    for (const id of idsToTry) {
+      alreadyInSecondary = secondaryContent.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]`);
+      if (alreadyInSecondary)
+        break;
+    }
+  }
+  if (alreadyInSecondary) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
+    const title2 = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: title2,
+      root: alreadyInSecondary,
+      iconSvg: tab.button?.querySelector("svg")?.outerHTML || alreadyInSecondary.querySelector("svg")?.outerHTML,
+      shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
+      deferActivation,
+      wireAssignment: true,
+      openOnClosed: true,
+      setActiveWhenReady: false
+    });
+    return;
+  }
+  if (!secondaryContent) {
+    dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
+      tabId,
+      resolvedId
+    });
+    return;
+  }
+  const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` + `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
+  let root;
+  let placedViaHost = false;
+  if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+    const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+    root = await moveBuiltInTabToSecondaryContainer2({
+      tabId,
+      deferActivation,
+      root: bridgeRoot
+    });
+    placedViaHost = !!root;
+  }
+  if (!root && storeTab?.root) {
+    root = storeTab.root;
+    if (root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(root);
+    }
+    root.setAttribute("data-canvas-moved", resolvedId);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
+  }
+  if (!root) {
+    if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
+      dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).", {
+        tabId,
+        resolvedId
+      });
+    }
+    return;
+  }
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContent.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root || child.getAttribute("data-canvas-moved") === resolvedId) {
+          child.setAttribute("data-canvas-active", "");
+        } else if (child.hasAttribute("data-canvas-moved")) {
+          child.removeAttribute("data-canvas-active");
+        }
+      }
+    }
+  }
+  const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
+  const iconSvg = tab.button?.querySelector("svg")?.outerHTML || root.querySelector("svg")?.outerHTML;
+  const shortName = readMainButtonShortName(tab.button) || storeTab?.shortName;
+  if (placedViaHost) {
+    try {
+      const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+      if (m.isMainMirrorActive())
+        m.ensureHostContentParkedPublic();
+    } catch {}
+  }
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment: true,
+    openOnClosed: true,
+    setActiveWhenReady: false
+  });
+}
 async function assignToSecondary(tabId) {
   const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
   let tab = drawerObserver.getTab(tabId);
   let iconSvg;
-  let iconUrl;
   let shortName;
   if (!tab) {
     const storeTab = findStoreTab(tabId);
@@ -1986,196 +2226,19 @@ async function assignToSecondary(tabId) {
       title: storeTab.title
     };
     iconSvg = storeTab.iconSvg;
-    iconUrl = storeTab.iconUrl;
     shortName = storeTab.shortName;
   } else {
     iconSvg = tab.button.querySelector("svg")?.outerHTML;
   }
   const resolvedId = tab.tabId;
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
-  const _isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
-  if (_isExtensionTab) {
-    setTabAssignment(resolvedId, "secondary");
-    hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar();
-      _state = "open";
-    }
-    const _secondaryContentEarly = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
-    const _bareIdEarly = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
-    const _existingRoot = _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? _secondaryContentEarly?.querySelector(`[data-canvas-moved="${CSS.escape(_bareIdEarly)}"]`);
-    if (_existingRoot) {
-      const _storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: tab.title || _storeTabForButton?.title || resolvedId,
-        root: _existingRoot,
-        iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || _storeTabForButton?.iconSvg,
-        shortName: shortName || readMainButtonShortName(tab.button) || _storeTabForButton?.shortName
-      });
-      updateDrawerTabVisibility();
-    } else {
-      const _secondaryWrapper = getSecondaryWrapper();
-      const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-      const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-      if (_storeTab?.root && _secondaryContent) {
-        const _root = _storeTab.root;
-        if (_root.parentElement !== _secondaryContent) {
-          _secondaryContent.appendChild(_root);
-        }
-        _root.setAttribute("data-canvas-moved", resolvedId);
-        if (!deferActivation) {
-          for (const _child of Array.from(_secondaryContent.children)) {
-            if (_child instanceof HTMLElement) {
-              if (_child === _root) {
-                _child.setAttribute("data-canvas-active", "");
-              } else {
-                _child.removeAttribute("data-canvas-active");
-              }
-            }
-          }
-        }
-        addSecondaryTabButton({
-          id: resolvedId,
-          title: tab.title || _storeTab.title || resolvedId,
-          root: _root,
-          iconSvg: tab.button?.querySelector("svg")?.outerHTML || _storeTab.iconSvg,
-          shortName: readMainButtonShortName(tab.button) || _storeTab.shortName
-        });
-        updateDrawerTabVisibility();
-      }
-    }
-    if (!isMobileViewport() && !deferActivation) {
-      _activeTabId = resolvedId;
-      _state = "tab_active";
-      setActiveSecondaryTabId(resolvedId);
-    }
-    const _headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !deferActivation) {
-      _headerTitle.textContent = tab.title || _existingRoot?.getAttribute("data-tab-title") || resolvedId;
-    }
+  const ctx = { tabId, tab, resolvedId, iconSvg, shortName, deferActivation };
+  const isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
+  if (isExtensionTab) {
+    await assignExtensionTabToSecondary(ctx);
   } else {
-    const _secondaryWrapper = getSecondaryWrapper();
-    const _secondaryContent = _secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-    const _storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-    const wSpindle = getHostBridge();
-    const wSpindleUi = wSpindle?.ui;
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!_storeTab} ` + `hasSecondaryContent=${!!_secondaryContent}`);
-    const _alreadyInSecondary = _secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`);
-    if (_alreadyInSecondary) {
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
-      const _title2 = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-      addSecondaryTabButton({
-        id: resolvedId,
-        title: _title2,
-        root: _alreadyInSecondary,
-        iconSvg: tab.button?.querySelector("svg")?.outerHTML || _alreadyInSecondary.querySelector("svg")?.outerHTML,
-        shortName: readMainButtonShortName(tab.button) || _storeTab?.shortName
-      });
-      updateDrawerTabVisibility();
-      setTabAssignment(resolvedId, "secondary");
-      hideMainTabButton(resolvedId);
-      if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-        await openSecondarySidebar();
-        if (!deferActivation) {
-          _state = "tab_active";
-          _activeTabId = resolvedId;
-          setActiveSecondaryTabId(resolvedId);
-        }
-      }
-      const _headerTitle2 = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-      if (_headerTitle2 && !deferActivation)
-        _headerTitle2.textContent = _title2;
-      if (!isMobileViewport() && !deferActivation) {
-        showSecondaryTab(resolvedId);
-      }
-      persistLayout();
-      return;
-    }
-    if (!_secondaryContent) {
-      dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
-        tabId,
-        resolvedId
-      });
-      return;
-    }
-    const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` + `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
-    let _root;
-    let _placedViaHost = false;
-    if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
-      const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
-      _root = await moveBuiltInTabToSecondaryContainer2({
-        tabId,
-        deferActivation,
-        root: bridgeRoot
-      });
-      _placedViaHost = !!_root;
-    }
-    if (!_root && _storeTab?.root) {
-      _root = _storeTab.root;
-      if (_root.parentElement !== _secondaryContent) {
-        _secondaryContent.appendChild(_root);
-      }
-      _root.setAttribute("data-canvas-moved", resolvedId);
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
-    }
-    if (!_root) {
-      if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
-        dwarn("[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).", {
-          tabId,
-          resolvedId
-        });
-      }
-      return;
-    }
-    if (!deferActivation && _secondaryContent) {
-      for (const _child of Array.from(_secondaryContent.children)) {
-        if (_child instanceof HTMLElement) {
-          if (_child === _root || _child.getAttribute("data-canvas-moved") === resolvedId) {
-            _child.setAttribute("data-canvas-active", "");
-          } else if (_child.hasAttribute("data-canvas-moved")) {
-            _child.removeAttribute("data-canvas-active");
-          }
-        }
-      }
-    }
-    const _title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || _storeTab?.title || resolvedId;
-    const _iconSvg = tab.button?.querySelector("svg")?.outerHTML || _root.querySelector("svg")?.outerHTML;
-    const _shortName = readMainButtonShortName(tab.button) || _storeTab?.shortName;
-    addSecondaryTabButton({
-      id: resolvedId,
-      title: _title,
-      root: _root,
-      iconSvg: _iconSvg,
-      shortName: _shortName
-    });
-    updateDrawerTabVisibility();
-    setTabAssignment(resolvedId, "secondary");
-    hideMainTabButton(resolvedId);
-    if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-      await openSecondarySidebar();
-      if (!deferActivation) {
-        _state = "tab_active";
-        _activeTabId = resolvedId;
-        setActiveSecondaryTabId(resolvedId);
-      }
-    }
-    const _headerTitle = _secondaryWrapper?.querySelector(".sidebar-ux-panel-title");
-    if (_headerTitle && !deferActivation)
-      _headerTitle.textContent = _title;
-    if (_placedViaHost) {
-      try {
-        const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-        if (m.isMainMirrorActive())
-          m.ensureHostContentParkedPublic();
-      } catch {}
-    }
+    await assignBuiltInTabToSecondary(ctx);
   }
-  if (!isMobileViewport() && !deferActivation) {
-    showSecondaryTab(resolvedId);
-  }
-  persistLayout();
 }
 async function unassignFromSecondary(tabId) {
   dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`);
@@ -2196,6 +2259,18 @@ async function unassignFromSecondary(tabId) {
       dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map((t) => ({ id: t.id, title: t.title })));
     }
   }
+  const bridge = getHostBridge();
+  const bridgeUi = bridge?.ui;
+  const bridgeRoot = bridgeUi?.getBuiltInTabRoot?.(tabId) || (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) : undefined);
+  const isBuiltIn = bridgeRoot != null;
+  if (isBuiltIn && bridgeUi?.requestTabLocation) {
+    const hostTabId = bridgeRoot?.getAttribute?.("data-tab-id") || tabId;
+    try {
+      bridgeUi.requestTabLocation(hostTabId, { kind: "main-drawer" });
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassign: requestTabLocation(main-drawer) failed for ${hostTabId}:`, err);
+    }
+  }
   const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
   let _movedRoot = null;
   if (_secondaryContentForUnassign) {
@@ -2205,29 +2280,43 @@ async function unassignFromSecondary(tabId) {
       if (_movedRoot)
         break;
     }
-    if (_movedRoot) {
-      const _mainContent = document.querySelector('[class*="_panelContent_"]');
-      if (_mainContent && _movedRoot.parentElement !== _mainContent) {
-        _mainContent.appendChild(_movedRoot);
-      }
-      _movedRoot.removeAttribute("data-canvas-moved");
-      _movedRoot.removeAttribute("data-canvas-active");
-    }
   }
-  if (!_movedRoot) {
-    const bridgeRoot = getHostBridge()?.ui.getBuiltInTabRoot?.(tabId) || (resolvedShowId !== tabId ? getHostBridge()?.ui.getBuiltInTabRoot?.(resolvedShowId) : undefined);
-    let residual = bridgeRoot && bridgeRoot.getAttribute?.("data-canvas-moved") != null ? bridgeRoot : null;
-    if (!residual && typeof document !== "undefined") {
+  if (isBuiltIn) {
+    const clearAttrs = (el) => {
+      if (!el)
+        return;
+      el.removeAttribute("data-canvas-moved");
+      el.removeAttribute("data-canvas-active");
+    };
+    clearAttrs(_movedRoot);
+    clearAttrs(bridgeRoot);
+    if (!_movedRoot && typeof document !== "undefined") {
       const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
       for (const id of idsToTry) {
-        residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
-        if (residual)
+        const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
+        if (residual) {
+          clearAttrs(residual);
           break;
+        }
       }
     }
-    if (residual) {
-      residual.removeAttribute("data-canvas-moved");
-      residual.removeAttribute("data-canvas-active");
+  } else if (_movedRoot) {
+    const { getMainPanelContent: getMainPanelContent2 } = await Promise.resolve().then(() => exports_lumiverse);
+    const _mainContent = getMainPanelContent2();
+    if (_mainContent && _movedRoot.parentElement !== _mainContent) {
+      _mainContent.appendChild(_movedRoot);
+    }
+    _movedRoot.removeAttribute("data-canvas-moved");
+    _movedRoot.removeAttribute("data-canvas-active");
+  } else if (typeof document !== "undefined") {
+    const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
+    for (const id of idsToTry) {
+      const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
+      if (residual) {
+        residual.removeAttribute("data-canvas-moved");
+        residual.removeAttribute("data-canvas-active");
+        break;
+      }
     }
   }
   deleteTabAssignment(tabId);
@@ -2235,10 +2324,17 @@ async function unassignFromSecondary(tabId) {
     deleteTabAssignment(resolvedShowId);
   }
   removeSecondaryTabButton(tabId);
-  if (getActiveSecondaryTabId() === tabId) {
-    showSecondaryTab(null);
+  const activeId = getActiveSecondaryTabId();
+  if (activeId === tabId || activeId === resolvedShowId) {
+    _activeTabId = null;
+    setActiveSecondaryTabId(null);
+    clearSecondaryTabButtonActive();
   }
   showMainTabButton(resolvedShowId);
+  try {
+    const m = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+    m.reconcileMainTabListPin();
+  } catch {}
   if (getTabAssignments().size === 0) {
     _state = "closed";
     _activeTabId = null;
@@ -2276,19 +2372,6 @@ var init_secondary_drawer = __esm(() => {
 });
 
 // src/sidebar/drawer-sync.ts
-var exports_drawer_sync = {};
-__export(exports_drawer_sync, {
-  syncSecondaryTabLabels: () => syncSecondaryTabLabels,
-  syncDrawerTabSettings: () => syncDrawerTabSettings,
-  stopSideChangeWatcher: () => stopSideChangeWatcher,
-  stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
-  stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
-  stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
-  startSideChangeWatcher: () => startSideChangeWatcher,
-  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
-  isShowTabLabels: () => isShowTabLabels,
-  checkSideChanged: () => checkSideChanged
-});
 function isShowTabLabels() {
   const mode = getSettings().showTabLabels;
   if (mode === "show")
@@ -3770,12 +3853,6 @@ var init_tab_position = __esm(() => {
 });
 
 // src/sidebar/panel-header-sync.ts
-var exports_panel_header_sync = {};
-__export(exports_panel_header_sync, {
-  syncPanelHeaderFromMain: () => syncPanelHeaderFromMain,
-  stopPanelHeaderObservers: () => stopPanelHeaderObservers,
-  resetPanelHeaderSyncCache: () => resetPanelHeaderSyncCache
-});
 function syncPanelHeaderFromMain(getWrapper) {
   if (getWrapper)
     _getPrimaryWrapper = getWrapper;
@@ -3891,6 +3968,7 @@ var init_panel_header_sync = __esm(() => {
 var exports_main_mirror_drawer = {};
 __export(exports_main_mirror_drawer, {
   setCanvasMainTitle: () => setCanvasMainTitle,
+  restartReparkWatch: () => restartReparkWatch,
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
   openCanvasMainDrawer: () => openCanvasMainDrawer,
   onMainMirrorTabActivated: () => onMainMirrorTabActivated,
@@ -3907,6 +3985,7 @@ __export(exports_main_mirror_drawer, {
   applyMainMirrorRestoredWidth: () => applyMainMirrorRestoredWidth,
   applyMainMirrorDrawer: () => applyMainMirrorDrawer,
   __resetMainMirrorForTest: () => __resetMainMirrorForTest,
+  __getReparkIdleCountForTest: () => __getReparkIdleCountForTest,
   MAIN_MIRROR_WIDTH_VAR: () => MAIN_MIRROR_WIDTH_VAR
 });
 function getMainMirrorWidthVar() {
@@ -3985,13 +4064,13 @@ function reconcileMainMirrorDrawer(opts) {
   }
 }
 function bumpReflow() {
-  Promise.resolve().then(() => (init_reflow(), exports_reflow)).then((m) => m.updateChatReflow());
+  updateChatReflow();
 }
 function bumpResizeHandles() {
-  Promise.resolve().then(() => (init_handles(), exports_handles)).then((m) => m.mountResizeHandles());
+  mountResizeHandles();
 }
 function persistCanvasMainOpenState() {
-  Promise.resolve().then(() => (init_persist(), exports_persist)).then((m) => m.persistOpenState());
+  persistOpenState();
 }
 function applyMainMirrorRestoredWidth(widthPx) {
   const w = Math.ceil(clampSidebarWidth(widthPx));
@@ -4016,9 +4095,12 @@ function openCanvasMainDrawer() {
   document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS);
   _shell.drawerTab.classList.add("sidebar-ux-drawer-tab--active");
   animateWrapper(_shell.wrapper, 0);
-  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
+  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin()).catch((err) => {
+    dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`);
+  });
   bumpReflow();
   persistCanvasMainOpenState();
+  restartReparkWatch();
 }
 function closeCanvasMainDrawer() {
   if (!_shell || !_active)
@@ -4056,9 +4138,13 @@ function onMainMirrorTabActivated(title) {
   ensureHostContentParked();
   openCanvasMainDrawer();
   requestAnimationFrame(() => ensureHostContentParked());
+  restartReparkWatch();
 }
 function __resetMainMirrorForTest() {
   teardownMainMirror();
+}
+function __getReparkIdleCountForTest() {
+  return _reparkIdleCount;
 }
 function injectHostHideStyles() {
   const id = "sidebar-ux-host-main-hide";
@@ -4179,11 +4265,9 @@ function mountMainMirror(opts) {
   if (!_open && isMainDrawerOpen()) {
     openCanvasMainDrawer();
   }
-  Promise.resolve().then(() => (init_drawer_sync(), exports_drawer_sync)).then((m) => m.syncDrawerTabSettings());
-  Promise.resolve().then(() => (init_panel_header_sync(), exports_panel_header_sync)).then((m) => {
-    m.resetPanelHeaderSyncCache();
-    m.syncPanelHeaderFromMain(() => _shell?.wrapper ?? null);
-  });
+  syncDrawerTabSettings();
+  resetPanelHeaderSyncCache();
+  syncPanelHeaderFromMain(() => _shell?.wrapper ?? null);
   bumpResizeHandles();
   bumpReflow();
 }
@@ -4287,7 +4371,9 @@ function ensureHostContentParked() {
   if (restorePending) {
     Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
       m.stampPanelBodyHide();
-    }).catch(() => {});
+    }).catch((err) => {
+      dwarn(`[main-mirror] stampPanelBodyHide failed: ${err}`);
+    });
   }
 }
 function ensureHostContentParkedPublic() {
@@ -4332,6 +4418,7 @@ function restoreHostContent() {
 }
 function startReparkWatch() {
   stopReparkWatch();
+  _reparkIdleCount = 0;
   const tickMs = () => typeof document !== "undefined" && document.documentElement.classList.contains("sidebar-ux-main-restore-pending") ? 50 : 500;
   const tick = () => {
     _reparkTimer = null;
@@ -4341,16 +4428,28 @@ function startReparkWatch() {
     if (el && el.parentElement !== _shell.content) {
       dlog("[main-mirror] re-park: React moved panelContent back to host");
       ensureHostContentParked();
+      _reparkIdleCount = 0;
+    } else {
+      _reparkIdleCount++;
+      if (_reparkIdleCount >= REPARK_IDLE_STOP_COUNT) {
+        dlog("[main-mirror] repark watch idle-stopped");
+        return;
+      }
     }
     _reparkTimer = setTimeout(tick, tickMs());
   };
   _reparkTimer = setTimeout(tick, tickMs());
+}
+function restartReparkWatch() {
+  if (_active && _shell)
+    startReparkWatch();
 }
 function stopReparkWatch() {
   if (_reparkTimer !== null) {
     clearTimeout(_reparkTimer);
     _reparkTimer = null;
   }
+  _reparkIdleCount = 0;
 }
 function clearHostWrapperInline() {
   const wrap = getMainWrapper();
@@ -4389,7 +4488,7 @@ function teardownMainMirror(opts) {
   _mountedSide = null;
   bumpReflow();
 }
-var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _reparkTimer = null;
+var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _reparkTimer = null, _reparkIdleCount = 0, REPARK_IDLE_STOP_COUNT = 10;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
   init_state();
@@ -4399,16 +4498,14 @@ var init_main_mirror_drawer = __esm(() => {
   init_mobile_exclusion();
   init_tab_position();
   init_styles();
+  init_persist();
+  init_reflow();
+  init_handles();
+  init_drawer_sync();
+  init_panel_header_sync();
 });
 
 // src/resize/handles.ts
-var exports_handles = {};
-__export(exports_handles, {
-  refreshResizeHandles: () => refreshResizeHandles,
-  mountResizeHandles: () => mountResizeHandles,
-  isPointerResizeActive: () => isPointerResizeActive,
-  createResizeHandle: () => createResizeHandle
-});
 function isPointerResizeActive() {
   return window.matchMedia("(pointer: coarse)").matches;
 }
@@ -4717,10 +4814,9 @@ function stampPanelBodyHide() {
     return;
   if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
     return;
-  const nodes = document.querySelectorAll('[class*="_panelContent_"],' + "[data-canvas-main-panel-content]," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *");
+  const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR);
   for (const node of Array.from(nodes)) {
     const el = node;
-    el.setAttribute(RESTORE_HIDE_ATTR, "1");
     el.style.setProperty("visibility", "hidden", "important");
     el.style.setProperty("opacity", "0", "important");
     el.style.setProperty("pointer-events", "none", "important");
@@ -4729,10 +4825,9 @@ function stampPanelBodyHide() {
 function clearPanelBodyHide() {
   if (typeof document === "undefined")
     return;
-  const nodes = document.querySelectorAll(`[${RESTORE_HIDE_ATTR}]`);
+  const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR);
   for (const node of Array.from(nodes)) {
     const el = node;
-    el.removeAttribute(RESTORE_HIDE_ATTR);
     el.style.removeProperty("visibility");
     el.style.removeProperty("opacity");
     el.style.removeProperty("pointer-events");
@@ -4801,11 +4896,6 @@ function beginMainDrawerRestoreGuard() {
 }
 function suppressMainDrawer() {
   beginMainDrawerRestoreGuard();
-  const wrapper = _wrapper;
-  if (!wrapper)
-    return;
-  wrapper.style.setProperty("visibility", "hidden", "important");
-  wrapper.style.setProperty("opacity", "0", "important");
   stampPanelBodyHide();
 }
 function unsuppressMainDrawer() {
@@ -4817,11 +4907,6 @@ function unsuppressMainDrawer() {
   stopPanelHideObserver();
   clearPanelBodyHide();
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS);
-  const wrapper = _wrapper;
-  if (wrapper) {
-    wrapper.style.removeProperty("visibility");
-    wrapper.style.removeProperty("opacity");
-  }
 }
 function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
@@ -4835,7 +4920,7 @@ function isHostPrimaryTabActive(targetTabId) {
   const title = active.getAttribute("title") || "";
   if (id === targetTabId || title === targetTabId)
     return true;
-  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}:`) || targetTabId.includes(`:tab:${id}`))) {
+  if (id && (targetTabId.endsWith(`:${id}`) || targetTabId.includes(`:tab:${id}`))) {
     return true;
   }
   return false;
@@ -4962,10 +5047,22 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
       unsuppressMainDrawer();
       return;
     }
-    stampPanelBodyHide();
+    let mirrorMod = null;
+    let mirrorLoaded = false;
     Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+      mirrorMod = m;
+      mirrorLoaded = true;
       m.ensureHostContentParkedPublic();
     }).catch(() => {});
+    const reparkIfNeeded = () => {
+      if (mirrorLoaded && mirrorMod) {
+        mirrorMod.ensureHostContentParkedPublic();
+      }
+    };
+    const isMirrorMode = preferMirror || document.documentElement.classList.contains("sidebar-ux-canvas-main-active");
+    if (!isMirrorMode) {
+      stampPanelBodyHide();
+    }
     if (targetTabId) {
       if (!isHostPrimaryTabActive(targetTabId)) {
         clickRestoredPrimaryTab(targetTabId, preferMirror);
@@ -4991,7 +5088,9 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
         return;
       finished = true;
       stopContentSettleWatch();
-      stampPanelBodyHide();
+      if (!isMirrorMode) {
+        stampPanelBodyHide();
+      }
       dlog(`main-persist restore: unsuppress (${reason})`);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -5014,10 +5113,10 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
       if (watchingContent || finished)
         return;
       watchingContent = true;
-      Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
-        m.ensureHostContentParkedPublic();
-      }).catch(() => {});
-      stampPanelBodyHide();
+      reparkIfNeeded();
+      if (!isMirrorMode) {
+        stampPanelBodyHide();
+      }
       startContentSettleWatch((settleReason) => {
         contentSettled = true;
         dlog(`main-persist restore: content settled (${settleReason})`);
@@ -5031,7 +5130,6 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
       }
       if (finished)
         return;
-      stampPanelBodyHide();
       if (!targetTabId) {
         finish("no-target-tab");
         return;
@@ -5051,9 +5149,7 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
         stopContentSettleWatch();
         if (polls % 3 === 0) {
           clickRestoredPrimaryTab(targetTabId, preferMirror);
-          Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
-            m.ensureHostContentParkedPublic();
-          }).catch(() => {});
+          reparkIfNeeded();
         }
       }
       polls++;
@@ -5185,8 +5281,6 @@ function startMainDrawerPersistence() {
 function ensureRestoredPrimaryTab(targetTabId) {
   if (!targetTabId || _stopped)
     return;
-  if (isHostPrimaryTabActive(targetTabId))
-    return;
   const keepVisible = !!getSettings().keepTabListVisible;
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
   clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile);
@@ -5303,7 +5397,7 @@ function stopMainDrawerPersistence() {
   _lastSeenOpen = null;
   _lastSeenTabId = null;
 }
-var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HIDE_ATTR = "data-canvas-restore-hide", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_persist();
   init_state();
@@ -5312,6 +5406,7 @@ var init_main_persist = __esm(() => {
   init_mobile_exclusion();
   init_persist_polling();
   init_persist_polling();
+  PANEL_BODY_HIDE_SELECTOR = '[class*="_panelContent_"],' + "[data-canvas-main-panel-content]," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *";
 });
 
 // src/sidebar/mobile-exclusion.ts
@@ -5467,15 +5562,6 @@ var init_mobile_exclusion = __esm(() => {
 });
 
 // src/chat/reflow.ts
-var exports_reflow = {};
-__export(exports_reflow, {
-  updateChatReflow: () => updateChatReflow,
-  startReflowObserver: () => startReflowObserver,
-  setChatMargin: () => setChatMargin,
-  scheduleReflow: () => scheduleReflow,
-  injectReflowStyles: () => injectReflowStyles,
-  clearChatMargins: () => clearChatMargins
-});
 function setChatMargin(side, px) {
   const chat = getChatColumn();
   if (!chat)
@@ -5865,6 +5951,121 @@ var init_secondary = __esm(() => {
   init_animation();
 });
 
+// src/layout/parse-layout.ts
+function isPlainObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function parseLayoutBlob(input) {
+  if (!isPlainObject(input)) {
+    dlog("parseLayoutBlob: top-level is not an object");
+    return null;
+  }
+  const out = {
+    detachedTabs: []
+  };
+  if (typeof input.version === "string")
+    out.version = input.version;
+  if ("settings" in input)
+    out.settings = input.settings;
+  if (isPlainObject(input.primary)) {
+    const p = input.primary;
+    const primary = {};
+    if (typeof p.open === "boolean")
+      primary.open = p.open;
+    if (typeof p.width === "number" && isFinite(p.width))
+      primary.width = p.width;
+    if (p.tabId === null || typeof p.tabId === "string")
+      primary.tabId = p.tabId;
+    out.primary = primary;
+  }
+  if (isPlainObject(input.secondary)) {
+    const s = input.secondary;
+    const secondary = {};
+    if (typeof s.open === "boolean")
+      secondary.open = s.open;
+    if (typeof s.width === "number" && isFinite(s.width))
+      secondary.width = s.width;
+    if (s.activeTabId === null || typeof s.activeTabId === "string") {
+      secondary.activeTabId = s.activeTabId;
+    }
+    out.secondary = secondary;
+  }
+  if (Array.isArray(input.detachedTabs)) {
+    for (const row of input.detachedTabs) {
+      if (!isPlainObject(row)) {
+        dlog("parseLayoutBlob: dropping non-object detachedTabs entry");
+        continue;
+      }
+      if (typeof row.tabId !== "string" || !row.tabId) {
+        dlog("parseLayoutBlob: dropping detachedTabs entry without string tabId");
+        continue;
+      }
+      out.detachedTabs.push(row);
+    }
+  } else if (input.detachedTabs !== undefined) {
+    dlog("parseLayoutBlob: detachedTabs is not an array; treating as empty");
+  }
+  for (const key of Object.keys(input)) {
+    if (key === "primary" || key === "secondary" || key === "detachedTabs" || key === "version" || key === "settings") {
+      continue;
+    }
+    out[key] = input[key];
+  }
+  return out;
+}
+var init_parse_layout = __esm(() => {
+  init_log();
+});
+
+// src/layout/tab-id-heal.ts
+function stripTabIdSuffix(id) {
+  return id.replace(/:\d+$/, "");
+}
+function pairStoredToLiveIds(storedIds, liveIds) {
+  const result = new Map;
+  const available = new Set(liveIds);
+  for (const stored of storedIds) {
+    if (available.has(stored)) {
+      result.set(stored, stored);
+      available.delete(stored);
+    }
+  }
+  const leftoverStored = storedIds.filter((s) => !result.has(s));
+  const byPrefix = new Map;
+  for (const stored of leftoverStored) {
+    const prefix = stripTabIdSuffix(stored);
+    let g = byPrefix.get(prefix);
+    if (!g) {
+      g = { stored: [], live: [] };
+      byPrefix.set(prefix, g);
+    }
+    g.stored.push(stored);
+  }
+  for (const live of available) {
+    const prefix = stripTabIdSuffix(live);
+    const g = byPrefix.get(prefix);
+    if (g)
+      g.live.push(live);
+  }
+  for (const [, g] of byPrefix) {
+    g.stored.sort();
+    g.live.sort();
+    const n = Math.min(g.stored.length, g.live.length);
+    for (let i = 0;i < n; i++) {
+      result.set(g.stored[i], g.live[i]);
+      available.delete(g.live[i]);
+    }
+    for (let i = n;i < g.stored.length; i++) {
+      result.set(g.stored[i], null);
+    }
+  }
+  for (const stored of storedIds) {
+    if (!result.has(stored))
+      result.set(stored, null);
+  }
+  return result;
+}
+
 // src/layout/apply.ts
 function isLayoutRestoreActive() {
   return _layoutRestoreActive;
@@ -5877,6 +6078,7 @@ function resolveRestoreDone() {
     done();
 }
 function cancelApplyLayoutInterval() {
+  _restoreGeneration++;
   if (_restoreObserver !== null) {
     _restoreObserver.disconnect();
     _restoreObserver = null;
@@ -5907,6 +6109,22 @@ function isTabFullyRestored(tabId) {
 async function applyLayout(layout) {
   if (!layout)
     return;
+  const parsed = parseLayoutBlob(layout);
+  if (!parsed) {
+    dwarn("applyLayout: layout blob failed validation; no-op");
+    return;
+  }
+  if (layout && typeof layout === "object") {
+    layout.detachedTabs = parsed.detachedTabs;
+    if (parsed.primary) {
+      layout.primary = { ...layout.primary || {}, ...parsed.primary };
+    }
+    if (parsed.secondary) {
+      layout.secondary = { ...layout.secondary || {}, ...parsed.secondary };
+    }
+  } else {
+    layout = parsed;
+  }
   cancelApplyLayoutInterval();
   const settings = getSettings();
   const restoreWidth = !!settings.persistDrawerWidth;
@@ -5943,15 +6161,11 @@ async function applyLayout(layout) {
     return new Promise((resolve) => {
       _restoreDone = resolve;
       _layoutRestoreActive = true;
-      const stripSuffix = (id) => {
-        const lastColon = id.lastIndexOf(":");
-        if (lastColon <= 0)
-          return id;
-        const tail = id.slice(lastColon + 1);
-        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
-      };
+      const stripSuffix = stripTabIdSuffix;
       setRestoringFromLayout(true);
       setSuppressAutoActivation(true);
+      const restoreGen = _restoreGeneration;
+      const isCurrentRestore = () => restoreGen === _restoreGeneration;
       let _restoreFinished = false;
       const _assigningIds = new Set;
       const _settledIds = new Set;
@@ -5973,6 +6187,8 @@ async function applyLayout(layout) {
         return fallback?.tabId ?? null;
       };
       const finishRestore = () => {
+        if (!isCurrentRestore())
+          return;
         if (_restoreFinished)
           return;
         _restoreFinished = true;
@@ -6000,9 +6216,13 @@ async function applyLayout(layout) {
           if (primaryTabId && layout.primary?.open !== false) {
             Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then((m) => {
               m.ensureRestoredPrimaryTab(primaryTabId);
+            }).catch((err) => {
+              dwarn("applyLayout: ensureRestoredPrimaryTab failed:", err);
             });
           }
         }
+        if (!isCurrentRestore())
+          return;
         setRestoringFromLayout(false);
         setSuppressAutoActivation(false);
         resolveRestoreDone();
@@ -6041,7 +6261,7 @@ async function applyLayout(layout) {
         }
       };
       const kickAssign = (tabId) => {
-        if (_restoreFinished || _assigningIds.has(tabId) || _settledIds.has(tabId))
+        if (!isCurrentRestore() || _restoreFinished || _assigningIds.has(tabId) || _settledIds.has(tabId))
           return;
         _assigningIds.add(tabId);
         assignToSecondary(tabId).catch((err) => {
@@ -6049,7 +6269,7 @@ async function applyLayout(layout) {
         }).finally(() => {
           _assigningIds.delete(tabId);
           _settledIds.add(tabId);
-          if (_restoreFinished)
+          if (!isCurrentRestore() || _restoreFinished)
             return;
           const remaining = attemptRestore();
           if (remaining === 0)
@@ -6057,17 +6277,20 @@ async function applyLayout(layout) {
         });
       };
       const attemptRestore = () => {
-        if (_restoreFinished)
+        if (!isCurrentRestore() || _restoreFinished)
           return 0;
         const detached = layout.detachedTabs ?? [];
         if (detached.length === 0)
           return 0;
+        const tabs = getDrawerTabs();
+        const liveIds = tabs.map((t) => t.id);
+        const storedIds = detached.map((dt) => dt.tabId);
+        const pairs = pairStoredToLiveIds(storedIds, liveIds);
         let remaining = 0;
         for (let i = 0;i < detached.length; i++) {
           const dt = detached[i];
-          const liveIdForCheck = (() => {
-            return dt.tabId;
-          })();
+          const pairedLive = pairs.get(dt.tabId) ?? null;
+          const liveIdForCheck = pairedLive && pairedLive !== dt.tabId ? pairedLive : dt.tabId;
           const _alreadyAssigned = hasTabAssignment(liveIdForCheck);
           const _fullyRestored = _alreadyAssigned ? isTabFullyRestored(liveIdForCheck) : false;
           if (_alreadyAssigned && _fullyRestored)
@@ -6075,28 +6298,47 @@ async function applyLayout(layout) {
           remaining++;
           if (_settledIds.has(liveIdForCheck) || _assigningIds.has(liveIdForCheck))
             continue;
-          const tabs = getDrawerTabs();
-          let tab = tabs.find((t) => t.id === dt.tabId);
-          if (!tab) {
-            const storedPrefix = stripSuffix(dt.tabId);
-            const candidates = tabs.filter((t) => stripSuffix(t.id) === storedPrefix);
-            if (candidates.length === 1) {
-              tab = candidates[0];
-              dlog(`applyLayout: suffix-drift fallback matched stored "${dt.tabId}" → live "${tab.id}"`);
-              const prevId = dt.tabId;
-              layout.detachedTabs[i] = { ...dt, tabId: tab.id };
-              const savedActive = layout.secondary?.activeTabId;
-              if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
-                layout.secondary = { ...layout.secondary, activeTabId: tab.id };
-              }
-            } else if (candidates.length > 1) {
-              dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" is ambiguous (${candidates.length} candidates). Skipping.`);
+          let tab = tabs.find((t) => t.id === liveIdForCheck) || tabs.find((t) => t.id === dt.tabId) || (pairedLive ? tabs.find((t) => t.id === pairedLive) : undefined) || null;
+          if (tab && tab.id !== dt.tabId) {
+            dlog(`applyLayout: suffix-drift bipartite matched stored "${dt.tabId}" → live "${tab.id}"`);
+            const prevId = dt.tabId;
+            layout.detachedTabs[i] = { ...dt, tabId: tab.id };
+            const savedActive = layout.secondary?.activeTabId;
+            if (savedActive && (savedActive === prevId || stripSuffix(savedActive) === stripSuffix(prevId))) {
+              layout.secondary = { ...layout.secondary, activeTabId: tab.id };
+            }
+          } else if (!tab && !pairedLive) {
+            const prefix = stripSuffix(dt.tabId);
+            const samePrefixLive = liveIds.filter((id) => stripSuffix(id) === prefix);
+            if (samePrefixLive.length > 1) {
+              dwarn(`applyLayout: stripped-suffix match for "${dt.tabId}" unmatched after bipartite pairing (${samePrefixLive.length} live candidates for prefix "${prefix}").`);
             }
           }
           if (tab) {
             kickAssign(tab.id);
           } else {
-            const mainBtn = findMainTabButton(dt.tabId);
+            let mainBtn = findMainTabButton(dt.tabId);
+            if (!mainBtn) {
+              const prefix = stripSuffix(dt.tabId);
+              const allBtns = document.querySelectorAll("[data-tab-id]");
+              const prefixHits = [];
+              for (const el of Array.from(allBtns)) {
+                const id = el.getAttribute("data-tab-id");
+                if (id && stripSuffix(id) === prefix)
+                  prefixHits.push(el);
+              }
+              if (prefixHits.length === 1) {
+                mainBtn = prefixHits[0];
+              } else if (prefixHits.length > 1) {
+                const sorted = prefixHits.map((el) => el.getAttribute("data-tab-id")).sort();
+                const groupStored = storedIds.filter((s) => stripSuffix(s) === prefix).sort();
+                const idx = groupStored.indexOf(dt.tabId);
+                const pick = idx >= 0 && idx < sorted.length ? sorted[idx] : null;
+                if (pick) {
+                  mainBtn = document.querySelector(`[data-tab-id="${CSS.escape(pick)}"]`);
+                }
+              }
+            }
             if (mainBtn) {
               const liveTabId = mainBtn.getAttribute("data-tab-id") || dt.tabId;
               kickAssign(liveTabId);
@@ -6110,7 +6352,7 @@ async function applyLayout(layout) {
         return remaining;
       };
       const startAssignPhase = () => {
-        if (_restoreFinished)
+        if (!isCurrentRestore() || _restoreFinished)
           return;
         const detachedLen = layout.detachedTabs?.length ?? 0;
         if (detachedLen === 0) {
@@ -6120,6 +6362,8 @@ async function applyLayout(layout) {
         const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
         if (sidebar) {
           _restoreObserver = new MutationObserver(() => {
+            if (!isCurrentRestore())
+              return;
             _settledIds.clear();
             const remaining = attemptRestore();
             if (remaining === 0)
@@ -6128,7 +6372,7 @@ async function applyLayout(layout) {
           _restoreObserver.observe(sidebar, { childList: true, subtree: true });
         } else {
           queueMicrotask(() => {
-            if (_restoreFinished)
+            if (!isCurrentRestore() || _restoreFinished)
               return;
             const remaining = attemptRestore();
             if (remaining === 0)
@@ -6136,6 +6380,8 @@ async function applyLayout(layout) {
           });
         }
         _restoreTimeoutHandle = setTimeout(() => {
+          if (!isCurrentRestore())
+            return;
           attemptRestore();
           finishRestore();
         }, _restoreTimeoutMs);
@@ -6151,6 +6397,8 @@ async function applyLayout(layout) {
       unassignUnwantedSecondary().catch((err) => {
         dwarn("applyLayout: unassignUnwantedSecondary failed:", err);
       }).then(() => {
+        if (!isCurrentRestore())
+          return;
         startAssignPhase();
       });
     });
@@ -6158,7 +6406,7 @@ async function applyLayout(layout) {
     applySecondaryOpenState();
   }
 }
-var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4, _restoreDone = null, _layoutRestoreActive = false;
+var _restoreObserver = null, _restoreTimeoutHandle = null, _restoreTimeoutMs = 1e4, _restoreDone = null, _layoutRestoreActive = false, _restoreGeneration = 0;
 var init_apply = __esm(() => {
   init_store();
   init_secondary();
@@ -6168,6 +6416,7 @@ var init_apply = __esm(() => {
   init_log();
   init_mobile_exclusion();
   init_state();
+  init_parse_layout();
 });
 
 // src/layout/persist.ts
@@ -6256,11 +6505,24 @@ function readPrimaryOpen() {
 function readPrimaryWidth() {
   if (isCanvasMainModeDom()) {
     const fromVar = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR));
-    if (isFinite(fromVar) && fromVar > 0)
+    if (isFinite(fromVar) && fromVar > 0) {
+      _lastKnownPrimaryWidth = fromVar;
       return fromVar;
+    }
+    if (_lastKnownPrimaryWidth != null && _lastKnownPrimaryWidth > 0) {
+      return _lastKnownPrimaryWidth;
+    }
+    return 420;
   }
   const hostW = getMainDrawerWidth();
-  return hostW > 0 ? hostW : 420;
+  if (hostW > 0) {
+    _lastKnownPrimaryWidth = hostW;
+    return hostW;
+  }
+  if (_lastKnownPrimaryWidth != null && _lastKnownPrimaryWidth > 0) {
+    return _lastKnownPrimaryWidth;
+  }
+  return 420;
 }
 function snapshotLayout() {
   const assignments = Array.from(getTabAssignments().entries());
@@ -6400,23 +6662,47 @@ function loadSavedLayout() {
 function applyMainDrawer(layout) {
   const restoreOpen = isOpenStatePersistenceEnabled();
   const restoreWidth = isWidthPersistenceEnabled();
+  if (layout != null) {
+    const parsed = parseLayoutBlob(layout);
+    if (!parsed) {
+      dwarn("applyMainDrawer: layout blob failed validation; unsuppress only");
+      Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
+        unsuppressMainDrawer2();
+      }).catch((err) => {
+        dwarn("applyMainDrawer: unsuppressMainDrawer failed:", err);
+      });
+      return;
+    }
+    layout = parsed;
+  }
   if (!restoreOpen && !restoreWidth) {
     Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
       unsuppressMainDrawer2();
+    }).catch((err) => {
+      dwarn("applyMainDrawer: unsuppressMainDrawer failed:", err);
     });
     return;
   }
   if (!layout || !layout.primary) {
     Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
       unsuppressMainDrawer2();
+    }).catch((err) => {
+      dwarn("applyMainDrawer: unsuppressMainDrawer failed:", err);
     });
     return;
   }
   Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ restoreMainDrawerFromDom: restoreMainDrawerFromDom2 }) => {
     restoreMainDrawerFromDom2(layout.primary.open === true, typeof layout.primary.tabId === "string" ? layout.primary.tabId : null, restoreWidth && typeof layout.primary.width === "number" ? layout.primary.width : undefined, { restoreOpen, restoreWidth });
+  }).catch((err) => {
+    dwarn("applyMainDrawer: restoreMainDrawerFromDom failed:", err);
+    Promise.resolve().then(() => (init_main_persist(), exports_main_persist)).then(({ unsuppressMainDrawer: unsuppressMainDrawer2 }) => {
+      unsuppressMainDrawer2();
+    }).catch((e2) => {
+      dwarn("applyMainDrawer: unsuppress after restore failure also failed:", e2);
+    });
   });
 }
-var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null;
+var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -6424,6 +6710,8 @@ var init_persist = __esm(() => {
   init_assignment();
   init_active_tab();
   init_state();
+  init_log();
+  init_parse_layout();
   init_apply();
   init_apply();
 });
@@ -6476,10 +6764,7 @@ function setPanelRefresh(fn) {
   _panelRefresh = fn;
 }
 function normalizeCanvasSettings(s) {
-  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false };
-  }
-  return s;
+  return normalizeCanvasSettingsFields(s);
 }
 function isKeepTabListVisibleEnabled(s = _settings) {
   return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge;
@@ -6516,6 +6801,10 @@ function persistSettings() {
   }
   if (isLoadInProgress()) {
     dlog("persistSettings: load in progress, skipping");
+    return;
+  }
+  if (isLayoutRestoreActive()) {
+    dlog("persistSettings: layout restore active, skipping");
     return;
   }
   if (_saveSettingsTimer !== null) {

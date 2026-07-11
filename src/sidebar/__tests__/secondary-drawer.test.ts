@@ -146,8 +146,18 @@ function setupTest(opts: {
     children: [] as any[],
     _attrs: {} as Record<string, string>,
     appendChild(child: any) { child.parentElement = fakePanelContent; fakePanelContent.children.push(child) },
+    removeChild(child: any) {
+      const idx = fakePanelContent.children.indexOf(child);
+      if (idx !== -1) { fakePanelContent.children.splice(idx, 1); child.parentElement = null; }
+    },
     querySelector(sel: string) {
-      if (sel.startsWith('[data-canvas-moved')) return null
+      if (sel.startsWith('[data-canvas-moved')) {
+        const idMatch = sel.match(/\[data-canvas-moved="(.+?)"\]/)
+        if (idMatch) {
+          return fakePanelContent.children.find((c: any) => c.getAttribute?.('data-canvas-moved') === idMatch[1]) ?? null
+        }
+        return null
+      }
       if (sel === '.sidebar-ux-tab-list') return null
       if (sel === '.sidebar-ux-panel-title') return null
       return null
@@ -259,6 +269,8 @@ function setupTest(opts: {
     extensionId: 'unknown',
     title: tabTitle,
   })
+
+  return { fakeRoot, fakePanelContent, fakeWrapper, tabId, tabTitle }
 }
 
 /**
@@ -341,6 +353,10 @@ function setupExtTest(opts: {
       }
       child.parentElement = fakePanelContent
       fakePanelContent.children.push(child)
+    },
+    removeChild(child: any) {
+      const idx = fakePanelContent.children.indexOf(child);
+      if (idx !== -1) { fakePanelContent.children.splice(idx, 1); child.parentElement = null; }
     },
     querySelector(sel: string) {
       if (sel.startsWith('[data-canvas-moved')) {
@@ -733,6 +749,50 @@ async function testUnassignClearsStaleAttrsWhenRootOutsideSecondary() {
       root.getAttribute('data-canvas-active') == null,
       'T3b: data-canvas-active cleared when root already outside secondary',
     )
+    const mainDrawerCall = requestTabLocationCalls.find(
+      (c) => c.tabId === tabId && JSON.stringify(c.location) === JSON.stringify({ kind: 'main-drawer' }),
+    )
+    assert(!!mainDrawerCall, 'T3b: built-in unassign calls requestTabLocation({kind:"main-drawer"})')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
+// T3c: Built-in unassign does NOT raw-removeChild the React root (host
+// requestTabLocation owns placement). Load previous called this path
+// without assignment.ts's pre-call to requestTabLocation — empty content.
+// =====================================================================
+async function testBuiltinUnassignDoesNotStealReactRoot() {
+  const tabId = 'databank-unassign'
+  const env = setupTest({ tabId, tabTitle: 'Databank' })
+  try {
+    const root = (globalThis as any).window.spindle.ui.getBuiltInTabRoot(tabId) as any
+    // Put root under secondary content as host container placement would.
+    const secContent = env.fakePanelContent
+    root.parentElement = secContent
+    secContent.children.push(root)
+    root.setAttribute('data-canvas-moved', tabId)
+    root.setAttribute('data-canvas-active', '')
+    const { setTabAssignment } = await import('../../tabs/assignment')
+    setTabAssignment(tabId, 'secondary')
+
+    const { unassignFromSecondary } = await import('../secondary-drawer')
+    await unassignFromSecondary(tabId)
+
+    // Host owns reparent — Canvas must not detach the React root.
+    assert(
+      secContent.children.includes(root) || root.parentElement === secContent,
+      'T3c: built-in root left in place for host requestTabLocation (not removeChild\'d)',
+    )
+    assert(
+      root.getAttribute('data-canvas-moved') == null,
+      'T3c: data-canvas-moved cleared',
+    )
+    const mainDrawerCall = requestTabLocationCalls.find(
+      (c) =>
+        (c.tabId === tabId || c.tabId === 'databank-unassign') &&
+        JSON.stringify(c.location) === JSON.stringify({ kind: 'main-drawer' }),
+    )
+    assert(!!mainDrawerCall, 'T3c: requestTabLocation({kind:"main-drawer"}) called')
   } finally { restoreTest() }
 }
 
@@ -880,6 +940,7 @@ async function main() {
   await testExtT2()
   await testExtT3()
   await testUnassignClearsStaleAttrsWhenRootOutsideSecondary()
+  await testBuiltinUnassignDoesNotStealReactRoot()
   await testExtT4()
   await testExtT5()
   await testExtT6()

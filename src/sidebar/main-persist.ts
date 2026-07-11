@@ -850,15 +850,18 @@ export function startMainDrawerPersistence(): void {
 }
 
 /**
- * Re-click the persisted primary tab if the host is not already on it.
- * Used after secondary layout restore (assignToSecondary can shove the
- * host back to profile). Does not toggle the restore-pending guard.
+ * Re-click the persisted primary tab after secondary layout restore.
+ * assignToSecondary can shove the host back to profile; unassign can leave
+ * host tabBtnActive while the panel body is empty/stale after tabLocations
+ * reset. Always re-click so content settles — host-only "already active"
+ * skip previously left blank panels after Load previous unassign.
+ * Does not toggle the restore-pending guard.
  */
 export function ensureRestoredPrimaryTab(targetTabId: string): void {
   if (!targetTabId || _stopped) return
-  // Host-only: mirror chrome can claim active while host is still Profile
-  // after secondary assign resets the host tab.
-  if (isHostPrimaryTabActive(targetTabId)) return
+  // Do not early-return on isHostPrimaryTabActive: after unassignFromSecondary
+  // the host button can still carry tabBtnActive while ContainerTabContent
+  // has not re-rendered into main-drawer yet. Re-click forces content settle.
   const keepVisible = !!getSettings().keepTabListVisible
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
   clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile)

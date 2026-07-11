@@ -559,16 +559,38 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
     }
   }
 
-  // Move reparented root back to the main panel and clear Canvas markers.
-  // The selector :not([data-canvas-secondary]) excludes wrapper-owned roots
-  // (legacy); reparented extension roots have data-canvas-moved but NOT
-  // data-canvas-secondary, so they match correctly.
-  //
+  // Built-in vs extension placement is different (see secondary.tsx teardown
+  // and tabs/assignment.ts primary restore):
+  //   - Built-in: host owns tabLocations. Must requestTabLocation({kind:
+  //     'main-drawer'}) so ContainerTabContent renders on activate. Never
+  //     raw-removeChild/appendChild React roots (orphans → empty/wrong content).
+  //   - Extension: Canvas reparented the store root into secondary; put it
+  //     back into main panel content via appendChild so instance state survives.
+  // applyLayout → unassignUnwantedSecondary calls this directly (skips
+  // assignment.ts), so the host reset must live here, not only in assignTab.
+  const bridge = getHostBridge()
+  const bridgeUi = bridge?.ui
+  const bridgeRoot =
+    (bridgeUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined) ||
+    (resolvedShowId !== tabId
+      ? (bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) as HTMLElement | undefined)
+      : undefined)
+  const isBuiltIn = bridgeRoot != null
+
+  if (isBuiltIn && bridgeUi?.requestTabLocation) {
+    // Prefer the bare id the host registered (tabId / bridge root tag).
+    const hostTabId =
+      bridgeRoot?.getAttribute?.('data-tab-id') ||
+      tabId
+    try {
+      bridgeUi.requestTabLocation(hostTabId, { kind: 'main-drawer' })
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassign: requestTabLocation(main-drawer) failed for ${hostTabId}:`, err)
+    }
+  }
+
   // Dual-id lookup: built-ins often tag with bare tabId (builtin-move) while
-  // resolvedShowId may be a composite store id. Host requestTabLocation may
-  // also reparent out of secondary before we run — still clear residual
-  // data-canvas-moved / data-canvas-active so main-mirror CSS cannot hide
-  // the panel body (inactive tabs lack data-canvas-active).
+  // resolvedShowId may be a composite store id.
   const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
   let _movedRoot: HTMLElement | null = null
   if (_secondaryContentForUnassign) {
@@ -581,43 +603,58 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
       ) as HTMLElement | null
       if (_movedRoot) break
     }
-    if (_movedRoot) {
-      // Extension reparent path only: root still under secondary content.
-      const _mainContent = document.querySelector('[class*="_panelContent_"]') as HTMLElement | null
-      if (_mainContent && _movedRoot.parentElement !== _mainContent) {
-        _mainContent.appendChild(_movedRoot)
-      }
-      _movedRoot.removeAttribute('data-canvas-moved')
-      _movedRoot.removeAttribute('data-canvas-active')
-    }
   }
 
-  // Fallback: host already moved the root (or id mismatch left it outside
-  // secondary). Clear Canvas attrs only — never raw-reparent built-ins.
-  if (!_movedRoot) {
-    const bridgeRoot =
-      (getHostBridge()?.ui.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined) ||
-      (resolvedShowId !== tabId
-        ? (getHostBridge()?.ui.getBuiltInTabRoot?.(resolvedShowId) as HTMLElement | undefined)
-        : undefined)
-    let residual: HTMLElement | null =
-      bridgeRoot && bridgeRoot.getAttribute?.('data-canvas-moved') != null
-        ? bridgeRoot
-        : null
-    if (!residual && typeof document !== 'undefined') {
+  if (isBuiltIn) {
+    // Host requestTabLocation moves the React root. Only clear Canvas attrs
+    // on the bridge root and any residual match — never steal the node.
+    const clearAttrs = (el: HTMLElement | null | undefined) => {
+      if (!el) return
+      el.removeAttribute('data-canvas-moved')
+      el.removeAttribute('data-canvas-active')
+    }
+    clearAttrs(_movedRoot)
+    clearAttrs(bridgeRoot)
+    if (!_movedRoot && typeof document !== 'undefined') {
       const idsToTry = resolvedShowId !== tabId
         ? [resolvedShowId, tabId]
         : [resolvedShowId]
       for (const id of idsToTry) {
-        residual = document.querySelector(
+        const residual = document.querySelector(
           `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
         ) as HTMLElement | null
-        if (residual) break
+        if (residual) {
+          clearAttrs(residual)
+          break
+        }
       }
     }
-    if (residual) {
-      residual.removeAttribute('data-canvas-moved')
-      residual.removeAttribute('data-canvas-active')
+  } else if (_movedRoot) {
+    // Extension reparent path: put the store root back under main panel
+    // content so the instance survives. Main-mirror parks this container;
+    // it is still the correct home for extension roots (not React-fiber
+    // built-ins).
+    const { getMainPanelContent } = await import('../dom/lumiverse')
+    const _mainContent = getMainPanelContent()
+    if (_mainContent && _movedRoot.parentElement !== _mainContent) {
+      _mainContent.appendChild(_movedRoot)
+    }
+    _movedRoot.removeAttribute('data-canvas-moved')
+    _movedRoot.removeAttribute('data-canvas-active')
+  } else if (typeof document !== 'undefined') {
+    // Fallback: root already outside secondary — clear residual attrs only.
+    const idsToTry = resolvedShowId !== tabId
+      ? [resolvedShowId, tabId]
+      : [resolvedShowId]
+    for (const id of idsToTry) {
+      const residual = document.querySelector(
+        `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
+      ) as HTMLElement | null
+      if (residual) {
+        residual.removeAttribute('data-canvas-moved')
+        residual.removeAttribute('data-canvas-active')
+        break
+      }
     }
   }
 
@@ -635,6 +672,13 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
     clearSecondaryTabButtonActive()
   }
   showMainTabButton(resolvedShowId)
+  // Main-mirror strip filters display:none host buttons and only rebuilds
+  // on its own reconcile. Without this, the unhidden host button stays
+  // invisible in the pin strip until some other host mutation.
+  try {
+    const m = await import('./main-tab-pin')
+    m.reconcileMainTabListPin()
+  } catch { /* pin module optional during early teardown */ }
 
   if (getTabAssignments().size === 0) {
     _state = 'closed'
