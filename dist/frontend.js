@@ -736,12 +736,15 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     width: 52px !important;
     height: 48px !important;
   }
-  /* Active tab indicator: bottom underline, top corners rounded.
-     Matches main sidebar's mobile .tabBtnActive exactly.
-     Same specificity as the desktop rule so it overrides on mobile. */
-  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
-    box-shadow: inset 0 -3px 0 var(--lumiverse-primary);
-    border-radius: 8px 8px 0 0;
+  /* Active tab: bottom underline on mobile. Must match
+     .sidebar-ux-side-left specificity and use !important —
+     desktop rules set inset 3px/–3px with !important and
+     would otherwise win. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+    border-radius: 8px 8px 0 0 !important;
   }
   /* Hide secondary's drawerTab when primary is open on mobile */
   body.canvas-ux-mobile-primary-open .sidebar-ux-drawer-tab {
