@@ -194,6 +194,8 @@ function findStoreData(force = false) {
   const now = Date.now();
   if (!force && _drawerTabsCache && _storeSnapshotCache && now - _cacheTimestamp < CACHE_TTL_MS)
     return;
+  if (typeof document === "undefined")
+    return;
   const sidebar = getMainSidebar();
   if (!sidebar)
     return;
@@ -2832,6 +2834,7 @@ __export(exports_buttons, {
   updateDrawerTabVisibility: () => updateDrawerTabVisibility,
   showSecondaryTab: () => showSecondaryTab,
   showMainTabButton: () => showMainTabButton,
+  reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
   removeSecondaryTabButton: () => removeSecondaryTabButton,
   readMainButtonShortName: () => readMainButtonShortName,
   isSettingsButton: () => isSettingsButton,
@@ -2841,6 +2844,8 @@ __export(exports_buttons, {
   deriveShortName: () => deriveShortName,
   cssEscape: () => cssEscape,
   clearSecondaryTabButtonActive: () => clearSecondaryTabButtonActive,
+  applyHiddenTabIdsToSecondary: () => applyHiddenTabIdsToSecondary,
+  applyHiddenTabIdsToMirror: () => applyHiddenTabIdsToMirror,
   addSecondaryTabButton: () => addSecondaryTabButton,
   __setShowMainTabButtonForTest: () => __setShowMainTabButtonForTest,
   __setHideMainTabButtonForTest: () => __setHideMainTabButtonForTest
@@ -3009,6 +3014,45 @@ function removeSecondaryTabButton(tabId) {
   const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   btn?.remove();
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
+}
+function reorderSecondaryTabButtons(ids) {
+  const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
+  for (const id of ids) {
+    const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+    if (btn) {
+      tabList.appendChild(btn);
+    }
+  }
+}
+function applyHiddenTabIdsToSecondary(hiddenIds) {
+  const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
+  for (const btn of Array.from(tabList.querySelectorAll("button[data-tab-id]"))) {
+    const tid = btn.getAttribute("data-tab-id") || "";
+    if (hiddenIds.has(tid)) {
+      btn.style.display = "none";
+    } else {
+      btn.style.display = "";
+    }
+  }
+}
+function applyHiddenTabIdsToMirror(hiddenIds) {
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => {
+    const list = m.getMainMirrorTabList();
+    if (!list)
+      return;
+    for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+      const tid = btn.getAttribute("data-tab-id") || "";
+      if (hiddenIds.has(tid)) {
+        btn.style.display = "none";
+      } else {
+        btn.style.display = "";
+      }
+    }
+  });
 }
 function _isMobileViewport() {
   if (typeof window === "undefined" || !window.matchMedia)
@@ -9290,6 +9334,20 @@ function y2(n2, u3) {
   var i3 = p2(t2++, 3);
   !c2.__s && C2(i3.__H, u3) && (i3.__ = n2, i3.u = u3, r2.__H.__h.push(i3));
 }
+function A2(n2) {
+  return o2 = 5, T2(function() {
+    return { current: n2 };
+  }, []);
+}
+function T2(n2, r3) {
+  var u3 = p2(t2++, 7);
+  return C2(u3.__H, r3) && (u3.__ = n2(), u3.__H = r3, u3.__h = n2), u3.__;
+}
+function q2(n2, t3) {
+  return o2 = 8, T2(function() {
+    return n2;
+  }, t3);
+}
 function j2() {
   for (var n2;n2 = f2.shift(); ) {
     var t3 = n2.__H;
@@ -9899,6 +9957,1470 @@ var init_drawer_tab_position = __esm(() => {
   };
 });
 
+// src/context-menu/index.ts
+function clampMenuToViewport(menu) {
+  const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale")) || 1;
+  const rect = menu.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (rect.right > vw - 8) {
+    menu.style.left = `${(vw - rect.width - 8) / uiScale}px`;
+  }
+  if (rect.bottom > vh - 8) {
+    menu.style.top = `${(vh - rect.height - 8) / uiScale}px`;
+  }
+}
+function findLumiverseContextMenu() {
+  const last = document.body.lastElementChild;
+  if (!last || last.tagName !== "DIV")
+    return null;
+  const style = getComputedStyle(last);
+  if (style.position !== "fixed")
+    return null;
+  if (style.zIndex !== "11000")
+    return null;
+  if (!last.querySelector("button"))
+    return null;
+  return last;
+}
+function startObserver() {
+  if (_observer)
+    return;
+  _observer = new MutationObserver(() => {
+    if (_injected || !_pendingTabInfo)
+      return;
+    requestAnimationFrame(() => {
+      if (_injected || !_pendingTabInfo)
+        return;
+      const menu = findLumiverseContextMenu();
+      if (!menu)
+        return;
+      injectCanvasItem(menu, _pendingTabInfo);
+      _injected = true;
+      _pendingTabInfo = null;
+      stopObserver();
+    });
+  });
+  _observer.observe(document.body, { childList: true });
+}
+function stopObserver() {
+  if (_observer) {
+    _observer.disconnect();
+    _observer = null;
+  }
+}
+function injectCanvasItem(menu, info) {
+  let label;
+  let targetSidebar;
+  if (info.currentSidebar === "secondary") {
+    label = "Move to main drawer";
+    targetSidebar = "primary";
+  } else {
+    label = "Move to second drawer";
+    targetSidebar = "secondary";
+  }
+  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`);
+  if (targetSidebar === "secondary" && !getSettings().secondSidebarEnabled) {
+    dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`);
+    return;
+  }
+  const divider = document.createElement("div");
+  divider.style.cssText = "height:1px;margin:4px 8px;background:var(--lumiverse-border)";
+  menu.appendChild(divider);
+  const refBtn = menu.querySelector("button");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = label;
+  if (refBtn) {
+    const rs = getComputedStyle(refBtn);
+    btn.style.cssText = [
+      "display",
+      "alignItems",
+      "gap",
+      "width",
+      "padding",
+      "border",
+      "borderRadius",
+      "background",
+      "fontFamily",
+      "cursor",
+      "transition",
+      "textAlign"
+    ].map((p3) => `${p3.replace(/([A-Z])/g, "-$1").toLowerCase()}:${rs.getPropertyValue(p3.replace(/([A-Z])/g, "-$1").toLowerCase())}`).join(";");
+    btn.style.color = "var(--lumiverse-text)";
+    btn.style.fontSize = "calc(12.5px * var(--lumiverse-font-scale, 1))";
+  } else {
+    btn.style.cssText = `
+      display:flex;align-items:center;gap:8px;width:100%;
+      padding:8px 12px;border:none;border-radius:6px;background:none;
+      color:var(--lumiverse-text);
+      font-size:calc(12.5px * var(--lumiverse-font-scale, 1));
+      font-family:inherit;cursor:pointer;transition:background 120ms ease;
+      text-align:left;
+    `;
+  }
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = "var(--lumiverse-fill, rgba(255, 255, 255, 0.06))";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = "none";
+  });
+  btn.addEventListener("click", (e3) => {
+    e3.stopPropagation();
+    dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`);
+    assignTab(info.tabId, targetSidebar);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  });
+  menu.appendChild(btn);
+  clampMenuToViewport(menu);
+}
+function startContextMenuListener() {
+  if (_contextMenuListenersActive)
+    return;
+  const docCtxCapture = (e3) => {
+    const evt = e3;
+    hideAssignmentMenu();
+    const target = evt.target;
+    const tabBtn = target?.closest?.("button[title]");
+    if (!tabBtn) {
+      _pendingTabInfo = null;
+      return;
+    }
+    if (isSettingsButton(tabBtn)) {
+      _pendingTabInfo = null;
+      return;
+    }
+    if (tabBtn.classList.contains("sidebar-ux-main-tab-mirror-btn")) {
+      dlog("[tabmove] docCtxCapture: main-mirror btn — host forward handles it");
+      _pendingTabInfo = null;
+      return;
+    }
+    const sidebar = getMainSidebar();
+    if (!sidebar || !sidebar.contains(tabBtn)) {
+      dlog("[tabmove] docCtxCapture: skip (not in host sidebar)", {
+        title: tabBtn.getAttribute("title"),
+        classes: tabBtn.className
+      });
+      _pendingTabInfo = null;
+      return;
+    }
+    const title = tabBtn.getAttribute("title") || "";
+    const dataTabId = tabBtn.getAttribute("data-tab-id");
+    let tabId;
+    if (dataTabId) {
+      tabId = dataTabId;
+    } else {
+      findStoreData(true);
+      const tabs = getDrawerTabs();
+      const matchedTab = tabs.find((t3) => t3.title === title);
+      tabId = matchedTab?.id || title;
+    }
+    const currentSidebar = getTabSidebar(tabId);
+    dlog(`[tabmove] docCtxCapture: tabBtn title="${title}" data-tab-id="${dataTabId || "(none)"}" ` + `-> resolved tabId="${tabId}" currentSidebar=${currentSidebar} ` + `(source=${dataTabId ? "data-tab-id" : "store-title-fallback"})`);
+    _pendingTabInfo = { tabId, currentSidebar, btn: tabBtn };
+    _injected = false;
+    startObserver();
+  };
+  const docClick = (e3) => {
+    hideAssignmentMenu();
+  };
+  const docScroll = () => hideAssignmentMenu();
+  const docKey = (e3) => {
+    if (e3.key === "Escape")
+      hideAssignmentMenu();
+  };
+  document.addEventListener("contextmenu", docCtxCapture, true);
+  document.addEventListener("click", docClick);
+  document.addEventListener("scroll", docScroll, true);
+  document.addEventListener("keydown", docKey);
+  _handlers = { docCtxCapture, docClick, docScroll, docKey };
+  _contextMenuListenersActive = true;
+}
+function stopContextMenuListener() {
+  if (!_contextMenuListenersActive)
+    return;
+  const h3 = _handlers;
+  if (h3.docCtxCapture)
+    document.removeEventListener("contextmenu", h3.docCtxCapture, true);
+  if (h3.docClick)
+    document.removeEventListener("click", h3.docClick);
+  if (h3.docScroll)
+    document.removeEventListener("scroll", h3.docScroll, true);
+  if (h3.docKey)
+    document.removeEventListener("keydown", h3.docKey);
+  _handlers = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null };
+  _contextMenuListenersActive = false;
+  stopObserver();
+  _pendingTabInfo = null;
+  _injected = false;
+  hideAssignmentMenu();
+}
+var _pendingTabInfo = null, _injected = false, _observer = null, _contextMenuListenersActive = false, _handlers;
+var init_context_menu = __esm(() => {
+  init_store();
+  init_assignment();
+  init_state();
+  init_tab_context_menu();
+  init_buttons();
+  init_log();
+  _handlers = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null };
+});
+
+// src/tabs/configure-catalog.ts
+function humanizeTabId(id) {
+  const known = BUILTIN_TAB_TITLES[id];
+  if (known)
+    return known;
+  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w3) => w3.charAt(0).toUpperCase() + w3.slice(1).toLowerCase());
+  return words.join(" ");
+}
+function getBuiltinCatalog() {
+  return BUILTIN_TAB_IDS.map((id) => ({
+    id,
+    kind: "builtin",
+    title: humanizeTabId(id),
+    hideLocked: CORE_HIDE_LOCKED.has(id)
+  }));
+}
+function getExtensionCatalog() {
+  const tabs = getDrawerTabs();
+  if (!tabs || tabs.length === 0)
+    return [];
+  return tabs.map((t3) => ({
+    id: t3.id,
+    kind: "extension",
+    title: t3.title || humanizeTabId(t3.id),
+    hideLocked: false,
+    extensionId: t3.extensionId || undefined
+  }));
+}
+function getFullCatalog() {
+  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
+}
+function isHideLocked(tabId) {
+  return CORE_HIDE_LOCKED.has(tabId);
+}
+var BUILTIN_TAB_IDS, CORE_HIDE_LOCKED, BUILTIN_TAB_TITLES;
+var init_configure_catalog = __esm(() => {
+  init_store();
+  BUILTIN_TAB_IDS = [
+    "profile",
+    "presets",
+    "loom",
+    "weaver",
+    "connections",
+    "browser",
+    "characters",
+    "personas",
+    "multiplayer",
+    "lorebook",
+    "cortex",
+    "databank",
+    "create",
+    "ooc",
+    "prompt",
+    "council",
+    "summary",
+    "feedback",
+    "worldinfo",
+    "imagegen",
+    "wallpaper",
+    "regex",
+    "branches",
+    "theme",
+    "spindle"
+  ];
+  CORE_HIDE_LOCKED = new Set([
+    "profile",
+    "presets",
+    "loom",
+    "characters",
+    "personas",
+    "branches",
+    "spindle",
+    "theme",
+    "lorebook"
+  ]);
+  BUILTIN_TAB_TITLES = {
+    profile: "Profile",
+    presets: "Presets",
+    loom: "Loom",
+    weaver: "Weaver",
+    connections: "Connections",
+    browser: "Browser",
+    characters: "Characters",
+    personas: "Personas",
+    multiplayer: "Multiplayer",
+    lorebook: "Lorebook",
+    cortex: "Cortex",
+    databank: "Data Bank",
+    create: "Create",
+    ooc: "OOC",
+    prompt: "Prompt",
+    council: "Council",
+    summary: "Summary",
+    feedback: "Feedback",
+    worldinfo: "World Info",
+    imagegen: "Image Gen",
+    wallpaper: "Wallpaper",
+    regex: "Regex",
+    branches: "Branches",
+    theme: "Theme",
+    spindle: "Spindle"
+  };
+});
+
+// src/tabs/configure-model.ts
+function partitionOrderByCatalog(tabOrder, catalog) {
+  const builtinOrder = [];
+  const extensionOrder = [];
+  const seen = new Set;
+  for (const id of tabOrder) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    if (_builtinIdSet.has(id)) {
+      builtinOrder.push(id);
+    } else {
+      extensionOrder.push(id);
+    }
+  }
+  for (const tab of catalog) {
+    if (!seen.has(tab.id)) {
+      seen.add(tab.id);
+      if (tab.kind === "builtin") {
+        builtinOrder.push(tab.id);
+      } else {
+        extensionOrder.push(tab.id);
+      }
+    }
+  }
+  return { builtinOrder, extensionOrder };
+}
+function resolveSide(tabId, assignments) {
+  return assignments.get(tabId) ?? "primary";
+}
+function syncKindOrders(draft) {
+  const builtinOrder = [];
+  const extensionOrder = [];
+  const seen = new Set;
+  const all = [...draft.primaryIds, ...draft.secondaryIds];
+  for (const id of all) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    if (_builtinIdSet.has(id)) {
+      builtinOrder.push(id);
+    } else {
+      extensionOrder.push(id);
+    }
+  }
+  return { builtinOrder, extensionOrder };
+}
+function createDraft(input) {
+  const { catalog, tabOrder, hiddenTabIds, drawerSide, assignments } = input;
+  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrder, catalog);
+  const hiddenSet = new Set(hiddenTabIds);
+  const allOrdered = [...builtinOrder, ...extensionOrder];
+  const primaryIds = [];
+  const secondaryIds = [];
+  for (const id of allOrdered) {
+    const side = resolveSide(id, assignments);
+    if (side === "primary") {
+      primaryIds.push(id);
+    } else {
+      secondaryIds.push(id);
+    }
+  }
+  return {
+    drawerSide,
+    primaryIds,
+    secondaryIds,
+    builtinOrder,
+    extensionOrder,
+    hiddenIds: hiddenSet
+  };
+}
+function encodeHostTabOrder(draft) {
+  return [...draft.builtinOrder, ...draft.extensionOrder];
+}
+function isDraftDirty(draft, base) {
+  const order = encodeHostTabOrder(draft);
+  if (order.length !== base.tabOrder.length)
+    return true;
+  for (let i3 = 0;i3 < order.length; i3++) {
+    if (order[i3] !== base.tabOrder[i3])
+      return true;
+  }
+  if (draft.hiddenIds.size !== base.hiddenTabIds.length)
+    return true;
+  for (const id of draft.hiddenIds) {
+    if (!base.hiddenTabIds.includes(id))
+      return true;
+  }
+  if (draft.drawerSide !== base.drawerSide)
+    return true;
+  for (const id of draft.primaryIds) {
+    const baseSide = base.assignments.get(id) ?? "primary";
+    if (baseSide !== "primary")
+      return true;
+  }
+  for (const id of draft.secondaryIds) {
+    const baseSide = base.assignments.get(id) ?? "primary";
+    if (baseSide !== "secondary")
+      return true;
+  }
+  return false;
+}
+function swapDrawerSide(draft) {
+  return { ...draft, drawerSide: draft.drawerSide === "left" ? "right" : "left" };
+}
+function moveTab(draft, tabId, to, index) {
+  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
+  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
+  const source = [...draft[fromList]];
+  const srcIdx = source.indexOf(tabId);
+  if (srcIdx === -1)
+    return draft;
+  source.splice(srcIdx, 1);
+  const target = [...draft[toList]];
+  const insertAt = index < 0 ? target.length : Math.min(index, target.length);
+  target.splice(insertAt, 0, tabId);
+  const next = { ...draft, [fromList]: source, [toList]: target };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function reorderWithin(draft, side, fromIndex, toIndex) {
+  const isSecondaryList = draft.drawerSide === "right" && side === "left" || draft.drawerSide === "left" && side === "right";
+  const listKey = isSecondaryList ? "secondaryIds" : "primaryIds";
+  const list = [...draft[listKey]];
+  if (fromIndex < 0 || fromIndex >= list.length)
+    return draft;
+  const [moved] = list.splice(fromIndex, 1);
+  const insertAt = toIndex < 0 ? list.length : Math.min(toIndex, list.length);
+  list.splice(insertAt, 0, moved);
+  const next = { ...draft, [listKey]: list };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function setHidden(draft, tabId, hidden) {
+  if (isHideLocked(tabId))
+    return draft;
+  const next = new Set(draft.hiddenIds);
+  if (hidden) {
+    next.add(tabId);
+  } else {
+    next.delete(tabId);
+  }
+  return { ...draft, hiddenIds: next };
+}
+function partitionDisplayLists(draft, catalog) {
+  const catalogById = new Map(catalog.map((t3) => [t3.id, t3]));
+  const primary = [];
+  const secondary = [];
+  for (const id of draft.secondaryIds) {
+    const tab = catalogById.get(id);
+    if (!tab)
+      continue;
+    secondary.push(tab);
+  }
+  for (const id of draft.primaryIds) {
+    const tab = catalogById.get(id);
+    if (!tab)
+      continue;
+    primary.push(tab);
+  }
+  return { primary, secondary };
+}
+function leftColumnIsSecondary(drawerSide) {
+  return drawerSide === "right";
+}
+var _builtinIdSet;
+var init_configure_model = __esm(() => {
+  init_configure_catalog();
+  _builtinIdSet = new Set(BUILTIN_TAB_IDS);
+});
+
+// src/dom/host-settings.ts
+function scanForHostSettings(fiber, depth, maxDepth, visited) {
+  if (!fiber || depth > maxDepth || visited.has(fiber))
+    return;
+  visited.add(fiber);
+  let hook = fiber.memoizedState;
+  let hookIdx = 0;
+  while (hook && hookIdx < 40) {
+    const state = hook.memoizedState;
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const keys = Object.keys(state);
+      const hasDrawerSettings = keys.includes("drawerSettings");
+      const hasSetSetting = keys.includes("setSetting") && typeof state.setSetting === "function";
+      if (hasDrawerSettings) {
+        _cachedDrawerSettings = state.drawerSettings;
+      }
+      if (hasSetSetting) {
+        _cachedSetSetting = state.setSetting;
+      }
+      if (hasDrawerSettings && hasSetSetting) {
+        _cacheTimestamp2 = Date.now();
+        return;
+      }
+    }
+    hook = hook.next;
+    hookIdx++;
+  }
+  scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
+  scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
+}
+function findHostSettings(force = false) {
+  const now = Date.now();
+  if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp2 < CACHE_TTL_MS3) {
+    return;
+  }
+  if (_testSetSetting) {
+    if (_cachedDrawerSettings)
+      return;
+    _cachedDrawerSettings = { tabOrder: [], hiddenTabIds: [], side: "right" };
+    return;
+  }
+  if (typeof document === "undefined")
+    return;
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const rootFiber = getFiberFromElement(sidebar);
+  if (!rootFiber)
+    return;
+  let fiber = rootFiber;
+  const ancestors = [];
+  while (fiber) {
+    ancestors.push(fiber);
+    fiber = fiber.return;
+  }
+  const visited = new Set;
+  for (let i3 = ancestors.length - 1;i3 >= Math.max(0, ancestors.length - 5); i3--) {
+    scanForHostSettings(ancestors[i3], 0, 30, visited);
+    if (_cachedSetSetting && _cachedDrawerSettings) {
+      _cacheTimestamp2 = Date.now();
+      break;
+    }
+  }
+}
+function getHostDrawerSettings() {
+  findHostSettings();
+  return _cachedDrawerSettings;
+}
+function patchHostDrawerSettings(partial) {
+  findHostSettings();
+  if (_testSetSetting) {
+    const current2 = getHostDrawerSettings() ?? {};
+    _testSetSetting("drawerSettings", { ...current2, ...partial });
+    findStoreData(true);
+    return true;
+  }
+  if (!_cachedSetSetting) {
+    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
+    return false;
+  }
+  const current = _cachedDrawerSettings ?? {};
+  _cachedSetSetting("drawerSettings", { ...current, ...partial });
+  findStoreData(true);
+  return true;
+}
+var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp2 = 0, CACHE_TTL_MS3 = 3000, _testSetSetting = null;
+var init_host_settings = __esm(() => {
+  init_fiber();
+  init_log();
+  init_store();
+});
+
+// src/tabs/configure-commit.ts
+function computeDeltas(draft) {
+  const currentAssignments = getTabAssignments();
+  const toSecondary = [];
+  const toPrimary = [];
+  for (const id of draft.primaryIds) {
+    const currentSide = currentAssignments.get(id) ?? "primary";
+    if (currentSide === "secondary") {
+      toPrimary.push(id);
+    }
+  }
+  for (const id of draft.secondaryIds) {
+    const currentSide = currentAssignments.get(id) ?? "primary";
+    if (currentSide !== "secondary") {
+      toSecondary.push(id);
+    }
+  }
+  return { toSecondary, toPrimary };
+}
+async function commitConfigureDraft(draft, _base) {
+  if (_batchActive)
+    return { ok: false, error: "Commit already in progress" };
+  _batchActive = true;
+  try {
+    const { toSecondary, toPrimary } = computeDeltas(draft);
+    setSuppressAutoActivation(true);
+    const hostWriteOk = patchHostDrawerSettings({
+      tabOrder: encodeHostTabOrder(draft),
+      hiddenTabIds: [...draft.hiddenIds],
+      side: draft.drawerSide
+    });
+    if (!hostWriteOk) {
+      dwarn("[configure-commit] patchHostDrawerSettings returned false; " + "host order/hide/side may not persist. Continuing with DOM moves.");
+    }
+    const movePromises = [];
+    for (const tabId of toSecondary) {
+      movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
+        dwarn(`[configure-commit] moveTabToSecondaryQuiet failed for "${tabId}":`, err);
+      }));
+    }
+    for (const tabId of toPrimary) {
+      movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
+        dwarn(`[configure-commit] moveTabToPrimaryQuiet failed for "${tabId}":`, err);
+      }));
+    }
+    await Promise.all(movePromises);
+    reorderSecondaryTabButtons(draft.secondaryIds);
+    applyHiddenTabIdsToSecondary(draft.hiddenIds);
+    applyHiddenTabIdsToMirror(draft.hiddenIds);
+    updateDrawerTabVisibility();
+    try {
+      const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+      mm.updateMainMirrorDrawerTabVisibility?.();
+    } catch (err) {
+      dwarn("[configure-commit] updateMainMirrorDrawerTabVisibility failed:", err);
+    }
+    try {
+      const tp = await Promise.resolve().then(() => (init_tab_position(), exports_tab_position));
+      tp.reconcileTabListPin();
+    } catch (err) {
+      dwarn("[configure-commit] reconcileTabListPin failed:", err);
+    }
+    try {
+      const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+      mp.reconcileMainTabListPin();
+    } catch (err) {
+      dwarn("[configure-commit] reconcileMainTabListPin failed:", err);
+    }
+    if (getSettings().persistTabAssignments) {
+      persistLayout();
+    }
+    findStoreData(true);
+    dlog("[configure-commit] commit successful", {
+      toSecondary: toSecondary.length,
+      toPrimary: toPrimary.length,
+      hidden: draft.hiddenIds.size
+    });
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    dwarn("[configure-commit] commit failed:", msg);
+    return { ok: false, error: msg };
+  } finally {
+    setSuppressAutoActivation(false);
+    _batchActive = false;
+  }
+}
+function findDrawerTab(tabId) {
+  findStoreData(true);
+  const tabs = getDrawerTabs();
+  return tabs.find((t3) => t3.id === tabId) || tabs.find((t3) => t3.id.includes(`:tab:${tabId}:`) || t3.id.endsWith(`:${tabId}`)) || tabs.find((t3) => t3.title === tabId);
+}
+async function moveTabToSecondaryQuiet(tabId) {
+  const bridge = getHostBridge();
+  const ui = bridge?.ui;
+  const isBuiltIn = !!ui?.getBuiltInTabRoot?.(tabId);
+  if (isBuiltIn) {
+    const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
+    const root = await moveBuiltInTabToSecondaryContainer2({ tabId, deferActivation: true });
+    setTabAssignment(tabId, "secondary");
+    hideMainTabButton(tabId);
+    if (root) {
+      const storeTab = findDrawerTab(tabId);
+      const title = ui?.getBuiltInTabTitle?.(tabId) || storeTab?.title || tabId;
+      addSecondaryTabButton({
+        id: tabId,
+        title,
+        root,
+        iconSvg: storeTab?.iconSvg,
+        iconUrl: storeTab?.iconUrl,
+        shortName: ui?.getBuiltInTabTitle?.(tabId) ? undefined : storeTab?.shortName
+      });
+    } else {
+      dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment recorded.`);
+    }
+  } else {
+    const storeTab = findDrawerTab(tabId);
+    if (!storeTab?.root) {
+      dwarn(`[configure-commit] extension "${tabId}" not found in store; skipping move to secondary`);
+      return;
+    }
+    setTabAssignment(tabId, "secondary");
+    hideMainTabButton(tabId);
+    const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+    if (secondaryContent && storeTab.root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(storeTab.root);
+    }
+    storeTab.root.setAttribute("data-canvas-moved", tabId);
+    addSecondaryTabButton({
+      id: tabId,
+      title: storeTab.title,
+      root: storeTab.root,
+      iconSvg: storeTab.iconSvg,
+      iconUrl: storeTab.iconUrl,
+      shortName: storeTab.shortName
+    });
+    updateDrawerTabVisibility();
+  }
+}
+async function moveTabToPrimaryQuiet(tabId) {
+  const bridge = getHostBridge();
+  const ui = bridge?.ui;
+  const isBuiltIn = !!ui?.getBuiltInTabRoot?.(tabId);
+  if (isBuiltIn) {
+    if (ui?.requestTabLocation) {
+      try {
+        ui.requestTabLocation(tabId, { kind: "main-drawer" });
+      } catch (err) {
+        dwarn(`[configure-commit] requestTabLocation(main-drawer) failed for "${tabId}":`, err);
+      }
+    }
+    deleteTabAssignment(tabId);
+    showMainTabButton(tabId);
+    removeSecondaryTabButton(tabId);
+  } else {
+    deleteTabAssignment(tabId);
+    showMainTabButton(tabId);
+    removeSecondaryTabButton(tabId);
+    const storeTab = findDrawerTab(tabId);
+    if (storeTab?.root) {
+      try {
+        const { getMainPanelContent: getMainPanelContent2 } = await Promise.resolve().then(() => exports_lumiverse);
+        const mainContent = getMainPanelContent2();
+        if (mainContent && storeTab.root.parentElement !== mainContent) {
+          mainContent.appendChild(storeTab.root);
+        }
+      } catch (err) {
+        dwarn(`[configure-commit] reparent "${tabId}" to main panel failed:`, err);
+      }
+      storeTab.root.removeAttribute("data-canvas-moved");
+      storeTab.root.removeAttribute("data-canvas-active");
+    }
+  }
+  updateDrawerTabVisibility();
+}
+var _batchActive = false;
+var init_configure_commit = __esm(() => {
+  init_configure_model();
+  init_assignment();
+  init_buttons();
+  init_host_settings();
+  init_secondary_drawer();
+  init_persist();
+  init_state();
+  init_log();
+  init_store();
+  init_secondary();
+});
+
+// src/tabs/configure-modal.tsx
+var exports_configure_modal = {};
+__export(exports_configure_modal, {
+  openConfigureTabsModal: () => openConfigureTabsModal,
+  isConfigureTabsModalOpen: () => isConfigureTabsModalOpen,
+  closeConfigureTabsModal: () => closeConfigureTabsModal
+});
+function injectModalStyles() {
+  if (typeof document === "undefined")
+    return;
+  if (document.getElementById(MODAL_STYLE_ID))
+    return;
+  const style = document.createElement("style");
+  style.id = MODAL_STYLE_ID;
+  style.textContent = `
+    .canvas-configure-tabs-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 12000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.5);
+      animation: canvasConfigureFadeIn 150ms ease-out;
+    }
+    @keyframes canvasConfigureFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .canvas-configure-tabs-dialog {
+      display: flex;
+      flex-direction: column;
+      width: min(90vw, 720px);
+      max-height: min(90vh, 600px);
+      background: var(--lumiverse-bg, #1a1a2e);
+      border: 1px solid var(--lumiverse-border, #333);
+      border-radius: 12px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+      color: var(--lumiverse-text, #eee);
+      font-family: var(--lumiverse-font-family, sans-serif);
+      animation: canvasConfigureSlideIn 150ms ease-out;
+    }
+    @keyframes canvasConfigureSlideIn {
+      from { transform: translateY(16px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .canvas-configure-tabs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-header h2 {
+      margin: 0;
+      font-size: calc(16px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+    }
+    .canvas-configure-tabs-swap-btn {
+      padding: 6px 14px;
+      border: 1px solid var(--lumiverse-border, #333);
+      border-radius: 6px;
+      background: var(--lumiverse-fill, rgba(255,255,255,0.06));
+      color: var(--lumiverse-text, #eee);
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 120ms ease;
+    }
+    .canvas-configure-tabs-swap-btn:hover {
+      background: var(--lumiverse-fill-strong, rgba(255,255,255,0.12));
+    }
+    .canvas-configure-tabs-body {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .canvas-configure-tabs-column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      width: 50%;
+    }
+    .canvas-configure-tabs-column + .canvas-configure-tabs-column {
+      border-left: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-column-header {
+      padding: 10px 16px;
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--lumiverse-text-muted, #888);
+      border-bottom: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .canvas-configure-tabs-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      margin: 1px 6px;
+      border-radius: 6px;
+      background: transparent;
+      transition: background 80ms ease;
+      cursor: grab;
+      user-select: none;
+    }
+    .canvas-configure-tabs-row:hover {
+      background: var(--lumiverse-fill, rgba(255,255,255,0.06));
+    }
+    .canvas-configure-tabs-row.dragging {
+      opacity: 0.4;
+    }
+    .canvas-configure-tabs-row.drag-over {
+      border-top: 2px solid var(--lumiverse-primary, #4a9eff);
+    }
+    .canvas-configure-tabs-row.hidden-row {
+      opacity: 0.45;
+    }
+    .canvas-configure-tabs-drag-handle {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      opacity: 0.35;
+      cursor: grab;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .canvas-configure-tabs-drag-handle svg {
+      width: 14px;
+      height: 14px;
+    }
+    .canvas-configure-tabs-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    }
+    .canvas-configure-tabs-title .kind-tag {
+      font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+      color: var(--lumiverse-text-muted, #888);
+      margin-left: 6px;
+    }
+    .canvas-configure-tabs-hide-toggle {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: 1px solid var(--lumiverse-border, #333);
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: var(--lumiverse-text-muted, #888);
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .canvas-configure-tabs-hide-toggle:hover:not(:disabled) {
+      background: var(--lumiverse-fill, rgba(255,255,255,0.06));
+    }
+    .canvas-configure-tabs-hide-toggle.hidden {
+      background: var(--lumiverse-danger-015, rgba(229,69,69,0.15));
+      border-color: var(--lumiverse-error, #e54545);
+      color: var(--lumiverse-error, #e54545);
+    }
+    .canvas-configure-tabs-hide-toggle:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    .canvas-configure-tabs-empty {
+      padding: 24px 16px;
+      text-align: center;
+      color: var(--lumiverse-text-muted, #666);
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+    }
+    .canvas-configure-tabs-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 20px;
+      border-top: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-btn {
+      padding: 8px 20px;
+      border-radius: 8px;
+      border: 1px solid var(--lumiverse-border, #333);
+      background: var(--lumiverse-fill, rgba(255,255,255,0.06));
+      color: var(--lumiverse-text, #eee);
+      font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 120ms ease;
+    }
+    .canvas-configure-tabs-btn:hover {
+      background: var(--lumiverse-fill-strong, rgba(255,255,255,0.12));
+    }
+    .canvas-configure-tabs-btn-primary {
+      background: var(--lumiverse-primary, #4a9eff);
+      border-color: var(--lumiverse-primary, #4a9eff);
+      color: white;
+    }
+    .canvas-configure-tabs-btn-primary:hover {
+      opacity: 0.9;
+    }
+    .canvas-configure-tabs-btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .canvas-configure-tabs-error {
+      padding: 8px 20px;
+      color: var(--lumiverse-error, #e54545);
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      text-align: right;
+    }
+  `;
+  document.head.appendChild(style);
+}
+function ConfigureTabsModalInner(props) {
+  const {
+    draft,
+    catalog,
+    primaryTabs,
+    secondaryTabs,
+    commitError,
+    committing,
+    onSwapSide,
+    onToggleHide,
+    onDrop,
+    onReorder,
+    onCancel,
+    onDone
+  } = props;
+  const leftIsSecondaryVal = leftColumnIsSecondary(draft.drawerSide);
+  const dragOverIndexRef = A2(-1);
+  const dragOverSideRef = A2(null);
+  const handleDragStart = q2((e3, tabId, side) => {
+    _dragTabId = tabId;
+    _dragFromSide = side;
+    e3.dataTransfer?.setData("text/plain", tabId);
+    e3.dataTransfer.effectAllowed = "move";
+    const target = e3.currentTarget;
+    target.classList.add("dragging");
+  }, []);
+  const handleDragEnd = q2((e3) => {
+    _dragTabId = null;
+    _dragFromSide = null;
+    dragOverIndexRef.current = -1;
+    dragOverSideRef.current = null;
+    const target = e3.currentTarget;
+    target.classList.remove("dragging");
+    document.querySelectorAll(".canvas-configure-tabs-row.drag-over").forEach((el) => {
+      el.classList.remove("drag-over");
+    });
+  }, []);
+  const handleDragOver = q2((e3, index, side) => {
+    e3.preventDefault();
+    if (!e3.dataTransfer)
+      return;
+    e3.dataTransfer.dropEffect = "move";
+    const target = e3.currentTarget;
+    if (dragOverIndexRef.current !== index || dragOverSideRef.current !== side) {
+      document.querySelectorAll(".canvas-configure-tabs-row.drag-over").forEach((el) => {
+        el.classList.remove("drag-over");
+      });
+      target.classList.add("drag-over");
+      dragOverIndexRef.current = index;
+      dragOverSideRef.current = side;
+    }
+  }, []);
+  const handleDragLeave = q2((e3) => {
+    const target = e3.currentTarget;
+    target.classList.remove("drag-over");
+    if (dragOverIndexRef.current !== -1) {}
+  }, []);
+  const handleDrop = q2((e3, toIndex, toSide) => {
+    e3.preventDefault();
+    e3.stopPropagation();
+    const target = e3.currentTarget;
+    target.classList.remove("drag-over");
+    const draggedTabId = _dragTabId;
+    const fromSide = _dragFromSide;
+    if (!draggedTabId || !fromSide)
+      return;
+    if (fromSide === toSide) {
+      const list = fromSide === "primary" ? draft.primaryIds : draft.secondaryIds;
+      const fromIdx = list.indexOf(draggedTabId);
+      if (fromIdx === -1)
+        return;
+      const spatialSide = leftIsSecondaryVal ? fromSide === "primary" ? "right" : "left" : fromSide === "primary" ? "left" : "right";
+      onReorder(spatialSide, fromIdx, toIndex);
+    } else {
+      onDrop(draggedTabId, fromSide, toSide, toIndex);
+    }
+    _dragTabId = null;
+    _dragFromSide = null;
+    dragOverIndexRef.current = -1;
+    dragOverSideRef.current = null;
+  }, [draft, leftIsSecondaryVal, onReorder, onDrop]);
+  const renderTabRow = (tab, index, side) => {
+    const isHidden = draft.hiddenIds.has(tab.id);
+    return /* @__PURE__ */ u3("div", {
+      class: `canvas-configure-tabs-row${isHidden ? " hidden-row" : ""}`,
+      draggable: true,
+      onDragStart: (e3) => handleDragStart(e3, tab.id, side),
+      onDragEnd: handleDragEnd,
+      onDragOver: (e3) => handleDragOver(e3, index, side),
+      onDragLeave: handleDragLeave,
+      onDrop: (e3) => handleDrop(e3, index, side),
+      children: [
+        /* @__PURE__ */ u3("span", {
+          class: "canvas-configure-tabs-drag-handle",
+          title: "Drag to reorder",
+          children: /* @__PURE__ */ u3("svg", {
+            viewBox: "0 0 24 24",
+            fill: "none",
+            stroke: "currentColor",
+            "stroke-width": "2",
+            children: [
+              /* @__PURE__ */ u3("circle", {
+                cx: "9",
+                cy: "5",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ u3("circle", {
+                cx: "15",
+                cy: "5",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ u3("circle", {
+                cx: "9",
+                cy: "12",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ u3("circle", {
+                cx: "15",
+                cy: "12",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ u3("circle", {
+                cx: "9",
+                cy: "19",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ u3("circle", {
+                cx: "15",
+                cy: "19",
+                r: "1.5",
+                fill: "currentColor",
+                stroke: "none"
+              }, undefined, false, undefined, this)
+            ]
+          }, undefined, true, undefined, this)
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ u3("span", {
+          class: "canvas-configure-tabs-title",
+          children: [
+            tab.title,
+            tab.kind === "extension" && tab.extensionId && /* @__PURE__ */ u3("span", {
+              class: "kind-tag",
+              children: [
+                "(",
+                tab.extensionId,
+                ")"
+              ]
+            }, undefined, true, undefined, this)
+          ]
+        }, undefined, true, undefined, this),
+        /* @__PURE__ */ u3("button", {
+          class: `canvas-configure-tabs-hide-toggle${isHidden ? " hidden" : ""}`,
+          disabled: tab.hideLocked,
+          title: tab.hideLocked ? "Cannot hide this tab" : isHidden ? "Show tab" : "Hide tab",
+          onClick: (e3) => {
+            e3.stopPropagation();
+            onToggleHide(tab.id, !isHidden);
+          },
+          children: isHidden ? "✓" : "○"
+        }, undefined, false, undefined, this)
+      ]
+    }, tab.id, true, undefined, this);
+  };
+  const primaryList = /* @__PURE__ */ u3("div", {
+    class: "canvas-configure-tabs-list",
+    onDragOver: (e3) => {
+      e3.preventDefault();
+      if (e3.dataTransfer)
+        e3.dataTransfer.dropEffect = "move";
+    },
+    onDrop: (e3) => {
+      handleDrop(e3, primaryTabs.length, "primary");
+    },
+    children: primaryTabs.length === 0 ? /* @__PURE__ */ u3("div", {
+      class: "canvas-configure-tabs-empty",
+      children: "No tabs assigned"
+    }, undefined, false, undefined, this) : primaryTabs.map((tab, i3) => renderTabRow(tab, i3, "primary"))
+  }, undefined, false, undefined, this);
+  const secondaryList = /* @__PURE__ */ u3("div", {
+    class: "canvas-configure-tabs-list",
+    onDragOver: (e3) => {
+      e3.preventDefault();
+      if (e3.dataTransfer)
+        e3.dataTransfer.dropEffect = "move";
+    },
+    onDrop: (e3) => {
+      handleDrop(e3, secondaryTabs.length, "secondary");
+    },
+    children: secondaryTabs.length === 0 ? /* @__PURE__ */ u3("div", {
+      class: "canvas-configure-tabs-empty",
+      children: "No tabs assigned"
+    }, undefined, false, undefined, this) : secondaryTabs.map((tab, i3) => renderTabRow(tab, i3, "secondary"))
+  }, undefined, false, undefined, this);
+  const leftColumn = leftIsSecondaryVal ? secondaryList : primaryList;
+  const rightColumn = leftIsSecondaryVal ? primaryList : secondaryList;
+  const leftLabel = leftIsSecondaryVal ? "Second Drawer Tabs" : "Main Drawer Tabs";
+  const rightLabel = leftIsSecondaryVal ? "Main Drawer Tabs" : "Second Drawer Tabs";
+  return /* @__PURE__ */ u3("div", {
+    class: "canvas-configure-tabs-overlay",
+    onClick: (e3) => {
+      if (e3.target === e3.currentTarget)
+        onCancel();
+    },
+    onKeyDown: (e3) => {
+      if (e3.key === "Escape" && !committing)
+        onCancel();
+    },
+    children: /* @__PURE__ */ u3("div", {
+      class: "canvas-configure-tabs-dialog",
+      onClick: (e3) => e3.stopPropagation(),
+      children: [
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-header",
+          children: [
+            /* @__PURE__ */ u3("h2", {
+              children: "Configure Tabs"
+            }, undefined, false, undefined, this),
+            /* @__PURE__ */ u3("button", {
+              class: "canvas-configure-tabs-swap-btn",
+              onClick: onSwapSide,
+              children: "Swap drawers"
+            }, undefined, false, undefined, this)
+          ]
+        }, undefined, true, undefined, this),
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-body",
+          children: [
+            /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-column",
+              children: [
+                /* @__PURE__ */ u3("div", {
+                  class: "canvas-configure-tabs-column-header",
+                  children: leftLabel
+                }, undefined, false, undefined, this),
+                leftColumn
+              ]
+            }, undefined, true, undefined, this),
+            /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-column",
+              children: [
+                /* @__PURE__ */ u3("div", {
+                  class: "canvas-configure-tabs-column-header",
+                  children: rightLabel
+                }, undefined, false, undefined, this),
+                rightColumn
+              ]
+            }, undefined, true, undefined, this)
+          ]
+        }, undefined, true, undefined, this),
+        commitError && /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-error",
+          children: commitError
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-footer",
+          children: [
+            /* @__PURE__ */ u3("button", {
+              class: "canvas-configure-tabs-btn",
+              onClick: onCancel,
+              disabled: committing,
+              children: "Cancel"
+            }, undefined, false, undefined, this),
+            /* @__PURE__ */ u3("button", {
+              class: "canvas-configure-tabs-btn canvas-configure-tabs-btn-primary",
+              onClick: onDone,
+              disabled: committing,
+              children: committing ? "Applying…" : "Done"
+            }, undefined, false, undefined, this)
+          ]
+        }, undefined, true, undefined, this)
+      ]
+    }, undefined, true, undefined, this)
+  }, undefined, false, undefined, this);
+}
+function openConfigureTabsModal() {
+  if (typeof document === "undefined")
+    return;
+  if (_modalContainer) {
+    _modalContainer.style.display = "flex";
+    return;
+  }
+  injectModalStyles();
+  const catalog = getFullCatalog();
+  const hostSettings = getHostDrawerSettings();
+  const currentAssignments = new Map(getTabAssignments());
+  const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const draft = createDraft({
+    catalog,
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: currentAssignments
+  });
+  _draftRef = draft;
+  _baseSnapshotRef = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: new Map(currentAssignments)
+  };
+  _modalContainer = document.createElement("div");
+  _modalContainer.id = "canvas-configure-tabs-modal";
+  document.body.appendChild(_modalContainer);
+  renderModal(draft, catalog, null, false);
+}
+function closeConfigureTabsModal() {
+  if (!_modalContainer)
+    return true;
+  if (_draftRef && _baseSnapshotRef) {
+    if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
+      if (typeof window !== "undefined" && !window.confirm("Discard changes?")) {
+        return false;
+      }
+    }
+  }
+  unmountModal();
+  return true;
+}
+function isConfigureTabsModalOpen() {
+  return _modalContainer !== null && _modalContainer.isConnected;
+}
+function renderModal(draft, catalog, commitError, committing) {
+  if (!_modalContainer)
+    return;
+  const { primary, secondary } = partitionDisplayLists(draft, catalog);
+  R(/* @__PURE__ */ u3(ConfigureTabsModalInner, {
+    draft,
+    catalog,
+    primaryTabs: primary,
+    secondaryTabs: secondary,
+    commitError,
+    committing,
+    onSwapSide: () => {
+      if (!_draftRef)
+        return;
+      const next = swapDrawerSide(_draftRef);
+      _draftRef = next;
+      renderModal(next, catalog, null, false);
+    },
+    onToggleHide: (tabId, hidden) => {
+      if (!_draftRef)
+        return;
+      const next = setHidden(_draftRef, tabId, hidden);
+      _draftRef = next;
+      renderModal(next, catalog, null, false);
+    },
+    onDrop: (tabId, fromSide, toSide, toIndex) => {
+      if (!_draftRef)
+        return;
+      const next = moveTab(_draftRef, tabId, toSide, toIndex);
+      _draftRef = next;
+      renderModal(next, catalog, null, false);
+    },
+    onReorder: (side, fromIndex, toIndex) => {
+      if (!_draftRef)
+        return;
+      const next = reorderWithin(_draftRef, side, fromIndex, toIndex);
+      _draftRef = next;
+      renderModal(next, catalog, null, false);
+    },
+    onCancel: () => {
+      closeConfigureTabsModal();
+    },
+    onDone: async () => {
+      if (!_draftRef || !_baseSnapshotRef)
+        return;
+      renderModal(_draftRef, catalog, null, true);
+      const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef);
+      if (result.ok) {
+        dlog("[configure-modal] commit successful");
+        unmountModal();
+      } else {
+        dlog("[configure-modal] commit failed:", result.error);
+        renderModal(_draftRef, catalog, result.error, false);
+      }
+    }
+  }, undefined, false, undefined, this), _modalContainer);
+}
+function unmountModal() {
+  if (!_modalContainer)
+    return;
+  R(null, _modalContainer);
+  _modalContainer.remove();
+  _modalContainer = null;
+  _draftRef = null;
+  _baseSnapshotRef = null;
+}
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _dragTabId = null, _dragFromSide = null;
+var init_configure_modal = __esm(() => {
+  init_preact_module();
+  init_hooks_module();
+  init_configure_model();
+  init_configure_catalog();
+  init_host_settings();
+  init_store();
+  init_assignment();
+  init_configure_commit();
+  init_log();
+  init_jsxRuntime_module();
+});
+
+// src/tabs/configure-intercept.ts
+function startConfigureTabsIntercept() {
+  if (_interceptActive)
+    return;
+  _interceptActive = true;
+  _clickHandler = (e3) => {
+    if (!_interceptActive)
+      return;
+    const menu = findLumiverseContextMenu();
+    if (!menu)
+      return;
+    const buttons = menu.querySelectorAll("button");
+    const configureBtn = buttons.length >= 2 ? buttons[1] : null;
+    if (!configureBtn)
+      return;
+    const target = e3.target;
+    if (!target)
+      return;
+    const clickedConfigureBtn = configureBtn.contains(target) || configureBtn === target;
+    if (!clickedConfigureBtn)
+      return;
+    e3.preventDefault();
+    e3.stopPropagation();
+    e3.stopImmediatePropagation();
+    dismissHostContextMenu();
+    dlog("[configure-intercept] intercepted Configure Tabs click, opening modal");
+    Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
+      m3.openConfigureTabsModal();
+    }).catch((err) => {
+      dwarn("[configure-intercept] Failed to open configure modal:", err);
+    });
+  };
+  document.addEventListener("click", _clickHandler, true);
+}
+function stopConfigureTabsIntercept() {
+  if (!_interceptActive)
+    return;
+  _interceptActive = false;
+  if (_clickHandler) {
+    document.removeEventListener("click", _clickHandler, true);
+    _clickHandler = null;
+  }
+  Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
+    m3.closeConfigureTabsModal();
+  }).catch(() => {});
+}
+function dismissHostContextMenu() {
+  document.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true
+  }));
+}
+var _interceptActive = false, _clickHandler = null;
+var init_configure_intercept = __esm(() => {
+  init_context_menu();
+  init_log();
+});
+
 // src/features/registry.ts
 function makeLayoutFacetFeature(id) {
   return {
@@ -9998,6 +11520,7 @@ var init_registry = __esm(() => {
   init_buttons();
   init_main_mirror_drawer();
   init_drawer_tab_position();
+  init_configure_intercept();
   debugFeature = {
     id: "debugMode",
     apply(prev, next) {
@@ -10045,7 +11568,12 @@ var init_registry = __esm(() => {
       const hasTabsToRestore = !!s3.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0;
       const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true && hasTabsToRestore);
       mountSecondarySidebar({ initialWidth, initialOpen });
-      return tearDownSecondarySidebar;
+      startConfigureTabsIntercept();
+      const teardown = () => {
+        tearDownSecondarySidebar();
+        stopConfigureTabsIntercept();
+      };
+      return teardown;
     },
     apply(prev, next) {
       if (prev.secondSidebarEnabled === next.secondSidebarEnabled)
@@ -10062,7 +11590,9 @@ var init_registry = __esm(() => {
           if (layout && anyFacet)
             applyLayout(layout);
         }
+        startConfigureTabsIntercept();
       } else {
+        stopConfigureTabsIntercept();
         tearDownSecondarySidebar();
       }
     }
@@ -10421,10 +11951,10 @@ function buildSettingsPanelDOM() {
   const section = (title) => {
     const sec = document.createElement("div");
     sec.className = "sidebar-ux-panel-section";
-    const h3 = document.createElement("h4");
-    h3.className = "sidebar-ux-panel-section-title";
-    h3.textContent = title;
-    sec.appendChild(h3);
+    const h4 = document.createElement("h4");
+    h4.className = "sidebar-ux-panel-section-title";
+    h4.textContent = title;
+    sec.appendChild(h4);
     return sec;
   };
   const sec1 = section("Chat");
@@ -10631,218 +12161,7 @@ init_mobile_exclusion();
 init_drawer_sync();
 init_drawer_observer();
 init_secondary_drawer();
-
-// src/context-menu/index.ts
-init_store();
-init_assignment();
-init_state();
-init_tab_context_menu();
-init_buttons();
-init_log();
-function clampMenuToViewport(menu) {
-  const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale")) || 1;
-  const rect = menu.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  if (rect.right > vw - 8) {
-    menu.style.left = `${(vw - rect.width - 8) / uiScale}px`;
-  }
-  if (rect.bottom > vh - 8) {
-    menu.style.top = `${(vh - rect.height - 8) / uiScale}px`;
-  }
-}
-var _pendingTabInfo = null;
-var _injected = false;
-var _observer = null;
-function findLumiverseContextMenu() {
-  const last = document.body.lastElementChild;
-  if (!last || last.tagName !== "DIV")
-    return null;
-  const style = getComputedStyle(last);
-  if (style.position !== "fixed")
-    return null;
-  if (style.zIndex !== "11000")
-    return null;
-  if (!last.querySelector("button"))
-    return null;
-  return last;
-}
-function startObserver() {
-  if (_observer)
-    return;
-  _observer = new MutationObserver(() => {
-    if (_injected || !_pendingTabInfo)
-      return;
-    requestAnimationFrame(() => {
-      if (_injected || !_pendingTabInfo)
-        return;
-      const menu = findLumiverseContextMenu();
-      if (!menu)
-        return;
-      injectCanvasItem(menu, _pendingTabInfo);
-      _injected = true;
-      _pendingTabInfo = null;
-      stopObserver();
-    });
-  });
-  _observer.observe(document.body, { childList: true });
-}
-function stopObserver() {
-  if (_observer) {
-    _observer.disconnect();
-    _observer = null;
-  }
-}
-function injectCanvasItem(menu, info) {
-  let label;
-  let targetSidebar;
-  if (info.currentSidebar === "secondary") {
-    label = "Move to main drawer";
-    targetSidebar = "primary";
-  } else {
-    label = "Move to second drawer";
-    targetSidebar = "secondary";
-  }
-  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`);
-  if (targetSidebar === "secondary" && !getSettings().secondSidebarEnabled) {
-    dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`);
-    return;
-  }
-  const divider = document.createElement("div");
-  divider.style.cssText = "height:1px;margin:4px 8px;background:var(--lumiverse-border)";
-  menu.appendChild(divider);
-  const refBtn = menu.querySelector("button");
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.textContent = label;
-  if (refBtn) {
-    const rs = getComputedStyle(refBtn);
-    btn.style.cssText = [
-      "display",
-      "alignItems",
-      "gap",
-      "width",
-      "padding",
-      "border",
-      "borderRadius",
-      "background",
-      "fontFamily",
-      "cursor",
-      "transition",
-      "textAlign"
-    ].map((p3) => `${p3.replace(/([A-Z])/g, "-$1").toLowerCase()}:${rs.getPropertyValue(p3.replace(/([A-Z])/g, "-$1").toLowerCase())}`).join(";");
-    btn.style.color = "var(--lumiverse-text)";
-    btn.style.fontSize = "calc(12.5px * var(--lumiverse-font-scale, 1))";
-  } else {
-    btn.style.cssText = `
-      display:flex;align-items:center;gap:8px;width:100%;
-      padding:8px 12px;border:none;border-radius:6px;background:none;
-      color:var(--lumiverse-text);
-      font-size:calc(12.5px * var(--lumiverse-font-scale, 1));
-      font-family:inherit;cursor:pointer;transition:background 120ms ease;
-      text-align:left;
-    `;
-  }
-  btn.addEventListener("mouseenter", () => {
-    btn.style.background = "var(--lumiverse-fill, rgba(255, 255, 255, 0.06))";
-  });
-  btn.addEventListener("mouseleave", () => {
-    btn.style.background = "none";
-  });
-  btn.addEventListener("click", (e3) => {
-    e3.stopPropagation();
-    dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`);
-    assignTab(info.tabId, targetSidebar);
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-  });
-  menu.appendChild(btn);
-  clampMenuToViewport(menu);
-}
-var _contextMenuListenersActive = false;
-var _handlers = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null };
-function startContextMenuListener() {
-  if (_contextMenuListenersActive)
-    return;
-  const docCtxCapture = (e3) => {
-    const evt = e3;
-    hideAssignmentMenu();
-    const target = evt.target;
-    const tabBtn = target?.closest?.("button[title]");
-    if (!tabBtn) {
-      _pendingTabInfo = null;
-      return;
-    }
-    if (isSettingsButton(tabBtn)) {
-      _pendingTabInfo = null;
-      return;
-    }
-    if (tabBtn.classList.contains("sidebar-ux-main-tab-mirror-btn")) {
-      dlog("[tabmove] docCtxCapture: main-mirror btn — host forward handles it");
-      _pendingTabInfo = null;
-      return;
-    }
-    const sidebar = getMainSidebar();
-    if (!sidebar || !sidebar.contains(tabBtn)) {
-      dlog("[tabmove] docCtxCapture: skip (not in host sidebar)", {
-        title: tabBtn.getAttribute("title"),
-        classes: tabBtn.className
-      });
-      _pendingTabInfo = null;
-      return;
-    }
-    const title = tabBtn.getAttribute("title") || "";
-    const dataTabId = tabBtn.getAttribute("data-tab-id");
-    let tabId;
-    if (dataTabId) {
-      tabId = dataTabId;
-    } else {
-      findStoreData(true);
-      const tabs = getDrawerTabs();
-      const matchedTab = tabs.find((t3) => t3.title === title);
-      tabId = matchedTab?.id || title;
-    }
-    const currentSidebar = getTabSidebar(tabId);
-    dlog(`[tabmove] docCtxCapture: tabBtn title="${title}" data-tab-id="${dataTabId || "(none)"}" ` + `-> resolved tabId="${tabId}" currentSidebar=${currentSidebar} ` + `(source=${dataTabId ? "data-tab-id" : "store-title-fallback"})`);
-    _pendingTabInfo = { tabId, currentSidebar, btn: tabBtn };
-    _injected = false;
-    startObserver();
-  };
-  const docClick = (e3) => {
-    hideAssignmentMenu();
-  };
-  const docScroll = () => hideAssignmentMenu();
-  const docKey = (e3) => {
-    if (e3.key === "Escape")
-      hideAssignmentMenu();
-  };
-  document.addEventListener("contextmenu", docCtxCapture, true);
-  document.addEventListener("click", docClick);
-  document.addEventListener("scroll", docScroll, true);
-  document.addEventListener("keydown", docKey);
-  _handlers = { docCtxCapture, docClick, docScroll, docKey };
-  _contextMenuListenersActive = true;
-}
-function stopContextMenuListener() {
-  if (!_contextMenuListenersActive)
-    return;
-  const h3 = _handlers;
-  if (h3.docCtxCapture)
-    document.removeEventListener("contextmenu", h3.docCtxCapture, true);
-  if (h3.docClick)
-    document.removeEventListener("click", h3.docClick);
-  if (h3.docScroll)
-    document.removeEventListener("scroll", h3.docScroll, true);
-  if (h3.docKey)
-    document.removeEventListener("keydown", h3.docKey);
-  _handlers = { docCtxCapture: null, docClick: null, docScroll: null, docKey: null };
-  _contextMenuListenersActive = false;
-  stopObserver();
-  _pendingTabInfo = null;
-  _injected = false;
-  hideAssignmentMenu();
-}
-
-// src/setup.ts
+init_context_menu();
 init_log();
 init_fiber_scan();
 function setup(ctx) {

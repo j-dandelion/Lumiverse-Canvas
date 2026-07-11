@@ -41,6 +41,10 @@ import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
 import { drawerTabDragFeature } from './drawer-tab-position'
+import {
+  startConfigureTabsIntercept,
+  stopConfigureTabsIntercept,
+} from '../tabs/configure-intercept'
 
 /** A teardown returned by mount(). */
 export type Teardown = () => void
@@ -141,7 +145,10 @@ const chatReflowFeature: CanvasFeature = {
 /** Second sidebar: the master toggle for the entire mirror-drawer feature.
  *  Initial mount reads the layout's saved width/open so the wrapper renders
  *  at the right size on the first paint (gated per layout facet).
- *  Runtime re-apply re-uses the last loaded layout to restore tab assignments. */
+ *  Runtime re-apply re-uses the last loaded layout to restore tab assignments.
+ *
+ *  Also manages the Configure Tabs intercept lifecycle:
+ *  starts when second sidebar is enabled, stops on disable/teardown. */
 const secondSidebarFeature: CanvasFeature = {
   id: 'secondSidebarEnabled',
   mount(_ctx, layout) {
@@ -156,7 +163,16 @@ const secondSidebarFeature: CanvasFeature = {
       hasTabsToRestore
     )
     mountSecondarySidebar({ initialWidth, initialOpen })
-    return tearDownSecondarySidebar
+
+    // Start configure-tabs intercept when second sidebar is on.
+    startConfigureTabsIntercept()
+
+    // Compose teardown: tear down secondary sidebar AND stop intercept + close modal.
+    const teardown = () => {
+      tearDownSecondarySidebar()
+      stopConfigureTabsIntercept()
+    }
+    return teardown
   },
   apply(prev, next) {
     if (prev.secondSidebarEnabled === next.secondSidebarEnabled) return
@@ -176,7 +192,11 @@ const secondSidebarFeature: CanvasFeature = {
         mountSecondarySidebar({ initialWidth, initialOpen })
         if (layout && anyFacet) applyLayout(layout)
       }
+      // Re-start intercept when turned back on.
+      startConfigureTabsIntercept()
     } else {
+      // Stop intercept and close modal when turned off.
+      stopConfigureTabsIntercept()
       tearDownSecondarySidebar()
     }
   },

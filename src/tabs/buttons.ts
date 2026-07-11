@@ -10,6 +10,8 @@
 //   per the plan's startTagObserver open question).
 // - addSecondaryTabButton / removeSecondaryTabButton / updateDrawerTabVisibility
 //   / showSecondaryTab: secondary sidebar's per-tab buttons and visibility.
+// - reorderSecondaryTabButtons / applyHiddenTabIdsToSecondary: configure-tabs
+//   commit helpers.
 // - deriveShortName: short name adapter matching Lumiverse's logic.
 import { getMainSidebar } from '../dom/lumiverse'
 import { getDrawerTabs } from '../store'
@@ -300,6 +302,65 @@ export function removeSecondaryTabButton(tabId: string): void {
   btn?.remove()
   // Last tab removed: unpin empty secondary strip under keep-tabs.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
+}
+
+/**
+ * Reorder secondary tab buttons to match the given id order.
+ * Uses DOM appendChild (which moves existing nodes) — creates nothing if
+ * a button for an id is missing. This is a separate path from
+ * addSecondaryTabButton; the alreadyHasButton guard in that function does
+ * NOT block this reorder.
+ */
+export function reorderSecondaryTabButtons(ids: string[]): void {
+  const tabList = getSecondaryTabList()
+  if (!tabList) return
+  for (const id of ids) {
+    const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`) as HTMLElement | null
+    if (btn) {
+      // appendChild moves an existing node to the end of the parent's
+      // children list. Iterating ids in order and appending each yields
+      // the desired sequence.
+      tabList.appendChild(btn)
+    }
+  }
+}
+
+/**
+ * Apply the hidden set to secondary tab buttons.
+ * Buttons whose data-tab-id is in hiddenIds get `display: none`;
+ * those not in the set (but still assigned and present) are shown.
+ */
+export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): void {
+  const tabList = getSecondaryTabList()
+  if (!tabList) return
+  for (const btn of Array.from(tabList.querySelectorAll('button[data-tab-id]')) as HTMLElement[]) {
+    const tid = btn.getAttribute('data-tab-id') || ''
+    if (hiddenIds.has(tid)) {
+      btn.style.display = 'none'
+    } else {
+      btn.style.display = ''
+    }
+  }
+}
+
+/**
+ * Apply the hidden set to main-mirror tab buttons.
+ * Uses getMainMirrorTabList from the mirror module.
+ */
+export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void {
+  // Lazy-import to avoid circular dependency at module level.
+  void import('../sidebar/main-mirror-drawer').then((m) => {
+    const list = m.getMainMirrorTabList()
+    if (!list) return
+    for (const btn of Array.from(list.querySelectorAll('button[data-tab-id]')) as HTMLElement[]) {
+      const tid = btn.getAttribute('data-tab-id') || ''
+      if (hiddenIds.has(tid)) {
+        btn.style.display = 'none'
+      } else {
+        btn.style.display = ''
+      }
+    }
+  })
 }
 
 // Local wrapper to avoid a static import cycle with sidebar/mobile-exclusion

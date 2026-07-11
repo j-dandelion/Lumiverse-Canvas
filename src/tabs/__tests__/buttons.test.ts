@@ -100,7 +100,7 @@ function makeClassList(): StubClassList {
     contains(c) { return set.has(c) },
     toggle(c, force) {
       if (force === undefined) {
-        if (set.has(c)) set.remove(c)
+        if (set.has(c)) set.delete(c)
         else set.add(c)
       } else if (force) {
         set.add(c)
@@ -199,8 +199,51 @@ const secondaryWrapper = {
 
 // Stub document.querySelector so getMainDrawerSide() falls through to
 // the default 'right' (no DOM wrappers, no store cache).
-;(globalThis as any).document = {
-  querySelector(_sel: string): unknown { return null },
+// Include resilient documentElement for transitive imports (strip-gutter).
+// Preserve addEventListener/removeEventListener for cross-file compatibility.
+{
+  const _doc = typeof document !== 'undefined' ? document : {} as Document
+  const _origCreateElement = typeof document !== 'undefined'
+    ? document.createElement.bind(document)
+    : (tag: string) => {
+        // Minimal stub for bun environments without DOM.
+        const children: unknown[] = []
+        const attrs: Record<string, string> = {}
+        return {
+          tag,
+          className: '',
+          children,
+          attributes: attrs,
+          style: { display: '' } as Record<string, string>,
+          setAttribute(name: string, value: string) { attrs[name] = value },
+          getAttribute(name: string) { return attrs[name] ?? null },
+          removeAttribute(name: string) { delete attrs[name] },
+          appendChild(child: unknown) { children.push(child) },
+          querySelector(_sel: string): unknown { return null },
+          querySelectorAll(_sel: string): unknown[] { return children },
+          remove() {},
+        }
+      }
+  ;(globalThis as any).document = {
+    ..._doc,
+    createElement: _origCreateElement,
+    querySelector(_sel: string): unknown { return null },
+    // Resilient documentElement for transitive imports (strip-gutter, main-mirror-drawer).
+    documentElement: (_doc as any)?.documentElement || {
+      style: { removeProperty() {}, setProperty() {} },
+      classList: { add() {}, remove() {}, contains() { return false }, toString() { return '' } },
+    },
+    // Preserve event listener methods for cross-file compatibility.
+    addEventListener: (_doc as any)?.addEventListener || (() => {}),
+    removeEventListener: (_doc as any)?.removeEventListener || (() => {}),
+  }
+}
+
+// Stub CSS.escape since bun doesn't have CSS global.
+if (typeof CSS === 'undefined') {
+  ;(globalThis as any).CSS = {
+    escape: (s: string) => s,
+  }
 }
 
 // Stub getComputedStyle for the dlog call inside showSecondaryTab
@@ -208,6 +251,7 @@ const secondaryWrapper = {
 
 // Stub window.spindle (matches assign-tab-wiring / secondary-drawer-wiring convention)
 ;(globalThis as any).window = {
+  ...((globalThis as any).window || {}),
   spindle: {
     ui: {
       getBuiltInTabRoot: () => undefined,
@@ -552,6 +596,202 @@ setSettings({
   keepTabListVisible: savedKeepTabs,
   moveControlsToOuterEdge: savedOuterEdge,
 })
+
+// ============================================================
+// B22-B27: reorderSecondaryTabButtons and applyHiddenTabIdsToSecondary
+// ============================================================
+import { reorderSecondaryTabButtons, applyHiddenTabIdsToSecondary } from '../buttons'
+
+// Factory for tab list stubs used by reorder/hide tests.
+// Returns a stub with DOM-like querySelector/appendChild/children.
+function makeListStub(initialButtons: Array<{ id: string; style: { display?: string } }>): {
+  className: string
+  children: unknown[]
+  querySelector: (sel: string) => unknown
+  querySelectorAll: (sel: string) => unknown[]
+  appendChild: (child: unknown) => void
+} {
+  // Each "button" is a lightweight object with data-tab-id attribute via getAttribute.
+  const items = initialButtons.map((b) => {
+    const el = {
+      _id: b.id,
+      style: { display: b.style?.display ?? '' },
+      getAttribute(name: string) { return name === 'data-tab-id' ? b.id : null },
+    }
+    return el
+  })
+
+  return {
+    className: 'sidebar-ux-tab-list',
+    children: items as unknown[],
+    querySelector(sel: string) {
+      // Handle [data-tab-id="..."]
+      const match = sel.match(/\[data-tab-id="([^"]+)"\]/)
+      if (match) {
+        return items.find((i) => i._id === match[1]) ?? null
+      }
+      return null
+    },
+    querySelectorAll(sel: string) {
+      if (sel === 'button[data-tab-id]') return items as unknown[]
+      return []
+    },
+    appendChild(child: unknown) {
+      // "Move" the child to the end (re-insert rather than duplicate).
+      const idx = items.indexOf(child as any)
+      if (idx >= 0) {
+        items.splice(idx, 1)
+      }
+      items.push(child as any)
+    },
+  }
+}
+
+// ============================================================
+// B22: reorderSecondaryTabButtons — reorders buttons via DOM appendChild
+// ============================================================
+{
+  const listStub = makeListStub([
+    { id: 'tab-a', style: {} },
+    { id: 'tab-b', style: {} },
+    { id: 'tab-c', style: {} },
+  ])
+
+  // Set up a wrapper that returns our list stub.
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  // Initial order: a, b, c
+  assertEqual((listStub.children as any[])[0]._id, 'tab-a', 'B22: initial order a')
+  assertEqual((listStub.children as any[])[1]._id, 'tab-b', 'B22: initial order b')
+  assertEqual((listStub.children as any[])[2]._id, 'tab-c', 'B22: initial order c')
+
+  // Reorder to: c, a, b
+  reorderSecondaryTabButtons(['tab-c', 'tab-a', 'tab-b'])
+
+  assertEqual((listStub.children as any[]).length, 3, 'B22.a: still 3 children after reorder')
+  assertEqual((listStub.children as any[])[0]._id, 'tab-c', 'B22.b: first is tab-c')
+  assertEqual((listStub.children as any[])[1]._id, 'tab-a', 'B22.c: second is tab-a')
+  assertEqual((listStub.children as any[])[2]._id, 'tab-b', 'B22.d: third is tab-b')
+
+  // Reorder again: b, c, a
+  reorderSecondaryTabButtons(['tab-b', 'tab-c', 'tab-a'])
+
+  assertEqual((listStub.children as any[])[0]._id, 'tab-b', 'B22.e: first is tab-b')
+  assertEqual((listStub.children as any[])[1]._id, 'tab-c', 'B22.f: second is tab-c')
+  assertEqual((listStub.children as any[])[2]._id, 'tab-a', 'B22.g: third is tab-a')
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// ============================================================
+// B23: reorderSecondaryTabButtons — missing ids are skipped
+// ============================================================
+{
+  const listStub = makeListStub([
+    { id: 'tab-x', style: {} },
+    { id: 'tab-y', style: {} },
+  ])
+
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  // Attempt to reorder including a non-existent id.
+  reorderSecondaryTabButtons(['tab-y', 'tab-z', 'tab-x'])
+
+  const items = listStub.children as any[]
+  assertEqual(items.length, 2, 'B23.a: still 2 children')
+  assertEqual(items[0]._id, 'tab-y', 'B23.b: first is tab-y')
+  assertEqual(items[1]._id, 'tab-x', 'B23.c: second is tab-x')
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// ============================================================
+// B24: reorderSecondaryTabButtons — no-op when tabList is null
+// ============================================================
+{
+  __setSecondaryWrapperForTest(null)
+  // Should not throw.
+  reorderSecondaryTabButtons(['tab-a', 'tab-b'])
+  assert(true, 'B24: no-op does not throw when tabList is null')
+}
+
+// ============================================================
+// B25: applyHiddenTabIdsToSecondary — hides matching buttons
+// ============================================================
+{
+  const listStub = makeListStub([
+    { id: 'hide-me', style: {} },
+    { id: 'show-me', style: {} },
+    { id: 'hide-me-too', style: {} },
+  ])
+
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  applyHiddenTabIdsToSecondary(new Set(['hide-me', 'hide-me-too']))
+
+  const items = listStub.children as any[]
+  assertEqual(items[0].style.display, 'none', 'B25.a: hide-me button hidden')
+  assertEqual(items[1].style.display, '', 'B25.b: show-me button visible')
+  assertEqual(items[2].style.display, 'none', 'B25.c: hide-me-too button hidden')
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// ============================================================
+// B26: applyHiddenTabIdsToSecondary — no-op when tabList is null
+// ============================================================
+{
+  __setSecondaryWrapperForTest(null)
+  applyHiddenTabIdsToSecondary(new Set(['any-tab']))
+  assert(true, 'B26: no-op does not throw when tabList is null')
+}
+
+// ============================================================
+// B27: applyHiddenTabIdsToSecondary — clear hidden works
+// ============================================================
+{
+  const listStub = makeListStub([
+    { id: 'toggle-tab', style: { display: 'none' } },
+  ])
+
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  // Apply empty set (unhide all).
+  applyHiddenTabIdsToSecondary(new Set())
+
+  const items = listStub.children as any[]
+  assertEqual(items[0].style.display, '', 'B27: toggle-tab button shown')
+
+  __setSecondaryWrapperForTest(null)
+}
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

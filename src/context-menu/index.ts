@@ -18,6 +18,8 @@
 //   4. MutationObserver detects the new menu element
 //   5. requestAnimationFrame (ensures React committed the DOM)
 //   6. Canvas appends divider + move button into the menu
+//
+// findLumiverseContextMenu is exported for reuse by configure-intercept.ts.
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
@@ -64,7 +66,7 @@ let _observer: MutationObserver | null = null
 // Detection uses 5 heuristics (last child of body + DIV + position:fixed +
 // z-index:11000 + contains button). Canvas's own menus are removed synchronously
 // before this observer fires, so false positives are not a practical concern.
-function findLumiverseContextMenu(): HTMLElement | null {
+export function findLumiverseContextMenu(): HTMLElement | null {
   // Lumiverse's ContextMenu component portals to document.body.
   // It's a div with position:fixed and z-index:11000 (ContextMenu.module.css).
   // The class name is CSS-module-hashed in production, so we match by
@@ -272,10 +274,7 @@ export function startContextMenuListener(): void {
 
     // [Canvas:tabmove] Right-click entry probe — confirms the right-click
     // handler fired, captured a tabId, and is about to start the observer
-    // that will inject the move item. If the user reports "right-click does
-    // nothing", the first question is "did docCtxCapture even fire for this
-    // tab?" — the log line below answers that with the resolved tabId and
-    // the source (data-tab-id attribute vs title store lookup fallback).
+    // that will inject the move item.
     dlog(
       `[tabmove] docCtxCapture: tabBtn title="${title}" data-tab-id="${dataTabId || '(none)'}" ` +
       `-> resolved tabId="${tabId}" currentSidebar=${currentSidebar} ` +

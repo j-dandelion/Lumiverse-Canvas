@@ -96,6 +96,9 @@ export function findStoreData(force = false): void {
   const now = Date.now()
   if (!force && _drawerTabsCache && _storeSnapshotCache && (now - _cacheTimestamp) < CACHE_TTL_MS) return // cached and fresh
 
+  // Guard: DOM not available (headless test / SSR).
+  if (typeof document === 'undefined') return
+
   const sidebar = getMainSidebar()
   if (!sidebar) return
 
