@@ -38,6 +38,7 @@ interface CanvasFeature {
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `keepTabListVisibleFeature` | `keepTabListVisible` | Pins tab lists when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
+| `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `keepTabListVisible`) |
 | `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs |
 
 **Note**: The `drawerTabDrag` feature is in the registry but has no settings panel toggle — it is enabled/disabled via the `drawerTabDrag` setting key, which is not exposed in the UI panel.
@@ -62,6 +63,11 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 - `persistSettings()` — debounced (100ms) SAVE_LAYOUT IPC
 - `cancelSettingsSave()` — cancel pending debounce
 
+**Dependency chain (normalize):**
+- `hideDrawerOpenCloseButtons` → `keepTabListVisible` → `moveControlsToOuterEdge`
+- Normalize cascades: outer-edge off → keep-tabs off → hide off
+- Helpers: `isKeepTabListVisibleEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires keep-tabs (and thus outer-edge)
+
 ### Settings Panel (`settings/panel.ts`)
 
 Built once, mounted into Lumiverse's per-extension settings host. In-place re-render via a `refresh` closure — no full re-mount on toggle.
@@ -69,7 +75,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 **Sections:**
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth, persistTabAssignments
-3. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+3. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires keep-tabs; pinned strip is the open/close chrome), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
 4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state)
 5. **Debug** — debugMode
 

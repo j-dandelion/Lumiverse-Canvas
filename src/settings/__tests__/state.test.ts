@@ -5,7 +5,7 @@ function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
 
-import { getSettings, normalizeCanvasSettings, isKeepTabListVisibleEnabled } from '../state'
+import { getSettings, normalizeCanvasSettings, isKeepTabListVisibleEnabled, isHideDrawerOpenCloseButtonsEnabled } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
 // --- getSettings returns default settings ---
@@ -26,6 +26,7 @@ assert(typeof settings.slashCommandsEnabled === 'boolean', 'slashCommandsEnabled
 assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
 assert(typeof settings.drawerShadowsDesktop === 'boolean', 'drawerShadowsDesktop is boolean')
 assert(typeof settings.drawerShadowsMobile === 'boolean', 'drawerShadowsMobile is boolean')
+assert(typeof settings.hideDrawerOpenCloseButtons === 'boolean', 'hideDrawerOpenCloseButtons is boolean')
 
 // Check specific defaults
 assertEqual(settings.secondSidebarEnabled, true, 'secondSidebarEnabled defaults to true')
@@ -34,12 +35,14 @@ assertEqual(settings.showTabLabels, 'follow', 'showTabLabels defaults to follow'
 assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults to true')
 assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
+assertEqual(settings.hideDrawerOpenCloseButtons, false, 'hideDrawerOpenCloseButtons defaults to false')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
 const fromNull = mergeCanvasSettings(null)
 assertEqual(fromNull.secondSidebarEnabled, true, 'mergeCanvasSettings(null) keeps default secondSidebarEnabled')
 assertEqual(fromNull.debugMode, false, 'mergeCanvasSettings(null) keeps default debugMode')
+assertEqual(fromNull.hideDrawerOpenCloseButtons, false, 'mergeCanvasSettings(null) keeps default hideDrawerOpenCloseButtons')
 
 // Partial input overrides matching keys
 const partial = mergeCanvasSettings({ debugMode: true, chatReflow: false })
@@ -149,6 +152,93 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     true,
     'isKeepTabListVisibleEnabled true when both on',
   )
+}
+
+// --- hideDrawerOpenCloseButtons requires keepTabListVisible ---
+// hide alone (no keep-tabs) → clear hide
+{
+  const normalized = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      hideDrawerOpenCloseButtons: true,
+      moveControlsToOuterEdge: false,
+      keepTabListVisible: false,
+    }),
+  )
+  assertEqual(
+    normalized.hideDrawerOpenCloseButtons,
+    false,
+    'hide cleared when keep-tabs is off (independent not enough)',
+  )
+  assertEqual(
+    normalized.moveControlsToOuterEdge,
+    false,
+    'hide: outer edge stays off',
+  )
+  assertEqual(
+    normalized.keepTabListVisible,
+    false,
+    'hide: keep-tabs stays off',
+  )
+  assertEqual(
+    isHideDrawerOpenCloseButtonsEnabled(normalized),
+    false,
+    'isHideDrawerOpenCloseButtonsEnabled false when hide cleared',
+  )
+}
+
+// hide + keep-tabs + outer-edge → stays on
+{
+  const both = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      hideDrawerOpenCloseButtons: true,
+      keepTabListVisible: true,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(both.hideDrawerOpenCloseButtons, true, 'hide stays on when keep-tabs + outer-edge on')
+  assertEqual(
+    isHideDrawerOpenCloseButtonsEnabled(both),
+    true,
+    'isHideDrawerOpenCloseButtonsEnabled true when all three on',
+  )
+}
+
+// Outer-edge off cascades: keep-tabs cleared → hide cleared
+{
+  const cascade = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      hideDrawerOpenCloseButtons: true,
+      keepTabListVisible: true,
+      moveControlsToOuterEdge: false,
+    }),
+  )
+  assertEqual(cascade.moveControlsToOuterEdge, false, 'cascade: outer-edge off')
+  assertEqual(cascade.keepTabListVisible, false, 'cascade: keep-tabs cleared')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'cascade: hide cleared')
+  assertEqual(
+    isKeepTabListVisibleEnabled(cascade),
+    false,
+    'cascade: isKeepTabListVisibleEnabled false',
+  )
+  assertEqual(
+    isHideDrawerOpenCloseButtonsEnabled(cascade),
+    false,
+    'cascade: isHideDrawerOpenCloseButtonsEnabled false',
+  )
+}
+
+// keep-tabs off, outer-edge on, hide on → hide cleared (direct dependency)
+{
+  const direct = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      hideDrawerOpenCloseButtons: true,
+      keepTabListVisible: false,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(direct.keepTabListVisible, false, 'direct: keep-tabs stays off')
+  assertEqual(direct.moveControlsToOuterEdge, true, 'direct: outer-edge stays on')
+  assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when keep-tabs off')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

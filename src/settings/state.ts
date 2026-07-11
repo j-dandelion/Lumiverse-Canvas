@@ -79,6 +79,16 @@ export function isKeepTabListVisibleEnabled(
   return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge
 }
 
+/** Hide drawer open/close buttons only makes sense when keep-tabs is on
+ *  (otherwise the edge button is the only reopen affordance).
+ *  Returns true only when hide is on AND keep-tabs is effectively on
+ *  (which already implies outer-edge via isKeepTabListVisibleEnabled). */
+export function isHideDrawerOpenCloseButtonsEnabled(
+  s: FullCanvasSettings = _settings,
+): boolean {
+  return !!s.hideDrawerOpenCloseButtons && isKeepTabListVisibleEnabled(s)
+}
+
 /**
  * One-shot hydration at setup time. Replaces the in-memory state with the
  * value merged from the loaded layout blob (defaults filled in by

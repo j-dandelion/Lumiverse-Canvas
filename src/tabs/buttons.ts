@@ -24,6 +24,7 @@ import {
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
+import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
@@ -37,8 +38,6 @@ export function __setHideMainTabButtonForTest(fn: typeof _hideMainTabButtonOverr
 export function __setShowMainTabButtonForTest(fn: typeof _showMainTabButtonOverride): void {
   _showMainTabButtonOverride = fn
 }
-
-
 
 export function hideMainTabButton(tabId: string): void {
   if (_hideMainTabButtonOverride) { _hideMainTabButtonOverride(tabId); return }
@@ -178,6 +177,7 @@ export function findSafeFallbackButton(sidebar: HTMLElement): HTMLElement | null
   )
 }
 
+
 // Derive shortName matching Lumiverse's adaptExtensionTabs logic.
 export function deriveShortName(title: string, shortName?: string): string {
   if (shortName) return shortName
@@ -302,16 +302,45 @@ export function removeSecondaryTabButton(tabId: string): void {
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
 
+// Local wrapper to avoid a static import cycle with sidebar/mobile-exclusion
+// (mobile-exclusion → secondary → buttons → mobile-exclusion).
+function _isMobileViewport(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false
+  return window.matchMedia('(max-width: 600px)').matches
+}
+
+/**
+ * Update the secondary drawer's edge toggle button visibility.
+ *
+ * Desktop logic:
+ *   - If hideDrawerOpenCloseButtons is on AND keep-tabs is on → always hidden.
+ *     (Without keep-tabs the edge button is the only reopen affordance.)
+ *   - Otherwise → visible when at least one tab is assigned to secondary.
+ *
+ * Mobile logic (never affected by hideDrawerOpenCloseButtons):
+ *   - Visible when at least one secondary tab (has-tabs).
+ *   - Mutual-exclusion body classes (canvas-ux-mobile-*) handle the
+ *     actual desktop-vs-secondary toggle — managed by mobile-exclusion.ts.
+ */
 export function updateDrawerTabVisibility(): void {
-  const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
+  const drawerTab = getSecondaryWrapper()?.querySelector(
+    '.sidebar-ux-drawer-tab',
+  ) as HTMLElement | null
   if (!drawerTab) return
-  // keepTabListVisible: pinned tab strip is the open/close chrome — hide the
-  // edge drawer-tab toggle (main mirror mounts with display:none already).
-  if (getSettings().keepTabListVisible) {
+
+  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === 'secondary')
+
+  // Mobile: never apply hide setting; clear any stale desktop inline hide.
+  if (_isMobileViewport()) {
+    drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
+    return
+  }
+
+  if (isHideDrawerOpenCloseButtonsEnabled()) {
     drawerTab.style.display = 'none'
     return
   }
-  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === 'secondary')
+
   drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
 }
 
@@ -393,4 +422,3 @@ export function showSecondaryTab(tabId: string): void {
     }
   }
 }
-

@@ -218,6 +218,10 @@ export function startMobileExclusion(): () => void {
       void import('./tab-position').then((m) => m.reconcileTabListPin())
       void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
     }
+    // Re-evaluate drawer-tab visibility on viewport cross so desktop↔mobile
+    // transitions clear any stale inline display:none from the hide setting.
+    void import('../tabs/buttons').then((m) => m.updateDrawerTabVisibility())
+    void import('./main-mirror-drawer').then((m) => m.updateMainMirrorDrawerTabVisibility())
   }
   _mediaQuery.addEventListener('change', _onMediaChange)
 

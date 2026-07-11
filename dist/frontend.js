@@ -17,7 +17,10 @@ var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 // src/types.ts
 function normalizeCanvasSettingsFields(s) {
   if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false };
+    return { ...s, keepTabListVisible: false, hideDrawerOpenCloseButtons: false };
+  }
+  if (s.hideDrawerOpenCloseButtons && !s.keepTabListVisible) {
+    return { ...s, hideDrawerOpenCloseButtons: false };
   }
   return s;
 }
@@ -54,6 +57,7 @@ var init_types = __esm(() => {
     showTabLabels: "follow",
     moveControlsToOuterEdge: false,
     keepTabListVisible: false,
+    hideDrawerOpenCloseButtons: false,
     drawerShadowsDesktop: true,
     drawerShadowsMobile: false,
     chatReflow: true,
@@ -2797,6 +2801,30 @@ var init_tab_context_menu = __esm(() => {
 });
 
 // src/tabs/buttons.ts
+var exports_buttons = {};
+__export(exports_buttons, {
+  updateDrawerTabVisibility: () => updateDrawerTabVisibility,
+  showSecondaryTab: () => showSecondaryTab,
+  showMainTabButton: () => showMainTabButton,
+  removeSecondaryTabButton: () => removeSecondaryTabButton,
+  readMainButtonShortName: () => readMainButtonShortName,
+  isSettingsButton: () => isSettingsButton,
+  hideMainTabButton: () => hideMainTabButton,
+  findSafeFallbackButton: () => findSafeFallbackButton,
+  findMainTabButton: () => findMainTabButton,
+  deriveShortName: () => deriveShortName,
+  cssEscape: () => cssEscape,
+  clearSecondaryTabButtonActive: () => clearSecondaryTabButtonActive,
+  addSecondaryTabButton: () => addSecondaryTabButton,
+  __setShowMainTabButtonForTest: () => __setShowMainTabButtonForTest,
+  __setHideMainTabButtonForTest: () => __setHideMainTabButtonForTest
+});
+function __setHideMainTabButtonForTest(fn) {
+  _hideMainTabButtonOverride = fn;
+}
+function __setShowMainTabButtonForTest(fn) {
+  _showMainTabButtonOverride = fn;
+}
 function hideMainTabButton(tabId) {
   if (_hideMainTabButtonOverride) {
     _hideMainTabButtonOverride(tabId);
@@ -2956,15 +2984,24 @@ function removeSecondaryTabButton(tabId) {
   btn?.remove();
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
 }
+function _isMobileViewport() {
+  if (typeof window === "undefined" || !window.matchMedia)
+    return false;
+  return window.matchMedia("(max-width: 600px)").matches;
+}
 function updateDrawerTabVisibility() {
   const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
   if (!drawerTab)
     return;
-  if (getSettings().keepTabListVisible) {
+  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === "secondary");
+  if (_isMobileViewport()) {
+    drawerTab.style.display = hasSecondaryTabs ? "flex" : "none";
+    return;
+  }
+  if (isHideDrawerOpenCloseButtonsEnabled()) {
     drawerTab.style.display = "none";
     return;
   }
-  const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === "secondary");
   drawerTab.style.display = hasSecondaryTabs ? "flex" : "none";
 }
 function clearSecondaryTabButtonActive() {
@@ -3967,6 +4004,7 @@ var init_panel_header_sync = __esm(() => {
 // src/sidebar/main-mirror-drawer.ts
 var exports_main_mirror_drawer = {};
 __export(exports_main_mirror_drawer, {
+  updateMainMirrorDrawerTabVisibility: () => updateMainMirrorDrawerTabVisibility,
   setCanvasMainTitle: () => setCanvasMainTitle,
   restartReparkWatch: () => restartReparkWatch,
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
@@ -4146,6 +4184,13 @@ function __resetMainMirrorForTest() {
 function __getReparkIdleCountForTest() {
   return _reparkIdleCount;
 }
+function updateMainMirrorDrawerTabVisibility() {
+  if (!_shell || !_active)
+    return;
+  if (isMobileViewport())
+    return;
+  _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
+}
 function injectHostHideStyles() {
   const id = "sidebar-ux-host-main-hide";
   const css = `
@@ -4222,6 +4267,7 @@ function mountMainMirror(opts) {
   } catch {
     seedW = undefined;
   }
+  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().keepTabListVisible;
   _shell = createDrawerShell({
     owner: "main",
     side,
@@ -4230,7 +4276,7 @@ function mountMainMirror(opts) {
     initialWidth: seedW,
     initialOpen: opts.initialOpen,
     title: "Drawer",
-    drawerTabDisplay: "none",
+    drawerTabDisplay: hideTab ? "none" : "flex",
     onDrawerTabClick: () => {
       if (_open)
         closeCanvasMainDrawer();
@@ -4491,6 +4537,7 @@ function teardownMainMirror(opts) {
 var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _reparkTimer = null, _reparkIdleCount = 0, REPARK_IDLE_STOP_COUNT = 10;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
+  init_state();
   init_state();
   init_log();
   init_animation();
@@ -5512,6 +5559,8 @@ function startMobileExclusion() {
       Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m) => m.reconcileTabListPin());
       Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
     }
+    Promise.resolve().then(() => (init_buttons(), exports_buttons)).then((m) => m.updateDrawerTabVisibility());
+    Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m) => m.updateMainMirrorDrawerTabVisibility());
   };
   _mediaQuery2.addEventListener("change", _onMediaChange2);
   const _onResize = () => {
@@ -6768,6 +6817,9 @@ function normalizeCanvasSettings(s) {
 }
 function isKeepTabListVisibleEnabled(s = _settings) {
   return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge;
+}
+function isHideDrawerOpenCloseButtonsEnabled(s = _settings) {
+  return !!s.hideDrawerOpenCloseButtons && isKeepTabListVisibleEnabled(s);
 }
 function hydrateSettings(raw) {
   if (_userHasTouchedSettings)
@@ -9889,7 +9941,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, persistTabAssignmentsFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, persistTabAssignmentsFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, hideDrawerOpenCloseButtonsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_log();
@@ -9907,6 +9959,7 @@ var init_registry = __esm(() => {
   init_main_tab_pin();
   init_strip_gutter();
   init_buttons();
+  init_main_mirror_drawer();
   init_drawer_tab_position();
   debugFeature = {
     id: "debugMode",
@@ -10097,6 +10150,21 @@ var init_registry = __esm(() => {
       updateChatReflow();
     }
   };
+  hideDrawerOpenCloseButtonsFeature = {
+    id: "hideDrawerOpenCloseButtons",
+    mount() {
+      updateDrawerTabVisibility();
+      updateMainMirrorDrawerTabVisibility();
+      return () => {
+        updateDrawerTabVisibility();
+        updateMainMirrorDrawerTabVisibility();
+      };
+    },
+    apply() {
+      updateDrawerTabVisibility();
+      updateMainMirrorDrawerTabVisibility();
+    }
+  };
   FEATURES = [
     debugFeature,
     chatReflowFeature,
@@ -10111,6 +10179,7 @@ var init_registry = __esm(() => {
     slashFeature,
     tabPositionFeature,
     keepTabListVisibleFeature,
+    hideDrawerOpenCloseButtonsFeature,
     drawerTabDragFeature
   ];
 });
@@ -10357,17 +10426,25 @@ function buildSettingsPanelDOM() {
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
   secSidebars.appendChild(buildSettingRow({
     label: "Move tab controls to outer edge",
-    hint: "Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for “Keep tab lists visible”.",
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab lists visible".',
     control: moveControlsToOuter.btn
   }));
   const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
   const keepTabListVisibleRow = buildSettingRow({
     label: "Keep tab lists visible",
-    hint: "Requires “Move tab controls to outer edge”. Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.",
+    hint: 'Requires "Move tab controls to outer edge". Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.',
     control: keepTabListVisible.btn,
     disabled: !getSettings().moveControlsToOuterEdge
   });
   secSidebars.appendChild(keepTabListVisibleRow);
+  const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().keepTabListVisible });
+  const hideDrawerTabToggleRow = buildSettingRow({
+    label: "Hide drawer open/close buttons",
+    hint: 'Requires "Keep tab lists visible". Hides edge open/close controls on desktop for the second drawer and the Canvas main drawer. The pinned tab strip is the open/close chrome. Does not affect mobile. Does not change the host main control when keep-tabs is off.',
+    control: hideDrawerTabToggle.btn,
+    disabled: !getSettings().keepTabListVisible
+  });
+  secSidebars.appendChild(hideDrawerTabToggleRow);
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   secSidebars.appendChild(buildSettingRow({
     label: "Drag to resize drawers",
@@ -10428,6 +10505,7 @@ function buildSettingsPanelDOM() {
     master.refresh();
     moveControlsToOuter.refresh();
     keepTabListVisible.refresh();
+    hideDrawerTabToggle.refresh();
     resizeSidebars.refresh();
     compact.refresh();
     chat.refresh();
@@ -10443,6 +10521,12 @@ function buildSettingsPanelDOM() {
       keepTabListVisible.btn.disabled = d3;
       keepTabListVisible.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       keepTabListVisibleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+    }
+    {
+      const d3 = !getSettings().keepTabListVisible;
+      hideDrawerTabToggle.btn.disabled = d3;
+      hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
     }
     for (const row of [resizeSidebars, compact]) {
       const d3 = !getSettings().secondSidebarEnabled;

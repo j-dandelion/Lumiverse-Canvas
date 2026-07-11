@@ -60,6 +60,15 @@ export interface CanvasSettings {
    *  Panels still slide in/out from behind the list. No-op on mobile. */
   keepTabListVisible?: boolean
 
+  /** When on (desktop only, default off), hide the drawer open/close
+   *  edge buttons for the second drawer and, when keep-tabs is on, the
+   *  Canvas main drawer. Requires `keepTabListVisible` (otherwise the
+   *  edge button is the only way to reopen a closed drawer). Does not
+   *  affect mobile — mobile edge buttons always follow has-tabs (+
+   *  mutual exclusion CSS). Does not change the host main drawer's edge
+   *  control when keep-tabs is off. */
+  hideDrawerOpenCloseButtons?: boolean
+
   /** Show box-shadow on drawers at min-width: 601px (desktop). */
   drawerShadowsDesktop?: boolean
 
@@ -125,6 +134,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   // Drawers
   moveControlsToOuterEdge: false,
   keepTabListVisible: false,
+  hideDrawerOpenCloseButtons: false,
   drawerShadowsDesktop: true,
   drawerShadowsMobile: false,
   // Chat
@@ -146,12 +156,21 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  * keepTabListVisible only makes sense with tab lists on the screen edge.
  * Clear it whenever moveControlsToOuterEdge is off (load safety + merge path).
  * Idempotent — safe to call after already-normalized settings.
+ *
+ * hideDrawerOpenCloseButtons requires keepTabListVisible (otherwise the
+ * edge button is the only reopen affordance). Cascade: outer-edge off →
+ * keep-tabs off → hide off.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
 ): Required<CanvasSettings> {
+  // Cascade 1: keep-tabs requires outer-edge
   if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false }
+    return { ...s, keepTabListVisible: false, hideDrawerOpenCloseButtons: false }
+  }
+  // Cascade 2: hide requires keep-tabs
+  if (s.hideDrawerOpenCloseButtons && !s.keepTabListVisible) {
+    return { ...s, hideDrawerOpenCloseButtons: false }
   }
   return s
 }

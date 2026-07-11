@@ -15,6 +15,7 @@ import { getMainPanelContent, getMainWrapper, getMainDrawerWidth } from '../dom/
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { getSettings } from '../settings/state'
+import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { animateWrapper } from './animation'
 import {
@@ -265,6 +266,15 @@ export function __getReparkIdleCountForTest(): number {
   return _reparkIdleCount
 }
 
+/** Update the main mirror's drawer edge toggle visibility based on settings.
+ *  No-op when no shell or on mobile (main mirror isn't active on mobile).
+ *  Desktop: hide when hideDrawerOpenCloseButtons is on AND keep-tabs is on. */
+export function updateMainMirrorDrawerTabVisibility(): void {
+  if (!_shell || !_active) return
+  if (isMobileViewport()) return
+  _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? 'none' : 'flex'
+}
+
 function injectHostHideStyles(): void {
   const id = 'sidebar-ux-host-main-hide'
   const css = `
@@ -343,6 +353,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     seedW = undefined
   }
 
+  // Compute initial drawer-tab display: hide requires keep-tabs.
+  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().keepTabListVisible
+
   _shell = createDrawerShell({
     owner: 'main',
     side,
@@ -351,8 +364,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     initialWidth: seedW,
     initialOpen: opts.initialOpen,
     title: 'Drawer',
-    // keepTabListVisible: pinned tab strip is the open/close chrome — no edge toggle.
-    drawerTabDisplay: 'none',
+    // When hide is on, show the edge toggle only for reopening (none = no chrome).
+    drawerTabDisplay: hideTab ? 'none' : 'flex',
     onDrawerTabClick: () => {
       if (_open) closeCanvasMainDrawer()
       else openCanvasMainDrawer()

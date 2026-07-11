@@ -39,6 +39,7 @@ import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../s
 import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
+import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -419,6 +420,25 @@ const keepTabListVisibleFeature: CanvasFeature = {
   },
 }
 
+/** Hide drawer open/close buttons: independent of keep-tabs.
+ *  Updates both secondary and main mirror drawer-tab visibility on mount
+ *  and on every settings change. */
+const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
+  id: 'hideDrawerOpenCloseButtons',
+  mount() {
+    updateDrawerTabVisibility()
+    updateMainMirrorDrawerTabVisibility()
+    return () => {
+      updateDrawerTabVisibility()
+      updateMainMirrorDrawerTabVisibility()
+    }
+  },
+  apply() {
+    updateDrawerTabVisibility()
+    updateMainMirrorDrawerTabVisibility()
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -435,6 +455,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   slashFeature,
   tabPositionFeature,
   keepTabListVisibleFeature,
+  hideDrawerOpenCloseButtonsFeature,
   drawerTabDragFeature,
 ]
 

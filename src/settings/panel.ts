@@ -270,7 +270,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secSidebars.appendChild(buildSettingRow({
     label: 'Move tab controls to outer edge',
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for “Keep tab lists visible”.',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab lists visible".',
     control: moveControlsToOuter.btn,
   }))
 
@@ -281,11 +281,24 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   const keepTabListVisibleRow = buildSettingRow({
     label: 'Keep tab lists visible',
-    hint: 'Requires “Move tab controls to outer edge”. Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.',
+    hint: 'Requires "Move tab controls to outer edge". Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Applies to the main drawer and, when enabled, the second drawer.',
     control: keepTabListVisible.btn,
     disabled: !getSettings().moveControlsToOuterEdge,
   })
   secSidebars.appendChild(keepTabListVisibleRow)
+
+  const hideDrawerTabToggle = makeToggle(
+    () => getSettings().hideDrawerOpenCloseButtons,
+    (v) => setSettings({ hideDrawerOpenCloseButtons: v }),
+    { disabled: () => !getSettings().keepTabListVisible },
+  )
+  const hideDrawerTabToggleRow = buildSettingRow({
+    label: 'Hide drawer open/close buttons',
+    hint: 'Requires "Keep tab lists visible". Hides edge open/close controls on desktop for the second drawer and the Canvas main drawer. The pinned tab strip is the open/close chrome. Does not affect mobile. Does not change the host main control when keep-tabs is off.',
+    control: hideDrawerTabToggle.btn,
+    disabled: !getSettings().keepTabListVisible,
+  })
+  secSidebars.appendChild(hideDrawerTabToggleRow)
 
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
@@ -389,6 +402,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     master.refresh()
     moveControlsToOuter.refresh()
     keepTabListVisible.refresh()
+    hideDrawerTabToggle.refresh()
     resizeSidebars.refresh()
     compact.refresh()
     chat.refresh()
@@ -405,6 +419,13 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       keepTabListVisible.btn.disabled = d
       keepTabListVisible.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       keepTabListVisibleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+    }
+    // hideDrawerOpenCloseButtons requires keepTabListVisible (reopen affordance).
+    {
+      const d = !getSettings().keepTabListVisible
+      hideDrawerTabToggle.btn.disabled = d
+      hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
     // Sub-features gated by the second-drawer master toggle.
     for (const row of [resizeSidebars, compact]) {

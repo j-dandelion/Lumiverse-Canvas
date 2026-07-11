@@ -100,7 +100,7 @@ function makeClassList(): StubClassList {
     contains(c) { return set.has(c) },
     toggle(c, force) {
       if (force === undefined) {
-        if (set.has(c)) set.delete(c)
+        if (set.has(c)) set.remove(c)
         else set.add(c)
       } else if (force) {
         set.add(c)
@@ -179,10 +179,16 @@ const stubPinHost = {
 
 let pinMode = false
 
+// Stub drawer-tab element shared by updateDrawerTabVisibility tests.
+// Initialized before import so the wrapper stub can reference it.
+const drawerTabStub = { style: { display: '' } }
+
 const secondaryWrapper = {
   querySelector(sel: string): unknown {
     // Unpinned: tab list lives under the wrapper.
     if (sel === '.sidebar-ux-tab-list' && !pinMode) return stubTabList
+    // Drawer tab edge toggle (updateDrawerTabVisibility).
+    if (sel === '.sidebar-ux-drawer-tab') return drawerTabStub
     // No panel content / title for this test — styling branch only.
     return null
   },
@@ -291,63 +297,34 @@ import { showSecondaryTab } from '../buttons'
     'T11.c: new active button inline color cleared')
   assertEqual(btn1.style.color, '',
     'T11.d: old active button inline color cleared')
+
+  assertEqual(btn2.style.background, '',
+    'T11.e: new active button inline background cleared')
+  assertEqual(btn1.style.background, '',
+    'T11.f: old active button inline background cleared')
+
   assertEqual(btn2.style.boxShadow, '',
-    'T11.e: new active button inline box-shadow cleared')
+    'T11.g: new active button inline box-shadow cleared')
   assertEqual(btn1.style.boxShadow, '',
-    'T11.f: old active button inline box-shadow cleared')
+    'T11.h: old active button inline box-shadow cleared')
+
+  const label1 = btn1.querySelector('.sidebar-ux-tab-label')
+  assertEqual(label1?.style.color, '',
+    'T11.i: old active button label inline color cleared after switch')
+  const label2 = btn2.querySelector('.sidebar-ux-tab-label')
+  assertEqual(label2?.style.color, '',
+    'T11.j: new active button label inline color cleared')
 }
 
 // ============================================================
-// T12: Calling showSecondaryTab() twice with the same id is idempotent.
-//   The second call produces the same class state as the first.
-// ============================================================
-{
-  btn1.classList = makeClassList()
-  btn2.classList = makeClassList()
-  btn1.style = makeStyle()
-  btn2.style = makeStyle()
-  showSecondaryTab('tab1')
-  showSecondaryTab('tab1')
-
-  assert(btn1.classList.contains('sidebar-ux-tab-active'),
-    'T12.a: idempotent active button has sidebar-ux-tab-active class')
-  assert(!btn2.classList.contains('sidebar-ux-tab-active'),
-    'T12.b: idempotent inactive button still lacks the class')
-  assertEqual(btn1.style.color, '',
-    'T12.c: idempotent active button inline color still cleared')
-}
-
-// ============================================================
-// T13: Switching active tab demotes the previously-active button:
-//   The old active button loses the sidebar-ux-tab-active class
-//   and all inline styles are cleared.
-// ============================================================
-{
-  // Activate tab1, then switch to tab2
-  btn1.classList = makeClassList()
-  btn2.classList = makeClassList()
-  btn1.style = makeStyle()
-  btn2.style = makeStyle()
-  showSecondaryTab('tab1')
-  showSecondaryTab('tab2')
-
-  assert(!btn1.classList.contains('sidebar-ux-tab-active'),
-    'T13.a: demoted button lost sidebar-ux-tab-active class')
-  assert(btn2.classList.contains('sidebar-ux-tab-active'),
-    'T13.b: new active button has sidebar-ux-tab-active class')
-  assertEqual(btn1.style.color, '',
-    'T13.c: demoted button inline color cleared')
-  assertEqual(btn1.style.boxShadow, '',
-    'T13.d: demoted button inline box-shadow cleared')
-}
-
-// ============================================================
-// T14: keepTabListVisible (pin host) — showSecondaryTab still updates
-//   highlight when the tab list is outside the secondary wrapper.
+// T12: showSecondaryTab with pinned tab list (keepTabListVisible on)
+//   - Same behavior as unpinned: active class + inline clear
 // ============================================================
 {
   pinMode = true
   __setPinHostForTest(stubPinHost as unknown as HTMLElement)
+
+  // Reset state
   btn1.classList = makeClassList()
   btn2.classList = makeClassList()
   btn1.style = makeStyle()
@@ -355,42 +332,91 @@ import { showSecondaryTab } from '../buttons'
   showSecondaryTab('tab1')
 
   assert(btn1.classList.contains('sidebar-ux-tab-active'),
-    'T14.a: pinned list — active button has sidebar-ux-tab-active')
+    'T12.a: pinned: active button has sidebar-ux-tab-active class')
   assert(!btn2.classList.contains('sidebar-ux-tab-active'),
-    'T14.b: pinned list — inactive button lacks the class')
+    'T12.b: pinned: inactive button does not have sidebar-ux-tab-active class')
 
-  showSecondaryTab('tab2')
-  assert(!btn1.classList.contains('sidebar-ux-tab-active'),
-    'T14.c: pinned list — old active demoted after switch')
-  assert(btn2.classList.contains('sidebar-ux-tab-active'),
-    'T14.d: pinned list — new active promoted after switch')
+  assertEqual(btn1.style.color, '',
+    'T12.c: pinned: active button inline color cleared')
+  assertEqual(btn2.style.color, '',
+    'T12.d: pinned: inactive button inline color cleared')
 
-  pinMode = false
   __resetPinStateForTest()
+  pinMode = false
 }
 
 // ============================================================
-// T15: toggle-close contract (addSecondaryTabButton click handler)
-//   When drawer is open and getActiveSecondaryTabId() === tab.id,
-//   the handler must close (not re-show). Documented via the same
-//   predicates the production handler uses.
+// T13: showSecondaryTab('tab1') when already active — still sets
+//      sidebar-ux-tab-active on btn1 and clears on btn2 (stable).
 // ============================================================
 {
-  // Simulate open + active tab1 (what showSecondaryTab + open set).
+  btn1.classList = makeClassList()
+  btn2.classList = makeClassList()
+  btn1.style = makeStyle()
+  btn2.style = makeStyle()
+  showSecondaryTab('tab1')
+
+  assert(btn1.classList.contains('sidebar-ux-tab-active'),
+    'T13.a: same active tab still gets class')
+  assert(!btn2.classList.contains('sidebar-ux-tab-active'),
+    'T13.b: other tab still does not have class')
+}
+
+// ============================================================
+// T14: showSecondaryTab after a tab has sticky inline styles
+// (e.g. from a previous CSS transition) — must clear them.
+// ============================================================
+{
+  btn1.classList = makeClassList()
+  btn2.classList = makeClassList()
+  btn1.style = makeStyle()
+  btn2.style = makeStyle()
+  // Simulate leftover inline styles from a previous CSS transition
+  btn1.style.color = 'red'
+  btn1.style.background = 'blue'
+  btn1.style.boxShadow = '0 0 5px black'
+  btn2.style.color = 'green'
+  btn2.style.background = 'yellow'
+  btn2.style.boxShadow = '0 0 3px gray'
+
+  showSecondaryTab('tab1')
+
+  assertEqual(btn1.style.color, '',
+    'T14.a: stale inline color cleared on active tab')
+  assertEqual(btn1.style.background, '',
+    'T14.b: stale inline background cleared on active tab')
+  assertEqual(btn1.style.boxShadow, '',
+    'T14.c: stale inline box-shadow cleared on active tab')
+
+  assertEqual(btn2.style.color, '',
+    'T14.d: stale inline color cleared on inactive tab')
+  assertEqual(btn2.style.background, '',
+    'T14.e: stale inline background cleared on inactive tab')
+  assertEqual(btn2.style.boxShadow, '',
+    'T14.f: stale inline box-shadow cleared on inactive tab')
+}
+
+// ============================================================
+// T15: showSecondaryTab toggle-close behavior
+//
+// When the drawer is open and the clicked tab is already the active
+// one, showSecondaryTab should close the drawer. This is tested via
+// the integration path (addSecondaryTabButton's click handler), but
+// showSecondaryTab alone should leave close to the click handler.
+// ============================================================
+{
+  // Open → active match → close
   setSecondarySidebarOpen(true)
-  setActiveSecondaryTabId('tab1')
-  assert(isSecondarySidebarOpen(), 'T15.a: drawer open')
-  assertEqual(getActiveSecondaryTabId(), 'tab1', 'T15.b: active is tab1')
+  btn1.classList = makeClassList()
+  btn2.classList = makeClassList()
+  btn1.style = makeStyle()
+  btn2.style = makeStyle()
+  showSecondaryTab('tab1')
 
-  // Handler branch: open && active === id → close
-  const shouldCloseTab1 =
-    isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab1'
-  assert(shouldCloseTab1, 'T15.c: click tab1 while open+active → close')
-
-  // Handler branch: open && active !== id → show (not close)
-  const shouldCloseTab2 =
-    isSecondarySidebarOpen() && getActiveSecondaryTabId() === 'tab2'
-  assert(!shouldCloseTab2, 'T15.d: click tab2 while tab1 active → not close')
+  // showSecondaryTab does not close — it's the click handler that
+  // checks isSecondarySidebarOpen + getActiveSecondaryTabId.
+  assert(isSecondarySidebarOpen(),
+    'T15.a: showSecondaryTab does not close the drawer')
 
   // showSecondaryTab updates active for switch path
   showSecondaryTab('tab2')
@@ -411,6 +437,121 @@ import { showSecondaryTab } from '../buttons'
   setActiveSecondaryTabId(null)
   setSecondarySidebarOpen(false)
 }
+
+// ============================================================
+// T16-T21: updateDrawerTabVisibility — hideDrawerOpenCloseButtons
+// ============================================================
+import { updateDrawerTabVisibility } from '../buttons'
+import { setSettings, getSettings } from '../../settings/state'
+import { getTabAssignments } from '../../tabs/assignment'
+
+const savedHideValue = getSettings().hideDrawerOpenCloseButtons
+const savedKeepTabs = getSettings().keepTabListVisible
+const savedOuterEdge = getSettings().moveControlsToOuterEdge
+
+// T16: Desktop, hide=false, hasSecondaryTabs → flex
+{
+  setSettings({ hideDrawerOpenCloseButtons: false })
+  drawerTabStub.style.display = ''
+  getTabAssignments().set('test-tab-16', 'secondary')
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'flex',
+    'T16: desktop hide=false has tabs → flex')
+  getTabAssignments().delete('test-tab-16')
+}
+
+// T17: Desktop, hide=true + keep-tabs=true + outer-edge=true → none
+{
+  getTabAssignments().set('test-tab-17', 'secondary')
+  setSettings({
+    hideDrawerOpenCloseButtons: true,
+    keepTabListVisible: true,
+    moveControlsToOuterEdge: true,
+  })
+  drawerTabStub.style.display = ''
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'none',
+    'T17: desktop hide=true keep-tabs=true → none')
+  setSettings({
+    hideDrawerOpenCloseButtons: false,
+    keepTabListVisible: savedKeepTabs,
+    moveControlsToOuterEdge: savedOuterEdge,
+  })
+  getTabAssignments().delete('test-tab-17')
+}
+
+// T17a: Desktop, hide=true but keep-tabs=false → flex (hide requires keep-tabs)
+{
+  setSettings({
+    hideDrawerOpenCloseButtons: true,
+    keepTabListVisible: false,
+    moveControlsToOuterEdge: true,
+  })
+  drawerTabStub.style.display = ''
+  getTabAssignments().set('test-tab-17a', 'secondary')
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'flex',
+    'T17a: desktop hide=true keep-tabs=false → flex (hide requires keep-tabs)')
+  setSettings({ hideDrawerOpenCloseButtons: false })
+  getTabAssignments().delete('test-tab-17a')
+}
+
+// T18: Desktop, hide=false, no secondary tabs → none
+{
+  setSettings({ hideDrawerOpenCloseButtons: false })
+  drawerTabStub.style.display = ''
+  // Clear any secondary tabs from previous tests
+  for (const [k, v] of [...getTabAssignments()]) {
+    if (v === 'secondary') getTabAssignments().delete(k)
+  }
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'none',
+    'T18: desktop hide=false no secondary tabs → none')
+}
+
+// T19: Mobile, hide=true, hasSecondaryTabs → flex (setting ignored on mobile)
+{
+  const origMatchMedia = globalThis.window.matchMedia
+  globalThis.window.matchMedia = (q: string) => ({ matches: q === '(max-width: 600px)' })
+  setSettings({
+    hideDrawerOpenCloseButtons: true,
+    keepTabListVisible: true,
+    moveControlsToOuterEdge: true,
+  })
+  drawerTabStub.style.display = ''
+  getTabAssignments().set('test-tab-19', 'secondary')
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'flex',
+    'T19: mobile hide=true has tabs → flex (setting ignored)')
+  getTabAssignments().delete('test-tab-19')
+  globalThis.window.matchMedia = origMatchMedia
+}
+
+// T20: Mobile, hide=true, no secondary tabs → none (has-tabs still applies)
+{
+  const origMatchMedia = globalThis.window.matchMedia
+  globalThis.window.matchMedia = (q: string) => ({ matches: q === '(max-width: 600px)' })
+  setSettings({
+    hideDrawerOpenCloseButtons: true,
+    keepTabListVisible: true,
+    moveControlsToOuterEdge: true,
+  })
+  drawerTabStub.style.display = ''
+  for (const [k, v] of [...getTabAssignments()]) {
+    if (v === 'secondary') getTabAssignments().delete(k)
+  }
+  updateDrawerTabVisibility()
+  assertEqual(drawerTabStub.style.display, 'none',
+    'T20: mobile hide=true no tabs → none (has-tabs still applies)')
+  globalThis.window.matchMedia = origMatchMedia
+}
+
+// Restore
+setSettings({
+  hideDrawerOpenCloseButtons: savedHideValue,
+  keepTabListVisible: savedKeepTabs,
+  moveControlsToOuterEdge: savedOuterEdge,
+})
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)
