@@ -72,15 +72,23 @@ assert(!isHideLocked('imagegen'), 'isHideLocked imagegen is false')
 assert(!isHideLocked('nonexistent'), 'isHideLocked nonexistent is false')
 
 // =====================================================================
-// humanizeTabId
+// humanizeTabId — host title parity
 // =====================================================================
 assertEqual(humanizeTabId('profile'), 'Profile', 'humanize profile')
-assertEqual(humanizeTabId('presets'), 'Presets', 'humanize presets')
+assertEqual(humanizeTabId('presets'), 'Reasoning', 'humanize presets')
 assertEqual(humanizeTabId('worldinfo'), 'World Info', 'humanize worldinfo')
-assertEqual(humanizeTabId('imagegen'), 'Image Gen', 'humanize imagegen')
-assertEqual(humanizeTabId('databank'), 'Data Bank', 'humanize databank')
+assertEqual(humanizeTabId('imagegen'), 'Image Generation', 'humanize imagegen')
+assertEqual(humanizeTabId('databank'), 'Databank', 'humanize databank')
 assertEqual(humanizeTabId('ooc'), 'OOC', 'humanize ooc preserves acronym')
 assertEqual(humanizeTabId('multiplayer'), 'Multiplayer', 'humanize multiplayer')
+assertEqual(humanizeTabId('browser'), 'Pack Browser', 'humanize browser')
+assertEqual(humanizeTabId('cortex'), 'Memory Cortex', 'humanize cortex')
+assertEqual(humanizeTabId('create'), 'Creator Workshop', 'humanize create')
+assertEqual(humanizeTabId('prompt'), 'Composition', 'humanize prompt')
+assertEqual(humanizeTabId('feedback'), 'Council Feedback', 'humanize feedback')
+assertEqual(humanizeTabId('regex'), 'Regex Scripts', 'humanize regex')
+assertEqual(humanizeTabId('branches'), 'Branch Tree', 'humanize branches')
+assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
 
 // =====================================================================
 // getBuiltinCatalog
@@ -101,6 +109,15 @@ assertEqual(humanizeTabId('multiplayer'), 'Multiplayer', 'humanize multiplayer')
 
   const profileTab = catalog.find(t => t.id === 'profile')!
   assert(profileTab.hideLocked, 'profile is hideLocked in catalog')
+  assertEqual(profileTab.title, 'Profile', 'profile title is Profile')
+  assert(profileTab.description === 'View and edit the active character', 'profile has description')
+
+  const presetsTab = catalog.find(t => t.id === 'presets')!
+  assertEqual(presetsTab.title, 'Reasoning', 'presets title is Reasoning')
+  assert(presetsTab.description === 'Configure reasoning, chain-of-thought, and prompt behavior', 'presets has description')
+
+  const browserTab = catalog.find(t => t.id === 'browser')!
+  assertEqual(browserTab.title, 'Pack Browser', 'browser title is Pack Browser')
 
   const weaverTab = catalog.find(t => t.id === 'weaver')!
   assert(!weaverTab.hideLocked, 'weaver is not hideLocked in catalog')

@@ -34,37 +34,72 @@ export type CatalogTab = {
   id: string
   kind: 'builtin' | 'extension'
   title: string
+  /** Short description shown in the configure body row. */
+  description?: string
   hideLocked: boolean
   extensionId?: string
+  /** SVG markup for extension tab icon (preferred over iconSvg/iconUrl). */
+  iconSvg?: string
+  /** URL for extension tab icon. */
+  iconUrl?: string
 }
 
-// Known built-in tab display titles (humanized).
+// Known built-in tab display titles (matching host drawer-tab-registry tabName).
 const BUILTIN_TAB_TITLES: Record<string, string> = {
   profile: 'Profile',
-  presets: 'Presets',
+  presets: 'Reasoning',
   loom: 'Loom',
   weaver: 'Weaver',
   connections: 'Connections',
-  browser: 'Browser',
+  browser: 'Pack Browser',
   characters: 'Characters',
   personas: 'Personas',
   multiplayer: 'Multiplayer',
   lorebook: 'Lorebook',
-  cortex: 'Cortex',
-  databank: 'Data Bank',
-  create: 'Create',
+  cortex: 'Memory Cortex',
+  databank: 'Databank',
+  create: 'Creator Workshop',
   ooc: 'OOC',
-  prompt: 'Prompt',
+  prompt: 'Composition',
   council: 'Council',
   summary: 'Summary',
-  feedback: 'Feedback',
+  feedback: 'Council Feedback',
   worldinfo: 'World Info',
-  imagegen: 'Image Gen',
+  imagegen: 'Image Generation',
   wallpaper: 'Wallpaper',
-  regex: 'Regex',
-  branches: 'Branches',
+  regex: 'Regex Scripts',
+  branches: 'Branch Tree',
   theme: 'Theme',
-  spindle: 'Spindle',
+  spindle: 'Extensions',
+}
+
+// Known built-in tab descriptions (matching host drawer-tab-registry tabDescription).
+const BUILTIN_TAB_DESCRIPTIONS: Record<string, string> = {
+  profile: 'View and edit the active character',
+  presets: 'Configure reasoning, chain-of-thought, and prompt behavior',
+  loom: 'Configure narrative structure and story beats',
+  weaver: 'Craft a character from your idea',
+  connections: 'Manage API connections and providers',
+  browser: 'Browse and manage content packs',
+  characters: 'Browse and manage your character cards',
+  personas: 'Manage your user personas',
+  multiplayer: 'Host or join a room and chat with bots alongside friends',
+  lorebook: 'Edit world book and lorebook entries',
+  cortex: 'View and manage memory cortex entries',
+  databank: 'Upload and manage reference documents for AI context',
+  create: 'Create and edit Lumia items and Loom presets',
+  ooc: 'Out-of-character comment display settings',
+  prompt: 'Pick Lumia and Loom content, Sovereign Hand, and context filters',
+  council: 'Configure the Lumia Council and tool functions',
+  summary: 'Configure context summarization and truncation',
+  feedback: 'View the latest council execution results',
+  worldinfo: 'View currently activated world info entries',
+  imagegen: 'Configure and control AI scene generation',
+  wallpaper: 'Set global or per-chat background wallpapers',
+  regex: 'Create and manage regex find/replace scripts',
+  branches: 'View and navigate the chat branch history',
+  theme: 'Customize colors, accent, and visual style',
+  spindle: 'Manage Spindle extensions',
 }
 
 /**
@@ -89,6 +124,7 @@ export function getBuiltinCatalog(): CatalogTab[] {
     id,
     kind: 'builtin' as const,
     title: humanizeTabId(id),
+    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
     hideLocked: CORE_HIDE_LOCKED.has(id),
   }))
 }
@@ -105,8 +141,11 @@ export function getExtensionCatalog(): CatalogTab[] {
     id: t.id,
     kind: 'extension' as const,
     title: t.title || humanizeTabId(t.id),
+    description: t.description || `Open ${t.title || t.id} extension tab`,
     hideLocked: false,
     extensionId: t.extensionId || undefined,
+    iconSvg: t.iconSvg || undefined,
+    iconUrl: t.iconUrl || undefined,
   }))
 }
 
