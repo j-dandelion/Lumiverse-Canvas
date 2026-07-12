@@ -29,6 +29,12 @@ import {
   clearSessionDualProfile,
   restoreSessionDualProfile,
 } from '../layout/dual-session-profile'
+import {
+  captureVanillaBaseline,
+  getVanillaBaseline,
+  clearVanillaBaseline,
+  restoreVanillaBaseline,
+} from '../layout/vanilla-baseline'
 import { injectStyles } from '../debug/styles'
 import { dlog, dwarn } from '../debug/log'
 
@@ -278,9 +284,25 @@ function showModeSwitchDialog(): Promise<ModeSwitchChoice> {
 
 /**
  * Run after the user has confirmed disable (or modal was clean).
- * Captures session profile, optionally merges into lastLoaded, flushes,
- * flips the setting, then refreshes any still-open Configure Tabs modal
- * from live so it reflects the now-disabled layout.
+ *
+ * Sequence:
+ *   1. Capture session dual profile (existing).
+ *   2. If persistTabAssignments is ON, merge dual into lastLoaded +
+ *      flush + sync freeze base (existing).
+ *   3. Flip the setting — feature.apply OFF path tears down the
+ *      secondary sidebar (existing).
+ *   4. **Vanilla baseline restore** — patch host drawerSettings +
+ *      restore main open/active. Done AFTER teardown so the host
+ *      tabs are back in main-drawer before we click the restored
+ *      primary tab. The "baseline wins" rule means any Configure
+ *      Apply / host edit / etc. that changed the host during the
+ *      dual session is overwritten with the captured pre-dual state.
+ *   5. Modal stays open; refresh its draft from the now-restored
+ *      live state (existing).
+ *   6. Clear the baseline only on successful restore so the next
+ *      enable cycle captures a fresh snapshot of the (now vanilla)
+ *      single-drawer state. On failure (NO-GO / partial), retain
+ *      the baseline for retry.
  */
 async function finishDisable(): Promise<void> {
   // 1. Capture session profile while assignments are still live.
@@ -326,8 +348,28 @@ async function finishDisable(): Promise<void> {
   //    buildPersistedLayout now freezes lastLoaded dual (not live empty).
   setSettings({ secondSidebarEnabled: false })
 
-  // 4. Modal stays open. After teardown, refresh its draft from the now-disabled
-  //    live state so the user sees a clean (non-dirty) view of the disabled layout.
+  // 4. Restore the vanilla baseline (host settings + main open/active).
+  //    Idempotent: no-op if no baseline was captured (single→dual never
+  //    happened this session). On NO-GO or partial failure, retain the
+  //    baseline so the next attempt (or next disable cycle) can retry.
+  const baseline = getVanillaBaseline()
+  if (baseline) {
+    const result = await restoreVanillaBaseline(baseline)
+    if (result.ok) {
+      dlog('[second-drawer-mode] vanilla baseline restored; clearing')
+      clearVanillaBaseline()
+    } else {
+      dwarn(
+        '[second-drawer-mode] vanilla baseline restore did not complete cleanly; ' +
+        'baseline retained for retry. reason=' + result.reason +
+        (result.reason === 'partial' ? ` details=${result.details}` : ''),
+      )
+    }
+  }
+
+  // 5. Modal stays open. After teardown + restore, refresh its draft from
+  //    the now-restored live state so the user sees a clean (non-dirty)
+  //    view of the disabled layout.
   try {
     const m = await import('../tabs/configure-modal')
     if (m.isConfigureTabsModalOpen()) {
@@ -367,6 +409,19 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
   if (next) {
     // ── ENABLE ──
     if (getSettings().secondSidebarEnabled) return
+
+    // Capture the vanilla baseline BEFORE setSettings({ secondSidebarEnabled: true })
+    // and BEFORE any dual UI mount can mutate host settings. captureVanillaBaseline
+    // is idempotent — repeated enable calls (without a successful disable in
+    // between) do not overwrite the existing baseline. The plan's "baseline wins"
+    // rule relies on the baseline being the original pre-dual state, unchanged
+    // by Configure Apply / host edits during the dual session.
+    const capture = captureVanillaBaseline()
+    dlog('[second-drawer-mode] vanilla baseline capture:', {
+      captured: capture.captured,
+      side: capture.baseline.host.side,
+      mainOpen: capture.baseline.mainOpen,
+    })
 
     setSettings({ secondSidebarEnabled: true })
 

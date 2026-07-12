@@ -45,6 +45,56 @@ mock.module('../../features/registry', () => ({
   FEATURES: [],
 }))
 
+// DOM seam: return null for all Lumiverse queries so the real
+// vanilla-baseline can run in headless bun without throwing on
+// `document.querySelector`. Cases A-E call captureVanillaBaseline via
+// the SUT; with this mock in place, getMainDrawerSide falls through to
+// the store (also empty) and returns 'right', and isMainDrawerOpen /
+// getActiveTabId return safe defaults. The vanilla-baseline.test.ts
+// file registers its own dom/lumiverse mock which overrides this one
+// (mock.module is process-global; latest call wins).
+mock.module('../../dom/lumiverse', () => ({
+  getMainSidebar: () => null,
+  getMainWrapper: () => null,
+  getMainDrawer: () => null,
+  getMainPanelContent: () => null,
+  getMainPanel: () => null,
+  getMainPanelHeader: () => null,
+  getChatColumn: () => null,
+  getMainDrawerWidth: () => 420,
+}))
+
+// host-settings seam: control isHostDrawerSettingsWritable and
+// patchHostDrawerSettings so cases G/H can drive the real vanilla-
+// baseline's restore to success or NO-GO without depending on its
+// internals. Default = writable + succeeds; cases override per-test.
+let _hostWritable = true
+let _hostPatchOk = true
+mock.module('../../dom/host-settings', () => ({
+  getHostDrawerSettings: () => null,
+  isHostDrawerSettingsWritable: () => _hostWritable,
+  patchHostDrawerSettings: (_partial: any) => _hostPatchOk,
+  __setHostSetSettingForTest: () => {},
+  clearHostSettingsCache: () => {},
+  HostDrawerSettings: undefined as any,
+}))
+
+// main-persist seam: restoreMainDrawerFromDom is a no-op so the real
+// vanilla-baseline's restore path completes synchronously in tests.
+mock.module('../../sidebar/main-persist', () => ({
+  restoreMainDrawerFromDom: () => {},
+  unsuppressMainDrawer: () => {},
+  stampPanelBodyHide: () => {},
+  startMainDrawerPersistence: () => {},
+  stopMainDrawerPersistence: () => {},
+}))
+
+// vanilla-baseline is NOT mocked. The SUT uses the real module; cases
+// F-I inspect the in-memory baseline (set by captureVanillaBaseline in
+// the SUT) via the real getVanillaBaseline / clearVanillaBaseline.
+// Cases G/H control the restore outcome by flipping _hostPatchOk /
+// _hostWritable on the host-settings mock above.
+
 // Import the SUT, the real state module, and the real session-profile module.
 import { requestSecondDrawerMode } from '../second-drawer-mode'
 import {
@@ -57,6 +107,10 @@ import {
   setSessionDualProfile,
   clearSessionDualProfile,
 } from '../../layout/dual-session-profile'
+import {
+  getVanillaBaseline,
+  clearVanillaBaseline,
+} from '../../layout/vanilla-baseline'
 
 let passed = 0
 let failed = 0
@@ -287,7 +341,157 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
     'E: refresh called once after applyLayout rejects (graceful completion)')
 }
 
-// Final cleanup so the next test file (persist.test.ts) starts clean.
+// =====================================================================
+// F. Vanilla baseline: enable captures pre-dual host state once
+// =====================================================================
+// Strategy: the SUT calls the real captureVanillaBaseline. After the
+// enable call, the in-memory baseline should be non-null. We inspect
+// it via the real getVanillaBaseline (imported above).
+{
+  const sut = await import('../second-drawer-mode')
+  resetSpies()
+  seedState({ persistTabAssignments: false, secondSidebarEnabled: false })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  mockApplyLayout(async () => { throw new Error('F: applyLayout should not be called (facet off, no profile)') })
+  clearSessionDualProfile()
+  clearVanillaBaseline()
+  assert(getVanillaBaseline() === null, 'F: no baseline before enable')
+
+  await sut.requestSecondDrawerMode(true)
+
+  assert(getVanillaBaseline() !== null, 'F: captureVanillaBaseline ran on enable (baseline present)')
+}
+
+// =====================================================================
+// G. Vanilla baseline: disable restores + clears on success
+// =====================================================================
+// Strategy: seed an in-memory baseline, flip host-settings to success
+// (default), call disable, expect baseline cleared by the SUT after
+// the successful restore.
+{
+  const sut = await import('../second-drawer-mode')
+  resetSpies()
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  _hostWritable = true
+  _hostPatchOk = true
+
+  // Seed a baseline so getVanillaBaseline returns one during disable.
+  // We re-use captureVanillaBaseline (real) to populate the in-memory
+  // state — the dom/lumiverse mock makes it return a default snapshot.
+  clearVanillaBaseline()
+  // Trigger a capture via the real SUT enable path so the baseline
+  // exists. Use a throwaway secondSidebarEnabled=true to avoid
+  // affecting later cases.
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: false })
+  await sut.requestSecondDrawerMode(true)
+  assert(getVanillaBaseline() !== null, 'G: baseline captured for the test')
+
+  // Now flip to off and run disable. host-settings mock is success.
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  await sut.requestSecondDrawerMode(false)
+
+  assert(getVanillaBaseline() === null,
+    'G: clearVanillaBaseline called after successful restore (baseline cleared)')
+}
+
+// =====================================================================
+// H. Vanilla baseline: disable retains baseline on failure (NO-GO)
+// =====================================================================
+// Strategy: seed a baseline, flip host-settings to NO-GO, call
+// disable, expect baseline retained for retry.
+{
+  const sut = await import('../second-drawer-mode')
+  resetSpies()
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  _hostWritable = false // NO-GO: patchHostDrawerSettings returns false
+
+  // Capture a baseline via the real SUT enable path.
+  clearVanillaBaseline()
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: false })
+  await sut.requestSecondDrawerMode(true)
+  assert(getVanillaBaseline() !== null, 'H: baseline captured for the test')
+
+  // Now disable with host-settings NO-GO. The restore returns
+  // { ok: false, reason: 'no-go' } and the SUT must NOT clear.
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  await sut.requestSecondDrawerMode(false)
+
+  assert(getVanillaBaseline() !== null,
+    'H: clearVanillaBaseline NOT called on failure (baseline retained for retry)')
+}
+
+// =====================================================================
+// I. Vanilla baseline: disable with no baseline is a no-op
+// =====================================================================
+// Strategy: ensure no baseline is in memory, call disable, expect
+// no change. The SUT must not call restoreVanillaBaseline or
+// clearVanillaBaseline when getVanillaBaseline() is null.
+{
+  const sut = await import('../second-drawer-mode')
+  resetSpies()
+  resetHydrationGuard()
+  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  _hostWritable = true
+  _hostPatchOk = true
+
+  clearVanillaBaseline()
+  assert(getVanillaBaseline() === null, 'I: no baseline before disable')
+
+  await sut.requestSecondDrawerMode(false)
+
+  assert(getVanillaBaseline() === null, 'I: still no baseline after disable (no-op)')
+}
+
+// Final cleanup so the next test file (vanilla-baseline.test.ts and
+// others) starts clean. Cases F-I mutate the in-memory baseline via
+// the real vanilla-baseline module; we clear it here so the next file
+// sees a fresh state. Also re-register the dom/lumiverse + dom/host-
+// settings + main-persist mock seams with no-ops so later test files
+// that don't register their own mocks see safe defaults.
+//
+// Note: the cases A-E `mockApplyLayout` helper re-mocks
+// `../../layout/apply` per case. The last case's mock is in effect
+// when this file ends and leaks into apply-restore.test.ts if that
+// file runs next. This is a pre-existing limitation of the per-case
+// mock pattern (bun's `mock.module` is process-global and there is no
+// public API to restore the real module after a mock is registered).
+// The vanilla-baseline.test.ts file does not depend on the real
+// applyLayout, so it runs cleanly after this file.
+mock.module('../../dom/lumiverse', () => ({
+  getMainSidebar: () => null,
+  getMainWrapper: () => null,
+  getMainDrawer: () => null,
+  getMainPanelContent: () => null,
+  getMainPanel: () => null,
+  getMainPanelHeader: () => null,
+  getChatColumn: () => null,
+  getMainDrawerWidth: () => 420,
+}))
+mock.module('../../dom/host-settings', () => ({
+  getHostDrawerSettings: () => null,
+  isHostDrawerSettingsWritable: () => false,
+  patchHostDrawerSettings: () => false,
+  __setHostSetSettingForTest: () => {},
+  clearHostSettingsCache: () => {},
+  HostDrawerSettings: undefined as any,
+}))
+mock.module('../../sidebar/main-persist', () => ({
+  restoreMainDrawerFromDom: () => {},
+  unsuppressMainDrawer: () => {},
+  stampPanelBodyHide: () => {},
+  startMainDrawerPersistence: () => {},
+  stopMainDrawerPersistence: () => {},
+}))
+clearVanillaBaseline()
 resetHydrationGuard()
 hydrateSettings(null)
 setLastLoadedLayout(null)
