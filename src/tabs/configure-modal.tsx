@@ -1146,13 +1146,15 @@ export function openConfigureTabsModal(): void {
 
 /**
  * Close the Configure Tabs modal.
- * If dirty, returns false and caller should handle confirmation.
+ * When force is true, skips the dirty check and unmounts immediately.
+ * When force is false (or omitted), if the draft is dirty a window.confirm
+ * is shown; returns true only if the modal was closed.
  */
-export function closeConfigureTabsModal(): boolean {
+export function closeConfigureTabsModal(opts?: { force?: boolean }): boolean {
   if (!_modalContainer) return true
 
-  // Check dirty state.
-  if (_draftRef && _baseSnapshotRef) {
+  // Skip dirty check when force-closing (e.g. mode switch already handled it).
+  if (!opts?.force && _draftRef && _baseSnapshotRef) {
     if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
       if (typeof window !== 'undefined' && !window.confirm('Discard changes?')) {
         return false
@@ -1162,6 +1164,30 @@ export function closeConfigureTabsModal(): boolean {
 
   unmountModal()
   return true
+}
+
+/**
+ * Return the current ConfigureDraft reference (null if modal is not open).
+ * Used by second-drawer-mode.ts to check dirty state for mode-switch dialog.
+ */
+export function getConfigureDraftRef(): import('./configure-model').ConfigureDraft | null {
+  return _draftRef
+}
+
+/**
+ * Return the current BaseSnapshot reference (null if modal is not open).
+ * Used by second-drawer-mode.ts to check dirty state for mode-switch dialog.
+ */
+export function getConfigureBaseRef(): import('./configure-model').BaseSnapshot | null {
+  return _baseSnapshotRef
+}
+
+/**
+ * Force-unmount the Configure Tabs modal without any dirty check or prompt.
+ * Used by the mode-switch "Discard and switch" path.
+ */
+export function forceUnmountConfigureTabsModal(): void {
+  unmountModal()
 }
 
 /** True when the modal is currently open. */
@@ -1204,16 +1230,14 @@ function renderModal(
         renderModal(next, catalog, null, false)
       }}
       onToggleSecondDrawer={() => {
-        if (getSettings().secondSidebarEnabled) {
-          // Turning off: close modal without confirm (intentional teardown)
-          // so stopConfigureTabsIntercept will be a no-op.
-          unmountModal()
-          setSettings({ secondSidebarEnabled: false })
-        } else {
-          // Turning on: modal needs to be openable — re-enable the setting.
-          // The modal is already open, so re-render to reflect the new state.
-          setSettings({ secondSidebarEnabled: true })
-        }
+        // Delegate to the central mode-toggle API which handles dirty confirm,
+        // session profile capture, and feature lifecycle coordination.
+        // Lazy-import to avoid circular dependency at module load time.
+        void import('../settings/second-drawer-mode').then((m) => {
+          m.requestSecondDrawerMode(!getSettings().secondSidebarEnabled)
+        }).catch((err) => {
+          dwarn('[configure-modal] second-drawer-mode import failed:', err)
+        })
       }}
       onCancel={() => {
         closeConfigureTabsModal()

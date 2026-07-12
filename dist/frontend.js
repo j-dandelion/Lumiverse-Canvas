@@ -6702,6 +6702,7 @@ function buildPersistedLayout() {
     detachedTabs: last?.detachedTabs ?? []
   };
   const s = getSettings();
+  const tabsFacet = s.persistTabAssignments && s.secondSidebarEnabled;
   return {
     version: live.version,
     primary: {
@@ -6712,9 +6713,9 @@ function buildPersistedLayout() {
     secondary: {
       open: s.persistDrawerOpenState ? live.secondary.open : base.secondary.open ?? false,
       width: s.persistDrawerWidth ? live.secondary.width : base.secondary.width ?? 420,
-      activeTabId: s.persistTabAssignments ? live.secondary.activeTabId : base.secondary.activeTabId
+      activeTabId: tabsFacet ? live.secondary.activeTabId : base.secondary.activeTabId
     },
-    detachedTabs: s.persistTabAssignments ? live.detachedTabs : base.detachedTabs ?? []
+    detachedTabs: tabsFacet ? live.detachedTabs : base.detachedTabs ?? []
   };
 }
 function persistOpenState() {
@@ -7262,6 +7263,10 @@ function requestPersistTabAssignments(next) {
     return;
   }
   if (getSettings().persistTabAssignments) {
+    return;
+  }
+  if (!getSettings().secondSidebarEnabled) {
+    setSettings({ persistTabAssignments: true });
     return;
   }
   const live = snapshotLayout();
@@ -10302,6 +10307,18 @@ var init_configure_catalog = __esm(() => {
 });
 
 // src/tabs/configure-model.ts
+var exports_configure_model = {};
+__export(exports_configure_model, {
+  swapDrawerSide: () => swapDrawerSide,
+  setHidden: () => setHidden,
+  reorderWithin: () => reorderWithin,
+  partitionDisplayLists: () => partitionDisplayLists,
+  moveTab: () => moveTab,
+  leftColumnIsSecondary: () => leftColumnIsSecondary,
+  isDraftDirty: () => isDraftDirty,
+  encodeHostTabOrder: () => encodeHostTabOrder,
+  createDraft: () => createDraft
+});
 function partitionOrderByCatalog(tabOrder, catalog) {
   const builtinOrder = [];
   const extensionOrder = [];
@@ -10565,6 +10582,11 @@ var init_host_settings = __esm(() => {
 });
 
 // src/tabs/configure-commit.ts
+var exports_configure_commit = {};
+__export(exports_configure_commit, {
+  isConfigureBatchActive: () => isConfigureBatchActive,
+  commitConfigureDraft: () => commitConfigureDraft
+});
 function computeDeltas(draft) {
   const currentAssignments = getTabAssignments();
   const toSecondary = [];
@@ -10582,6 +10604,9 @@ function computeDeltas(draft) {
     }
   }
   return { toSecondary, toPrimary };
+}
+function isConfigureBatchActive() {
+  return _batchActive;
 }
 async function commitConfigureDraft(draft, _base) {
   if (_batchActive)
@@ -10753,11 +10778,369 @@ var init_configure_commit = __esm(() => {
   init_secondary();
 });
 
+// src/layout/dual-session-profile.ts
+function captureSessionDualProfileFromLive() {
+  const assignments = Array.from(getTabAssignments().entries());
+  const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
+  const tabs = getDrawerTabs();
+  const profile = {
+    detachedTabs: secondaryAssignments.map(([tabId]) => {
+      const tab = tabs.find((t3) => t3.id === tabId);
+      return { tabId, tabTitle: tab?.title || tabId, sidebar: "secondary" };
+    }),
+    activeTabId: getActiveSecondaryTabId()
+  };
+  _sessionProfile = profile;
+  return profile;
+}
+function getSessionDualProfile() {
+  return _sessionProfile;
+}
+async function restoreSessionDualProfile(profile) {
+  if (!profile || profile.detachedTabs.length === 0)
+    return;
+  const sd = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
+  sd.setSuppressAutoActivation(true);
+  try {
+    for (const dt of profile.detachedTabs) {
+      try {
+        await sd.assignToSecondary(dt.tabId);
+      } catch (err) {
+        dwarn(`restoreSessionDualProfile: assignToSecondary("${dt.tabId}") failed:`, err);
+      }
+    }
+    if (profile.activeTabId) {
+      showSecondaryTab(profile.activeTabId);
+    }
+  } finally {
+    sd.setSuppressAutoActivation(false);
+  }
+}
+var _sessionProfile = null;
+var init_dual_session_profile = __esm(() => {
+  init_assignment();
+  init_active_tab();
+  init_store();
+  init_buttons();
+  init_log();
+});
+
+// src/settings/second-drawer-mode.ts
+var exports_second_drawer_mode = {};
+__export(exports_second_drawer_mode, {
+  requestSecondDrawerMode: () => requestSecondDrawerMode
+});
+function injectDialogStyles() {
+  injectStyles(STYLE_ID6, `
+    #${HOST_ID2} {
+      position: fixed;
+      inset: 0;
+      /* Above Configure Tabs overlay (12000) and drag clone (13000). */
+      z-index: 14000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      box-sizing: border-box;
+      font-family: var(--lumiverse-font-family, sans-serif);
+      animation: canvas-mode-switch-fade 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    #${HOST_ID2} .canvas-mode-switch-backdrop {
+      position: absolute;
+      inset: 0;
+      background: color-mix(in srgb, var(--lumiverse-fill-heavy, rgba(0,0,0,0.45)) 85%, transparent);
+    }
+    #${HOST_ID2} .canvas-mode-switch-card {
+      position: relative;
+      z-index: 1;
+      width: min(380px, 100%);
+      background: var(--lumiverse-bg-elevated, var(--lumiverse-bg-deep, #1a1a1a));
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius-md, 12px);
+      box-shadow: var(--lumiverse-shadow-md, 0 12px 32px rgba(0,0,0,0.5));
+      padding: 16px;
+      box-sizing: border-box;
+      animation: canvas-mode-switch-in 120ms ease-out;
+    }
+    #${HOST_ID2} .canvas-mode-switch-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    #${HOST_ID2} .canvas-mode-switch-title {
+      margin: 0;
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--lumiverse-text);
+    }
+    #${HOST_ID2} .canvas-mode-switch-desc {
+      margin: 0 0 14px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      line-height: 1.4;
+      color: var(--lumiverse-text-muted);
+    }
+    #${HOST_ID2} .canvas-mode-switch-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #${HOST_ID2} .canvas-mode-switch-option {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 8px;
+      background: var(--lumiverse-bg-050, transparent);
+      color: var(--lumiverse-text);
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+    #${HOST_ID2} .canvas-mode-switch-option:hover:not(:disabled) {
+      background: var(--lumiverse-primary-020, rgba(66,165,245,0.12));
+      border-color: var(--lumiverse-primary, #42a5f5);
+    }
+    #${HOST_ID2} .canvas-mode-switch-option:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+    #${HOST_ID2} .canvas-mode-switch-option-label {
+      font-size: calc(13px * var(--lumiverse-font-scale, 1));
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--lumiverse-text);
+    }
+    #${HOST_ID2} .canvas-mode-switch-option-hint {
+      margin-top: 2px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.35;
+      color: var(--lumiverse-text-muted);
+    }
+    @keyframes canvas-mode-switch-fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes canvas-mode-switch-in {
+      from { opacity: 0; transform: scale(0.92); }
+      to { opacity: 1; transform: scale(1); }
+    }
+  `);
+}
+function makeOptionButton2(label, hint) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "canvas-mode-switch-option";
+  const labelEl = document.createElement("div");
+  labelEl.className = "canvas-mode-switch-option-label";
+  labelEl.textContent = label;
+  const hintEl = document.createElement("div");
+  hintEl.className = "canvas-mode-switch-option-hint";
+  hintEl.textContent = hint;
+  btn.appendChild(labelEl);
+  btn.appendChild(hintEl);
+  return btn;
+}
+function cleanupDialogListeners() {
+  if (_dialogKeydown) {
+    document.removeEventListener("keydown", _dialogKeydown);
+    _dialogKeydown = null;
+  }
+}
+function hideModeSwitchDialog() {
+  cleanupDialogListeners();
+  if (_dialogHost) {
+    _dialogHost.remove();
+    _dialogHost = null;
+  }
+}
+function showModeSwitchDialog() {
+  return new Promise((resolve) => {
+    injectDialogStyles();
+    const host = document.createElement("div");
+    host.id = HOST_ID2;
+    host.setAttribute("role", "dialog");
+    host.setAttribute("aria-modal", "true");
+    const backdrop = document.createElement("div");
+    backdrop.className = "canvas-mode-switch-backdrop";
+    backdrop.addEventListener("click", () => {
+      resolve("cancel");
+      hideModeSwitchDialog();
+    });
+    const card = document.createElement("div");
+    card.className = "canvas-mode-switch-card";
+    card.addEventListener("click", (e3) => e3.stopPropagation());
+    const header = document.createElement("div");
+    header.className = "canvas-mode-switch-header";
+    const title = document.createElement("h3");
+    title.className = "canvas-mode-switch-title";
+    title.textContent = "Unsaved configure changes";
+    header.appendChild(title);
+    const desc = document.createElement("p");
+    desc.className = "canvas-mode-switch-desc";
+    desc.textContent = "You have unsaved changes in the Configure Tabs dialog. Choose what to do before disabling the second drawer.";
+    const options = document.createElement("div");
+    options.className = "canvas-mode-switch-options";
+    const applyBtn = makeOptionButton2("Apply and switch", "Save current tab arrangement, then disable the second drawer.");
+    const discardBtn = makeOptionButton2("Discard and switch", "Discard unsaved changes, then disable the second drawer.");
+    const cancelBtn = makeOptionButton2("Cancel", "Stay in Configure Tabs without disabling the second drawer.");
+    const setBusy = (busy) => {
+      applyBtn.disabled = busy;
+      discardBtn.disabled = busy;
+      cancelBtn.disabled = busy;
+    };
+    applyBtn.addEventListener("click", () => {
+      if (applyBtn.disabled)
+        return;
+      setBusy(true);
+      resolve("apply");
+      hideModeSwitchDialog();
+    });
+    discardBtn.addEventListener("click", () => {
+      if (discardBtn.disabled)
+        return;
+      setBusy(true);
+      resolve("discard");
+      hideModeSwitchDialog();
+    });
+    cancelBtn.addEventListener("click", () => {
+      resolve("cancel");
+      hideModeSwitchDialog();
+    });
+    options.appendChild(applyBtn);
+    options.appendChild(discardBtn);
+    options.appendChild(cancelBtn);
+    card.appendChild(header);
+    card.appendChild(desc);
+    card.appendChild(options);
+    host.appendChild(backdrop);
+    host.appendChild(card);
+    _dialogKeydown = (e3) => {
+      if (e3.key !== "Escape")
+        return;
+      if (applyBtn.disabled)
+        return;
+      e3.preventDefault();
+      e3.stopPropagation();
+      resolve("cancel");
+      hideModeSwitchDialog();
+    };
+    document.addEventListener("keydown", _dialogKeydown);
+    document.body.appendChild(host);
+    _dialogHost = host;
+    cancelBtn.focus();
+  });
+}
+async function finishDisable() {
+  const profile = captureSessionDualProfileFromLive();
+  dlog("[second-drawer-mode] captured session dual profile:", {
+    tabs: profile.detachedTabs.length,
+    active: profile.activeTabId
+  });
+  if (getSettings().persistTabAssignments) {
+    const last = getLastLoadedLayout();
+    if (last) {
+      const merged = { ...last };
+      merged.detachedTabs = profile.detachedTabs;
+      if (merged.secondary) {
+        merged.secondary = { ...merged.secondary, activeTabId: profile.activeTabId };
+      } else {
+        merged.secondary = { activeTabId: profile.activeTabId, open: false, width: 420 };
+      }
+      setLastLoadedLayout(merged);
+    } else {
+      setLastLoadedLayout({
+        detachedTabs: profile.detachedTabs,
+        secondary: { activeTabId: profile.activeTabId, open: false, width: 420 },
+        primary: { open: false, width: 420, tabId: null }
+      });
+    }
+    flushPendingSaves();
+    syncLastLoadedFromPersistedLayout();
+  }
+  try {
+    const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+    m3.closeConfigureTabsModal({ force: true });
+  } catch {}
+  setSettings({ secondSidebarEnabled: false });
+}
+async function requestSecondDrawerMode(next) {
+  if (next) {
+    if (getSettings().secondSidebarEnabled)
+      return;
+    setSettings({ secondSidebarEnabled: true });
+    const profile = getSessionDualProfile();
+    if (profile && profile.detachedTabs.length > 0 && !getSettings().persistTabAssignments) {
+      dlog("[second-drawer-mode] restoring session dual profile:", {
+        tabs: profile.detachedTabs.length,
+        active: profile.activeTabId
+      });
+      await restoreSessionDualProfile(profile);
+    }
+  } else {
+    if (!getSettings().secondSidebarEnabled)
+      return;
+    let userChoice = "clean";
+    try {
+      const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+      if (m3.isConfigureTabsModalOpen()) {
+        const draft = m3.getConfigureDraftRef();
+        const base = m3.getConfigureBaseRef();
+        if (draft && base) {
+          const { isDraftDirty: isDraftDirty2 } = await Promise.resolve().then(() => (init_configure_model(), exports_configure_model));
+          if (isDraftDirty2(draft, base)) {
+            userChoice = await showModeSwitchDialog();
+          }
+        }
+      }
+    } catch (err) {
+      dwarn("[second-drawer-mode] error checking modal state:", err);
+    }
+    if (userChoice === "cancel")
+      return;
+    if (userChoice === "apply") {
+      try {
+        const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+        const draft = m3.getConfigureDraftRef();
+        const base = m3.getConfigureBaseRef();
+        if (draft && base) {
+          const { commitConfigureDraft: commitConfigureDraft2 } = await Promise.resolve().then(() => (init_configure_commit(), exports_configure_commit));
+          const result = await commitConfigureDraft2(draft, base);
+          if (!result.ok) {
+            dwarn("[second-drawer-mode] commit failed on mode switch:", result.error);
+          }
+        }
+      } catch (err) {
+        dwarn("[second-drawer-mode] error applying draft on mode switch:", err);
+      }
+    } else if (userChoice === "discard") {
+      try {
+        const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+        m3.forceUnmountConfigureTabsModal();
+      } catch {}
+    }
+    await finishDisable();
+  }
+}
+var HOST_ID2 = "canvas-mode-switch-dialog", STYLE_ID6 = "canvas-mode-switch-dialog-styles", _dialogHost = null, _dialogKeydown = null;
+var init_second_drawer_mode = __esm(() => {
+  init_state();
+  init_persist();
+  init_dual_session_profile();
+  init_log();
+});
+
 // src/tabs/configure-modal.tsx
 var exports_configure_modal = {};
 __export(exports_configure_modal, {
   openConfigureTabsModal: () => openConfigureTabsModal,
   isConfigureTabsModalOpen: () => isConfigureTabsModalOpen,
+  getConfigureDraftRef: () => getConfigureDraftRef,
+  getConfigureBaseRef: () => getConfigureBaseRef,
+  forceUnmountConfigureTabsModal: () => forceUnmountConfigureTabsModal,
   closeConfigureTabsModal: () => closeConfigureTabsModal
 });
 function injectModalStyles() {
@@ -11778,10 +12161,10 @@ function openConfigureTabsModal() {
   document.body.appendChild(_modalContainer);
   renderModal(draft, catalog, null, false);
 }
-function closeConfigureTabsModal() {
+function closeConfigureTabsModal(opts) {
   if (!_modalContainer)
     return true;
-  if (_draftRef && _baseSnapshotRef) {
+  if (!opts?.force && _draftRef && _baseSnapshotRef) {
     if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
       if (typeof window !== "undefined" && !window.confirm("Discard changes?")) {
         return false;
@@ -11790,6 +12173,15 @@ function closeConfigureTabsModal() {
   }
   unmountModal();
   return true;
+}
+function getConfigureDraftRef() {
+  return _draftRef;
+}
+function getConfigureBaseRef() {
+  return _baseSnapshotRef;
+}
+function forceUnmountConfigureTabsModal() {
+  unmountModal();
 }
 function isConfigureTabsModalOpen() {
   return _modalContainer !== null && _modalContainer.isConnected;
@@ -11822,12 +12214,11 @@ function renderModal(draft, catalog, commitError, committing) {
       renderModal(next, catalog, null, false);
     },
     onToggleSecondDrawer: () => {
-      if (getSettings().secondSidebarEnabled) {
-        unmountModal();
-        setSettings({ secondSidebarEnabled: false });
-      } else {
-        setSettings({ secondSidebarEnabled: true });
-      }
+      Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
+        m3.requestSecondDrawerMode(!getSettings().secondSidebarEnabled);
+      }).catch((err) => {
+        dwarn("[configure-modal] second-drawer-mode import failed:", err);
+      });
     },
     onCancel: () => {
       closeConfigureTabsModal();
@@ -11944,7 +12335,7 @@ function stopConfigureTabsIntercept() {
     _clickHandler = null;
   }
   Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
-    m3.closeConfigureTabsModal();
+    m3.closeConfigureTabsModal({ force: true });
   }).catch(() => {});
 }
 function dismissHostContextMenu() {
@@ -12571,7 +12962,14 @@ function buildSettingsPanelDOM() {
     control: shadowsMobile.btn
   }));
   const sec2 = section("Second drawer");
-  const master = makeToggle(() => getSettings().secondSidebarEnabled, (v3) => setSettings({ secondSidebarEnabled: v3 }));
+  const master = makeToggle(() => getSettings().secondSidebarEnabled, (v3) => {
+    Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
+      m3.requestSecondDrawerMode(v3);
+    }).catch((err) => {
+      dwarn("[settings-panel] second-drawer-mode import failed:", err);
+      setSettings({ secondSidebarEnabled: v3 });
+    });
+  });
   sec2.appendChild(buildSettingRow({
     label: "Enable second drawer",
     hint: "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.",

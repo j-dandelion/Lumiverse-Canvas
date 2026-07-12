@@ -337,7 +337,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
 
   const master = makeToggle(
     () => getSettings().secondSidebarEnabled,
-    (v) => setSettings({ secondSidebarEnabled: v })
+    (v) => {
+      // Use the central mode-toggle API which handles dirty confirm,
+      // session profile capture, and feature lifecycle coordination.
+      void import('./second-drawer-mode').then((m) => {
+        m.requestSecondDrawerMode(v)
+      }).catch((err) => {
+        dwarn('[settings-panel] second-drawer-mode import failed:', err)
+        // Fallback: direct setSettings if the module failed to load.
+        setSettings({ secondSidebarEnabled: v })
+      })
+    }
   )
   sec2.appendChild(buildSettingRow({
     label: 'Enable second drawer',

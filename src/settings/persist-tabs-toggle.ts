@@ -85,6 +85,13 @@ export function requestPersistTabAssignments(next: boolean): void {
     return
   }
 
+  // When the second drawer is disabled, flip the facet on immediately with
+  // no conflict dialog — there are no live dual tabs to compare.
+  if (!getSettings().secondSidebarEnabled) {
+    setSettings({ persistTabAssignments: true })
+    return
+  }
+
   const live = snapshotLayout()
   const saved = getLastLoadedLayout()
 

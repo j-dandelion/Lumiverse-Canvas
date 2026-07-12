@@ -83,9 +83,10 @@ export function stopConfigureTabsIntercept(): void {
     _clickHandler = null
   }
 
-  // Also close the modal if it's open.
+  // Also close the modal if it's open (force — skip dirty check; the mode-switch
+  // code in second-drawer-mode.ts already handled any confirmation needed).
   void import('./configure-modal').then((m) => {
-    m.closeConfigureTabsModal()
+    m.closeConfigureTabsModal({ force: true })
   }).catch(() => { /* module may not have been loaded */ })
 }
 

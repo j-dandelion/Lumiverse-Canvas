@@ -272,6 +272,11 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
     detachedTabs: last?.detachedTabs ?? [],
   }
   const s = getSettings()
+  // Dual-profile freeze: when the second drawer is disabled, lock detachedTabs
+  // and secondary.activeTabId to lastLoaded (or defaults) even when the tabs
+  // facet is ON, so the live empty state (no secondary wrapper → zero tabs)
+  // never clobbers the saved dual layout on disk.
+  const tabsFacet = s.persistTabAssignments && s.secondSidebarEnabled
   return {
     version: live.version,
     primary: {
@@ -284,11 +289,11 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
     secondary: {
       open: s.persistDrawerOpenState ? live.secondary.open : (base.secondary.open ?? false),
       width: s.persistDrawerWidth ? live.secondary.width : (base.secondary.width ?? 420),
-      activeTabId: s.persistTabAssignments
+      activeTabId: tabsFacet
         ? live.secondary.activeTabId
         : (base.secondary as { activeTabId?: string | null }).activeTabId,
     },
-    detachedTabs: s.persistTabAssignments ? live.detachedTabs : (base.detachedTabs ?? []),
+    detachedTabs: tabsFacet ? live.detachedTabs : (base.detachedTabs ?? []),
   }
 }
 
