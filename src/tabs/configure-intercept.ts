@@ -11,6 +11,11 @@
 // menu and opens the Canvas configure modal.
 //
 // Only active when secondSidebarEnabled is true.
+//
+// Note: stopping the intercept does NOT close the modal. The second-drawer
+// mode controller (settings/second-drawer-mode.ts) owns modal lifecycle on
+// mode switches and refreshes any still-open modal from live. Intercept stop
+// only detaches the click listener.
 
 import { findLumiverseContextMenu } from '../context-menu/index'
 import { dlog, dwarn } from '../debug/log'
@@ -73,6 +78,10 @@ export function startConfigureTabsIntercept(): void {
 
 /**
  * Stop intercepting. Safe to call when already stopped — idempotent.
+ *
+ * This function only detaches the click listener. It does NOT own modal
+ * lifecycle: the second-drawer mode controller (settings/second-drawer-mode.ts)
+ * refreshes any still-open Configure Tabs modal from live on mode switches.
  */
 export function stopConfigureTabsIntercept(): void {
   if (!_interceptActive) return
@@ -82,12 +91,6 @@ export function stopConfigureTabsIntercept(): void {
     document.removeEventListener('click', _clickHandler, true)
     _clickHandler = null
   }
-
-  // Also close the modal if it's open (force — skip dirty check; the mode-switch
-  // code in second-drawer-mode.ts already handled any confirmation needed).
-  void import('./configure-modal').then((m) => {
-    m.closeConfigureTabsModal({ force: true })
-  }).catch(() => { /* module may not have been loaded */ })
 }
 
 /**

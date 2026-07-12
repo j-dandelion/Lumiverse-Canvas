@@ -491,10 +491,25 @@ function injectModalStyles(): void {
     .canvas-configure-tabs-footer {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
+      justify-content: space-between;
       gap: 8px;
       padding: 10px 20px;
       border-top: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-footer-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .canvas-configure-tabs-footer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Body — single column (second drawer disabled) ── */
+    .canvas-configure-tabs-body--single .canvas-configure-tabs-column {
+      width: 100%;
     }
     .canvas-configure-tabs-btn {
       padding: 6px 16px;
@@ -1026,24 +1041,6 @@ function ConfigureTabsModalInner(props: ModalProps) {
           <div class="canvas-configure-tabs-header-row">
             <h2>Configure Tabs</h2>
             <div class="canvas-configure-tabs-header-actions">
-              <div class="canvas-configure-tabs-second-drawer-toggle">
-                <span
-                  class="canvas-configure-tabs-second-drawer-toggle-label"
-                  onClick={() => onToggleSecondDrawer()}
-                >
-                  Enable second drawer
-                </span>
-                <button
-                  class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onToggleSecondDrawer()
-                  }}
-                />
-              </div>
-              <button class="canvas-configure-tabs-swap-btn" onClick={onSwapSide}>
-                Swap drawer locations
-              </button>
               <button
                 class="canvas-configure-tabs-close"
                 type="button"
@@ -1061,11 +1058,21 @@ function ConfigureTabsModalInner(props: ModalProps) {
           <p class="canvas-configure-tabs-subtitle">Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.</p>
         </div>
 
-        {/* Body: two columns */}
-        <div class="canvas-configure-tabs-body">
-          {leftColumn}
-          {rightColumn}
-        </div>
+        {/* Body: two columns when second drawer is enabled, one column otherwise */}
+        {secondDrawerEnabled ? (
+          <div class="canvas-configure-tabs-body">
+            {leftColumn}
+            {rightColumn}
+          </div>
+        ) : (
+          <div class="canvas-configure-tabs-body canvas-configure-tabs-body--single">
+            {renderColumn(
+              primaryTabs,
+              'primary',
+              renderColumnHeader('Drawer Tabs', 'Tabs in the sidebar drawer.'),
+            )}
+          </div>
+        )}
 
         {/* Error */}
         {commitError && (
@@ -1074,20 +1081,44 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
         {/* Footer */}
         <div class="canvas-configure-tabs-footer">
-          <button
-            class="canvas-configure-tabs-btn"
-            onClick={onCancel}
-            disabled={committing}
-          >
-            Cancel
-          </button>
-          <button
-            class="canvas-configure-tabs-btn canvas-configure-tabs-btn-primary"
-            onClick={onDone}
-            disabled={committing}
-          >
-            {committing ? 'Applying\u2026' : 'Done'}
-          </button>
+          <div class="canvas-configure-tabs-footer-left">
+            <div class="canvas-configure-tabs-second-drawer-toggle">
+              <span
+                class="canvas-configure-tabs-second-drawer-toggle-label"
+                onClick={() => onToggleSecondDrawer()}
+              >
+                Enable second drawer
+              </span>
+              <button
+                class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onToggleSecondDrawer()
+                }}
+              />
+            </div>
+            {secondDrawerEnabled && (
+              <button class="canvas-configure-tabs-swap-btn" onClick={onSwapSide}>
+                Swap drawer locations
+              </button>
+            )}
+          </div>
+          <div class="canvas-configure-tabs-footer-right">
+            <button
+              class="canvas-configure-tabs-btn"
+              onClick={onCancel}
+              disabled={committing}
+            >
+              Cancel
+            </button>
+            <button
+              class="canvas-configure-tabs-btn canvas-configure-tabs-btn-primary"
+              onClick={onDone}
+              disabled={committing}
+            >
+              {committing ? 'Applying\u2026' : 'Done'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1095,6 +1126,39 @@ function ConfigureTabsModalInner(props: ModalProps) {
 }
 
 // ── Modal controller ──
+
+/**
+ * Build a fresh ConfigureDraft + BaseSnapshot from current host state.
+ * Single source of truth for the initial-draft logic; reused by both
+ * openConfigureTabsModal and refreshConfigureDraftFromLive.
+ */
+function buildLiveDraftAndBase(): {
+  draft: ConfigureDraft
+  base: BaseSnapshot
+  catalog: CatalogTab[]
+} {
+  const catalog = getFullCatalog()
+  const hostSettings = getHostDrawerSettings()
+  const currentAssignments = new Map(getTabAssignments())
+  const drawerSide = (hostSettings?.side as DrawerSide) || getMainDrawerSide()
+
+  const draft = createDraft({
+    catalog,
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: currentAssignments,
+  })
+
+  const base: BaseSnapshot = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: new Map(currentAssignments),
+  }
+
+  return { draft, base, catalog }
+}
 
 /**
  * Open the Configure Tabs modal.
@@ -1112,35 +1176,31 @@ export function openConfigureTabsModal(): void {
   // Lock body scroll like host ModalShell
   document.body.style.overflow = 'hidden'
 
-  // Build initial draft.
-  const catalog = getFullCatalog()
-  const hostSettings = getHostDrawerSettings()
-  const currentAssignments = new Map(getTabAssignments())
-  const drawerSide = (hostSettings?.side as DrawerSide) || getMainDrawerSide()
-
-  const draft = createDraft({
-    catalog,
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
-    drawerSide,
-    assignments: currentAssignments,
-  })
-
+  const { draft, base, catalog } = buildLiveDraftAndBase()
   _draftRef = draft
-
-  // Build base snapshot for dirty check.
-  _baseSnapshotRef = {
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
-    drawerSide,
-    assignments: new Map(currentAssignments),
-  }
+  _baseSnapshotRef = base
 
   // Create container and render.
   _modalContainer = document.createElement('div')
   _modalContainer.id = 'canvas-configure-tabs-modal'
   document.body.appendChild(_modalContainer)
 
+  renderModal(draft, catalog, null, false)
+}
+
+/**
+ * Re-read the current host state and rebuild the modal's draft + base snapshot
+ * in place. No-op when the modal is not currently mounted. Intended for
+ * callers that change drawer/host state while the modal is open (e.g. toggling
+ * second-drawer mode from the new footer toggle while the user is editing).
+ * The dirty-check baseline is reset, so any unsaved edits in the modal are
+ * discarded — call sites are expected to prompt the user beforehand.
+ */
+export function refreshConfigureDraftFromLive(): void {
+  if (!_modalContainer) return
+  const { draft, base, catalog } = buildLiveDraftAndBase()
+  _draftRef = draft
+  _baseSnapshotRef = base
   renderModal(draft, catalog, null, false)
 }
 

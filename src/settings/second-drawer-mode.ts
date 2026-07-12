@@ -7,6 +7,8 @@
 //   - Merging dual into lastLoaded when persistTabAssignments is ON (OFF path)
 //   - Restoring session dual profile on re-enable (ON path)
 //   - Feature lifecycle (setSettings triggers feature.apply)
+//   - Refreshing the still-open Configure Tabs modal from live on both
+//     the enable and disable paths (modal stays open across mode switches)
 
 import { getSettings, setSettings, getLastLoadedLayout, setLastLoadedLayout } from './state'
 import {
@@ -270,7 +272,8 @@ function showModeSwitchDialog(): Promise<ModeSwitchChoice> {
 /**
  * Run after the user has confirmed disable (or modal was clean).
  * Captures session profile, optionally merges into lastLoaded, flushes,
- * force-closes modal, then sets setting to false.
+ * flips the setting, then refreshes any still-open Configure Tabs modal
+ * from live so it reflects the now-disabled layout.
  */
 async function finishDisable(): Promise<void> {
   // 1. Capture session profile while assignments are still live.
@@ -312,16 +315,18 @@ async function finishDisable(): Promise<void> {
     syncLastLoadedFromPersistedLayout()
   }
 
-  // 3. Force-close the Configure Tabs modal if still open (the 3-way dialog
-  //    already handled discard or commit — just in case, force here too).
-  try {
-    const m = await import('../tabs/configure-modal')
-    m.closeConfigureTabsModal({ force: true })
-  } catch { /* module may not be loaded */ }
-
-  // 4. Flip the setting — feature.apply OFF path tears down the sidebar.
+  // 3. Flip the setting — feature.apply OFF path tears down the sidebar.
   //    buildPersistedLayout now freezes lastLoaded dual (not live empty).
   setSettings({ secondSidebarEnabled: false })
+
+  // 4. Modal stays open. After teardown, refresh its draft from the now-disabled
+  //    live state so the user sees a clean (non-dirty) view of the disabled layout.
+  try {
+    const m = await import('../tabs/configure-modal')
+    if (m.isConfigureTabsModalOpen()) {
+      m.refreshConfigureDraftFromLive()
+    }
+  } catch { /* module may not be loaded */ }
 }
 
 // ── Public API ──
@@ -335,7 +340,8 @@ async function finishDisable(): Promise<void> {
  *   2. If Configure modal open with dirty draft → 3-way dialog
  *      (Apply and switch / Discard and switch / Cancel)
  *   3. `finishDisable`: capture session profile, optionally merge into
- *      lastLoaded + flush, force-close modal, setSettings(false)
+ *      lastLoaded + flush, setSettings(false). Modal stays open and is
+ *      refreshed from live (now-disabled) state.
  *
  * **Enable path** (`next === true`):
  *   1. If already on → return
@@ -343,6 +349,8 @@ async function finishDisable(): Promise<void> {
  *   3. If session profile has tabs and tabs facet OFF → restore from profile
  *   4. If tabs facet ON → applyLayout already handled restore from lastLoaded
  *      (which was synced before disable)
+ *   5. If modal is still open, refresh its draft from live so it reflects
+ *      the re-enabled layout.
  */
 export async function requestSecondDrawerMode(next: boolean): Promise<void> {
   if (next) {
@@ -362,6 +370,15 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       })
       await restoreSessionDualProfile(profile)
     }
+
+    // If the Configure Tabs modal is still open, refresh its draft from
+    // the now-enabled live state so it reflects the re-enabled layout.
+    try {
+      const m = await import('../tabs/configure-modal')
+      if (m.isConfigureTabsModalOpen()) {
+        m.refreshConfigureDraftFromLive()
+      }
+    } catch { /* module may not be loaded */ }
   } else {
     // ── DISABLE ──
     if (!getSettings().secondSidebarEnabled) return
@@ -405,11 +422,8 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
         dwarn('[second-drawer-mode] error applying draft on mode switch:', err)
       }
     } else if (userChoice === 'discard') {
-      // Discard and switch: force-unmount modal.
-      try {
-        const m = await import('../tabs/configure-modal')
-        m.forceUnmountConfigureTabsModal()
-      } catch { /* module may not be loaded */ }
+      // Discard and switch: fall through to finishDisable, which refreshes
+      // the still-open modal from the now-disabled live state.
     }
 
     // userChoice is 'apply', 'discard', or 'clean' — all proceed to finishDisable.

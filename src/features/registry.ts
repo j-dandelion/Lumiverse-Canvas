@@ -167,7 +167,9 @@ const secondSidebarFeature: CanvasFeature = {
     // Start configure-tabs intercept when second sidebar is on.
     startConfigureTabsIntercept()
 
-    // Compose teardown: tear down secondary sidebar AND stop intercept + close modal.
+    // Compose teardown: tear down secondary sidebar AND stop intercept.
+    // Note: intercept stop does not close the Configure Tabs modal;
+    // the second-drawer mode controller refreshes any still-open modal.
     const teardown = () => {
       tearDownSecondarySidebar()
       stopConfigureTabsIntercept()
@@ -195,7 +197,9 @@ const secondSidebarFeature: CanvasFeature = {
       // Re-start intercept when turned back on.
       startConfigureTabsIntercept()
     } else {
-      // Stop intercept and close modal when turned off.
+      // Stop intercept when turned off. The second-drawer mode controller
+      // (settings/second-drawer-mode.ts) refreshes any still-open Configure
+      // Tabs modal from live on mode switch.
       stopConfigureTabsIntercept()
       tearDownSecondarySidebar()
     }

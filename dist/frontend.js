@@ -11062,11 +11062,13 @@ async function finishDisable() {
     flushPendingSaves();
     syncLastLoadedFromPersistedLayout();
   }
+  setSettings({ secondSidebarEnabled: false });
   try {
     const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
-    m3.closeConfigureTabsModal({ force: true });
+    if (m3.isConfigureTabsModalOpen()) {
+      m3.refreshConfigureDraftFromLive();
+    }
   } catch {}
-  setSettings({ secondSidebarEnabled: false });
 }
 async function requestSecondDrawerMode(next) {
   if (next) {
@@ -11081,6 +11083,12 @@ async function requestSecondDrawerMode(next) {
       });
       await restoreSessionDualProfile(profile);
     }
+    try {
+      const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+      if (m3.isConfigureTabsModalOpen()) {
+        m3.refreshConfigureDraftFromLive();
+      }
+    } catch {}
   } else {
     if (!getSettings().secondSidebarEnabled)
       return;
@@ -11117,12 +11125,7 @@ async function requestSecondDrawerMode(next) {
       } catch (err) {
         dwarn("[second-drawer-mode] error applying draft on mode switch:", err);
       }
-    } else if (userChoice === "discard") {
-      try {
-        const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
-        m3.forceUnmountConfigureTabsModal();
-      } catch {}
-    }
+    } else if (userChoice === "discard") {}
     await finishDisable();
   }
 }
@@ -11137,6 +11140,7 @@ var init_second_drawer_mode = __esm(() => {
 // src/tabs/configure-modal.tsx
 var exports_configure_modal = {};
 __export(exports_configure_modal, {
+  refreshConfigureDraftFromLive: () => refreshConfigureDraftFromLive,
   openConfigureTabsModal: () => openConfigureTabsModal,
   isConfigureTabsModalOpen: () => isConfigureTabsModalOpen,
   getConfigureDraftRef: () => getConfigureDraftRef,
@@ -11548,10 +11552,25 @@ function injectModalStyles() {
     .canvas-configure-tabs-footer {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
+      justify-content: space-between;
       gap: 8px;
       padding: 10px 20px;
       border-top: 1px solid var(--lumiverse-border, #333);
+    }
+    .canvas-configure-tabs-footer-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .canvas-configure-tabs-footer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Body — single column (second drawer disabled) ── */
+    .canvas-configure-tabs-body--single .canvas-configure-tabs-column {
+      width: 100%;
     }
     .canvas-configure-tabs-btn {
       padding: 6px 16px;
@@ -12036,60 +12055,36 @@ function ConfigureTabsModalInner(props) {
                 }, undefined, false, undefined, this),
                 /* @__PURE__ */ u3("div", {
                   class: "canvas-configure-tabs-header-actions",
-                  children: [
-                    /* @__PURE__ */ u3("div", {
-                      class: "canvas-configure-tabs-second-drawer-toggle",
+                  children: /* @__PURE__ */ u3("button", {
+                    class: "canvas-configure-tabs-close",
+                    type: "button",
+                    title: "Close",
+                    onClick: () => onCancel(),
+                    onPointerDown: (e3) => e3.stopPropagation(),
+                    children: /* @__PURE__ */ u3("svg", {
+                      viewBox: "0 0 24 24",
+                      fill: "none",
+                      stroke: "currentColor",
+                      "stroke-width": "2",
+                      "stroke-linecap": "round",
+                      "stroke-linejoin": "round",
                       children: [
-                        /* @__PURE__ */ u3("span", {
-                          class: "canvas-configure-tabs-second-drawer-toggle-label",
-                          onClick: () => onToggleSecondDrawer(),
-                          children: "Enable second drawer"
+                        /* @__PURE__ */ u3("line", {
+                          x1: "18",
+                          y1: "6",
+                          x2: "6",
+                          y2: "18"
                         }, undefined, false, undefined, this),
-                        /* @__PURE__ */ u3("button", {
-                          class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
-                          onClick: (e3) => {
-                            e3.stopPropagation();
-                            onToggleSecondDrawer();
-                          }
+                        /* @__PURE__ */ u3("line", {
+                          x1: "6",
+                          y1: "6",
+                          x2: "18",
+                          y2: "18"
                         }, undefined, false, undefined, this)
                       ]
-                    }, undefined, true, undefined, this),
-                    /* @__PURE__ */ u3("button", {
-                      class: "canvas-configure-tabs-swap-btn",
-                      onClick: onSwapSide,
-                      children: "Swap drawer locations"
-                    }, undefined, false, undefined, this),
-                    /* @__PURE__ */ u3("button", {
-                      class: "canvas-configure-tabs-close",
-                      type: "button",
-                      title: "Close",
-                      onClick: () => onCancel(),
-                      onPointerDown: (e3) => e3.stopPropagation(),
-                      children: /* @__PURE__ */ u3("svg", {
-                        viewBox: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        "stroke-width": "2",
-                        "stroke-linecap": "round",
-                        "stroke-linejoin": "round",
-                        children: [
-                          /* @__PURE__ */ u3("line", {
-                            x1: "18",
-                            y1: "6",
-                            x2: "6",
-                            y2: "18"
-                          }, undefined, false, undefined, this),
-                          /* @__PURE__ */ u3("line", {
-                            x1: "6",
-                            y1: "6",
-                            x2: "18",
-                            y2: "18"
-                          }, undefined, false, undefined, this)
-                        ]
-                      }, undefined, true, undefined, this)
-                    }, undefined, false, undefined, this)
-                  ]
-                }, undefined, true, undefined, this)
+                    }, undefined, true, undefined, this)
+                  }, undefined, false, undefined, this)
+                }, undefined, false, undefined, this)
               ]
             }, undefined, true, undefined, this),
             /* @__PURE__ */ u3("p", {
@@ -12098,13 +12093,16 @@ function ConfigureTabsModalInner(props) {
             }, undefined, false, undefined, this)
           ]
         }, undefined, true, undefined, this),
-        /* @__PURE__ */ u3("div", {
+        secondDrawerEnabled ? /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-body",
           children: [
             leftColumn,
             rightColumn
           ]
-        }, undefined, true, undefined, this),
+        }, undefined, true, undefined, this) : /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-body canvas-configure-tabs-body--single",
+          children: renderColumn(primaryTabs, "primary", renderColumnHeader("Drawer Tabs", "Tabs in the sidebar drawer."))
+        }, undefined, false, undefined, this),
         commitError && /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-error",
           children: commitError
@@ -12112,33 +12110,57 @@ function ConfigureTabsModalInner(props) {
         /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-footer",
           children: [
-            /* @__PURE__ */ u3("button", {
-              class: "canvas-configure-tabs-btn",
-              onClick: onCancel,
-              disabled: committing,
-              children: "Cancel"
-            }, undefined, false, undefined, this),
-            /* @__PURE__ */ u3("button", {
-              class: "canvas-configure-tabs-btn canvas-configure-tabs-btn-primary",
-              onClick: onDone,
-              disabled: committing,
-              children: committing ? "Applying…" : "Done"
-            }, undefined, false, undefined, this)
+            /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-footer-left",
+              children: [
+                /* @__PURE__ */ u3("div", {
+                  class: "canvas-configure-tabs-second-drawer-toggle",
+                  children: [
+                    /* @__PURE__ */ u3("span", {
+                      class: "canvas-configure-tabs-second-drawer-toggle-label",
+                      onClick: () => onToggleSecondDrawer(),
+                      children: "Enable second drawer"
+                    }, undefined, false, undefined, this),
+                    /* @__PURE__ */ u3("button", {
+                      class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
+                      onClick: (e3) => {
+                        e3.stopPropagation();
+                        onToggleSecondDrawer();
+                      }
+                    }, undefined, false, undefined, this)
+                  ]
+                }, undefined, true, undefined, this),
+                secondDrawerEnabled && /* @__PURE__ */ u3("button", {
+                  class: "canvas-configure-tabs-swap-btn",
+                  onClick: onSwapSide,
+                  children: "Swap drawer locations"
+                }, undefined, false, undefined, this)
+              ]
+            }, undefined, true, undefined, this),
+            /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-footer-right",
+              children: [
+                /* @__PURE__ */ u3("button", {
+                  class: "canvas-configure-tabs-btn",
+                  onClick: onCancel,
+                  disabled: committing,
+                  children: "Cancel"
+                }, undefined, false, undefined, this),
+                /* @__PURE__ */ u3("button", {
+                  class: "canvas-configure-tabs-btn canvas-configure-tabs-btn-primary",
+                  onClick: onDone,
+                  disabled: committing,
+                  children: committing ? "Applying…" : "Done"
+                }, undefined, false, undefined, this)
+              ]
+            }, undefined, true, undefined, this)
           ]
         }, undefined, true, undefined, this)
       ]
     }, undefined, true, undefined, this)
   }, undefined, false, undefined, this);
 }
-function openConfigureTabsModal() {
-  if (typeof document === "undefined")
-    return;
-  if (_modalContainer) {
-    _modalContainer.style.display = "flex";
-    return;
-  }
-  injectModalStyles();
-  document.body.style.overflow = "hidden";
+function buildLiveDraftAndBase() {
   const catalog = getFullCatalog();
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
@@ -12150,16 +12172,37 @@ function openConfigureTabsModal() {
     drawerSide,
     assignments: currentAssignments
   });
-  _draftRef = draft;
-  _baseSnapshotRef = {
+  const base = {
     tabOrder: hostSettings?.tabOrder || [],
     hiddenTabIds: hostSettings?.hiddenTabIds || [],
     drawerSide,
     assignments: new Map(currentAssignments)
   };
+  return { draft, base, catalog };
+}
+function openConfigureTabsModal() {
+  if (typeof document === "undefined")
+    return;
+  if (_modalContainer) {
+    _modalContainer.style.display = "flex";
+    return;
+  }
+  injectModalStyles();
+  document.body.style.overflow = "hidden";
+  const { draft, base, catalog } = buildLiveDraftAndBase();
+  _draftRef = draft;
+  _baseSnapshotRef = base;
   _modalContainer = document.createElement("div");
   _modalContainer.id = "canvas-configure-tabs-modal";
   document.body.appendChild(_modalContainer);
+  renderModal(draft, catalog, null, false);
+}
+function refreshConfigureDraftFromLive() {
+  if (!_modalContainer)
+    return;
+  const { draft, base, catalog } = buildLiveDraftAndBase();
+  _draftRef = draft;
+  _baseSnapshotRef = base;
   renderModal(draft, catalog, null, false);
 }
 function closeConfigureTabsModal(opts) {
@@ -12335,9 +12378,6 @@ function stopConfigureTabsIntercept() {
     document.removeEventListener("click", _clickHandler, true);
     _clickHandler = null;
   }
-  Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
-    m3.closeConfigureTabsModal({ force: true });
-  }).catch(() => {});
 }
 function dismissHostContextMenu() {
   document.dispatchEvent(new KeyboardEvent("keydown", {

@@ -5,6 +5,26 @@
 // - Intercept fires on the second menu button
 // - Intercept does NOT fire on the first menu button
 // - Intercept does NOT fire after stopConfigureTabsIntercept
+// - stopConfigureTabsIntercept does NOT force-close an open modal
+//   (modal lifecycle is owned by settings/second-drawer-mode.ts, not the intercept)
+
+// Mock configure-modal before importing the intercept (the intercept uses
+// a dynamic import inside its click handler; this spy verifies that stop
+// does not call any modal lifecycle function).
+import { mock } from 'bun:test'
+const closeConfigureTabsModalSpy = mock(() => true)
+const openConfigureTabsModalSpy = mock(() => {})
+const isConfigureTabsModalOpenSpy = mock(() => true)
+const refreshConfigureDraftFromLiveSpy = mock(() => {})
+mock.module('../configure-modal', () => ({
+  openConfigureTabsModal: openConfigureTabsModalSpy,
+  closeConfigureTabsModal: closeConfigureTabsModalSpy,
+  isConfigureTabsModalOpen: isConfigureTabsModalOpenSpy,
+  refreshConfigureDraftFromLive: refreshConfigureDraftFromLiveSpy,
+  getConfigureDraftRef: () => null,
+  getConfigureBaseRef: () => null,
+  forceUnmountConfigureTabsModal: () => {},
+}))
 
 import {
   startConfigureTabsIntercept,
@@ -437,6 +457,79 @@ function cleanup(): void {
   document.removeEventListener('keydown', escapeHandler)
   menu.remove()
   stopConfigureTabsIntercept()
+}
+
+// =====================================================================
+// I6: stopConfigureTabsIntercept does NOT force-close an open modal
+//
+// Design property: stopping the intercept only detaches the click listener.
+// The modal lifecycle is owned by settings/second-drawer-mode.ts (which
+// refreshes any still-open modal from live on mode switches, but does not
+// close it). Asserting that closeConfigureTabsModal is NOT called on stop
+// guards against accidental regressions where stop starts closing the modal.
+// =====================================================================
+{
+  cleanup()
+  // Reset the spy counters from any prior tests in this run.
+  closeConfigureTabsModalSpy.mockClear()
+  openConfigureTabsModalSpy.mockClear()
+  refreshConfigureDraftFromLiveSpy.mockClear()
+
+  // The "modal" is "open" while intercept is active (mock state).
+  isConfigureTabsModalOpenSpy.mockReturnValue(true)
+
+  startConfigureTabsIntercept()
+  assert(isConfigureTabsInterceptActive(), 'I6: intercept active after start')
+
+  // Simulate a click before stop — the open spy should fire (positive control).
+  {
+    const menu = createFakeContextMenu(2)
+    const configureBtn = menu.querySelectorAll('button')[1]
+    const clickEvent = new MouseEvent('click', {
+      bubbles: true, cancelable: true, composed: true,
+    })
+    Object.defineProperty(clickEvent, 'target', { value: configureBtn })
+    document.dispatchEvent(clickEvent)
+    await new Promise<void>(r => setTimeout(r, 0))
+    menu.remove()
+  }
+  assert(openConfigureTabsModalSpy.mock.calls.length >= 1,
+    'I6: openConfigureTabsModal was called on click before stop (positive control)')
+  assertEqual(closeConfigureTabsModalSpy.mock.calls.length, 0,
+    'I6: closeConfigureTabsModal NOT called on click before stop')
+
+  // Now stop. The modal is "still open" per our mock.
+  stopConfigureTabsIntercept()
+  assert(!isConfigureTabsInterceptActive(), 'I6: intercept inactive after stop')
+
+  // The core property: stop does not force-close the modal.
+  assertEqual(closeConfigureTabsModalSpy.mock.calls.length, 0,
+    'I6: closeConfigureTabsModal NOT called on stop (modal stays open)')
+
+  // Stop should also not refresh or re-open the modal.
+  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 0,
+    'I6: refreshConfigureDraftFromLive NOT called on stop')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 1,
+    'I6: openConfigureTabsModal call count unchanged by stop (1 from positive control)')
+
+  // Click after stop: nothing should happen (no open, no close).
+  {
+    const menu = createFakeContextMenu(2)
+    const configureBtn = menu.querySelectorAll('button')[1]
+    const clickEvent = new MouseEvent('click', {
+      bubbles: true, cancelable: true, composed: true,
+    })
+    Object.defineProperty(clickEvent, 'target', { value: configureBtn })
+    document.dispatchEvent(clickEvent)
+    await new Promise<void>(r => setTimeout(r, 0))
+    menu.remove()
+  }
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 1,
+    'I6: openConfigureTabsModal NOT called on click after stop')
+  assertEqual(closeConfigureTabsModalSpy.mock.calls.length, 0,
+    'I6: closeConfigureTabsModal NOT called on click after stop')
+
+  cleanup()
 }
 
 // =====================================================================

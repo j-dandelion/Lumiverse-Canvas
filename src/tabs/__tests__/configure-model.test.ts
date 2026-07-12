@@ -733,6 +733,121 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
 }
 
 // =====================================================================
+// createDraft — post-disable-style state: empty assignments Map
+// (mirrors what the Configure Tabs modal sees after the user disables
+// the second drawer: all tabs back on primary, no secondary tabs).
+// =====================================================================
+{
+  const catalog = makeTestCatalog()
+  const tabOrder = [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS]
+  const draft = createDraft({
+    catalog,
+    tabOrder,
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map(), // empty — no second drawer
+  })
+
+  // Every catalog id is on primary.
+  assertEqual(draft.secondaryIds.length, 0, 'post-disable: secondaryIds empty')
+  assertEqual(draft.primaryIds.length, catalog.length, 'post-disable: primaryIds == all catalog ids')
+  for (const tab of catalog) {
+    assert(draft.primaryIds.includes(tab.id), `post-disable: ${tab.id} on primary`)
+  }
+
+  // builtinOrder + extensionOrder still partition the catalog.
+  assertArraysEqual(draft.builtinOrder, TEST_BUILTIN_IDS, 'post-disable: builtinOrder is the catalog builtins in order')
+  assertArraysEqual(draft.extensionOrder, TEST_EXT_IDS, 'post-disable: extensionOrder is the catalog extensions in order')
+
+  // encodeHostTabOrder returns builtins then extensions (host order).
+  const encoded = encodeHostTabOrder(draft)
+  assertArraysEqual(encoded, [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    'post-disable: encodeHostTabOrder returns builtins then extensions')
+}
+
+// =====================================================================
+// createDraft — post-disable: hidden tabs remain hidden, partition
+// preserved
+// =====================================================================
+{
+  const catalog = makeTestCatalog()
+  const tabOrder = [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS]
+  const draft = createDraft({
+    catalog,
+    tabOrder,
+    hiddenTabIds: ['loom', 'ext-a'],
+    drawerSide: 'left',
+    assignments: new Map(), // empty — post-disable
+  })
+
+  assertEqual(draft.secondaryIds.length, 0, 'post-disable+hidden: secondaryIds empty')
+  assertEqual(draft.primaryIds.length, catalog.length, 'post-disable+hidden: primaryIds == all catalog ids')
+  assertSetEqual(draft.hiddenIds, ['loom', 'ext-a'], 'post-disable+hidden: hiddenIds match input')
+
+  // Hidden tabs are still in primaryIds (they live in the list; UI shows them muted).
+  assert(draft.primaryIds.includes('loom'), 'post-disable+hidden: loom in primaryIds (hidden but listed)')
+  assert(draft.primaryIds.includes('ext-a'), 'post-disable+hidden: ext-a in primaryIds (hidden but listed)')
+
+  // encodeHostTabOrder still returns builtins then extensions.
+  const encoded = encodeHostTabOrder(draft)
+  assertArraysEqual(encoded, [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    'post-disable+hidden: encodeHostTabOrder returns builtins then extensions')
+}
+
+// =====================================================================
+// isDraftDirty — post-disable: not dirty when base matches the
+// all-primary state (i.e. closing the disable-confirm dialog without
+// changing anything leaves the draft clean).
+// =====================================================================
+{
+  const catalog = makeTestCatalog()
+  const tabOrder = [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS]
+  const draft = createDraft({
+    catalog,
+    tabOrder,
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map(), // post-disable
+  })
+  const base: BaseSnapshot = {
+    tabOrder: [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    // All assignments default to 'primary' when key missing → matches draft.
+    assignments: new Map(),
+  }
+  assert(!isDraftDirty(draft, base), 'post-disable: draft is not dirty when base matches (no per-tab entries)')
+}
+
+// =====================================================================
+// isDraftDirty — post-disable: dirty when an assignment was just flipped
+// to secondary (e.g. before the disable, user moved weaver to secondary;
+// now base shows the old dual and draft shows all-primary after disable).
+// =====================================================================
+{
+  const catalog = makeTestCatalog()
+  const tabOrder = [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS]
+  // Post-disable draft: all on primary.
+  const draft = createDraft({
+    catalog,
+    tabOrder,
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map(),
+  })
+  // Base still has the pre-disable assignment (weaver was on secondary).
+  const base: BaseSnapshot = {
+    tabOrder: [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map([
+      ['weaver', 'secondary'],
+    ]),
+  }
+  assert(isDraftDirty(draft, base), 'post-disable: draft is dirty when base has secondary tabs that draft no longer has')
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
