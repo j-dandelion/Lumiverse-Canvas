@@ -578,9 +578,12 @@ function pinTabList(tabList: HTMLElement): void {
 
   applyPinnedTabListChrome(tabList, side)
 
-  // Out of flex flow while pinned — flex-direction no longer affects layout.
+  // Tab list is out of flex flow while pinned, but the 56px spacer stays in
+  // flow. Orient the drawer so the spacer sits under the outer-edge pin strip
+  // (DOM order is always [spacer, panel]).
   if (drawer) {
-    setIfDifferent(drawer.style, 'flexDirection', '')
+    const flexDirection = side === 'right' ? 'row-reverse' : 'row'
+    setIfDifferent(drawer.style, 'flexDirection', flexDirection)
   }
   // Keep chat-facing panel border while pin owns the tab strip (same edge
   // as moveControlsToOuterEdge). applyTabListPosition skips flex on pinned

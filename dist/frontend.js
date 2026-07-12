@@ -3897,7 +3897,8 @@ function pinTabList(tabList) {
   }
   applyPinnedTabListChrome(tabList, side);
   if (drawer) {
-    setIfDifferent(drawer.style, "flexDirection", "");
+    const flexDirection = side === "right" ? "row-reverse" : "row";
+    setIfDifferent(drawer.style, "flexDirection", flexDirection);
   }
   if (panel) {
     applyPanelChatBorder(panel, side, true);
