@@ -11076,12 +11076,41 @@ async function requestSecondDrawerMode(next) {
       return;
     setSettings({ secondSidebarEnabled: true });
     const profile = getSessionDualProfile();
-    if (profile && profile.detachedTabs.length > 0 && !getSettings().persistTabAssignments) {
+    const persistTabs = getSettings().persistTabAssignments;
+    if (persistTabs) {
+      cancelSettingsSave();
+      cancelLayoutSave();
+      const layout = getLastLoadedLayout();
+      if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
+        dlog("[second-drawer-mode] applyLayout(lastLoaded) for facet-ON re-enable:", {
+          tabs: layout.detachedTabs.length
+        });
+        try {
+          await applyLayout(layout);
+        } catch (err) {
+          dwarn("[second-drawer-mode] applyLayout on re-enable failed:", err);
+        }
+      } else if (profile && profile.detachedTabs.length > 0) {
+        dlog("[second-drawer-mode] facet-ON re-enable falling back to session dual profile:", {
+          tabs: profile.detachedTabs.length,
+          active: profile.activeTabId
+        });
+        try {
+          await restoreSessionDualProfile(profile);
+        } catch (err) {
+          dwarn("[second-drawer-mode] restoreSessionDualProfile fallback failed:", err);
+        }
+      }
+    } else if (profile && profile.detachedTabs.length > 0) {
       dlog("[second-drawer-mode] restoring session dual profile:", {
         tabs: profile.detachedTabs.length,
         active: profile.activeTabId
       });
-      await restoreSessionDualProfile(profile);
+      try {
+        await restoreSessionDualProfile(profile);
+      } catch (err) {
+        dwarn("[second-drawer-mode] restoreSessionDualProfile failed:", err);
+      }
     }
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));

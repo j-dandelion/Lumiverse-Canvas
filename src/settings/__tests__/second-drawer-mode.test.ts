@@ -1,0 +1,297 @@
+// Tests for second-drawer-mode enable path.
+//
+// Verifies the re-enable sequence:
+//   A. Facet ON: refreshConfigureDraftFromLive runs ONLY after applyLayout resolves.
+//   B. Facet ON: applyLayout is called with the lastLoaded layout (containing tabs).
+//   C. Facet OFF: no applyLayout call when facet is OFF; clean no-op when no profile.
+//   D. Facet ON + empty lastLoaded + non-empty session profile → fallback to
+//      session profile before refresh.
+//   E. applyLayout rejects → still completes, modal still refreshes.
+//
+// Strategy:
+// - Don't mock `../state` or `../layout/dual-session-profile` (they are
+//   process-globally leaked by bun's mock.module; persist.test.ts and
+//   dual-session-profile.test.ts rely on the real modules).
+// - For each case, re-mock `../../layout/apply` with a case-specific
+//   `applyLayout` function. This keeps the spy observable while avoiding
+//   stale closures across cases. `mock.module` is process-global but
+//   we re-issue it for each case to control behavior.
+
+import { mock } from 'bun:test'
+
+// configure-modal mock (process-global; one factory is enough)
+const isConfigureTabsModalOpenSpy = mock(() => false)
+const refreshConfigureDraftFromLiveSpy = mock(() => {})
+mock.module('../../tabs/configure-modal', () => ({
+  isConfigureTabsModalOpen: isConfigureTabsModalOpenSpy,
+  refreshConfigureDraftFromLive: refreshConfigureDraftFromLiveSpy,
+  getConfigureDraftRef: () => null,
+  getConfigureBaseRef: () => null,
+  openConfigureTabsModal: () => {},
+  closeConfigureTabsModal: () => true,
+  forceUnmountConfigureTabsModal: () => {},
+}))
+
+// debug/styles, debug/log, features/registry — no-ops
+mock.module('../../debug/styles', () => ({
+  injectStyles: (_id: string, _css: string) => {},
+}))
+mock.module('../../debug/log', () => ({
+  dlog: () => {},
+  dwarn: () => {},
+  setDebug: (_v: boolean) => {},
+}))
+mock.module('../../features/registry', () => ({
+  FEATURES: [],
+}))
+
+// Import the SUT, the real state module, and the real session-profile module.
+import { requestSecondDrawerMode } from '../second-drawer-mode'
+import {
+  getSettings,
+  setLastLoadedLayout,
+  hydrateSettings,
+  resetHydrationGuard,
+} from '../state'
+import {
+  setSessionDualProfile,
+  clearSessionDualProfile,
+} from '../../layout/dual-session-profile'
+
+let passed = 0
+let failed = 0
+function assert(cond: unknown, msg: string) {
+  if (cond) { passed++ } else { console.error('FAIL:', msg); failed++ }
+}
+function assertEqual<T>(actual: T, expected: T, msg: string) {
+  if (actual === expected) { passed++ }
+  else { console.error(`FAIL: ${msg} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`); failed++ }
+}
+
+/** Per-case observable state for the applyLayout mock. */
+let applyLayoutArgs: any[] = []
+let applyLayoutCallCount = 0
+
+/** Reset all spies and state between cases. */
+function resetSpies() {
+  applyLayoutArgs = []
+  applyLayoutCallCount = 0
+  isConfigureTabsModalOpenSpy.mockClear()
+  refreshConfigureDraftFromLiveSpy.mockClear()
+  clearSessionDualProfile()
+  // Reset real state to defaults so the next test file starts clean.
+  resetHydrationGuard()
+  hydrateSettings(null)
+  setLastLoadedLayout(null)
+}
+
+/** Seed state for a case. Uses hydrateSettings which only writes when the
+ *  user-touched guard is false — we reset the guard first. */
+function seedState(patch: {
+  persistTabAssignments: boolean
+  secondSidebarEnabled?: boolean
+}) {
+  resetHydrationGuard()
+  hydrateSettings({
+    persistTabAssignments: patch.persistTabAssignments,
+    secondSidebarEnabled: patch.secondSidebarEnabled ?? false,
+  })
+}
+
+/** Re-mock layout/apply with a case-specific applyLayout. */
+function mockApplyLayout(fn: (layout: any) => Promise<void>) {
+  mock.module('../../layout/apply', () => ({
+    applyLayout: (layout: any) => {
+      applyLayoutArgs.push(layout)
+      applyLayoutCallCount++
+      return fn(layout)
+    },
+    isLayoutRestoreActive: () => false,
+    cancelApplyLayoutInterval: () => {},
+    setRestoreTimeoutMs: (_ms: number) => {},
+  }))
+}
+
+/** Create a deferred promise with a `resolve` function exposed. The
+ *  single-cell array pattern works around TS strict-narrowing issues
+ *  when the resolve is captured inside a Promise constructor closure. */
+function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
+  const cell: { fn?: () => void } = {}
+  const promise = new Promise<void>((resolve) => { cell.fn = resolve })
+  return { promise, resolve: () => { if (cell.fn) cell.fn() } }
+}
+
+// =====================================================================
+// A. Facet ON: refresh runs ONLY after applyLayout resolves
+// =====================================================================
+{
+  resetSpies()
+  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: 'tab-1', open: false, width: 420 },
+    detachedTabs: [
+      { tabId: 'tab-1', tabTitle: 'Tab 1', sidebar: 'secondary' },
+      { tabId: 'tab-2', tabTitle: 'Tab 2', sidebar: 'secondary' },
+    ],
+  })
+  isConfigureTabsModalOpenSpy.mockReturnValue(true)
+
+  // Make applyLayout defer its resolve until we say so.
+  const deferred = makeDeferred()
+  mockApplyLayout(() => deferred.promise)
+
+  // Start the enable — do NOT await yet.
+  const pending = requestSecondDrawerMode(true)
+
+  // Yield a few microtasks so setSettings runs and the code reaches
+  // applyLayout. The production code should NOT have refreshed the
+  // modal yet because applyLayout hasn't resolved.
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+
+  assert(applyLayoutCallCount === 1, 'A: applyLayout called exactly once on enable (facet ON)')
+  assert(refreshConfigureDraftFromLiveSpy.mock.calls.length === 0,
+    'A: refresh NOT called before applyLayout resolves')
+  assert(getSettings().secondSidebarEnabled === true, 'A: setSettings flipped secondSidebarEnabled to true')
+
+  // Now release applyLayout and let the await chain complete.
+  deferred.resolve()
+  await pending
+
+  assert(refreshConfigureDraftFromLiveSpy.mock.calls.length === 1,
+    'A: refresh called exactly once AFTER applyLayout resolves')
+}
+
+// =====================================================================
+// B. Facet ON: applyLayout is called with the lastLoaded layout
+// =====================================================================
+{
+  resetSpies()
+  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  const savedLayout = {
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: 'tab-x', open: false, width: 420 },
+    detachedTabs: [
+      { tabId: 'tab-x', tabTitle: 'Tab X', sidebar: 'secondary' },
+    ],
+  }
+  setLastLoadedLayout(savedLayout)
+  isConfigureTabsModalOpenSpy.mockReturnValue(false) // modal closed path
+  mockApplyLayout(async () => { /* resolves cleanly */ })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 1, 'B: applyLayout called once')
+  assert(applyLayoutArgs[0] === savedLayout, 'B: applyLayout called with the exact lastLoaded layout')
+  assert(refreshConfigureDraftFromLiveSpy.mock.calls.length === 0,
+    'B: refresh NOT called when modal closed')
+}
+
+// =====================================================================
+// C. Facet OFF: clean no-op when no profile, no applyLayout
+// =====================================================================
+{
+  resetSpies()
+  seedState({ persistTabAssignments: false, secondSidebarEnabled: false })
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: 'tab-y', open: false, width: 420 },
+    detachedTabs: [
+      { tabId: 'tab-y', tabTitle: 'Tab Y', sidebar: 'secondary' },
+    ],
+  })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  clearSessionDualProfile()
+  // If applyLayout is incorrectly called, fail loudly so the test catches it.
+  mockApplyLayout(async () => {
+    throw new Error('C: applyLayout should NOT be called when facet OFF')
+  })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 0, 'C: applyLayout NOT called when facet OFF (no profile)')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'C: still flips secondSidebarEnabled to true')
+  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 0,
+    'C: refresh NOT called when modal closed (facet OFF)')
+}
+
+// =====================================================================
+// D. Facet ON + empty lastLoaded + non-empty session profile → fallback
+// =====================================================================
+{
+  resetSpies()
+  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: null, open: false, width: 420 },
+    detachedTabs: [], // empty → must fall back to session profile
+  })
+  isConfigureTabsModalOpenSpy.mockReturnValue(true)
+  setSessionDualProfile({
+    detachedTabs: [
+      { tabId: 'sess-tab', tabTitle: 'Sess Tab', sidebar: 'secondary' },
+    ],
+    activeTabId: 'sess-tab',
+  })
+  // applyLayout should NOT be called when lastLoaded has no tabs.
+  mockApplyLayout(async () => {
+    throw new Error('D: applyLayout should NOT be called when lastLoaded has no tabs')
+  })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 0, 'D: applyLayout NOT called when lastLoaded has no tabs')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'D: setting still flipped to true')
+  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 1,
+    'D: refresh called AFTER session profile fallback')
+
+  clearSessionDualProfile()
+}
+
+// =====================================================================
+// E. applyLayout rejects → still completes, modal still refreshes
+// =====================================================================
+{
+  resetSpies()
+  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: 'tab-z', open: false, width: 420 },
+    detachedTabs: [
+      { tabId: 'tab-z', tabTitle: 'Tab Z', sidebar: 'secondary' },
+    ],
+  })
+  isConfigureTabsModalOpenSpy.mockReturnValue(true)
+  // Build a rejected promise with a pre-attached .then(_, noop) handler.
+  // The SUT's `await` will register another handler, so the rejection is
+  // doubly-handled. This avoids the "unhandled rejection" noise bun
+  // emits between test files.
+  mockApplyLayout(() => {
+    const rejected = Promise.reject(new Error('applyLayout boom'))
+    // Pre-handle so the unhandledRejection event is suppressed.
+    rejected.then(
+      () => {},
+      () => {},
+    )
+    return rejected
+  })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 1, 'E: applyLayout was called once before rejecting')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'E: setting still flipped to true despite failure')
+  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 1,
+    'E: refresh called once after applyLayout rejects (graceful completion)')
+}
+
+// Final cleanup so the next test file (persist.test.ts) starts clean.
+resetHydrationGuard()
+hydrateSettings(null)
+setLastLoadedLayout(null)
+clearSessionDualProfile()
+
+console.log(`second-drawer-mode: ${passed} passed, ${failed} failed`)
+if (failed > 0) process.exit(1)

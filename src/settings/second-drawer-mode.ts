@@ -10,8 +10,15 @@
 //   - Refreshing the still-open Configure Tabs modal from live on both
 //     the enable and disable paths (modal stays open across mode switches)
 
-import { getSettings, setSettings, getLastLoadedLayout, setLastLoadedLayout } from './state'
 import {
+  cancelSettingsSave,
+  getSettings,
+  setSettings,
+  getLastLoadedLayout,
+  setLastLoadedLayout,
+} from './state'
+import {
+  applyLayout,
   flushPendingSaves,
   syncLastLoadedFromPersistedLayout,
   cancelLayoutSave,
@@ -346,11 +353,15 @@ async function finishDisable(): Promise<void> {
  * **Enable path** (`next === true`):
  *   1. If already on → return
  *   2. setSettings({ secondSidebarEnabled: true }) — feature mount runs
- *   3. If session profile has tabs and tabs facet OFF → restore from profile
- *   4. If tabs facet ON → applyLayout already handled restore from lastLoaded
- *      (which was synced before disable)
+ *   3. If tabs facet ON → cancel debounced saves, await applyLayout from
+ *      lastLoaded (which was synced with the session profile before
+ *      disable) so the modal does not refresh mid-restore. Fall back to
+ *      session profile if lastLoaded has no tabs.
+ *   4. If tabs facet OFF → restore from session dual profile (defensive
+ *      fallback when no profile, no-op).
  *   5. If modal is still open, refresh its draft from live so it reflects
- *      the re-enabled layout.
+ *      the re-enabled layout. The refresh is gated to run AFTER the
+ *      restore attempt so dual tabs are visible in the modal.
  */
 export async function requestSecondDrawerMode(next: boolean): Promise<void> {
   if (next) {
@@ -359,20 +370,59 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
 
     setSettings({ secondSidebarEnabled: true })
 
-    // Restore session dual profile if non-empty and tabs facet is off
-    // (tabs facet ON: applyLayout already restored from lastLoaded, which
-    // was synced with the session profile before disable).
+    // Restore dual assignments. Mirror the Load-previous pattern
+    // (src/settings/persist-tabs-toggle.ts → enableAndLoadPrevious):
+    // cancel debounced settings/layout saves first so the post-setSettings
+    // write does not clobber disk with pre-restore live empty tabs.
+    //
+    // Tabs facet ON: lastLoaded was merged with the session profile in
+    // finishDisable; applyLayout restores from it. Fall back to the
+    // session profile if lastLoaded has no tabs (defensive).
+    // Tabs facet OFF: session profile is the only source; restore from it.
     const profile = getSessionDualProfile()
-    if (profile && profile.detachedTabs.length > 0 && !getSettings().persistTabAssignments) {
+    const persistTabs = getSettings().persistTabAssignments
+    if (persistTabs) {
+      cancelSettingsSave()
+      cancelLayoutSave()
+      const layout = getLastLoadedLayout()
+      if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
+        dlog('[second-drawer-mode] applyLayout(lastLoaded) for facet-ON re-enable:', {
+          tabs: layout.detachedTabs.length,
+        })
+        try {
+          await applyLayout(layout)
+        } catch (err) {
+          dwarn('[second-drawer-mode] applyLayout on re-enable failed:', err)
+        }
+      } else if (profile && profile.detachedTabs.length > 0) {
+        // Defensive fallback: facet ON but lastLoaded has no tabs. Session
+        // profile is still the live (same-session) source of truth.
+        dlog('[second-drawer-mode] facet-ON re-enable falling back to session dual profile:', {
+          tabs: profile.detachedTabs.length,
+          active: profile.activeTabId,
+        })
+        try {
+          await restoreSessionDualProfile(profile)
+        } catch (err) {
+          dwarn('[second-drawer-mode] restoreSessionDualProfile fallback failed:', err)
+        }
+      }
+    } else if (profile && profile.detachedTabs.length > 0) {
       dlog('[second-drawer-mode] restoring session dual profile:', {
         tabs: profile.detachedTabs.length,
         active: profile.activeTabId,
       })
-      await restoreSessionDualProfile(profile)
+      try {
+        await restoreSessionDualProfile(profile)
+      } catch (err) {
+        dwarn('[second-drawer-mode] restoreSessionDualProfile failed:', err)
+      }
     }
 
     // If the Configure Tabs modal is still open, refresh its draft from
     // the now-enabled live state so it reflects the re-enabled layout.
+    // Runs AFTER the restore attempt above so the modal shows the dual
+    // tabs (not the pre-restore empty state).
     try {
       const m = await import('../tabs/configure-modal')
       if (m.isConfigureTabsModalOpen()) {
