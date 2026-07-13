@@ -4,6 +4,12 @@
 // The main sidebar's context menu is now handled by injection into
 // Lumiverse's built-in ContextMenu (context-menu/index.ts).
 //
+// Menu items (in order):
+//   1. Toggle labels — toggle showTabLabels on the host drawer
+//   2. Configure tabs — open the Canvas Configure Tabs modal
+//   3. Divider
+//   4. Move to … — reassign tab between main/second drawer (gated)
+//
 // Extracted from buttons.ts to isolate the context menu DOM construction,
 // menu item creation, positioning, and event handlers from the tab button
 // management logic.
@@ -11,6 +17,9 @@
 import { getTabSidebar } from '../tabs/assignment'
 import { getSettings } from '../settings/state'
 import { injectStyles } from '../debug/styles'
+import { isShowTabLabels, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
+import { patchHostDrawerSettings } from '../dom/host-settings'
+import { openConfigureTabsModal } from './configure-modal'
 
 // Test seam for showAssignmentMenu — allows tests to override the real implementation
 let _showAssignmentMenuOverride: ((x: number, y: number, tabId: string, tabTitle: string, originatingTarget?: HTMLElement | null) => void) | null = null
@@ -42,24 +51,17 @@ export function showAssignmentMenu(
     return
   }
 
+  const secondEnabled = getSettings().secondSidebarEnabled
   const currentSidebar = getTabSidebar(tabId)
-  let label: string
-  let targetSidebar: 'primary' | 'secondary'
-  // Label/target from assignment only (not drawer open/closed).
-  if (currentSidebar === 'secondary') {
-    label = 'Move to main drawer'
-    targetSidebar = 'primary'
-  } else {
-    label = 'Move to second drawer'
-    targetSidebar = 'secondary'
-  }
+  const onSecondary = currentSidebar === 'secondary'
 
-  // Defense in depth: host inject already gates this; mirror used to bypass
-  // via this menu. Secondary → main is always allowed.
-  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) {
-    hideAssignmentMenu()
-    return
-  }
+  // Build label state for "Move to ..." item.
+  const moveLabel = onSecondary ? 'Move to main drawer' : 'Move to second drawer'
+  const moveSidebar: 'primary' | 'secondary' = onSecondary ? 'primary' : 'secondary'
+
+  // Gate: omit "Move to second drawer" when second drawer is disabled,
+  // but always allow "Move to main drawer" for secondary-assigned tabs.
+  const canShowMove = moveSidebar === 'primary' || secondEnabled
 
   if (!_contextMenu) {
     _contextMenu = createAssignmentContextMenu()
@@ -68,11 +70,39 @@ export function showAssignmentMenu(
 
   _contextMenu.innerHTML = ''
 
-  const item = createAssignmentContextMenuItem(label, () => {
-    // Lazy-import assignTab to avoid circular dependency at module load time.
-    import('../tabs/assignment').then(m => m.assignTab(tabId, targetSidebar))
+  // 1. Toggle labels
+  const showLabels = isShowTabLabels()
+  const toggleLabel = showLabels ? 'Hide labels' : 'Show labels'
+  const toggleItem = createAssignmentContextMenuItem(toggleLabel, () => {
+    const next = !showLabels
+    const ok = patchHostDrawerSettings({ showTabLabels: next })
+    if (ok && next) {
+      // Only need explicit sync when turning ON — the host store write
+      // will propagate through the observer path for OFF.
+      syncSecondaryTabLabels()
+    }
   })
-  _contextMenu.appendChild(item)
+  _contextMenu.appendChild(toggleItem)
+
+  // 2. Configure tabs
+  const configureItem = createAssignmentContextMenuItem('Configure tabs', () => {
+    openConfigureTabsModal()
+  })
+  _contextMenu.appendChild(configureItem)
+
+  // 3. Divider
+  if (canShowMove) {
+    const divider = createDivider()
+    _contextMenu.appendChild(divider)
+
+    // 4. Move to …
+    const moveItem = createAssignmentContextMenuItem(moveLabel, () => {
+      // Lazy-import assignTab to avoid circular dependency at module load time.
+      import('../tabs/assignment').then(m => m.assignTab(tabId, moveSidebar))
+    })
+    _contextMenu.appendChild(moveItem)
+  }
+
   _contextMenu.style.left = `${x}px`
   _contextMenu.style.top = `${y}px`
   _contextMenu.style.display = 'block'
@@ -108,6 +138,19 @@ function createAssignmentContextMenu(): HTMLElement {
     display: none;
   `
   return menu
+}
+
+/** Create a visual divider (role="separator") for the context menu. */
+function createDivider(): HTMLElement {
+  const div = document.createElement('div')
+  div.setAttribute('role', 'separator')
+  div.style.cssText = `
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--lumiverse-border);
+    flex-shrink: 0;
+  `
+  return div
 }
 
 /**
