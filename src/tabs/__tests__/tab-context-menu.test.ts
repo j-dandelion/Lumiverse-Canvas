@@ -156,10 +156,15 @@ let _mockSyncCalled = false
 // Mock drawer-sync to avoid Preact/TSX transitive chain.
 // Must include ALL exports that any static-import chain needs — features/registry
 // imports syncDrawerTabSettings, so if we omit it the import fails.
+let _mockSyncForceShow: boolean | undefined
+let _mockIsShowTabLabels = false
 mock.module('../../sidebar/drawer-sync', () => {
   return {
-    isShowTabLabels: () => false,
-    syncSecondaryTabLabels: () => { _mockSyncCalled = true },
+    isShowTabLabels: () => _mockIsShowTabLabels,
+    syncSecondaryTabLabels: (forceShow?: boolean) => {
+      _mockSyncCalled = true
+      _mockSyncForceShow = forceShow
+    },
     syncDrawerTabSettings: () => {},
     checkSideChanged: () => {},
     restoreSecondaryTabButtons: () => {},
@@ -212,8 +217,15 @@ try {
   const toggleItem = menu!.children[0]
   assertEqual(toggleItem.tagName, 'BUTTON', 'first item is a BUTTON')
   assert(
-    toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
-    'first item is label toggle',
+    toggleItem.textContent === 'Show tab labels' || toggleItem.textContent === 'Hide tab labels',
+    'first item is label toggle (host wording)',
+  )
+  // Mock isShowTabLabels → false, so item is "Show tab labels" (not danger).
+  // When showLabels is true, host paints danger (--lumiverse-error).
+  assert(
+    !String(toggleItem.style.cssText || '').includes('lumiverse-error') &&
+      !String((toggleItem as any)._styleMap?.color || '').includes('lumiverse-error'),
+    'Show tab labels is not danger-colored when labels are hidden',
   )
 
   // Item 2: configure tabs
@@ -247,8 +259,8 @@ try {
   const toggleItem = menu!.children[0]
   assertEqual(toggleItem.tagName, 'BUTTON', 'first item is a BUTTON')
   assert(
-    toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
-    'first item is label toggle',
+    toggleItem.textContent === 'Show tab labels' || toggleItem.textContent === 'Hide tab labels',
+    'first item is label toggle (host wording)',
   )
 
   const configureItem = menu!.children[1]
@@ -266,7 +278,9 @@ hideAssignmentMenu()
 const menuAfterHide = stubBody.querySelector('.canvas-tab-context-menu')
 assert(menuAfterHide === null, 'hideAssignmentMenu removes menu from DOM')
 
-// --- Test 4: patchHostDrawerSettings fail path → toggle doesn't call sync ---
+// --- Test 4: patchHostDrawerSettings fail path → still stamps secondary labels ---
+// Secondary chrome must follow the click even when the host fiber bridge is
+// NO-GO; otherwise Hide tab labels appears to do nothing on the second drawer.
 __setHostSetSettingForTest(null)
 clearHostSettingsCache()
 hideAssignmentMenu()
@@ -274,6 +288,8 @@ const prev4 = getSettings().secondSidebarEnabled
 setSettings({ secondSidebarEnabled: true })
 try {
   _mockSyncCalled = false
+  _mockSyncForceShow = undefined
+  _mockIsShowTabLabels = true // Hide tab labels → next = false
   showAssignmentMenu(100, 200, 'test-tab-patch-fail', 'Patch Fail Tab')
   const menu = stubBody.querySelector('.canvas-tab-context-menu')
   assert(menu !== null, 'patch fail: menu is created')
@@ -281,18 +297,18 @@ try {
   const toggleItem = menu!.children[0]
   assertEqual(toggleItem.tagName, 'BUTTON', 'patch fail: toggle is a button')
   toggleItem.click()
-  // No crash means success
   assert(true, 'patch fail: toggle click did not throw')
-  // When patchHostDrawerSettings returns false (NO-GO), sync should NOT be called
-  assert(!_mockSyncCalled, 'patch fail: syncSecondaryTabLabels NOT called when patch returns false')
+  assert(_mockSyncCalled, 'patch fail: sync still called so secondary labels update')
+  assertEqual(_mockSyncForceShow, false, 'patch fail: sync receives known next=false')
 } finally {
   setSettings({ secondSidebarEnabled: prev4 })
   hideAssignmentMenu()
   __setHostSetSettingForTest(null)
   clearHostSettingsCache()
+  _mockIsShowTabLabels = false
 }
 
-// --- Test 5: patchHostDrawerSettings success → toggle DOES call sync ---
+// --- Test 5: patchHostDrawerSettings success → toggle DOES call sync(next) ---
 __setHostSetSettingForTest((_key: string, _value: unknown) => {
   // Mock write succeeds
 })
@@ -301,18 +317,57 @@ const prev5 = getSettings().secondSidebarEnabled
 setSettings({ secondSidebarEnabled: true })
 try {
   _mockSyncCalled = false
+  _mockSyncForceShow = undefined
+  _mockIsShowTabLabels = false // menu says "Show tab labels"; next = true
   showAssignmentMenu(100, 200, 'test-tab-patch-ok', 'Patch OK Tab')
   const menu = stubBody.querySelector('.canvas-tab-context-menu')
   assert(menu !== null, 'patch ok: menu is created')
 
   const toggleItem = menu!.children[0]
+  assertEqual(toggleItem.textContent, 'Show tab labels', 'patch ok: show labels wording')
   toggleItem.click()
   assert(_mockSyncCalled, 'patch ok: toggle click calls syncSecondaryTabLabels when patch succeeds')
+  assertEqual(_mockSyncForceShow, true, 'patch ok: sync receives known next=true (not stale re-read)')
 } finally {
   setSettings({ secondSidebarEnabled: prev5 })
   hideAssignmentMenu()
   __setHostSetSettingForTest(null)
   clearHostSettingsCache()
+  _mockIsShowTabLabels = false
+}
+
+// --- Test 6: Hide path — danger color + sync(false) ---
+__setHostSetSettingForTest((_key: string, _value: unknown) => {})
+hideAssignmentMenu()
+const prev6 = getSettings().secondSidebarEnabled
+setSettings({ secondSidebarEnabled: true })
+try {
+  _mockSyncCalled = false
+  _mockSyncForceShow = undefined
+  _mockIsShowTabLabels = true // labels on → "Hide tab labels" + danger
+  showAssignmentMenu(100, 200, 'test-tab-hide-labels', 'Hide Labels Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'hide path: menu is created')
+
+  const toggleItem = menu!.children[0]
+  assertEqual(toggleItem.textContent, 'Hide tab labels', 'hide path: host wording')
+  const color =
+    (toggleItem as any)._styleMap?.color ||
+    String(toggleItem.style.cssText || '')
+  assert(
+    String(color).includes('lumiverse-error') || String(color).includes('#e54545'),
+    'hide path: danger color (host itemDanger)',
+  )
+
+  toggleItem.click()
+  assert(_mockSyncCalled, 'hide path: sync called')
+  assertEqual(_mockSyncForceShow, false, 'hide path: sync receives known next=false')
+} finally {
+  setSettings({ secondSidebarEnabled: prev6 })
+  hideAssignmentMenu()
+  __setHostSetSettingForTest(null)
+  clearHostSettingsCache()
+  _mockIsShowTabLabels = false
 }
 
 // --- Summary ---

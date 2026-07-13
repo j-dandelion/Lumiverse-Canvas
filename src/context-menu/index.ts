@@ -287,7 +287,13 @@ export function startContextMenuListener(): void {
   }
 
   const docClick = (e: Event) => {
-    // Close Canvas menu (secondary sidebar) on outside click.
+    // Close Canvas menu (secondary sidebar) on outside click only.
+    // Clicks on menu items stopPropagation, but defend against any path
+    // that still bubbles so we never remove the menu before the item
+    // handler runs (would drop Hide/Show labels, Configure, Move).
+    const t = e.target as Node | null
+    const menu = document.querySelector('.canvas-tab-context-menu')
+    if (menu && t && menu.contains(t)) return
     hideAssignmentMenu()
   }
   const docScroll = () => hideAssignmentMenu()

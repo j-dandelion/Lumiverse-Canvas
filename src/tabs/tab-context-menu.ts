@@ -70,19 +70,27 @@ export function showAssignmentMenu(
 
   _contextMenu.innerHTML = ''
 
-  // 1. Toggle labels
+  // 1. Toggle labels — match host ViewportDrawer wording + danger color
+  // (host: hideTabLabels/showTabLabels i18n, danger: showTabLabels).
   const showLabels = isShowTabLabels()
-  const toggleLabel = showLabels ? 'Hide labels' : 'Show labels'
+  const toggleLabel = showLabels ? 'Hide tab labels' : 'Show tab labels'
   const toggleItem = createAssignmentContextMenuItem(toggleLabel, () => {
     const next = !showLabels
+    // Host write first (updates host-settings cache synchronously).
     const ok = patchHostDrawerSettings({ showTabLabels: next })
+    // Always stamp Canvas-owned secondary/mirror labels with the known
+    // next value — do not gate on patch success. Host React may lag or
+    // the fiber bridge may be NO-GO; secondary chrome still follows the click.
+    // Pass `next` so we never re-read a pre-commit fiber snapshot.
+    syncSecondaryTabLabels(next)
     if (ok) {
-      // Sync labels on both ON and OFF — the CSS toggle (opacity/height)
-      // on secondary/mirror buttons only runs inside syncSecondaryTabLabels,
-      // not in the observer path.
-      syncSecondaryTabLabels()
+      // Host re-render (main tab strip 56→48) can fire ResizeObserver →
+      // syncDrawerTabSettings → syncSecondaryTabLabels() without a force
+      // arg. Re-stamp once after paint so a stale unforced re-read cannot
+      // win the race before host cache/DOM settle.
+      requestAnimationFrame(() => syncSecondaryTabLabels(next))
     }
-  })
+  }, { danger: showLabels })
   _contextMenu.appendChild(toggleItem)
 
   // 2. Configure tabs

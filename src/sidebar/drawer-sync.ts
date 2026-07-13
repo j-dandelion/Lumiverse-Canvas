@@ -26,6 +26,7 @@
 // _tabAssignments entries when their source extension unregisters.
 
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore, findStoreData } from '../store'
 import { dlog, dwarn } from '../debug/log'
 // NOTE: secondary.tsx imports from this module (bidirectional). Both modules
@@ -64,22 +65,31 @@ let _lastWrittenLabelsKey: string | null = null
 
 /** Read showTabLabels from the host store / DOM (no Canvas tri-state override). */
 export function isShowTabLabels(): boolean {
-  // The Canvas tri-state override (showTabLabels) was removed. Always read
-  // from the host Lumiverse store or fall back to DOM detection.
+  // Prefer host-settings cache: patchHostDrawerSettings updates it
+  // synchronously, while the React fiber snapshot (getStoreSnapshot) can
+  // lag until the next commit. Without this, post-patch sync re-reads the
+  // old value and secondary/mirror labels never flip.
+  const host = getHostDrawerSettings()
+  if (host && typeof host.showTabLabels === 'boolean') {
+    return host.showTabLabels
+  }
+  // Fiber store snapshot (may lag after a direct setSetting write).
   const store = getStoreSnapshot()
   if (store) {
     const snapshot = asDrawerStore(store)
-    if (snapshot.drawerSettings) {
-      return !!snapshot.drawerSettings.showTabLabels
+    if (snapshot.drawerSettings && typeof snapshot.drawerSettings.showTabLabels === 'boolean') {
+      return snapshot.drawerSettings.showTabLabels
     }
   }
-  // Fallback: check if main sidebar buttons have the labeled class
+  // Fallback: host toggles tabBtnLabeled on main buttons. If the main
+  // sidebar is mounted, its class state is authoritative.
   const sidebar = getMainSidebar()
   if (sidebar) {
-    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]')
-    if (labeledBtn) return true
+    return !!sidebar.querySelector('button[class*="tabBtnLabeled"]')
   }
-  return false
+  // Host default when main sidebar is not yet in the DOM
+  // (ViewportDrawer: drawerSettings.showTabLabels ?? true).
+  return true
 }
 
 export function syncDrawerTabSettings(): void {
@@ -275,39 +285,59 @@ function _runSyncDrawerTabSettings(): void {
   syncSecondaryTabLabels()
 }
 
-/** Update all secondary + main-mirror tab buttons' label visibility to match showTabLabels. */
-export function syncSecondaryTabLabels(): void {
-  const showLabels = isShowTabLabels()
+/**
+ * Update all secondary + main-mirror tab buttons' label visibility to match
+ * showTabLabels.
+ *
+ * @param forceShow — when provided (e.g. right after patchHostDrawerSettings),
+ *   apply this visibility instead of re-reading store/fiber, which can still
+ *   hold the pre-write value until React commits. Forced writes also skip the
+ *   last-written cache so a previous no-op (0 labels found / remount race)
+ *   cannot leave secondary labels stuck visible.
+ */
+export function syncSecondaryTabLabels(forceShow?: boolean): void {
+  const showLabels = typeof forceShow === 'boolean' ? forceShow : isShowTabLabels()
   const cacheKey = showLabels ? 'show' : 'hide'
-  if (cacheKey === _lastWrittenLabelsKey) return
+  const forced = typeof forceShow === 'boolean'
+  // Unforced path: skip when nothing changed. Forced path always re-stamps.
+  if (!forced && cacheKey === _lastWrittenLabelsKey) return
   _lastWrittenLabelsKey = cacheKey
 
-  const roots: ParentNode[] = []
-  const secondary = getSecondaryWrapper()
-  if (secondary) roots.push(secondary)
-  const mainMirror = getMainMirrorWrapper()
-  if (mainMirror) roots.push(mainMirror)
-  // Pinned lists live on body-level pin hosts, outside wrappers.
-  if (typeof document.querySelectorAll === 'function') {
-    for (const host of Array.from(document.querySelectorAll('.sidebar-ux-tab-list-pin-host'))) {
-      roots.push(host)
-    }
-  }
+  // Host uses CSS-module `.tabLabel_*`. Only Canvas secondary / main-mirror
+  // (and their pin hosts) use `.sidebar-ux-tab-label`. Query the whole
+  // document so keep-tabs reparent (list outside the secondary wrapper) and
+  // dual pin hosts cannot miss live buttons.
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return
 
-  for (const root of roots) {
-    const labels = root.querySelectorAll('.sidebar-ux-tab-label') as NodeListOf<HTMLElement>
-    for (const label of labels) {
-      label.style.opacity = showLabels ? '1' : '0'
-      label.style.height = showLabels ? 'auto' : '0'
-      label.style.marginTop = showLabels ? '1px' : '0'
-      const btn = label.closest(
-        'button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn',
-      ) as HTMLElement | null
-      if (btn) {
-        btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
-        // Keep square geometry in sync with labeled class (secondary + main).
-        btn.style.height = showLabels ? '56px' : '48px'
-      }
+  const labels = document.querySelectorAll('.sidebar-ux-tab-label')
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i] as HTMLElement
+    if (showLabels) {
+      label.style.display = ''
+      label.style.visibility = 'visible'
+      label.style.opacity = '1'
+      label.style.height = 'auto'
+      label.style.minHeight = ''
+      label.style.marginTop = '1px'
+    } else {
+      // Host unmounts the label span. We keep the node but must fully
+      // collapse it: flex items default to min-height:auto, so height:0
+      // alone does not shrink below text; opacity:0 alone can look like a
+      // failed toggle if a later style write restores opacity.
+      label.style.display = 'none'
+      label.style.visibility = 'hidden'
+      label.style.opacity = '0'
+      label.style.height = '0'
+      label.style.minHeight = '0'
+      label.style.marginTop = '0'
+    }
+    const btn = label.closest(
+      'button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn',
+    ) as HTMLElement | null
+    if (btn) {
+      btn.classList.toggle('sidebar-ux-tab-labeled', showLabels)
+      // Keep square geometry in sync with labeled class (secondary + main).
+      btn.style.height = showLabels ? '56px' : '48px'
     }
   }
 }

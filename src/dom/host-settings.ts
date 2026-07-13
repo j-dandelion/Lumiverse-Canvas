@@ -14,7 +14,7 @@
 import { getMainSidebar } from './lumiverse'
 import { getFiberFromElement } from './fiber'
 import { dlog } from '../debug/log'
-import { findStoreData } from '../store'
+import { findStoreData, getStoreSnapshot } from '../store'
 
 // ── Types ──
 
@@ -181,17 +181,36 @@ export function patchHostDrawerSettings(
   }
 
   if (!_cachedSetSetting) {
-    // NO-GO: no setSetting found in fiber tree.
+    // Fallback: the full Zustand snapshot (drawerOpen / drawerTabs walk)
+    // often carries setSetting even when the dedicated host-settings walk
+    // only found drawerSettings on a partial hook state.
+    findStoreData(true)
+    const snap = getStoreSnapshot() as { setSetting?: (k: string, v: unknown) => void; drawerSettings?: HostDrawerSettings } | null
+    if (snap && typeof snap.setSetting === 'function') {
+      _cachedSetSetting = snap.setSetting.bind(snap)
+      if (snap.drawerSettings && typeof snap.drawerSettings === 'object') {
+        _cachedDrawerSettings = snap.drawerSettings
+      }
+      _cacheTimestamp = Date.now()
+      dlog('patchHostDrawerSettings: setSetting recovered from store snapshot')
+    }
+  }
+
+  if (!_cachedSetSetting) {
+    // NO-GO: no setSetting found in fiber tree / store snapshot.
     dlog('patchHostDrawerSettings: setSetting not available (NO-GO)')
     return false
   }
 
+  // Merge against the best-known current settings, then stamp the cache
+  // *before* the host write so isShowTabLabels / secondary label sync see
+  // the intended value even if React fiber still holds the pre-write
+  // snapshot for a frame.
   const current = _cachedDrawerSettings ?? {}
   const merged = { ...current, ...partial }
-  _cachedSetSetting('drawerSettings', merged)
-  // Update cache so subsequent getHostDrawerSettings() reflects the write.
   _cachedDrawerSettings = merged as HostDrawerSettings
   _cacheTimestamp = Date.now()
+  _cachedSetSetting('drawerSettings', merged)
   // Bust the 3s store cache so downstream readers see the new state.
   findStoreData(true)
   return true

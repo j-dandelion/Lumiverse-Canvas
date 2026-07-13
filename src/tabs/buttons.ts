@@ -258,16 +258,15 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   }
   btn.appendChild(iconWrap)
 
-  // Render label
+  // Render label (visibility matches host showTabLabels; host unmounts the
+  // span when off — we keep the node and collapse via display/opacity so
+  // syncSecondaryTabLabels can toggle without recreating buttons).
   const labelSpan = document.createElement('span')
   labelSpan.className = 'sidebar-ux-tab-label'
   labelSpan.textContent = deriveShortName(tab.title, tab.shortName)
-  labelSpan.style.cssText = `
-    opacity: ${showLabels ? '1' : '0'};
-    height: ${showLabels ? 'auto' : '0'};
-    margin-top: ${showLabels ? '1px' : '0'};
-    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
-  `
+  labelSpan.style.cssText = showLabels
+    ? `opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`
+    : `display:none;visibility:hidden;opacity:0;height:0;min-height:0;margin-top:0;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`
   btn.appendChild(labelSpan)
 
   btn.addEventListener('click', () => {

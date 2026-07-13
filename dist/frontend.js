@@ -998,6 +998,122 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
+// src/dom/host-settings.ts
+function scanForHostSettings(fiber, depth, maxDepth, visited) {
+  if (!fiber || depth > maxDepth || visited.has(fiber))
+    return;
+  visited.add(fiber);
+  let hook = fiber.memoizedState;
+  let hookIdx = 0;
+  while (hook && hookIdx < 40) {
+    const state = hook.memoizedState;
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const keys = Object.keys(state);
+      const hasDrawerSettings = keys.includes("drawerSettings");
+      const hasSetSetting = keys.includes("setSetting") && typeof state.setSetting === "function";
+      if (hasDrawerSettings) {
+        _cachedDrawerSettings = state.drawerSettings;
+      }
+      if (hasSetSetting) {
+        _cachedSetSetting = state.setSetting;
+      }
+      if (hasDrawerSettings && hasSetSetting) {
+        _cacheTimestamp2 = Date.now();
+        return;
+      }
+    }
+    hook = hook.next;
+    hookIdx++;
+  }
+  scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
+  scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
+}
+function findHostSettings(force = false) {
+  const now = Date.now();
+  if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp2 < CACHE_TTL_MS2) {
+    return;
+  }
+  if (_testSetSetting) {
+    if (_cachedDrawerSettings)
+      return;
+    _cachedDrawerSettings = { tabOrder: [], hiddenTabIds: [], side: "right" };
+    return;
+  }
+  if (typeof document === "undefined")
+    return;
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const rootFiber = getFiberFromElement(sidebar);
+  if (!rootFiber)
+    return;
+  let fiber = rootFiber;
+  const ancestors = [];
+  while (fiber) {
+    ancestors.push(fiber);
+    fiber = fiber.return;
+  }
+  const visited = new Set;
+  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 5); i--) {
+    scanForHostSettings(ancestors[i], 0, 30, visited);
+    if (_cachedSetSetting && _cachedDrawerSettings) {
+      _cacheTimestamp2 = Date.now();
+      break;
+    }
+  }
+}
+function getHostDrawerSettings() {
+  findHostSettings();
+  return _cachedDrawerSettings;
+}
+function patchHostDrawerSettings(partial) {
+  findHostSettings();
+  if (_testSetSetting) {
+    const current2 = getHostDrawerSettings() ?? {};
+    const merged2 = { ...current2, ...partial };
+    _testSetSetting("drawerSettings", merged2);
+    _cachedDrawerSettings = merged2;
+    _cacheTimestamp2 = Date.now();
+    findStoreData(true);
+    return true;
+  }
+  if (!_cachedSetSetting) {
+    findStoreData(true);
+    const snap = getStoreSnapshot();
+    if (snap && typeof snap.setSetting === "function") {
+      _cachedSetSetting = snap.setSetting.bind(snap);
+      if (snap.drawerSettings && typeof snap.drawerSettings === "object") {
+        _cachedDrawerSettings = snap.drawerSettings;
+      }
+      _cacheTimestamp2 = Date.now();
+      dlog("patchHostDrawerSettings: setSetting recovered from store snapshot");
+    }
+  }
+  if (!_cachedSetSetting) {
+    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
+    return false;
+  }
+  const current = _cachedDrawerSettings ?? {};
+  const merged = { ...current, ...partial };
+  _cachedDrawerSettings = merged;
+  _cacheTimestamp2 = Date.now();
+  _cachedSetSetting("drawerSettings", merged);
+  findStoreData(true);
+  return true;
+}
+function isHostDrawerSettingsWritable() {
+  if (_testSetSetting)
+    return true;
+  findHostSettings();
+  return _cachedSetSetting !== null;
+}
+var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp2 = 0, CACHE_TTL_MS2 = 3000, _testSetSetting = null;
+var init_host_settings = __esm(() => {
+  init_fiber();
+  init_log();
+  init_store();
+});
+
 // src/sidebar/cleanup.ts
 function registerCleanup(fn) {
   _cleanupFns.push(fn);
@@ -2410,20 +2526,22 @@ var init_secondary_drawer = __esm(() => {
 
 // src/sidebar/drawer-sync.ts
 function isShowTabLabels() {
+  const host = getHostDrawerSettings();
+  if (host && typeof host.showTabLabels === "boolean") {
+    return host.showTabLabels;
+  }
   const store = getStoreSnapshot();
   if (store) {
     const snapshot = asDrawerStore(store);
-    if (snapshot.drawerSettings) {
-      return !!snapshot.drawerSettings.showTabLabels;
+    if (snapshot.drawerSettings && typeof snapshot.drawerSettings.showTabLabels === "boolean") {
+      return snapshot.drawerSettings.showTabLabels;
     }
   }
   const sidebar = getMainSidebar();
   if (sidebar) {
-    const labeledBtn = sidebar.querySelector('button[class*="tabBtnLabeled"]');
-    if (labeledBtn)
-      return true;
+    return !!sidebar.querySelector('button[class*="tabBtnLabeled"]');
   }
-  return false;
+  return true;
 }
 function syncDrawerTabSettings() {
   if (_syncPending)
@@ -2548,35 +2666,37 @@ function _runSyncDrawerTabSettings() {
   }
   syncSecondaryTabLabels();
 }
-function syncSecondaryTabLabels() {
-  const showLabels = isShowTabLabels();
+function syncSecondaryTabLabels(forceShow) {
+  const showLabels = typeof forceShow === "boolean" ? forceShow : isShowTabLabels();
   const cacheKey = showLabels ? "show" : "hide";
-  if (cacheKey === _lastWrittenLabelsKey)
+  const forced = typeof forceShow === "boolean";
+  if (!forced && cacheKey === _lastWrittenLabelsKey)
     return;
   _lastWrittenLabelsKey = cacheKey;
-  const roots = [];
-  const secondary = getSecondaryWrapper();
-  if (secondary)
-    roots.push(secondary);
-  const mainMirror = getMainMirrorWrapper();
-  if (mainMirror)
-    roots.push(mainMirror);
-  if (typeof document.querySelectorAll === "function") {
-    for (const host of Array.from(document.querySelectorAll(".sidebar-ux-tab-list-pin-host"))) {
-      roots.push(host);
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function")
+    return;
+  const labels = document.querySelectorAll(".sidebar-ux-tab-label");
+  for (let i = 0;i < labels.length; i++) {
+    const label = labels[i];
+    if (showLabels) {
+      label.style.display = "";
+      label.style.visibility = "visible";
+      label.style.opacity = "1";
+      label.style.height = "auto";
+      label.style.minHeight = "";
+      label.style.marginTop = "1px";
+    } else {
+      label.style.display = "none";
+      label.style.visibility = "hidden";
+      label.style.opacity = "0";
+      label.style.height = "0";
+      label.style.minHeight = "0";
+      label.style.marginTop = "0";
     }
-  }
-  for (const root of roots) {
-    const labels = root.querySelectorAll(".sidebar-ux-tab-label");
-    for (const label of labels) {
-      label.style.opacity = showLabels ? "1" : "0";
-      label.style.height = showLabels ? "auto" : "0";
-      label.style.marginTop = showLabels ? "1px" : "0";
-      const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
-      if (btn) {
-        btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
-        btn.style.height = showLabels ? "56px" : "48px";
-      }
+    const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
+    if (btn) {
+      btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
+      btn.style.height = showLabels ? "56px" : "48px";
     }
   }
 }
@@ -2696,6 +2816,7 @@ function stopDrawerTabStyleObserver() {
 }
 var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null;
 var init_drawer_sync = __esm(() => {
+  init_host_settings();
   init_store();
   init_log();
   init_secondary();
@@ -2705,104 +2826,6 @@ var init_drawer_sync = __esm(() => {
   init_state();
   init_buttons();
   init_active_tab();
-});
-
-// src/dom/host-settings.ts
-function scanForHostSettings(fiber, depth, maxDepth, visited) {
-  if (!fiber || depth > maxDepth || visited.has(fiber))
-    return;
-  visited.add(fiber);
-  let hook = fiber.memoizedState;
-  let hookIdx = 0;
-  while (hook && hookIdx < 40) {
-    const state = hook.memoizedState;
-    if (state && typeof state === "object" && !Array.isArray(state)) {
-      const keys = Object.keys(state);
-      const hasDrawerSettings = keys.includes("drawerSettings");
-      const hasSetSetting = keys.includes("setSetting") && typeof state.setSetting === "function";
-      if (hasDrawerSettings) {
-        _cachedDrawerSettings = state.drawerSettings;
-      }
-      if (hasSetSetting) {
-        _cachedSetSetting = state.setSetting;
-      }
-      if (hasDrawerSettings && hasSetSetting) {
-        _cacheTimestamp2 = Date.now();
-        return;
-      }
-    }
-    hook = hook.next;
-    hookIdx++;
-  }
-  scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
-  scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
-}
-function findHostSettings(force = false) {
-  const now = Date.now();
-  if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp2 < CACHE_TTL_MS2) {
-    return;
-  }
-  if (_testSetSetting) {
-    if (_cachedDrawerSettings)
-      return;
-    _cachedDrawerSettings = { tabOrder: [], hiddenTabIds: [], side: "right" };
-    return;
-  }
-  if (typeof document === "undefined")
-    return;
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return;
-  const rootFiber = getFiberFromElement(sidebar);
-  if (!rootFiber)
-    return;
-  let fiber = rootFiber;
-  const ancestors = [];
-  while (fiber) {
-    ancestors.push(fiber);
-    fiber = fiber.return;
-  }
-  const visited = new Set;
-  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 5); i--) {
-    scanForHostSettings(ancestors[i], 0, 30, visited);
-    if (_cachedSetSetting && _cachedDrawerSettings) {
-      _cacheTimestamp2 = Date.now();
-      break;
-    }
-  }
-}
-function getHostDrawerSettings() {
-  findHostSettings();
-  return _cachedDrawerSettings;
-}
-function patchHostDrawerSettings(partial) {
-  findHostSettings();
-  if (_testSetSetting) {
-    const current2 = getHostDrawerSettings() ?? {};
-    _testSetSetting("drawerSettings", { ...current2, ...partial });
-    findStoreData(true);
-    return true;
-  }
-  if (!_cachedSetSetting) {
-    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
-    return false;
-  }
-  const current = _cachedDrawerSettings ?? {};
-  _cachedSetSetting("drawerSettings", { ...current, ...partial });
-  findStoreData(true);
-  return true;
-}
-function isHostDrawerSettingsWritable() {
-  if (_testSetSetting)
-    return true;
-  findHostSettings();
-  return _cachedSetSetting !== null;
-}
-var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp2 = 0, CACHE_TTL_MS2 = 3000, _testSetSetting = null;
-var init_host_settings = __esm(() => {
-  init_fiber();
-  init_log();
-  init_store();
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
@@ -3402,7 +3425,8 @@ __export(exports_configure_model, {
   leftColumnIsSecondary: () => leftColumnIsSecondary,
   isDraftDirty: () => isDraftDirty,
   encodeHostTabOrder: () => encodeHostTabOrder,
-  createDraft: () => createDraft
+  createDraft: () => createDraft,
+  baseSnapshotFromDraft: () => baseSnapshotFromDraft
 });
 function partitionOrderByCatalog(tabOrder, catalog) {
   const builtinOrder = [];
@@ -3476,6 +3500,21 @@ function createDraft(input) {
 }
 function encodeHostTabOrder(draft) {
   return [...draft.builtinOrder, ...draft.extensionOrder];
+}
+function baseSnapshotFromDraft(draft) {
+  const assignments = new Map;
+  for (const id of draft.primaryIds) {
+    assignments.set(id, "primary");
+  }
+  for (const id of draft.secondaryIds) {
+    assignments.set(id, "secondary");
+  }
+  return {
+    tabOrder: encodeHostTabOrder(draft),
+    hiddenTabIds: [...draft.hiddenIds],
+    drawerSide: draft.drawerSide,
+    assignments
+  };
 }
 function isDraftDirty(draft, base) {
   const order = encodeHostTabOrder(draft);
@@ -5023,11 +5062,7 @@ async function autoCommit() {
       return { ok: true };
     const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef);
     if (result.ok) {
-      try {
-        const fresh = buildLiveDraftAndBase();
-        _draftRef = fresh.draft;
-        _baseSnapshotRef = fresh.base;
-      } catch {}
+      _baseSnapshotRef = baseSnapshotFromDraft(_draftRef);
       if (_draftRef) {
         renderModal(_draftRef, _catalogRef, null, false);
       }
@@ -5613,14 +5648,15 @@ function showAssignmentMenu(x2, y3, tabId, tabTitle, originatingTarget) {
   }
   _contextMenu.innerHTML = "";
   const showLabels = isShowTabLabels();
-  const toggleLabel = showLabels ? "Hide labels" : "Show labels";
+  const toggleLabel = showLabels ? "Hide tab labels" : "Show tab labels";
   const toggleItem = createAssignmentContextMenuItem(toggleLabel, () => {
     const next = !showLabels;
     const ok = patchHostDrawerSettings({ showTabLabels: next });
+    syncSecondaryTabLabels(next);
     if (ok) {
-      syncSecondaryTabLabels();
+      requestAnimationFrame(() => syncSecondaryTabLabels(next));
     }
-  });
+  }, { danger: showLabels });
   _contextMenu.appendChild(toggleItem);
   const configureItem = createAssignmentContextMenuItem("Configure tabs", () => {
     openConfigureTabsModal();
@@ -5888,12 +5924,7 @@ function addSecondaryTabButton(tab) {
   const labelSpan = document.createElement("span");
   labelSpan.className = "sidebar-ux-tab-label";
   labelSpan.textContent = deriveShortName(tab.title, tab.shortName);
-  labelSpan.style.cssText = `
-    opacity: ${showLabels ? "1" : "0"};
-    height: ${showLabels ? "auto" : "0"};
-    margin-top: ${showLabels ? "1px" : "0"};
-    transition: opacity 0.2s ease, height 0.2s ease, margin 0.2s ease;
-  `;
+  labelSpan.style.cssText = showLabels ? `opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease` : `display:none;visibility:hidden;opacity:0;height:0;min-height:0;margin-top:0;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`;
   btn.appendChild(labelSpan);
   btn.addEventListener("click", () => {
     if (isSecondarySidebarOpen()) {
@@ -12956,6 +12987,10 @@ function startContextMenuListener() {
     startObserver();
   };
   const docClick = (e3) => {
+    const t3 = e3.target;
+    const menu = document.querySelector(".canvas-tab-context-menu");
+    if (menu && t3 && menu.contains(t3))
+      return;
     hideAssignmentMenu();
   };
   const docScroll = () => hideAssignmentMenu();
