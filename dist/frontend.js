@@ -3854,6 +3854,18 @@ function findDrawerTab(tabId) {
   const tabs = getDrawerTabs();
   return tabs.find((t3) => t3.id === tabId) || tabs.find((t3) => t3.id.includes(`:tab:${tabId}:`) || t3.id.endsWith(`:${tabId}`)) || tabs.find((t3) => t3.title === tabId);
 }
+function resolveSecondaryButtonChrome(tabId, opts) {
+  const storeTab = opts?.storeTab ?? findDrawerTab(tabId);
+  const root = opts?.root;
+  const mainBtn = findMainTabButton(tabId);
+  const bridge = getHostBridge();
+  const bridgeTitle = bridge?.ui?.getBuiltInTabTitle?.(tabId);
+  const title = bridgeTitle || mainBtn?.getAttribute("title") || storeTab?.title || tabId;
+  const iconSvg = mainBtn?.querySelector("svg")?.outerHTML || storeTab?.iconSvg || root?.querySelector?.("svg")?.outerHTML || undefined;
+  const iconUrl = storeTab?.iconUrl;
+  const shortName = readMainButtonShortName(mainBtn) || (bridgeTitle ? undefined : storeTab?.shortName);
+  return { title, iconSvg, iconUrl, shortName };
+}
 async function moveTabToSecondaryQuiet(tabId) {
   const bridge = getHostBridge();
   const ui = bridge?.ui;
@@ -3862,17 +3874,17 @@ async function moveTabToSecondaryQuiet(tabId) {
     const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
     const root = await moveBuiltInTabToSecondaryContainer2({ tabId, deferActivation: true });
     setTabAssignment(tabId, "secondary");
+    const storeTab = findDrawerTab(tabId);
+    const chrome = resolveSecondaryButtonChrome(tabId, { root, storeTab });
     hideMainTabButton(tabId);
     if (root) {
-      const storeTab = findDrawerTab(tabId);
-      const title = ui?.getBuiltInTabTitle?.(tabId) || storeTab?.title || tabId;
       addSecondaryTabButton({
         id: tabId,
-        title,
+        title: chrome.title,
         root,
-        iconSvg: storeTab?.iconSvg,
-        iconUrl: storeTab?.iconUrl,
-        shortName: ui?.getBuiltInTabTitle?.(tabId) ? undefined : storeTab?.shortName
+        iconSvg: chrome.iconSvg,
+        iconUrl: chrome.iconUrl,
+        shortName: chrome.shortName
       });
     } else {
       dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment recorded.`);
@@ -3884,6 +3896,7 @@ async function moveTabToSecondaryQuiet(tabId) {
       return;
     }
     setTabAssignment(tabId, "secondary");
+    const chrome = resolveSecondaryButtonChrome(tabId, { root: storeTab.root, storeTab });
     hideMainTabButton(tabId);
     const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
     if (secondaryContent && storeTab.root.parentElement !== secondaryContent) {
@@ -3892,11 +3905,11 @@ async function moveTabToSecondaryQuiet(tabId) {
     storeTab.root.setAttribute("data-canvas-moved", tabId);
     addSecondaryTabButton({
       id: tabId,
-      title: storeTab.title,
+      title: chrome.title,
       root: storeTab.root,
-      iconSvg: storeTab.iconSvg,
-      iconUrl: storeTab.iconUrl,
-      shortName: storeTab.shortName
+      iconSvg: chrome.iconSvg,
+      iconUrl: chrome.iconUrl,
+      shortName: chrome.shortName
     });
     updateDrawerTabVisibility();
   }

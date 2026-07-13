@@ -24,6 +24,8 @@ import {
 import {
   hideMainTabButton,
   showMainTabButton,
+  findMainTabButton,
+  readMainButtonShortName,
   addSecondaryTabButton,
   removeSecondaryTabButton,
   reorderSecondaryTabButtons,
@@ -236,6 +238,46 @@ function findDrawerTab(tabId: string): import('../store').DrawerTab | undefined 
 }
 
 /**
+ * Resolve icon/title/shortName for a newly created secondary tab button.
+ *
+ * Built-in host tabs almost never carry iconSvg on the store DrawerTab —
+ * the real SVG lives on the main (or main-mirror) strip button. Live DnD
+ * and Configure quiet commits used only store fields, so cross-drawer
+ * drops fell through to PUZZLE_ICON_SVG. Match assignTab / secondary-drawer:
+ * prefer main-button SVG, then store, then root.
+ */
+function resolveSecondaryButtonChrome(
+  tabId: string,
+  opts?: { root?: HTMLElement | null; storeTab?: ReturnType<typeof findDrawerTab> },
+): {
+  title: string
+  iconSvg?: string
+  iconUrl?: string
+  shortName?: string
+} {
+  const storeTab = opts?.storeTab ?? findDrawerTab(tabId)
+  const root = opts?.root
+  const mainBtn = findMainTabButton(tabId) as HTMLElement | null
+  const bridge = getHostBridge()
+  const bridgeTitle = bridge?.ui?.getBuiltInTabTitle?.(tabId)
+  const title =
+    bridgeTitle
+    || mainBtn?.getAttribute('title')
+    || storeTab?.title
+    || tabId
+  const iconSvg =
+    mainBtn?.querySelector('svg')?.outerHTML
+    || storeTab?.iconSvg
+    || root?.querySelector?.('svg')?.outerHTML
+    || undefined
+  const iconUrl = storeTab?.iconUrl
+  const shortName =
+    readMainButtonShortName(mainBtn)
+    || (bridgeTitle ? undefined : storeTab?.shortName)
+  return { title, iconSvg, iconUrl, shortName }
+}
+
+/**
  * Move a tab to the secondary drawer without handoff, auto-open, or per-tab persist.
  */
 async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
@@ -248,17 +290,19 @@ async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
     const { moveBuiltInTabToSecondaryContainer } = await import('./builtin-move')
     const root = await moveBuiltInTabToSecondaryContainer({ tabId, deferActivation: true })
     setTabAssignment(tabId, 'secondary')
+    // Capture chrome before hide so main-button SVG is still in a normal
+    // layout tree (display:none still works, but order matches assignTab).
+    const storeTab = findDrawerTab(tabId)
+    const chrome = resolveSecondaryButtonChrome(tabId, { root, storeTab })
     hideMainTabButton(tabId)
     if (root) {
-      const storeTab = findDrawerTab(tabId)
-      const title = ui?.getBuiltInTabTitle?.(tabId) || storeTab?.title || tabId
       addSecondaryTabButton({
         id: tabId,
-        title,
+        title: chrome.title,
         root,
-        iconSvg: storeTab?.iconSvg,
-        iconUrl: storeTab?.iconUrl,
-        shortName: ui?.getBuiltInTabTitle?.(tabId) ? undefined : storeTab?.shortName,
+        iconSvg: chrome.iconSvg,
+        iconUrl: chrome.iconUrl,
+        shortName: chrome.shortName,
       })
     } else {
       dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment recorded.`)
@@ -271,6 +315,7 @@ async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
       return
     }
     setTabAssignment(tabId, 'secondary')
+    const chrome = resolveSecondaryButtonChrome(tabId, { root: storeTab.root, storeTab })
     hideMainTabButton(tabId)
 
     // Reparent the extension root into secondary content.
@@ -282,11 +327,11 @@ async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
 
     addSecondaryTabButton({
       id: tabId,
-      title: storeTab.title,
+      title: chrome.title,
       root: storeTab.root,
-      iconSvg: storeTab.iconSvg,
-      iconUrl: storeTab.iconUrl,
-      shortName: storeTab.shortName,
+      iconSvg: chrome.iconSvg,
+      iconUrl: chrome.iconUrl,
+      shortName: chrome.shortName,
     })
     updateDrawerTabVisibility()
   }

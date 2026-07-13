@@ -735,6 +735,147 @@ function wireSecondaryShell(
 }
 
 // =====================================================================
+// C12: primary → secondary quiet move preserves tab icon (not puzzle)
+//     Regression: live DnD / Configure quiet path only passed store
+//     iconSvg/iconUrl; host strip tabs often have no store icons —
+//     fell through to PUZZLE_ICON_SVG. Prefer main-button SVG like assignTab.
+//     Uses extension quiet path (no rAF/builtin-move) with store icons empty.
+// =====================================================================
+{
+  setup()
+  const ICON_SVG = '<svg data-test-icon="profile-gear"></svg>'
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.children = panelContent.children || []
+  const origPanelAppend = panelContent.appendChild.bind(panelContent)
+  panelContent.appendChild = (c: unknown) => {
+    origPanelAppend(c)
+    if (Array.isArray(panelContent.children) && !panelContent.children.includes(c)) {
+      panelContent.children.push(c)
+    }
+    return c
+  }
+
+  const tabList: any = makeStubTabList()
+  // Ensure children is a real array the stub can grow (document stub
+  // appendChild already pushes; re-bind for clarity).
+  if (!Array.isArray(tabList.children)) tabList.children = []
+  // addSecondaryTabButton scans querySelectorAll for data-tab-id.
+  tabList.querySelectorAll = (sel: string) => {
+    if (!sel.includes('data-tab-id')) return []
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return []
+    return (tabList.children as any[]).filter(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    )
+  }
+  tabList.querySelector = (sel: string) => tabList.querySelectorAll(sel)[0] ?? null
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [])
+  __setSecondaryWrapperForTest(wrapper)
+
+  // Main strip button carries the real host SVG (store has none).
+  const mainBtn: any = document.createElement('button')
+  mainBtn.setAttribute('data-tab-id', 'ext-a')
+  mainBtn.setAttribute('title', 'Ext A')
+  mainBtn.querySelector = (sel: string) => {
+    if (sel === 'svg' || (typeof sel === 'string' && sel.includes('svg'))) {
+      return { outerHTML: ICON_SVG }
+    }
+    return null
+  }
+
+  const mainSidebar: any = document.createElement('div')
+  mainSidebar.setAttribute('data-spindle-mount', 'sidebar')
+  mainSidebar.querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-tab-id') && sel.includes('ext-a')) {
+      return mainBtn
+    }
+    if (typeof sel === 'string' && sel.includes('title') && sel.includes('Ext A')) {
+      return mainBtn
+    }
+    return null
+  }
+  mainSidebar.querySelectorAll = () => [mainBtn]
+  ;(document as any).querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-spindle-mount')) return mainSidebar
+    return null
+  }
+
+  const extRoot: any = document.createElement('div')
+  extRoot.querySelector = () => null
+  // parentElement needed so reparent check runs cleanly
+  Object.defineProperty(extRoot, 'parentElement', {
+    get() { return null },
+    configurable: true,
+  })
+
+  // Extension path: no built-in roots (avoids rAF in builtin-move).
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: () => undefined,
+        getBuiltInTabTitle: () => undefined,
+        requestTabLocation: () => {},
+        getTabLocation: () => null,
+      },
+      containers: {},
+    },
+    matchMedia: (q: string) => ({ matches: q === '(max-width: 600px)' }),
+  }
+
+  // Store deliberately has no iconSvg/iconUrl (same as built-in host tabs).
+  __setDrawerTabsForTest([
+    { id: 'ext-a', title: 'Ext A', root: extRoot, extensionId: 'ext' },
+  ] as any)
+
+  __setHostSetSettingForTest(
+    () => {},
+    { side: 'right', tabOrder: ['ext-a'], hiddenTabIds: [], showTabLabels: false },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: [],
+    secondaryIds: ['ext-a'],
+    builtinOrder: [],
+    extensionOrder: ['ext-a'],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['ext-a'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([['ext-a', 'primary']]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C12: primary→secondary commit ok')
+  assertEqual(getTabAssignments().get('ext-a'), 'secondary', 'C12: assignment is secondary')
+
+  const created = (tabList.children as any[]).find(
+    (c) => c.getAttribute?.('data-tab-id') === 'ext-a',
+  )
+  assert(!!created, 'C12: secondary tab button created')
+  const iconChild = created?.children?.[0] as any
+  const iconHtml = iconChild?.innerHTML ?? ''
+  assert(
+    iconHtml.includes('data-test-icon="profile-gear"'),
+    'C12: secondary button uses main-button SVG, not puzzle fallback',
+  )
+  assert(
+    !iconHtml.includes('M15.39 4.39'),
+    'C12: secondary button does not use puzzle path',
+  )
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
