@@ -4,6 +4,9 @@
 // atomic-like pass. Avoids the per-tab side effects of assignTab (no
 // runHandoff, no auto-open, no per-tab persist), coalescing all writes
 // into a single patchHostDrawerSettings + persistLayout call.
+//
+// Tab-assignment persistence is always-on (built-in), so persistLayout
+// is always called after commit (no longer gated on a setting).
 
 import {
   type ConfigureDraft,
@@ -32,7 +35,6 @@ import {
   setSuppressAutoActivation,
 } from '../sidebar/secondary-drawer'
 import { persistLayout } from '../layout/persist'
-import { getSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getHostBridge } from '../dom/host-bridge'
@@ -91,7 +93,8 @@ export function isConfigureBatchActive(): boolean { return _batchActive }
  *   5. Reorder secondary tab buttons to match draft order.
  *   6. Apply hidden state to secondary + mirror buttons.
  *   7. Reconcile drawer tab visibility (await each, guarded).
- *   8. Persist layout once (only if persistTabAssignments enabled).
+ *   8. Persist layout once (tab-assignment persistence is always-on, so
+ *      persistLayout always runs).
  *   9. Bust store cache so downstream readers see new host state.
  */
 export async function commitConfigureDraft(
@@ -165,10 +168,9 @@ export async function commitConfigureDraft(
       dwarn('[configure-commit] reconcileMainTabListPin failed:', err)
     }
 
-    // 8. One persist (only if setting enabled).
-    if (getSettings().persistTabAssignments) {
-      persistLayout()
-    }
+    // 8. One persist. Tab-assignment persistence is always-on (built-in),
+    //    so persistLayout always runs after commit.
+    persistLayout()
 
     // 9. Bust store cache.
     findStoreData(true)

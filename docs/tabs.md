@@ -117,7 +117,7 @@ A **session-only vanilla baseline** is captured the first time the user enables 
 
 1. Resolve any dirty Configure Apply/Discard/Cancel dialog.
 2. Capture session dual profile (existing — Canvas-owned state to re-enable).
-3. If `persistTabAssignments` is ON: merge dual into `lastLoaded` + flush + sync freeze base (existing).
+3. Merge dual into `lastLoaded` + flush + sync freeze base (tab-assignment persistence is always-on, so this is unconditional).
 4. `setSettings({ secondSidebarEnabled: false })` — feature.apply tears down the secondary sidebar.
 5. **Vanilla baseline restore** (new) — `restoreVanillaBaseline()` patches host `drawerSettings` + restores main open/active. Done AFTER teardown so the host tabs are back in main-drawer before the restored primary tab is clicked.
 6. Modal refresh from live (existing) — now shows the restored vanilla layout.

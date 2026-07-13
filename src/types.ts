@@ -94,8 +94,9 @@ export interface CanvasSettings {
   /** Remember resized main + secondary drawer widths across sessions. */
   persistDrawerWidth?: boolean
 
-  /** Remember secondary tab assignments (+ secondary activeTabId) across sessions. */
-  persistTabAssignments?: boolean
+  // Tab assignment persistence is always-on (built-in). Secondary tab
+  // assignments (+ activeTabId) are always saved/restored. Zombie disk key
+  // persistTabAssignments from older versions is ignored by mergeCanvasSettings.
 
   // --- Drawer Tab Drag ---
   /** Enable click/tap-and-drag on sidebar drawer tabs to reposition them
@@ -143,7 +144,6 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   // Layout
   persistDrawerOpenState: true,
   persistDrawerWidth: true,
-  persistTabAssignments: true,
   // Drawer Tab Drag
   drawerTabDrag: true,
   mainDrawerTabOverrideVh: undefined as unknown as number,
@@ -200,16 +200,15 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     if (saved.drawerShadowsMobile === undefined && typeof raw.sidebarShadowsMobile === 'boolean') {
       out.drawerShadowsMobile = raw.sidebarShadowsMobile
     }
-    // Legacy single layoutPersistence → three layout facets. Only when none of
-    // the new keys are present on disk (new keys win; missing new keys keep defaults).
+    // Legacy single layoutPersistence → two layout facets (persistTabAssignments is always-on,
+    // so legacy maps to open + width only). Only when none of the new keys are present on disk
+    // (new keys win; missing new keys keep defaults).
     const hasNewLayoutFacet =
       saved.persistDrawerOpenState !== undefined
       || saved.persistDrawerWidth !== undefined
-      || saved.persistTabAssignments !== undefined
     if (!hasNewLayoutFacet && typeof raw.layoutPersistence === 'boolean') {
       out.persistDrawerOpenState = raw.layoutPersistence
       out.persistDrawerWidth = raw.layoutPersistence
-      out.persistTabAssignments = raw.layoutPersistence
     }
   }
   return normalizeCanvasSettingsFields(out)

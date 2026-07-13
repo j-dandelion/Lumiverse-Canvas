@@ -7,6 +7,10 @@
 // is the single live-update entry point — it diffs the previous and next
 // state and mounts/unmounts the relevant features.
 //
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed; isAnyLayoutPersistenceEnabled
+// in layout/persist.ts always returns true.
+//
 // State owners in this module:
 //   - `_settings`            — the in-memory CanvasSettings (full defaults)
 //   - `_lastLoadedLayout`    — most recent layout snapshot, for re-apply
@@ -150,7 +154,7 @@ export function persistSettings(): void {
     // a facet off does not clobber its disk value with live state).
     const layoutSnapshot = buildPersistedLayout()
     const layout = { ...layoutSnapshot, settings: _settings }
-    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, tabs=${_settings.persistTabAssignments}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
+    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, snapshot.primary.open=${layout.primary.open}, snapshot.secondary.open=${layout.secondary.open})`)
     backendCtx.sendToBackend({ type: 'SAVE_LAYOUT', layout })
     // Keep freeze base aligned with disk (same as layout/persist write paths).
     setLastLoadedLayout(layout)

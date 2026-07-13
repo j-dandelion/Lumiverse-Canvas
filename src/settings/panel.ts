@@ -10,15 +10,18 @@
 //
 // Section structure:
 //   - Chat (chatReflow, slashCommandsEnabled)
-//   - Layout (persistDrawerOpenState, persistDrawerWidth, persistTabAssignments)
+//   - Layout (persistDrawerOpenState, persistDrawerWidth)
 //   - Drawers / Second drawer / Debug
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed from the settings panel
+// and from the Layout section.
 //
 // All toggles call setSettings({ field: value }) from settings/state.ts.
 // The "live-apply" effect chain runs through applySettings below.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } from '../settings/state'
-import { requestPersistTabAssignments } from './persist-tabs-toggle'
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
@@ -251,15 +254,9 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: persistWidth.btn,
   }))
 
-  const persistTabs = makeToggle(
-    () => getSettings().persistTabAssignments,
-    (v) => requestPersistTabAssignments(v),
-  )
-  secLayout.appendChild(buildSettingRow({
-    label: 'Remember tab assignments',
-    hint: 'Persist arrangement of tabs across sessions (between main and second drawer).',
-    control: persistTabs.btn,
-  }))
+  // Note: "Remember tab assignments" was removed. Tab-assignment persistence
+  // is always-on (built-in) — secondary tab assignments (+ activeTabId) are
+  // always saved and restored across sessions. There is no user-facing toggle.
 
   // --- Section: Drawers ---
   const secSidebars = section('Drawers')
@@ -418,7 +415,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     chat.refresh()
     persistOpen.refresh()
     persistWidth.refresh()
-    persistTabs.refresh()
     slash.refresh()
     debugMode.refresh()
     shadowsDesktop.refresh()

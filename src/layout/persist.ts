@@ -17,6 +17,12 @@
 // applyLayout restores the saved state. The 90-line polling loop (the
 // suffix-drift fallback for tabId suffix drift across sessions) is moved
 // here as-is; the rewrite into a MutationObserver callback is TODO.
+//
+// Tab assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed — secondary tab assignments
+// (+ activeTabId) are always saved and restored. The
+// isAnyLayoutPersistenceEnabled function always returns true since tabs
+// always contribute to the write path.
 
 import { getMainDrawerWidth } from '../dom/lumiverse'
 import { getDrawerTabs } from '../store'
@@ -83,8 +89,8 @@ export function cancelLayoutSave(): void {
 /**
  * Post SAVE_LAYOUT and keep `_lastLoadedLayout` aligned with disk.
  * Facet freeze (buildPersistedLayout for disabled facets) reads last-loaded;
- * without this sync, re-enabling "Remember tab assignments" falsely reports
- * drift after a successful save/load cycle.
+ * without this sync, turning a facet off after a save/load cycle would
+ * falsely report drift.
  */
 function writeLayoutToBackend(layout: any): void {
   const backendCtx = getBackendCtx()
@@ -236,26 +242,19 @@ export function snapshotLayout(): any {
   return result
 }
 
-/** Facet gates for independent layout persistence toggles. */
-export function isOpenStatePersistenceEnabled(): boolean {
-  return !!getSettings().persistDrawerOpenState
-}
-export function isWidthPersistenceEnabled(): boolean {
-  return !!getSettings().persistDrawerWidth
-}
-export function isTabAssignmentPersistenceEnabled(): boolean {
-  return !!getSettings().persistTabAssignments
-}
-
-/** Any geometry facet on — enables layout write paths (with merge). */
+/**
+ * Tab-assignment persistence is always-on (built-in). This always returns true
+ * so layout writes always include tab assignment data.
+ */
 export function isAnyLayoutPersistenceEnabled(): boolean {
-  const s = getSettings()
-  return !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments)
+  return true
 }
 
-/** Shared gate alias: true when any layout facet is enabled. */
+/**
+ * isPersistenceEnabled: always true — tab-assignment persistence is always-on.
+ */
 export function isPersistenceEnabled(): boolean {
-  return isAnyLayoutPersistenceEnabled()
+  return true
 }
 
 /**
@@ -273,10 +272,12 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
   }
   const s = getSettings()
   // Dual-profile freeze: when the second drawer is disabled, lock detachedTabs
-  // and secondary.activeTabId to lastLoaded (or defaults) even when the tabs
-  // facet is ON, so the live empty state (no secondary wrapper → zero tabs)
-  // never clobbers the saved dual layout on disk.
-  const tabsFacet = s.persistTabAssignments && s.secondSidebarEnabled
+  // and secondary.activeTabId to lastLoaded (or defaults) even though tab
+  // persistence is always-on, so the live empty state (no secondary wrapper →
+  // zero tabs) never clobbers the saved dual layout on disk.
+  // persistTabAssignments was removed — tabs always contribute to the write,
+  // but the second-sidebar gate still controls the live/freeze boundary.
+  const tabsLive = s.secondSidebarEnabled
   return {
     version: live.version,
     primary: {
@@ -289,11 +290,11 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
     secondary: {
       open: s.persistDrawerOpenState ? live.secondary.open : (base.secondary.open ?? false),
       width: s.persistDrawerWidth ? live.secondary.width : (base.secondary.width ?? 420),
-      activeTabId: tabsFacet
+      activeTabId: tabsLive
         ? live.secondary.activeTabId
         : (base.secondary as { activeTabId?: string | null }).activeTabId,
     },
-    detachedTabs: tabsFacet ? live.detachedTabs : (base.detachedTabs ?? []),
+    detachedTabs: tabsLive ? live.detachedTabs : (base.detachedTabs ?? []),
   }
 }
 
@@ -473,5 +474,14 @@ export function applyMainDrawer(layout: any): void {
     })
 }
 
-
-
+/**
+ * Gate re-exports for main-drawer persistence facet checks.
+ * Tab-assignment persistence is always-on (built-in), so the tabs facet
+ * check is omitted.
+ */
+export function isOpenStatePersistenceEnabled(): boolean {
+  return !!getSettings().persistDrawerOpenState
+}
+export function isWidthPersistenceEnabled(): boolean {
+  return !!getSettings().persistDrawerWidth
+}

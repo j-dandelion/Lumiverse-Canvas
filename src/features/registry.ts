@@ -18,6 +18,10 @@
 //
 // The contract is intentionally small. Features can grow extra methods
 // (e.g. a "preview" hook) when needed; the registry stays simple.
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting and its feature have been removed —
+// secondary tab assignments (+ activeTabId) are always saved and restored.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
@@ -148,15 +152,18 @@ const chatReflowFeature: CanvasFeature = {
  *  Runtime re-apply re-uses the last loaded layout to restore tab assignments.
  *
  *  Also manages the Configure Tabs intercept lifecycle:
- *  starts when second sidebar is enabled, stops on disable/teardown. */
+ *  starts when second sidebar is enabled, stops on disable/teardown.
+ *
+ *  Tab-assignment persistence is always-on (built-in), so hasTabsToRestore
+ *  only checks for layout detachedTabs (no longer gated on a setting). */
 const secondSidebarFeature: CanvasFeature = {
   id: 'secondSidebarEnabled',
   mount(_ctx, layout) {
     const s = getSettings()
     const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
-    // Do not first-paint open when tab assignments will not be restored (empty drawer).
-    const hasTabsToRestore =
-      !!s.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0
+    // hasTabsToRestore: tab-assignment persistence is always-on, so we only
+    // check whether the layout actually has tabs to restore.
+    const hasTabsToRestore = (layout?.detachedTabs?.length ?? 0) > 0
     const initialOpen = !!(
       s.persistDrawerOpenState &&
       layout?.secondary?.open === true &&
@@ -181,18 +188,17 @@ const secondSidebarFeature: CanvasFeature = {
     if (next.secondSidebarEnabled) {
       if (!getSecondaryWrapper()) {
         const s = getSettings()
-        const anyFacet = !!(s.persistDrawerOpenState || s.persistDrawerWidth || s.persistTabAssignments)
-        const layout = anyFacet ? getLastLoadedLayout() : null
+        // Tab-assignment persistence is always-on, so anyFacet is always true.
+        const layout = getLastLoadedLayout()
         const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
-        const hasTabsToRestore =
-          !!s.persistTabAssignments && (layout?.detachedTabs?.length ?? 0) > 0
+        const hasTabsToRestore = (layout?.detachedTabs?.length ?? 0) > 0
         const initialOpen = !!(
           s.persistDrawerOpenState &&
           layout?.secondary?.open === true &&
           hasTabsToRestore
         )
         mountSecondarySidebar({ initialWidth, initialOpen })
-        if (layout && anyFacet) applyLayout(layout)
+        if (layout) applyLayout(layout)
       }
       // Re-start intercept when turned back on.
       startConfigureTabsIntercept()
@@ -288,10 +294,14 @@ const shadowsMobileFeature: CanvasFeature = {
   },
 }
 
-/** Layout facet: cancel in-flight debounced save when a facet turns off so
- *  a queued mutation doesn't write live values for a disabled facet. */
+/**
+ * Layout facet feature factory: cancels in-flight debounced save when a facet
+ * turns off so a queued mutation doesn't write live values for a disabled
+ * facet. persistTabAssignments was removed (always-on), so this factory is
+ * now only used for persistDrawerOpenState and persistDrawerWidth.
+ */
 function makeLayoutFacetFeature(
-  id: 'persistDrawerOpenState' | 'persistDrawerWidth' | 'persistTabAssignments',
+  id: 'persistDrawerOpenState' | 'persistDrawerWidth',
 ): CanvasFeature {
   return {
     id,
@@ -304,7 +314,6 @@ function makeLayoutFacetFeature(
 }
 const persistDrawerOpenStateFeature = makeLayoutFacetFeature('persistDrawerOpenState')
 const persistDrawerWidthFeature = makeLayoutFacetFeature('persistDrawerWidth')
-const persistTabAssignmentsFeature = makeLayoutFacetFeature('persistTabAssignments')
 
 /** Slash commands: mount/unmount the entire runtime. Owns its own
  *  always-on teardown (slashAlwaysCleanup) so a runtime-mounted slash
@@ -475,7 +484,6 @@ export const FEATURES: readonly CanvasFeature[] = [
   shadowsMobileFeature,
   persistDrawerOpenStateFeature,
   persistDrawerWidthFeature,
-  persistTabAssignmentsFeature,
   slashFeature,
   tabPositionFeature,
   keepTabListVisibleFeature,

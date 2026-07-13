@@ -3,10 +3,14 @@
 // Verifies the re-enable sequence:
 //   A. Facet ON: refreshConfigureDraftFromLive runs ONLY after applyLayout resolves.
 //   B. Facet ON: applyLayout is called with the lastLoaded layout (containing tabs).
-//   C. Facet OFF: no applyLayout call when facet is OFF; clean no-op when no profile.
-//   D. Facet ON + empty lastLoaded + non-empty session profile → fallback to
-//      session profile before refresh.
+//   C. Non-empty lastLoaded → applyLayout called (tab-assignment persistence is
+//      always-on, so the facet-ON path is always taken).
+//   D. Empty lastLoaded + non-empty session profile → fallback before refresh.
 //   E. applyLayout rejects → still completes, modal still refreshes.
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed, so the enable path always
+// uses the facet-ON logic (no OFF branch).
 //
 // Strategy:
 // - Don't mock `../state` or `../layout/dual-session-profile` (they are
@@ -140,14 +144,14 @@ function resetSpies() {
 }
 
 /** Seed state for a case. Uses hydrateSettings which only writes when the
- *  user-touched guard is false — we reset the guard first. */
+ *  user-touched guard is false — we reset the guard first.
+ *  persistTabAssignments is omitted because tab-assignment persistence is
+ *  always-on (built-in). */
 function seedState(patch: {
-  persistTabAssignments: boolean
   secondSidebarEnabled?: boolean
 }) {
   resetHydrationGuard()
   hydrateSettings({
-    persistTabAssignments: patch.persistTabAssignments,
     secondSidebarEnabled: patch.secondSidebarEnabled ?? false,
   })
 }
@@ -180,7 +184,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 // =====================================================================
 {
   resetSpies()
-  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   setLastLoadedLayout({
     primary: { open: false, width: 420, tabId: null },
     secondary: { activeTabId: 'tab-1', open: false, width: 420 },
@@ -206,7 +210,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   await Promise.resolve()
   await Promise.resolve()
 
-  assert(applyLayoutCallCount === 1, 'A: applyLayout called exactly once on enable (facet ON)')
+  assert(applyLayoutCallCount === 1, 'A: applyLayout called exactly once on enable')
   assert(refreshConfigureDraftFromLiveSpy.mock.calls.length === 0,
     'A: refresh NOT called before applyLayout resolves')
   assert(getSettings().secondSidebarEnabled === true, 'A: setSettings flipped secondSidebarEnabled to true')
@@ -220,11 +224,11 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 // =====================================================================
-// B. Facet ON: applyLayout is called with the lastLoaded layout
+// B. applyLayout is called with the lastLoaded layout
 // =====================================================================
 {
   resetSpies()
-  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   const savedLayout = {
     primary: { open: false, width: 420, tabId: null },
     secondary: { activeTabId: 'tab-x', open: false, width: 420 },
@@ -245,11 +249,15 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 // =====================================================================
-// C. Facet OFF: clean no-op when no profile, no applyLayout
+// C. Non-empty lastLoaded → applyLayout called (always-on tabs facet)
 // =====================================================================
+// Tab-assignment persistence is always-on, so the facet-ON path is always
+// taken. Non-empty lastLoaded with detachedTabs should result in applyLayout
+// being called (inverted from the old test which expected NO call when
+// the facet was OFF).
 {
   resetSpies()
-  seedState({ persistTabAssignments: false, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   setLastLoadedLayout({
     primary: { open: false, width: 420, tabId: null },
     secondary: { activeTabId: 'tab-y', open: false, width: 420 },
@@ -259,25 +267,24 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   })
   isConfigureTabsModalOpenSpy.mockReturnValue(false)
   clearSessionDualProfile()
-  // If applyLayout is incorrectly called, fail loudly so the test catches it.
+  // applyLayout SHOULD be called: tabs persistence is always-on.
+  let wasCalled = false
   mockApplyLayout(async () => {
-    throw new Error('C: applyLayout should NOT be called when facet OFF')
+    wasCalled = true
   })
 
   await requestSecondDrawerMode(true)
 
-  assertEqual(applyLayoutCallCount, 0, 'C: applyLayout NOT called when facet OFF (no profile)')
+  assert(wasCalled, 'C: applyLayout IS called when lastLoaded has tabs (always-on tabs facet)')
   assertEqual(getSettings().secondSidebarEnabled, true, 'C: still flips secondSidebarEnabled to true')
-  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 0,
-    'C: refresh NOT called when modal closed (facet OFF)')
 }
 
 // =====================================================================
-// D. Facet ON + empty lastLoaded + non-empty session profile → fallback
+// D. Empty lastLoaded + non-empty session profile → fallback
 // =====================================================================
 {
   resetSpies()
-  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   setLastLoadedLayout({
     primary: { open: false, width: 420, tabId: null },
     secondary: { activeTabId: null, open: false, width: 420 },
@@ -290,7 +297,8 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
     ],
     activeTabId: 'sess-tab',
   })
-  // applyLayout should NOT be called when lastLoaded has no tabs.
+  // applyLayout should NOT be called when lastLoaded has no tabs; session
+  // profile fallback runs instead.
   mockApplyLayout(async () => {
     throw new Error('D: applyLayout should NOT be called when lastLoaded has no tabs')
   })
@@ -310,7 +318,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 // =====================================================================
 {
   resetSpies()
-  seedState({ persistTabAssignments: true, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   setLastLoadedLayout({
     primary: { open: false, width: 420, tabId: null },
     secondary: { activeTabId: 'tab-z', open: false, width: 420 },
@@ -350,9 +358,9 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 {
   const sut = await import('../second-drawer-mode')
   resetSpies()
-  seedState({ persistTabAssignments: false, secondSidebarEnabled: false })
+  seedState({ secondSidebarEnabled: false })
   isConfigureTabsModalOpenSpy.mockReturnValue(false)
-  mockApplyLayout(async () => { throw new Error('F: applyLayout should not be called (facet off, no profile)') })
+  mockApplyLayout(async () => { throw new Error('F: applyLayout should not be called (no profile, no lastLoaded)') })
   clearSessionDualProfile()
   clearVanillaBaseline()
   assert(getVanillaBaseline() === null, 'F: no baseline before enable')
@@ -372,7 +380,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   const sut = await import('../second-drawer-mode')
   resetSpies()
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  hydrateSettings({ secondSidebarEnabled: true })
   isConfigureTabsModalOpenSpy.mockReturnValue(false)
   _hostWritable = true
   _hostPatchOk = true
@@ -385,13 +393,13 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   // exists. Use a throwaway secondSidebarEnabled=true to avoid
   // affecting later cases.
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: false })
+  hydrateSettings({ secondSidebarEnabled: false })
   await sut.requestSecondDrawerMode(true)
   assert(getVanillaBaseline() !== null, 'G: baseline captured for the test')
 
   // Now flip to off and run disable. host-settings mock is success.
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  hydrateSettings({ secondSidebarEnabled: true })
   await sut.requestSecondDrawerMode(false)
 
   assert(getVanillaBaseline() === null,
@@ -407,21 +415,21 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   const sut = await import('../second-drawer-mode')
   resetSpies()
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  hydrateSettings({ secondSidebarEnabled: true })
   isConfigureTabsModalOpenSpy.mockReturnValue(false)
   _hostWritable = false // NO-GO: patchHostDrawerSettings returns false
 
   // Capture a baseline via the real SUT enable path.
   clearVanillaBaseline()
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: false })
+  hydrateSettings({ secondSidebarEnabled: false })
   await sut.requestSecondDrawerMode(true)
   assert(getVanillaBaseline() !== null, 'H: baseline captured for the test')
 
   // Now disable with host-settings NO-GO. The restore returns
   // { ok: false, reason: 'no-go' } and the SUT must NOT clear.
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  hydrateSettings({ secondSidebarEnabled: true })
   await sut.requestSecondDrawerMode(false)
 
   assert(getVanillaBaseline() !== null,
@@ -438,7 +446,7 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   const sut = await import('../second-drawer-mode')
   resetSpies()
   resetHydrationGuard()
-  hydrateSettings({ persistTabAssignments: false, secondSidebarEnabled: true })
+  hydrateSettings({ secondSidebarEnabled: true })
   isConfigureTabsModalOpenSpy.mockReturnValue(false)
   _hostWritable = true
   _hostPatchOk = true

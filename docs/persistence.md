@@ -30,7 +30,6 @@ Canvas persists the full UI state (drawer open/close, widths, tab assignments, s
     "chatReflow": true,
     "persistDrawerOpenState": true,
     "persistDrawerWidth": true,
-    "persistTabAssignments": true,
     "slashCommandsEnabled": true,
     "debugMode": false,
     ...
@@ -73,17 +72,18 @@ Builds the current layout from in-memory state:
 
 ### Layout facets (settings)
 
-Three independent toggles replace the old single `layoutPersistence` flag:
+Two user-facing toggles control which parts of the layout are saved and restored:
 
 | Setting | Restores / writes |
 |---------|-------------------|
 | `persistDrawerOpenState` | `primary.open`, `primary.tabId`, `secondary.open` |
 | `persistDrawerWidth` | `primary.width`, `secondary.width` |
-| `persistTabAssignments` | `detachedTabs`, `secondary.activeTabId` |
 
-**Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it.
+Tab-assignment persistence (`detachedTabs`, `secondary.activeTabId`) is **always-on** (built-in) and not user-configurable. There is no user-facing toggle for it.
 
-**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → all three on; false → all three off). Secondary open restore also requires at least one live secondary tab assignment (tabs facet + restored map); open facet alone does not show an empty second drawer.
+**Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it. Tab assignments are always written from the live state (or frozen from last-loaded when the second drawer is off).
+
+**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets, but tabs are always restored. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → open + width on; false → open + width off). Secondary open restore also requires at least one live secondary tab assignment (tabs are always restored, so the check is just whether the restored map has any tabs assigned); open facet alone does not show an empty second drawer.
 
 ### `loadSavedLayout()`
 
@@ -174,4 +174,4 @@ Restores the secondary sidebar state:
 
 Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with `buildPersistedLayout()` geometry plus `getSettings()`.
 
-When all layout facets are OFF, geometry fields come from the last-loaded layout (or closed defaults), so re-enabling a facet later does not lose the previous disk state.
+Tab assignment is always written (built-in). When the remaining two user-facing layout facets (open + width) are both OFF, their geometry fields come from the last-loaded layout (or closed defaults), so re-enabling a facet later does not lose the previous disk state.

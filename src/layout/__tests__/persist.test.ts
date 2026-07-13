@@ -88,49 +88,32 @@ try {
   assert(false, 'cancelLayoutSave threw')
 }
 
-// --- isPersistenceEnabled follows hydrated layout facets ---
+// --- isPersistenceEnabled is always true (tabs always-on) ---
 import { hydrateSettings, resetHydrationGuard } from '../../settings/state'
 import {
   isOpenStatePersistenceEnabled,
   isWidthPersistenceEnabled,
-  isTabAssignmentPersistenceEnabled,
 } from '../persist'
 try {
   resetHydrationGuard()
   hydrateSettings({
     persistDrawerOpenState: false,
     persistDrawerWidth: false,
-    persistTabAssignments: false,
   })
-  assert(isPersistenceEnabled() === false, 'isPersistenceEnabled false when all facets off')
+  // isPersistenceEnabled is always true because tab-assignment persistence
+  // is always-on (built-in), regardless of open/width facet state.
+  assert(isPersistenceEnabled() === true, 'isPersistenceEnabled always true (tabs always-on)')
   assert(isOpenStatePersistenceEnabled() === false, 'open facet false')
   assert(isWidthPersistenceEnabled() === false, 'width facet false')
-  assert(isTabAssignmentPersistenceEnabled() === false, 'tabs facet false')
 
   resetHydrationGuard()
   hydrateSettings({
     persistDrawerOpenState: true,
     persistDrawerWidth: false,
-    persistTabAssignments: false,
   })
   assert(isPersistenceEnabled() === true, 'isPersistenceEnabled true when any facet on')
   assert(isOpenStatePersistenceEnabled() === true, 'open facet true')
   assert(isWidthPersistenceEnabled() === false, 'width facet still false')
-
-  // Legacy layoutPersistence migration (via merge in hydrate)
-  resetHydrationGuard()
-  hydrateSettings({ layoutPersistence: false } as any)
-  assert(isPersistenceEnabled() === false, 'legacy layoutPersistence:false → all facets off')
-  assert(isOpenStatePersistenceEnabled() === false, 'legacy false → open off')
-  assert(isWidthPersistenceEnabled() === false, 'legacy false → width off')
-  assert(isTabAssignmentPersistenceEnabled() === false, 'legacy false → tabs off')
-
-  resetHydrationGuard()
-  hydrateSettings({ layoutPersistence: true } as any)
-  assert(isPersistenceEnabled() === true, 'legacy layoutPersistence:true → any on')
-  assert(isOpenStatePersistenceEnabled() === true, 'legacy true → open on')
-  assert(isWidthPersistenceEnabled() === true, 'legacy true → width on')
-  assert(isTabAssignmentPersistenceEnabled() === true, 'legacy true → tabs on')
 } catch (e) {
   console.log(`SKIP: isPersistenceEnabled hydrate — ${e}`)
 }
@@ -156,8 +139,8 @@ try {
     // Store original settings
     const orig = { ...getSettings() }
 
-    // Case 1: secondSidebarEnabled ON + persistTabAssignments ON → live tabs used
-    setSettings({ secondSidebarEnabled: true, persistTabAssignments: true })
+    // Case 1: secondSidebarEnabled ON → live tabs used (tab-assignment persistence is always-on)
+    setSettings({ secondSidebarEnabled: true })
     const liveOn = buildPersistedLayout()
     // We can't easily mock the live state in headless, but verify structure
     assert(typeof liveOn === 'object', 'buildPersistedLayout returns object when second ON')
@@ -166,8 +149,8 @@ try {
     assert('secondary' in liveOn, 'secondary present')
     assert('activeTabId' in liveOn.secondary || !('activeTabId' in liveOn.secondary) || liveOn.secondary.activeTabId === undefined || typeof liveOn.secondary.activeTabId === 'string' || liveOn.secondary.activeTabId === null, 'activeTabId shape ok')
 
-    // Case 2: secondSidebarEnabled OFF + persistTabAssignments ON → freeze dual from lastLoaded
-    setSettings({ secondSidebarEnabled: false, persistTabAssignments: true })
+    // Case 2: secondSidebarEnabled OFF → freeze dual from lastLoaded
+    setSettings({ secondSidebarEnabled: false })
     const liveOff = buildPersistedLayout()
     assert(typeof liveOff === 'object', 'buildPersistedLayout returns object when second OFF')
     assert('detachedTabs' in liveOff, 'detachedTabs present when second OFF')
@@ -178,7 +161,7 @@ try {
     // structure is valid (not undefined or throwing).
 
     // Restore original settings
-    setSettings({ secondSidebarEnabled: orig.secondSidebarEnabled, persistTabAssignments: orig.persistTabAssignments })
+    setSettings({ secondSidebarEnabled: orig.secondSidebarEnabled })
   }
 } catch (e) {
   console.log(`SKIP: buildPersistedLayout freeze tests — ${e}`)

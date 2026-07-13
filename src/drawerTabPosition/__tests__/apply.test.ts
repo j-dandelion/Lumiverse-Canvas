@@ -46,7 +46,6 @@ function makeSettings(overrides: Partial<FullCanvasSettings> = {}): FullCanvasSe
     chatReflow: true,
     persistDrawerOpenState: true,
     persistDrawerWidth: true,
-    persistTabAssignments: true,
     slashCommandsEnabled: true,
     debugMode: false,
     drawerTabDrag: true,

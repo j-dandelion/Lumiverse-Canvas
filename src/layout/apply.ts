@@ -1,6 +1,10 @@
 // Restore a saved layout snapshot to the DOM.
 // Extracted from persist.ts — applyLayout restores drawer positions,
 // widths, open/closed state, and tab assignments from the persisted blob.
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed; applyLayout always
+// restores tab assignments when called.
 
 import { getDrawerTabs, isMainDrawerOpen, getMainDrawerSide } from '../store'
 import {
@@ -131,6 +135,10 @@ function isTabFullyRestored(tabId: string): boolean {
  * Restore a saved layout. When tab restore runs, the returned Promise
  * resolves only after finishRestore (all tabs done or safety timeout) —
  * callers like "Load previous" must not flush/save until then.
+ *
+ * Tab-assignment persistence is always-on (built-in). The
+ * persistTabAssignments setting was removed; applyLayout always restores
+ * tabs from the given layout.
  */
 export async function applyLayout(layout: any): Promise<void> {
   if (!layout) return
@@ -160,7 +168,8 @@ export async function applyLayout(layout: any): Promise<void> {
 
   const settings = getSettings()
   const restoreWidth = !!settings.persistDrawerWidth
-  const restoreTabs = !!settings.persistTabAssignments
+  // Tab-assignment persistence is always-on (built-in).
+  const restoreTabs = true
   const restoreOpen = !!settings.persistDrawerOpenState
 
   // Restore secondary sidebar width — clamp to viewport so the closed
@@ -204,7 +213,7 @@ export async function applyLayout(layout: any): Promise<void> {
     if (!restoreOpen) return
     const mobileExcluded = isMobileViewport() && isMainDrawerOpen()
     const savedOpen = layout.secondary?.open === true
-    // Live assignments only: disk detachedTabs may still exist when tabs facet is frozen off.
+    // Live assignments only: disk detachedTabs may still exist when second is off.
     const hasSecondaryTabs = getTabAssignments().size > 0
     const shouldBeOpen = savedOpen && hasSecondaryTabs
     if (mobileExcluded && isSecondarySidebarOpen()) {
@@ -613,7 +622,8 @@ export async function applyLayout(layout: any): Promise<void> {
         })
     })
   } else if (restoreOpen) {
-    // Tabs facet off: still restore secondary open/close.
+    // Tab restore is always-on; this branch is dead code but kept for
+    // clarity: when always-on, the `if (restoreTabs)` path is always taken.
     applySecondaryOpenState()
   }
 }

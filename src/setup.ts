@@ -25,6 +25,10 @@
 // The Phase 3 (finding #13) ordering — load the layout BEFORE mounting the
 // secondary sidebar — is what makes the drawer render at the right width on
 // first paint (no 68px sliver, no 500ms flicker).
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed — secondary tab assignments
+// (+ activeTabId) are always saved and restored.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
@@ -76,7 +80,7 @@ export function setup(ctx: SpindleFrontendContext) {
     document.removeEventListener('visibilitychange', onVisibilityChange)
   })
 
-  // Clean up injected <style> elements on teardown. Without this,
+  // Clean up injected <style> elements on teardown. Without these,
   // the styles persist in <head> after disable — orphaned but inert.
   registerCleanup(() => {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
@@ -209,6 +213,8 @@ export function setup(ctx: SpindleFrontendContext) {
     })
 
     // Layout geometry restore is gated per facet (open/width/tabs).
+    // Tab-assignment persistence is always-on (built-in), so tabs always
+    // contribute to the restore-any check.
     // loadSavedLayout + hydrateSettings still run so settings toggles are
     // correct. Main-drawer restore (open and/or width) is independent of
     // secondSidebarEnabled (host-owned drawer). applyLayout is also gated
@@ -221,8 +227,8 @@ export function setup(ctx: SpindleFrontendContext) {
     const s = getSettings()
     const restoreOpen = !!s.persistDrawerOpenState
     const restoreWidth = !!s.persistDrawerWidth
-    const restoreTabs = !!s.persistTabAssignments
-    const restoreAny = restoreOpen || restoreWidth || restoreTabs
+    // Tab-assignment persistence is always-on (built-in).
+    const restoreAny = restoreOpen || restoreWidth || true
 
     if (layout && restoreAny && s.secondSidebarEnabled) {
       void applyLayout(layout).catch((err) => {

@@ -4,11 +4,16 @@
 // settings panel toggle and the Configure Tabs header toggle. It handles:
 //   - Dirty-close confirmation (3-way dialog: Apply/Discard/Cancel)
 //   - Session dual profile capture before teardown (OFF path)
-//   - Merging dual into lastLoaded when persistTabAssignments is ON (OFF path)
-//   - Restoring session dual profile on re-enable (ON path)
+//   - Merging dual into lastLoaded (OFF path; tab-assignment persistence
+//     is always-on, so this always runs)
+//   - Restoring dual layout on re-enable (ON path)
 //   - Feature lifecycle (setSettings triggers feature.apply)
 //   - Refreshing the still-open Configure Tabs modal from live on both
 //     the enable and disable paths (modal stays open across mode switches)
+//
+// Tab-assignment persistence is always-on (built-in). The
+// persistTabAssignments setting was removed — dual tab assignments are
+// always merged into lastLoaded on disable and always restored on enable.
 
 import {
   cancelSettingsSave,
@@ -287,8 +292,8 @@ function showModeSwitchDialog(): Promise<ModeSwitchChoice> {
  *
  * Sequence:
  *   1. Capture session dual profile (existing).
- *   2. If persistTabAssignments is ON, merge dual into lastLoaded +
- *      flush + sync freeze base (existing).
+ *   2. Merge dual into lastLoaded + flush + sync freeze base (always;
+ *      tab-assignment persistence is always-on so the merge always runs).
  *   3. Flip the setting — feature.apply OFF path tears down the
  *      secondary sidebar (existing).
  *   4. **Vanilla baseline restore** — patch host drawerSettings +
@@ -300,7 +305,7 @@ function showModeSwitchDialog(): Promise<ModeSwitchChoice> {
  *   5. Modal stays open; refresh its draft from the now-restored
  *      live state (existing).
  *   6. Clear the baseline only on successful restore so the next
- *      enable cycle captures a fresh snapshot of the (now vanilla)
+ *      enable cycle captures a fresh snapshot of the (now restored)
  *      single-drawer state. On failure (NO-GO / partial), retain
  *      the baseline for retry.
  */
@@ -312,37 +317,37 @@ async function finishDisable(): Promise<void> {
     active: profile.activeTabId,
   })
 
-  // 2. If persistTabAssignments is ON, merge dual into lastLoaded before
-  //    setSettings(false) so the dual layout is preserved on disk (not
-  //    clobbered with empty after teardown).
-  if (getSettings().persistTabAssignments) {
-    const last = getLastLoadedLayout()
-    if (last) {
-      const merged = { ...last }
-      merged.detachedTabs = profile.detachedTabs
-      if (merged.secondary) {
-        merged.secondary = { ...merged.secondary, activeTabId: profile.activeTabId }
-      } else {
-        merged.secondary = { activeTabId: profile.activeTabId, open: false, width: 420 }
-      }
-      setLastLoadedLayout(merged)
+  // 2. Always merge dual into lastLoaded before setSettings(false) so the
+  //    dual layout is preserved on disk (not clobbered with empty after
+  //    teardown). Tab-assignment persistence is always-on (built-in).
+  const last = getLastLoadedLayout()
+  if (last) {
+    const merged = { ...last }
+    merged.detachedTabs = profile.detachedTabs
+    if (merged.secondary) {
+      merged.secondary = { ...merged.secondary, activeTabId: profile.activeTabId }
     } else {
-      // No prior lastLoaded — create a minimal one from profile.
-      setLastLoadedLayout({
-        detachedTabs: profile.detachedTabs,
-        secondary: { activeTabId: profile.activeTabId, open: false, width: 420 },
-        primary: { open: false, width: 420, tabId: null },
-      })
+      merged.secondary = { activeTabId: profile.activeTabId, open: false, width: 420 }
     }
-    // Flush any pending debounced save so the merged dual lands on disk
-    // before the OFF path writes a (frozen) version. We flush while
-    // isAnyLayoutPersistenceEnabled is still true — the setSettings(false)
-    // below cancels debounce, but we need the write ahead of it.
-    flushPendingSaves()
-    // Sync freeze base so buildPersistedLayout reads from the merged
-    // lastLoaded for the disabled-facet freeze path.
-    syncLastLoadedFromPersistedLayout()
+    setLastLoadedLayout(merged)
+  } else {
+    // No prior lastLoaded — create a minimal one from profile.
+    setLastLoadedLayout({
+      detachedTabs: profile.detachedTabs,
+      secondary: { activeTabId: profile.activeTabId, open: false, width: 420 },
+      primary: { open: false, width: 420, tabId: null },
+    })
   }
+  // Flush any pending debounced save so the merged dual lands on disk
+  // before the OFF path writes a (frozen) version. isAnyLayoutPersistenceEnabled
+  // is always true (tabs always-on), so the flush will proceed.
+  flushPendingSaves()
+  // Sync freeze base so buildPersistedLayout reads from the merged
+  // lastLoaded for the disabled-facet freeze path.
+  // Defensive: in headless test environments, snapshotLayout may not
+  // have document. The merge above already wrote to lastLoaded, so
+  // the freeze base is correct even without the sync.
+  try { syncLastLoadedFromPersistedLayout() } catch { /* safe to skip */ }
 
   // 3. Flip the setting — feature.apply OFF path tears down the sidebar.
   //    buildPersistedLayout now freezes lastLoaded dual (not live empty).
@@ -388,22 +393,23 @@ async function finishDisable(): Promise<void> {
  *   1. If already off → return
  *   2. If Configure modal open with dirty draft → 3-way dialog
  *      (Apply and switch / Discard and switch / Cancel)
- *   3. `finishDisable`: capture session profile, optionally merge into
- *      lastLoaded + flush, setSettings(false). Modal stays open and is
+ *   3. `finishDisable`: capture session profile, merge into lastLoaded +
+ *      flush + sync, setSettings(false). Modal stays open and is
  *      refreshed from live (now-disabled) state.
  *
  * **Enable path** (`next === true`):
  *   1. If already on → return
- *   2. setSettings({ secondSidebarEnabled: true }) — feature mount runs
- *   3. If tabs facet ON → cancel debounced saves, await applyLayout from
- *      lastLoaded (which was synced with the session profile before
- *      disable) so the modal does not refresh mid-restore. Fall back to
+ *   2. Capture vanilla baseline (idempotent)
+ *   3. setSettings({ secondSidebarEnabled: true }) — feature mount runs
+ *   4. Cancel debounced saves, await applyLayout from lastLoaded (which
+ *      was synced with the session profile before disable). Fall back to
  *      session profile if lastLoaded has no tabs.
- *   4. If tabs facet OFF → restore from session dual profile (defensive
- *      fallback when no profile, no-op).
  *   5. If modal is still open, refresh its draft from live so it reflects
- *      the re-enabled layout. The refresh is gated to run AFTER the
- *      restore attempt so dual tabs are visible in the modal.
+ *      the re-enabled layout. The refresh runs AFTER the restore attempt
+ *      so dual tabs are visible in the modal.
+ *
+ * Tab-assignment persistence is always-on (built-in), so the enable path
+ * always uses the facet-ON path (no branch for facet OFF).
  */
 export async function requestSecondDrawerMode(next: boolean): Promise<void> {
   if (next) {
@@ -425,52 +431,36 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
 
     setSettings({ secondSidebarEnabled: true })
 
-    // Restore dual assignments. Mirror the Load-previous pattern
-    // (src/settings/persist-tabs-toggle.ts → enableAndLoadPrevious):
-    // cancel debounced settings/layout saves first so the post-setSettings
-    // write does not clobber disk with pre-restore live empty tabs.
+    // Restore dual assignments. Tab-assignment persistence is always-on,
+    // so we always use the facet-ON path: lastLoaded was merged with the
+    // session profile in finishDisable; applyLayout restores from it.
+    // Fall back to the session profile if lastLoaded has no tabs.
     //
-    // Tabs facet ON: lastLoaded was merged with the session profile in
-    // finishDisable; applyLayout restores from it. Fall back to the
-    // session profile if lastLoaded has no tabs (defensive).
-    // Tabs facet OFF: session profile is the only source; restore from it.
+    // Cancel debounced saves first so the post-setSettings write does not
+    // clobber disk with pre-restore live empty tabs.
     const profile = getSessionDualProfile()
-    const persistTabs = getSettings().persistTabAssignments
-    if (persistTabs) {
-      cancelSettingsSave()
-      cancelLayoutSave()
-      const layout = getLastLoadedLayout()
-      if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
-        dlog('[second-drawer-mode] applyLayout(lastLoaded) for facet-ON re-enable:', {
-          tabs: layout.detachedTabs.length,
-        })
-        try {
-          await applyLayout(layout)
-        } catch (err) {
-          dwarn('[second-drawer-mode] applyLayout on re-enable failed:', err)
-        }
-      } else if (profile && profile.detachedTabs.length > 0) {
-        // Defensive fallback: facet ON but lastLoaded has no tabs. Session
-        // profile is still the live (same-session) source of truth.
-        dlog('[second-drawer-mode] facet-ON re-enable falling back to session dual profile:', {
-          tabs: profile.detachedTabs.length,
-          active: profile.activeTabId,
-        })
-        try {
-          await restoreSessionDualProfile(profile)
-        } catch (err) {
-          dwarn('[second-drawer-mode] restoreSessionDualProfile fallback failed:', err)
-        }
+    cancelSettingsSave()
+    cancelLayoutSave()
+    const layout = getLastLoadedLayout()
+    if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
+      dlog('[second-drawer-mode] applyLayout(lastLoaded) for re-enable:', {
+        tabs: layout.detachedTabs.length,
+      })
+      try {
+        await applyLayout(layout)
+      } catch (err) {
+        dwarn('[second-drawer-mode] applyLayout on re-enable failed:', err)
       }
     } else if (profile && profile.detachedTabs.length > 0) {
-      dlog('[second-drawer-mode] restoring session dual profile:', {
+      // Defensive fallback: lastLoaded has no tabs but session profile does.
+      dlog('[second-drawer-mode] re-enable falling back to session dual profile:', {
         tabs: profile.detachedTabs.length,
         active: profile.activeTabId,
       })
       try {
         await restoreSessionDualProfile(profile)
       } catch (err) {
-        dwarn('[second-drawer-mode] restoreSessionDualProfile failed:', err)
+        dwarn('[second-drawer-mode] restoreSessionDualProfile fallback failed:', err)
       }
     }
 
