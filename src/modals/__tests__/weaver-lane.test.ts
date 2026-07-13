@@ -1,10 +1,12 @@
-// Test file: weaver-lane detection and dialog tagging.
+// Test file: weaver-lane strip-only geometry (keep-tabs pin strips, not drawers).
 //
 // Validates:
-//   - getActiveModal()==='weaver' tags [role="dialog"][aria-modal="true"]
-//   - getActiveModal() returns null or non-weaver removes the tag
-//   - Teardown removes the tag
-//   - null activeModal (field absent) → no tag
+//   - aria-label "Weaver" tags dialog even when activeModal is null
+//   - Insets use strip gutters only (never open-drawer 420)
+//   - keep-tabs off → 0,0
+//   - Live pin hosts contribute strip width
+//   - Teardown clears tag + styles
+//   - Non-weaver modal not tagged
 //
 // Uses dynamic import() so mock.module is registered before the module loads.
 
@@ -24,46 +26,85 @@ import { mock } from 'bun:test'
 class StubElement {
   tagName = 'DIV'
   className = ''
-  _style: Record<string, string> = {}
+  id = ''
+  offsetWidth = 0
+  offsetHeight = 0
+  _styleProps: Record<string, string> = {}
   _attrs: Record<string, string> = {}
   _children: StubElement[] = []
   parentElement: StubElement | null = null
-  appendChild(c: StubElement) { this._children.push(c); c.parentElement = this }
-  remove() { if (this.parentElement) { const i = this.parentElement._children.indexOf(this); if (i >= 0) this.parentElement._children.splice(i, 1) } }
+  firstElementChild: StubElement | null = null
+  appendChild(c: StubElement) {
+    this._children.push(c)
+    c.parentElement = this
+    if (!this.firstElementChild) this.firstElementChild = c
+  }
+  remove() {
+    if (this.parentElement) {
+      const i = this.parentElement._children.indexOf(this)
+      if (i >= 0) this.parentElement._children.splice(i, 1)
+      if (this.parentElement.firstElementChild === this) {
+        this.parentElement.firstElementChild = this.parentElement._children[0] ?? null
+      }
+    }
+  }
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
   hasAttribute(n: string): boolean { return n in this._attrs }
   removeAttribute(n: string) { delete this._attrs[n] }
-  get style() { return this._style }
-  get children() { return this._children as any }
+  getBoundingClientRect() {
+    return { width: this.offsetWidth, height: this.offsetHeight || 600, top: 0, left: 0, right: this.offsetWidth, bottom: 600 }
+  }
+  get style() {
+    const self = this
+    return {
+      setProperty: (n: string, v: string, _priority?: string) => { self._styleProps[n] = v },
+      removeProperty: (n: string) => { delete self._styleProps[n] },
+      getPropertyValue: (n: string) => self._styleProps[n] ?? '',
+    }
+  }
   querySelector(sel: string): any {
-    // data-canvas-weaver-lane attribute search
     if (sel.includes('[data-canvas-weaver-lane]')) {
-      const attrName = sel.match(/\[([^\]]+)\]/)?.[1]
-      if (attrName && this.hasAttribute(attrName)) return this
+      if (this.getAttribute('data-canvas-weaver-lane') === '1') return this
       for (const c of this._children) { const f = c.querySelector(sel); if (f) return f }
       return null
     }
-    // General attribute selector
-    if (sel.startsWith('[') && sel.includes(']')) {
-      const parts = sel.slice(1, -1).split('=')
-      const attrName = parts[0].trim()
-      const attrVal = parts[1]?.replace(/"/g, '').trim()
-      if (attrVal !== undefined) {
-        if (this.getAttribute(attrName) === attrVal) return this
-      } else {
-        if (this.hasAttribute(attrName)) return this
-      }
+    if (sel.startsWith('.')) {
+      const cls = sel.slice(1).split(/[\s\[]/)[0]
+      if (this.className.includes(cls)) return this
       for (const c of this._children) { const f = c.querySelector(sel); if (f) return f }
       return null
     }
-    // Default: recursive child search
+    if (sel.includes('[') ) {
+      const parts = sel.match(/\[([^\]]+)\]/g) || []
+      const checks = parts.map((p) => {
+        const inner = p.slice(1, -1)
+        const eq = inner.indexOf('=')
+        if (eq < 0) return { name: inner, val: null as string | null }
+        return { name: inner.slice(0, eq).trim(), val: inner.slice(eq + 1).replace(/"/g, '').trim() }
+      })
+      const matches = (el: StubElement) => checks.every((c) =>
+        c.val === null ? el.hasAttribute(c.name) : el.getAttribute(c.name) === c.val,
+      )
+      if (matches(this)) return this
+      for (const c of this._children) { const f = c.querySelector(sel); if (f) return f }
+      return null
+    }
     for (const c of this._children) { const f = c.querySelector(sel); if (f) return f }
     return null
   }
   querySelectorAll(sel: string): any[] {
-    if (sel.includes('[data-canvas-weaver-lane]')) return this._children.filter(c => c.hasAttribute('data-canvas-weaver-lane'))
-    return []
+    const out: StubElement[] = []
+    const walk = (el: StubElement) => {
+      if (sel.includes('[data-canvas-weaver-lane]') && el.getAttribute('data-canvas-weaver-lane') === '1') out.push(el)
+      else if (sel === '.sidebar-ux-tab-list-pin-host' && el.className.includes('sidebar-ux-tab-list-pin-host')) out.push(el)
+      else if (sel.includes('[role="dialog"]')) {
+        if (el.getAttribute('role') === 'dialog' && el.getAttribute('aria-modal') === 'true') out.push(el)
+      }
+      for (const c of el._children) walk(c)
+    }
+    walk(this)
+    return out
   }
   addEventListener() {}
   removeEventListener() {}
@@ -74,126 +115,345 @@ class StubElement {
 
 const _styleElements: Record<string, StubElement> = {}
 const stubBody = new StubElement()
+const stubDocEl = {
+  clientWidth: 1280,
+  style: {
+    _props: {} as Record<string, string>,
+    setProperty: (n: string, v: string) => { (stubDocEl.style._props as any)[n] = v },
+    getPropertyValue: (n: string) => (stubDocEl.style._props as any)[n] ?? '',
+    removeProperty: (n: string) => { delete (stubDocEl.style._props as any)[n] },
+  },
+}
 
 const stubDoc: any = {
-  documentElement: { style: { setProperty: () => {}, getPropertyValue: () => '' } },
+  documentElement: stubDocEl,
   body: stubBody,
   getElementById: (id: string) => _styleElements[id] ?? null,
   createElement: () => new StubElement(),
   querySelector: (sel: string) => {
     if (sel === '[role="dialog"][aria-modal="true"]') {
-      return stubBody._children.find(c => c.getAttribute('role') === 'dialog' && c.getAttribute('aria-modal') === 'true') ?? null
+      return stubBody.querySelectorAll('[role="dialog"]').find((d: StubElement) => d.getAttribute('aria-modal') === 'true') ?? null
     }
+    if (sel.startsWith('[data-canvas-weaver-lane')) return stubBody.querySelector(sel)
     return stubBody.querySelector(sel)
   },
-  querySelectorAll: (sel: string) => stubBody.querySelectorAll(sel),
+  querySelectorAll: (sel: string) => {
+    if (sel === '[role="dialog"][aria-modal="true"]') return stubBody.querySelectorAll('[role="dialog"]')
+    return stubBody.querySelectorAll(sel)
+  },
   head: { appendChild: (c: StubElement) => { if (c.id) _styleElements[c.id] = c }, removeChild: () => {} },
   addEventListener: () => {},
   removeEventListener: () => {},
 }
 ;(globalThis as any).document = stubDoc
-;(globalThis as any).window = { requestAnimationFrame: (cb: any) => { setTimeout(cb, 0); return 1 }, cancelAnimationFrame: () => {} }
+const _listeners: Record<string, Function[]> = {}
+;(globalThis as any).window = {
+  innerWidth: 1280,
+  requestAnimationFrame: (cb: any) => { setTimeout(cb, 0); return 1 },
+  cancelAnimationFrame: () => {},
+  getComputedStyle: () => ({ display: '', visibility: '' }),
+  addEventListener: (t: string, cb: any) => {
+    _listeners[t] = _listeners[t] || []
+    _listeners[t].push(cb)
+  },
+  removeEventListener: (t: string, cb: any) => {
+    _listeners[t] = (_listeners[t] || []).filter((f) => f !== cb)
+  },
+}
 ;(globalThis as any).requestAnimationFrame = (cb: any) => { setTimeout(cb, 0); return 1 }
 ;(globalThis as any).cancelAnimationFrame = () => {}
-;(globalThis as any).MutationObserver = class { _cb: any; _target: any; constructor(cb: any) { this._cb = cb } observe(t: any) { this._target = t } disconnect() { this._target = null } takeRecords() { return [] } }
+;(globalThis as any).MutationObserver = class {
+  constructor(_cb: any) {}
+  observe() {}
+  disconnect() {}
+  takeRecords() { return [] }
+}
 
 // ── Mocks ──
-
 let _mockActiveModal: string | null = null
+let _keepTabs = true
+let _mobile = false
+let _stripGutters = { left: 56, right: 56 }
 let _publishCalled = false
+let _secondaryOpen = true
+let _mainMirrorActive = true
+let _canvasMainOpen = true
+let _closeSecondaryCalls = 0
+let _closeMainMirrorCalls = 0
+let _hostCloseDrawerCalls = 0
+/** When true, store exposes closeDrawer (host vanilla path). */
+let _hostStoreHasCloseDrawer = false
 
 mock.module('../../store', () => ({
-  getActiveModal: () => _mockActiveModal,
+  getActiveModal: (_force = false) => _mockActiveModal,
+  findStoreData: (_force = false) => {},
+  getStoreSnapshot: () => {
+    if (!_hostStoreHasCloseDrawer) return null
+    return {
+      drawerOpen: true,
+      closeDrawer: () => { _hostCloseDrawerCalls++ },
+    }
+  },
 }))
 
 mock.module('../../chat/reflow', () => ({
   publishContentLaneInsets: () => { _publishCalled = true },
+  // Intentionally NOT used by weaver-lane for geometry — if something
+  // still imported computeContentLaneInsets, tests would fail on missing export.
 }))
 
-// Suppress dwarn output during tests
 mock.module('../../debug/log', () => ({
   dwarn: () => {},
   dlog: () => {},
 }))
 
-// ── Dynamic import of module under test ──
-const mod = await import('../weaver-lane')
-const { startWeaverLane } = mod
+mock.module('../../sidebar/styles', () => ({
+  TAB_LIST_WIDTH_PX: 56,
+}))
 
-// ── Helpers ──
+mock.module('../../settings/state', () => ({
+  isKeepTabListVisibleEnabled: () => _keepTabs,
+}))
+
+mock.module('../../sidebar/strip-gutter', () => ({
+  computeStripGutters: () => ({ ..._stripGutters }),
+}))
+
+mock.module('../../sidebar/mobile-exclusion', () => ({
+  isMobileViewport: () => _mobile,
+}))
+
+mock.module('../../sidebar/secondary', () => ({
+  isSecondarySidebarOpen: () => _secondaryOpen,
+  closeSecondarySidebar: () => { _closeSecondaryCalls++ },
+}))
+
+mock.module('../../sidebar/main-mirror-drawer', () => ({
+  isMainMirrorActive: () => _mainMirrorActive,
+  isCanvasMainOpen: () => _canvasMainOpen,
+  closeCanvasMainDrawer: () => { _closeMainMirrorCalls++ },
+}))
+
+mock.module('../../dom/lumiverse', () => ({
+  getMainWrapper: () => null,
+}))
+
+mock.module('../../sidebar/main-persist', () => ({
+  findDrawerToggleButton: () => null,
+}))
+
+const mod = await import('../weaver-lane')
+const { startWeaverLane, computeWeaverStripInsets } = mod
+
 function reset() {
   _mockActiveModal = null
+  _keepTabs = true
+  _mobile = false
+  _stripGutters = { left: 56, right: 56 }
   _publishCalled = false
-  // Clear body children
+  _secondaryOpen = true
+  _mainMirrorActive = true
+  _canvasMainOpen = true
+  _closeSecondaryCalls = 0
+  _closeMainMirrorCalls = 0
+  _hostCloseDrawerCalls = 0
+  _hostStoreHasCloseDrawer = false
   stubBody._children = []
-  // Clear style elements
+  stubBody.firstElementChild = null
+  stubDocEl.style._props = {}
   for (const k of Object.keys(_styleElements)) delete _styleElements[k]
+  for (const k of Object.keys(_listeners)) delete _listeners[k]
 }
 
-// ── Test 1: Start with no weaver → no tag, publish called ──
-reset()
-const teardown1 = startWeaverLane()
-// Wait for RAF to fire
-await new Promise(r => setTimeout(r, 10))
-const tagged1 = stubBody.querySelector('[data-canvas-weaver-lane]')
-assert(tagged1 === null, 'start with no weaver: no tag')
-assert(_publishCalled, 'start calls publishContentLaneInsets')
-teardown1()
+function makeDialog(ariaLabel?: string): StubElement {
+  const dialog = new StubElement()
+  dialog.setAttribute('role', 'dialog')
+  dialog.setAttribute('aria-modal', 'true')
+  if (ariaLabel) dialog.setAttribute('aria-label', ariaLabel)
+  const shell = new StubElement()
+  shell.className = 'shell'
+  dialog.appendChild(shell)
+  stubBody.appendChild(dialog)
+  return dialog
+}
 
-// ── Test 2: Start with weaver dialog → tags it ──
-reset()
-// Create and attach a dialog
-const dialog2 = new StubElement()
-dialog2.setAttribute('role', 'dialog')
-dialog2.setAttribute('aria-modal', 'true')
-stubBody.appendChild(dialog2)
-_mockActiveModal = 'weaver'
-const teardown2 = startWeaverLane()
-// Wait for RAF (setTimeout 0)
-await new Promise(r => setTimeout(r, 10))
-const tagged2 = stubBody.querySelector('[data-canvas-weaver-lane]')
-assert(tagged2 !== null, 'weaver dialog tagged')
-assertEqual(tagged2!.getAttribute('data-canvas-weaver-lane'), '1', 'weaver lane attr = "1"')
-teardown2()
+function makePinHost(side: 'left' | 'right', width = 56): StubElement {
+  const host = new StubElement()
+  host.className = `sidebar-ux-tab-list-pin-host sidebar-ux-side-${side}`
+  host.offsetWidth = width
+  host.offsetHeight = 800
+  if (side === 'right') {
+    host.getBoundingClientRect = () => ({
+      width, height: 800, top: 0, left: 1280 - width, right: 1280, bottom: 800,
+    })
+  } else {
+    host.getBoundingClientRect = () => ({
+      width, height: 800, top: 0, left: 0, right: width, bottom: 800,
+    })
+  }
+  stubBody.appendChild(host)
+  return host
+}
 
-// --- Test 3: Non-weaver modal → no tag ---
+// ── Unit: computeWeaverStripInsets ──
 reset()
-const dialog3 = new StubElement()
-dialog3.setAttribute('role', 'dialog')
-dialog3.setAttribute('aria-modal', 'true')
-stubBody.appendChild(dialog3)
-_mockActiveModal = 'presets'
-const teardown3 = startWeaverLane()
-await new Promise(r => setTimeout(r, 10))
-const tagged3 = stubBody.querySelector('[data-canvas-weaver-lane]')
-assert(tagged3 === null, 'non-weaver modal not tagged')
-teardown3()
+_keepTabs = true
+_stripGutters = { left: 56, right: 56 }
+assertEqual(computeWeaverStripInsets().left, 56, 'strip gutters left')
+assertEqual(computeWeaverStripInsets().right, 56, 'strip gutters right')
 
-// --- Test 4: Teardown removes the tag ---
 reset()
-const dialog4 = new StubElement()
-dialog4.setAttribute('role', 'dialog')
-dialog4.setAttribute('aria-modal', 'true')
-stubBody.appendChild(dialog4)
-dialog4.setAttribute('data-canvas-weaver-lane', '1')
-_mockActiveModal = 'weaver'
-const teardown4 = startWeaverLane()
-teardown4()
-const tagged4 = stubBody.querySelector('[data-canvas-weaver-lane]')
-assert(tagged4 === null, 'teardown removes weaver lane tag')
+_keepTabs = false
+_stripGutters = { left: 56, right: 56 }
+assertEqual(computeWeaverStripInsets().left, 0, 'keep-tabs off: left 0')
+assertEqual(computeWeaverStripInsets().right, 0, 'keep-tabs off: right 0')
 
-// --- Test 5: getActiveModal returns null (field absent) → no tag ---
 reset()
-const dialog5 = new StubElement()
-dialog5.setAttribute('role', 'dialog')
-dialog5.setAttribute('aria-modal', 'true')
-stubBody.appendChild(dialog5)
+_mobile = true
+_keepTabs = true
+assertEqual(computeWeaverStripInsets().left, 0, 'mobile: left 0')
+
+// Strip gutters stay at 56 even if a hypothetical open-drawer path would be 420
+reset()
+_keepTabs = true
+_stripGutters = { left: 56, right: 56 }
+assertEqual(computeWeaverStripInsets().left, 56, 'never open-drawer width on left')
+assert(computeWeaverStripInsets().left < 100, 'strip inset is strip-scale not drawer-scale')
+
+// Live pin can raise above zero gutters
+reset()
+_keepTabs = true
+_stripGutters = { left: 0, right: 0 }
+makePinHost('left', 56)
+makePinHost('right', 56)
+assertEqual(computeWeaverStripInsets().left, 56, 'live pin left')
+assertEqual(computeWeaverStripInsets().right, 56, 'live pin right')
+
+// ── Integration: tag + stamp ──
+reset()
+const d1 = makeDialog('Weaver')
+makePinHost('left', 56)
+makePinHost('right', 56)
 _mockActiveModal = null
-startWeaverLane()
-await new Promise(r => setTimeout(r, 10))
-const tagged5 = stubBody.querySelector('[data-canvas-weaver-lane]')
-assert(tagged5 === null, 'null activeModal: no tag')
+_keepTabs = true
+_stripGutters = { left: 56, right: 56 }
+const t1 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 15))
+assertEqual(d1.getAttribute('data-canvas-weaver-lane'), '1', 'aria-label Weaver: tagged')
+assertEqual(d1.style.getPropertyValue('left'), '56px', 'left = strip only')
+assertEqual(d1.style.getPropertyValue('right'), '56px', 'right = strip only')
+assertEqual(
+  stubDocEl.style.getPropertyValue('--sidebar-ux-weaver-inset-l'),
+  '56px',
+  'weaver-only L var (not content-lane)',
+)
+t1()
 
-// --- Summary ---
+// Store path
+reset()
+const d2 = makeDialog()
+_mockActiveModal = 'weaver'
+_keepTabs = true
+_stripGutters = { left: 56, right: 0 }
+const t2 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 15))
+assertEqual(d2.getAttribute('data-canvas-weaver-lane'), '1', 'store weaver: tagged')
+assertEqual(d2.style.getPropertyValue('left'), '56px', 'store path left strip')
+assertEqual(d2.style.getPropertyValue('right'), '0px', 'no secondary strip → right 0')
+t2()
+
+// keep-tabs off while weaver open → 0 insets (full host modal)
+reset()
+const d3 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_keepTabs = false
+const t3 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 15))
+assertEqual(d3.getAttribute('data-canvas-weaver-lane'), '1', 'still tagged when keep-tabs off')
+assertEqual(d3.style.getPropertyValue('left'), '0px', 'keep-tabs off: left 0')
+assertEqual(d3.style.getPropertyValue('right'), '0px', 'keep-tabs off: right 0')
+t3()
+
+// Non-weaver
+reset()
+const d4 = makeDialog('Settings')
+_mockActiveModal = 'settings'
+const t4 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 15))
+assertEqual(d4.getAttribute('data-canvas-weaver-lane'), null, 'settings not tagged')
+t4()
+
+// Teardown
+reset()
+const d5 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_keepTabs = true
+const t5 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 15))
+t5()
+assertEqual(d5.getAttribute('data-canvas-weaver-lane'), null, 'teardown removes tag')
+assertEqual(d5.style.getPropertyValue('left'), '', 'teardown clears left')
+assert(_publishCalled, 'teardown republishes content-lane insets')
+
+// ── Drawer collapse on Weaver open (rising edge) ──
+reset()
+const d6 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_secondaryOpen = true
+_mainMirrorActive = true
+_canvasMainOpen = true
+const t6 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 40))
+assertEqual(_closeSecondaryCalls, 1, 'open weaver closes secondary once')
+assertEqual(_closeMainMirrorCalls, 1, 'open weaver closes main-mirror once')
+// Poll must not re-close
+await new Promise((r) => setTimeout(r, 300))
+assertEqual(_closeSecondaryCalls, 1, 'poll does not re-close secondary')
+assertEqual(_closeMainMirrorCalls, 1, 'poll does not re-close main')
+t6()
+
+// Already-closed drawers: close still gated by is*Open checks
+reset()
+const d7 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_secondaryOpen = false
+_canvasMainOpen = false
+_mainMirrorActive = true
+const t7 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 40))
+assertEqual(_closeSecondaryCalls, 0, 'secondary already closed: no close call')
+assertEqual(_closeMainMirrorCalls, 0, 'main already closed: no close call')
+t7()
+
+// Second drawer not active / closed — main-mirror still closes main
+reset()
+const d8 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_secondaryOpen = false
+_mainMirrorActive = true
+_canvasMainOpen = true
+const t8 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 40))
+assertEqual(_closeSecondaryCalls, 0, 'second off: no secondary close')
+assertEqual(_closeMainMirrorCalls, 1, 'second off + keep-tabs: still closes main-mirror')
+assertEqual(_hostCloseDrawerCalls, 0, 'mirror active: skip host closeDrawer')
+t8()
+
+// Second off + keep-tabs off — host store closeDrawer closes main
+reset()
+const d9 = makeDialog('Weaver')
+_mockActiveModal = 'weaver'
+_secondaryOpen = false
+_mainMirrorActive = false
+_canvasMainOpen = false
+_hostStoreHasCloseDrawer = true
+const t9 = startWeaverLane()
+await new Promise((r) => setTimeout(r, 40))
+assertEqual(_closeSecondaryCalls, 0, 'host path: no secondary close')
+assertEqual(_closeMainMirrorCalls, 0, 'host path: no mirror close')
+assertEqual(_hostCloseDrawerCalls, 1, 'second off + no keep-tabs: host closeDrawer once')
+t9()
+
+// ── Summary ──
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

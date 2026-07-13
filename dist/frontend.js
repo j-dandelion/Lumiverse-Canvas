@@ -154,6 +154,18 @@ var init_fiber = __esm(() => {
 });
 
 // src/store/index.ts
+var exports_store = {};
+__export(exports_store, {
+  isMainDrawerOpen: () => isMainDrawerOpen,
+  getStoreSnapshot: () => getStoreSnapshot,
+  getMainDrawerSide: () => getMainDrawerSide,
+  getDrawerTabs: () => getDrawerTabs,
+  getActiveModal: () => getActiveModal,
+  findStoreData: () => findStoreData,
+  asDrawerStore: () => asDrawerStore,
+  __setStoreSnapshotForTest: () => __setStoreSnapshotForTest,
+  __setDrawerTabsForTest: () => __setDrawerTabsForTest
+});
 function asDrawerStore(store) {
   return store;
 }
@@ -273,6 +285,14 @@ function getMainDrawerSide() {
     }
   }
   return "right";
+}
+function __setStoreSnapshotForTest(snap, timestamp = Date.now()) {
+  _storeSnapshotCache = snap;
+  _cacheTimestamp = timestamp;
+}
+function __setDrawerTabsForTest(tabs) {
+  _drawerTabsCache = tabs;
+  _cacheTimestamp = Date.now();
 }
 var _drawerTabsCache = null, _storeSnapshotCache = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000;
 var init_store = __esm(() => {
@@ -8829,6 +8849,29 @@ var init_reflow = __esm(() => {
 });
 
 // src/sidebar/secondary.tsx
+var exports_secondary = {};
+__export(exports_secondary, {
+  unmountSecondarySidebar: () => unmountSecondarySidebar,
+  tearDownSecondarySidebar: () => tearDownSecondarySidebar,
+  syncPanelHeaderFromMain: () => syncPanelHeaderFromMain2,
+  stopPanelHeaderObservers: () => stopPanelHeaderObservers,
+  setSecondarySidebarOpen: () => setSecondarySidebarOpen,
+  openSecondarySidebar: () => openSecondarySidebar,
+  mountSecondarySidebar: () => mountSecondarySidebar,
+  isSecondarySidebarOpen: () => isSecondarySidebarOpen,
+  injectDrawerTabStyles: () => injectDrawerTabStyles,
+  getSecondaryWrapper: () => getSecondaryWrapper,
+  getSecondaryTabList: () => getSecondaryTabList,
+  getSecondaryPanel: () => getSecondaryPanel,
+  getSecondaryDrawer: () => getSecondaryDrawer,
+  getClosedTransformPx: () => getClosedTransformPx,
+  createSecondarySidebar: () => createSecondarySidebar,
+  closeSecondarySidebar: () => closeSecondarySidebar,
+  animateWrapper: () => animateWrapper,
+  __setSecondaryWrapperForTest: () => __setSecondaryWrapperForTest,
+  SECONDARY_WIDTH_VAR: () => SECONDARY_WIDTH_VAR,
+  PUZZLE_ICON_SVG: () => PUZZLE_ICON_SVG
+});
 function syncPanelHeaderFromMain2() {
   syncPanelHeaderFromMain(() => _secondaryWrapper);
 }
@@ -8849,8 +8892,14 @@ function getSecondaryTabList() {
 function getSecondaryPanel() {
   return _secondaryWrapper?.querySelector(".sidebar-ux-panel");
 }
+function __setSecondaryWrapperForTest(wrapper) {
+  _secondaryWrapper = wrapper;
+}
 function isSecondarySidebarOpen() {
   return _secondarySidebarOpen;
+}
+function setSecondarySidebarOpen(open) {
+  _secondarySidebarOpen = open;
 }
 function unmountSecondarySidebar() {
   applyTabListPin(false, { force: true });
@@ -13190,43 +13239,325 @@ function dismissHostContextMenu() {
 init_store();
 init_reflow();
 init_log();
+init_styles();
+init_state();
+init_strip_gutter();
+init_mobile_exclusion();
 var WEAVER_LANE_STYLE_ID = "canvas-weaver-lane-styles";
 var WEAVER_LANE_ATTR = "data-canvas-weaver-lane";
+var WEAVER_INSET_L_VAR = "--sidebar-ux-weaver-inset-l";
+var WEAVER_INSET_R_VAR = "--sidebar-ux-weaver-inset-r";
+var PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host";
 var _observer2 = null;
 var _rafId = null;
 var _active2 = false;
+var _resizeListening = false;
+var _pollTimer = null;
+var _taggedDialog = null;
+var _drawersClosedForWeaver = false;
+var POLL_MS = 250;
+function closeBothDrawersForWeaver() {
+  Promise.resolve().then(() => (init_secondary(), exports_secondary)).then((m3) => {
+    try {
+      if (m3.isSecondarySidebarOpen())
+        m3.closeSecondarySidebar();
+    } catch (err) {
+      dwarn("[weaver-lane] closeSecondarySidebar failed:", err);
+    }
+  }).catch((err) => dwarn("[weaver-lane] secondary import failed:", err));
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
+    try {
+      if (m3.isMainMirrorActive()) {
+        if (m3.isCanvasMainOpen())
+          m3.closeCanvasMainDrawer();
+        return;
+      }
+    } catch (err) {
+      dwarn("[weaver-lane] closeCanvasMainDrawer failed:", err);
+    }
+    closeHostMainDrawer();
+  }).catch((err) => {
+    dwarn("[weaver-lane] main-mirror import failed:", err);
+    closeHostMainDrawer();
+  });
+}
+function closeHostMainDrawer() {
+  Promise.all([
+    Promise.resolve().then(() => (init_store(), exports_store)),
+    Promise.resolve().then(() => exports_lumiverse),
+    Promise.resolve().then(() => (init_main_persist(), exports_main_persist))
+  ]).then(([storeMod, dom, persist]) => {
+    try {
+      storeMod.findStoreData(true);
+      const snap = storeMod.getStoreSnapshot();
+      if (snap && typeof snap.closeDrawer === "function") {
+        snap.closeDrawer();
+        return;
+      }
+    } catch (err) {
+      dwarn("[weaver-lane] store closeDrawer failed:", err);
+    }
+    try {
+      const wrapper = dom.getMainWrapper();
+      if (!wrapper)
+        return;
+      const cls = wrapper.classList?.toString?.() ?? String(wrapper.className || "");
+      if (!cls.includes("wrapperOpen"))
+        return;
+      const btn = persist.findDrawerToggleButton(wrapper);
+      if (btn) {
+        try {
+          btn.click();
+        } catch {}
+      }
+    } catch (err) {
+      dwarn("[weaver-lane] closeHostMainDrawer failed:", err);
+    }
+  }).catch((err) => dwarn("[weaver-lane] host main close import failed:", err));
+}
 function injectWeaverLaneStyles() {
   injectStyles(WEAVER_LANE_STYLE_ID, `
     [${WEAVER_LANE_ATTR}="1"] {
+      position: fixed !important;
       inset: unset !important;
       top: 0 !important;
       bottom: 0 !important;
-      left: var(--sidebar-ux-content-inset-l, 0px) !important;
-      right: var(--sidebar-ux-content-inset-r, 0px) !important;
+      left: var(${WEAVER_INSET_L_VAR}, 0px) !important;
+      right: var(${WEAVER_INSET_R_VAR}, 0px) !important;
+      /* Beat host --app-scaled-viewport-width which ignores strip insets. */
       width: auto !important;
+      height: auto !important;
+      max-width: none !important;
+      max-height: none !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+    }
+    /* Host .shell uses 95vw of the full viewport — size to the strip lane. */
+    [${WEAVER_LANE_ATTR}="1"] > * {
+      width: min(100%, 1180px) !important;
+      max-width: 100% !important;
+      height: min(100%, 880px) !important;
+      max-height: 100% !important;
+      box-sizing: border-box !important;
+      flex: 0 1 auto !important;
     }
   `);
+}
+function setImportant(el, prop, value) {
+  el.style.setProperty(prop, value, "important");
+}
+function clearLaneInlineStyles(el) {
+  for (const prop of [
+    "position",
+    "inset",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "width",
+    "height",
+    "max-width",
+    "max-height",
+    "box-sizing",
+    "overflow",
+    "display",
+    "align-items",
+    "justify-content"
+  ]) {
+    el.style.removeProperty(prop);
+  }
+}
+function clearShellInlineStyles(dialog) {
+  const shell = dialog.firstElementChild;
+  if (!shell)
+    return;
+  for (const prop of ["width", "max-width", "height", "max-height", "box-sizing", "flex"]) {
+    shell.style.removeProperty(prop);
+  }
+}
+function clearWeaverInsetVars() {
+  if (typeof document === "undefined")
+    return;
+  const root = document.documentElement;
+  root.style.removeProperty(WEAVER_INSET_L_VAR);
+  root.style.removeProperty(WEAVER_INSET_R_VAR);
+}
+function measurePinStripInsets() {
+  let left = 0;
+  let right = 0;
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return { left, right };
+  }
+  const vw = document.documentElement.clientWidth || window.innerWidth || 0;
+  const cap = TAB_LIST_WIDTH_PX + 8;
+  for (const el of document.querySelectorAll(PIN_HOST_SEL)) {
+    const style = window.getComputedStyle?.(el);
+    if (style && (style.display === "none" || style.visibility === "hidden"))
+      continue;
+    const w3 = el.offsetWidth;
+    if (w3 < 8)
+      continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1)
+      continue;
+    const mid = rect.left + rect.width / 2;
+    const strip = Math.min(w3, cap);
+    if (mid < vw / 2)
+      left = Math.max(left, strip);
+    else
+      right = Math.max(right, strip);
+  }
+  return { left, right };
+}
+function computeWeaverStripInsets() {
+  if (typeof document === "undefined")
+    return { left: 0, right: 0 };
+  if (isMobileViewport())
+    return { left: 0, right: 0 };
+  if (!isKeepTabListVisibleEnabled())
+    return { left: 0, right: 0 };
+  let gutters = { left: 0, right: 0 };
+  try {
+    gutters = computeStripGutters();
+  } catch (err) {
+    dwarn("[weaver-lane] computeStripGutters failed:", err);
+  }
+  const live = measurePinStripInsets();
+  return {
+    left: Math.max(gutters.left, live.left),
+    right: Math.max(gutters.right, live.right)
+  };
+}
+function applyLaneGeometry(dialog) {
+  const insets = computeWeaverStripInsets();
+  try {
+    const root = document.documentElement;
+    root.style.setProperty(WEAVER_INSET_L_VAR, `${insets.left}px`);
+    root.style.setProperty(WEAVER_INSET_R_VAR, `${insets.right}px`);
+  } catch (err) {
+    dwarn("[weaver-lane] publish weaver inset vars failed:", err);
+  }
+  setImportant(dialog, "position", "fixed");
+  setImportant(dialog, "inset", "unset");
+  setImportant(dialog, "top", "0px");
+  setImportant(dialog, "bottom", "0px");
+  setImportant(dialog, "left", `${insets.left}px`);
+  setImportant(dialog, "right", `${insets.right}px`);
+  setImportant(dialog, "width", "auto");
+  setImportant(dialog, "height", "auto");
+  setImportant(dialog, "max-width", "none");
+  setImportant(dialog, "max-height", "none");
+  setImportant(dialog, "box-sizing", "border-box");
+  setImportant(dialog, "overflow", "hidden");
+  setImportant(dialog, "display", "flex");
+  setImportant(dialog, "align-items", "center");
+  setImportant(dialog, "justify-content", "center");
+  const shell = dialog.firstElementChild;
+  if (shell) {
+    setImportant(shell, "width", "min(100%, 1180px)");
+    setImportant(shell, "max-width", "100%");
+    setImportant(shell, "height", "min(100%, 880px)");
+    setImportant(shell, "max-height", "100%");
+    setImportant(shell, "box-sizing", "border-box");
+    setImportant(shell, "flex", "0 1 auto");
+  }
+}
+function findWeaverDialog() {
+  if (typeof document === "undefined")
+    return null;
+  const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+  for (const d3 of dialogs) {
+    const label = (d3.getAttribute("aria-label") || "").toLowerCase();
+    if (label.includes("weaver"))
+      return d3;
+    if (d3.getAttribute(WEAVER_LANE_ATTR) === "1")
+      return d3;
+  }
+  let modal = null;
+  try {
+    modal = getActiveModal(true);
+  } catch (err) {
+    dwarn("[weaver-lane] getActiveModal failed:", err);
+  }
+  if (modal === "weaver") {
+    return document.querySelector('[role="dialog"][aria-modal="true"]');
+  }
+  return null;
+}
+function clearTaggedDialog() {
+  if (_taggedDialog) {
+    clearShellInlineStyles(_taggedDialog);
+    clearLaneInlineStyles(_taggedDialog);
+    _taggedDialog.removeAttribute(WEAVER_LANE_ATTR);
+    _taggedDialog = null;
+  } else if (typeof document !== "undefined") {
+    const tagged = document.querySelector(`[${WEAVER_LANE_ATTR}="1"]`);
+    if (tagged) {
+      clearShellInlineStyles(tagged);
+      clearLaneInlineStyles(tagged);
+      tagged.removeAttribute(WEAVER_LANE_ATTR);
+    }
+  }
+  clearWeaverInsetVars();
+  setResizeListening(false);
+  setPoll(false);
+  try {
+    publishContentLaneInsets();
+  } catch {}
+}
+function setResizeListening(on) {
+  if (typeof window === "undefined")
+    return;
+  if (on && !_resizeListening) {
+    window.addEventListener("resize", scheduleApply);
+    _resizeListening = true;
+  } else if (!on && _resizeListening) {
+    window.removeEventListener("resize", scheduleApply);
+    _resizeListening = false;
+  }
+}
+function setPoll(on) {
+  if (on && _pollTimer === null) {
+    _pollTimer = setInterval(() => {
+      if (!_active2) {
+        setPoll(false);
+        return;
+      }
+      scheduleApply();
+    }, POLL_MS);
+  } else if (!on && _pollTimer !== null) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
 }
 function applyWeaverLane() {
   if (!_active2)
     return;
-  const modal = getActiveModal();
-  try {
-    publishContentLaneInsets();
-  } catch (err) {
-    dwarn("[weaver-lane] publishContentLaneInsets failed:", err);
-  }
-  if (modal === "weaver") {
-    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
-    if (dialog && !dialog.hasAttribute(WEAVER_LANE_ATTR)) {
-      dialog.setAttribute(WEAVER_LANE_ATTR, "1");
+  const dialog = findWeaverDialog();
+  if (dialog) {
+    if (_taggedDialog && _taggedDialog !== dialog) {
+      clearShellInlineStyles(_taggedDialog);
+      clearLaneInlineStyles(_taggedDialog);
+      _taggedDialog.removeAttribute(WEAVER_LANE_ATTR);
     }
-  } else {
-    const tagged = document.querySelector(`[${WEAVER_LANE_ATTR}="1"]`);
-    if (tagged) {
-      tagged.removeAttribute(WEAVER_LANE_ATTR);
+    dialog.setAttribute(WEAVER_LANE_ATTR, "1");
+    _taggedDialog = dialog;
+    applyLaneGeometry(dialog);
+    setResizeListening(true);
+    setPoll(true);
+    if (!_drawersClosedForWeaver) {
+      _drawersClosedForWeaver = true;
+      closeBothDrawersForWeaver();
     }
+    return;
   }
+  if (_taggedDialog || typeof document !== "undefined" && document.querySelector(`[${WEAVER_LANE_ATTR}="1"]`)) {
+    clearTaggedDialog();
+  }
+  _drawersClosedForWeaver = false;
 }
 function scheduleApply() {
   if (_rafId !== null)
@@ -13243,15 +13574,10 @@ function startWeaverLane() {
   injectWeaverLaneStyles();
   _active2 = true;
   scheduleApply();
-  _observer2 = new MutationObserver((mutations) => {
+  _observer2 = new MutationObserver(() => {
     if (!_active2)
       return;
-    for (const mutation of mutations) {
-      if (mutation.type === "childList") {
-        scheduleApply();
-        break;
-      }
-    }
+    scheduleApply();
   });
   _observer2.observe(document.body, { childList: true, subtree: true });
   return () => {
@@ -13264,10 +13590,9 @@ function startWeaverLane() {
       _observer2.disconnect();
       _observer2 = null;
     }
-    const tagged = document.querySelector(`[${WEAVER_LANE_ATTR}="1"]`);
-    if (tagged) {
-      tagged.removeAttribute(WEAVER_LANE_ATTR);
-    }
+    setPoll(false);
+    clearTaggedDialog();
+    _drawersClosedForWeaver = false;
   };
 }
 
