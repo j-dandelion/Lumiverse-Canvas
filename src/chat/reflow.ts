@@ -35,6 +35,10 @@ import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
 
+// CSS variable names for content lane insets (published on documentElement).
+export const CONTENT_INSET_L_VAR = '--sidebar-ux-content-inset-l'
+export const CONTENT_INSET_R_VAR = '--sidebar-ux-content-inset-r'
+
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { isKeepTabListVisibleEnabled } from '../settings/state'
@@ -86,6 +90,91 @@ export function injectReflowStyles(): void {
 
 let _reflowRaf: number | null = null
 
+/**
+ * Compute the content lane insets — the left/right visual margin that
+ * remains visible between the drawer chrome and the viewport edge.
+ * Returns {left, right} in pixels.
+ *
+ * Exact same math as the chat-reflow margins: main mirror OR host drawer
+ * on one side, secondary open / pin strip on the other, dock-panel clamp,
+ * mobile → {0, 0}. Extracted so the weaver-lane module and other always-on
+ * consumers can position content without duplicating the geometry logic.
+ */
+export function computeContentLaneInsets(): { left: number; right: number } {
+  if (isMobileViewport()) {
+    return { left: 0, right: 0 }
+  }
+
+  const mainSide = getMainDrawerSide()
+  // When Canvas owns main chrome (keepTabListVisible desktop), reflow
+  // follows the Canvas main shell — not host wrapperOpen.
+  let mainWidth: number
+  if (isMainMirrorActive()) {
+    if (isCanvasMainOpen()) {
+      mainWidth =
+        parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) ||
+        420
+    } else {
+      // Closed mirror: permanent pin strip still occupies the edge.
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
+  } else {
+    const mainOpen = isMainDrawerOpen()
+    mainWidth = mainOpen ? getMainDrawerWidth() : 0
+    // Legacy pin path: closed host drawer but strip still visible.
+    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
+      mainWidth = TAB_LIST_WIDTH_PX
+    }
+  }
+
+  // Secondary is opposite main. Open → live width; keep-tabs closed with
+  // a secondary pin strip → reserve strip so content does not sit under buttons.
+  let secondaryWidth = isSecondarySidebarOpen()
+    ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+    : 0
+  if (
+    secondaryWidth === 0 &&
+    isKeepTabListVisibleEnabled() &&
+    getSecondaryTabList()
+  ) {
+    secondaryWidth = TAB_LIST_WIDTH_PX
+  }
+
+  // Account for the LumiScript dock panel widths. The dock panel and the
+  // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with
+  // `position: fixed`; the drawer has higher z-index). The App's padding
+  // already pushes the chat by the dock panel's width, so we subtract it
+  // from the drawer's width to avoid double-counting. If the dock panel
+  // is wider than the drawer, the result is clamped to 0.
+  const dockInsets = getDockInsets()
+  let rightMargin: number
+  let leftMargin: number
+  if (mainSide === 'left') {
+    rightMargin = secondaryWidth
+    leftMargin = mainWidth
+  } else {
+    rightMargin = mainWidth
+    leftMargin = secondaryWidth
+  }
+  rightMargin = Math.max(0, rightMargin - dockInsets.right)
+  leftMargin = Math.max(0, leftMargin - dockInsets.left)
+
+  return { left: leftMargin, right: rightMargin }
+}
+
+/**
+ * Publish the content lane insets as CSS variables on document.documentElement.
+ * These vars are read by the weaver-lane module and any other always-on
+ * consumer that needs to position content within the visible lane.
+ * Always safe to call (no-op in mobile viewport). Not gated on chatReflow.
+ */
+export function publishContentLaneInsets(): void {
+  const insets = computeContentLaneInsets()
+  const root = document.documentElement
+  root.style.setProperty(CONTENT_INSET_L_VAR, `${insets.left}px`)
+  root.style.setProperty(CONTENT_INSET_R_VAR, `${insets.right}px`)
+}
+
 // --- Viewport-cross state (mirrors the pattern in mobile-exclusion.ts) ---
 // MatchMedia 'change' fires once per 600px boundary crossing. The
 // reflow MutationObserver on the main wrapper only fires on class
@@ -125,78 +214,23 @@ export function updateChatReflow(): void {
   // state, drop it before returning.
   if (isMobileViewport()) {
     clearChatMargins()
+    publishContentLaneInsets()
     return
   }
 
-  const mainSide = getMainDrawerSide()
-  // When Canvas owns main chrome (keepTabListVisible desktop), reflow
-  // follows the Canvas main shell — not host wrapperOpen.
-  let mainWidth: number
-  if (isMainMirrorActive()) {
-    if (isCanvasMainOpen()) {
-      mainWidth =
-        parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) ||
-        420
-    } else {
-      // Closed mirror: permanent pin strip still occupies the edge.
-      mainWidth = TAB_LIST_WIDTH_PX
-    }
-  } else {
-    const mainOpen = isMainDrawerOpen()
-    mainWidth = mainOpen ? getMainDrawerWidth() : 0
-    // Legacy pin path: closed host drawer but strip still visible.
-    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
-      mainWidth = TAB_LIST_WIDTH_PX
-    }
-  }
-
-  // Secondary is opposite main. Open → live width; keep-tabs closed with
-  // a secondary pin strip → reserve strip so chat does not sit under buttons.
-  let secondaryWidth = isSecondarySidebarOpen()
-    ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-    : 0
-  if (
-    secondaryWidth === 0 &&
-    isKeepTabListVisibleEnabled() &&
-    getSecondaryTabList()
-  ) {
-    secondaryWidth = TAB_LIST_WIDTH_PX
-  }
-
-  // Account for the LumiScript dock panel widths. The dock panel and the
-  // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with
-  // `position: fixed`; the drawer has higher z-index). The App's padding
-  // already pushes the chat by the dock panel's width, so we subtract it
-  // from the drawer's width to avoid double-counting. If the dock panel
-  // is wider than the drawer, the result is clamped to 0.
-  const dockInsets = getDockInsets()
-  let rightMargin: number
-  let leftMargin: number
-  if (mainSide === 'left') {
-    rightMargin = secondaryWidth
-    leftMargin = mainWidth
-  } else {
-    rightMargin = mainWidth
-    leftMargin = secondaryWidth
-  }
-  rightMargin = Math.max(0, rightMargin - dockInsets.right)
-  leftMargin = Math.max(0, leftMargin - dockInsets.left)
-
-  setChatMargin('right', rightMargin)
-  setChatMargin('left', leftMargin)
+  const insets = computeContentLaneInsets()
+  setChatMargin('right', insets.right)
+  setChatMargin('left', insets.left)
+  publishContentLaneInsets()
 }
 
 /** MatchMedia change handler. On cross-down, drop any stale inline
  *  margin vars. On cross-up, re-run the desktop reflow. */
 function _onMediaChangeImpl(e: MediaQueryListEvent): void {
   if (e.matches) {
-    // Cross-down into mobile: clear any stale inline vars from a
-    // prior desktop state. The injected mobile CSS rule (see
-    // injectReflowStyles) keeps the chat column at margin: 0 on
-    // mobile; this ensures we don't leave our own inline vars in
-    // place that the host CSS would otherwise re-apply on the
-    // next toggle.
+    // Cross-down into mobile: clear margins + content insets.
     clearChatMargins()
+    publishContentLaneInsets()
   } else {
     // Cross-up to desktop: recompute margins. updateChatReflow
     // reads isMobileViewport() fresh, so this is safe to call

@@ -37,11 +37,30 @@ export interface DrawerStoreSnapshot {
     side?: 'left' | 'right'
     showTabLabels?: boolean
   }
+  /** Name of the currently active modal dialog, if any (e.g. "weaver").
+   * May not be present in all Lumiverse versions — callers should handle
+   * null (field absent) gracefully without fuzzy-matching dialogs. */
+  activeModal?: string
 }
 
 /** Cast a raw store snapshot to the narrow DrawerStoreSnapshot view. */
 export function asDrawerStore(store: Record<string, unknown>): DrawerStoreSnapshot {
   return store as DrawerStoreSnapshot
+}
+
+/**
+ * Read the active modal name from the store snapshot, or null when no modal
+ * is open or the field is not present in this Lumiverse version.
+ * Use force=true to bust the 3s TTL and re-walk the fiber tree.
+ */
+export function getActiveModal(force = false): string | null {
+  if (force) findStoreData(true)
+  else findStoreData()
+  const store = _storeSnapshotCache
+  if (!store) return null
+  const v = store['activeModal']
+  if (typeof v === 'string') return v
+  return null
 }
 
 function scanForStoreData(fiber: any, depth: number, maxDepth: number, visited: Set<any>, force: boolean): void {

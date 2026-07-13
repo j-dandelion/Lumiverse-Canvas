@@ -30,6 +30,10 @@ let _fakeSecondaryWrapper: any = null
 let _fakeMainSidebar: any = null
 
 ;(globalThis as any).document = {
+  documentElement: {
+    style: { setProperty: () => {}, getPropertyValue: () => '', removeProperty: () => {} },
+    classList: { add() {}, remove() {}, contains() { return false }, toggle() {} },
+  },
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeMainSidebar
     if (sel === '.sidebar-ux-resize-handle') return null
@@ -82,6 +86,10 @@ let _fakeMainSidebar: any = null
 ;(globalThis as any).MutationObserver = class { observe() {} disconnect() {} }
 ;(globalThis as any).ResizeObserver = class { observe() {} disconnect() {} }
 ;(globalThis as any).HTMLElement = class {}
+// Permanent window.matchMedia — survive setupEnv/restoreEnv
+;(globalThis as any).window = Object.assign(globalThis.window ?? {}, {
+  matchMedia: (_q: string) => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+})
 
 // =====================================================================
 // Imports

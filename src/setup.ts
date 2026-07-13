@@ -52,6 +52,7 @@ import { startContextMenuListener, stopContextMenuListener } from './context-men
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
+import { startWeaverLane } from './modals/weaver-lane'
 
 export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
@@ -213,6 +214,11 @@ export function setup(ctx: SpindleFrontendContext) {
     // from the footer toggle inside the modal.
     startConfigureTabsIntercept()
     registerCleanup(stopConfigureTabsIntercept)
+
+    // Weaver Studio content-lane containment is always on while Canvas is
+    // loaded, independent of chatReflow setting. It constrains the weaver
+    // dialog to the visible content lane between drawer/strip insets.
+    registerCleanup(startWeaverLane())
 
     // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
     // on extension disable.
