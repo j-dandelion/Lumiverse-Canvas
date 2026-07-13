@@ -10971,7 +10971,6 @@ function scheduleDragFrame() {
     if (!target) {
       if (prev) {
         clearInsertIndicator();
-        _lastDropTarget2 = null;
       }
       return;
     }

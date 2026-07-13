@@ -1064,11 +1064,12 @@ function scheduleDragFrame(): void {
       prev.secondary === target.secondary
 
     if (!target) {
-      // Remove indicator but keep _lastDropTarget if we were over a valid target
-      // (so adding/removing indicator is a no-op when we briefly leave)
+      // Sticky last drop: keep `_lastDropTarget` when the float briefly leaves
+      // hit-pad (edge of padX/padY, or rAF miss on release). Mid-drag DOM is
+      // already reordered to that slot — clearing the target made pointerup
+      // take the cancel path and snap back "to where it was".
       if (prev) {
         clearInsertIndicator()
-        _lastDropTarget = null
       }
       return
     }
