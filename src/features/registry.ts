@@ -45,10 +45,6 @@ import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
 import { drawerTabDragFeature } from './drawer-tab-position'
-import {
-  startConfigureTabsIntercept,
-  stopConfigureTabsIntercept,
-} from '../tabs/configure-intercept'
 
 /** A teardown returned by mount(). */
 export type Teardown = () => void
@@ -151,8 +147,8 @@ const chatReflowFeature: CanvasFeature = {
  *  at the right size on the first paint (gated per layout facet).
  *  Runtime re-apply re-uses the last loaded layout to restore tab assignments.
  *
- *  Also manages the Configure Tabs intercept lifecycle:
- *  starts when second sidebar is enabled, stops on disable/teardown.
+ *  The Configure Tabs intercept lifecycle is now owned by setup.ts (always-on
+ *  while Canvas is loaded), not tied to second-drawer state.
  *
  *  Tab-assignment persistence is always-on (built-in), so hasTabsToRestore
  *  only checks for layout detachedTabs (no longer gated on a setting). */
@@ -171,15 +167,8 @@ const secondSidebarFeature: CanvasFeature = {
     )
     mountSecondarySidebar({ initialWidth, initialOpen })
 
-    // Start configure-tabs intercept when second sidebar is on.
-    startConfigureTabsIntercept()
-
-    // Compose teardown: tear down secondary sidebar AND stop intercept.
-    // Note: intercept stop does not close the Configure Tabs modal;
-    // the second-drawer mode controller refreshes any still-open modal.
     const teardown = () => {
       tearDownSecondarySidebar()
-      stopConfigureTabsIntercept()
     }
     return teardown
   },
@@ -200,13 +189,7 @@ const secondSidebarFeature: CanvasFeature = {
         mountSecondarySidebar({ initialWidth, initialOpen })
         if (layout) applyLayout(layout)
       }
-      // Re-start intercept when turned back on.
-      startConfigureTabsIntercept()
     } else {
-      // Stop intercept when turned off. The second-drawer mode controller
-      // (settings/second-drawer-mode.ts) refreshes any still-open Configure
-      // Tabs modal from live on mode switch.
-      stopConfigureTabsIntercept()
       tearDownSecondarySidebar()
     }
   },

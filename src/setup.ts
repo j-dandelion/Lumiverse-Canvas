@@ -51,6 +51,7 @@ import { initSecondaryDrawer, teardownSecondaryDrawer, isRestoringFromLayout } f
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
+import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
 
 export function setup(ctx: SpindleFrontendContext) {
   setBackendCtx(ctx)
@@ -205,6 +206,13 @@ export function setup(ctx: SpindleFrontendContext) {
     // setting later if requested.
     startContextMenuListener()
     registerCleanup(stopContextMenuListener)
+
+    // Configure Tabs intercept is always on while Canvas is loaded, so
+    // right-click → "Configure tabs" routes to Canvas's modal regardless
+    // of second-drawer state. This lets users enable the second drawer
+    // from the footer toggle inside the modal.
+    startConfigureTabsIntercept()
+    registerCleanup(stopConfigureTabsIntercept)
 
     // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
     // on extension disable.

@@ -10,7 +10,10 @@
 // second menu button (configure). If so, it intercepts: dismisses the host
 // menu and opens the Canvas configure modal.
 //
-// Only active when secondSidebarEnabled is true.
+// Active whenever Canvas is loaded: started from setup.ts on boot, stopped
+// on extension cleanup. This guarantees "Configure tabs" always routes to
+// Canvas's modal even when the second drawer is disabled, so the user can
+// use the footer toggle to enable it.
 //
 // Note: stopping the intercept does NOT close the modal. The second-drawer
 // mode controller (settings/second-drawer-mode.ts) owns modal lifecycle on

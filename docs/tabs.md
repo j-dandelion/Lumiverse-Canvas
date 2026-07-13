@@ -94,7 +94,12 @@ Captures ordered tab IDs before the move. For primary: merges DOM buttons (built
 
 ## Dual Mode × Configure Tabs (`tabs/configure-*.ts` + `layout/vanilla-baseline.ts`)
 
-When the second drawer is on, Configure Tabs runs in dual-column mode. The user can reorder tabs across columns, change visibility, swap drawer sides, and apply the change. The host `drawerSettings` are patched in one atomic-like write via `commitConfigureDraft` (see `tabs/configure-commit.ts`).
+Canvas intercepts "Configure tabs" from Lumiverse's context menu regardless of whether the second drawer is enabled (always-on intercept, started in `setup.ts`). The modal presentation depends on the second-drawer state:
+
+- **Second drawer enabled**: Configure Tabs opens in dual-column mode. The user can reorder tabs across columns, change visibility, swap drawer sides, and apply the change.
+- **Second drawer disabled**: Configure Tabs still opens (Canvas modal, not vanilla Lumiverse). The footer toggle lets the user enable the second drawer directly from within the modal.
+
+The host `drawerSettings` are patched in one atomic-like write via `commitConfigureDraft` (see `tabs/configure-commit.ts`).
 
 ### Conflict rule: baseline wins on disable
 
