@@ -1,6 +1,6 @@
 // Drag-and-drop tab reorder on live drawer tabs.
 //
-// Long-press (~300ms) on any tab button lifts it into a floating overlay
+// Long-press (~200ms) on any tab button lifts it into a floating overlay
 // clone. While dragging, hit-test finds the drop target (within or across
 // drawers). On pointerup, builds a ConfigureDraft from current state,
 // applies the reorder/move, and commits via the configure pipeline
@@ -1468,7 +1468,7 @@ function installLongPressOnButton(btn: HTMLElement): void {
     const startX = e.clientX
     const startY = e.clientY
 
-    // Start long-press timer (~300ms)
+    // Start long-press timer (~200ms)
     longPressTimer = setTimeout(() => {
       longPressTimer = null
       cleanupPendingListeners()
@@ -1477,7 +1477,7 @@ function installLongPressOnButton(btn: HTMLElement): void {
 
       // Activate drag
       startDrag(btn, e)
-    }, 300)
+    }, 200)
 
     // Document-level move listener — stays until timer fires, pointerup,
     // or cancel threshold is crossed. Using document-level ensures that

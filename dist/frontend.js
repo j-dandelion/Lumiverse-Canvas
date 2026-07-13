@@ -11132,7 +11132,7 @@ function installLongPressOnButton(btn) {
         return;
       longPressActivated = true;
       startDrag(btn, e3);
-    }, 300);
+    }, 200);
     const onMove = (ev) => {
       if (longPressActivated)
         return;
