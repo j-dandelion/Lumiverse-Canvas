@@ -68,8 +68,14 @@ export type CommitResult = { ok: true } | { ok: false; error: string }
  * Quiet live-DnD / Configure must do the same or main-mirror panel content
  * jumps to the top-most primary tab.
  *
- * Returns disconnect + optional reassert helpers; no-op when the active tab
- * itself is among the moved set (handoff owns neighbor selection then).
+ * Stick pattern (matches assignTab inactive restore + activateInPrimary):
+ * keep re-clicking while wrong for the full safety window — do NOT disconnect
+ * on the first correction. Quiet moves can flip active twice (ensureBuiltIn
+ * pre-activate of a never-mounted tab, then host pendingActiveTabReset to the
+ * first remaining primary). Early disconnect left the second flip stuck.
+ *
+ * Returns disconnect + reassert helpers; no-op when the active tab itself is
+ * among the moved set (handoff owns neighbor selection then).
  */
 function armPreservePrimaryActiveOnQuietToSecondary(
   toSecondary: string[],
@@ -94,7 +100,10 @@ function armPreservePrimaryActiveOnQuietToSecondary(
   // Also skip if any moved tab claims active via store/DOM (id alias).
   if (toSecondary.some((id) => isTabActiveInMainDrawer(id))) return null
 
-  let observer: MutationObserver | null = new MutationObserver(() => {
+  const restorePrimaryActive = (): void => {
+    const btn =
+      (findMainTabButton(preActiveId) as HTMLElement | null) || preActiveBtn
+    if (!btn) return
     const active = sidebar.querySelector(
       'button.tabBtnActive, button[class*="tabBtnActive"]',
     ) as HTMLElement | null
@@ -102,33 +111,45 @@ function armPreservePrimaryActiveOnQuietToSecondary(
       active?.getAttribute('data-tab-id')
       || active?.getAttribute('title')
       || null
-    if (activeId && activeId !== preActiveId) {
-      if (observer) {
-        observer.disconnect()
-        observer = null
+    if (activeId !== preActiveId) {
+      try {
+        btn.click()
+      } catch {
+        /* host may throw during teardown */
       }
-      // Prefer live button by id (React may have replaced the node).
-      const btn =
-        (findMainTabButton(preActiveId) as HTMLElement | null) || preActiveBtn
-      btn.click()
-      const title =
-        btn.getAttribute('title')
-        || btn.getAttribute('aria-label')
-        || undefined
-      adoptMainMirrorHostActivation(btn, title)
     }
+    const title =
+      btn.getAttribute('title')
+      || btn.getAttribute('aria-label')
+      || undefined
+    try {
+      adoptMainMirrorHostActivation(btn, title)
+    } catch {
+      /* mirror may be off / mid-teardown */
+    }
+  }
+
+  let observer: MutationObserver | null = new MutationObserver(() => {
+    // Keep observing — host may override again after ensureBuiltIn or after
+    // our own re-click races pendingActiveTabReset.
+    restorePrimaryActive()
   })
   observer.observe(sidebar, {
     attributes: true,
     attributeFilter: ['class'],
     subtree: true,
   })
+  // Longer than assignTab's 200ms stick: quiet batch does multi-tab moves +
+  // handoff + pin reconcile; host reset can land late in that window.
   const safetyTimer = setTimeout(() => {
     if (observer) {
       observer.disconnect()
       observer = null
     }
-  }, 250)
+    // Final restore after host useEffect window (same idea as activateInPrimary
+    // 100ms re-click, but at end of safety).
+    restorePrimaryActive()
+  }, 350)
 
   const disconnect = () => {
     clearTimeout(safetyTimer)
@@ -139,23 +160,7 @@ function armPreservePrimaryActiveOnQuietToSecondary(
   }
 
   const reassert = () => {
-    const btn =
-      (findMainTabButton(preActiveId) as HTMLElement | null) || preActiveBtn
-    const active = sidebar.querySelector(
-      'button.tabBtnActive, button[class*="tabBtnActive"]',
-    ) as HTMLElement | null
-    const activeId =
-      active?.getAttribute('data-tab-id')
-      || active?.getAttribute('title')
-      || null
-    if (activeId !== preActiveId) {
-      btn.click()
-    }
-    const title =
-      btn.getAttribute('title')
-      || btn.getAttribute('aria-label')
-      || undefined
-    adoptMainMirrorHostActivation(btn, title)
+    restorePrimaryActive()
   }
 
   return { disconnect, reassert }
@@ -298,10 +303,16 @@ export async function commitConfigureDraft(
     }
     await Promise.all(movePromises)
 
-    // Let host React commit pendingActiveTabReset, then stop the observer.
+    // Give host React a frame to apply pendingActiveTabReset. Keep the stick
+    // observer armed through handoff + reorder + pin reconcile — disconnecting
+    // after one rAF raced a second host reset (ensureBuiltIn then first-tab).
     if (preservePrimary) {
       await new Promise<void>((r) => requestAnimationFrame(() => r()))
-      preservePrimary.disconnect()
+      try {
+        preservePrimary.reassert()
+      } catch (err) {
+        dwarn('[configure-commit] post-move primary active reassert failed:', err)
+      }
     }
 
     // 4d. Source neighbor + destination activation (same rules as assignTab /
@@ -375,7 +386,9 @@ export async function commitConfigureDraft(
     }
 
     // Reconcile can re-sync mirror chrome from host; reassert once more if we
-    // were preserving a non-moved primary active tab.
+    // were preserving a non-moved primary active tab, then release the stick
+    // observer. A delayed reassert covers host useEffects that fire after
+    // this async function returns (pendingActiveTabReset lag).
     if (preservePrimary) {
       try {
         preservePrimary.reassert()
@@ -386,6 +399,20 @@ export async function commitConfigureDraft(
         const mm = await import('../sidebar/main-mirror-drawer')
         if (mm.isMainMirrorActive?.()) mm.ensureHostContentParkedPublic?.()
       } catch { /* ignore */ }
+      // Stick ~100ms more (activateInPrimary verification window), then drop.
+      const stick = preservePrimary
+      void new Promise<void>((r) => setTimeout(() => r(), 120)).then(() => {
+        try {
+          stick.reassert()
+        } catch {
+          /* ignore */
+        }
+        try {
+          stick.disconnect()
+        } catch {
+          /* ignore */
+        }
+      })
     }
 
     // 8. One persist. Tab-assignment persistence is always-on (built-in),

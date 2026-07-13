@@ -123,6 +123,24 @@ if (typeof getComputedStyle === 'undefined') {
   ;(globalThis as any).getComputedStyle = (el: any) => el?.style ?? {}
 }
 
+// Bun bare runtime has no MutationObserver / rAF — configure-commit preserve
+// and builtin-move need them. Minimal shims (observe no-ops; rAF → macrotask).
+if (typeof (globalThis as any).MutationObserver === 'undefined') {
+  ;(globalThis as any).MutationObserver = class {
+    constructor(_cb: MutationCallback) {}
+    observe() {}
+    disconnect() {}
+    takeRecords() { return [] }
+  }
+}
+if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
+  ;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) =>
+    setTimeout(() => cb(Date.now()), 0) as unknown as number
+}
+if (typeof (globalThis as any).cancelAnimationFrame !== 'function') {
+  ;(globalThis as any).cancelAnimationFrame = (id: number) => clearTimeout(id)
+}
+
 const NO_TABS_DRAFT: ConfigureDraft = {
   drawerSide: 'right',
   primaryIds: [],
@@ -982,6 +1000,167 @@ function wireSecondaryShell(
   assert(
     !iconHtml.includes('M15.39 4.39'),
     'C12: secondary button does not use puzzle path',
+  )
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// =====================================================================
+// C14: primary → secondary of *inactive* tab preserves primary active
+//     Regression (main-mirror live DnD): 3rd tab active, drag 6th to
+//     second drawer → host pendingActiveTabReset jumps drawerTab to the
+//     top-most remaining primary tab; panel content must stay on the
+//     pre-move active tab (rClick assignTab parity).
+// =====================================================================
+{
+  setup()
+  // Desktop: armPreservePrimaryActiveOnQuietToSecondary skips mobile.
+  // Default stubHostBridge matchMedia treats ≤600 as true — override.
+  if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
+    ;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) =>
+      setTimeout(() => cb(0), 0) as unknown as number
+  }
+
+  const clicks: string[] = []
+  const makeMainBtn = (id: string, active: boolean) => {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    btn.setAttribute('title', id)
+    btn.className = active ? 'tabBtn tabBtnActive' : 'tabBtn'
+    btn.click = () => {
+      clicks.push(id)
+      // Simulate host accepting the click: exclusive tabBtnActive.
+      for (const b of mainButtons) {
+        b.className = b === btn ? 'tabBtn tabBtnActive' : 'tabBtn'
+      }
+    }
+    btn.querySelector = () => null
+    return btn
+  }
+
+  const btnA = makeMainBtn('tab-a', false) // top-most
+  const btnB = makeMainBtn('tab-b', true)  // pre-move active (3rd-like)
+  const btnC = makeMainBtn('tab-c', false) // dragged inactive
+  const mainButtons = [btnA, btnB, btnC]
+
+  const mainSidebar: any = document.createElement('div')
+  mainSidebar.setAttribute('data-spindle-mount', 'sidebar')
+  mainSidebar.querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('tabBtnActive')) {
+      return mainButtons.find((b) => String(b.className).includes('tabBtnActive')) ?? null
+    }
+    const idM = typeof sel === 'string' ? sel.match(/data-tab-id="([^"]+)"/) : null
+    if (idM) return mainButtons.find((b) => b.getAttribute('data-tab-id') === idM[1]) ?? null
+    const titleM = typeof sel === 'string' ? sel.match(/title="([^"]+)"/) : null
+    if (titleM) return mainButtons.find((b) => b.getAttribute('title') === titleM[1]) ?? null
+    return null
+  }
+  mainSidebar.querySelectorAll = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-tab-id')) return mainButtons.slice()
+    if (typeof sel === 'string' && sel.includes('button')) return mainButtons.slice()
+    return []
+  }
+
+  ;(document as any).querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-spindle-mount')) return mainSidebar
+    return null
+  }
+
+  const rootC: any = document.createElement('div')
+  rootC.querySelector = () => null
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.children = panelContent.children || []
+  const origAppend = panelContent.appendChild.bind(panelContent)
+  panelContent.appendChild = (c: unknown) => {
+    origAppend(c)
+    if (Array.isArray(panelContent.children) && !panelContent.children.includes(c)) {
+      panelContent.children.push(c)
+    }
+    return c
+  }
+
+  const tabList: any = makeStubTabList()
+  if (!Array.isArray(tabList.children)) tabList.children = []
+  tabList.querySelectorAll = (sel: string) => {
+    if (!sel.includes('data-tab-id')) return []
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return []
+    return (tabList.children as any[]).filter(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    )
+  }
+  tabList.querySelector = (sel: string) => tabList.querySelectorAll(sel)[0] ?? null
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [])
+  __setSecondaryWrapperForTest(wrapper)
+
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: (id: string) => (id === 'tab-c' ? rootC : undefined),
+        getBuiltInTabTitle: (id: string) => id,
+        requestTabLocation: () => {
+          // Host pendingActiveTabReset → first non-moved primary (tab-a).
+          btnA.className = 'tabBtn tabBtnActive'
+          btnB.className = 'tabBtn'
+          btnC.className = 'tabBtn'
+        },
+        getTabLocation: () => ({ kind: 'container', containerId: 'canvas-secondary-drawer' }),
+      },
+      containers: {},
+    },
+    // Desktop viewport so preserve + handoff dest activation run.
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  }
+
+  __setHostSetSettingForTest(
+    () => {},
+    {
+      side: 'right',
+      tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+      hiddenTabIds: [],
+      showTabLabels: false,
+    },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-a', 'tab-b'],
+    secondaryIds: ['tab-c'],
+    builtinOrder: ['tab-a', 'tab-b', 'tab-c'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'primary'],
+      ['tab-b', 'primary'],
+      ['tab-c', 'primary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C14: commit ok')
+  assertEqual(getTabAssignments().get('tab-c'), 'secondary', 'C14: tab-c moved to secondary')
+  assert(
+    clicks.includes('tab-b'),
+    'C14: re-clicked pre-move active tab-b after host reset to top tab',
+  )
+  assert(
+    String(btnB.className).includes('tabBtnActive'),
+    'C14: tab-b still host-active after quiet move of inactive tab-c',
+  )
+  assert(
+    !String(btnA.className).includes('tabBtnActive'),
+    'C14: top-most tab-a is not left active',
   )
 
   __setSecondaryWrapperForTest(null)

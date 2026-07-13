@@ -3981,19 +3981,24 @@ function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
     return null;
   if (toSecondary.some((id) => isTabActiveInMainDrawer(id)))
     return null;
-  let observer = new MutationObserver(() => {
+  const restorePrimaryActive = () => {
+    const btn = findMainTabButton(preActiveId) || preActiveBtn;
+    if (!btn)
+      return;
     const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
     const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
-    if (activeId && activeId !== preActiveId) {
-      if (observer) {
-        observer.disconnect();
-        observer = null;
-      }
-      const btn = findMainTabButton(preActiveId) || preActiveBtn;
-      btn.click();
-      const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
-      adoptMainMirrorHostActivation(btn, title);
+    if (activeId !== preActiveId) {
+      try {
+        btn.click();
+      } catch {}
     }
+    const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
+    try {
+      adoptMainMirrorHostActivation(btn, title);
+    } catch {}
+  };
+  let observer = new MutationObserver(() => {
+    restorePrimaryActive();
   });
   observer.observe(sidebar, {
     attributes: true,
@@ -4005,7 +4010,8 @@ function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
       observer.disconnect();
       observer = null;
     }
-  }, 250);
+    restorePrimaryActive();
+  }, 350);
   const disconnect = () => {
     clearTimeout(safetyTimer);
     if (observer) {
@@ -4014,14 +4020,7 @@ function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
     }
   };
   const reassert = () => {
-    const btn = findMainTabButton(preActiveId) || preActiveBtn;
-    const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-    const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
-    if (activeId !== preActiveId) {
-      btn.click();
-    }
-    const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
-    adoptMainMirrorHostActivation(btn, title);
+    restorePrimaryActive();
   };
   return { disconnect, reassert };
 }
@@ -4101,7 +4100,11 @@ async function commitConfigureDraft(draft, _base) {
     await Promise.all(movePromises);
     if (preservePrimary) {
       await new Promise((r3) => requestAnimationFrame(() => r3()));
-      preservePrimary.disconnect();
+      try {
+        preservePrimary.reassert();
+      } catch (err) {
+        dwarn("[configure-commit] post-move primary active reassert failed:", err);
+      }
     }
     for (const h3 of pendingHandoffs) {
       try {
@@ -4162,6 +4165,15 @@ async function commitConfigureDraft(draft, _base) {
         if (mm.isMainMirrorActive?.())
           mm.ensureHostContentParkedPublic?.();
       } catch {}
+      const stick = preservePrimary;
+      new Promise((r3) => setTimeout(() => r3(), 120)).then(() => {
+        try {
+          stick.reassert();
+        } catch {}
+        try {
+          stick.disconnect();
+        } catch {}
+      });
     }
     persistLayout();
     findStoreData(true);
