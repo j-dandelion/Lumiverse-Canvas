@@ -20,7 +20,9 @@ import {
   hasSecondaryAssignedTabs,
   getActiveSecondaryTabId,
   setActiveSecondaryTabId,
+  isTabActiveInMainDrawer,
 } from './assignment'
+import { runHandoff, captureSourceList } from './activation-handoff'
 import {
   hideMainTabButton,
   showMainTabButton,
@@ -137,8 +139,44 @@ export async function commitConfigureDraft(
       )
     }
 
-    // 4. Move tabs.
-    //    Parallel moves; errors caught per-tab so one failure doesn't abort batch.
+    // 4. Capture source lists + active flags *before* quiet moves so handoff
+    //    can pick the rClick neighbor (above, else below) — not first remaining.
+    //    Live drawer DnD uses this quiet path; without handoff, source kept
+    //    selecting the first tab in the strip after an active tab was moved.
+    type QuietHandoff = {
+      tabId: string
+      source: 'primary' | 'secondary'
+      destination: 'primary' | 'secondary'
+      sourceList: string[]
+      preMoveSourceActiveTab: boolean
+    }
+    const pendingHandoffs: QuietHandoff[] = []
+    if (toSecondary.length > 0) {
+      const primaryList = await captureSourceList('primary')
+      for (const tabId of toSecondary) {
+        pendingHandoffs.push({
+          tabId,
+          source: 'primary',
+          destination: 'secondary',
+          sourceList: primaryList,
+          preMoveSourceActiveTab: isTabActiveInMainDrawer(tabId),
+        })
+      }
+    }
+    if (toPrimary.length > 0) {
+      const secondaryList = await captureSourceList('secondary')
+      for (const tabId of toPrimary) {
+        pendingHandoffs.push({
+          tabId,
+          source: 'secondary',
+          destination: 'primary',
+          sourceList: secondaryList,
+          preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
+        })
+      }
+    }
+
+    // 4b. Move tabs (quiet — no per-tab handoff/persist; handoff runs in 4c).
     const movePromises: Promise<void>[] = []
 
     for (const tabId of toSecondary) {
@@ -153,10 +191,18 @@ export async function commitConfigureDraft(
     }
     await Promise.all(movePromises)
 
-    // 4b. Quiet toPrimary skips runHandoff / unassignFromSecondary. Without
-    //     this, secondary stays open with no active content after live DnD
-    //     (or Configure drag) secondary → primary — empty panel left behind.
-    //     Only when we actually moved something out of secondary.
+    // 4c. Source neighbor + destination activation (same rules as assignTab /
+    //     rClick Move). Suppress-auto-open stays on; handoff does not open.
+    for (const h of pendingHandoffs) {
+      try {
+        await runHandoff(h)
+      } catch (err) {
+        dwarn(`[configure-commit] runHandoff failed for "${h.tabId}":`, err)
+      }
+    }
+
+    // 4d. Empty secondary shell: handoff leaves active null when no neighbor.
+    //     Close the open panel so live DnD last-tab→primary is not blank.
     if (toPrimary.length > 0) {
       try {
         reconcileSecondaryAfterQuietPrimaryMoves(draft.secondaryIds)
@@ -365,9 +411,13 @@ function clearCanvasMovedAttrs(tabId: string, root?: HTMLElement | null): void {
 }
 
 /**
- * After quiet toPrimary moves: close empty secondary, or activate a remaining
- * tab so the open drawer is not a blank panel. Full assignTab runs handoff;
- * quiet path does not — live drawer DnD hits this gap.
+ * After quiet toPrimary + runHandoff: close empty secondary, or if active is
+ * still missing (handoff found no neighbor / was inactive), activate a
+ * remaining tab so the open drawer is not a blank panel.
+ *
+ * Neighbor selection for *active* moves is owned by runHandoff
+ * (pickSourceReplacement: above, else below). Do not prefer ids[0] when
+ * handoff already set a neighbor — that was the "first tab" bug.
  */
 function reconcileSecondaryAfterQuietPrimaryMoves(secondaryIds: string[]): void {
   const remaining = secondaryIds.filter((id) => {
@@ -398,8 +448,8 @@ function reconcileSecondaryAfterQuietPrimaryMoves(secondaryIds: string[]): void 
     !!active &&
     (ids.includes(active) || getTabAssignments().get(active) === 'secondary')
   if (!activeStillHere) {
-    // Neighbor / first remaining — avoids open secondary with all roots
-    // hidden via [data-canvas-moved]:not([data-canvas-active]).
+    // Fallback only when handoff did not set an active secondary (inactive
+    // move, or no neighbor). Prefer first remaining so the open panel is not blank.
     showSecondaryTab(ids[0]!)
   }
 }

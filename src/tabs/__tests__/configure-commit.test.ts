@@ -735,6 +735,118 @@ function wireSecondaryShell(
 }
 
 // =====================================================================
+// C13: secondary → primary activates *neighbor* (above), not first remaining
+//     Order [a,b,c], active=c, move c → primary. Remaining a,b — first would
+//     be a; handoff Part B picks above → b (matches rClick Move).
+// =====================================================================
+{
+  setup()
+  const { getActiveSecondaryTabId, setActiveSecondaryTabId } = await import('../assignment')
+
+  const roots: Record<string, any> = {}
+  for (const id of ['tab-a', 'tab-b', 'tab-c']) {
+    const root: any = document.createElement('div')
+    root.setAttribute('data-canvas-moved', id)
+    if (id === 'tab-c') root.setAttribute('data-canvas-active', '')
+    roots[id] = root
+  }
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  for (const id of ['tab-a', 'tab-b', 'tab-c']) panelContent.appendChild(roots[id])
+
+  const tabList: any = makeStubTabList()
+  for (const id of ['tab-a', 'tab-b', 'tab-c']) {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    const classes = new Set<string>()
+    btn.classList = {
+      add: (c: string) => { classes.add(c); btn.className = [...classes].join(' ') },
+      remove: (c: string) => { classes.delete(c); btn.className = [...classes].join(' ') },
+      toggle: (c: string, force?: boolean) => {
+        const on = force === undefined ? !classes.has(c) : !!force
+        if (on) classes.add(c); else classes.delete(c)
+        btn.className = [...classes].join(' ')
+        return on
+      },
+      contains: (c: string) => classes.has(c),
+    }
+    btn.querySelector = () => null
+    tabList.appendChild(btn)
+  }
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, Object.values(roots))
+  tabList.querySelectorAll = (sel: string) => {
+    if (sel.includes('data-tab-id') || sel.includes('button')) {
+      return [...(tabList.children as any[])]
+    }
+    return []
+  }
+  __setSecondaryWrapperForTest(wrapper)
+
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: () => undefined,
+        getBuiltInTabTitle: () => undefined,
+        requestTabLocation: () => {},
+        getTabLocation: () => null,
+      },
+      containers: {},
+    },
+    matchMedia: (q: string) => ({ matches: q === '(max-width: 600px)' }),
+  }
+
+  __setDrawerTabsForTest([
+    { id: 'tab-a', title: 'A', root: roots['tab-a'], extensionId: 'ext' },
+    { id: 'tab-b', title: 'B', root: roots['tab-b'], extensionId: 'ext' },
+    { id: 'tab-c', title: 'C', root: roots['tab-c'], extensionId: 'ext' },
+  ] as any)
+
+  setTabAssignment('tab-a', 'secondary')
+  setTabAssignment('tab-b', 'secondary')
+  setTabAssignment('tab-c', 'secondary')
+  setActiveSecondaryTabId('tab-c')
+
+  __setHostSetSettingForTest(
+    () => {},
+    { side: 'right', tabOrder: ['tab-a', 'tab-b', 'tab-c'], hiddenTabIds: [] },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-c'],
+    secondaryIds: ['tab-a', 'tab-b'],
+    builtinOrder: [],
+    extensionOrder: ['tab-a', 'tab-b', 'tab-c'],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'secondary'],
+      ['tab-b', 'secondary'],
+      ['tab-c', 'secondary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C13: commit ok')
+  assertEqual(getTabAssignments().get('tab-c'), undefined, 'C13: tab-c left secondary')
+  assertEqual(getActiveSecondaryTabId(), 'tab-b', 'C13: neighbor above (tab-b), not first remaining (tab-a)')
+  assertEqual(
+    roots['tab-b'].getAttribute('data-canvas-active'),
+    '',
+    'C13: tab-b root active',
+  )
+  __setSecondaryWrapperForTest(null)
+}
+
+// =====================================================================
 // C12: primary → secondary quiet move preserves tab icon (not puzzle)
 //     Regression: live DnD / Configure quiet path only passed store
 //     iconSvg/iconUrl; host strip tabs often have no store icons —

@@ -221,8 +221,10 @@ async function isMovedTabActiveInSource(tabId: string, side: 'primary' | 'second
  * Logic: pick the tab immediately above (lower index) the moved tab.
  * If none exists above, pick the tab immediately below (higher index).
  * If the list has no neighbor, return null (drawer ends empty).
+ *
+ * Exported for quiet configure/live-DnD commit (same rule as rClick assignTab).
  */
-function pickSourceReplacement(tabId: string, sourceList: string[]): string | null {
+export function pickSourceReplacement(tabId: string, sourceList: string[]): string | null {
   const idx = sourceList.indexOf(tabId)
   if (idx === -1) return sourceList.length > 0 ? sourceList[0] : null
   if (idx > 0) return sourceList[idx - 1]
