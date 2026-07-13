@@ -297,7 +297,7 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   // Re-apply pin after construction/remount. Setting can stay true across a
   // side-change remount while the fresh DOM is unpinned.
   reconcileTabListPin()
-  // Secondary list presence affects opposite-edge keep-tabs strip gutter.
+  // Secondary list presence affects opposite-edge taskbar-mode strip gutter.
   void import('./strip-gutter').then((m) => m.updateStripGutters())
   // Phase 3: sync the in-flight state to the initial layout so a hard-refresh
   // with secondary open doesn't trip the "no transition needed" check inside

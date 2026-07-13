@@ -4,8 +4,8 @@
 //   1. Chat reflow — watch the main wrapper's class/style mutations and
 //      recompute the chat column's --sidebar-ux-chat-ml/mr CSS variables
 //      so the chat stays centered in the visible area when the main and/or
-//      secondary drawer is open (or pin strips under keep-tabs). Welcome/
-//      Landing is NOT a reflow consumer; keep-tabs Welcome bounds live in
+//      secondary drawer is open (or pin strips under taskbar mode). Welcome/
+//      Landing is NOT a reflow consumer; taskbar mode Welcome bounds live in
 //      sidebar/strip-gutter.ts (strip width only, static CSS on LandingPage).
 //   2. Main-sidebar button tagging — watch the main sidebar for child-list
 //      changes (tab add/replace) and tag each extension tab button with a
@@ -16,9 +16,9 @@
 // Both observers are gated on this function being called, which in setup()
 // only happens when CanvasSettings.chatReflow is on.
 //
-// Policy vs keep-tabs (see docs/chat-reflow.md):
-//   - keepTabListVisible OFF → classic host open-drawer widths on chat.
-//   - keepTabListVisible ON → main-mirror open width / closed pin-strip
+// Policy vs taskbar mode (see docs/chat-reflow.md):
+//   - taskbarMode OFF → classic host open-drawer widths on chat.
+//   - taskbarMode ON → main-mirror open width / closed pin-strip
 //     reserve; secondary open width / strip reserve. Strip gutters own
 //     Welcome only (do not override chat margins).
 //
@@ -41,7 +41,7 @@ export const CONTENT_INSET_R_VAR = '--sidebar-ux-content-inset-r'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { isKeepTabListVisibleEnabled } from '../settings/state'
+import { isTaskbarModeEnabled } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 
@@ -106,7 +106,7 @@ export function computeContentLaneInsets(): { left: number; right: number } {
   }
 
   const mainSide = getMainDrawerSide()
-  // When Canvas owns main chrome (keepTabListVisible desktop), reflow
+  // When Canvas owns main chrome (taskbarMode desktop), reflow
   // follows the Canvas main shell — not host wrapperOpen.
   let mainWidth: number
   if (isMainMirrorActive()) {
@@ -122,19 +122,19 @@ export function computeContentLaneInsets(): { left: number; right: number } {
     const mainOpen = isMainDrawerOpen()
     mainWidth = mainOpen ? getMainDrawerWidth() : 0
     // Legacy pin path: closed host drawer but strip still visible.
-    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
+    if (mainWidth === 0 && isTaskbarModeEnabled()) {
       mainWidth = TAB_LIST_WIDTH_PX
     }
   }
 
-  // Secondary is opposite main. Open → live width; keep-tabs closed with
+  // Secondary is opposite main. Open → live width; taskbar mode closed with
   // a secondary pin strip → reserve strip so content does not sit under buttons.
   let secondaryWidth = isSecondarySidebarOpen()
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
   if (
     secondaryWidth === 0 &&
-    isKeepTabListVisibleEnabled() &&
+    isTaskbarModeEnabled() &&
     getSecondaryTabList()
   ) {
     secondaryWidth = TAB_LIST_WIDTH_PX

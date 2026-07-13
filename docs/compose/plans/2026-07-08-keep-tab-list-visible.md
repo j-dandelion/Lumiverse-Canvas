@@ -1,5 +1,7 @@
 # keepTabListVisible Setting Implementation Plan
 
+> **Historical.** Setting/API renamed **2026-07-12** to `taskbarMode` / “Taskbar mode” (UI). Legacy key still migrates in `mergeCanvasSettings`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent (recommended) or compose:execute to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a new `keepTabListVisible` setting to Canvas that pins the secondary drawer's tab-button-list to the screen edge so the user can switch tabs even when the drawer is closed. Works regardless of the `moveControlsToOuterEdge` setting and regardless of which side the main/secondary drawer is on.

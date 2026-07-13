@@ -123,7 +123,7 @@ export function createResizeHandle(
 export function mountResizeHandles(): void {
   if (isPointerResizeActive()) return // Skip resize handles on mobile
 
-  // Canvas main mirror drawer — when keepTabListVisible owns main chrome,
+  // Canvas main mirror drawer — when taskbarMode owns main chrome,
   // put the handle on the Canvas shell and skip the host handle.
   if (isMainMirrorActive()) {
     const mirrorDrawer = getMainMirrorDrawer()

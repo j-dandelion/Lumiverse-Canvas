@@ -1,4 +1,4 @@
-// Tests for keep-tabs strip gutters (page bounds between pin strips).
+// Tests for taskbar-mode strip gutters (page bounds between pin strips).
 
 let passed = 0
 let failed = 0
@@ -202,7 +202,7 @@ function _resetAll() {
   clearTabAssignments()
   clearStripGutters()
   resetHydrationGuard()
-  hydrateSettings({ keepTabListVisible: false, moveControlsToOuterEdge: false })
+  hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
 }
 
 // --- Tests ---
@@ -216,34 +216,34 @@ assert(css.includes('LandingPage'), 'strip gutter CSS targets LandingPage')
 assert(!css.includes('_chatColumn_'), 'strip gutter CSS does not own chat column (reflow does)')
 assert(!css.includes('transition:'), 'strip gutter CSS has no transition: property')
 
-function _hydrate(patch: { keepTabListVisible?: boolean; moveControlsToOuterEdge?: boolean }) {
+function _hydrate(patch: { taskbarMode?: boolean; moveControlsToOuterEdge?: boolean }) {
   resetHydrationGuard()
   hydrateSettings(patch)
 }
 
-// keep-tabs off → clear
+// taskbar mode off → clear
 _resetAll()
 _installDom()
-_hydrate({ keepTabListVisible: false, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: false, moveControlsToOuterEdge: true })
 updateStripGutters()
 assert(
   !stubDocument.documentElement.classList.contains(STRIP_GUTTER_CLASS),
-  'keep-tabs off: no gutter class',
+  'taskbar off: no gutter class',
 )
 assertEqual(
   stubDocument.documentElement.style.getPropertyValue(STRIP_R_VAR),
   '',
-  'keep-tabs off: no right strip var',
+  'taskbar off: no right strip var',
 )
 
-// keep-tabs on, main right, no secondary → right strip only
+// taskbar mode on, main right, no secondary → right strip only
 _resetAll()
 _installDom({ leftSide: false, secondaryList: false })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 updateStripGutters()
 assert(
   stubDocument.documentElement.classList.contains(STRIP_GUTTER_CLASS),
-  'keep-tabs on: gutter class set',
+  'taskbar on: gutter class set',
 )
 assertEqual(
   stubDocument.documentElement.style.getPropertyValue(STRIP_R_VAR),
@@ -259,7 +259,7 @@ assertEqual(
 // main left + secondary (with assignments) → both sides
 _resetAll()
 _installDom({ leftSide: true, secondaryList: true })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 updateStripGutters()
 assertEqual(
   stubDocument.documentElement.style.getPropertyValue(STRIP_L_VAR),
@@ -276,7 +276,7 @@ assertEqual(
 _resetAll()
 _installDom({ leftSide: true, secondaryList: true })
 clearTabAssignments()
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 assertEqual(
   computeStripGutters().right,
   0,
@@ -297,7 +297,7 @@ assertEqual(
 // dock wider than strip → 0 extra on that side
 _resetAll()
 _installDom({ leftSide: false, secondaryList: false, dockRight: 100 })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 const computed = computeStripGutters()
 assertEqual(computed.right, 0, 'dock right 100 > strip 56: right extra = 0')
 assertEqual(computed.left, 0, 'dock right 100: left still 0 (no secondary)')
@@ -311,7 +311,7 @@ assertEqual(
 // dock narrower than strip → partial extra
 _resetAll()
 _installDom({ leftSide: false, secondaryList: false, dockRight: 20 })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 assertEqual(
   computeStripGutters().right,
   TAB_LIST_WIDTH_PX - 20,
@@ -321,7 +321,7 @@ assertEqual(
 // mobile → clear vars
 _resetAll()
 _installDom({ leftSide: false, secondaryList: true })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 _setViewport(false)
 updateStripGutters()
 assert(
@@ -343,7 +343,7 @@ assertEqual(
 // clearStripGutters full cleanup
 _resetAll()
 _installDom({ leftSide: false, secondaryList: true })
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: true })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 _setViewport(false)
 updateStripGutters()
 clearStripGutters()
@@ -362,14 +362,14 @@ assertEqual(
   'clearStripGutters removes right var',
 )
 
-// keep-tabs requires outer-edge (normalize)
+// taskbar mode requires outer-edge (normalize)
 _resetAll()
 _installDom()
-_hydrate({ keepTabListVisible: true, moveControlsToOuterEdge: false })
+_hydrate({ taskbarMode: true, moveControlsToOuterEdge: false })
 updateStripGutters()
 assert(
   !stubDocument.documentElement.classList.contains(STRIP_GUTTER_CLASS),
-  'keep-tabs without outer-edge: no gutters (normalized off)',
+  'taskbar without outer-edge: no gutters (normalized off)',
 )
 
 console.log(`PASS: ${passed}`)

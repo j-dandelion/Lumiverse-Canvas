@@ -742,7 +742,7 @@ function tick() { return new Promise<void>(resolve => setTimeout(resolve, 0)) }
 
 // =====================================================================
 // T15: Closed secondary restore — activeTabId restored, no button highlight
-// Hard refresh with keep-tabs strip + secondary.open:false: finishRestore
+// Hard refresh with taskbar-mode strip + secondary.open:false: finishRestore
 // used to call showSecondaryTab (paint active) then skip close (already
 // closed), leaving a highlighted tab on the closed strip.
 // =====================================================================

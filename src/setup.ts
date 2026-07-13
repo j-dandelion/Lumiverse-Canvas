@@ -141,7 +141,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     if (getSettings().debugMode) installDebugEscapeHatch()
 
-    // Hide host main + main-mirror before feature mounts (keep-tabs can
+    // Hide host main + main-mirror before feature mounts (taskbar mode can
     // open the mirror with the host default "profile" tab). Lifted after
     // applyMainDrawer activates the persisted primary.tabId.
     beginMainDrawerRestoreGuard()

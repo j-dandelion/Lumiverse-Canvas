@@ -16,10 +16,10 @@ var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
 // src/types.ts
 function normalizeCanvasSettingsFields(s) {
-  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false, hideDrawerOpenCloseButtons: false };
+  if (s.taskbarMode && !s.moveControlsToOuterEdge) {
+    return { ...s, taskbarMode: false, hideDrawerOpenCloseButtons: false };
   }
-  if (s.hideDrawerOpenCloseButtons && !s.keepTabListVisible) {
+  if (s.hideDrawerOpenCloseButtons && !s.taskbarMode) {
     return { ...s, hideDrawerOpenCloseButtons: false };
   }
   return s;
@@ -44,6 +44,9 @@ function mergeCanvasSettings(saved) {
       out.persistDrawerOpenState = raw.layoutPersistence;
       out.persistDrawerWidth = raw.layoutPersistence;
     }
+    if (saved.taskbarMode === undefined && typeof raw.keepTabListVisible === "boolean") {
+      out.taskbarMode = raw.keepTabListVisible;
+    }
   }
   return normalizeCanvasSettingsFields(out);
 }
@@ -54,7 +57,7 @@ var init_types = __esm(() => {
     resizeSidebars: true,
     mirrorCompactPosition: true,
     moveControlsToOuterEdge: false,
-    keepTabListVisible: false,
+    taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
     drawerShadowsDesktop: true,
     drawerShadowsMobile: false,
@@ -1231,7 +1234,7 @@ function getDockInsets() {
 }
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
-    /* Static keep-tabs chrome for Welcome only — no transition.
+    /* Static taskbar-mode chrome for Welcome only — no transition.
        Chat column is owned by chat reflow (higher-churn open/close margins). */
     html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
       margin-left: var(${STRIP_L_VAR}, 0px) !important;
@@ -1312,7 +1315,7 @@ function updateStripGutters() {
     clearStripGutterVars();
     return;
   }
-  if (!isKeepTabListVisibleEnabled()) {
+  if (!isTaskbarModeEnabled()) {
     clearStripGutters();
     return;
   }
@@ -1375,7 +1378,7 @@ function reconcileMainTabListPin() {
     return;
   }
   reconcileMainMirrorDrawer();
-  const on = !!getSettings().keepTabListVisible;
+  const on = !!getSettings().taskbarMode;
   if (!on) {
     teardownMainPin();
     Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
@@ -1483,7 +1486,7 @@ function reconcileMainMirror() {
   const regularButtons = hostButtons.filter((b) => !isSettingsButton(b));
   const settingsButtons = hostButtons.filter((b) => isSettingsButton(b));
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)));
-  if (_activeMainMirrorKey != null && !wantedKeys.has(_activeMainMirrorKey)) {
+  if (_activeMainMirrorKey == null || !wantedKeys.has(_activeMainMirrorKey)) {
     const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
     const prevKey = _activeMainMirrorKey;
     if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
@@ -1491,13 +1494,15 @@ function reconcileMainMirror() {
       const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
       if (t)
         setCanvasMainTitle(t);
-    } else {
+    } else if (prevKey != null) {
       _activeMainMirrorKey = null;
     }
-    dlog("[main-mirror] stale active key healed", {
-      prevKey,
-      nextKey: _activeMainMirrorKey
-    });
+    if (prevKey !== _activeMainMirrorKey) {
+      dlog("[main-mirror] active key healed/seeded", {
+        prevKey,
+        nextKey: _activeMainMirrorKey
+      });
+    }
   }
   for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
     const key = btn.getAttribute("data-mirror-key") || "";
@@ -1628,7 +1633,9 @@ function syncMirrorButtonsInto(container, hostButtons, listRoot) {
     }
   }
 }
-function resolveMirrorLabeled(_hostBtn) {
+function resolveMirrorLabeled(hostBtn) {
+  if (isSettingsButton(hostBtn))
+    return false;
   return isShowTabLabels();
 }
 function applyMirrorButtonChrome(btn, labeled) {
@@ -1757,7 +1764,7 @@ function buildMirrorInnerHtml(hostBtn, labeled) {
   if (svg) {
     parts.push(`<span>${svg.outerHTML}</span>`);
   }
-  if (labeled) {
+  if (labeled && !isSettingsButton(hostBtn)) {
     const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]');
     const fromHost = hostLabel ? (hostLabel.textContent || "").trim() : "";
     const title = hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || "";
@@ -6674,7 +6681,7 @@ function applyPanelChatBorder(panel, drawerSide, enabled) {
   setIfDifferent(panel.style, "borderBottom", "none");
 }
 function wantsChatFacingPanelBorder(outerEdgeEnabled) {
-  return outerEdgeEnabled || !!getSettings().keepTabListVisible;
+  return outerEdgeEnabled || !!getSettings().taskbarMode;
 }
 function applyTabListPosition(enabled, opts) {
   if (isMobileViewport())
@@ -6745,7 +6752,7 @@ function reconcileTabListPin() {
     Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m3) => m3.updateStripGutters());
     return;
   }
-  const want = !!getSettings().keepTabListVisible && hasSecondaryAssignedTabs();
+  const want = !!getSettings().taskbarMode && hasSecondaryAssignedTabs();
   applyTabListPin(want, { force: true });
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m3) => m3.updateStripGutters());
 }
@@ -7144,7 +7151,7 @@ function reconcileMainMirrorDrawer(opts) {
     applyMainMirrorDrawer(false, { force: true });
     return;
   }
-  const on = !!getSettings().keepTabListVisible;
+  const on = !!getSettings().taskbarMode;
   if (!on) {
     applyMainMirrorDrawer(false, { force: true });
     return;
@@ -7323,7 +7330,7 @@ function mountMainMirror(opts) {
   } catch {
     seedW = undefined;
   }
-  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().keepTabListVisible;
+  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().taskbarMode;
   _shell = createDrawerShell({
     owner: "main",
     side,
@@ -8283,7 +8290,7 @@ function findDrawerToggleButton(wrapper) {
 function pushCurrentState() {
   if (!_wrapper)
     return;
-  const canvasMain = !!getSettings().keepTabListVisible && typeof window !== "undefined" && window.innerWidth > 600;
+  const canvasMain = !!getSettings().taskbarMode && typeof window !== "undefined" && window.innerWidth > 600;
   const open = canvasMain ? document.documentElement.classList.contains("sidebar-ux-canvas-main-open") : readWrapperOpen(_wrapper);
   const tabId = _sidebar ? readActiveTabId(_sidebar) : null;
   if (open === _lastSeenOpen && tabId === _lastSeenTabId)
@@ -8384,9 +8391,9 @@ function startMainDrawerPersistence() {
 function ensureRestoredPrimaryTab(targetTabId) {
   if (!targetTabId || _stopped)
     return;
-  const keepVisible = !!getSettings().keepTabListVisible;
+  const taskbarMode = !!getSettings().taskbarMode;
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
-  clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile);
+  clickRestoredPrimaryTab(targetTabId, taskbarMode && !isMobile);
 }
 function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) {
   if (_stopped)
@@ -8401,10 +8408,10 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
     return;
   }
   const clampedWidth = restoreWidth && typeof targetWidthPx === "number" && targetWidthPx > 0 ? clampSidebarWidth(targetWidthPx) : null;
-  const keepVisible = !!getSettings().keepTabListVisible;
+  const taskbarMode = !!getSettings().taskbarMode;
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
   const isHostMobile = isHostMobileDrawerViewport();
-  if (keepVisible && !isMobile) {
+  if (taskbarMode && !isMobile) {
     Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
       if (_stopped) {
         unsuppressMainDrawer();
@@ -8427,7 +8434,7 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
     });
     return;
   }
-  if (isHostMobile && !keepVisible && drawer) {
+  if (isHostMobile && !taskbarMode && drawer) {
     drawer.style.removeProperty("width");
     wrapper.style.removeProperty("--drawer-panel-w");
     if (!isMobileViewport()) {
@@ -8757,12 +8764,12 @@ function computeContentLaneInsets() {
   } else {
     const mainOpen = isMainDrawerOpen();
     mainWidth = mainOpen ? getMainDrawerWidth() : 0;
-    if (mainWidth === 0 && isKeepTabListVisibleEnabled()) {
+    if (mainWidth === 0 && isTaskbarModeEnabled()) {
       mainWidth = TAB_LIST_WIDTH_PX;
     }
   }
   let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
-  if (secondaryWidth === 0 && isKeepTabListVisibleEnabled() && getSecondaryTabList()) {
+  if (secondaryWidth === 0 && isTaskbarModeEnabled() && getSecondaryTabList()) {
     secondaryWidth = TAB_LIST_WIDTH_PX;
   }
   const dockInsets = getDockInsets2();
@@ -9992,11 +9999,11 @@ function setPanelRefresh(fn) {
 function normalizeCanvasSettings(s3) {
   return normalizeCanvasSettingsFields(s3);
 }
-function isKeepTabListVisibleEnabled(s3 = _settings) {
-  return !!s3.keepTabListVisible && !!s3.moveControlsToOuterEdge;
+function isTaskbarModeEnabled(s3 = _settings) {
+  return !!s3.taskbarMode && !!s3.moveControlsToOuterEdge;
 }
 function isHideDrawerOpenCloseButtonsEnabled(s3 = _settings) {
-  return !!s3.hideDrawerOpenCloseButtons && isKeepTabListVisibleEnabled(s3);
+  return !!s3.hideDrawerOpenCloseButtons && isTaskbarModeEnabled(s3);
 }
 function hydrateSettings(raw) {
   if (_userHasTouchedSettings)
@@ -12342,7 +12349,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, tabPositionFeature, keepTabListVisibleFeature, hideDrawerOpenCloseButtonsFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_log();
@@ -12514,10 +12521,10 @@ var init_registry = __esm(() => {
       applyTabListPosition(next.moveControlsToOuterEdge);
     }
   };
-  keepTabListVisibleFeature = {
-    id: "keepTabListVisible",
+  taskbarModeFeature = {
+    id: "taskbarMode",
     mount(_ctx2, _layout) {
-      const on = !!getSettings().keepTabListVisible && !!getSettings().moveControlsToOuterEdge;
+      const on = !!getSettings().taskbarMode && !!getSettings().moveControlsToOuterEdge;
       if (on) {
         reconcileTabListPin();
         reconcileMainTabListPin();
@@ -12537,7 +12544,7 @@ var init_registry = __esm(() => {
       };
     },
     apply(_prev, next) {
-      const on = !!next.keepTabListVisible && !!next.moveControlsToOuterEdge;
+      const on = !!next.taskbarMode && !!next.moveControlsToOuterEdge;
       applyTabListPin(on, { force: true });
       applyMainTabListPin(on, { force: true });
       updateDrawerTabVisibility();
@@ -12576,7 +12583,7 @@ var init_registry = __esm(() => {
     persistDrawerWidthFeature,
     slashFeature,
     tabPositionFeature,
-    keepTabListVisibleFeature,
+    taskbarModeFeature,
     hideDrawerOpenCloseButtonsFeature,
     drawerTabDragFeature
   ];
@@ -12800,23 +12807,23 @@ function buildSettingsPanelDOM() {
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
   secSidebars.appendChild(buildSettingRow({
     label: "Move tab controls to outer edge",
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab controls visible".',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".',
     control: moveControlsToOuter.btn
   }));
-  const keepTabListVisible = makeToggle(() => getSettings().keepTabListVisible, (v3) => setSettings({ keepTabListVisible: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
-  const keepTabListVisibleRow = buildSettingRow({
-    label: "Keep tab controls visible",
+  const taskbarMode = makeToggle(() => getSettings().taskbarMode, (v3) => setSettings({ taskbarMode: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
+  const taskbarModeRow = buildSettingRow({
+    label: "Taskbar mode",
     hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.',
-    control: keepTabListVisible.btn,
+    control: taskbarMode.btn,
     disabled: !getSettings().moveControlsToOuterEdge
   });
-  secSidebars.appendChild(keepTabListVisibleRow);
-  const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().keepTabListVisible });
+  secSidebars.appendChild(taskbarModeRow);
+  const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().taskbarMode });
   const hideDrawerTabToggleRow = buildSettingRow({
     label: "Hide drawer open/close buttons",
-    hint: 'Hides the small button that open/closes the drawer. Requires "Keep tab controls visible".',
+    hint: 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".',
     control: hideDrawerTabToggle.btn,
-    disabled: !getSettings().keepTabListVisible
+    disabled: !getSettings().taskbarMode
   });
   secSidebars.appendChild(hideDrawerTabToggleRow);
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }));
@@ -12873,7 +12880,7 @@ function buildSettingsPanelDOM() {
   const refresh = () => {
     master.refresh();
     moveControlsToOuter.refresh();
-    keepTabListVisible.refresh();
+    taskbarMode.refresh();
     hideDrawerTabToggle.refresh();
     resizeSidebars.refresh();
     compact.refresh();
@@ -12886,12 +12893,12 @@ function buildSettingsPanelDOM() {
     shadowsMobile.refresh();
     {
       const d3 = !getSettings().moveControlsToOuterEdge;
-      keepTabListVisible.btn.disabled = d3;
-      keepTabListVisible.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      keepTabListVisibleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+      taskbarMode.btn.disabled = d3;
+      taskbarMode.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      taskbarModeRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
     }
     {
-      const d3 = !getSettings().keepTabListVisible;
+      const d3 = !getSettings().taskbarMode;
       hideDrawerTabToggle.btn.disabled = d3;
       hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
@@ -13452,7 +13459,7 @@ function computeWeaverStripInsets() {
     return { left: 0, right: 0 };
   if (isMobileViewport())
     return { left: 0, right: 0 };
-  if (!isKeepTabListVisibleEnabled())
+  if (!isTaskbarModeEnabled())
     return { left: 0, right: 0 };
   let gutters = { left: 0, right: 0 };
   try {

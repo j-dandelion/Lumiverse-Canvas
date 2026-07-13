@@ -130,7 +130,7 @@
 - Category: type-safety
 - Confidence: high
 - Host-justified?: no
-- Description: `mergeCanvasSettings` returns `Required<CanvasSettings>` but does not call `normalizeCanvasSettings`; the `keepTabListVisible ⇒ moveControlsToOuterEdge` invariant is enforced by `hydrateSettings` and `setSettings` only. The exported `FullCanvasSettings` type and `mergeCanvasSettings` together imply a fully-consistent object, but only the test harness wraps correctly (state.test.ts:132 explicitly calls `normalizeCanvasSettings(mergeCanvasSettings(...))`). Latent in production; future direct callers will be silently broken.
+- Description: `mergeCanvasSettings` returns `Required<CanvasSettings>` but does not call `normalizeCanvasSettings`; the `taskbarMode ⇒ moveControlsToOuterEdge` invariant is enforced by `hydrateSettings` and `setSettings` only. The exported `FullCanvasSettings` type and `mergeCanvasSettings` together imply a fully-consistent object, but only the test harness wraps correctly (state.test.ts:132 explicitly calls `normalizeCanvasSettings(mergeCanvasSettings(...))`). Latent in production; future direct callers will be silently broken. (Note: setting renamed from `keepTabListVisible` → `taskbarMode` in 2026-07-12.)
 - Suggestion: Either call `normalizeCanvasSettings` at the end of `mergeCanvasSettings` (single source of truth) or rename to `mergeCanvasSettingsRaw` and route callers through a `getSettings` wrapper that normalizes.
 - Status: addressed
 

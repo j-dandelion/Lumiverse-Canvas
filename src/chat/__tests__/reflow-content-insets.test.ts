@@ -60,7 +60,7 @@ class StubElement {
 // ── Mock all reflow module dependencies ──
 
 // State shared between mocks
-const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, keepTabs: false, mobile: false, dockLeft: 0, dockRight: 0 }
+const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0 }
 
 mock.module('../../sidebar/mobile-exclusion', () => ({
   isMobileViewport: () => state.mobile,
@@ -81,8 +81,8 @@ mock.module('../../sidebar/main-mirror-drawer', () => ({
 }))
 
 mock.module('../../settings/state', () => ({
-  isKeepTabListVisibleEnabled: () => state.keepTabs,
-  getSettings: () => ({ keepTabListVisible: state.keepTabs }),
+  isTaskbarModeEnabled: () => state.taskbarMode,
+  getSettings: () => ({ taskbarMode: state.taskbarMode }),
 }))
 
 mock.module('../../sidebar/secondary', () => ({
@@ -133,7 +133,7 @@ function reset() {
   state.mainSide = 'right'
   state.secondaryOpen = false
   state.secondaryTabList = false
-  state.keepTabs = false
+  state.taskbarMode = false
   state.mobile = false
   state.dockLeft = 0
   state.dockRight = 0
@@ -192,26 +192,26 @@ state.secondaryOpen = false
 assertEqual(computeContentLaneInsets().left, 0, 'second off: left = 0')
 assertEqual(computeContentLaneInsets().right, 420, 'second off: right = 420')
 
-// ── Test 7: Keep-tabs with secondary strip (closed, strip visible) ──
+// ── Test 7: Taskbar mode with secondary strip (closed, strip visible) ──
 reset()
 state.mainOpen = false
 state.mainSide = 'right'
-state.keepTabs = true
+state.taskbarMode = true
 state.secondaryTabList = true
 state.secondaryOpen = false
-// main closed but keepTabs → mainWidth = 56 (TAB_LIST_WIDTH_PX) from legacy pin path
+// main closed but taskbarMode → mainWidth = 56 (TAB_LIST_WIDTH_PX) from legacy pin path
 // secondary closed with strip → secondaryWidth = 56
 // mainSide='right', so left=secondary=56, right=main=56
-assertEqual(computeContentLaneInsets().left, 56, 'keep-tabs: left = 56 (secondary strip)')
-assertEqual(computeContentLaneInsets().right, 56, 'keep-tabs: right = 56 (main strip via legacy pin path)')
+assertEqual(computeContentLaneInsets().left, 56, 'taskbar mode: left = 56 (secondary strip)')
+assertEqual(computeContentLaneInsets().right, 56, 'taskbar mode: right = 56 (main strip via legacy pin path)')
 
 // ── Test 8: Zero secondary tabs (no strip) ──
 reset()
 state.mainOpen = false
 state.mainSide = 'right'
-state.keepTabs = true
+state.taskbarMode = true
 state.secondaryTabList = false
-// main closed but keepTabs → mainWidth = 56
+// main closed but taskbarMode → mainWidth = 56
 // secondary has no tab list → secondaryWidth = 0
 // mainSide='right', so left=secondary=0, right=main=56
 assertEqual(computeContentLaneInsets().left, 0, 'zero secondary tabs: left = 0')

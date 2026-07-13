@@ -294,7 +294,7 @@ export function startMobileExclusion(): () => void {
       // Cross-up to desktop: clear both body classes, don't auto-reopen
       _updateDrawerWidth()
       document.body.classList.remove(BODY_CLASS_PRIMARY, BODY_CLASS_SECONDARY)
-      // Restore pins if keepTabListVisible is still true.
+      // Restore pins if taskbarMode is still true.
       void import('./tab-position').then((m) => m.reconcileTabListPin())
       void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
     }

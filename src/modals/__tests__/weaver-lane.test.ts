@@ -1,9 +1,9 @@
-// Test file: weaver-lane strip-only geometry (keep-tabs pin strips, not drawers).
+// Test file: weaver-lane strip-only geometry (taskbar-mode pin strips, not drawers).
 //
 // Validates:
 //   - aria-label "Weaver" tags dialog even when activeModal is null
 //   - Insets use strip gutters only (never open-drawer 420)
-//   - keep-tabs off → 0,0
+//   - taskbar mode off → 0,0
 //   - Live pin hosts contribute strip width
 //   - Teardown clears tag + styles
 //   - Non-weaver modal not tagged
@@ -171,7 +171,7 @@ const _listeners: Record<string, Function[]> = {}
 
 // ── Mocks ──
 let _mockActiveModal: string | null = null
-let _keepTabs = true
+let _taskbarMode = true
 let _mobile = false
 let _stripGutters = { left: 56, right: 56 }
 let _publishCalled = false
@@ -212,7 +212,7 @@ mock.module('../../sidebar/styles', () => ({
 }))
 
 mock.module('../../settings/state', () => ({
-  isKeepTabListVisibleEnabled: () => _keepTabs,
+  isTaskbarModeEnabled: () => _taskbarMode,
 }))
 
 mock.module('../../sidebar/strip-gutter', () => ({
@@ -247,7 +247,7 @@ const { startWeaverLane, computeWeaverStripInsets } = mod
 
 function reset() {
   _mockActiveModal = null
-  _keepTabs = true
+  _taskbarMode = true
   _mobile = false
   _stripGutters = { left: 56, right: 56 }
   _publishCalled = false
@@ -297,32 +297,32 @@ function makePinHost(side: 'left' | 'right', width = 56): StubElement {
 
 // ── Unit: computeWeaverStripInsets ──
 reset()
-_keepTabs = true
+_taskbarMode = true
 _stripGutters = { left: 56, right: 56 }
 assertEqual(computeWeaverStripInsets().left, 56, 'strip gutters left')
 assertEqual(computeWeaverStripInsets().right, 56, 'strip gutters right')
 
 reset()
-_keepTabs = false
+_taskbarMode = false
 _stripGutters = { left: 56, right: 56 }
-assertEqual(computeWeaverStripInsets().left, 0, 'keep-tabs off: left 0')
-assertEqual(computeWeaverStripInsets().right, 0, 'keep-tabs off: right 0')
+assertEqual(computeWeaverStripInsets().left, 0, 'taskbar off: left 0')
+assertEqual(computeWeaverStripInsets().right, 0, 'taskbar off: right 0')
 
 reset()
 _mobile = true
-_keepTabs = true
+_taskbarMode = true
 assertEqual(computeWeaverStripInsets().left, 0, 'mobile: left 0')
 
 // Strip gutters stay at 56 even if a hypothetical open-drawer path would be 420
 reset()
-_keepTabs = true
+_taskbarMode = true
 _stripGutters = { left: 56, right: 56 }
 assertEqual(computeWeaverStripInsets().left, 56, 'never open-drawer width on left')
 assert(computeWeaverStripInsets().left < 100, 'strip inset is strip-scale not drawer-scale')
 
 // Live pin can raise above zero gutters
 reset()
-_keepTabs = true
+_taskbarMode = true
 _stripGutters = { left: 0, right: 0 }
 makePinHost('left', 56)
 makePinHost('right', 56)
@@ -335,7 +335,7 @@ const d1 = makeDialog('Weaver')
 makePinHost('left', 56)
 makePinHost('right', 56)
 _mockActiveModal = null
-_keepTabs = true
+_taskbarMode = true
 _stripGutters = { left: 56, right: 56 }
 const t1 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 15))
@@ -353,7 +353,7 @@ t1()
 reset()
 const d2 = makeDialog()
 _mockActiveModal = 'weaver'
-_keepTabs = true
+_taskbarMode = true
 _stripGutters = { left: 56, right: 0 }
 const t2 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 15))
@@ -362,16 +362,16 @@ assertEqual(d2.style.getPropertyValue('left'), '56px', 'store path left strip')
 assertEqual(d2.style.getPropertyValue('right'), '0px', 'no secondary strip → right 0')
 t2()
 
-// keep-tabs off while weaver open → 0 insets (full host modal)
+// taskbar mode off while weaver open → 0 insets (full host modal)
 reset()
 const d3 = makeDialog('Weaver')
 _mockActiveModal = 'weaver'
-_keepTabs = false
+_taskbarMode = false
 const t3 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 15))
-assertEqual(d3.getAttribute('data-canvas-weaver-lane'), '1', 'still tagged when keep-tabs off')
-assertEqual(d3.style.getPropertyValue('left'), '0px', 'keep-tabs off: left 0')
-assertEqual(d3.style.getPropertyValue('right'), '0px', 'keep-tabs off: right 0')
+assertEqual(d3.getAttribute('data-canvas-weaver-lane'), '1', 'still tagged when taskbar mode off')
+assertEqual(d3.style.getPropertyValue('left'), '0px', 'taskbar off: left 0')
+assertEqual(d3.style.getPropertyValue('right'), '0px', 'taskbar off: right 0')
 t3()
 
 // Non-weaver
@@ -387,7 +387,7 @@ t4()
 reset()
 const d5 = makeDialog('Weaver')
 _mockActiveModal = 'weaver'
-_keepTabs = true
+_taskbarMode = true
 const t5 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 15))
 t5()
@@ -435,11 +435,11 @@ _canvasMainOpen = true
 const t8 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 40))
 assertEqual(_closeSecondaryCalls, 0, 'second off: no secondary close')
-assertEqual(_closeMainMirrorCalls, 1, 'second off + keep-tabs: still closes main-mirror')
+assertEqual(_closeMainMirrorCalls, 1, 'second off + taskbar: still closes main-mirror')
 assertEqual(_hostCloseDrawerCalls, 0, 'mirror active: skip host closeDrawer')
 t8()
 
-// Second off + keep-tabs off — host store closeDrawer closes main
+// Second off + taskbar mode off — host store closeDrawer closes main
 reset()
 const d9 = makeDialog('Weaver')
 _mockActiveModal = 'weaver'
@@ -451,7 +451,7 @@ const t9 = startWeaverLane()
 await new Promise((r) => setTimeout(r, 40))
 assertEqual(_closeSecondaryCalls, 0, 'host path: no secondary close')
 assertEqual(_closeMainMirrorCalls, 0, 'host path: no mirror close')
-assertEqual(_hostCloseDrawerCalls, 1, 'second off + no keep-tabs: host closeDrawer once')
+assertEqual(_hostCloseDrawerCalls, 1, 'second off + no taskbar: host closeDrawer once')
 t9()
 
 // ── Summary ──

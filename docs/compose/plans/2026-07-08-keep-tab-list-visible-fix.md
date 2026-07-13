@@ -1,5 +1,7 @@
 # keepTabListVisible Fix Plan
 
+> **Historical.** Setting/API renamed **2026-07-12** to `taskbarMode` / “Taskbar mode” (UI). Prefer live code + `docs/features.md` / `docs/sidebar.md` over this plan.
+
 > **For agentic workers:** Implement task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Do not start Task N+1 until Task N’s acceptance criteria pass (except where noted “can parallel”).
 
 **Context:** The initial implementation (`docs/compose/plans/2026-07-08-keep-tab-list-visible.md`, commits `c793996`…`dc2cf4d`) wired types, settings UI, registry, `applyTabListPin`, and unit tests. Code review found the **core pin mechanism cannot work** under the secondary drawer architecture, plus lifecycle / composition / reflow gaps. This plan fixes those defects; it does not re-litigate the product goal.

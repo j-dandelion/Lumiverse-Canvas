@@ -68,7 +68,7 @@ export function getLastLoadedLayout(): any { return _lastLoadedLayout }
 export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh = fn }
 
 /**
- * keepTabListVisible only makes sense with tab lists on the screen edge.
+ * taskbarMode only makes sense with tab lists on the screen edge.
  * Clear it whenever moveControlsToOuterEdge is off (UI gate + load safety).
  * Implementation lives in types (mergeCanvasSettings applies the same rule).
  */
@@ -76,21 +76,21 @@ export function normalizeCanvasSettings(s: FullCanvasSettings): FullCanvasSettin
   return normalizeCanvasSettingsFields(s)
 }
 
-/** Effective keep-tabs flag after the outer-edge dependency. */
-export function isKeepTabListVisibleEnabled(
+/** Effective taskbar-mode flag after the outer-edge dependency. */
+export function isTaskbarModeEnabled(
   s: FullCanvasSettings = _settings,
 ): boolean {
-  return !!s.keepTabListVisible && !!s.moveControlsToOuterEdge
+  return !!s.taskbarMode && !!s.moveControlsToOuterEdge
 }
 
-/** Hide drawer open/close buttons only makes sense when keep-tabs is on
+/** Hide drawer open/close buttons only makes sense when taskbar mode is on
  *  (otherwise the edge button is the only reopen affordance).
- *  Returns true only when hide is on AND keep-tabs is effectively on
- *  (which already implies outer-edge via isKeepTabListVisibleEnabled). */
+ *  Returns true only when hide is on AND taskbar mode is effectively on
+ *  (which already implies outer-edge via isTaskbarModeEnabled). */
 export function isHideDrawerOpenCloseButtonsEnabled(
   s: FullCanvasSettings = _settings,
 ): boolean {
-  return !!s.hideDrawerOpenCloseButtons && isKeepTabListVisibleEnabled(s)
+  return !!s.hideDrawerOpenCloseButtons && isTaskbarModeEnabled(s)
 }
 
 /**

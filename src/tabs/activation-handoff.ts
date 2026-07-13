@@ -324,7 +324,7 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
 
     // Align main-mirror chrome (header + exclusive active key) after host
     // activation outside onMirrorClick (handoff both directions). No-op
-    // when keep-tabs / mirror mode is off.
+    // when taskbar / mirror mode is off.
     const title =
       mainBtn.getAttribute('title') ||
       mainBtn.getAttribute('aria-label') ||

@@ -270,33 +270,33 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   secSidebars.appendChild(buildSettingRow({
     label: 'Move tab controls to outer edge',
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Keep tab controls visible".',
+    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".',
     control: moveControlsToOuter.btn,
   }))
 
-  const keepTabListVisible = makeToggle(
-    () => getSettings().keepTabListVisible,
-    (v) => setSettings({ keepTabListVisible: v }),
+  const taskbarMode = makeToggle(
+    () => getSettings().taskbarMode,
+    (v) => setSettings({ taskbarMode: v }),
     { disabled: () => !getSettings().moveControlsToOuterEdge },
   )
-  const keepTabListVisibleRow = buildSettingRow({
-    label: 'Keep tab controls visible',
+  const taskbarModeRow = buildSettingRow({
+    label: 'Taskbar mode',
     hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.',
-    control: keepTabListVisible.btn,
+    control: taskbarMode.btn,
     disabled: !getSettings().moveControlsToOuterEdge,
   })
-  secSidebars.appendChild(keepTabListVisibleRow)
+  secSidebars.appendChild(taskbarModeRow)
 
   const hideDrawerTabToggle = makeToggle(
     () => getSettings().hideDrawerOpenCloseButtons,
     (v) => setSettings({ hideDrawerOpenCloseButtons: v }),
-    { disabled: () => !getSettings().keepTabListVisible },
+    { disabled: () => !getSettings().taskbarMode },
   )
   const hideDrawerTabToggleRow = buildSettingRow({
     label: 'Hide drawer open/close buttons',
-    hint: 'Hides the small button that open/closes the drawer. Requires "Keep tab controls visible".',
+    hint: 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".',
     control: hideDrawerTabToggle.btn,
-    disabled: !getSettings().keepTabListVisible,
+    disabled: !getSettings().taskbarMode,
   })
   secSidebars.appendChild(hideDrawerTabToggleRow)
 
@@ -393,7 +393,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   const refresh = () => {
     master.refresh()
     moveControlsToOuter.refresh()
-    keepTabListVisible.refresh()
+    taskbarMode.refresh()
     hideDrawerTabToggle.refresh()
     resizeSidebars.refresh()
     compact.refresh()
@@ -404,16 +404,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     debugMode.refresh()
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
-    // keepTabListVisible requires moveControlsToOuterEdge (strip on screen edge).
+    // taskbarMode requires moveControlsToOuterEdge (strip on screen edge).
     {
       const d = !getSettings().moveControlsToOuterEdge
-      keepTabListVisible.btn.disabled = d
-      keepTabListVisible.btn.style.cursor = d ? 'not-allowed' : 'pointer'
-      keepTabListVisibleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      taskbarMode.btn.disabled = d
+      taskbarMode.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      taskbarModeRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    // hideDrawerOpenCloseButtons requires keepTabListVisible (reopen affordance).
+    // hideDrawerOpenCloseButtons requires taskbarMode (reopen affordance).
     {
-      const d = !getSettings().keepTabListVisible
+      const d = !getSettings().taskbarMode
       hideDrawerTabToggle.btn.disabled = d
       hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)

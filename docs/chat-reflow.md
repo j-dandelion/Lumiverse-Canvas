@@ -1,15 +1,15 @@
-# Chat Reflow & Keep-tabs Strip Gutters
+# Chat Reflow &amp; Taskbar Mode Strip Gutters
 
 Two separate systems own different surfaces. Do not merge them.
 
 | System | Setting | What it does | Consumers |
 |--------|---------|--------------|-----------|
-| **Strip gutters** | `keepTabListVisible` (+ outer-edge) | Permanent **Welcome/Landing** bounds = **pin-strip width only** (56px). Open drawers **overlay** Welcome. | `[data-component="LandingPage"]` via static CSS |
-| **Chat reflow** | `chatReflow` | Open-drawer (and keep-tabs closed-strip) margins on the **chat column** only (with transition). | `[class*="_chatColumn_"]` only |
+| **Strip gutters** | `taskbarMode` (+ outer-edge) | Permanent **Welcome/Landing** bounds = **pin-strip width only** (56px). Open drawers **overlay** Welcome. | `[data-component="LandingPage"]` via static CSS |
+| **Chat reflow** | `chatReflow` | Open-drawer (and taskbar closed-strip) margins on the **chat column** only (with transition). | `[class*="_chatColumn_"]` only |
 
 ## Policy matrix
 
-| keepTabListVisible (desktop) | chatReflow | Strip gutters | Chat reflow |
+| taskbarMode (desktop) | chatReflow | Strip gutters | Chat reflow |
 |------------------------------|------------|---------------|-------------|
 | OFF | OFF | none | none |
 | OFF | ON | none | Classic host open-drawer widths on chat column |
@@ -22,11 +22,11 @@ Mobile (≤600px): both clear / no-op.
 
 ## Strip gutters (`src/sidebar/strip-gutter.ts`)
 
-Owned by **keep tab controls visible**, not by chat reflow.
+Owned by **taskbar mode**, not by chat reflow.
 
 ### Behavior
 
-When keep-tabs is effective on desktop:
+When taskbar mode is effective on desktop:
 
 1. Main edge → reserve `TAB_LIST_WIDTH_PX` (56)
 2. Opposite edge → 56 only if a secondary tab list exists
@@ -48,7 +48,7 @@ Vars live on `document.documentElement`. Chat is **not** a strip-gutter consumer
 
 ### When updated
 
-- keep-tabs mount / apply / teardown  
+- taskbar mode mount / apply / teardown  
 - secondary list create/destroy  
 - main side change (pin reconcile)  
 - dock style changes on `[data-app-root]`  
@@ -76,9 +76,9 @@ Welcome/Landing is **not** a reflow consumer.
 
 1. Mobile → clear + return  
 2. Main width:  
-   - **Main mirror active** (keep-tabs): open → `MAIN_MIRROR_WIDTH_VAR` (fallback 420); closed → `TAB_LIST_WIDTH_PX`  
-   - **Else**: host `isMainDrawerOpen` ? live width : 0; if keep-tabs effective and still 0 → strip reserve  
-3. Secondary: open → `--sidebar-ux-secondary-w` (fallback 420); if closed + keep-tabs + secondary list → strip reserve  
+   - **Main mirror active** (taskbar mode): open → `MAIN_MIRROR_WIDTH_VAR` (fallback 420); closed → `TAB_LIST_WIDTH_PX`  
+   - **Else**: host `isMainDrawerOpen` ? live width : 0; if taskbar mode effective and still 0 → strip reserve  
+3. Secondary: open → `--sidebar-ux-secondary-w` (fallback 420); if closed + taskbar mode + secondary list → strip reserve  
 4. Subtract dock insets per side  
 5. Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
 
@@ -92,7 +92,7 @@ Welcome/Landing is **not** a reflow consumer.
 4. matchMedia 600px → clear on cross-down, recompute on cross-up  
 5. Button tagger (co-located lifecycle)
 
-Also: secondary open/close, main-mirror `bumpReflow()`, keep-tabs apply, and feature toggle call `updateChatReflow()` directly.
+Also: secondary open/close, main-mirror `bumpReflow()`, taskbar mode apply, and feature toggle call `updateChatReflow()` directly.
 
 `scheduleReflow()` coalesces via `requestAnimationFrame`.
 

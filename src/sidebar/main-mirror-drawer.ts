@@ -1,4 +1,4 @@
-// Canvas-owned main drawer when keepTabListVisible is on (desktop).
+// Canvas-owned main drawer when taskbarMode is on (desktop).
 //
 // Same shape as the secondary drawer (shared createDrawerShell):
 //   - Hide host main chrome via document-level CSS (no class fight with React).
@@ -152,7 +152,7 @@ export function reconcileMainMirrorDrawer(opts?: { initialOpen?: boolean }): voi
     applyMainMirrorDrawer(false, { force: true })
     return
   }
-  const on = !!getSettings().keepTabListVisible
+  const on = !!getSettings().taskbarMode
   if (!on) {
     applyMainMirrorDrawer(false, { force: true })
     return
@@ -268,7 +268,7 @@ export function __getReparkIdleCountForTest(): number {
 
 /** Update the main mirror's drawer edge toggle visibility based on settings.
  *  No-op when no shell or on mobile (main mirror isn't active on mobile).
- *  Desktop: hide when hideDrawerOpenCloseButtons is on AND keep-tabs is on. */
+ *  Desktop: hide when hideDrawerOpenCloseButtons is on AND taskbar mode is on. */
 export function updateMainMirrorDrawerTabVisibility(): void {
   if (!_shell || !_active) return
   if (isMobileViewport()) return
@@ -353,8 +353,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     seedW = undefined
   }
 
-  // Compute initial drawer-tab display: hide requires keep-tabs.
-  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().keepTabListVisible
+  // Compute initial drawer-tab display: hide requires taskbar mode.
+  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().taskbarMode
 
   _shell = createDrawerShell({
     owner: 'main',

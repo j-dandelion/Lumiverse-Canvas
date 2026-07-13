@@ -1,10 +1,10 @@
-// Weaver Studio strip-lane containment (keep-tabs only).
+// Weaver Studio strip-lane containment (taskbar mode only).
 //
-// When Weaver Studio is open under keepTabListVisible, inset its dialog by the
+// When Weaver Studio is open under taskbarMode, inset its dialog by the
 // permanent pin-strip widths only — NOT by open drawer widths. Open drawers
 // may overlay the studio; the static tab lists stay clear of the shell.
 //
-// When keep-tabs is off, no inset (host full-viewport modal).
+// When taskbar mode is off, no inset (host full-viewport modal).
 //
 // Why geometry (not z-index) matters: pin hosts are `body > *` siblings of
 // `#root` with z-index 10000. Weaver lives inside `#root`, so strips always
@@ -19,14 +19,14 @@
 // Does not call computeContentLaneInsets (that includes open drawers for chat).
 //
 // On Weaver open (rising edge only): close main + secondary drawers so the
-// studio is not covered by open panels. Keep-tabs pin strips stay visible.
+// studio is not covered by open panels. Taskbar pin strips stay visible.
 
 import { getActiveModal } from '../store'
 import { publishContentLaneInsets } from '../chat/reflow'
 import { injectStyles } from '../debug/styles'
 import { dwarn } from '../debug/log'
 import { TAB_LIST_WIDTH_PX } from '../sidebar/styles'
-import { isKeepTabListVisibleEnabled } from '../settings/state'
+import { isTaskbarModeEnabled } from '../settings/state'
 import { computeStripGutters } from '../sidebar/strip-gutter'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
@@ -65,8 +65,8 @@ function closeBothDrawersForWeaver(): void {
     .catch((err) => dwarn('[weaver-lane] secondary import failed:', err))
 
   // Main always attempted — independent of second-drawer mode.
-  // keep-tabs: Canvas mirror owns open/close; host wrapper is headless.
-  // keep-tabs off (vanilla / second-off): host store closeDrawer + toggle.
+  // Taskbar mode: Canvas mirror owns open/close; host wrapper is headless.
+  // Taskbar off (vanilla / second-off): host store closeDrawer + toggle.
   void import('../sidebar/main-mirror-drawer')
     .then((m) => {
       try {
@@ -86,7 +86,7 @@ function closeBothDrawersForWeaver(): void {
 }
 
 /**
- * Host-owned main drawer close (second drawer off, keep-tabs off).
+ * Host-owned main drawer close (second drawer off, taskbar off).
  * Prefer Zustand closeDrawer (idempotent); fall back to edge-toggle click
  * (same path as mobile exclusion) when the fiber action is unavailable.
  */
@@ -210,7 +210,7 @@ function clearWeaverInsetVars(): void {
 }
 
 /**
- * Live pin-host widths only (static keep-tabs strips). Ignores open drawers.
+ * Live pin-host widths only (static taskbar strips). Ignores open drawers.
  * Cap each side at a reasonable strip width so a mis-measured host cannot
  * collapse the studio.
  */
@@ -243,12 +243,12 @@ function measurePinStripInsets(): { left: number; right: number } {
 
 /**
  * Strip-only insets for Weaver. Open-drawer widths are intentionally excluded.
- * keep-tabs off or mobile → {0,0}.
+ * Taskbar off or mobile → {0,0}.
  */
 export function computeWeaverStripInsets(): { left: number; right: number } {
   if (typeof document === 'undefined') return { left: 0, right: 0 }
   if (isMobileViewport()) return { left: 0, right: 0 }
-  if (!isKeepTabListVisibleEnabled()) return { left: 0, right: 0 }
+  if (!isTaskbarModeEnabled()) return { left: 0, right: 0 }
 
   let gutters = { left: 0, right: 0 }
   try {

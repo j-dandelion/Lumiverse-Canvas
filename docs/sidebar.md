@@ -18,7 +18,7 @@ The secondary sidebar is a wrapper element with this hierarchy:
               └── .sidebar-ux-panel-content  (hosts reparented extension roots)
 ```
 
-### `keepTabListVisible` (pin + Canvas main shell)
+### `taskbarMode` (pin + Canvas main shell)
 
 When the setting is on (desktop only):
 

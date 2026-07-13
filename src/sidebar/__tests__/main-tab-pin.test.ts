@@ -644,7 +644,7 @@ function resetAll() {
   }
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
 
-  // Secondary pin is gated on hasSecondaryAssignedTabs() (keep-tabs empty strip).
+  // Secondary pin is gated on hasSecondaryAssignedTabs() (taskbar empty strip).
   setTabAssignment('m4-sec-tab', 'secondary')
   applyTabListPin(true, { force: true })
   applyMainTabListPin(true, { force: true })
@@ -1241,6 +1241,125 @@ function resetAll() {
   )
 
   clearHostSettingsCache()
+}
+
+// M18: Show tab labels must not label the Settings gear in main-mirror.
+// Host keeps Settings icon-only; title/aria still "Settings" for tooltips —
+// title fallback must not invent a short-name label.
+{
+  resetAll()
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const settings = makeHostBtn('settings', 'Settings', false)
+  settings.removeAttribute('data-tab-id')
+  settings.setAttribute('title', 'Settings')
+  settings.setAttribute('aria-label', 'Settings')
+  // Host may still expose tabBtnLabeled / a host label node — ignore for Settings.
+  settings.classList.add('tabBtnLabeled')
+  settings.className = `${settings.className} tabBtnLabeled`
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(settings)
+
+  applyMainTabListPin(true, { force: true })
+  const host = getMainPinHost() as unknown as StubElement
+  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))!
+  const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))!
+  const profileMirror = mainSec.children.find(
+    (c) => c.className.includes(MAIN_MIRROR_BTN_CLASS) && c.getAttribute('data-tab-id') === 'profile',
+  )!
+  const settingsMirror = bottomSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
+
+  assert(
+    profileMirror.classList.contains('sidebar-ux-tab-labeled'),
+    'M18: profile labeled when showTabLabels true',
+  )
+  assert(
+    String(profileMirror.innerHTML || '').includes('sidebar-ux-tab-label'),
+    'M18: profile has label span',
+  )
+  assert(
+    !settingsMirror.classList.contains('sidebar-ux-tab-labeled'),
+    'M18: Settings never gets labeled class',
+  )
+  assertEqual(settingsMirror.style.height, '48px', 'M18: Settings stays icon-only height')
+  assert(
+    !String(settingsMirror.innerHTML || '').includes('sidebar-ux-tab-label'),
+    'M18: Settings has no label span',
+  )
+  assert(
+    !String(settingsMirror.innerHTML || '').includes('Settings'),
+    'M18: Settings title not rendered as label text',
+  )
+  assertEqual(settingsMirror.getAttribute('title'), 'Settings', 'M18: tooltip title preserved')
+
+  clearHostSettingsCache()
+}
+
+// M19: first enable of taskbar mode seeds header from host tabBtnActive
+// (shell mounts with title "Drawer"; must not stay that way when a tab is active).
+{
+  resetAll()
+  clearHostSettingsCache()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+
+  // No prior Canvas key (fresh enable). Shell title defaults to Drawer.
+  assertEqual(getActiveMainMirrorKey(), null, 'M19: key null before enable')
+  applyMainTabListPin(true, { force: true })
+
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M19: key seeded from host active')
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Profile',
+    'M19: header title = host active tab (not "Drawer")',
+  )
+  // Secondary parity: closed drawer still no highlight even with seeded key.
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const profileMirror = collectMirrorButtons(list).find(
+    (m) => m.getAttribute('data-tab-id') === 'profile',
+  )!
+  assert(
+    !profileMirror.classList.contains('sidebar-ux-tab-active'),
+    'M19: no active highlight while drawer closed',
+  )
+
+  clearHostSettingsCache()
+}
+
+// M19b: first enable must not seed Settings as header when only Settings is host-active.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const settings = makeHostBtn('settings', 'Settings', true)
+  settings.removeAttribute('data-tab-id')
+  settings.setAttribute('title', 'Settings')
+  settings.setAttribute('aria-label', 'Settings')
+  mainSidebar.appendChild(settings)
+
+  applyMainTabListPin(true, { force: true })
+  assertEqual(getActiveMainMirrorKey(), null, 'M19b: Settings not adopted as canvas key')
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Drawer',
+    'M19b: title stays Drawer when only Settings is host-active',
+  )
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

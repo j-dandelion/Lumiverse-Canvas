@@ -155,7 +155,7 @@ export function setMainDrawerState(open: boolean, tabId: string | null): void {
 }
 
 /**
- * When keepTabListVisible owns main chrome, primary open/width live on the
+ * When taskbarMode owns main chrome, primary open/width live on the
  * Canvas main-mirror shell (document markers + CSS var), not the headless
  * host wrapper. Reading host open/width would freeze stale/wrong values.
  */

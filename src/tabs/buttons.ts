@@ -209,7 +209,7 @@ interface SecondaryTabDescriptor {
 }
 
 export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
-  // Use getSecondaryTabList() so this works when keepTabListVisible has
+  // Use getSecondaryTabList() so this works when taskbarMode has
   // reparented the list onto the body-level pin host (outside the wrapper).
   const tabList = getSecondaryTabList()
   const _bareId = tab.id.includes(':')
@@ -288,7 +288,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   })
 
   tabList.appendChild(btn)
-  // Keep-tabs pin tracks secondary assignment count — re-evaluate after first tab.
+  // Taskbar pin tracks secondary assignment count — re-evaluate after first tab.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
 
@@ -299,7 +299,7 @@ export function removeSecondaryTabButton(tabId: string): void {
     getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ??
     getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`)
   btn?.remove()
-  // Last tab removed: unpin empty secondary strip under keep-tabs.
+  // Last tab removed: unpin empty secondary strip under taskbar mode.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
 
@@ -373,8 +373,8 @@ function _isMobileViewport(): boolean {
  * Update the secondary drawer's edge toggle button visibility.
  *
  * Desktop logic:
- *   - If hideDrawerOpenCloseButtons is on AND keep-tabs is on → always hidden.
- *     (Without keep-tabs the edge button is the only reopen affordance.)
+ *   - If hideDrawerOpenCloseButtons is on AND taskbar mode is on → always hidden.
+ *     (Without taskbar mode the edge button is the only reopen affordance.)
  *   - Otherwise → visible when at least one tab is assigned to secondary.
  *
  * Mobile logic (never affected by hideDrawerOpenCloseButtons):
@@ -463,7 +463,7 @@ export function showSecondaryTab(tabId: string): void {
   // (ViewportDrawer.module.css:227-237). No inline style needed.
   //
   // Query via getSecondaryTabList() so the highlight still updates when
-  // keepTabListVisible has reparented the list onto the pin host (outside
+  // taskbarMode has reparented the list onto the pin host (outside
   // the secondary wrapper — wrapper.querySelector would miss the buttons).
   const allBtns = getSecondaryTabList()?.querySelectorAll(
     'button[data-tab-id]',

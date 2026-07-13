@@ -68,7 +68,7 @@ const MOUNT_QUIET_MS = 500
 // async LOAD_LAYOUT never arrives. Prevents a permanently hidden drawer.
 const UNSUPPRESS_TIMEOUT_MS = 3000
 // Delay before restoring the active primary tab via .click(). One frame
-// is enough for keep-tabs pin/reconcile to attach mirror buttons; panel
+// is enough for taskbar mode pin/reconcile to attach mirror buttons; panel
 // bodies stay opacity:0 until the correct tab is active, so we do not
 // need a long blank settle.
 const RESTORE_TAB_CLICK_MS = 0
@@ -269,7 +269,7 @@ function armUnsuppressTimeout(): void {
 }
 
 /**
- * Start the restore-pending visual guard early (before keep-tabs /
+ * Start the restore-pending visual guard early (before taskbar mode /
  * main-mirror mounts) so the host default tab (profile) never paints
  * for a frame. Safe to call before the main-drawer watcher attaches.
  */
@@ -439,7 +439,7 @@ function startContentSettleWatch(
  * Find the host button for a persisted primary tabId and activate it.
  * Never dispatches through main-mirror onMirrorClick — that path
  * toggle-closes when the drawer is already open on the same tab.
- * When keep-tabs / canvas-main is active, also set the Canvas active
+ * When taskbar mode / canvas-main is active, also set the Canvas active
  * key + open via activateMainMirrorFromRestore.
  */
 function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boolean): boolean {
@@ -468,7 +468,7 @@ function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boole
   }
 
   // Canvas main-mirror mode: activate via host + open helper (no mirror.click).
-  // preferMirror only means "we are in keep-tabs restore"; still use host for content.
+  // preferMirror only means "we are in taskbar mode restore"; still use host for content.
   if (preferMirror || document.documentElement.classList.contains('sidebar-ux-canvas-main-active')) {
     void import('./main-tab-pin').then((m) => {
       const title =
@@ -702,7 +702,7 @@ function pushCurrentState() {
   if (!_wrapper) return
   // Canvas main-mirror owns open/close; host wrapperOpen is headless and
   // must not clobber primary.open. Still track active tabId from host.
-  const canvasMain = !!getSettings().keepTabListVisible
+  const canvasMain = !!getSettings().taskbarMode
     && typeof window !== 'undefined'
     && window.innerWidth > 600
   const open = canvasMain
@@ -862,9 +862,9 @@ export function ensureRestoredPrimaryTab(targetTabId: string): void {
   // Do not early-return on isHostPrimaryTabActive: after unassignFromSecondary
   // the host button can still carry tabBtnActive while ContainerTabContent
   // has not re-rendered into main-drawer yet. Re-click forces content settle.
-  const keepVisible = !!getSettings().keepTabListVisible
+  const taskbarMode = !!getSettings().taskbarMode
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
-  clickRestoredPrimaryTab(targetTabId, keepVisible && !isMobile)
+  clickRestoredPrimaryTab(targetTabId, taskbarMode && !isMobile)
 }
 
 /**
@@ -906,20 +906,20 @@ export function restoreMainDrawerFromDom(
     ? clampSidebarWidth(targetWidthPx)
     : null
 
-  // Canvas main-mirror owns open/close + width when keepTabListVisible is on
+  // Canvas main-mirror owns open/close + width when taskbarMode is on
   // (desktop). Host wrapperOpen / --drawer-panel-w are headless and must not
   // drive restore — apply MAIN_MIRROR_WIDTH_VAR and open/close the shell.
   //
   // Stay suppressed until after the restored tab is activated: the host
   // defaults to "profile", and opening the mirror early would flash that
   // panel for a frame (or ~100ms) before the deferred tab click.
-  const keepVisible = !!getSettings().keepTabListVisible
+  const taskbarMode = !!getSettings().taskbarMode
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
   // Larger mobile detection for host main drawer width.
   // When true, saved width must not be stamped inline; either host CSS
   // (≤600px) or JS full-bleed force (coarse, >600) takes over.
   const isHostMobile = isHostMobileDrawerViewport()
-  if (keepVisible && !isMobile) {
+  if (taskbarMode && !isMobile) {
     void import('./main-mirror-drawer').then((m) => {
       if (_stopped) {
         unsuppressMainDrawer()
@@ -949,7 +949,7 @@ export function restoreMainDrawerFromDom(
   // (≤600px) or our full-bleed override (larger touch mobile) take over.
   // This prevents a saved desktop width (e.g. 420px) from staying
   // stamped with !important after the viewport crosses into mobile.
-  if (isHostMobile && !keepVisible && drawer) {
+  if (isHostMobile && !taskbarMode && drawer) {
     drawer.style.removeProperty('width')
     wrapper.style.removeProperty('--drawer-panel-w')
     if (!isMobileViewport()) {

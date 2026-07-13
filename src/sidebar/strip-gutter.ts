@@ -1,15 +1,15 @@
-// Keep-tabs strip gutters — permanent Welcome/Landing bounds between pin strips.
+// Taskbar-mode strip gutters — permanent Welcome/Landing bounds between pin strips.
 //
-// When keepTabListVisible is on (desktop), Welcome/Landing is inset by pin-strip
+// When taskbarMode is on (desktop), Welcome/Landing is inset by pin-strip
 // width only (TAB_LIST_WIDTH_PX). Open drawers overlay Welcome; they do not
 // expand Landing page bounds. Chat column margins are owned by chat reflow
-// (open-drawer + closed-strip reserve under keep-tabs) — see chat/reflow.ts.
+// (open-drawer + closed-strip reserve under taskbar mode) — see chat/reflow.ts.
 //
 // Consumers use static CSS (no transition) on LandingPage only.
 
 import { injectStyles } from '../debug/styles'
 import { getMainDrawerSide } from '../store'
-import { isKeepTabListVisibleEnabled } from '../settings/state'
+import { isTaskbarModeEnabled } from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { TAB_LIST_WIDTH_PX } from './styles'
@@ -39,7 +39,7 @@ export function injectStripGutterStyles(): void {
   injectStyles(
     STYLE_ID,
     `
-    /* Static keep-tabs chrome for Welcome only — no transition.
+    /* Static taskbar-mode chrome for Welcome only — no transition.
        Chat column is owned by chat reflow (higher-churn open/close margins). */
     html.${STRIP_GUTTER_CLASS} [data-component="LandingPage"] {
       margin-left: var(${STRIP_L_VAR}, 0px) !important;
@@ -124,14 +124,14 @@ export function computeStripGutters(): { left: number; right: number } {
   }
 }
 
-/** Full clear: vars + class + observers (keep-tabs off / feature teardown). */
+/** Full clear: vars + class + observers (taskbar mode off / feature teardown). */
 export function clearStripGutters(): void {
   clearStripGutterVars()
   stopStripGutterObservers()
 }
 
 /**
- * Apply or clear strip gutters from current keep-tabs + side + secondary
+ * Apply or clear strip gutters from current taskbar + side + secondary
  * presence. Does not read open-drawer widths.
  */
 export function updateStripGutters(): void {
@@ -139,7 +139,7 @@ export function updateStripGutters(): void {
     clearStripGutterVars()
     return
   }
-  if (!isKeepTabListVisibleEnabled()) {
+  if (!isTaskbarModeEnabled()) {
     clearStripGutters()
     return
   }

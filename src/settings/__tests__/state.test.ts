@@ -5,7 +5,7 @@ function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
 
-import { getSettings, normalizeCanvasSettings, isKeepTabListVisibleEnabled, isHideDrawerOpenCloseButtonsEnabled } from '../state'
+import { getSettings, normalizeCanvasSettings, isTaskbarModeEnabled, isHideDrawerOpenCloseButtonsEnabled } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
 // --- getSettings returns default settings ---
@@ -122,44 +122,44 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
-// --- keepTabListVisible requires moveControlsToOuterEdge ---
+// --- taskbarMode requires moveControlsToOuterEdge ---
 {
   const cleared = normalizeCanvasSettings(
-    mergeCanvasSettings({ keepTabListVisible: true, moveControlsToOuterEdge: false }),
+    mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: false }),
   )
-  assertEqual(cleared.keepTabListVisible, false, 'normalize: keep off when outer edge off')
+  assertEqual(cleared.taskbarMode, false, 'normalize: taskbar off when outer edge off')
   assertEqual(cleared.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
   assertEqual(
-    isKeepTabListVisibleEnabled(cleared),
+    isTaskbarModeEnabled(cleared),
     false,
-    'isKeepTabListVisibleEnabled false when outer off',
+    'isTaskbarModeEnabled false when outer off',
   )
 
   const both = normalizeCanvasSettings(
-    mergeCanvasSettings({ keepTabListVisible: true, moveControlsToOuterEdge: true }),
+    mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: true }),
   )
-  assertEqual(both.keepTabListVisible, true, 'normalize: keep stays on when outer on')
+  assertEqual(both.taskbarMode, true, 'normalize: taskbar stays on when outer on')
   assertEqual(
-    isKeepTabListVisibleEnabled(both),
+    isTaskbarModeEnabled(both),
     true,
-    'isKeepTabListVisibleEnabled true when both on',
+    'isTaskbarModeEnabled true when both on',
   )
 }
 
-// --- hideDrawerOpenCloseButtons requires keepTabListVisible ---
-// hide alone (no keep-tabs) → clear hide
+// --- hideDrawerOpenCloseButtons requires taskbarMode ---
+// hide alone (no taskbar mode) → clear hide
 {
   const normalized = normalizeCanvasSettings(
     mergeCanvasSettings({
       hideDrawerOpenCloseButtons: true,
       moveControlsToOuterEdge: false,
-      keepTabListVisible: false,
+      taskbarMode: false,
     }),
   )
   assertEqual(
     normalized.hideDrawerOpenCloseButtons,
     false,
-    'hide cleared when keep-tabs is off (independent not enough)',
+    'hide cleared when taskbar mode is off (independent not enough)',
   )
   assertEqual(
     normalized.moveControlsToOuterEdge,
@@ -167,9 +167,9 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     'hide: outer edge stays off',
   )
   assertEqual(
-    normalized.keepTabListVisible,
+    normalized.taskbarMode,
     false,
-    'hide: keep-tabs stays off',
+    'hide: taskbar stays off',
   )
   assertEqual(
     isHideDrawerOpenCloseButtonsEnabled(normalized),
@@ -178,16 +178,16 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   )
 }
 
-// hide + keep-tabs + outer-edge → stays on
+// hide + taskbar + outer-edge → stays on
 {
   const both = normalizeCanvasSettings(
     mergeCanvasSettings({
       hideDrawerOpenCloseButtons: true,
-      keepTabListVisible: true,
+      taskbarMode: true,
       moveControlsToOuterEdge: true,
     }),
   )
-  assertEqual(both.hideDrawerOpenCloseButtons, true, 'hide stays on when keep-tabs + outer-edge on')
+  assertEqual(both.hideDrawerOpenCloseButtons, true, 'hide stays on when taskbar + outer-edge on')
   assertEqual(
     isHideDrawerOpenCloseButtonsEnabled(both),
     true,
@@ -195,22 +195,22 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   )
 }
 
-// Outer-edge off cascades: keep-tabs cleared → hide cleared
+// Outer-edge off cascades: taskbar cleared → hide cleared
 {
   const cascade = normalizeCanvasSettings(
     mergeCanvasSettings({
       hideDrawerOpenCloseButtons: true,
-      keepTabListVisible: true,
+      taskbarMode: true,
       moveControlsToOuterEdge: false,
     }),
   )
   assertEqual(cascade.moveControlsToOuterEdge, false, 'cascade: outer-edge off')
-  assertEqual(cascade.keepTabListVisible, false, 'cascade: keep-tabs cleared')
+  assertEqual(cascade.taskbarMode, false, 'cascade: taskbar cleared')
   assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'cascade: hide cleared')
   assertEqual(
-    isKeepTabListVisibleEnabled(cascade),
+    isTaskbarModeEnabled(cascade),
     false,
-    'cascade: isKeepTabListVisibleEnabled false',
+    'cascade: isTaskbarModeEnabled false',
   )
   assertEqual(
     isHideDrawerOpenCloseButtonsEnabled(cascade),
@@ -219,18 +219,31 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   )
 }
 
-// keep-tabs off, outer-edge on, hide on → hide cleared (direct dependency)
+// taskbar off, outer-edge on, hide on → hide cleared (direct dependency)
 {
   const direct = normalizeCanvasSettings(
     mergeCanvasSettings({
       hideDrawerOpenCloseButtons: true,
-      keepTabListVisible: false,
+      taskbarMode: false,
       moveControlsToOuterEdge: true,
     }),
   )
-  assertEqual(direct.keepTabListVisible, false, 'direct: keep-tabs stays off')
+  assertEqual(direct.taskbarMode, false, 'direct: taskbar stays off')
   assertEqual(direct.moveControlsToOuterEdge, true, 'direct: outer-edge stays on')
-  assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when keep-tabs off')
+  assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when taskbar off')
+}
+
+// Legacy keepTabListVisible → taskbarMode migration
+{
+  const migrated = mergeCanvasSettings({ keepTabListVisible: true, moveControlsToOuterEdge: true } as any)
+  assertEqual(migrated.taskbarMode, true, 'migration: legacy keepTabListVisible maps to taskbarMode')
+  assertEqual((migrated as any).keepTabListVisible, undefined, 'migration: zombie keepTabListVisible is dropped')
+
+  const newKeyWins = mergeCanvasSettings({ taskbarMode: false, keepTabListVisible: true } as any)
+  assertEqual(newKeyWins.taskbarMode, false, 'migration: new key taskbarMode wins over legacy')
+
+  const noLegacy = mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  assertEqual(noLegacy.taskbarMode, true, 'migration: new key alone works')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

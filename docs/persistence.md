@@ -66,7 +66,7 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 Builds the current layout from in-memory state:
 - `primary`:
   - **Host main** (default): module-level cache (`_mainDrawerOpen`, `_mainDrawerTabId`) + `getMainDrawerWidth()`
-  - **Canvas main mirror** (`keepTabListVisible` desktop): `html.sidebar-ux-canvas-main-open` for open + `--sidebar-ux-main-mirror-w` for width (host wrapper is headless; measuring it freezes stale open/width)
+  - **Canvas main mirror** (`taskbarMode` desktop): `html.sidebar-ux-canvas-main-open` for open + `--sidebar-ux-main-mirror-w` for width (host wrapper is headless; measuring it freezes stale open/width)
 - `secondary`: reads `isSecondarySidebarOpen()`, CSS variable for width, `getActiveSecondaryTabId()` for active tab
 - `detachedTabs`: maps secondary assignments to `{ tabId, tabTitle, sidebar }`
 
@@ -98,7 +98,7 @@ Drains both layout and settings debounce timers, posts a single merged SAVE_LAYO
 ### `applyMainDrawer(layout)`
 
 Restores the main drawer's open/close + active tab. Delegates to `restoreMainDrawerFromDom()` which:
-1. **Canvas main mirror** (`keepTabListVisible`): sets `--sidebar-ux-main-mirror-w`, calls `openCanvasMainDrawer` / `closeCanvasMainDrawer`, clicks host/mirror tab for content
+1. **Canvas main mirror** (`taskbarMode`): sets `--sidebar-ux-main-mirror-w`, calls `openCanvasMainDrawer` / `closeCanvasMainDrawer`, clicks host/mirror tab for content
 2. **Host main** (default):
    - Compares current state with saved state
    - If open target: clicks the tab button to open the drawer
@@ -121,7 +121,7 @@ The main drawer is host-owned — Canvas can't call its API directly. Instead:
 
 **Unsuppress readiness** (main-mirror and host): lift the guard only when the **host** sidebar has `tabBtnActive` for the saved `primary.tabId` **and** the parked panel body has settled (childList mutation quiescence, or a short fallback if the tab was already correct / empty). Canvas mirror chrome (`_activeMainMirrorKey` / `sidebar-ux-tab-active` on mirror buttons) is **not** a restore-ready signal — `activateMainMirrorFromRestore` paints header + highlight before React commits panel children. Secondary `finishRestore` re-asserts primary via `ensureRestoredPrimaryTab` (also host-only). 3s safety timeout if restore never completes.
 
-**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host tab (with Canvas active-key update under keep-tabs) since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once host active + content settle.
+**Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host tab (with Canvas active-key update under taskbar mode) since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once host active + content settle.
 
 ## Vanilla Baseline (session-only) (`layout/vanilla-baseline.ts`)
 

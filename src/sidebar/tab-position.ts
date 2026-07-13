@@ -26,7 +26,7 @@ import { TAB_LIST_WIDTH_PX } from './styles'
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
 
-/** Runtime flag on the tab list while keepTabListVisible is applied.
+/** Runtime flag on the tab list while taskbarMode is applied.
  *  Also a CSS hook (see styles under pin host / secondary wrapper). */
 export const TAB_LIST_PINNED_CLASS = 'sidebar-ux-tab-list--pinned'
 
@@ -47,7 +47,7 @@ const PIN_Z_INDEX = '10000'
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
-/** Panel edge facing the chat column (outer-edge / keep-tabs-visible).
+/** Panel edge facing the chat column (outer-edge / taskbar mode visible).
  *  Same primary-020 token as INNER_BORDER (tab-list ↔ panel chrome). */
 const CHAT_FACING_BORDER = '1px solid var(--lumiverse-primary-020)'
 
@@ -242,7 +242,7 @@ function applyFlexAndBorder(
  *  drawer is on, NOT on the toggle: a drawer on the left of the screen
  *  has chat to its right, so the panel's chat-facing edge is always its
  *  right side (and vice versa).
- *  - Enabled (moveControlsToOuterEdge and/or keepTabListVisible): write
+ *  - Enabled (moveControlsToOuterEdge and/or taskbarMode): write
  *    CHAT_FACING_BORDER on the chat-facing side.
  *  - Disabled: clear the border (the primary-020 border between tab list
  *    and panel is the only divider needed when controls are on the inner edge). */
@@ -269,9 +269,9 @@ function applyPanelChatBorder(
 }
 
 /** Chat-facing panel border when tabs sit on the outer edge (explicit toggle
- *  or keep-tabs-visible pin, which always parks the strip at the screen edge). */
+ *  or taskbar mode pin, which always parks the strip at the screen edge). */
 function wantsChatFacingPanelBorder(outerEdgeEnabled: boolean): boolean {
-  return outerEdgeEnabled || !!getSettings().keepTabListVisible
+  return outerEdgeEnabled || !!getSettings().taskbarMode
 }
 
 export function applyTabListPosition(
@@ -376,9 +376,9 @@ export function reconcileTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
-  // Keep-tabs only pins secondary when it has tabs — empty strip must not show.
+  // Taskbar mode only pins secondary when it has tabs — empty strip must not show.
   const want =
-    !!getSettings().keepTabListVisible && hasSecondaryAssignedTabs()
+    !!getSettings().taskbarMode && hasSecondaryAssignedTabs()
   applyTabListPin(want, { force: true })
   // Side-change / remount: remap strip gutters to the current main side.
   void import('./strip-gutter').then((m) => m.updateStripGutters())

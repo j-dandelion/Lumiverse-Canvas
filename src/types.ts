@@ -51,21 +51,22 @@ export interface CanvasSettings {
    *  No-op on mobile (mobile CSS forces column layout + bottom border). */
   moveControlsToOuterEdge?: boolean
 
-  /** When a drawer is closed, keep its tab-button-list visible at the
-   *  screen edge so the user can switch tabs without opening the drawer.
-   *  Requires `moveControlsToOuterEdge` (forced off when outer-edge is off).
-   *  Secondary: reparents Canvas-owned tab list. Main: Canvas mirror strip
-   *  (host React nodes stay in place; clicks forward to host buttons).
-   *  Panels still slide in/out from behind the list. No-op on mobile. */
-  keepTabListVisible?: boolean
+  /** When a drawer is closed, show its tab-button strip as a taskbar
+   *  pinned to the screen edge so the user can switch tabs without opening
+   *  the drawer. Requires `moveControlsToOuterEdge` (forced off when
+   *  outer-edge is off). Secondary: reparents Canvas-owned tab list.
+   *  Main: Canvas mirror strip (host React nodes stay in place; clicks
+   *  forward to host buttons). Panels still slide in/out from behind
+   *  the strip. No-op on mobile. */
+  taskbarMode?: boolean
 
   /** When on (desktop only, default off), hide the drawer open/close
-   *  edge buttons for the second drawer and, when keep-tabs is on, the
-   *  Canvas main drawer. Requires `keepTabListVisible` (otherwise the
+   *  edge buttons for the second drawer and, when taskbar mode is on, the
+   *  Canvas main drawer. Requires `taskbarMode` (otherwise the
    *  edge button is the only way to reopen a closed drawer). Does not
    *  affect mobile — mobile edge buttons always follow has-tabs (+
    *  mutual exclusion CSS). Does not change the host main drawer's edge
-   *  control when keep-tabs is off. */
+   *  control when taskbar mode is off. */
   hideDrawerOpenCloseButtons?: boolean
 
   /** Show box-shadow on drawers at min-width: 601px (desktop). */
@@ -132,7 +133,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   // Drawers
   moveControlsToOuterEdge: false,
-  keepTabListVisible: false,
+  taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
   drawerShadowsDesktop: true,
   drawerShadowsMobile: false,
@@ -151,23 +152,23 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
 }
 
 /**
- * keepTabListVisible only makes sense with tab lists on the screen edge.
+ * taskbarMode only makes sense with tab lists on the screen edge.
  * Clear it whenever moveControlsToOuterEdge is off (load safety + merge path).
  * Idempotent — safe to call after already-normalized settings.
  *
- * hideDrawerOpenCloseButtons requires keepTabListVisible (otherwise the
+ * hideDrawerOpenCloseButtons requires taskbarMode (otherwise the
  * edge button is the only reopen affordance). Cascade: outer-edge off →
- * keep-tabs off → hide off.
+ * taskbar mode off → hide off.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
 ): Required<CanvasSettings> {
-  // Cascade 1: keep-tabs requires outer-edge
-  if (s.keepTabListVisible && !s.moveControlsToOuterEdge) {
-    return { ...s, keepTabListVisible: false, hideDrawerOpenCloseButtons: false }
+  // Cascade 1: taskbar mode requires outer-edge
+  if (s.taskbarMode && !s.moveControlsToOuterEdge) {
+    return { ...s, taskbarMode: false, hideDrawerOpenCloseButtons: false }
   }
-  // Cascade 2: hide requires keep-tabs
-  if (s.hideDrawerOpenCloseButtons && !s.keepTabListVisible) {
+  // Cascade 2: hide requires taskbar mode
+  if (s.hideDrawerOpenCloseButtons && !s.taskbarMode) {
     return { ...s, hideDrawerOpenCloseButtons: false }
   }
   return s
@@ -179,7 +180,7 @@ export function normalizeCanvasSettingsFields(
  * reading `layout.settings` directly, so new fields added in future versions
  * gracefully appear at their default value.
  *
- * Always returns a normalized full settings object (keep-tabs outer-edge
+ * Always returns a normalized full settings object (taskbarMode outer-edge
  * invariant enforced here so future callers cannot skip it).
  */
 export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): Required<CanvasSettings> {
@@ -207,6 +208,11 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     if (!hasNewLayoutFacet && typeof raw.layoutPersistence === 'boolean') {
       out.persistDrawerOpenState = raw.layoutPersistence
       out.persistDrawerWidth = raw.layoutPersistence
+    }
+    // Legacy keepTabListVisible → taskbarMode migration. Prefer the new key when
+    // present on the raw object; only map the zombie key when taskbarMode is absent.
+    if (saved.taskbarMode === undefined && typeof raw.keepTabListVisible === 'boolean') {
+      out.taskbarMode = raw.keepTabListVisible
     }
   }
   return normalizeCanvasSettingsFields(out)

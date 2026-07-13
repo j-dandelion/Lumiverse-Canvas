@@ -361,7 +361,7 @@ import { showSecondaryTab } from '../buttons'
 }
 
 // ============================================================
-// T12: showSecondaryTab with pinned tab list (keepTabListVisible on)
+// T12: showSecondaryTab with pinned tab list (taskbarMode on)
 //   - Same behavior as unpinned: active class + inline clear
 // ============================================================
 {
@@ -490,7 +490,7 @@ import { setSettings, getSettings } from '../../settings/state'
 import { getTabAssignments } from '../../tabs/assignment'
 
 const savedHideValue = getSettings().hideDrawerOpenCloseButtons
-const savedKeepTabs = getSettings().keepTabListVisible
+const savedKeepTabs = getSettings().taskbarMode
 const savedOuterEdge = getSettings().moveControlsToOuterEdge
 
 // T16: Desktop, hide=false, hasSecondaryTabs → flex
@@ -504,38 +504,38 @@ const savedOuterEdge = getSettings().moveControlsToOuterEdge
   getTabAssignments().delete('test-tab-16')
 }
 
-// T17: Desktop, hide=true + keep-tabs=true + outer-edge=true → none
+// T17: Desktop, hide=true + taskbar=true + outer-edge=true → none
 {
   getTabAssignments().set('test-tab-17', 'secondary')
   setSettings({
     hideDrawerOpenCloseButtons: true,
-    keepTabListVisible: true,
+    taskbarMode: true,
     moveControlsToOuterEdge: true,
   })
   drawerTabStub.style.display = ''
   updateDrawerTabVisibility()
   assertEqual(drawerTabStub.style.display, 'none',
-    'T17: desktop hide=true keep-tabs=true → none')
+    'T17: desktop hide=true taskbar=true → none')
   setSettings({
     hideDrawerOpenCloseButtons: false,
-    keepTabListVisible: savedKeepTabs,
+    taskbarMode: savedKeepTabs,
     moveControlsToOuterEdge: savedOuterEdge,
   })
   getTabAssignments().delete('test-tab-17')
 }
 
-// T17a: Desktop, hide=true but keep-tabs=false → flex (hide requires keep-tabs)
+// T17a: Desktop, hide=true but taskbar=false → flex (hide requires taskbar)
 {
   setSettings({
     hideDrawerOpenCloseButtons: true,
-    keepTabListVisible: false,
+    taskbarMode: false,
     moveControlsToOuterEdge: true,
   })
   drawerTabStub.style.display = ''
   getTabAssignments().set('test-tab-17a', 'secondary')
   updateDrawerTabVisibility()
   assertEqual(drawerTabStub.style.display, 'flex',
-    'T17a: desktop hide=true keep-tabs=false → flex (hide requires keep-tabs)')
+    'T17a: desktop hide=true taskbar=false → flex (hide requires taskbar)')
   setSettings({ hideDrawerOpenCloseButtons: false })
   getTabAssignments().delete('test-tab-17a')
 }
@@ -559,7 +559,7 @@ const savedOuterEdge = getSettings().moveControlsToOuterEdge
   globalThis.window.matchMedia = (q: string) => ({ matches: q === '(max-width: 600px)' })
   setSettings({
     hideDrawerOpenCloseButtons: true,
-    keepTabListVisible: true,
+    taskbarMode: true,
     moveControlsToOuterEdge: true,
   })
   drawerTabStub.style.display = ''
@@ -577,7 +577,7 @@ const savedOuterEdge = getSettings().moveControlsToOuterEdge
   globalThis.window.matchMedia = (q: string) => ({ matches: q === '(max-width: 600px)' })
   setSettings({
     hideDrawerOpenCloseButtons: true,
-    keepTabListVisible: true,
+    taskbarMode: true,
     moveControlsToOuterEdge: true,
   })
   drawerTabStub.style.display = ''
@@ -593,7 +593,7 @@ const savedOuterEdge = getSettings().moveControlsToOuterEdge
 // Restore
 setSettings({
   hideDrawerOpenCloseButtons: savedHideValue,
-  keepTabListVisible: savedKeepTabs,
+  taskbarMode: savedKeepTabs,
   moveControlsToOuterEdge: savedOuterEdge,
 })
 

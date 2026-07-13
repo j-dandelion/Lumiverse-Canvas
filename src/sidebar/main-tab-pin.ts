@@ -1,6 +1,6 @@
 // Main-drawer "keep tab controls visible" — mirror buttons + orchestration.
 //
-// When keepTabListVisible is on (desktop), Canvas owns the full main drawer
+// When taskbarMode is on (desktop), Canvas owns the full main drawer
 // chrome via main-mirror-drawer.ts (headless host + shell + portal). This
 // module:
 //
@@ -115,7 +115,7 @@ export function reconcileMainTabListPin(): void {
     return
   }
   reconcileMainMirrorDrawer()
-  const on = !!getSettings().keepTabListVisible
+  const on = !!getSettings().taskbarMode
   if (!on) {
     teardownMainPin()
     void import('./strip-gutter').then((m) => m.updateStripGutters())
@@ -277,15 +277,16 @@ function reconcileMainMirror(): void {
   const settingsButtons = hostButtons.filter((b) => isSettingsButton(b))
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)))
 
-  // When the Canvas-owned active key no longer maps to any host button
-  // (tab moved off primary), heal to host tabBtnActive or clear key so
-  // syncMirrorFromHost can fall back. Does not run while the restored
-  // key still exists in wantedKeys (preserves exclusive dual-active guard).
-  if (_activeMainMirrorKey != null && !wantedKeys.has(_activeMainMirrorKey)) {
+  // When the Canvas-owned active key is missing or no longer maps to any
+  // host button, adopt host tabBtnActive (or clear). Covers:
+  //   - first enable of taskbar mode (key starts null; shell title is 'Drawer')
+  //   - tab moved off primary (stale key)
+  // Does not run while a restored key still exists in wantedKeys
+  // (preserves exclusive dual-active guard). Settings is host chrome only.
+  if (_activeMainMirrorKey == null || !wantedKeys.has(_activeMainMirrorKey)) {
     const hostActiveBtn =
       hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
     const prevKey = _activeMainMirrorKey
-    // Settings is host chrome only — never adopt as Canvas active tab / header.
     if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
       _activeMainMirrorKey = hostButtonKey(hostActiveBtn)
       const t =
@@ -293,13 +294,15 @@ function reconcileMainMirror(): void {
         hostActiveBtn.getAttribute('aria-label') ||
         ''
       if (t) setCanvasMainTitle(t)
-    } else {
+    } else if (prevKey != null) {
       _activeMainMirrorKey = null
     }
-    dlog('[main-mirror] stale active key healed', {
-      prevKey,
-      nextKey: _activeMainMirrorKey,
-    })
+    if (prevKey !== _activeMainMirrorKey) {
+      dlog('[main-mirror] active key healed/seeded', {
+        prevKey,
+        nextKey: _activeMainMirrorKey,
+      })
+    }
   }
 
   // Drop stale mirrors anywhere under the list (main + bottom + legacy flat).
@@ -324,10 +327,9 @@ function reconcileMainMirror(): void {
     while (bottomSection.firstChild) bottomSection.removeChild(bottomSection.firstChild)
   }
 
-  // Re-stamp header title from active key.  mountMainMirror always creates
-  // the shell with title 'Drawer', and the stale-key heal above only
-  // re-stamps when the key is stale.  When the key survived the remount
-  // unchanged, restore the title here.
+  // Re-stamp header title from active key. mountMainMirror always creates
+  // the shell with title 'Drawer'; seed/heal above covers first-enable and
+  // stale keys; this path re-stamps when the key survived a remount.
   if (_activeMainMirrorKey != null) {
     const activeMirror = list.querySelector(
       `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_activeMainMirrorKey)}"]`,
@@ -483,8 +485,12 @@ function syncMirrorButtonsInto(
  * optimistic cache after Hide/Show). Host button `tabBtnLabeled` lags React
  * commit after hide; on activate/reconcile that stale class re-applied 56px
  * height with empty label DOM ("grow again even when there's no label").
+ *
+ * Settings is host chrome (gear only) — never labeled, even when tabs show
+ * short names. Title/aria-label still say "Settings" for a11y/tooltips.
  */
-function resolveMirrorLabeled(_hostBtn: HTMLElement): boolean {
+function resolveMirrorLabeled(hostBtn: HTMLElement): boolean {
+  if (isSettingsButton(hostBtn)) return false
   return isShowTabLabels()
 }
 
@@ -648,7 +654,8 @@ function buildMirrorInnerHtml(hostBtn: HTMLElement, labeled: boolean): string {
   // Canvas Show. Prefer host short name; fall back to title-derived short
   // name so main-mirror can rebuild labels immediately after secondary Show.
   // Omit the span entirely when unlabeled (zero-height still costs 1px flex gap).
-  if (labeled) {
+  // Settings never gets a short-name label (host keeps it icon-only).
+  if (labeled && !isSettingsButton(hostBtn)) {
     const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
     const fromHost = hostLabel ? (hostLabel.textContent || '').trim() : ''
     const title =

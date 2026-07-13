@@ -103,7 +103,7 @@ export function syncDrawerTabSettings(): void {
 
 function _runSyncDrawerTabSettings(): void {
   // Secondary and/or Canvas main-mirror edge toggles. Either may be absent
-  // (second drawer off, keepTabListVisible off) — still sync the other.
+  // (second drawer off, taskbarMode off) — still sync the other.
   const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
   const mainMirrorWrapperEarly = getMainMirrorWrapper()
   if (!drawerTab && !mainMirrorWrapperEarly) return
@@ -305,7 +305,7 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
 
   // Host uses CSS-module `.tabLabel_*`. Only Canvas secondary / main-mirror
   // (and their pin hosts) use `.sidebar-ux-tab-label`. Query the whole
-  // document so keep-tabs reparent (list outside the secondary wrapper) and
+  // document so taskbar reparent (list outside the secondary wrapper) and
   // dual pin hosts cannot miss live buttons.
   if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return
 

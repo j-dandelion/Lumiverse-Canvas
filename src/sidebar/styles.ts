@@ -10,7 +10,7 @@ import { injectStyles } from '../debug/styles'
 // it for persistence.
 export const SECONDARY_WIDTH_VAR = '--sidebar-ux-secondary-w'
 
-/** Canvas main mirror drawer width (keepTabListVisible desktop mode). */
+/** Canvas main mirror drawer width (taskbarMode desktop mode). */
 export const MAIN_MIRROR_WIDTH_VAR = '--sidebar-ux-main-mirror-w'
 
 /** @deprecated Host class hide was removed (fought React). Use document markers. */

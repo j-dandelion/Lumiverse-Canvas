@@ -390,7 +390,7 @@ const tabPositionFeature: CanvasFeature = {
   },
 }
 
-/** Keep tab controls visible (requires moveControlsToOuterEdge):
+/** Taskbar mode (requires moveControlsToOuterEdge):
  *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
  *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
  *    forward to host tab buttons. Hidden while main drawer is open.
@@ -399,12 +399,12 @@ const tabPositionFeature: CanvasFeature = {
  *  Secondary remount also calls reconcileTabListPin(); side-change calls
  *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
  *  No-op on mobile (force-unpins / tears down main mirror). */
-const keepTabListVisibleFeature: CanvasFeature = {
-  id: 'keepTabListVisible',
+const taskbarModeFeature: CanvasFeature = {
+  id: 'taskbarMode',
   mount(_ctx, _layout) {
-    // mount() only runs when keepTabListVisible is truthy at setup, but still
+    // mount() only runs when taskbarMode is truthy at setup, but still
     // require outer-edge (settings normalize + apply also enforce this).
-    const on = !!getSettings().keepTabListVisible && !!getSettings().moveControlsToOuterEdge
+    const on = !!getSettings().taskbarMode && !!getSettings().moveControlsToOuterEdge
     if (on) {
       reconcileTabListPin()
       reconcileMainTabListPin()
@@ -425,7 +425,7 @@ const keepTabListVisibleFeature: CanvasFeature = {
     }
   },
   apply(_prev, next) {
-    const on = !!next.keepTabListVisible && !!next.moveControlsToOuterEdge
+    const on = !!next.taskbarMode && !!next.moveControlsToOuterEdge
     applyTabListPin(on, { force: true })
     applyMainTabListPin(on, { force: true })
     updateDrawerTabVisibility()
@@ -438,7 +438,7 @@ const keepTabListVisibleFeature: CanvasFeature = {
   },
 }
 
-/** Hide drawer open/close buttons: independent of keep-tabs.
+/** Hide drawer open/close buttons: independent of taskbar mode.
  *  Updates both secondary and main mirror drawer-tab visibility on mount
  *  and on every settings change. */
 const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
@@ -471,7 +471,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   persistDrawerWidthFeature,
   slashFeature,
   tabPositionFeature,
-  keepTabListVisibleFeature,
+  taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,
   drawerTabDragFeature,
 ]

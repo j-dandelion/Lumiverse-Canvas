@@ -10,12 +10,12 @@ Convenient tweaks and features to enhance your Lumiverse UI!
 - Center the chat in the visible area (prevent panels from covering chat)
 - Add a second drawer, move any tab between drawers freely (right click tab, click move)
 - Move tab buttons to the other side of the drawer panel (along screen edge)
+- Taskbar mode — pin tab controls to the screen edge when a drawer is closed
 - Press and drag drawer open/close buttons to move them without going into settings
 - Slash commands system (focus on performance, more commands on the way)
 
 ## Coming soon™
 - Change size of tabs easily
-- Keep tab controls visible when drawer is closed
 - Drag to reorder tab buttons
 - Layout system (try different layouts, save and load)
 - Drawers on top/bottom of screen
