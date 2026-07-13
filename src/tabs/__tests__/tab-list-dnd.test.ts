@@ -26,6 +26,9 @@
 // Click after release: capture suppressors stay installed for the whole drag;
 // removal is scheduled only on pointerup (setTimeout 0). Scheduling removal
 // at drag-start cleared the listener mid-drag → every drop activated the tab.
+//
+// Hit-test uses floating *tab* geometry (overlay center + bounds), not raw
+// pointer — grab offset on narrow strips otherwise swapped neighbors early.
 
 // Verify reorderWithin takes a post-removal toIndex (integration safe-check):
 // configure-model.ts reorderWithin: splices fromIndex first, then inserts at
@@ -40,6 +43,11 @@ import {
 } from '../configure-model'
 import type { ConfigureDraft } from '../configure-model'
 import { isSettingsButton } from '../buttons'
+import {
+  dragHitGeometry,
+  overlayOverlapsContainer,
+  insertIndexFromMidpoints,
+} from '../tab-list-dnd'
 
 let passed = 0
 let failed = 0
@@ -238,6 +246,52 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     false,
     'isSettingsButton: normal tab → false (DnD may install)',
   )
+})()
+
+// Tab-position hit geometry: center is overlay mid, not grab/pointer offset.
+;(() => {
+  const g = dragHitGeometry(100, 200, 48, 56)
+  assertEqual(g.centerX, 124, 'dragHitGeometry: centerX = left + w/2')
+  assertEqual(g.centerY, 228, 'dragHitGeometry: centerY = top + h/2')
+  assertEqual(g.right, 148, 'dragHitGeometry: right edge')
+  assertEqual(g.bottom, 256, 'dragHitGeometry: bottom edge')
+})()
+
+// Container match uses overlay overlap (tab body), not a single pointer point.
+;(() => {
+  const tab = { left: 10, top: 50, right: 58, bottom: 106 }
+  const strip = { left: 0, top: 0, right: 48, bottom: 400 }
+  // Tab mostly over strip (center still in strip)
+  assertEqual(
+    overlayOverlapsContainer(tab, strip),
+    true,
+    'overlayOverlapsContainer: tab overlapping strip → true',
+  )
+  const far = { left: 200, top: 50, right: 248, bottom: 106 }
+  assertEqual(
+    overlayOverlapsContainer(far, strip),
+    false,
+    'overlayOverlapsContainer: tab far from strip → false',
+  )
+  // Pointer would be in the chat gap, but tab still overlaps strip:
+  // right edge of tab (58) past strip right (48) and left (10) still in strip.
+  const halfOut = { left: 20, top: 50, right: 68, bottom: 106 }
+  assertEqual(
+    overlayOverlapsContainer(halfOut, strip),
+    true,
+    'overlayOverlapsContainer: half-over strip still hits (tab position)',
+  )
+})()
+
+// Insert index from midpoints (post-removal convention).
+;(() => {
+  // Neighbors at mid Y 100, 200, 300
+  const mids = [100, 200, 300]
+  assertEqual(insertIndexFromMidpoints(50, mids), 0, 'insertIndex: above first → 0')
+  assertEqual(insertIndexFromMidpoints(150, mids), 1, 'insertIndex: between 0 and 1 → 1')
+  assertEqual(insertIndexFromMidpoints(250, mids), 2, 'insertIndex: between 1 and 2 → 2')
+  assertEqual(insertIndexFromMidpoints(350, mids), 3, 'insertIndex: below last → length')
+  assertEqual(insertIndexFromMidpoints(0, []), 0, 'insertIndex: empty list → 0')
 })()
 
 // Report

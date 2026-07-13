@@ -10521,27 +10521,53 @@ function buildDraftAndBase() {
   };
   return { draft, base, catalog };
 }
-function hitTestDropTarget2(x2, y3) {
+function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
+  const w3 = Math.max(0, overlayWidth);
+  const h4 = Math.max(0, overlayHeight);
+  return {
+    centerX: overlayTx + w3 / 2,
+    centerY: overlayTy + h4 / 2,
+    left: overlayTx,
+    top: overlayTy,
+    right: overlayTx + w3,
+    bottom: overlayTy + h4
+  };
+}
+function overlayOverlapsContainer(overlay, container, padY = 8) {
+  const overlapsX = overlay.right > container.left && overlay.left < container.right;
+  const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
+  return overlapsX && overlapsY;
+}
+function insertIndexFromMidpoints(y3, midpoints) {
+  for (let i3 = 0;i3 < midpoints.length; i3++) {
+    if (y3 < midpoints[i3])
+      return i3;
+  }
+  return midpoints.length;
+}
+function hitTestDropTarget2(geom) {
   const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
+  let best = null;
   for (const { el: container, secondary } of containers) {
     const rect = container.getBoundingClientRect();
-    if (x2 < rect.left || x2 > rect.right)
-      continue;
-    if (y3 < rect.top - 8 || y3 > rect.bottom + 8)
+    if (!overlayOverlapsContainer(geom, rect))
       continue;
     const buttons = getButtonsInContainer(container, secondary, _dragTabId2);
-    if (buttons.length === 0) {
-      return { container, index: 0, secondary };
+    let index = 0;
+    if (buttons.length > 0) {
+      const midpoints = buttons.map((btn) => {
+        const btnRect = btn.getBoundingClientRect();
+        return btnRect.top + btnRect.height / 2;
+      });
+      index = insertIndexFromMidpoints(geom.centerY, midpoints);
     }
-    for (let i3 = 0;i3 < buttons.length; i3++) {
-      const btnRect = buttons[i3].getBoundingClientRect();
-      const mid = btnRect.top + btnRect.height / 2;
-      if (y3 < mid)
-        return { container, index: i3, secondary };
+    const containerMidX = rect.left + rect.width / 2;
+    const distX = Math.abs(geom.centerX - containerMidX);
+    if (!best || distX < best.distX) {
+      best = { container, index, secondary, distX };
     }
-    return { container, index: buttons.length, secondary };
   }
-  return null;
+  return best ? { container: best.container, index: best.index, secondary: best.secondary } : null;
 }
 function clearInsertIndicator() {
   if (_insertIndicatorEl) {
@@ -10730,13 +10756,12 @@ function scheduleDragFrame() {
     _rafId = null;
     if (!_isDragging)
       return;
-    const x2 = _pendingPointerX;
-    const y3 = _pendingPointerY;
     if (_geomDirty || !_geometryCache) {
       _geometryCache = { containers: getDropContainers() };
       _geomDirty = false;
     }
-    const target = hitTestDropTarget2(x2, y3);
+    const geom = dragHitGeometry(_overlayTx, _overlayTy, _overlayWidth || 48, _overlayHeight || 48);
+    const target = hitTestDropTarget2(geom);
     const prev = _lastDropTarget2;
     const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
     if (!target) {
@@ -10798,6 +10823,8 @@ function startDrag(btn, pointerEvent) {
   _dragOffsetY2 = pointerEvent.clientY - rect.top;
   _overlayTx = rect.left;
   _overlayTy = rect.top;
+  _overlayWidth = rect.width;
+  _overlayHeight = rect.height;
   btn.classList.add("canvas-tab-list-dnd-placeholder");
   _dragOverlay2 = createDragOverlay2(btn);
   _geometryCache = { containers: getDropContainers() };
@@ -10877,6 +10904,10 @@ function cleanupDragVisuals() {
     _dragOverlay2 = null;
   }
   _dragOverlayInner = null;
+  _overlayWidth = 0;
+  _overlayHeight = 0;
+  _overlayTx = 0;
+  _overlayTy = 0;
   if (_dragElement) {
     _dragElement.classList.remove("canvas-tab-list-dnd-placeholder");
   }
@@ -11050,7 +11081,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();

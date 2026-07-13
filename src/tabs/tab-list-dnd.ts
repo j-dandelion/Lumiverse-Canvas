@@ -81,6 +81,9 @@ let _pendingPointerX = 0
 let _pendingPointerY = 0
 let _overlayTx = 0
 let _overlayTy = 0
+/** Floating clone size at lift (for tab-center hit-test without layout thrash). */
+let _overlayWidth = 0
+let _overlayHeight = 0
 /** Source button's original DOM position for cancel-restore. */
 let _originalParent: HTMLElement | null = null
 let _originalNextSibling: HTMLElement | null = null
@@ -452,7 +455,61 @@ function buildDraftAndBase(): {
 // ── Hit-test ──
 
 /**
- * Find the drop target under the pointer.
+ * Geometry of the floating tab used for hit-testing (not the raw pointer).
+ *
+ * Live strips are narrow; grabbing near an edge made pointer-based hit-test
+ * swap neighbors / change drawers before the floating tab itself reached
+ * the midpoint. Configure feels "tab-slot" oriented because the row is
+ * wide and grab is on a centered handle — we match that intent by using
+ * the overlay center for insert Y and overlay bounds for which list is
+ * under the drag.
+ */
+export function dragHitGeometry(
+  overlayTx: number,
+  overlayTy: number,
+  overlayWidth: number,
+  overlayHeight: number,
+): { centerX: number; centerY: number; left: number; top: number; right: number; bottom: number } {
+  const w = Math.max(0, overlayWidth)
+  const h = Math.max(0, overlayHeight)
+  return {
+    centerX: overlayTx + w / 2,
+    centerY: overlayTy + h / 2,
+    left: overlayTx,
+    top: overlayTy,
+    right: overlayTx + w,
+    bottom: overlayTy + h,
+  }
+}
+
+/**
+ * True when the floating tab overlaps a drop container (with a small
+ * vertical pad so empty/near-edge lists still accept the tab).
+ */
+export function overlayOverlapsContainer(
+  overlay: { left: number; top: number; right: number; bottom: number },
+  container: { left: number; top: number; right: number; bottom: number },
+  padY = 8,
+): boolean {
+  const overlapsX = overlay.right > container.left && overlay.left < container.right
+  const overlapsY =
+    overlay.bottom > container.top - padY && overlay.top < container.bottom + padY
+  return overlapsX && overlapsY
+}
+
+/**
+ * Post-removal insert index for a Y coordinate against button midpoints
+ * (same convention as configure-modal hitTestDropTarget).
+ */
+export function insertIndexFromMidpoints(y: number, midpoints: number[]): number {
+  for (let i = 0; i < midpoints.length; i++) {
+    if (y < midpoints[i]) return i
+  }
+  return midpoints.length
+}
+
+/**
+ * Find the drop target under the floating tab (tab position, not cursor).
  *
  * Returns the container element, insertion index (the index BEFORE which the
  * dragged tab would be inserted, in the post-removal button layout), and
@@ -463,18 +520,25 @@ function buildDraftAndBase(): {
  * insert position that can be passed directly to reorderWithin / moveTab.
  */
 function hitTestDropTarget(
-  x: number,
-  y: number,
+  geom: ReturnType<typeof dragHitGeometry>,
 ): { container: HTMLElement; index: number; secondary: boolean } | null {
   const containers = _geometryCache
     ? _geometryCache.containers
     : getDropContainers()
 
+  // Prefer the container whose horizontal center is closest to the tab
+  // center when both overlap (unlikely for opposite-side drawers, but
+  // stable if they briefly both match).
+  let best: {
+    container: HTMLElement
+    index: number
+    secondary: boolean
+    distX: number
+  } | null = null
+
   for (const { el: container, secondary } of containers) {
     const rect = container.getBoundingClientRect()
-    // Expand vertical hit zone so empty/near-edge drops still work
-    if (x < rect.left || x > rect.right) continue
-    if (y < rect.top - 8 || y > rect.bottom + 8) continue
+    if (!overlayOverlapsContainer(geom, rect)) continue
 
     const buttons = getButtonsInContainer(
       container,
@@ -482,20 +546,26 @@ function hitTestDropTarget(
       _dragTabId,
     )
 
-    if (buttons.length === 0) {
-      return { container, index: 0, secondary }
+    let index = 0
+    if (buttons.length > 0) {
+      const midpoints = buttons.map((btn) => {
+        const btnRect = btn.getBoundingClientRect()
+        return btnRect.top + btnRect.height / 2
+      })
+      // Insert index from floating *tab center* Y (not pointer Y).
+      index = insertIndexFromMidpoints(geom.centerY, midpoints)
     }
 
-    for (let i = 0; i < buttons.length; i++) {
-      const btnRect = buttons[i].getBoundingClientRect()
-      const mid = btnRect.top + btnRect.height / 2
-      if (y < mid) return { container, index: i, secondary }
+    const containerMidX = rect.left + rect.width / 2
+    const distX = Math.abs(geom.centerX - containerMidX)
+    if (!best || distX < best.distX) {
+      best = { container, index, secondary, distX }
     }
-    // After the last button
-    return { container, index: buttons.length, secondary }
   }
 
-  return null
+  return best
+    ? { container: best.container, index: best.index, secondary: best.secondary }
+    : null
 }
 
 // ── Insert indicator management ──
@@ -810,17 +880,22 @@ function scheduleDragFrame(): void {
 
     if (!_isDragging) return
 
-    const x = _pendingPointerX
-    const y = _pendingPointerY
-
     // Rebuild geometry cache if dirty (after reorder) or on first use
     if (_geomDirty || !_geometryCache) {
       _geometryCache = { containers: getDropContainers() }
       _geomDirty = false
     }
 
-    // Hit-test
-    const target = hitTestDropTarget(x, y)
+    // Hit-test from floating tab geometry (center + bounds), not raw pointer.
+    // Overlay may lag one pointermove if only rAF runs; use latest _overlayTx/Ty
+    // which onMove updates synchronously before scheduleDragFrame.
+    const geom = dragHitGeometry(
+      _overlayTx,
+      _overlayTy,
+      _overlayWidth || 48,
+      _overlayHeight || 48,
+    )
+    const target = hitTestDropTarget(geom)
 
     const prev = _lastDropTarget
     const sameTarget = prev && target &&
@@ -914,6 +989,8 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Initialize overlay transform (matches the initial translate3d in createDragOverlay)
   _overlayTx = rect.left
   _overlayTy = rect.top
+  _overlayWidth = rect.width
+  _overlayHeight = rect.height
 
   // Dim the source
   btn.classList.add('canvas-tab-list-dnd-placeholder')
@@ -1052,6 +1129,10 @@ function cleanupDragVisuals(): void {
     _dragOverlay = null
   }
   _dragOverlayInner = null
+  _overlayWidth = 0
+  _overlayHeight = 0
+  _overlayTx = 0
+  _overlayTy = 0
 
   // Remove placeholder from source
   if (_dragElement) {
