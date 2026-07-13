@@ -17,6 +17,7 @@ import { getMainDrawerSide } from '../store'
 import { getSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from './mobile-exclusion'
+import { isShowTabLabels } from './drawer-sync'
 import {
   applyMainMirrorDrawer,
   closeCanvasMainDrawer,
@@ -458,12 +459,16 @@ function syncMirrorButtonsInto(
   }
 }
 
-/** Host-only: check whether the host button has the labeled class. */
-function resolveMirrorLabeled(hostBtn: HTMLElement): boolean {
-  return (
-    hostBtn.classList.contains('tabBtnLabeled') ||
-    String(hostBtn.className || '').includes('tabBtnLabeled')
-  )
+/**
+ * Whether mirror buttons should use labeled (56px) geometry.
+ *
+ * Prefer host-settings `showTabLabels` (via isShowTabLabels — includes the
+ * optimistic cache after Hide/Show). Host button `tabBtnLabeled` lags React
+ * commit after hide; on activate/reconcile that stale class re-applied 56px
+ * height with empty label DOM ("grow again even when there's no label").
+ */
+function resolveMirrorLabeled(_hostBtn: HTMLElement): boolean {
+  return isShowTabLabels()
 }
 
 /**

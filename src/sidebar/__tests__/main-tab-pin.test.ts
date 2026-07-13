@@ -35,6 +35,26 @@ class StubStyle {
   set zIndex(v: string) { this._props['zIndex'] = v }
   get width() { return this._props['width'] ?? '' }
   set width(v: string) { this._props['width'] = v }
+  get height() { return this._props['height'] ?? '' }
+  set height(v: string) { this._props['height'] = v }
+  get gap() { return this._props['gap'] ?? '' }
+  set gap(v: string) { this._props['gap'] = v }
+  get border() { return this._props['border'] ?? '' }
+  set border(v: string) { this._props['border'] = v }
+  get cursor() { return this._props['cursor'] ?? '' }
+  set cursor(v: string) { this._props['cursor'] = v }
+  get transition() { return this._props['transition'] ?? '' }
+  set transition(v: string) { this._props['transition'] = v }
+  get padding() { return this._props['padding'] ?? '' }
+  set padding(v: string) { this._props['padding'] = v }
+  get color() { return this._props['color'] ?? '' }
+  set color(v: string) { this._props['color'] = v }
+  get boxShadow() { return this._props['boxShadow'] ?? '' }
+  set boxShadow(v: string) { this._props['boxShadow'] = v }
+  get borderRadius() { return this._props['borderRadius'] ?? '' }
+  set borderRadius(v: string) { this._props['borderRadius'] = v }
+  get justifyContent() { return this._props['justifyContent'] ?? '' }
+  set justifyContent(v: string) { this._props['justifyContent'] = v }
   get pointerEvents() { return this._props['pointerEvents'] ?? '' }
   set pointerEvents(v: string) { this._props['pointerEvents'] = v }
   get borderLeft() { return this._props['borderLeft'] ?? '' }
@@ -84,6 +104,8 @@ class StubElement {
   /** Synthetic contextmenu events received via dispatchEvent (M9c host-forward). */
   contextmenuDispatches: Array<{ clientX: number; clientY: number }> = []
   private _listeners: Record<string, Function[]> = {}
+  /** dataset proxy used by drawer-shell (data-drawer-open, etc.). */
+  dataset: Record<string, string> = {}
 
   classList = {
     add: (c: string) => {
@@ -111,9 +133,25 @@ class StubElement {
     toString: () => this.className,
   }
 
-  setAttribute(k: string, v: string) { this._attrs[k] = v }
+  setAttribute(k: string, v: string) {
+    this._attrs[k] = v
+    if (k.startsWith('data-') && k.length > 5) {
+      const camel = k
+        .slice(5)
+        .replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase())
+      this.dataset[camel] = v
+    }
+  }
   getAttribute(k: string) { return this._attrs[k] ?? null }
-  removeAttribute(k: string) { delete this._attrs[k] }
+  removeAttribute(k: string) {
+    delete this._attrs[k]
+    if (k.startsWith('data-') && k.length > 5) {
+      const camel = k
+        .slice(5)
+        .replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase())
+      delete this.dataset[camel]
+    }
+  }
   closest(_sel: string): StubElement | null { return null }
   querySelector(sel: string): StubElement | null {
     // Attribute-key lookup must not fall through to "first matching class"
@@ -433,6 +471,10 @@ import {
 } from '../main-tab-pin'
 import { isCanvasMainOpen } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
+import {
+  __setHostSetSettingForTest,
+  clearHostSettingsCache,
+} from '../../dom/host-settings'
 
 /** Collect mirror buttons from the list (nested under main/bottom sections). */
 function collectMirrorButtons(list: StubElement): StubElement[] {
@@ -1035,6 +1077,52 @@ function resetAll() {
   adoptMainMirrorHostActivation(memory as unknown as HTMLElement, 'Memory', { open: false })
   assert(!isCanvasMainOpen(), 'M14: open:false does not reopen')
   assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M14: key still updates with open:false')
+}
+
+// M15: hide labels via host settings — stale host tabBtnLabeled must not
+// re-inflate mirror height on reconcile/activate (empty label DOM).
+{
+  resetAll()
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  // Stale host state after hide: class still labeled, but label span may lag.
+  const profile = makeHostBtn('profile', 'Profile', true)
+  profile.classList.add('tabBtnLabeled')
+  profile.className = `${profile.className} tabBtnLabeled`
+  mainSidebar.appendChild(profile)
+
+  applyMainTabListPin(true, { force: true })
+  let list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  let mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  assert(
+    !mirror.classList.contains('sidebar-ux-tab-labeled'),
+    'M15: no labeled class when showTabLabels false (stale host class ignored)',
+  )
+  assertEqual(mirror.style.height, '48px', 'M15: icon-only height 48px after pin')
+
+  // Click / activate path re-reconciles from host — must stay compact.
+  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
+  applyMainTabListPin(true, { force: true })
+  list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  assert(
+    !mirror.classList.contains('sidebar-ux-tab-labeled'),
+    'M15: still unlabeled after activate/reconcile',
+  )
+  assertEqual(mirror.style.height, '48px', 'M15: height stays 48px after activate/reconcile')
+  assert(
+    !String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
+    'M15: no label span in mirror HTML when labels off',
+  )
+
+  clearHostSettingsCache()
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

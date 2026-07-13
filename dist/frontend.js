@@ -1601,8 +1601,8 @@ function syncMirrorButtonsInto(container, hostButtons, listRoot) {
     }
   }
 }
-function resolveMirrorLabeled(hostBtn) {
-  return hostBtn.classList.contains("tabBtnLabeled") || String(hostBtn.className || "").includes("tabBtnLabeled");
+function resolveMirrorLabeled(_hostBtn) {
+  return isShowTabLabels();
 }
 function applyMirrorButtonChrome(btn, labeled) {
   const height = labeled ? "56px" : "48px";
@@ -1882,6 +1882,7 @@ var init_main_tab_pin = __esm(() => {
   init_state();
   init_log();
   init_mobile_exclusion();
+  init_drawer_sync();
   init_main_mirror_drawer();
   init_tab_position();
   init_buttons();
