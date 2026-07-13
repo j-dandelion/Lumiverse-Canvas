@@ -76,9 +76,10 @@ export function showAssignmentMenu(
   const toggleItem = createAssignmentContextMenuItem(toggleLabel, () => {
     const next = !showLabels
     const ok = patchHostDrawerSettings({ showTabLabels: next })
-    if (ok && next) {
-      // Only need explicit sync when turning ON — the host store write
-      // will propagate through the observer path for OFF.
+    if (ok) {
+      // Sync labels on both ON and OFF — the CSS toggle (opacity/height)
+      // on secondary/mirror buttons only runs inside syncSecondaryTabLabels,
+      // not in the observer path.
       syncSecondaryTabLabels()
     }
   })

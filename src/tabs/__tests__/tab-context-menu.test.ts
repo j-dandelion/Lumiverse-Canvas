@@ -4,145 +4,320 @@ let failed = 0
 function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
-
-// showAssignmentMenu depends on DOM (document.body, document.createElement).
-// In headless bun without --bun flag, document may not exist.
-import { showAssignmentMenu, hideAssignmentMenu } from '../tab-context-menu'
-import { getSettings, setSettings } from '../../settings/state'
-import { __setHostSetSettingForTest } from '../../dom/host-settings'
-
-// --- showAssignmentMenu creates a multi-item menu with toggle, configure, divider, and move ---
-try {
-  if (typeof document === 'undefined') {
-    throw new Error('document not available')
-  }
-  // Ensure second sidebar on so move item is shown.
-  const prevEnabled = getSettings().secondSidebarEnabled
-  setSettings({ secondSidebarEnabled: true })
-  try {
-    showAssignmentMenu(100, 200, 'test-tab', 'Test Tab')
-    const menu = document.querySelector('.canvas-tab-context-menu')
-    assert(menu !== null, 'showAssignmentMenu creates a .canvas-tab-context-menu element')
-    assert(menu instanceof HTMLElement, 'menu is an HTMLElement')
-    assertEqual((menu as HTMLElement).style.display, 'block', 'menu display is set to block')
-
-    // Menu should have 4 items: toggle, configure, divider, move
-    assert(menu!.children.length === 4, 'menu has exactly 4 children')
-
-    // Item 1: toggle labels
-    const toggleItem = menu!.children[0] as HTMLElement
-    assert(toggleItem.tagName === 'BUTTON', 'first item is a BUTTON')
-    assert(
-      toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
-      'first item is label toggle',
-    )
-
-    // Item 2: configure tabs
-    const configureItem = menu!.children[1] as HTMLElement
-    assert(configureItem.tagName === 'BUTTON', 'second item is a BUTTON')
-    assert(configureItem.textContent === 'Configure tabs', 'second item is Configure tabs')
-
-    // Item 3: divider
-    const divider = menu!.children[2] as HTMLElement
-    assert(divider.getAttribute('role') === 'separator', 'third item has role="separator"')
-
-    // Item 4: move
-    const moveItem = menu!.children[3] as HTMLElement
-    assert(moveItem.tagName === 'BUTTON', 'fourth item is a BUTTON')
-    assert(moveItem.textContent === 'Move to second drawer', 'fourth item is Move to second drawer')
-  } finally {
-    setSettings({ secondSidebarEnabled: prevEnabled })
-    hideAssignmentMenu()
-  }
-} catch (e) {
-  console.log(`SKIP: multi-item menu test requires DOM — ${e}`)
+function assertEqual<T>(actual: T, expected: T, msg: string) {
+  if (actual === expected) { passed++ }
+  else { failed++; console.error(`FAIL: ${msg} -- expected ${String(expected)}, got ${String(actual)}`) }
 }
 
-// --- secondSidebarEnabled=false still shows toggle + configure, omits divider + move ---
-try {
-  if (typeof document === 'undefined') {
-    throw new Error('document not available')
+// ── DOM stubs (must exist before any module import touches document) ──
+
+const _allElements: any[] = []
+let _nextId = 1
+
+class StubElement {
+  tagName = 'DIV'
+  _id = _nextId++
+  _attrs: Record<string, string> = {}
+  _children: StubElement[] = []
+  _parent: StubElement | null = null
+  _styleMap: Record<string, string> = {}
+  _handlers: Record<string, (...args: any[]) => void> = {}
+  textContent = ''
+  className = ''
+  innerHTML = ''
+
+  constructor(tag?: string) {
+    if (tag) this.tagName = tag.toUpperCase()
+    _allElements.push(this)
   }
+
+  get parentElement() { return this._parent }
+
+  getAttribute(n: string) { return this._attrs[n] ?? null }
+  setAttribute(n: string, v: string) { this._attrs[n] = v }
+  removeAttribute(n: string) { delete this._attrs[n] }
+  hasAttribute(n: string) { return n in this._attrs }
+
+  get style() {
+    const map = this._styleMap
+    function setCssText(v: string) {
+      v.split(';').filter(Boolean).forEach(part => {
+        const colon = part.indexOf(':')
+        if (colon > 0) {
+          const k = part.slice(0, colon).trim()
+          const v = part.slice(colon + 1).trim()
+          map[k] = v
+        }
+      })
+    }
+    return {
+      set cssText(v: string) { setCssText(v) },
+      get cssText() { return Object.entries(map).map(([k, v]) => `${k}: ${v}`).join('; ') },
+      setProperty(n: string, v: string) { map[n] = v },
+      getPropertyValue(n: string) { return map[n] ?? '' },
+      removeProperty(n: string) { delete map[n] },
+      get display() { return map.display ?? '' },
+      set display(v: string) { map.display = v },
+      get left() { return map.left ?? '' },
+      set left(v: string) { map.left = v },
+      get top() { return map.top ?? '' },
+      set top(v: string) { map.top = v },
+      get transform() { return map.transform ?? '' },
+      set transform(v: string) { map.transform = v },
+      get zIndex() { return map['z-index'] ?? '' },
+      set zIndex(v: string) { map['z-index'] = v },
+    }
+  }
+
+  appendChild(c: any) {
+    if (c._parent) {
+      const idx = c._parent._children.indexOf(c)
+      if (idx >= 0) c._parent._children.splice(idx, 1)
+    }
+    this._children.push(c)
+    c._parent = this
+    return c
+  }
+
+  remove() {
+    if (this._parent) {
+      const idx = this._parent._children.indexOf(this)
+      if (idx >= 0) this._parent._children.splice(idx, 1)
+    }
+    this._parent = null
+  }
+
+  addEventListener(evt: string, fn: (...args: any[]) => void) { this._handlers[evt] = fn }
+  removeEventListener(evt: string, _fn: (...args: any[]) => void) { delete this._handlers[evt] }
+
+  dispatchEvent(evt: any) {
+    const fn = this._handlers[evt.type]
+    if (fn) fn(evt)
+  }
+
+  click() {
+    const evt = { type: 'click', stopPropagation: () => {} }
+    this.dispatchEvent(evt)
+  }
+
+  getBoundingClientRect() {
+    return { x: 0, y: 0, width: 200, height: 200, top: 0, left: 0, right: 200, bottom: 200 }
+  }
+
+  get children() { return this._children }
+
+  querySelector(sel: string): any {
+    if (sel === '.canvas-tab-context-menu') {
+      return this._children.find(c => c.className === 'canvas-tab-context-menu') ?? null
+    }
+    for (const c of this._children) {
+      const parts = sel.startsWith('.') ? [sel.slice(1)] : []
+      if (parts.length && c.className.split(' ').some(p => parts.includes(p))) return c
+      const f = c.querySelector(sel)
+      if (f) return f
+    }
+    return null
+  }
+
+  querySelectorAll(_sel: string) { return [] }
+  closest(_sel: string) { return null }
+}
+
+;(globalThis as any).HTMLElement = StubElement
+;(globalThis as any).Element = StubElement
+
+const stubBody = new StubElement('body')
+;(globalThis as any).document = {
+  body: stubBody,
+  documentElement: { style: { setProperty: () => {}, getPropertyValue: () => '' } },
+  head: { appendChild: () => {}, removeChild: () => {} },
+  createElement: (tag?: string) => new StubElement(tag),
+  getElementById: () => null,
+  querySelector: (sel: string) => stubBody.querySelector(sel),
+  querySelectorAll: (sel: string) => stubBody.querySelectorAll(sel),
+}
+;(globalThis as any).window = {
+  innerWidth: 1024,
+  innerHeight: 768,
+  requestAnimationFrame: (cb: any) => { cb(1); return 1 },
+  cancelAnimationFrame: () => {},
+}
+;(globalThis as any).requestAnimationFrame = (cb: any) => { cb(1); return 1 }
+;(globalThis as any).cancelAnimationFrame = () => {}
+;(globalThis as any).CSS = { escape: (s: string) => s }
+;(globalThis as any).getComputedStyle = () => ({})
+
+// ── Mock transitive deps ──
+
+import { mock } from 'bun:test'
+
+let _mockSyncCalled = false
+const _tracker = { called: false }
+
+// Mock drawer-sync to avoid Preact/TSX transitive chain.
+// Must include ALL exports that any static-import chain needs — features/registry
+// imports syncDrawerTabSettings, so if we omit it the import fails.
+mock.module('../../sidebar/drawer-sync', () => {
+  console.log('DBG: drawer-sync mock factory called')
+  return {
+    isShowTabLabels: () => { console.log('DBG: isShowTabLabels called'); return false },
+    syncSecondaryTabLabels: () => { console.log('DBG: syncSecondaryTabLabels called!'); _mockSyncCalled = true; _tracker.called = true },
+    syncDrawerTabSettings: () => {},
+    checkSideChanged: () => {},
+    restoreSecondaryTabButtons: () => {},
+    startSideChangeWatcher: () => {},
+    stopSideChangeWatcher: () => {},
+    stopDrawerTabResizeWatcher: () => {},
+    stopDrawerTabClassObserver: () => {},
+    stopDrawerTabStyleObserver: () => {},
+  }
+})
+
+mock.module('../configure-modal', () => ({
+  openConfigureTabsModal: () => {},
+}))
+
+mock.module('../../debug/log', () => ({
+  dlog: () => {},
+  dwarn: () => {},
+  setDebug: () => {},
+}))
+
+// Mock features/registry to avoid loading sidebar/secondary.tsx etc.
+mock.module('../../features/registry', () => ({
+  FEATURES: [],
+}))
+
+// ── Dynamic imports (must be AFTER mock.module calls — static imports hoist
+//    and would pre-load the real drawer-sync via settings/state → panel → features/registry) ──
+
+const [{ getSettings, setSettings }, { __setHostSetSettingForTest, clearHostSettingsCache }] = await Promise.all([
+  import('../../settings/state'),
+  import('../../dom/host-settings'),
+])
+const { showAssignmentMenu, hideAssignmentMenu, __setShowAssignmentMenuForTest } = await import('../tab-context-menu')
+
+// There is NO try/catch here — if DOM stubs fail, the test
+// fails loudly (which is the right behavior).
+
+// --- Test 1: Multi-item menu structure (second on) ---
+hideAssignmentMenu()
+const prev1 = getSettings().secondSidebarEnabled
+setSettings({ secondSidebarEnabled: true })
+try {
+  showAssignmentMenu(100, 200, 'test-tab', 'Test Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'showAssignmentMenu creates a .canvas-tab-context-menu element')
+  assertEqual(menu!.children.length, 4, 'menu has exactly 4 children')
+
+  // Item 1: toggle labels
+  const toggleItem = menu!.children[0]
+  assertEqual(toggleItem.tagName, 'BUTTON', 'first item is a BUTTON')
+  assert(
+    toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
+    'first item is label toggle',
+  )
+
+  // Item 2: configure tabs
+  const configureItem = menu!.children[1]
+  assertEqual(configureItem.tagName, 'BUTTON', 'second item is a BUTTON')
+  assertEqual(configureItem.textContent, 'Configure tabs', 'second item is Configure tabs')
+
+  // Item 3: divider
+  const divider = menu!.children[2]
+  assertEqual(divider.getAttribute('role'), 'separator', 'third item has role="separator"')
+
+  // Item 4: move
+  const moveItem = menu!.children[3]
+  assertEqual(moveItem.tagName, 'BUTTON', 'fourth item is a BUTTON')
+  assertEqual(moveItem.textContent, 'Move to second drawer', 'fourth item is Move to second drawer')
+} finally {
+  setSettings({ secondSidebarEnabled: prev1 })
   hideAssignmentMenu()
-  const prevEnabled = getSettings().secondSidebarEnabled
-  setSettings({ secondSidebarEnabled: false })
-  try {
-    showAssignmentMenu(100, 200, 'test-tab-gated', 'Gated Tab')
-    const menu = document.querySelector('.canvas-tab-context-menu')
-    assert(menu !== null, 'showAssignmentMenu creates menu even when second sidebar off')
-    assert(menu instanceof HTMLElement, 'menu is an HTMLElement')
-
-    // Menu has 2 items: toggle + configure (no divider, no move)
-    assert(menu!.children.length === 2, 'menu has exactly 2 children when second off')
-
-    // Item 1: toggle labels
-    const toggleItem = menu!.children[0] as HTMLElement
-    assert(toggleItem.tagName === 'BUTTON', 'first item is a BUTTON')
-    assert(
-      toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
-      'first item is label toggle',
-    )
-
-    // Item 2: configure tabs
-    const configureItem = menu!.children[1] as HTMLElement
-    assert(configureItem.tagName === 'BUTTON', 'second item is a BUTTON')
-    assert(configureItem.textContent === 'Configure tabs', 'second item is Configure tabs')
-  } finally {
-    setSettings({ secondSidebarEnabled: prevEnabled })
-    hideAssignmentMenu()
-  }
-} catch (e) {
-  console.log(`SKIP: second-off menu test requires DOM — ${e}`)
 }
 
-// --- hideAssignmentMenu removes the menu ---
+// --- Test 2: Second off → only toggle + configure (no divider, no move) ---
+hideAssignmentMenu()
+const prev2 = getSettings().secondSidebarEnabled
+setSettings({ secondSidebarEnabled: false })
 try {
-  if (typeof document === 'undefined') {
-    throw new Error('document not available')
-  }
-  setSettings({ secondSidebarEnabled: true })
-  showAssignmentMenu(100, 200, 'test-tab-hide', 'Hide Tab')
+  showAssignmentMenu(100, 200, 'test-tab-gated', 'Gated Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'showAssignmentMenu creates menu even when second sidebar off')
+  assertEqual(menu!.children.length, 2, 'menu has exactly 2 children when second off')
+
+  const toggleItem = menu!.children[0]
+  assertEqual(toggleItem.tagName, 'BUTTON', 'first item is a BUTTON')
+  assert(
+    toggleItem.textContent === 'Show labels' || toggleItem.textContent === 'Hide labels',
+    'first item is label toggle',
+  )
+
+  const configureItem = menu!.children[1]
+  assertEqual(configureItem.tagName, 'BUTTON', 'second item is a BUTTON')
+  assertEqual(configureItem.textContent, 'Configure tabs', 'second item is Configure tabs')
+} finally {
+  setSettings({ secondSidebarEnabled: prev2 })
   hideAssignmentMenu()
-  const menuAfterHide = document.querySelector('.canvas-tab-context-menu')
-  assert(menuAfterHide === null, 'hideAssignmentMenu removes menu from DOM')
-} catch (e) {
-  console.log(`SKIP: hideAssignmentMenu requires DOM — ${e}`)
 }
 
-// --- patchHostDrawerSettings fail path: toggle still works (no crash) ---
+// --- Test 3: hideAssignmentMenu removes the menu ---
+setSettings({ secondSidebarEnabled: true })
+showAssignmentMenu(100, 200, 'test-tab-hide', 'Hide Tab')
+hideAssignmentMenu()
+const menuAfterHide = stubBody.querySelector('.canvas-tab-context-menu')
+assert(menuAfterHide === null, 'hideAssignmentMenu removes menu from DOM')
+
+// --- Test 4: patchHostDrawerSettings fail path → toggle doesn't call sync ---
+__setHostSetSettingForTest(null)
+clearHostSettingsCache()
+hideAssignmentMenu()
+const prev4 = getSettings().secondSidebarEnabled
+setSettings({ secondSidebarEnabled: true })
 try {
-  if (typeof document === 'undefined') {
-    throw new Error('document not available')
-  }
-  // No test seam set — patchHostDrawerSettings will NO-GO gracefully.
-  const prevForPatch = getSettings().secondSidebarEnabled
+  _mockSyncCalled = false
+  showAssignmentMenu(100, 200, 'test-tab-patch-fail', 'Patch Fail Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'patch fail: menu is created')
+
+  const toggleItem = menu!.children[0]
+  assertEqual(toggleItem.tagName, 'BUTTON', 'patch fail: toggle is a button')
+  toggleItem.click()
+  // No crash means success
+  assert(true, 'patch fail: toggle click did not throw')
+  // When patchHostDrawerSettings returns false (NO-GO), sync should NOT be called
+  assert(!_mockSyncCalled, 'patch fail: syncSecondaryTabLabels NOT called when patch returns false')
+} finally {
+  setSettings({ secondSidebarEnabled: prev4 })
   hideAssignmentMenu()
-  setSettings({ secondSidebarEnabled: true })
-  try {
-    showAssignmentMenu(100, 200, 'test-tab-patch-fail', 'Patch Fail Tab')
-    const menu = document.querySelector('.canvas-tab-context-menu')
-    assert(menu !== null, 'patch fail: menu is created')
-
-    // Toggle button should still exist and click without throwing
-    const toggleItem = menu!.children[0] as HTMLElement
-    assert(toggleItem.tagName === 'BUTTON', 'patch fail: toggle is a button')
-    toggleItem.click()
-    // No crash means success
-    assert(true, 'patch fail: toggle click did not throw')
-  } finally {
-    setSettings({ secondSidebarEnabled: prevForPatch })
-    hideAssignmentMenu()
-  }
-} catch (e) {
-  console.log(`SKIP: patch fail path test requires DOM — ${e}`)
+  __setHostSetSettingForTest(null)
+  clearHostSettingsCache()
 }
 
-function assertEqual(actual: unknown, expected: unknown, message: string) {
-  if (actual !== expected) {
-    console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
-    failed++
-  }
+// --- Test 5: patchHostDrawerSettings success → toggle DOES call sync ---
+__setHostSetSettingForTest((_key: string, _value: unknown) => {
+  // Mock write succeeds
+})
+hideAssignmentMenu()
+const prev5 = getSettings().secondSidebarEnabled
+setSettings({ secondSidebarEnabled: true })
+try {
+  _mockSyncCalled = false
+  showAssignmentMenu(100, 200, 'test-tab-patch-ok', 'Patch OK Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'patch ok: menu is created')
+
+  const toggleItem = menu!.children[0]
+  toggleItem.click()
+  console.log('DBG: after click _mockSyncCalled =', _mockSyncCalled, '_tracker.called =', _tracker.called)
+  assert(_mockSyncCalled, 'patch ok: toggle click calls syncSecondaryTabLabels when patch succeeds')
+} finally {
+  setSettings({ secondSidebarEnabled: prev5 })
+  hideAssignmentMenu()
+  __setHostSetSettingForTest(null)
+  clearHostSettingsCache()
 }
 
+// --- Summary ---
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)
