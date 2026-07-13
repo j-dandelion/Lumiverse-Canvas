@@ -223,6 +223,17 @@ function injectDndStyles(): void {
       pointer-events: none !important;
     }
 
+    /* ── While dragging: strip buttons do not receive pointer hits.
+         Overlay is pointer-events:none so the cursor would otherwise
+         :hover the tab underneath (host hover glow/background). Hit-test
+         uses document pointer coords, not elementFromPoint. ── */
+    body.canvas-tab-list-dnd-dragging button[data-tab-id],
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
+      pointer-events: none !important;
+    }
+
     /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
@@ -1133,9 +1144,10 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   _geometryCache = { containers: getDropContainers() }
   _geomDirty = false
 
-  // Prevent text selection globally
+  // Prevent text selection globally; mark drag so strip :hover is suppressed
   document.body.style.userSelect = 'none'
   document.body.style.cursor = 'grabbing'
+  document.body.classList.add('canvas-tab-list-dnd-dragging')
 
   // Suppress context menu during drag (capture-phase preventDefault)
   // so host long-press contextmenu does not fire while dragging.
@@ -1297,6 +1309,11 @@ function cleanupDragVisuals(): void {
 
   // Clear insert indicator
   clearInsertIndicator()
+
+  // Re-enable strip pointer events / host :hover
+  if (typeof document !== 'undefined') {
+    document.body.classList.remove('canvas-tab-list-dnd-dragging')
+  }
 
   _isDragging = false
   _dragTabId = null
@@ -1578,6 +1595,7 @@ export function tearDownTabListDnd(): void {
     clearDragState()
   }
   if (typeof document !== 'undefined') {
+    document.body.classList.remove('canvas-tab-list-dnd-dragging')
     document.getElementById(DND_STYLE_ID)?.remove()
   }
 }

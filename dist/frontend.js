@@ -10397,6 +10397,17 @@ function injectDndStyles() {
       pointer-events: none !important;
     }
 
+    /* ── While dragging: strip buttons do not receive pointer hits.
+         Overlay is pointer-events:none so the cursor would otherwise
+         :hover the tab underneath (host hover glow/background). Hit-test
+         uses document pointer coords, not elementFromPoint. ── */
+    body.canvas-tab-list-dnd-dragging button[data-tab-id],
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
+      pointer-events: none !important;
+    }
+
     /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
@@ -10926,6 +10937,7 @@ function startDrag(btn, pointerEvent) {
   _geomDirty = false;
   document.body.style.userSelect = "none";
   document.body.style.cursor = "grabbing";
+  document.body.classList.add("canvas-tab-list-dnd-dragging");
   const suppressCtx = (e3) => {
     e3.preventDefault();
     e3.stopPropagation();
@@ -11020,6 +11032,9 @@ function cleanupDragVisuals() {
     _dragElement.classList.remove("canvas-tab-list-dnd-placeholder");
   }
   clearInsertIndicator();
+  if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
+  }
   _isDragging = false;
   _dragTabId2 = null;
   _dragElement = null;
@@ -11187,6 +11202,7 @@ function tearDownTabListDnd() {
     clearDragState2();
   }
   if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
