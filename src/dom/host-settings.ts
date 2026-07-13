@@ -196,20 +196,23 @@ export function patchHostDrawerSettings(
     }
   }
 
-  if (!_cachedSetSetting) {
-    // NO-GO: no setSetting found in fiber tree / store snapshot.
-    dlog('patchHostDrawerSettings: setSetting not available (NO-GO)')
-    return false
-  }
-
   // Merge against the best-known current settings, then stamp the cache
-  // *before* the host write so isShowTabLabels / secondary label sync see
-  // the intended value even if React fiber still holds the pre-write
-  // snapshot for a frame.
+  // *before* the host write (and even on NO-GO) so isShowTabLabels /
+  // secondary menu wording see the intended value. Secondary Hide/Show
+  // still stamps Canvas labels when the fiber bridge is unavailable;
+  // without an optimistic cache, the next RClick still said "Hide".
   const current = _cachedDrawerSettings ?? {}
   const merged = { ...current, ...partial }
   _cachedDrawerSettings = merged as HostDrawerSettings
   _cacheTimestamp = Date.now()
+
+  if (!_cachedSetSetting) {
+    // NO-GO: no setSetting found in fiber tree / store snapshot.
+    // Cache already holds the intended merge for Canvas chrome.
+    dlog('patchHostDrawerSettings: setSetting not available (NO-GO)')
+    return false
+  }
+
   _cachedSetSetting('drawerSettings', merged)
   // Bust the 3s store cache so downstream readers see the new state.
   findStoreData(true)

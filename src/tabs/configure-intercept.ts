@@ -1,14 +1,18 @@
-// Configure Tabs — context menu interception.
+// Host main-drawer context menu interception.
 //
-// When the user right-clicks a main-drawer tab, Lumiverse renders its own
-// ContextMenu with items like "Toggle labels", "Configure tabs". This module
-// intercepts the click on the "Configure tabs" button (second item in the
-// default menu) and opens the Canvas Configure Tabs modal instead.
+// When the user right-clicks a main-drawer (or main-mirror) tab, Lumiverse
+// renders its own ContextMenu with items like "Hide/Show tab labels",
+// "Configure tabs". This module intercepts those clicks:
+//
+//   button[0] = Hide/Show tab labels — patch host showTabLabels + stamp
+//               Canvas secondary/mirror labels so both drawers stay synced
+//               (host alone only updates the main strip; secondary is Canvas).
+//   button[1] = Configure tabs — open the Canvas Configure Tabs modal
 //
 // Design: capture-phase click listener that detects Lumiverse's context menu
-// via `findLumiverseContextMenu`, then checks if the click landed on the
-// second menu button (configure). If so, it intercepts: dismisses the host
-// menu and opens the Canvas configure modal.
+// via `findLumiverseContextMenu`, then checks if the click landed on a known
+// host menu button. If so, it intercepts: dismisses the host menu and runs
+// the Canvas path (so host does not double-toggle labels).
 //
 // Active whenever Canvas is loaded: started from setup.ts on boot, stopped
 // on extension cleanup. This guarantees "Configure tabs" always routes to
@@ -21,13 +25,15 @@
 // only detaches the click listener.
 
 import { findLumiverseContextMenu } from '../context-menu/index'
+import { patchHostDrawerSettings } from '../dom/host-settings'
+import { isShowTabLabels, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
 import { dlog, dwarn } from '../debug/log'
 
 let _interceptActive = false
 let _clickHandler: ((e: MouseEvent) => void) | null = null
 
 /**
- * Start intercepting clicks on Lumiverse's "Configure tabs" menu item.
+ * Start intercepting host context-menu clicks (labels + Configure tabs).
  * Safe to call multiple times — idempotent.
  */
 export function startConfigureTabsIntercept(): void {
@@ -43,16 +49,38 @@ export function startConfigureTabsIntercept(): void {
 
     // Lumiverse's context menu buttons are rendered in DOM order.
     // The menu typically has:
-    //   button[0] = "Toggle labels" (first item)
+    //   button[0] = "Hide/Show tab labels" (first item)
     //   button[1] = "Configure tabs" (second item)
-    // We target the second button.
+    // Canvas may inject "Move to …" after that — ignore it (own handler).
     const buttons = menu.querySelectorAll('button')
-    const configureBtn = buttons.length >= 2 ? buttons[1] : null
-    if (!configureBtn) return
-
-    // Check if the click target is the configure button or a child of it.
     const target = e.target as HTMLElement | null
     if (!target) return
+
+    const labelsBtn = buttons.length >= 1 ? buttons[0] : null
+    const configureBtn = buttons.length >= 2 ? buttons[1] : null
+
+    // ── Hide / Show tab labels (main + main-mirror path) ──
+    if (labelsBtn && (labelsBtn.contains(target) || labelsBtn === target)) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      dismissHostContextMenu()
+
+      const showLabels = isShowTabLabels()
+      const next = !showLabels
+      // Same path as secondary tab-context-menu: host write + force-stamp
+      // Canvas labels so secondary/mirror follow immediately.
+      const ok = patchHostDrawerSettings({ showTabLabels: next })
+      syncSecondaryTabLabels(next)
+      if (ok) {
+        requestAnimationFrame(() => syncSecondaryTabLabels(next))
+      }
+      dlog('[configure-intercept] intercepted Hide/Show tab labels', { next, ok })
+      return
+    }
+
+    // ── Configure tabs ──
+    if (!configureBtn) return
     const clickedConfigureBtn = configureBtn.contains(target) || configureBtn === target
     if (!clickedConfigureBtn) return
 

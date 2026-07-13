@@ -2,8 +2,8 @@
 //
 // Tests the context menu click interception logic:
 // - Lifecycle (start/stop)
-// - Intercept fires on the second menu button
-// - Intercept does NOT fire on the first menu button
+// - Intercept fires on the second menu button (Configure tabs)
+// - Intercept fires on the first menu button (Hide/Show tab labels)
 // - Intercept does NOT fire after stopConfigureTabsIntercept
 // - stopConfigureTabsIntercept does NOT force-close an open modal
 //   (modal lifecycle is owned by settings/second-drawer-mode.ts, not the intercept)
@@ -24,6 +24,40 @@ mock.module('../configure-modal', () => ({
   getConfigureDraftRef: () => null,
   getConfigureBaseRef: () => null,
   forceUnmountConfigureTabsModal: () => {},
+}))
+
+// Label-toggle intercept calls host-settings + drawer-sync (mocked here).
+let _mockIsShowTabLabels = true
+let _mockPatchPartial: unknown = null
+let _mockPatchOk = true
+let _mockSyncForceShow: boolean | undefined
+let _mockSyncCallCount = 0
+const patchHostDrawerSettingsSpy = mock((partial: unknown) => {
+  _mockPatchPartial = partial
+  return _mockPatchOk
+})
+const syncSecondaryTabLabelsSpy = mock((forceShow?: boolean) => {
+  _mockSyncCallCount++
+  _mockSyncForceShow = forceShow
+})
+mock.module('../../dom/host-settings', () => ({
+  patchHostDrawerSettings: patchHostDrawerSettingsSpy,
+  getHostDrawerSettings: () => null,
+  isHostDrawerSettingsWritable: () => true,
+  clearHostSettingsCache: () => {},
+  __setHostSetSettingForTest: () => {},
+}))
+mock.module('../../sidebar/drawer-sync', () => ({
+  isShowTabLabels: () => _mockIsShowTabLabels,
+  syncSecondaryTabLabels: syncSecondaryTabLabelsSpy,
+  syncDrawerTabSettings: () => {},
+  checkSideChanged: () => {},
+  restoreSecondaryTabButtons: () => {},
+  startSideChangeWatcher: () => {},
+  stopSideChangeWatcher: () => {},
+  stopDrawerTabResizeWatcher: () => {},
+  stopDrawerTabClassObserver: () => {},
+  stopDrawerTabStyleObserver: () => {},
 }))
 
 import {
@@ -353,11 +387,19 @@ function cleanup(): void {
 }
 
 // =====================================================================
-// I3: Intercept does NOT fire on first context menu button
+// I3: Intercept fires on first context menu button (Hide/Show tab labels)
 // =====================================================================
 {
   cleanup()
   let escapeDispatched = false
+  _mockIsShowTabLabels = true
+  _mockPatchOk = true
+  _mockPatchPartial = null
+  _mockSyncCallCount = 0
+  _mockSyncForceShow = undefined
+  patchHostDrawerSettingsSpy.mockClear()
+  syncSecondaryTabLabelsSpy.mockClear()
+  openConfigureTabsModalSpy.mockClear()
 
   const escapeHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') escapeDispatched = true
@@ -367,7 +409,7 @@ function cleanup(): void {
   startConfigureTabsIntercept()
 
   const menu = createFakeContextMenu(2)
-  // Click the FIRST button (toggle labels, not configure).
+  // Click the FIRST button (Hide/Show tab labels).
   const firstBtn = menu.querySelectorAll('button')[0]
 
   const clickEvent = new MouseEvent('click', {
@@ -380,9 +422,17 @@ function cleanup(): void {
 
   await new Promise<void>(r => setTimeout(r, 0))
 
-  // The intercept should NOT have fired for the first button.
-  assert(!clickEvent._propagationStopped, 'I3: stopPropagation was NOT called for first button')
-  assert(!escapeDispatched, 'I3: Escape NOT dispatched for first button')
+  assert(clickEvent._propagationStopped, 'I3: stopPropagation called for labels button')
+  assert(escapeDispatched, 'I3: Escape dispatched to dismiss host menu')
+  assertEqual(patchHostDrawerSettingsSpy.mock.calls.length, 1, 'I3: patchHostDrawerSettings called once')
+  assertEqual(
+    (_mockPatchPartial as { showTabLabels?: boolean } | null)?.showTabLabels,
+    false,
+    'I3: patch writes showTabLabels: false (was showing)',
+  )
+  assert(_mockSyncCallCount >= 1, 'I3: syncSecondaryTabLabels called so second drawer follows')
+  assertEqual(_mockSyncForceShow, false, 'I3: sync force-stamps next=false')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 0, 'I3: Configure modal not opened')
 
   document.removeEventListener('keydown', escapeHandler)
   menu.remove()
@@ -425,11 +475,18 @@ function cleanup(): void {
 }
 
 // =====================================================================
-// I5: Intercept does NOT fire when menu has fewer than 2 buttons
+// I5: Single-button host menu still intercepts labels (button[0])
 // =====================================================================
 {
   cleanup()
   let escapeDispatched = false
+  _mockIsShowTabLabels = false // currently hidden → next = true (Show)
+  _mockPatchOk = true
+  _mockPatchPartial = null
+  _mockSyncCallCount = 0
+  _mockSyncForceShow = undefined
+  patchHostDrawerSettingsSpy.mockClear()
+  syncSecondaryTabLabelsSpy.mockClear()
 
   const escapeHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') escapeDispatched = true
@@ -438,7 +495,7 @@ function cleanup(): void {
 
   startConfigureTabsIntercept()
 
-  // Menu with only 1 button (no "Configure tabs").
+  // Menu with only 1 button (labels only — still Canvas's concern).
   const menu = createFakeContextMenu(1)
   const onlyBtn = menu.querySelectorAll('button')[0]
 
@@ -452,7 +509,13 @@ function cleanup(): void {
 
   await new Promise<void>(r => setTimeout(r, 0))
 
-  assert(!escapeDispatched, 'I5: Escape NOT dispatched when menu has 1 button')
+  assert(escapeDispatched, 'I5: Escape dispatched for single-button labels menu')
+  assertEqual(
+    (_mockPatchPartial as { showTabLabels?: boolean } | null)?.showTabLabels,
+    true,
+    'I5: patch writes showTabLabels: true (was hidden)',
+  )
+  assertEqual(_mockSyncForceShow, true, 'I5: sync force-stamps next=true')
 
   document.removeEventListener('keydown', escapeHandler)
   menu.remove()

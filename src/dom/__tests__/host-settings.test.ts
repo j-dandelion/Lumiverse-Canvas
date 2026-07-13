@@ -124,7 +124,7 @@ function reset() {
 }
 
 // =====================================================================
-// Failed write (no setter) does not change cache
+// Failed write (no setter) still stamps optimistic cache
 // =====================================================================
 {
   reset()
@@ -141,14 +141,16 @@ function reset() {
   // Clear mock setter but keep cached settings
   __setHostSetSettingForTest(null)
 
-  // Without a setter, write should fail
-  const result = patchHostDrawerSettings({ side: 'right' })
+  // Without a setter, write should fail — but cache still merges so
+  // isShowTabLabels / secondary menu wording follow the intentional click.
+  const result = patchHostDrawerSettings({ side: 'right', showTabLabels: false })
   assert(!result, 'patch returns false without setter')
+  assertEqual(written.length, 1, 'no setSetting call after mock cleared')
 
-  // Cache should be unchanged from the last successful write
   const settings = getHostDrawerSettings()
-  assertEqual(settings?.side, 'left', 'cache unchanged after failed write')
-  assertArraysEqual(settings?.tabOrder ?? [], ['a', 'b'], 'tabOrder unchanged after failed write')
+  assertEqual(settings?.side, 'right', 'cache merges side on NO-GO')
+  assertEqual(settings?.showTabLabels, false, 'cache merges showTabLabels on NO-GO')
+  assertArraysEqual(settings?.tabOrder ?? [], ['a', 'b'], 'tabOrder preserved after NO-GO merge')
 }
 
 // =====================================================================

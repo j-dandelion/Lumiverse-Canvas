@@ -1089,14 +1089,14 @@ function patchHostDrawerSettings(partial) {
       dlog("patchHostDrawerSettings: setSetting recovered from store snapshot");
     }
   }
-  if (!_cachedSetSetting) {
-    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
-    return false;
-  }
   const current = _cachedDrawerSettings ?? {};
   const merged = { ...current, ...partial };
   _cachedDrawerSettings = merged;
   _cacheTimestamp2 = Date.now();
+  if (!_cachedSetSetting) {
+    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
+    return false;
+  }
   _cachedSetSetting("drawerSettings", merged);
   findStoreData(true);
   return true;
@@ -13030,6 +13030,8 @@ init_log();
 init_fiber_scan();
 
 // src/tabs/configure-intercept.ts
+init_host_settings();
+init_drawer_sync();
 init_log();
 var _interceptActive = false;
 var _clickHandler = null;
@@ -13044,11 +13046,27 @@ function startConfigureTabsIntercept() {
     if (!menu)
       return;
     const buttons = menu.querySelectorAll("button");
-    const configureBtn = buttons.length >= 2 ? buttons[1] : null;
-    if (!configureBtn)
-      return;
     const target = e3.target;
     if (!target)
+      return;
+    const labelsBtn = buttons.length >= 1 ? buttons[0] : null;
+    const configureBtn = buttons.length >= 2 ? buttons[1] : null;
+    if (labelsBtn && (labelsBtn.contains(target) || labelsBtn === target)) {
+      e3.preventDefault();
+      e3.stopPropagation();
+      e3.stopImmediatePropagation();
+      dismissHostContextMenu();
+      const showLabels = isShowTabLabels();
+      const next = !showLabels;
+      const ok = patchHostDrawerSettings({ showTabLabels: next });
+      syncSecondaryTabLabels(next);
+      if (ok) {
+        requestAnimationFrame(() => syncSecondaryTabLabels(next));
+      }
+      dlog("[configure-intercept] intercepted Hide/Show tab labels", { next, ok });
+      return;
+    }
+    if (!configureBtn)
       return;
     const clickedConfigureBtn = configureBtn.contains(target) || configureBtn === target;
     if (!clickedConfigureBtn)
