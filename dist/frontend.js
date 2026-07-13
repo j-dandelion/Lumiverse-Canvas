@@ -4862,6 +4862,16 @@ function injectModalStyles() {
       will-change: left, top;
       cursor: grabbing;
     }
+    /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
+    .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
+      transition:
+        left ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        top ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
+      cursor: default;
+    }
 
     /* ── Row card (host .row) ── */
     .canvas-configure-tabs-row {
@@ -5129,7 +5139,84 @@ function injectModalStyles() {
   `;
   document.head.appendChild(style);
 }
+function detachDragListeners() {
+  if (_dragMoveHandler) {
+    document.removeEventListener("pointermove", _dragMoveHandler);
+    _dragMoveHandler = null;
+  }
+  if (_dragUpHandler) {
+    document.removeEventListener("pointerup", _dragUpHandler);
+    document.removeEventListener("pointercancel", _dragUpHandler);
+    _dragUpHandler = null;
+  }
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+}
+function cancelOverlaySettle() {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer);
+    _settleTimer = null;
+  }
+  if (_dragOverlay) {
+    _dragOverlay.classList.remove("canvas-configure-tabs-overlay-settling");
+  }
+  _settling = false;
+}
+function resolveConfigureSettleDestination(tabId) {
+  if (!tabId)
+    return null;
+  for (const el of document.querySelectorAll(".canvas-configure-tabs-row")) {
+    if (el.getAttribute("data-tab-id") === tabId) {
+      const r3 = el.getBoundingClientRect();
+      return { left: r3.left, top: r3.top };
+    }
+  }
+  return null;
+}
+function animateOverlaySettle(destLeft, destTop) {
+  const overlay = _dragOverlay;
+  if (!overlay)
+    return Promise.resolve();
+  const curLeft = parseFloat(overlay.style.left) || 0;
+  const curTop = parseFloat(overlay.style.top) || 0;
+  const dx = destLeft - curLeft;
+  const dy = destTop - curTop;
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    overlay.style.left = `${destLeft}px`;
+    overlay.style.top = `${destTop}px`;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done)
+        return;
+      done = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer);
+        _settleTimer = null;
+      }
+      resolve();
+    };
+    const onEnd = (e3) => {
+      if (e3.target !== overlay)
+        return;
+      if (e3.propertyName && e3.propertyName !== "left" && e3.propertyName !== "top")
+        return;
+      finish();
+    };
+    _settling = true;
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.add("canvas-configure-tabs-overlay-settling");
+    overlay.offsetWidth;
+    overlay.style.left = `${destLeft}px`;
+    overlay.style.top = `${destTop}px`;
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+  });
+}
 function clearDragState() {
+  cancelOverlaySettle();
   if (_dragOverlay) {
     _dragOverlay.remove();
     _dragOverlay = null;
@@ -5143,17 +5230,7 @@ function clearDragState() {
       }
     }
   }
-  if (_dragMoveHandler) {
-    document.removeEventListener("pointermove", _dragMoveHandler);
-    _dragMoveHandler = null;
-  }
-  if (_dragUpHandler) {
-    document.removeEventListener("pointerup", _dragUpHandler);
-    document.removeEventListener("pointercancel", _dragUpHandler);
-    _dragUpHandler = null;
-  }
-  document.body.style.userSelect = "";
-  document.body.style.cursor = "";
+  detachDragListeners();
   _dragActive = false;
   _lastDropTarget = null;
   _flipRects = null;
@@ -5335,6 +5412,8 @@ function ConfigureTabsModalInner(props) {
     const target = e3.currentTarget;
     if (!target.classList.contains("canvas-configure-tabs-drag-handle"))
       return;
+    if (_settling)
+      return;
     e3.preventDefault();
     _dragTabId = tabId;
     _dragFromSide = side;
@@ -5343,6 +5422,8 @@ function ConfigureTabsModalInner(props) {
     _dragStartY = e3.clientY;
     _lastDropTarget = null;
     const onMove = (ev) => {
+      if (_settling)
+        return;
       const dx = ev.clientX - _dragStartX;
       const dy = ev.clientY - _dragStartY;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -5374,9 +5455,19 @@ function ConfigureTabsModalInner(props) {
       _lastDropTarget = target_;
       performDragMove(tabId, target_.side, target_.index);
     };
-    const onUp = (_ev) => {
-      clearDragState();
-      autoCommit();
+    const onUp = async (_ev) => {
+      detachDragListeners();
+      try {
+        if (_dragActive && _dragOverlay && _dragTabId) {
+          const dest = resolveConfigureSettleDestination(_dragTabId);
+          if (dest) {
+            await animateOverlaySettle(dest.left, dest.top);
+          }
+        }
+      } finally {
+        clearDragState();
+        autoCommit();
+      }
     };
     _dragMoveHandler = onMove;
     _dragUpHandler = onUp;
@@ -5801,7 +5892,7 @@ function unmountModal() {
   clearDragState();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _commitPromise = null, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -10416,9 +10507,9 @@ function injectDndStyles() {
     /* ── Drop settle: floating clone eases into its destination slot ── */
     .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
       transition:
-        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        box-shadow ${SETTLE_DURATION_MS}ms ease,
-        opacity ${SETTLE_DURATION_MS}ms ease !important;
+        transform ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS2}ms ease,
+        opacity ${SETTLE_DURATION_MS2}ms ease !important;
       box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
         0 0 0 1px var(--lumiverse-border, #333);
       cursor: default;
@@ -10628,13 +10719,13 @@ function resolveSettleDestination(tabId, target, crossList) {
   }
   return null;
 }
-function animateOverlaySettle(destLeft, destTop) {
+function animateOverlaySettle2(destLeft, destTop) {
   const overlay = _dragOverlay2;
   if (!overlay)
     return Promise.resolve();
   const dx = destLeft - _overlayTx;
   const dy = destTop - _overlayTy;
-  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
     _overlayTx = destLeft;
     _overlayTy = destTop;
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
@@ -10647,9 +10738,9 @@ function animateOverlaySettle(destLeft, destTop) {
         return;
       done = true;
       overlay.removeEventListener("transitionend", onEnd);
-      if (_settleTimer !== null) {
-        clearTimeout(_settleTimer);
-        _settleTimer = null;
+      if (_settleTimer2 !== null) {
+        clearTimeout(_settleTimer2);
+        _settleTimer2 = null;
       }
       _overlayTx = destLeft;
       _overlayTy = destTop;
@@ -10668,13 +10759,13 @@ function animateOverlaySettle(destLeft, destTop) {
     _overlayTx = destLeft;
     _overlayTy = destTop;
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+    _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
   });
 }
-function cancelOverlaySettle() {
-  if (_settleTimer !== null) {
-    clearTimeout(_settleTimer);
-    _settleTimer = null;
+function cancelOverlaySettle2() {
+  if (_settleTimer2 !== null) {
+    clearTimeout(_settleTimer2);
+    _settleTimer2 = null;
   }
   if (_dragOverlay2) {
     _dragOverlay2.classList.remove("canvas-tab-list-dnd-overlay-settling");
@@ -10974,7 +11065,7 @@ function startDrag(btn, pointerEvent) {
           restoreSourceButtonDOM();
         }
         if (dest) {
-          await animateOverlaySettle(dest.left, dest.top);
+          await animateOverlaySettle2(dest.left, dest.top);
         }
         const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
         if (!ok && !crossList) {
@@ -10984,11 +11075,11 @@ function startDrag(btn, pointerEvent) {
         restoreSourceButtonDOM();
         const dest = resolveSettleDestination(capturedTabId, null, false);
         if (dest) {
-          await animateOverlaySettle(dest.left, dest.top);
+          await animateOverlaySettle2(dest.left, dest.top);
         }
       }
     } finally {
-      cancelOverlaySettle();
+      cancelOverlaySettle2();
       cleanupDragVisuals();
     }
   };
@@ -11196,7 +11287,7 @@ function tearDownTabListDnd() {
       cancelAnimationFrame(_rafId);
       _rafId = null;
     }
-    cancelOverlaySettle();
+    cancelOverlaySettle2();
     restoreSourceButtonDOM();
     cleanupDragVisuals();
     clearDragState2();
@@ -11206,7 +11297,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();

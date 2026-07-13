@@ -53,7 +53,16 @@ let _lastDropTarget: { side: 'primary' | 'secondary'; index: number } | null = n
 let _flipRects: Map<string, DOMRect> | null = null
 let _dragMoveHandler: ((e: PointerEvent) => void) | null = null
 let _dragUpHandler: ((e: PointerEvent) => void) | null = null
+/** In-flight drop-settle timeout (transitionend fallback). */
+let _settleTimer: ReturnType<typeof setTimeout> | null = null
+/** True while overlay eases into its drop slot after pointerup. */
+let _settling = false
 let _commitPromise: Promise<CommitResult> | null = null
+
+/** Drop-settle duration — keep in sync with CSS on .overlay-settling + live DnD. */
+const SETTLE_DURATION_MS = 140
+/** Skip settle when already within this many CSS pixels of dest. */
+const SETTLE_MIN_DISTANCE_PX = 2
 
 // ── Built-in tab icon SVGs (lucide paths, 18×18, strokeWidth 1.75) ──
 
@@ -318,6 +327,16 @@ function injectModalStyles(): void {
       opacity: 1;
       will-change: left, top;
       cursor: grabbing;
+    }
+    /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
+    .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
+      transition:
+        left ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        top ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
+      cursor: default;
     }
 
     /* ── Row card (host .row) ── */
@@ -591,8 +610,98 @@ function injectModalStyles(): void {
 
 type ColumnSide = 'primary' | 'secondary'
 
+/** Stop pointer listeners without removing the overlay (for settle anim). */
+function detachDragListeners(): void {
+  if (_dragMoveHandler) {
+    document.removeEventListener('pointermove', _dragMoveHandler)
+    _dragMoveHandler = null
+  }
+  if (_dragUpHandler) {
+    document.removeEventListener('pointerup', _dragUpHandler)
+    document.removeEventListener('pointercancel', _dragUpHandler)
+    _dragUpHandler = null
+  }
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+}
+
+function cancelOverlaySettle(): void {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer)
+    _settleTimer = null
+  }
+  if (_dragOverlay) {
+    _dragOverlay.classList.remove('canvas-configure-tabs-overlay-settling')
+  }
+  _settling = false
+}
+
+/**
+ * Destination top-left for the floating overlay on release.
+ * Mid-drag re-render already placed the placeholder row in its final slot.
+ */
+function resolveConfigureSettleDestination(tabId: string | null): { left: number; top: number } | null {
+  if (!tabId) return null
+  for (const el of document.querySelectorAll('.canvas-configure-tabs-row')) {
+    if (el.getAttribute('data-tab-id') === tabId) {
+      const r = (el as HTMLElement).getBoundingClientRect()
+      return { left: r.left, top: r.top }
+    }
+  }
+  return null
+}
+
+/**
+ * Animate the floating overlay into its drop slot (same timing as live DnD).
+ * Uses left/top (configure overlay position model), not translate3d.
+ */
+function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> {
+  const overlay = _dragOverlay
+  if (!overlay) return Promise.resolve()
+
+  const curLeft = parseFloat(overlay.style.left) || 0
+  const curTop = parseFloat(overlay.style.top) || 0
+  const dx = destLeft - curLeft
+  const dy = destTop - curTop
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    overlay.style.left = `${destLeft}px`
+    overlay.style.top = `${destTop}px`
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      overlay.removeEventListener('transitionend', onEnd)
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer)
+        _settleTimer = null
+      }
+      resolve()
+    }
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target !== overlay) return
+      // left and top both transition; complete on either once.
+      if (e.propertyName && e.propertyName !== 'left' && e.propertyName !== 'top') return
+      finish()
+    }
+
+    _settling = true
+    overlay.addEventListener('transitionend', onEnd)
+    overlay.classList.add('canvas-configure-tabs-overlay-settling')
+    // Ensure the settling class applies before changing position.
+    void overlay.offsetWidth
+    overlay.style.left = `${destLeft}px`
+    overlay.style.top = `${destTop}px`
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40)
+  })
+}
+
 /** Clean up all DnD state. */
 function clearDragState(): void {
+  cancelOverlaySettle()
   if (_dragOverlay) {
     _dragOverlay.remove()
     _dragOverlay = null
@@ -606,17 +715,7 @@ function clearDragState(): void {
       }
     }
   }
-  if (_dragMoveHandler) {
-    document.removeEventListener('pointermove', _dragMoveHandler)
-    _dragMoveHandler = null
-  }
-  if (_dragUpHandler) {
-    document.removeEventListener('pointerup', _dragUpHandler)
-    document.removeEventListener('pointercancel', _dragUpHandler)
-    _dragUpHandler = null
-  }
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
+  detachDragListeners()
   _dragActive = false
   _lastDropTarget = null
   _flipRects = null
@@ -874,6 +973,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
     // Only handle from the drag handle element
     const target = e.currentTarget as HTMLElement
     if (!target.classList.contains('canvas-configure-tabs-drag-handle')) return
+    // Ignore new presses while a prior drop is settling
+    if (_settling) return
 
     // Prevent text selection and default drag behavior
     e.preventDefault()
@@ -887,6 +988,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
     // Define move handler
     const onMove = (ev: PointerEvent) => {
+      if (_settling) return
       const dx = ev.clientX - _dragStartX
       const dy = ev.clientY - _dragStartY
       const dist = Math.sqrt(dx * dx + dy * dy)
@@ -924,9 +1026,21 @@ function ConfigureTabsModalInner(props: ModalProps) {
       performDragMove(tabId, target_.side, target_.index)
     }
 
-    const onUp = (_ev: PointerEvent) => {
-      clearDragState()
-      autoCommit()
+    const onUp = async (_ev: PointerEvent) => {
+      // Stop tracking pointer; keep overlay + placeholder for settle anim.
+      detachDragListeners()
+
+      try {
+        if (_dragActive && _dragOverlay && _dragTabId) {
+          const dest = resolveConfigureSettleDestination(_dragTabId)
+          if (dest) {
+            await animateOverlaySettle(dest.left, dest.top)
+          }
+        }
+      } finally {
+        clearDragState()
+        void autoCommit()
+      }
     }
 
     _dragMoveHandler = onMove
