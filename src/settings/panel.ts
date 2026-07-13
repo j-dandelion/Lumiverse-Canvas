@@ -300,6 +300,19 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   })
   secSidebars.appendChild(hideDrawerTabToggleRow)
 
+  const dragAndDropDrawerTabs = makeToggle(
+    () => getSettings().dragAndDropDrawerTabs,
+    (v) => setSettings({ dragAndDropDrawerTabs: v }),
+    { disabled: () => !getSettings().taskbarMode },
+  )
+  const dragAndDropDrawerTabsRow = buildSettingRow({
+    label: 'Drag and drop drawer tabs',
+    hint: 'Long-press a tab button to reorder it within a drawer or move it to the other drawer. Requires "Taskbar mode".',
+    control: dragAndDropDrawerTabs.btn,
+    disabled: !getSettings().taskbarMode,
+  })
+  secSidebars.appendChild(dragAndDropDrawerTabsRow)
+
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
     (v) => setSettings({ resizeSidebars: v })
@@ -395,6 +408,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     moveControlsToOuter.refresh()
     taskbarMode.refresh()
     hideDrawerTabToggle.refresh()
+    dragAndDropDrawerTabs.refresh()
     resizeSidebars.refresh()
     compact.refresh()
     chat.refresh()
@@ -411,12 +425,15 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       taskbarMode.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       taskbarModeRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    // hideDrawerOpenCloseButtons requires taskbarMode (reopen affordance).
+    // hideDrawerOpenCloseButtons + dragAndDropDrawerTabs require taskbarMode.
     {
       const d = !getSettings().taskbarMode
       hideDrawerTabToggle.btn.disabled = d
       hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      dragAndDropDrawerTabs.btn.disabled = d
+      dragAndDropDrawerTabs.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      dragAndDropDrawerTabsRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
     // compact gated by second-drawer master toggle (resizeSidebars is always-on).
     for (const row of [compact]) {

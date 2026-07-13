@@ -5,7 +5,13 @@ function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
 
-import { getSettings, normalizeCanvasSettings, isTaskbarModeEnabled, isHideDrawerOpenCloseButtonsEnabled } from '../state'
+import {
+  getSettings,
+  normalizeCanvasSettings,
+  isTaskbarModeEnabled,
+  isHideDrawerOpenCloseButtonsEnabled,
+  isDragAndDropDrawerTabsEnabled,
+} from '../state'
 import { mergeCanvasSettings } from '../../types'
 
 // --- getSettings returns default settings ---
@@ -25,6 +31,7 @@ assert(typeof settings.debugMode === 'boolean', 'debugMode is boolean')
 assert(typeof settings.drawerShadowsDesktop === 'boolean', 'drawerShadowsDesktop is boolean')
 assert(typeof settings.drawerShadowsMobile === 'boolean', 'drawerShadowsMobile is boolean')
 assert(typeof settings.hideDrawerOpenCloseButtons === 'boolean', 'hideDrawerOpenCloseButtons is boolean')
+assert(typeof settings.dragAndDropDrawerTabs === 'boolean', 'dragAndDropDrawerTabs is boolean')
 
 // Check specific defaults
 assertEqual(settings.secondSidebarEnabled, true, 'secondSidebarEnabled defaults to true')
@@ -33,6 +40,9 @@ assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults 
 assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
 assertEqual(settings.hideDrawerOpenCloseButtons, false, 'hideDrawerOpenCloseButtons defaults to false')
+// Default true in DEFAULT_CANVAS_SETTINGS, but normalize clears it when taskbar is off
+// (getSettings() after hydrate is normalized — taskbar default false → drag forced off).
+assertEqual(settings.dragAndDropDrawerTabs, false, 'dragAndDropDrawerTabs defaults to false after normalize (taskbar off)')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
@@ -231,6 +241,69 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(direct.taskbarMode, false, 'direct: taskbar stays off')
   assertEqual(direct.moveControlsToOuterEdge, true, 'direct: outer-edge stays on')
   assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when taskbar off')
+}
+
+// --- dragAndDropDrawerTabs requires taskbarMode ---
+{
+  const cleared = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      dragAndDropDrawerTabs: true,
+      taskbarMode: false,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(
+    cleared.dragAndDropDrawerTabs,
+    false,
+    'dragAndDrop cleared when taskbar mode is off',
+  )
+  assertEqual(
+    isDragAndDropDrawerTabsEnabled(cleared),
+    false,
+    'isDragAndDropDrawerTabsEnabled false when drag cleared',
+  )
+
+  const both = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      dragAndDropDrawerTabs: true,
+      taskbarMode: true,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(both.dragAndDropDrawerTabs, true, 'dragAndDrop stays on when taskbar + outer-edge on')
+  assertEqual(
+    isDragAndDropDrawerTabsEnabled(both),
+    true,
+    'isDragAndDropDrawerTabsEnabled true when all three on',
+  )
+
+  const cascade = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      dragAndDropDrawerTabs: true,
+      hideDrawerOpenCloseButtons: true,
+      taskbarMode: true,
+      moveControlsToOuterEdge: false,
+    }),
+  )
+  assertEqual(cascade.taskbarMode, false, 'dnd cascade: taskbar cleared')
+  assertEqual(cascade.dragAndDropDrawerTabs, false, 'dnd cascade: drag cleared')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'dnd cascade: hide cleared')
+  assertEqual(
+    isDragAndDropDrawerTabsEnabled(cascade),
+    false,
+    'dnd cascade: isDragAndDropDrawerTabsEnabled false',
+  )
+
+  // Raw default true survives merge before normalize when taskbar on
+  const rawDefault = mergeCanvasSettings({
+    taskbarMode: true,
+    moveControlsToOuterEdge: true,
+  })
+  assertEqual(
+    rawDefault.dragAndDropDrawerTabs,
+    true,
+    'merge default dragAndDropDrawerTabs true when taskbar on',
+  )
 }
 
 // Legacy keepTabListVisible → taskbarMode migration

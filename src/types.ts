@@ -69,6 +69,11 @@ export interface CanvasSettings {
    *  control when taskbar mode is off. */
   hideDrawerOpenCloseButtons?: boolean
 
+  /** Long-press drag-and-drop to reorder drawer tabs within a list or
+   *  move them between primary and secondary. Requires `taskbarMode`
+   *  (primary surface is the Canvas main-mirror strip). Default on. */
+  dragAndDropDrawerTabs?: boolean
+
   /** Show box-shadow on drawers at min-width: 601px (desktop). */
   drawerShadowsDesktop?: boolean
 
@@ -135,6 +140,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   moveControlsToOuterEdge: false,
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
+  dragAndDropDrawerTabs: true,
   drawerShadowsDesktop: true,
   drawerShadowsMobile: false,
   // Chat
@@ -156,22 +162,33 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  * Clear it whenever moveControlsToOuterEdge is off (load safety + merge path).
  * Idempotent — safe to call after already-normalized settings.
  *
- * hideDrawerOpenCloseButtons requires taskbarMode (otherwise the
- * edge button is the only reopen affordance). Cascade: outer-edge off →
- * taskbar mode off → hide off.
+ * hideDrawerOpenCloseButtons and dragAndDropDrawerTabs require taskbarMode
+ * (hide: edge button is the only reopen affordance without a pin strip;
+ * drag: primary surface is the main-mirror strip). Cascade: outer-edge off →
+ * taskbar mode off → hide + drag-and-drop off.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
 ): Required<CanvasSettings> {
+  let out = s
   // Cascade 1: taskbar mode requires outer-edge
-  if (s.taskbarMode && !s.moveControlsToOuterEdge) {
-    return { ...s, taskbarMode: false, hideDrawerOpenCloseButtons: false }
+  if (out.taskbarMode && !out.moveControlsToOuterEdge) {
+    out = {
+      ...out,
+      taskbarMode: false,
+      hideDrawerOpenCloseButtons: false,
+      dragAndDropDrawerTabs: false,
+    }
   }
   // Cascade 2: hide requires taskbar mode
-  if (s.hideDrawerOpenCloseButtons && !s.taskbarMode) {
-    return { ...s, hideDrawerOpenCloseButtons: false }
+  if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
+    out = { ...out, hideDrawerOpenCloseButtons: false }
   }
-  return s
+  // Cascade 3: drag-and-drop drawer tabs requires taskbar mode
+  if (out.dragAndDropDrawerTabs && !out.taskbarMode) {
+    out = { ...out, dragAndDropDrawerTabs: false }
+  }
+  return out
 }
 
 /**

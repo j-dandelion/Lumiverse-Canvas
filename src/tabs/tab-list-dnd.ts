@@ -10,11 +10,11 @@
 // every pointermove (cheap compositor work). Hit-test, DOM reorder, and
 // FLIP animation are coalesced via requestAnimationFrame.
 //
-// Reorderable lists get mid-drag FLIP-animated DOM reorder: secondary
-// .sidebar-ux-tab-list, main-mirror .sidebar-ux-tab-list-main, and the host
-// React .tabList (taskbar mode off). Commit uses visible-index helpers so
-// hidden tabs do not make primary reorder a no-op, and explicitly reorders
-// host + mirror DOM so primary sticks even before React re-renders.
+// Requires taskbar mode (settings-gated): primary mid-drag surface is
+// main-mirror only. Reorderable lists get mid-drag FLIP: secondary
+// .sidebar-ux-tab-list and main-mirror .sidebar-ux-tab-list-main. Commit
+// uses visible-index helpers so hidden tabs do not make primary reorder a
+// no-op, and reorders host + mirror DOM so primary sticks before React.
 //
 // Style: overlay clone preserves original classes so label/icon sizing
 // inherits from the existing tab stylesheet. A wrapper div provides the
@@ -234,8 +234,7 @@ function getButtonTabId(btn: HTMLElement): string | null {
 
 /**
  * True when the container is eligible for mid-drag FLIP reorder.
- * Includes secondary list, mirror main/bottom sections, and the host
- * React tab list (taskbar mode off).
+ * Secondary list + mirror main/bottom sections only (taskbar mode required).
  */
 function isReorderableContainer(el: HTMLElement): boolean {
   if (el.classList.contains(MIRROR_MAIN_CLASS)) return true
@@ -245,27 +244,13 @@ function isReorderableContainer(el: HTMLElement): boolean {
   if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
     return true
   }
-  // Host Lumiverse tab list (CSS-module class contains "tabList", not wrap/scroll)
-  if (isHostTabListEl(el)) return true
   return false
-}
-
-/** Host `.tabList` node (not tabListWrap / scroll chrome). */
-function isHostTabListEl(el: HTMLElement): boolean {
-  const cn = String(el.className || '')
-  if (!cn.includes('tabList')) return false
-  if (cn.includes('tabListWrap')) return false
-  if (cn.includes('tabListScroll')) return false
-  // Canvas lists use sidebar-ux-tab-list — already handled above
-  if (el.classList.contains(TAB_LIST_CLASS)) return false
-  return true
 }
 
 /**
  * Parent element that owns mid-drag insertBefore for this button.
  * Mirror: .sidebar-ux-tab-list-main or .sidebar-ux-tab-list-bottom.
  * Secondary: the .sidebar-ux-tab-list itself.
- * Host React: the `.tabList` flex column (not tabListWrap).
  */
 function getReorderParent(btn: HTMLElement): HTMLElement | null {
   if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
@@ -278,9 +263,6 @@ function getReorderParent(btn: HTMLElement): HTMLElement | null {
     const list = btn.closest(`.${TAB_LIST_CLASS}`) as HTMLElement | null
     if (list && !list.classList.contains(MIRROR_LIST_CLASS)) return list
   }
-  // Host main drawer tab button
-  const hostList = btn.closest('[class*="tabList"]') as HTMLElement | null
-  if (hostList && isHostTabListEl(hostList)) return hostList
   return null
 }
 
@@ -288,6 +270,8 @@ function getReorderParent(btn: HTMLElement): HTMLElement | null {
  * Collect all potential drop containers and their side.
  * Mirror uses main/bottom *sections* (where buttons actually live) so
  * hit-test and insertBefore stay within the correct flex column.
+ * Host React `.tabList` is not a mid-drag surface (taskbar mode required;
+ * commit still reorders host buttons via configure-commit).
  */
 function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
   const containers: { el: HTMLElement; secondary: boolean }[] = []
@@ -298,7 +282,7 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     if (secList) containers.push({ el: secList, secondary: true })
   }
 
-  // 2. Main-mirror primary strip (Canvas-owned when taskbar mode on).
+  // 2. Main-mirror primary strip (Canvas-owned under taskbar mode).
   //    Settings bottom dock is not a drop target — host chrome stays pinned.
   const mirrorList = document.querySelector(
     `.${MIRROR_LIST_CLASS}`,
@@ -315,35 +299,12 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     }
   }
 
-  // 3. Host React tab list (no main-mirror, e.g. taskbar mode off).
-  //    Prefer the inner `.tabList` (button parent) — not tabListWrap —
-  //    so mid-drag insertBefore keeps buttons inside the flex column.
-  if (!mirrorList) {
-    const hostSidebar = document.querySelector(
-      '[class*="sidebarLeft" i], [class*="sidebarRight" i]',
-    ) as HTMLElement | null
-    const tabListWrap = hostSidebar?.querySelector(
-      '[class*="tabListWrap"]',
-    ) as HTMLElement | null
-    const tabList = (tabListWrap?.querySelector(
-      ':scope > [class*="tabList"]',
-    ) as HTMLElement | null) ||
-      (hostSidebar?.querySelector('[class*="tabList"]') as HTMLElement | null)
-    if (tabList && isHostTabListEl(tabList)) {
-      containers.push({ el: tabList, secondary: false })
-    } else if (tabListWrap) {
-      containers.push({ el: tabListWrap, secondary: false })
-    } else if (hostSidebar) {
-      containers.push({ el: hostSidebar, secondary: false })
-    }
-  }
-
   return containers
 }
 
 /**
  * Collect tab buttons from a drop container (direct children for Canvas
- * sections; descendants for host / outer mirror fallback).
+ * sections; nested for outer mirror fallback).
  */
 function getAllButtonsInContainer(container: HTMLElement): HTMLElement[] {
   // Mirror main/bottom sections — buttons are direct children
@@ -372,14 +333,6 @@ function getAllButtonsInContainer(container: HTMLElement): HTMLElement[] {
       container.querySelectorAll(':scope > button[data-tab-id]'),
     )
   }
-  // Host React .tabList — prefer direct button children (skip divider noise)
-  if (isHostTabListEl(container)) {
-    const direct = Array.from(
-      container.querySelectorAll(':scope > button[data-tab-id]'),
-    ) as HTMLElement[]
-    if (direct.length > 0) return direct
-  }
-  // Host sidebar / wrap fallback
   return Array.from(
     container.querySelectorAll('button[data-tab-id]'),
   )
@@ -861,8 +814,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Save original DOM position for cancel-restore
   _originalParent = btn.parentElement
   _originalNextSibling = btn.nextElementSibling as HTMLElement | null
-  // Mirror: section parent; secondary: tab list; host: .tabList.
-  // _sourceIsInCanvasList gates mid-drag DOM reorder (name kept for brevity).
+  // Mirror section or secondary list — gates mid-drag DOM reorder.
   _sourceIsInCanvasList = getReorderParent(btn) != null
 
   // Calculate overlay offset from pointer
@@ -1142,6 +1094,9 @@ function installLongPressOnButton(btn: HTMLElement): void {
   }
 
   const onPointerDown = (e: PointerEvent) => {
+    // Feature off / torn down — handlers may remain on buttons (WeakSet);
+    // only start a drag while the module is active.
+    if (!_active) return
     // Only respond to left button
     if (e.button !== 0) return
     // Do not activate if already dragging
@@ -1207,10 +1162,10 @@ let _observer: MutationObserver | null = null
  *
  * Watches document.body for new buttons. Idempotent (uses WeakSet).
  * Safe to call multiple times (no-ops when already installed).
- * Returns a teardown function.
+ * Returns a teardown when newly activated; `null` if already active.
  */
-export function installTabListDnd(): () => void {
-  if (_active) return () => {}
+export function installTabListDnd(): (() => void) | null {
+  if (_active) return null
   _active = true
 
   injectDndStyles()
@@ -1257,7 +1212,9 @@ export function installTabListDnd(): () => void {
 }
 
 /**
- * Tear down tab-list DnD (disconnect observer, clear state).
+ * Tear down tab-list DnD (disconnect observer, clear in-flight drag, styles).
+ * Button listeners stay (WeakSet) but no-op while `_active` is false;
+ * re-install reactivates them and attaches any buttons added while off.
  */
 export function tearDownTabListDnd(): void {
   _active = false
@@ -1275,5 +1232,8 @@ export function tearDownTabListDnd(): void {
     restoreSourceButtonDOM()
     cleanupDragVisuals()
     clearDragState()
+  }
+  if (typeof document !== 'undefined') {
+    document.getElementById(DND_STYLE_ID)?.remove()
   }
 }

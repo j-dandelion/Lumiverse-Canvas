@@ -93,6 +93,14 @@ export function isHideDrawerOpenCloseButtonsEnabled(
   return !!s.hideDrawerOpenCloseButtons && isTaskbarModeEnabled(s)
 }
 
+/** Long-press drag-and-drop drawer tabs only when the setting is on and
+ *  taskbar mode is effectively on (primary surface is main-mirror). */
+export function isDragAndDropDrawerTabsEnabled(
+  s: FullCanvasSettings = _settings,
+): boolean {
+  return !!s.dragAndDropDrawerTabs && isTaskbarModeEnabled(s)
+}
+
 /**
  * One-shot hydration at setup time. Replaces the in-memory state with the
  * value merged from the loaded layout blob (defaults filled in by

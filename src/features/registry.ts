@@ -29,7 +29,8 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
-import { getSettings, getLastLoadedLayout } from '../settings/state'
+import { getSettings, getLastLoadedLayout, isDragAndDropDrawerTabsEnabled } from '../settings/state'
+import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug } from '../debug/log'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
@@ -438,7 +439,7 @@ const taskbarModeFeature: CanvasFeature = {
   },
 }
 
-/** Hide drawer open/close buttons: independent of taskbar mode.
+/** Hide drawer open/close buttons: requires taskbar mode (normalize cascade).
  *  Updates both secondary and main mirror drawer-tab visibility on mount
  *  and on every settings change. */
 const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
@@ -454,6 +455,27 @@ const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
   apply() {
     updateDrawerTabVisibility()
     updateMainMirrorDrawerTabVisibility()
+  },
+}
+
+/** Long-press drag-and-drop reorder/move on drawer tab buttons.
+ *  Requires taskbar mode (normalize cascade + isDragAndDropDrawerTabsEnabled).
+ *  Primary surface is main-mirror; commit still reorders host React buttons. */
+const dragAndDropDrawerTabsFeature: CanvasFeature = {
+  id: 'dragAndDropDrawerTabs',
+  mount() {
+    if (!isDragAndDropDrawerTabsEnabled()) return
+    return installTabListDnd() ?? undefined
+  },
+  apply(_prev, next) {
+    if (isDragAndDropDrawerTabsEnabled(next)) {
+      // Off → on at runtime (mount skipped at boot). Register teardown so
+      // extension disable still cleans up.
+      const teardown = installTabListDnd()
+      if (teardown) registerCleanup(teardown)
+    } else {
+      tearDownTabListDnd()
+    }
   },
 }
 
@@ -473,6 +495,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   tabPositionFeature,
   taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,
+  dragAndDropDrawerTabsFeature,
   drawerTabDragFeature,
 ]
 

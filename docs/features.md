@@ -38,9 +38,10 @@ interface CanvasFeature {
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `taskbarModeFeature` | `taskbarMode` | Taskbar mode: pin tab strips when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `taskbarMode`) |
-| `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs |
+| `dragAndDropDrawerTabsFeature` | `dragAndDropDrawerTabs` | Long-press drag-and-drop to reorder/move drawer tabs (requires `taskbarMode`) |
+| `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs (vertical vh of open/close edge control) |
 
-**Note**: The `drawerTabDrag` feature is in the registry but has no settings panel toggle — it is enabled/disabled via the `drawerTabDrag` setting key, which is not exposed in the UI panel.
+**Note**: The `drawerTabDrag` feature is in the registry but has no settings panel toggle — it is enabled/disabled via the `drawerTabDrag` setting key, which is not exposed in the UI panel. It is unrelated to `dragAndDropDrawerTabs` (tab *list* reorder).
 
 ### Removed Features
 
@@ -69,9 +70,9 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 - `cancelSettingsSave()` — cancel pending debounce
 
 **Dependency chain (normalize):**
-- `hideDrawerOpenCloseButtons` → `taskbarMode` → `moveControlsToOuterEdge`
-- Normalize cascades: outer-edge off → taskbar off → hide off
-- Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode (and thus outer-edge)
+- `hideDrawerOpenCloseButtons` / `dragAndDropDrawerTabs` → `taskbarMode` → `moveControlsToOuterEdge`
+- Normalize cascades: outer-edge off → taskbar off → hide + drag-and-drop off
+- Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` / `isDragAndDropDrawerTabsEnabled(s)` require taskbar mode (and thus outer-edge)
 
 ### Settings Panel (`settings/panel.ts`)
 
@@ -80,7 +81,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 **Sections:**
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
-3. **Drawers** — moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+3. **Drawers** — moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome), dragAndDropDrawerTabs (requires taskbar mode; long-press tab list reorder), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
 4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
 5. **Debug** — debugMode
 
