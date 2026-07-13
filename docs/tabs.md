@@ -130,6 +130,31 @@ A **session-only vanilla baseline** is captured the first time the user enables 
 
 ### Why baseline wins
 
+### Auto-save behavior (2026-07-12)
+
+Configure Tabs now auto-saves individual edits immediately rather than
+waiting for Done. The draft model is retained but commits happen
+automatically on toggle hide, swap side, and drag-end (not mid-drag).
+
+| Action | Behavior |
+|--------|----------|
+| Toggle hide | Mutate → render → auto-commit |
+| Swap side | Mutate → render → auto-commit |
+| Drag pointermove | Draft-only (no commit) |
+| Drag pointerup | One auto-commit if dirty |
+| Done / Cancel / X / Esc / outside | Close, **no** discard confirm; re-commits if residual dirty |
+| Commit failure | Stay open + inline error; no native confirm |
+
+On auto-commit success, the base snapshot is rebased so `isDraftDirty`
+returns false. Cancel closes the modal without rolling back (the edits
+were already committed). Done also closes when clean; if there is a
+residual dirty state (e.g., a commit raced with closure), Done flushes
+first.
+
+The mode-switch dirty dialog (second-drawer-mode.ts) still shows the
+Apply/Discard/Cancel 3-way when toggling the second drawer off with
+residual dirty — unchanged safety net.
+
 The plan locks the rule: "Enabling the second drawer may establish a temporary dual layout, but returning to single-drawer mode must restore the vanilla state from immediately before that dual session." This guarantees the user always sees the same vanilla Lumiverse layout they had before enabling, regardless of what they did in dual mode. The dual session's Configure changes are an isolated experiment; the baseline is the contract for the round trip.
 
 ## Context Menus

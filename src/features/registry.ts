@@ -22,6 +22,10 @@
 // Tab-assignment persistence is always-on (built-in). The
 // persistTabAssignments setting and its feature have been removed —
 // secondary tab assignments (+ activeTabId) are always saved and restored.
+//
+// showTabLabels was removed from Canvas — the second drawer always follows
+// the host main-drawer showTabLabels setting (no tri-state override). The
+// drawerSyncFeature no longer has a showTabLabels apply branch.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
@@ -34,7 +38,7 @@ import { getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
-import { syncDrawerTabSettings, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
+import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../layout/persist'
 import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
@@ -216,11 +220,12 @@ const resizeSidebarsFeature: CanvasFeature = {
   },
 }
 
-/** Drawer-sync bundle: mirror compact position + tab-label visibility. Both
- *  toggles are owned by sidebar/drawer-sync.ts, so the feature id is the master
- *  (mirrorCompactPosition) and the showTabLabels hook rides along in
- *  apply(). The orchestrator still iterates by id, but the drawer-sync module
- *  is the single owner of both effects. */
+/** Drawer-sync bundle: mirror compact position + tab-label visibility.
+ *  Both are owned by sidebar/drawer-sync.ts. The feature id is the master
+ *  (mirrorCompactPosition). Label visibility sync lives in
+ *  syncDrawerTabSettings which is called on mount/apply. The Canvas
+ *  showTabLabels tri-state override has been removed — the second drawer
+ *  always follows the host main-drawer setting. */
 const drawerSyncFeature: CanvasFeature = {
   id: 'mirrorCompactPosition',
   mount() {
@@ -234,9 +239,6 @@ const drawerSyncFeature: CanvasFeature = {
         const drawerTab = getSecondaryWrapper()?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement
         if (drawerTab) drawerTab.style.marginTop = ''
       }
-    }
-    if (prev.showTabLabels !== next.showTabLabels) {
-      syncSecondaryTabLabels()
     }
   },
 }

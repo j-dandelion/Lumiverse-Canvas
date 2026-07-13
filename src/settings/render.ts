@@ -1,12 +1,16 @@
 // Canvas settings panel — DOM construction helpers.
 //
 // Pure rendering functions that build individual UI controls (toggle
-// switches, segmented controls, setting rows). These don't depend on
-// settings state; the caller wires onChange handlers.
+// switches, setting rows). These don't depend on settings state; the
+// caller wires onChange handlers.
+//
+// showTabLabels was removed from Canvas — the second drawer always
+// follows the host main-drawer showTabLabels setting. The tri-state
+// segmented control (buildShowLabelsControl) has been removed.
 
 /**
  * Render a single setting row. `control` is the right-hand element
- * (toggle button, segmented control, etc.) — caller builds it.
+ * (toggle button, etc.) — caller builds it.
  */
 export function buildSettingRow(args: {
   label: string
@@ -56,24 +60,4 @@ export function buildToggleControl(value: boolean, onChange: (next: boolean) => 
     onChange(!current)
   })
   return btn
-}
-
-/** Build a 3-button segmented control (Follow / Show / Hide). */
-export function buildShowLabelsControl(value: 'follow' | 'show' | 'hide', onChange: (next: 'follow' | 'show' | 'hide') => void): HTMLElement {
-  const wrap = document.createElement('div')
-  wrap.className = 'sidebar-ux-panel-segmented'
-  const opts: Array<{ value: 'follow' | 'show' | 'hide'; label: string }> = [
-    { value: 'follow', label: 'Follow' },
-    { value: 'show', label: 'Show' },
-    { value: 'hide', label: 'Hide' },
-  ]
-  for (const o of opts) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'sidebar-ux-panel-segmented-btn' + (value === o.value ? ' sidebar-ux-panel-segmented-btn-active' : '')
-    btn.textContent = o.label
-    btn.addEventListener('click', () => onChange(o.value))
-    wrap.appendChild(btn)
-  }
-  return wrap
 }

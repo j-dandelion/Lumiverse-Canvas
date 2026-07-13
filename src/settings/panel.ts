@@ -17,6 +17,9 @@
 // persistTabAssignments setting was removed from the settings panel
 // and from the Layout section.
 //
+// showTabLabels was removed from Canvas — the second drawer always
+// follows the host main-drawer showTabLabels setting (no tri-state override).
+//
 // All toggles call setSettings({ field: value }) from settings/state.ts.
 // The "live-apply" effect chain runs through applySettings below.
 
@@ -30,7 +33,7 @@ import { injectStyles } from '../debug/styles'
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
 // Lumiverse's own CSS modules. The class definitions are injected once
 // when the panel is first built.
-import { buildSettingRow, buildToggleControl, buildShowLabelsControl } from './render'
+import { buildSettingRow, buildToggleControl } from './render'
 
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
@@ -364,24 +367,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     disabled: !getSettings().secondSidebarEnabled,
   }))
 
-  // Tab labels — tri-state segmented control. We keep a reference so refresh
-  // can rebuild the inner buttons (a segmented control needs DOM
-  // replacement when the active value changes, since each button carries
-  // its own click handler bound to the current value).
-  let showLabelsWrap: HTMLElement
-  let showLabelsRow: HTMLElement
-  const buildShowLabelsSeg = () => buildShowLabelsControl(
-    getSettings().showTabLabels,
-    (v) => setSettings({ showTabLabels: v })
-  )
-  showLabelsWrap = buildShowLabelsSeg()
-  showLabelsRow = buildSettingRow({
-    label: 'Tab labels in the second drawer',
-    hint: "\"Follow\" mirrors Lumiverse's main sidebar setting. \"Show\" / \"Hide\" override it.",
-    control: showLabelsWrap,
-    disabled: !getSettings().secondSidebarEnabled,
-  })
-  sec2.appendChild(showLabelsRow)
+  // showTabLabels was removed — the second drawer always follows the host
+  // main-drawer showTabLabels setting (no Canvas tri-state override).
 
   // --- Section: Debug ---
   const sec4 = section('Debug')
@@ -440,12 +427,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       ;(row.btn.parentElement as HTMLElement)?.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    showLabelsRow.classList.toggle('sidebar-ux-panel-row-disabled', !getSettings().secondSidebarEnabled)
-    // Rebuild the showTabLabels segmented control (each button captures the
-    // current value in its handler).
-    const newSeg = buildShowLabelsSeg()
-    showLabelsWrap.replaceWith(newSeg)
-    showLabelsWrap = newSeg
   }
 
   return { root, refresh }

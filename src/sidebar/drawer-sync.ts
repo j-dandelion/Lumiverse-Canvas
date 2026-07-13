@@ -12,9 +12,10 @@
 // independent value that only takes effect when the mirror is OFF
 // (e.g., to set the secondary to a different position than the main).
 //
-// isShowTabLabels — derived from CanvasSettings.showTabLabels (the
-// user's explicit Canvas override) or the live Lumiverse store
-// (when the override is 'follow').
+// isShowTabLabels — reads the live Lumiverse store for the host
+// main-drawer showTabLabels setting. The Canvas tri-state override
+// (showTabLabels) was removed — the second drawer always follows
+// the host main-drawer setting.
 //
 // checkSideChanged / startSideChangeWatcher — 2s poll that detects a
 // flip of the main drawer's side in Lumiverse settings and rebuilds
@@ -61,12 +62,10 @@ let _lastWrittenDrawerTabVars: string | null = null
 // skip the per-label opacity/height/marginTop re-stamp.
 let _lastWrittenLabelsKey: string | null = null
 
-/** Read showTabLabels, honoring the user's Canvas override. */
+/** Read showTabLabels from the host store / DOM (no Canvas tri-state override). */
 export function isShowTabLabels(): boolean {
-  const mode = getSettings().showTabLabels
-  if (mode === 'show') return true
-  if (mode === 'hide') return false
-  // 'follow' (default) — read from the store snapshot or main sidebar DOM.
+  // The Canvas tri-state override (showTabLabels) was removed. Always read
+  // from the host Lumiverse store or fall back to DOM detection.
   const store = getStoreSnapshot()
   if (store) {
     const snapshot = asDrawerStore(store)

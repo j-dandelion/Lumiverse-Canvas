@@ -359,6 +359,130 @@ function setup() {
   assert(!isSuppressAutoActivation(), 'C6: suppressAutoActivation reset')
 }
 
+
+// =====================================================================
+// C7: commit + rebase — isDraftDirty is clean after successful commit
+//
+// Tests the auto-commit invariant: after commitConfigureDraft succeeds
+// and the host state reflects the committed draft, building a fresh
+// base from the committed state yields a clean dirty check.
+// =====================================================================
+{
+  setup()
+  // Use a live test seam that actually updates cached settings on write.
+  let cachedSettings: any = { side: 'right', tabOrder: ['profile', 'presets', 'loom'], hiddenTabIds: [] }
+  __setHostSetSettingForTest(
+    (_key: string, value: unknown) => {
+      cachedSettings = value as any
+      // Re-inject so getHostDrawerSettings reads the updated cache.
+      __setHostSetSettingForTest(
+        (_k: string, _v: unknown) => { cachedSettings = _v as any },
+        cachedSettings,
+      )
+    },
+    cachedSettings,
+  )
+  setTabAssignment('profile', 'primary')
+  setTabAssignment('presets', 'primary')
+  setTabAssignment('loom', 'primary')
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'loom'],
+    secondaryIds: [],
+    builtinOrder: ['profile', 'presets', 'loom'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['profile', 'presets', 'loom'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['profile', 'primary'],
+      ['presets', 'primary'],
+      ['loom', 'primary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C7: commit returns ok')
+
+  // Simulate autoCommit's rebase: build fresh draft+base from committed
+  // host state. Since we used a live seam, getHostDrawerSettings now
+  // reflects the committed tabOrder.
+  const { isDraftDirty } = await import('../configure-model')
+  const { getHostDrawerSettings } = await import('../../dom/host-settings')
+  const { getTabAssignments } = await import('../assignment')
+
+  const hostSettings = getHostDrawerSettings()
+  const currentAssignments = new Map(getTabAssignments())
+
+  // Build fresh draft+base from the known committed layout (not relying
+  // on getFullCatalog, which returns all 25 builtins). The relevant
+  // invariant is that a draft built from the committed state paired with
+  // a base snapshot of that same state reports clean.
+  const freshDraft: ConfigureDraft = {
+    drawerSide: (hostSettings?.side as 'left' | 'right') || 'right',
+    primaryIds: ['profile', 'presets', 'loom'],
+    secondaryIds: [],
+    builtinOrder: ['profile', 'presets', 'loom'],
+    extensionOrder: [],
+    hiddenIds: new Set(hostSettings?.hiddenTabIds || []),
+  }
+  const freshBase: BaseSnapshot = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide: (hostSettings?.side as 'left' | 'right') || 'right',
+    assignments: new Map(currentAssignments),
+  }
+
+  assert(!isDraftDirty(freshDraft, freshBase), 'C7: isDraftDirty is false after commit + rebase')
+}
+
+// =====================================================================
+// C8: concurrent commits are rejected (guard) — same as C3 but explicit
+//     about the auto-commit serialization pattern
+// =====================================================================
+{
+  setup()
+  __setHostSetSettingForTest(
+    (key: string, value: unknown) => { /* no-op */ },
+    { side: 'right', tabOrder: [], hiddenTabIds: [] },
+  )
+
+  // Fire two commits concurrently (simulates rapid auto-commit calls).
+  const p1 = commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
+  const p2 = commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
+
+  const r1 = await p1
+  const r2 = await p2
+
+  // Exactly one of the two should succeed; the other returns busy error.
+  const okCount = [r1, r2].filter(r => r.ok === true).length
+  const errCount = [r1, r2].filter(r => r.ok === false).length
+  assert(okCount === 1, 'C8: exactly one concurrent commit succeeds')
+  assert(errCount === 1, 'C8: exactly one concurrent commit returns busy')
+  assert(!isConfigureBatchActive(), 'C8: batch guard reset after both complete')
+}
+
+// =====================================================================
+// C9: commit returns ok with empty deltas (no-op happy path for auto-commit)
+// =====================================================================
+{
+  setup()
+  __setHostSetSettingForTest(
+    (key: string, value: unknown) => { /* no-op */ },
+    { side: 'right', tabOrder: [], hiddenTabIds: [] },
+  )
+
+  // autoCommit calls commitConfigureDraft only when dirty. This test
+  // confirms that even if called when clean (draft matches base),
+  // the function handles it gracefully.
+  const result: CommitResult = await commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
+  assert(result.ok === true, 'C9: commit with clean (matching) state returns ok')
+}
+
 // =====================================================================
 // Summary
 // =====================================================================

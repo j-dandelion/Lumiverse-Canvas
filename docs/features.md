@@ -81,7 +81,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
 3. **Drawers** — moveControlsToOuterEdge, keepTabListVisible (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires keep-tabs; pinned strip is the open/close chrome), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
-4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition, showTabLabels (tri-state)
+4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
 5. **Debug** — debugMode
 
 ### Settings Diff Dispatch (`applySettings`)

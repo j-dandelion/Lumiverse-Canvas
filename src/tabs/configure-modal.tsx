@@ -2,9 +2,9 @@
 // Configure Tabs modal — Preact-based UI for reordering and hiding drawer tabs.
 //
 // Renders as a fixed overlay with a two-column layout. Left/right column
-// mapping depends on the main drawer side (leftColumnIsSecondary). All
-// mutations operate on a draft ConfigureDraft until "Done" is clicked,
-// at which point commitConfigureDraft is called.
+// mapping depends on the main drawer side (leftColumnIsSecondary). Edits
+// auto-commit immediately (toggle hide, swap side, drag-end). Cancel closes
+// without rollback. Done closes when clean (or flushes residual dirty first).
 //
 // Styled to match host Lumiverse ConfigureDrawerTabsModal within the
 // structural deltas of dual-drawer columns + draft footer.
@@ -29,7 +29,7 @@ import { getFullCatalog, type CatalogTab } from './configure-catalog'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
 import { getTabAssignments } from './assignment'
-import { commitConfigureDraft, type CommitResult } from './configure-commit'
+import { commitConfigureDraft, isConfigureBatchActive, type CommitResult } from './configure-commit'
 import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
@@ -52,6 +52,7 @@ let _lastDropTarget: { side: 'primary' | 'secondary'; index: number } | null = n
 let _flipRects: Map<string, DOMRect> | null = null
 let _dragMoveHandler: ((e: PointerEvent) => void) | null = null
 let _dragUpHandler: ((e: PointerEvent) => void) | null = null
+let _commitPromise: Promise<CommitResult> | null = null
 
 // ── Built-in tab icon SVGs (lucide paths, 18×18, strokeWidth 1.75) ──
 
@@ -765,6 +766,57 @@ function cancelDrag(): void {
   clearDragState()
 }
 
+/**
+ * Auto-commit the current draft if dirty.
+ *
+ * Uses a serial chain (_commitPromise) so concurrent calls always wait
+ * for any in-flight auto-commit before proceeding. After the previous
+ * commit finishes, the draft is re-checked and committed again if still
+ * dirty (e.g. user made another edit during the previous commit).
+ * This avoids the "Commit already in progress" error from racing calls.
+ */
+async function autoCommit(): Promise<void> {
+  // Chain behind any in-flight auto-commit.
+  const prev = _commitPromise
+
+  // Build a promise for this invocation's work.
+  const myWork = (async () => {
+    // Wait for previous autoCommit to finish.
+    if (prev) { try { await prev } catch { /* ignore */ } }
+
+    if (!_draftRef || !_baseSnapshotRef) return { ok: true as const }
+    if (!isDraftDirty(_draftRef, _baseSnapshotRef)) return { ok: true as const }
+
+    const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
+
+    if (result.ok) {
+      // Rebase from live state so dirty check is clean.
+      try {
+        const fresh = buildLiveDraftAndBase()
+        _draftRef = fresh.draft
+        _baseSnapshotRef = fresh.base
+      } catch { /* keep current state */ }
+      if (_draftRef) {
+        renderModal(_draftRef, _catalogRef, null, false)
+      }
+    } else {
+      if (_draftRef) {
+        renderModal(_draftRef, _catalogRef, result.error, false)
+      }
+    }
+    return result
+  })()
+
+  // Store a promise that covers both wait + our work for subsequent callers.
+  _commitPromise = myWork.then(r => r as CommitResult).catch(
+    () => ({ ok: false as const, error: 'auto-commit failed' }),
+  )
+
+  await myWork
+}
+
+
+
 // ── Catalog ref for module-level re-renders ──
 
 let _catalogRef: CatalogTab[] = []
@@ -875,6 +927,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
     const onUp = (_ev: PointerEvent) => {
       clearDragState()
+      autoCommit()
     }
 
     _dragMoveHandler = onMove
@@ -1206,22 +1259,11 @@ export function refreshConfigureDraftFromLive(): void {
 
 /**
  * Close the Configure Tabs modal.
- * When force is true, skips the dirty check and unmounts immediately.
- * When force is false (or omitted), if the draft is dirty a window.confirm
- * is shown; returns true only if the modal was closed.
+ * With auto-commit, all edits are already persisted, so there is no need
+ * for a discard confirm. Just unmounts immediately.
  */
-export function closeConfigureTabsModal(opts?: { force?: boolean }): boolean {
+export function closeConfigureTabsModal(_opts?: { force?: boolean }): boolean {
   if (!_modalContainer) return true
-
-  // Skip dirty check when force-closing (e.g. mode switch already handled it).
-  if (!opts?.force && _draftRef && _baseSnapshotRef) {
-    if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
-      if (typeof window !== 'undefined' && !window.confirm('Discard changes?')) {
-        return false
-      }
-    }
-  }
-
   unmountModal()
   return true
 }
@@ -1282,12 +1324,14 @@ function renderModal(
         const next = swapDrawerSide(_draftRef)
         _draftRef = next
         renderModal(next, catalog, null, false)
+        autoCommit()
       }}
       onToggleHide={(tabId, hidden) => {
         if (!_draftRef) return
         const next = setHidden(_draftRef, tabId, hidden)
         _draftRef = next
         renderModal(next, catalog, null, false)
+        autoCommit()
       }}
       onToggleSecondDrawer={() => {
         // Delegate to the central mode-toggle API which handles dirty confirm,
@@ -1304,16 +1348,19 @@ function renderModal(
       }}
       onDone={async () => {
         if (!_draftRef || !_baseSnapshotRef) return
-        renderModal(_draftRef, catalog, null, true)
 
-        const result: CommitResult = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
-        if (result.ok) {
-          dlog('[configure-modal] commit successful')
-          unmountModal()
-        } else {
-          dlog('[configure-modal] commit failed:', result.error)
-          renderModal(_draftRef, catalog, result.error, false)
+        // With auto-commit, edits are already persisted. Flush only if
+        // residual dirty (e.g. a commit was still in-flight).
+        if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
+          renderModal(_draftRef, catalog, null, true)
+          const result: CommitResult = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
+          if (!result.ok) {
+            renderModal(_draftRef, catalog, result.error, false)
+            return
+          }
         }
+
+        unmountModal()
       }}
     />,
     _modalContainer,

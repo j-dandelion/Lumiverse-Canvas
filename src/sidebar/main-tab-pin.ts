@@ -458,11 +458,8 @@ function syncMirrorButtonsInto(
   }
 }
 
-/** Canvas showTabLabels + host tabBtnLabeled — same rules as isShowTabLabels for follow. */
+/** Host-only: check whether the host button has the labeled class. */
 function resolveMirrorLabeled(hostBtn: HTMLElement): boolean {
-  const mode = getSettings().showTabLabels
-  if (mode === 'show') return true
-  if (mode === 'hide') return false
   return (
     hostBtn.classList.contains('tabBtnLabeled') ||
     String(hostBtn.className || '').includes('tabBtnLabeled')

@@ -39,7 +39,6 @@ function makeSettings(overrides: Partial<FullCanvasSettings> = {}): FullCanvasSe
     secondSidebarEnabled: true,
     resizeSidebars: true,
     mirrorCompactPosition: true,
-    showTabLabels: 'follow',
     moveControlsToOuterEdge: false,
     drawerShadowsDesktop: true,
     drawerShadowsMobile: false,

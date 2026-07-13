@@ -17,7 +17,6 @@ assert(typeof settings === 'object', 'getSettings returns an object')
 assert(typeof settings.secondSidebarEnabled === 'boolean', 'secondSidebarEnabled is boolean')
 assert(typeof settings.resizeSidebars === 'boolean', 'resizeSidebars is boolean')
 assert(typeof settings.mirrorCompactPosition === 'boolean', 'mirrorCompactPosition is boolean')
-assert(typeof settings.showTabLabels === 'string', 'showTabLabels is string')
 assert(typeof settings.chatReflow === 'boolean', 'chatReflow is boolean')
 assert(typeof settings.persistDrawerOpenState === 'boolean', 'persistDrawerOpenState is boolean')
 assert(typeof settings.persistDrawerWidth === 'boolean', 'persistDrawerWidth is boolean')
@@ -30,7 +29,6 @@ assert(typeof settings.hideDrawerOpenCloseButtons === 'boolean', 'hideDrawerOpen
 // Check specific defaults
 assertEqual(settings.secondSidebarEnabled, true, 'secondSidebarEnabled defaults to true')
 assertEqual(settings.debugMode, false, 'debugMode defaults to false')
-assertEqual(settings.showTabLabels, 'follow', 'showTabLabels defaults to follow')
 assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults to true')
 assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
@@ -49,7 +47,6 @@ assertEqual(partial.debugMode, true, 'mergeCanvasSettings overrides debugMode')
 assertEqual(partial.chatReflow, false, 'mergeCanvasSettings overrides chatReflow')
 // Non-specified keys keep defaults
 assertEqual(partial.secondSidebarEnabled, true, 'mergeCanvasSettings preserves unmentioned keys')
-assertEqual(partial.showTabLabels, 'follow', 'mergeCanvasSettings preserves showTabLabels')
 
 // Undefined values in saved object are ignored (keep defaults)
 const withUndefined = mergeCanvasSettings({ debugMode: undefined })

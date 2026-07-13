@@ -41,9 +41,8 @@ export interface CanvasSettings {
   /** Mirror the main drawer's compact mode + vertical position. */
   mirrorCompactPosition?: boolean
 
-  /** Tab-label visibility. 'follow' = match Lumiverse's main drawer setting
-   *  (read from the store); 'show' = always visible; 'hide' = never visible. */
-  showTabLabels?: 'follow' | 'show' | 'hide'
+  // showTabLabels was removed — the second drawer always follows the
+  // host main-drawer showTabLabels setting (no Canvas override).
 
   // --- Drawers ---
   /** Move the tab-button column to the screen-edge side of the secondary
@@ -131,7 +130,6 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   secondSidebarEnabled: true,
   resizeSidebars: true,
   mirrorCompactPosition: true,
-  showTabLabels: 'follow',
   // Drawers
   moveControlsToOuterEdge: false,
   keepTabListVisible: false,
