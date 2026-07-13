@@ -515,15 +515,20 @@ export function dragHitGeometry(
 }
 
 /**
- * True when the floating tab overlaps a drop container (with a small
- * vertical pad so empty/near-edge lists still accept the tab).
+ * True when the floating tab overlaps a drop container.
+ *
+ * Vertical pad keeps empty/near-edge lists accepting the tab. Horizontal
+ * pad gives ~80px of sideways leeway so reorder/FLIP still runs when the
+ * floating tab (or cursor) drifts off a narrow drawer strip into chat.
  */
 export function overlayOverlapsContainer(
   overlay: { left: number; top: number; right: number; bottom: number },
   container: { left: number; top: number; right: number; bottom: number },
   padY = 8,
+  padX = 80,
 ): boolean {
-  const overlapsX = overlay.right > container.left && overlay.left < container.right
+  const overlapsX =
+    overlay.right > container.left - padX && overlay.left < container.right + padX
   const overlapsY =
     overlay.bottom > container.top - padY && overlay.top < container.bottom + padY
   return overlapsX && overlapsY

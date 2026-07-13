@@ -10558,8 +10558,8 @@ function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
     bottom: overlayTy + h4
   };
 }
-function overlayOverlapsContainer(overlay, container, padY = 8) {
-  const overlapsX = overlay.right > container.left && overlay.left < container.right;
+function overlayOverlapsContainer(overlay, container, padY = 8, padX = 80) {
+  const overlapsX = overlay.right > container.left - padX && overlay.left < container.right + padX;
   const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
   return overlapsX && overlapsY;
 }

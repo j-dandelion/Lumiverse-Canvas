@@ -259,6 +259,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
 })()
 
 // Container match uses overlay overlap (tab body), not a single pointer point.
+// Default padX=80 lets the float drift sideways off a narrow strip and still reorder.
 ;(() => {
   const tab = { left: 10, top: 50, right: 58, bottom: 106 }
   const strip = { left: 0, top: 0, right: 48, bottom: 400 }
@@ -268,6 +269,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     true,
     'overlayOverlapsContainer: tab overlapping strip → true',
   )
+  // ~152px gap from strip right (48) to tab left (200) — outside padX 80
   const far = { left: 200, top: 50, right: 248, bottom: 106 }
   assertEqual(
     overlayOverlapsContainer(far, strip),
@@ -281,6 +283,18 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     overlayOverlapsContainer(halfOut, strip),
     true,
     'overlayOverlapsContainer: half-over strip still hits (tab position)',
+  )
+  // Fully beside strip but within default padX (~42px past strip right)
+  const beside = { left: 90, top: 50, right: 138, bottom: 106 }
+  assertEqual(
+    overlayOverlapsContainer(beside, strip),
+    true,
+    'overlayOverlapsContainer: ~80px horizontal leeway → still hits',
+  )
+  assertEqual(
+    overlayOverlapsContainer(beside, strip, 8, 0),
+    false,
+    'overlayOverlapsContainer: padX=0 → beside strip misses',
   )
 })()
 
