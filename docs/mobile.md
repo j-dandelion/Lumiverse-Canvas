@@ -10,6 +10,8 @@ Canvas provides mobile-specific behavior for viewports <= 600px. The primary con
 
 **Distinct from**: `isPointerResizeActive()` in `resize/handles.ts` which uses `matchMedia('(pointer: coarse)')` for resize-handle suppression. Mobile viewport detection is for layout decisions; pointer detection is for interaction decisions.
 
+`isHostMobileDrawerViewport()` — `isMobileViewport() || (pointer: coarse)`. Matches Lumiverse's `useIsMobile` hook. Used **only** for host main drawer full-width forcing — NOT for layout/exclusion/main-mirror decisions (which use the stricter `isMobileViewport()`).
+
 ## Mutual Exclusion (`sidebar/mobile-exclusion.ts`)
 
 When a sidebar opens on mobile, the other must close:
@@ -73,6 +75,21 @@ Additionally, a `resize` listener keeps the CSS variable and wrapper transform i
 - `_updateDrawerWidth()`: On mobile, forces `drawer.style.width = 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'`. On desktop, restores `var(--sidebar-ux-secondary-w, 420px)`.
 - Cancels any in-flight wrapper animation before updating.
 - Updates the wrapper's `translateX` to match the new CSS var.
+
+## Host Main Drawer Full-Bleed on Larger Mobile
+
+The host main drawer is forced to full viewport width when `isHostMobileDrawerViewport()` returns true:
+
+- **≤600px**: Canvas clears any `!important` width override from `restoreMainDrawerFromDom` (set by previous desktop sessions) so the host CSS media query enforcing `--drawer-panel-w: calc(... + 1px)` takes effect.
+- **>600px with coarse pointer** (tablets, phone landscape): The host treats the viewport as mobile (backdrop) but its `@media (max-width: 600px)` CSS does not fire. Canvas JS forces `--drawer-panel-w` to the scaled full-viewport `+1px` expression on the wrapper with `!important`.
+
+This is synchronized on viewport-cross (`startMobileExclusion` matchMedia `change` handler), resize events, and one-shot mount reconciliation via `syncHostMainDrawerToMobileWidth()` in `mobile-exclusion.ts`.
+
+Key guard points:
+- `restoreMainDrawerFromDom` — three width-stamp paths gated with `!isHostMobileDrawerViewport()`. When mobile, the saved desktop `clampedWidth` is not stamped and any existing inline width/`--drawer-panel-w` is cleared.
+- `teardownMainMirror` — the `--drawer-panel-w` stamp from mirror width is gated with `!isHostMobileDrawerViewport()` so cross-down to mobile does not underfill.
+- `resize/handles.ts` — handles never mount on touch devices (`isPointerResizeActive()`), so they don't set width on mobile.
+- Resize listener in `startMobileExclusion` calls `syncHostMainDrawerToMobileWidth()` on every resize frame.
 
 ## Mobile Full-Bleed Width: +1px Oversize
 

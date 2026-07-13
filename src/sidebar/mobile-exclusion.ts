@@ -11,7 +11,7 @@
 //   body.canvas-ux-mobile-primary-open  → hides secondary's drawerTab
 //   body.canvas-ux-mobile-secondary-open → hides main's drawerTab
 
-import { getMainWrapper } from '../dom/lumiverse'
+import { getMainWrapper, getMainDrawer } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
 import { dlog } from '../debug/log'
 import { findDrawerToggleButton } from './main-persist'
@@ -83,6 +83,69 @@ function syncCssVarToDrawerWidth(): void {
  *  suppression, not layout decisions). */
 export function isMobileViewport(): boolean {
   return window.matchMedia('(max-width: 600px)').matches
+}
+
+/**
+ * True when the host would treat the viewport as "mobile" for drawer
+ * layout. Matches Lumiverse's useIsMobile hook: coarse pointer OR ≤600px.
+ *
+ * Used ONLY for host main drawer full-width forcing — NOT for
+ * layout/exclusion decisions (which use isMobileViewport()). This is
+ * deliberately separate so main-mirror, secondary layout, and other
+ * call sites that depend on the strict ≤600px check stay unchanged.
+ */
+export function isHostMobileDrawerViewport(): boolean {
+  if (isMobileViewport()) return true
+  return window.matchMedia('(pointer: coarse)').matches
+}
+
+/**
+ * Sync the host main drawer width for mobile awareness.
+ *
+ * On ≤600px: remove any inline width / --drawer-panel-w !important that
+ *   restoreMainDrawerFromDom may have stamped, so the host mobile CSS
+ *   (and Canvas SECONDARY_MOBILE_CSS +1px override) can enforce
+ *   full-viewport width.
+ *
+ * On larger mobile (coarse pointer, >600px, e.g. tablet landscape): the
+ *   host treats the viewport as mobile (backdrop, etc.) but its media
+ *   query does not force full-width. Set --drawer-panel-w to the scaled
+ *   full-viewport +1px expression (same oversize used by secondary).
+ *
+ * On fine-pointer desktop: clear any full-bleed override we set, so the
+ *   saved restored width takes effect.
+ *
+ * Safe to call repeatedly; designed for viewport-cross, resize, and
+ * one-shot init reconciliation.
+ */
+export function syncHostMainDrawerToMobileWidth(): void {
+  const wrapper = getMainWrapper()
+  const drawer = getMainDrawer()
+  if (!wrapper || !drawer) return
+
+  if (isMobileViewport()) {
+    // ≤600px: host CSS + Canvas SECONDARY_MOBILE_CSS already force
+    // full-bleed. Our restore inline width must not override that.
+    drawer.style.removeProperty('width')
+    wrapper.style.removeProperty('--drawer-panel-w')
+  } else if (window.matchMedia('(pointer: coarse)').matches) {
+    // Larger touch mobile (e.g. tablet landscape >600px): force
+    // full-viewport width via the host-aligned scaled viewport
+    // expression (same +1px oversize used by secondary).
+    const fullWidth = 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'
+    drawer.style.removeProperty('width')
+    wrapper.style.setProperty('--drawer-panel-w', fullWidth, 'important')
+  } else {
+    // Fine-pointer desktop: clear any full-bleed override we might
+    // have set during a larger-mobile phase. Value-sniff: only remove
+    // if the current inline --drawer-panel-w is our calc() expression.
+    // This must NOT wipe a legitimate px width set by
+    // restoreMainDrawerFromDom or resize handles (e.g. "420px").
+    const current = wrapper.style.getPropertyValue('--drawer-panel-w')
+    if (current && current.includes('app-scaled-viewport-width')) {
+      wrapper.style.removeProperty('--drawer-panel-w')
+    }
+  }
 }
 
 const DIAG_THROTTLE_MS = 500
@@ -205,6 +268,8 @@ export function startMobileExclusion(): () => void {
         ? 'translateX(0)'
         : `translateX(${closedPx}px)`
     }
+    // Also sync host main drawer width for mobile full-bleed.
+    syncHostMainDrawerToMobileWidth()
   }
 
   _onMediaChange = (e: MediaQueryListEvent) => {
@@ -245,13 +310,16 @@ export function startMobileExclusion(): () => void {
   //     event fires only once per 600px boundary crossing; without a
   //     resize listener, the CSS var and transform freeze at the
   //     innerWidth at crossing time.
+  // Also syncs host main drawer width for mobile full-bleed on every
+  // resize (covers ≤600px + larger touch mobile).
   const _onResize = () => {
-    if (!isMobileViewport()) return           // desktop: no work
-    if (_resizeRafId !== null) return          // already coalesced for this frame
+    syncHostMainDrawerToMobileWidth()           // host main full-bleed sync
+    if (!isMobileViewport()) return             // desktop / larger mobile: no secondary work
+    if (_resizeRafId !== null) return            // already coalesced for this frame
     _resizeRafId = requestAnimationFrame(() => {
       _resizeRafId = null
       _logDiag('resize-tick')
-      _updateDrawerWidth()                     // cancelWrapperAnimation + syncCssVar + transform
+      _updateDrawerWidth()                       // cancelWrapperAnimation + syncCssVar + transform
     })
   }
   window.addEventListener('resize', _onResize)
@@ -261,6 +329,9 @@ export function startMobileExclusion(): () => void {
   // still holds the desktop-saved value from createSecondarySidebar) with
   // the measured/host-aligned width so getClosedTransformPx() matches the
   // drawer width — preventing the 60-100px peek on hard-refresh at mobile.
+  // Always sync host main drawer for mobile full-bleed (covers both ≤600px
+  // and larger touch mobile).
+  syncHostMainDrawerToMobileWidth()
   if (isMobileViewport()) {
     _updateDrawerWidth()
   }

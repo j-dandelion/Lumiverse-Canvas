@@ -49,7 +49,7 @@ import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/p
 import { getSettings } from '../settings/state'
 import { dlog } from '../debug/log'
 import { isPointerResizeActive } from '../resize/handles'
-import { enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
+import { enforceExclusionOnOpen, isHostMobileDrawerViewport, isMobileViewport, setMobileOpenClass } from './mobile-exclusion'
 import { waitForDrawerDOM, cleanupDomPoll } from './persist-polling'
 
 // Re-export for back-compat so existing imports keep working.
@@ -915,6 +915,10 @@ export function restoreMainDrawerFromDom(
   // panel for a frame (or ~100ms) before the deferred tab click.
   const keepVisible = !!getSettings().keepTabListVisible
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 600
+  // Larger mobile detection for host main drawer width.
+  // When true, saved width must not be stamped inline; either host CSS
+  // (≤600px) or JS full-bleed force (coarse, >600) takes over.
+  const isHostMobile = isHostMobileDrawerViewport()
   if (keepVisible && !isMobile) {
     void import('./main-mirror-drawer').then((m) => {
       if (_stopped) {
@@ -941,10 +945,28 @@ export function restoreMainDrawerFromDom(
     return
   }
 
+  // Host-mobile: clear any Canvas-set inline width and let host CSS
+  // (≤600px) or our full-bleed override (larger touch mobile) take over.
+  // This prevents a saved desktop width (e.g. 420px) from staying
+  // stamped with !important after the viewport crosses into mobile.
+  if (isHostMobile && !keepVisible && drawer) {
+    drawer.style.removeProperty('width')
+    wrapper.style.removeProperty('--drawer-panel-w')
+    if (!isMobileViewport()) {
+      // Larger mobile (coarse, >600, no @media full-width rule):
+      // force via the scaled viewport +1px expression.
+      wrapper.style.setProperty(
+        '--drawer-panel-w',
+        'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)',
+        'important',
+      )
+    }
+  }
+
   if (!restoreOpen) {
     // Width-only: apply width if currently open; do not click open/close.
     const currentOpen = readWrapperOpen(wrapper)
-    if (currentOpen && clampedWidth !== null && drawer) {
+    if (currentOpen && clampedWidth !== null && drawer && !isHostMobile) {
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
@@ -960,7 +982,7 @@ export function restoreMainDrawerFromDom(
     // If closed, leave --drawer-panel-w alone — the host's CSS uses it
     // for the close animation (translateX). Clearing it breaks the
     // animation on desktop.
-    if (targetOpen && clampedWidth !== null && drawer) {
+    if (targetOpen && clampedWidth !== null && drawer && !isHostMobile) {
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')
@@ -980,7 +1002,7 @@ export function restoreMainDrawerFromDom(
     // On mobile, skip the width override — the host's mobile CSS
     // handles sizing and setting --drawer-panel-w with !important
     // causes the close-animation peek.
-    if (clampedWidth !== null && drawer) {
+    if (clampedWidth !== null && drawer && !isHostMobile) {
       if (!isPointerResizeActive()) {
         drawer.style.width = `${clampedWidth}px`
         wrapper.style.setProperty('--drawer-panel-w', `${clampedWidth}px`, 'important')

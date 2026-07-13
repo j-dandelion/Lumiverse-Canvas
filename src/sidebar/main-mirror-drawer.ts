@@ -24,7 +24,7 @@ import {
   readWidthCssVar,
   type DrawerShell,
 } from './drawer-shell'
-import { isMobileViewport } from './mobile-exclusion'
+import { isMobileViewport, isHostMobileDrawerViewport } from './mobile-exclusion'
 import {
   applyPinnedTabListChrome,
   applyTabListPosition,
@@ -641,7 +641,10 @@ function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
     const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0)
     if (w > 0) {
       const wrapper = getMainWrapper()
-      if (wrapper) {
+      // On mobile (≤600px or larger touch) the host CSS or our JS
+      // full-bleed force owns the drawer width. Do NOT stamp the
+      // desktop mirror width onto the host — it would underfill.
+      if (wrapper && !isHostMobileDrawerViewport()) {
         wrapper.style.setProperty(
           '--drawer-panel-w',
           `${Math.ceil(clampSidebarWidth(w))}px`,
