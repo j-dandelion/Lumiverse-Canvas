@@ -743,6 +743,52 @@ function cancelOverlaySettle(): void {
   }
 }
 
+/**
+ * Hold the drop-slot height when the mid-drag placeholder must leave the
+ * target list (cross-drawer restore) before commit creates the correct
+ * button type. Without this, siblings collapse into the gap under the
+ * settling overlay → visible flicker, then expand again when the real tab
+ * lands.
+ *
+ * Insert *after* the placeholder so when the placeholder is moved back to
+ * its origin, the spacer remains between the previous and next siblings.
+ */
+function installDropSlotSpacer(placeholder: HTMLElement | null): HTMLElement | null {
+  if (!placeholder?.parentElement) return null
+  const parent = placeholder.parentElement
+  const rect = placeholder.getBoundingClientRect()
+  const height = Math.max(Math.round(rect.height), 1)
+  const spacer = document.createElement('div')
+  spacer.className = 'canvas-tab-list-dnd-slot-spacer'
+  spacer.setAttribute('aria-hidden', 'true')
+  spacer.style.cssText = [
+    `height:${height}px`,
+    'width:100%',
+    'flex-shrink:0',
+    'pointer-events:none',
+    'visibility:hidden',
+    'box-sizing:border-box',
+    'margin:0',
+    'padding:0',
+    'border:none',
+  ].join(';')
+  parent.insertBefore(spacer, placeholder.nextSibling)
+  return spacer
+}
+
+function removeDropSlotSpacer(spacer: HTMLElement | null | undefined): void {
+  if (spacer?.isConnected) spacer.remove()
+  // Belt-and-suspenders: commit reorders may leave a stray spacer if the
+  // captured ref was replaced / the list remounted mid-drop.
+  if (typeof document !== 'undefined') {
+    for (const el of Array.from(
+      document.querySelectorAll('.canvas-tab-list-dnd-slot-spacer'),
+    )) {
+      el.remove()
+    }
+  }
+}
+
 // ── Insert indicator management ──
 
 function clearInsertIndicator(): void {
@@ -1224,33 +1270,36 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     clearDragState()
     clearInsertIndicator()
 
+    let slotSpacer: HTMLElement | null = null
     try {
       if (capturedTarget && capturedTabId) {
         // Same-list: keep mid-drag DOM through successful commit so primary/
         // mirror do not flash pre-drag order (commit re-applies draft order).
         // Cross-list: mid-drag parks the wrong node type (mirror btn in
-        // secondary, or secondary btn in mirror). Restore first so
-        // addSecondaryTabButton / removeSecondary see clean lists; commit
-        // owns create/remove/reorder.
+        // secondary, or secondary btn in mirror). Restore is required before
+        // commit so addSecondaryTabButton / removeSecondary see clean lists,
+        // but must NOT collapse the drop slot under the settling overlay —
+        // hold height with a spacer, settle first, then restore + commit.
         const crossList = capturedFromSecondary !== capturedTarget.secondary
 
-        // Capture settle dest *before* cross-list restore: when the
-        // placeholder is already parked in the target, use its live rect
-        // (sibling-based predict would be one slot low). Cross-list then
-        // restores so commit can create the correct node type.
+        // Prefer live placeholder rect while it still sits in the drop list
+        // (sibling predict after excluding placeholder is one slot low).
         const dest = resolveSettleDestination(
           capturedTabId,
           capturedTarget,
           crossList,
         )
 
-        if (crossList) {
-          restoreSourceButtonDOM()
-        }
-
-        // Quick ease of the floating tab into its destination slot.
+        // Keep placeholder in the target through settle so siblings stay put.
         if (dest) {
           await animateOverlaySettle(dest.left, dest.top)
+        }
+
+        if (crossList) {
+          // Spacer holds the gap while the wrong-type node returns home and
+          // commit installs the correct button type in the drop list.
+          slotSpacer = installDropSlotSpacer(_dragElement)
+          restoreSourceButtonDOM()
         }
 
         const ok = await performDrop(
@@ -1270,6 +1319,9 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         }
       }
     } finally {
+      // Drop spacer only after commit has (or has not) filled the slot —
+      // never before, or siblings collapse for a frame under the overlay.
+      removeDropSlotSpacer(slotSpacer)
       cancelOverlaySettle()
       cleanupDragVisuals()
     }
@@ -1327,8 +1379,11 @@ function cleanupDragVisuals(): void {
     })
   }
 
-  // Remove overlay (real tab already fully visible underneath when same-list)
+  // Remove overlay only after the real slot is fully painted (same-list) or
+  // commit has already replaced a cross-list spacer. Force one layout so the
+  // browser does not composite "overlay gone + still-empty gap" for a frame.
   if (_dragOverlay) {
+    void document.body.offsetWidth
     _dragOverlay.remove()
     _dragOverlay = null
   }

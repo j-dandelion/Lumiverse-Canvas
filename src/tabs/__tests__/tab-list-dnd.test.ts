@@ -9,9 +9,11 @@
 // Drop / restore policy (pointerup → performDrop):
 //   - Same-list reorder: keep mid-drag DOM through successful commit
 //     (primary stick; host+mirror reordered in configure-commit).
-//   - Cross-list move: restoreSourceButtonDOM() BEFORE commit so mirror
-//     nodes are not parked in the secondary list (would block
-//     addSecondaryTabButton via data-tab-id match).
+//   - Cross-list move: settle with placeholder still in the drop list,
+//     then installDropSlotSpacer + restoreSourceButtonDOM BEFORE commit
+//     (wrong node type must leave target; spacer holds height so siblings
+//     do not collapse under the overlay). Commit creates the correct
+//     button; spacer removed in finally before cleanupDragVisuals.
 //   - Fail / cancel / tearDown while dragging: restore source DOM.
 //
 // Settings (isSettingsButton) is never long-press installed.

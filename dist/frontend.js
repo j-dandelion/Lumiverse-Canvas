@@ -10923,6 +10923,38 @@ function cancelOverlaySettle2() {
     _dragOverlay2.classList.remove("canvas-tab-list-dnd-overlay-settling");
   }
 }
+function installDropSlotSpacer(placeholder) {
+  if (!placeholder?.parentElement)
+    return null;
+  const parent = placeholder.parentElement;
+  const rect = placeholder.getBoundingClientRect();
+  const height = Math.max(Math.round(rect.height), 1);
+  const spacer = document.createElement("div");
+  spacer.className = "canvas-tab-list-dnd-slot-spacer";
+  spacer.setAttribute("aria-hidden", "true");
+  spacer.style.cssText = [
+    `height:${height}px`,
+    "width:100%",
+    "flex-shrink:0",
+    "pointer-events:none",
+    "visibility:hidden",
+    "box-sizing:border-box",
+    "margin:0",
+    "padding:0",
+    "border:none"
+  ].join(";");
+  parent.insertBefore(spacer, placeholder.nextSibling);
+  return spacer;
+}
+function removeDropSlotSpacer(spacer) {
+  if (spacer?.isConnected)
+    spacer.remove();
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-slot-spacer"))) {
+      el.remove();
+    }
+  }
+}
 function clearInsertIndicator() {
   if (_insertIndicatorEl) {
     _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
@@ -11208,15 +11240,17 @@ function startDrag(btn, pointerEvent) {
     }
     clearDragState2();
     clearInsertIndicator();
+    let slotSpacer = null;
     try {
       if (capturedTarget && capturedTabId) {
         const crossList = capturedFromSecondary !== capturedTarget.secondary;
         const dest = resolveSettleDestination(capturedTabId, capturedTarget, crossList);
-        if (crossList) {
-          restoreSourceButtonDOM();
-        }
         if (dest) {
           await animateOverlaySettle2(dest.left, dest.top);
+        }
+        if (crossList) {
+          slotSpacer = installDropSlotSpacer(_dragElement);
+          restoreSourceButtonDOM();
         }
         const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
         if (!ok && !crossList) {
@@ -11230,6 +11264,7 @@ function startDrag(btn, pointerEvent) {
         }
       }
     } finally {
+      removeDropSlotSpacer(slotSpacer);
       cancelOverlaySettle2();
       cleanupDragVisuals();
     }
@@ -11271,6 +11306,7 @@ function cleanupDragVisuals() {
     });
   }
   if (_dragOverlay2) {
+    document.body.offsetWidth;
     _dragOverlay2.remove();
     _dragOverlay2 = null;
   }
