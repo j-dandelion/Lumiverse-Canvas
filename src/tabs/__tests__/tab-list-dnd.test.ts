@@ -309,7 +309,10 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   assertEqual(insertIndexFromMidpoints(0, []), 0, 'insertIndex: empty list → 0')
 })()
 
-// Drop-settle destination from sibling rects (cross-list predicted slot).
+// Drop-settle destination from sibling rects (predicted slot when source is
+// NOT already parked in the list). If the invisible placeholder is mid-drag
+// in the target, resolveSettleDestination uses its live rect instead —
+// sibling-predict after exclude is one slot too low (neighbors already shifted).
 ;(() => {
   const rects = [
     { left: 10, top: 0, width: 48, height: 48 },
@@ -325,7 +328,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   assertEqual(
     settleDestFromButtonRects(1, rects, empty).top,
     48,
-    'settleDest: index 1 → second rect top',
+    'settleDest: index 1 → second rect top (list without placeholder)',
   )
   assertEqual(
     settleDestFromButtonRects(3, rects, empty).top,

@@ -10698,8 +10698,8 @@ function settleDestFromButtonRects(index, rects, emptyFallback) {
   const ref = rects[index];
   return { left: ref.left, top: ref.top };
 }
-function resolveSettleDestination(tabId, target, crossList) {
-  if (!crossList && _dragElement) {
+function resolveSettleDestination(tabId, target, _crossList) {
+  if (_dragElement && target && target.container.contains(_dragElement)) {
     const r3 = _dragElement.getBoundingClientRect();
     return { left: r3.left, top: r3.top };
   }

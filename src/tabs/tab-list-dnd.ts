@@ -607,7 +607,9 @@ function hitTestDropTarget(
 
 /**
  * Predicted top-left of the drop slot from sibling button rects (post-removal
- * insert index). Used for cross-list settle before commit creates the real btn.
+ * insert index). Only valid when `rects` do **not** include the dragged
+ * placeholder (siblings have not already shifted around it). Prefer the live
+ * placeholder rect when mid-drag has already parked the source in the list.
  *
  * Pure helper — unit-tested.
  */
@@ -627,21 +629,29 @@ export function settleDestFromButtonRects(
 
 /**
  * Destination top-left for the floating overlay on release.
- * Same-list: live source button (already mid-drag reordered into the slot).
- * Cross-list: predicted slot among target list buttons (exclude dragged id).
- * Cancel: caller restores source first, then pass target=null.
+ *
+ * Mid-drag parks the source button (invisible placeholder) into the drop
+ * slot for both same-list and cross-drawer. Prefer that live rect when the
+ * placeholder is already in the target container — predicting from siblings
+ * *after excluding* the placeholder is one slot too low, because neighbors
+ * have already shifted around it.
+ *
+ * Cross-list prediction (settleDestFromButtonRects) only when the source is
+ * not yet in the target (reorder failed / never parked). Cancel: restore
+ * source first, then pass target=null.
  */
 function resolveSettleDestination(
   tabId: string | null,
   target: { container: HTMLElement; index: number; secondary: boolean } | null,
-  crossList: boolean,
+  _crossList: boolean,
 ): { left: number; top: number } | null {
-  // Same-list drop: source placeholder is already in the final slot.
-  if (!crossList && _dragElement) {
+  // Placeholder already in the drop list (same- or cross-drawer mid-drag).
+  if (_dragElement && target && target.container.contains(_dragElement)) {
     const r = _dragElement.getBoundingClientRect()
     return { left: r.left, top: r.top }
   }
 
+  // Source not in target — predict insert among remaining buttons.
   if (target && tabId) {
     const buttons = getButtonsInContainer(
       target.container,
@@ -1220,9 +1230,10 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         // owns create/remove/reorder.
         const crossList = capturedFromSecondary !== capturedTarget.secondary
 
-        // Capture settle dest *before* cross-list restore when possible:
-        // same-list uses the live placeholder slot; cross-list predicts
-        // from target siblings (exclude dragged id — may still be parked).
+        // Capture settle dest *before* cross-list restore: when the
+        // placeholder is already parked in the target, use its live rect
+        // (sibling-based predict would be one slot low). Cross-list then
+        // restores so commit can create the correct node type.
         const dest = resolveSettleDestination(
           capturedTabId,
           capturedTarget,
