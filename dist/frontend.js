@@ -12827,6 +12827,7 @@ init_assignment();
 init_state();
 init_tab_context_menu();
 init_buttons();
+init_drawer_sync();
 init_log();
 function clampMenuToViewport(menu) {
   const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale")) || 1;
@@ -12856,18 +12857,35 @@ function findLumiverseContextMenu() {
     return null;
   return last;
 }
+function stampHostTabLabelsMenuItem(menu) {
+  const btn = menu.querySelector("button");
+  if (!btn)
+    return;
+  const show = isShowTabLabels();
+  const label = show ? "Hide tab labels" : "Show tab labels";
+  if (btn.textContent !== label) {
+    btn.textContent = label;
+  }
+  btn.style.color = show ? "var(--lumiverse-error, #e54545)" : "var(--lumiverse-text)";
+  dlog("[tabmove] stampHostTabLabelsMenuItem", { show, label });
+}
 function startObserver() {
   if (_observer)
     return;
   _observer = new MutationObserver(() => {
-    if (_injected || !_pendingTabInfo)
-      return;
     requestAnimationFrame(() => {
-      if (_injected || !_pendingTabInfo)
-        return;
       const menu = findLumiverseContextMenu();
       if (!menu)
         return;
+      if (menu.dataset.canvasLabelsSynced !== "1") {
+        stampHostTabLabelsMenuItem(menu);
+        menu.dataset.canvasLabelsSynced = "1";
+      }
+      if (_injected || !_pendingTabInfo) {
+        if (!_pendingTabInfo)
+          stopObserver();
+        return;
+      }
       injectCanvasItem(menu, _pendingTabInfo);
       _injected = true;
       _pendingTabInfo = null;
@@ -12883,6 +12901,10 @@ function stopObserver() {
   }
 }
 function injectCanvasItem(menu, info) {
+  if (menu.dataset.canvasLabelsSynced !== "1") {
+    stampHostTabLabelsMenuItem(menu);
+    menu.dataset.canvasLabelsSynced = "1";
+  }
   let label;
   let targetSidebar;
   if (info.currentSidebar === "secondary") {

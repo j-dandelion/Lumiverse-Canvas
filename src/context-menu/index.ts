@@ -27,6 +27,7 @@ import { getTabSidebar, assignTab } from '../tabs/assignment'
 import { getSettings } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 import { isSettingsButton } from '../tabs/buttons'
+import { isShowTabLabels } from '../sidebar/drawer-sync'
 import { dlog, dwarn } from '../debug/log'
 
 /**
@@ -81,15 +82,48 @@ export function findLumiverseContextMenu(): HTMLElement | null {
   return last
 }
 
+/**
+ * Align host ContextMenu button[0] (Hide/Show tab labels) with Canvas's
+ * isShowTabLabels() — the optimistic host-settings cache after intercept
+ * Hide/Show. Host React can lag or miss fiber setSetting (NO-GO), so the
+ * main-mirror menu kept saying "Hide tab labels" after labels were already
+ * hidden. Secondary uses a Canvas-owned menu; main-mirror uses host menu.
+ *
+ * English wording matches secondary tab-context-menu and host en i18n.
+ */
+export function stampHostTabLabelsMenuItem(menu: HTMLElement): void {
+  const btn = menu.querySelector('button') as HTMLElement | null
+  if (!btn) return
+  const show = isShowTabLabels()
+  const label = show ? 'Hide tab labels' : 'Show tab labels'
+  if (btn.textContent !== label) {
+    btn.textContent = label
+  }
+  // Host applies .itemDanger via CSS module (hashed). Inline color matches
+  // secondary menu + host --lumiverse-error when labels are visible.
+  btn.style.color = show
+    ? 'var(--lumiverse-error, #e54545)'
+    : 'var(--lumiverse-text)'
+  dlog('[tabmove] stampHostTabLabelsMenuItem', { show, label })
+}
+
 function startObserver(): void {
   if (_observer) return
   _observer = new MutationObserver(() => {
-    if (_injected || !_pendingTabInfo) return
     // Give React one frame to commit the DOM after state update.
     requestAnimationFrame(() => {
-      if (_injected || !_pendingTabInfo) return
       const menu = findLumiverseContextMenu()
       if (!menu) return
+      // Always rewrite labels wording from Canvas cache (idempotent per open).
+      if (menu.dataset.canvasLabelsSynced !== '1') {
+        stampHostTabLabelsMenuItem(menu)
+        menu.dataset.canvasLabelsSynced = '1'
+      }
+      if (_injected || !_pendingTabInfo) {
+        // Labels stamped; Move inject already done or not needed this open.
+        if (!_pendingTabInfo) stopObserver()
+        return
+      }
       injectCanvasItem(menu, _pendingTabInfo)
       _injected = true
       _pendingTabInfo = null
@@ -109,6 +143,12 @@ function stopObserver(): void {
 // --- Injection: append Canvas item into Lumiverse's rendered menu ---
 
 function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
+  // Host menu button[0] wording — always (even when Move inject aborts).
+  if (menu.dataset.canvasLabelsSynced !== '1') {
+    stampHostTabLabelsMenuItem(menu)
+    menu.dataset.canvasLabelsSynced = '1'
+  }
+
   // Derive the move label from the tab's current sidebar assignment only
   // (open/closed state does not change the move action).
   let label: string
@@ -130,7 +170,7 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`)
 
   // Don't show the move option when the second sidebar is disabled —
-  // there's nothing to move to.
+  // there's nothing to move to. Labels stamp above still ran.
   if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) {
     dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`)
     return
