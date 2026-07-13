@@ -4098,6 +4098,9 @@ async function commitConfigureDraft(draft, _base) {
       }));
     }
     await Promise.all(movePromises);
+    reorderSecondaryTabButtons(draft.secondaryIds);
+    reorderHostMainTabButtons(draft.primaryIds);
+    reorderMainMirrorTabButtons(draft.primaryIds);
     if (preservePrimary) {
       await new Promise((r3) => requestAnimationFrame(() => r3()));
       try {
@@ -4105,6 +4108,8 @@ async function commitConfigureDraft(draft, _base) {
       } catch (err) {
         dwarn("[configure-commit] post-move primary active reassert failed:", err);
       }
+      reorderHostMainTabButtons(draft.primaryIds);
+      reorderMainMirrorTabButtons(draft.primaryIds);
     }
     for (const h3 of pendingHandoffs) {
       try {
@@ -4153,6 +4158,10 @@ async function commitConfigureDraft(draft, _base) {
       mp.reconcileMainTabListPin();
     } catch (err) {
       dwarn("[configure-commit] reconcileMainTabListPin failed:", err);
+    }
+    if (toPrimary.length > 0 || toSecondary.length > 0) {
+      reorderHostMainTabButtons(draft.primaryIds);
+      reorderMainMirrorTabButtons(draft.primaryIds);
     }
     if (preservePrimary) {
       try {
@@ -4322,13 +4331,18 @@ async function moveTabToPrimaryQuiet(tabId) {
     removeSecondaryTabButton(tabId);
   } else {
     deleteTabAssignment(tabId);
+    let mainContent = null;
+    try {
+      const { getMainPanelContent: getMainPanelContent2 } = await Promise.resolve().then(() => exports_lumiverse);
+      mainContent = getMainPanelContent2();
+    } catch (err) {
+      dwarn(`[configure-commit] resolve main panel for "${tabId}" failed:`, err);
+    }
     showMainTabButton(tabId);
     removeSecondaryTabButton(tabId);
     const storeTab = findDrawerTab(tabId);
     if (storeTab?.root) {
       try {
-        const { getMainPanelContent: getMainPanelContent2 } = await Promise.resolve().then(() => exports_lumiverse);
-        const mainContent = getMainPanelContent2();
         if (mainContent && storeTab.root.parentElement !== mainContent) {
           mainContent.appendChild(storeTab.root);
         }

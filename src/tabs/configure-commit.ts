@@ -303,6 +303,16 @@ export async function commitConfigureDraft(
     }
     await Promise.all(movePromises)
 
+    // 4c2. Apply strip order *immediately* after quiet moves — before any
+    //      await that can yield a paint frame. Quiet to-primary only
+    //      unhides the host button (still at its pre-hide DOM index); host
+    //      React / mirror reconcile then briefly show that slot (often the
+    //      top of main-mirror) until reorder runs. Handoff alone can take
+    //      100ms+, so late reorder looked like a flash-to-top.
+    reorderSecondaryTabButtons(draft.secondaryIds)
+    reorderHostMainTabButtons(draft.primaryIds)
+    reorderMainMirrorTabButtons(draft.primaryIds)
+
     // Give host React a frame to apply pendingActiveTabReset. Keep the stick
     // observer armed through handoff + reorder + pin reconcile — disconnecting
     // after one rAF raced a second host reset (ensureBuiltIn then first-tab).
@@ -313,6 +323,9 @@ export async function commitConfigureDraft(
       } catch (err) {
         dwarn('[configure-commit] post-move primary active reassert failed:', err)
       }
+      // Host React may reshuffle host buttons on the same frame as reset.
+      reorderHostMainTabButtons(draft.primaryIds)
+      reorderMainMirrorTabButtons(draft.primaryIds)
     }
 
     // 4d. Source neighbor + destination activation (same rules as assignTab /
@@ -346,11 +359,9 @@ export async function commitConfigureDraft(
       }
     }
 
-    // 5. Reorder buttons to match draft (Canvas lists + host main).
-    //    Secondary is Canvas-owned. Primary also needs an explicit DOM apply:
-    //    reconcileMainTabListPin mirrors host button order, and host React
-    //    may not have flushed the new tabOrder yet — without this, live
-    //    primary DnD animates mid-drag then snaps back on release.
+    // 5. Final reorder (Canvas lists + host main) after handoff/secondary
+    //    reconcile. Same apply as 4c2 — host React may have re-rendered from
+    //    tabOrder between then and now; primary DnD stick still needs this.
     reorderSecondaryTabButtons(draft.secondaryIds)
     reorderHostMainTabButtons(draft.primaryIds)
     reorderMainMirrorTabButtons(draft.primaryIds)
@@ -383,6 +394,14 @@ export async function commitConfigureDraft(
       mp.reconcileMainTabListPin()
     } catch (err) {
       dwarn('[configure-commit] reconcileMainTabListPin failed:', err)
+    }
+
+    // Pin reconcile rebuilds mirror from host DOM order. If host React has not
+    // flushed tabOrder yet, re-apply draft order so a secondary→primary drop
+    // does not leave the tab at the top for a frame after reconcile.
+    if (toPrimary.length > 0 || toSecondary.length > 0) {
+      reorderHostMainTabButtons(draft.primaryIds)
+      reorderMainMirrorTabButtons(draft.primaryIds)
     }
 
     // Reconcile can re-sync mirror chrome from host; reassert once more if we
@@ -653,7 +672,16 @@ async function moveTabToPrimaryQuiet(tabId: string): Promise<void> {
     removeSecondaryTabButton(tabId)
   } else {
     // Extension path: quiet unassign without persist, close, or handoff.
+    // Resolve main panel *before* unhiding the strip button so a dynamic
+    // import cannot yield a paint with the tab visible at the wrong index.
     deleteTabAssignment(tabId)
+    let mainContent: HTMLElement | null = null
+    try {
+      const { getMainPanelContent } = await import('../dom/lumiverse')
+      mainContent = getMainPanelContent()
+    } catch (err) {
+      dwarn(`[configure-commit] resolve main panel for "${tabId}" failed:`, err)
+    }
     showMainTabButton(tabId)
     removeSecondaryTabButton(tabId)
 
@@ -661,8 +689,6 @@ async function moveTabToPrimaryQuiet(tabId: string): Promise<void> {
     const storeTab = findDrawerTab(tabId)
     if (storeTab?.root) {
       try {
-        const { getMainPanelContent } = await import('../dom/lumiverse')
-        const mainContent = getMainPanelContent()
         if (mainContent && storeTab.root.parentElement !== mainContent) {
           mainContent.appendChild(storeTab.root)
         }
