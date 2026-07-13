@@ -93,7 +93,7 @@ let _sourceIsInCanvasList = false
 let _settleTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Drop-settle duration — keep in sync with CSS transition on .overlay-settling. */
-const SETTLE_DURATION_MS = 180
+const SETTLE_DURATION_MS = 140
 /** Skip settle animation when already within this many CSS pixels of dest. */
 const SETTLE_MIN_DISTANCE_PX = 2
 
@@ -210,9 +210,11 @@ function injectDndStyles(): void {
       display: block !important;
     }
 
-    /* ── Source button while being dragged — same dim as .row-dragging ── */
+    /* ── Source button while being dragged — invisible slot holder (keeps
+         layout / mid-drag FLIP geometry; floating overlay is the visible tab) ── */
     .canvas-tab-list-dnd-placeholder {
-      opacity: 0.35 !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
     }
 
     /* ── Drop-insert indicator: a subtle primary underline at the top of the
