@@ -10485,10 +10485,13 @@ function injectDndStyles() {
     }
 
     /* ── Source button while being dragged — invisible slot holder (keeps
-         layout / mid-drag FLIP geometry; floating overlay is the visible tab) ── */
+         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
+         transition:none while hidden so removing the class does not fade
+         opacity via strip transition:all 0.2s. ── */
     .canvas-tab-list-dnd-placeholder {
       opacity: 0 !important;
       pointer-events: none !important;
+      transition: none !important;
     }
 
     /* ── While dragging: strip buttons do not receive pointer hits.
@@ -11113,6 +11116,15 @@ function clearDragState2() {
 }
 function cleanupDragVisuals() {
   clearFLIPStyles();
+  if (_dragElement) {
+    const el = _dragElement;
+    el.style.setProperty("transition", "none", "important");
+    el.classList.remove("canvas-tab-list-dnd-placeholder");
+    el.offsetWidth;
+    requestAnimationFrame(() => {
+      el.style.removeProperty("transition");
+    });
+  }
   if (_dragOverlay2) {
     _dragOverlay2.remove();
     _dragOverlay2 = null;
@@ -11122,9 +11134,6 @@ function cleanupDragVisuals() {
   _overlayHeight = 0;
   _overlayTx = 0;
   _overlayTy = 0;
-  if (_dragElement) {
-    _dragElement.classList.remove("canvas-tab-list-dnd-placeholder");
-  }
   clearInsertIndicator();
   if (typeof document !== "undefined") {
     document.body.classList.remove("canvas-tab-list-dnd-dragging");

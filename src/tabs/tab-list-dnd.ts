@@ -217,10 +217,13 @@ function injectDndStyles(): void {
     }
 
     /* ── Source button while being dragged — invisible slot holder (keeps
-         layout / mid-drag FLIP geometry; floating overlay is the visible tab) ── */
+         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
+         transition:none while hidden so removing the class does not fade
+         opacity via strip transition:all 0.2s. ── */
     .canvas-tab-list-dnd-placeholder {
       opacity: 0 !important;
       pointer-events: none !important;
+      transition: none !important;
     }
 
     /* ── While dragging: strip buttons do not receive pointer hits.
@@ -1307,7 +1310,23 @@ function cleanupDragVisuals(): void {
   // Clear FLIP styles from all buttons
   clearFLIPStyles()
 
-  // Remove overlay
+  // Handoff: reveal the real tab under the floating clone *before* removing
+  // the overlay. Strip buttons use `transition: all 0.2s ease`, so dropping
+  // opacity:0 placeholder without suppressing transition fades 0→1 (looks
+  // like disappear-then-fade-in if the overlay is already gone).
+  if (_dragElement) {
+    const el = _dragElement
+    el.style.setProperty('transition', 'none', 'important')
+    el.classList.remove('canvas-tab-list-dnd-placeholder')
+    // Commit the un-hidden, non-transitioning style before overlay removal.
+    void el.offsetWidth
+    // Restore normal transitions on the next frame (hover color, labels, …).
+    requestAnimationFrame(() => {
+      el.style.removeProperty('transition')
+    })
+  }
+
+  // Remove overlay (real tab already fully visible underneath when same-list)
   if (_dragOverlay) {
     _dragOverlay.remove()
     _dragOverlay = null
@@ -1317,11 +1336,6 @@ function cleanupDragVisuals(): void {
   _overlayHeight = 0
   _overlayTx = 0
   _overlayTy = 0
-
-  // Remove placeholder from source
-  if (_dragElement) {
-    _dragElement.classList.remove('canvas-tab-list-dnd-placeholder')
-  }
 
   // Clear insert indicator
   clearInsertIndicator()
