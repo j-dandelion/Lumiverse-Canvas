@@ -10539,7 +10539,7 @@ function isOpenStatePersistenceEnabled() {
 function isWidthPersistenceEnabled() {
   return !!getSettings().persistDrawerWidth;
 }
-var CANVAS_VERSION = "1.7.2.9", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
+var CANVAS_VERSION = "1.8.0", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
