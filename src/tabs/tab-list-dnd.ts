@@ -6,13 +6,18 @@
 // applies the reorder/move, and commits via the configure pipeline
 // (commitConfigureDraft) — same backend as the Configure Tabs modal.
 //
-// Surfaces:
-//   - Secondary:  button[data-tab-id] in .sidebar-ux-tab-list
-//   - Main-mirror: .sidebar-ux-main-tab-mirror-btn[data-tab-id]
-//   - Host main:  button[data-tab-id] in host Sidebar
+// Performance: overlay transform via translate3d updated immediately on
+// every pointermove (cheap compositor work). Hit-test, DOM reorder, and
+// FLIP animation are coalesced via requestAnimationFrame.
 //
-// Style: overlay clone matches .canvas-configure-tabs-overlay-clone (same
-// border + primary ring + background treatment).
+// Canvas-owned lists (secondary .sidebar-ux-tab-list and main-mirror
+// .sidebar-ux-main-tab-list-mirror) get mid-drag FLIP-animated DOM reorder.
+// The host React-owned main list gets indicator + hit-test only — no
+// mid-drag DOM reorder.
+//
+// Style: overlay clone preserves original classes so label/icon sizing
+// inherits from the existing tab stylesheet. A wrapper div provides the
+// floating chrome (border + primary ring + background treatment).
 
 import {
   createDraft,
@@ -38,8 +43,10 @@ let _dragTabId: string | null = null
 let _dragElement: HTMLElement | null = null
 /** Whether the source is from the secondary drawer. */
 let _dragFromSecondary = false
-/** Floating clone that follows the pointer. */
+/** Floating clone that follows the pointer (wrapper div, not the button clone). */
 let _dragOverlay: HTMLElement | null = null
+/** The button clone inside the overlay wrapper. */
+let _dragOverlayInner: HTMLElement | null = null
 let _dragOffsetX = 0
 let _dragOffsetY = 0
 let _lastDropTarget: { container: HTMLElement; index: number; secondary: boolean } | null = null
@@ -53,10 +60,38 @@ let _upHandler: ((e: PointerEvent) => void) | null = null
 let _clickSuppressor: ((e: Event) => void) | null = null
 let _clickSuppressorTimer: ReturnType<typeof setTimeout> | null = null
 
+// ── rAF-coalesced drag-frame state ──
+
+let _rafId: number | null = null
+let _pendingPointerX = 0
+let _pendingPointerY = 0
+let _overlayTx = 0
+let _overlayTy = 0
+/** Source button's original DOM position for cancel-restore. */
+let _originalParent: HTMLElement | null = null
+let _originalNextSibling: HTMLElement | null = null
+/** True when the source button is in a Canvas-owned list (mid-drag reorder eligible). */
+let _sourceIsInCanvasList = false
+
+// ── Geometry cache (rebuilt each rAF, invalidated on DOM reorder) ──
+
+interface ContainerCache {
+  containers: { el: HTMLElement; secondary: boolean }[]
+}
+let _geometryCache: ContainerCache | null = null
+/** True after a DOM reorder — next rAF must rebuild cache. */
+let _geomDirty = false
+
 // ── Long-press state per button ──
 
 /** Buttons that already have long-press handlers installed. */
 const _installed = new WeakSet<HTMLElement>()
+
+// ── FLIP state ──
+
+/** Previous button rects snapshot for FLIP (flushed after each animation series). */
+let _flipPrevRects: Map<string, DOMRect> | null = null
+let _flipActiveTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── Style injection ──
 
@@ -69,12 +104,13 @@ function injectDndStyles(): void {
   const style = document.createElement('style')
   style.id = DND_STYLE_ID
   style.textContent = `
-    /* Floating overlay clone — matches configure-modal overlay-clone treatment */
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment ── */
     .canvas-tab-list-dnd-overlay-clone {
       position: fixed;
       z-index: 13000;
       pointer-events: none;
       margin: 0;
+      padding: 0;
       box-sizing: border-box;
       display: flex;
       align-items: center;
@@ -87,29 +123,85 @@ function injectDndStyles(): void {
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
       opacity: 1;
-      will-change: left, top;
+      will-change: transform;
       cursor: grabbing;
     }
 
-    /* Source button while being dragged — same dim as .row-dragging */
+    /* ── Inner button clone — preserves original classes, reset outer chrome so
+         the wrapper provides the overlay treatment ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      border: none !important;
+      background: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+    }
+
+    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
+      font-weight: 500 !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: 48px !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Override icon size for overlay clone ── */
+    .canvas-tab-list-dnd-overlay-clone > button > span > svg {
+      width: 20px !important;
+      height: 20px !important;
+    }
+
+    /* ── Override button height/width — use the rect-measured dimensions ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Source button while being dragged — same dim as .row-dragging ── */
     .canvas-tab-list-dnd-placeholder {
       opacity: 0.35 !important;
     }
 
-    /* Drop-insert indicator: a subtle primary underline at the top of the
-       target button where the tab will be inserted. */
+    /* ── Drop-insert indicator: a subtle primary underline at the top of the
+         target button where the tab will be inserted. ── */
     .canvas-tab-list-dnd-insert-before {
       box-shadow: inset 0 2px 0 0 var(--lumiverse-primary, #4a9eff) !important;
+    }
+
+    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
+    .canvas-tab-list-dnd-flipping {
+      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
     }
   `
   document.head.appendChild(style)
 }
 
 // ── Surface helpers ──
+//
+// Main-mirror DOM (main-tab-pin.ts) nests buttons — they are NOT direct
+// children of the outer list:
+//   .sidebar-ux-main-tab-list-mirror  (also has .sidebar-ux-tab-list)
+//     .sidebar-ux-tab-list-main       ← primary tabs live here
+//     .sidebar-ux-tab-list-bottom     ← Settings dock
+// Secondary tabs are direct children of .sidebar-ux-tab-list (no nesting).
 
-/** True when the button lives in the secondary drawer's tab list. */
+const MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
+const MIRROR_MAIN_CLASS = 'sidebar-ux-tab-list-main'
+const MIRROR_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
+const MIRROR_BTN_CLASS = 'sidebar-ux-main-tab-mirror-btn'
+const TAB_LIST_CLASS = 'sidebar-ux-tab-list'
+
+/** True when the button lives in the secondary drawer's tab list (not main-mirror). */
 function isSecondaryButton(btn: HTMLElement): boolean {
-  return !!btn.closest('.sidebar-ux-tab-list')
+  // Mirror outer list also carries .sidebar-ux-tab-list — exclude it.
+  if (btn.classList.contains(MIRROR_BTN_CLASS)) return false
+  if (btn.closest(`.${MIRROR_LIST_CLASS}`)) return false
+  return !!btn.closest(`.${TAB_LIST_CLASS}`)
 }
 
 /** Get the tab id from any surface button (data-tab-id on all surfaces). */
@@ -118,10 +210,44 @@ function getButtonTabId(btn: HTMLElement): string | null {
 }
 
 /**
+ * True when the container is Canvas-owned (eligible for mid-drag FLIP reorder).
+ * Includes secondary list, mirror outer, and mirror main/bottom sections.
+ */
+function isCanvasOwnedContainer(el: HTMLElement): boolean {
+  if (el.classList.contains(MIRROR_MAIN_CLASS)) return true
+  if (el.classList.contains(MIRROR_BOTTOM_CLASS)) return true
+  if (el.classList.contains(MIRROR_LIST_CLASS)) return true
+  // Secondary .sidebar-ux-tab-list (mirror outer also has this class — already handled)
+  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Parent element that owns mid-drag insertBefore for this button.
+ * Mirror: .sidebar-ux-tab-list-main or .sidebar-ux-tab-list-bottom.
+ * Secondary: the .sidebar-ux-tab-list itself.
+ * Host React: null (no mid-drag DOM reorder).
+ */
+function getCanvasReorderParent(btn: HTMLElement): HTMLElement | null {
+  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
+    const section = btn.closest(
+      `.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`,
+    ) as HTMLElement | null
+    return section ?? btn.parentElement
+  }
+  if (isSecondaryButton(btn)) {
+    const list = btn.closest(`.${TAB_LIST_CLASS}`) as HTMLElement | null
+    if (list && !list.classList.contains(MIRROR_LIST_CLASS)) return list
+  }
+  return null
+}
+
+/**
  * Collect all potential drop containers and their side.
- * A container is a parent element that holds tab buttons.
- * Returns an empty array when no valid containers exist (e.g. second drawer
- * disabled and no primary container available).
+ * Mirror uses main/bottom *sections* (where buttons actually live) so
+ * hit-test and insertBefore stay within the correct flex column.
  */
 function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
   const containers: { el: HTMLElement; secondary: boolean }[] = []
@@ -132,12 +258,23 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     if (secList) containers.push({ el: secList, secondary: true })
   }
 
-  // 2. Main-mirror tab list (Canvas-owned primary strip when taskbar mode on)
+  // 2. Main-mirror sections (Canvas-owned primary strip when taskbar mode on)
   const mirrorList = document.querySelector(
-    '.sidebar-ux-main-tab-list-mirror',
+    `.${MIRROR_LIST_CLASS}`,
   ) as HTMLElement | null
   if (mirrorList) {
-    containers.push({ el: mirrorList, secondary: false })
+    const main = mirrorList.querySelector(
+      `:scope > .${MIRROR_MAIN_CLASS}`,
+    ) as HTMLElement | null
+    const bottom = mirrorList.querySelector(
+      `:scope > .${MIRROR_BOTTOM_CLASS}`,
+    ) as HTMLElement | null
+    if (main) containers.push({ el: main, secondary: false })
+    if (bottom) containers.push({ el: bottom, secondary: false })
+    // Fallback if structure not yet built (legacy flat list)
+    if (!main && !bottom) {
+      containers.push({ el: mirrorList, secondary: false })
+    }
   }
 
   // 3. Host sidebar fallback (no main-mirror, e.g. taskbar mode off)
@@ -145,11 +282,9 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     const hostSidebar = document.querySelector(
       '[class*="sidebarLeft" i], [class*="sidebarRight" i]',
     ) as HTMLElement | null
-    // Only use the main (tab-button) section — skip the Settings bottom area
     const tabListWrap = hostSidebar?.querySelector(
       ':scope > [class*="tabListWrap"], :scope > div > [class*="tabListWrap"]',
     ) as HTMLElement | null
-    // Fall back to the sidebar itself if we can't find a specific sub-container
     if (tabListWrap) {
       containers.push({ el: tabListWrap, secondary: false })
     } else if (hostSidebar) {
@@ -161,35 +296,53 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
 }
 
 /**
+ * Collect tab buttons from a drop container (direct children for Canvas
+ * sections; descendants for host / outer mirror fallback).
+ */
+function getAllButtonsInContainer(container: HTMLElement): HTMLElement[] {
+  // Mirror main/bottom sections — buttons are direct children
+  if (
+    container.classList.contains(MIRROR_MAIN_CLASS) ||
+    container.classList.contains(MIRROR_BOTTOM_CLASS)
+  ) {
+    return Array.from(
+      container.querySelectorAll(
+        `:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`,
+      ),
+    )
+  }
+  // Outer mirror list (legacy / fallback) — buttons nested under sections
+  if (container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(
+      container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`),
+    )
+  }
+  // Secondary list — direct children
+  if (
+    container.classList.contains(TAB_LIST_CLASS) &&
+    !container.classList.contains(MIRROR_LIST_CLASS)
+  ) {
+    return Array.from(
+      container.querySelectorAll(':scope > button[data-tab-id]'),
+    )
+  }
+  // Host sidebar
+  return Array.from(
+    container.querySelectorAll('button[data-tab-id]'),
+  )
+}
+
+/**
  * Collect tab buttons from a drop container for hit-test math.
  * Filters out the dragged tab (excludeTabId) if present.
  */
 function getButtonsInContainer(
   container: HTMLElement,
-  secondary: boolean,
+  _secondary: boolean,
   excludeTabId: string | null,
 ): HTMLElement[] {
-  let buttons: HTMLElement[]
-
-  if (secondary) {
-    // Secondary: direct child button[data-tab-id]
-    buttons = Array.from(
-      container.querySelectorAll(':scope > button[data-tab-id]'),
-    )
-  } else if (container.classList.contains('sidebar-ux-main-tab-list-mirror')) {
-    // Main-mirror: mirror button class
-    buttons = Array.from(
-      container.querySelectorAll(':scope > button.sidebar-ux-main-tab-mirror-btn'),
-    )
-  } else {
-    // Host sidebar: look for button[data-tab-id] (tagged by tagMainSidebarButtons)
-    buttons = Array.from(
-      container.querySelectorAll(':scope button[data-tab-id]'),
-    )
-  }
-
+  const buttons = getAllButtonsInContainer(container)
   if (!excludeTabId) return buttons
-
   return buttons.filter(
     (el) => el.getAttribute('data-tab-id') !== excludeTabId,
   )
@@ -243,7 +396,9 @@ function hitTestDropTarget(
   x: number,
   y: number,
 ): { container: HTMLElement; index: number; secondary: boolean } | null {
-  const containers = getDropContainers()
+  const containers = _geometryCache
+    ? _geometryCache.containers
+    : getDropContainers()
 
   for (const { el: container, secondary } of containers) {
     const rect = container.getBoundingClientRect()
@@ -310,18 +465,219 @@ function setInsertIndicator(
   _insertIndicatorEl = targetBtn
 }
 
+// ── FLIP animation helpers ──
+
+/**
+ * Snapshot bounding rects of all buttons in a container, keyed by data-tab-id.
+ */
+function snapshotButtonRects(container: HTMLElement): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>()
+  for (const btn of getAllButtonsInContainer(container)) {
+    const id = btn.getAttribute('data-tab-id')
+    if (id) rects.set(id, btn.getBoundingClientRect())
+  }
+  return rects
+}
+
+/**
+ * Merge rect maps (later entries overwrite).
+ */
+function mergeRects(
+  into: Map<string, DOMRect>,
+  from: Map<string, DOMRect>,
+): void {
+  for (const [k, v] of from) into.set(k, v)
+}
+
+/**
+ * Apply FLIP transforms to moved buttons after a temporary DOM reorder.
+ *
+ * Each button that changed vertical position gets:
+ *   1. invert translateY (no transition) to appear at its old position
+ *   2. force layout
+ *   3. transition to identity (200ms cubic-bezier)
+ *   4. cleanup inline styles after animation completes
+ *
+ * Uses setProperty(..., 'important') so FLIP wins over stylesheet
+ * `transition: all 0.2s ease` on tab buttons.
+ */
+function applyFLIP(
+  prevRects: Map<string, DOMRect>,
+  excludeTabId: string | null,
+  containers: HTMLElement[],
+): void {
+  const animated: HTMLElement[] = []
+  const seen = new Set<HTMLElement>()
+
+  for (const container of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      if (seen.has(btn)) continue
+      seen.add(btn)
+      const id = btn.getAttribute('data-tab-id')
+      if (!id || id === excludeTabId || !prevRects.has(id)) continue
+      const prev = prevRects.get(id)!
+      const curr = btn.getBoundingClientRect()
+      const deltaY = prev.top - curr.top
+      if (Math.abs(deltaY) <= 0.5) continue
+      btn.style.setProperty('transition', 'none', 'important')
+      btn.style.setProperty('transform', `translateY(${deltaY}px)`, 'important')
+      animated.push(btn)
+    }
+  }
+
+  if (animated.length === 0) return
+
+  // Force layout so the invert sticks before we animate
+  void document.body.offsetHeight
+
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      node.style.setProperty(
+        'transition',
+        'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)',
+        'important',
+      )
+      node.style.setProperty('transform', '', 'important')
+      // Clear transform so identity plays; removeProperty after empty set
+      node.style.removeProperty('transform')
+    }
+    if (_flipActiveTimer) clearTimeout(_flipActiveTimer)
+    _flipActiveTimer = setTimeout(() => {
+      for (const node of animated) {
+        node.style.removeProperty('transition')
+        node.style.removeProperty('transform')
+      }
+      _flipActiveTimer = null
+    }, 220)
+  })
+}
+
+/**
+ * Clear any ongoing FLIP inline styles (used on drag cancel / cleanup).
+ */
+function clearFLIPStyles(): void {
+  if (_flipActiveTimer) {
+    clearTimeout(_flipActiveTimer)
+    _flipActiveTimer = null
+  }
+  const containers = _geometryCache?.containers ?? getDropContainers()
+  for (const { el: container } of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      btn.style.removeProperty('transition')
+      btn.style.removeProperty('transform')
+    }
+  }
+}
+
+// ── DOM reorder for Canvas-owned lists (mid-drag FLIP reorder) ──
+
+/**
+ * Move the dragged source button into `container` at the hit-test index
+ * (post-removal insert position). Supports same-list and cross-list
+ * (secondary ↔ mirror section) moves among Canvas-owned parents.
+ *
+ * Host React-owned list: never call this (isCanvasOwnedContainer false).
+ *
+ * Returns true if a DOM mutation was performed.
+ */
+function reorderCanvasListDOM(
+  container: HTMLElement,
+  target: { index: number; secondary: boolean },
+  sourceTabId: string | null,
+): boolean {
+  if (!sourceTabId) return false
+  if (!isCanvasOwnedContainer(container)) return false
+
+  // Prefer the live drag element so cross-list moves work even when the
+  // source is not yet a child of the target container.
+  const sourceBtn =
+    _dragElement && _dragElement.getAttribute('data-tab-id') === sourceTabId
+      ? _dragElement
+      : getAllButtonsInContainer(container).find(
+          (b) => b.getAttribute('data-tab-id') === sourceTabId,
+        ) ?? null
+  if (!sourceBtn) return false
+
+  const buttons = getAllButtonsInContainer(container)
+  const buttonsWithoutSource = buttons.filter((b) => b !== sourceBtn)
+
+  if (target.index >= buttonsWithoutSource.length) {
+    // Append to end of container
+    if (
+      sourceBtn.parentElement === container &&
+      sourceBtn.nextElementSibling === null
+    ) {
+      return false
+    }
+    container.appendChild(sourceBtn)
+    return true
+  }
+
+  const referenceBtn = buttonsWithoutSource[target.index]
+  if (
+    sourceBtn.parentElement === container &&
+    sourceBtn.nextElementSibling === referenceBtn
+  ) {
+    return false
+  }
+  container.insertBefore(sourceBtn, referenceBtn)
+  return true
+}
+
+/**
+ * Restore the source button to its original DOM position.
+ * Used on drag cancel to undo mid-drag reorders.
+ */
+function restoreSourceButtonDOM(): void {
+  if (!_dragElement || !_originalParent) return
+
+  // If the source is already in its original parent at the right position, skip
+  const parent = _dragElement.parentNode
+  if (parent === _originalParent) {
+    if (_originalNextSibling) {
+      if (_dragElement.nextElementSibling === _originalNextSibling) return
+      _originalParent.insertBefore(_dragElement, _originalNextSibling)
+    } else {
+      // Was last child
+      if (_dragElement.nextElementSibling === null &&
+          _dragElement.parentNode === _originalParent) return
+      _originalParent.insertBefore(_dragElement, null)
+    }
+  } else {
+    // Moved to a different container — move back
+    if (_originalNextSibling && _originalNextSibling.parentNode === _originalParent) {
+      _originalParent.insertBefore(_dragElement, _originalNextSibling)
+    } else {
+      // Original next sibling may have been removed; append instead
+      _originalParent.appendChild(_dragElement)
+    }
+  }
+}
+
 // ── Drag implementation ──
 
 function createDragOverlay(sourceBtn: HTMLElement): HTMLElement {
-  const overlay = sourceBtn.cloneNode(true) as HTMLElement
-  overlay.className = 'canvas-tab-list-dnd-overlay-clone'
+  // Create wrapper div with overlay chrome
+  const wrapper = document.createElement('div')
+  wrapper.className = 'canvas-tab-list-dnd-overlay-clone'
+
+  // Clone the source button preserving all original classes
+  const clone = sourceBtn.cloneNode(true) as HTMLElement
+  clone.classList.add('canvas-tab-list-dnd-overlay-clone-btn')
+
   const rect = sourceBtn.getBoundingClientRect()
-  overlay.style.width = rect.width + 'px'
-  overlay.style.height = rect.height + 'px'
-  overlay.style.left = rect.left + 'px'
-  overlay.style.top = rect.top + 'px'
-  document.body.appendChild(overlay)
-  return overlay
+  wrapper.style.width = rect.width + 'px'
+  wrapper.style.height = rect.height + 'px'
+  // left/top = 0; translate3d gives us absolute positioning without layout thrash
+  wrapper.style.left = '0px'
+  wrapper.style.top = '0px'
+  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`
+
+  wrapper.appendChild(clone)
+  document.body.appendChild(wrapper)
+
+  _dragOverlayInner = clone
+  return wrapper
 }
 
 function installClickSuppressor(el: HTMLElement): void {
@@ -353,6 +709,91 @@ function removeClickSuppressorNow(): void {
   _clickSuppressor = null
 }
 
+/** Schedule rAF-coalesced hit-test + reorder + FLIP work. */
+function scheduleDragFrame(): void {
+  if (_rafId !== null) return
+  _rafId = requestAnimationFrame(() => {
+    _rafId = null
+
+    if (!_isDragging) return
+
+    const x = _pendingPointerX
+    const y = _pendingPointerY
+
+    // Rebuild geometry cache if dirty (after reorder) or on first use
+    if (_geomDirty || !_geometryCache) {
+      _geometryCache = { containers: getDropContainers() }
+      _geomDirty = false
+    }
+
+    // Hit-test
+    const target = hitTestDropTarget(x, y)
+
+    const prev = _lastDropTarget
+    const sameTarget = prev && target &&
+      prev.container === target.container &&
+      prev.index === target.index &&
+      prev.secondary === target.secondary
+
+    if (!target) {
+      // Remove indicator but keep _lastDropTarget if we were over a valid target
+      // (so adding/removing indicator is a no-op when we briefly leave)
+      if (prev) {
+        clearInsertIndicator()
+        _lastDropTarget = null
+      }
+      return
+    }
+
+    if (!sameTarget) {
+      // Target changed — check if we need mid-drag FLIP reorder
+      const isCanvas = isCanvasOwnedContainer(target.container)
+      const prevCanvas = prev ? isCanvasOwnedContainer(prev.container) : false
+
+      if (isCanvas && _sourceIsInCanvasList) {
+        // Snapshot source parent + target (and prev target) so siblings on
+        // both lists animate when crossing secondary ↔ mirror / main ↔ bottom.
+        const prevRects = new Map<string, DOMRect>()
+        const flipContainers: HTMLElement[] = []
+        const sourceParent = _dragElement?.parentElement
+        if (sourceParent && isCanvasOwnedContainer(sourceParent)) {
+          mergeRects(prevRects, snapshotButtonRects(sourceParent))
+          flipContainers.push(sourceParent)
+        }
+        if (prev?.container && prev.container !== sourceParent) {
+          mergeRects(prevRects, snapshotButtonRects(prev.container))
+          if (!flipContainers.includes(prev.container)) {
+            flipContainers.push(prev.container)
+          }
+        }
+        mergeRects(prevRects, snapshotButtonRects(target.container))
+        if (!flipContainers.includes(target.container)) {
+          flipContainers.push(target.container)
+        }
+
+        const didReorder = reorderCanvasListDOM(
+          target.container,
+          target,
+          _dragTabId,
+        )
+
+        if (didReorder) {
+          applyFLIP(prevRects, _dragTabId, flipContainers)
+          _geomDirty = true
+        }
+      } else if (prevCanvas && !isCanvas && prev) {
+        // Leaving Canvas-owned surface for host — restore source DOM
+        restoreSourceButtonDOM()
+        clearFLIPStyles()
+        _geomDirty = true
+      }
+
+      _lastDropTarget = target
+      setInsertIndicator(target)
+    }
+  })
+}
+
 function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   const tabId = getButtonTabId(btn)
   if (!tabId) return
@@ -363,16 +804,31 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   _dragElement = btn
   _isDragging = true
 
+  // Save original DOM position for cancel-restore
+  _originalParent = btn.parentElement
+  _originalNextSibling = btn.nextElementSibling as HTMLElement | null
+  // Mirror buttons live under .sidebar-ux-tab-list-main / -bottom, not the
+  // outer list — use getCanvasReorderParent, not parent.classList alone.
+  _sourceIsInCanvasList = getCanvasReorderParent(btn) != null
+
   // Calculate overlay offset from pointer
   const rect = btn.getBoundingClientRect()
   _dragOffsetX = pointerEvent.clientX - rect.left
   _dragOffsetY = pointerEvent.clientY - rect.top
+
+  // Initialize overlay transform (matches the initial translate3d in createDragOverlay)
+  _overlayTx = rect.left
+  _overlayTy = rect.top
 
   // Dim the source
   btn.classList.add('canvas-tab-list-dnd-placeholder')
 
   // Create overlay
   _dragOverlay = createDragOverlay(btn)
+
+  // Initialize geometry cache
+  _geometryCache = { containers: getDropContainers() }
+  _geomDirty = false
 
   // Prevent text selection globally
   document.body.style.userSelect = 'none'
@@ -392,32 +848,22 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // in the same task as pointerup.
   installClickSuppressor(btn)
 
-  // Pointer move
+  // Pointer move — updates overlay transform IMMEDIATELY (cheap compositor work)
+  // and defers hit-test/reorder to rAF.
   const onMove = (ev: PointerEvent) => {
     if (!_dragOverlay) return
 
-    _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`
-    _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`
+    // Update overlay position via translate3d immediately (no layout thrash)
+    _overlayTx = ev.clientX - _dragOffsetX
+    _overlayTy = ev.clientY - _dragOffsetY
+    _dragOverlay.style.transform = `translate3d(${_overlayTx}px, ${_overlayTy}px, 0)`
 
-    // Hit-test for drop target
-    const target = hitTestDropTarget(ev.clientX, ev.clientY)
-    if (!target) {
-      clearInsertIndicator()
-      _lastDropTarget = null
-      return
-    }
+    // Store latest pointer coords for rAF-coalesced hit-test
+    _pendingPointerX = ev.clientX
+    _pendingPointerY = ev.clientY
 
-    const prev = _lastDropTarget
-    if (
-      prev &&
-      prev.container === target.container &&
-      prev.index === target.index &&
-      prev.secondary === target.secondary
-    ) {
-      return // No change — avoid thrashing indicator
-    }
-    _lastDropTarget = target
-    setInsertIndicator(target)
+    // Schedule rAF if not already pending
+    scheduleDragFrame()
   }
 
   // Pointer up / cancel
@@ -429,10 +875,23 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     const capturedTarget = _lastDropTarget
 
     document.removeEventListener('contextmenu', suppressCtx, true)
+
+    // Cancel any pending rAF
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId)
+      _rafId = null
+    }
+
     clearDragState()
 
     if (capturedTarget && capturedTabId) {
+      // Restore source to original DOM position before commit
+      // (the commit pipeline handles everything from the draft state)
+      restoreSourceButtonDOM()
       await performDrop(capturedTabId, capturedFromSecondary, capturedTarget)
+    } else {
+      // Cancel: restore original DOM order, no commit
+      restoreSourceButtonDOM()
     }
 
     cleanupDragVisuals()
@@ -458,14 +917,28 @@ function clearDragState(): void {
   }
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
+
+  // Clean up rAF
+  if (_rafId !== null) {
+    cancelAnimationFrame(_rafId)
+    _rafId = null
+  }
+
+  // Clear geometry cache
+  _geometryCache = null
+  _geomDirty = false
 }
 
 function cleanupDragVisuals(): void {
+  // Clear FLIP styles from all buttons
+  clearFLIPStyles()
+
   // Remove overlay
   if (_dragOverlay) {
     _dragOverlay.remove()
     _dragOverlay = null
   }
+  _dragOverlayInner = null
 
   // Remove placeholder from source
   if (_dragElement) {
@@ -480,6 +953,9 @@ function cleanupDragVisuals(): void {
   _dragElement = null
   _dragFromSecondary = false
   _lastDropTarget = null
+  _originalParent = null
+  _originalNextSibling = null
+  _sourceIsInCanvasList = false
 }
 
 /**
@@ -736,6 +1212,12 @@ export function tearDownTabListDnd(): void {
   }
   if (_isDragging) {
     removeClickSuppressorNow()
+    // Cancel any pending rAF
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId)
+      _rafId = null
+    }
+    restoreSourceButtonDOM()
     cleanupDragVisuals()
     clearDragState()
   }

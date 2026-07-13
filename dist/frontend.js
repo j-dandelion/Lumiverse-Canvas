@@ -13291,6 +13291,7 @@ var _dragTabId2 = null;
 var _dragElement = null;
 var _dragFromSecondary = false;
 var _dragOverlay2 = null;
+var _dragOverlayInner = null;
 var _dragOffsetX2 = 0;
 var _dragOffsetY2 = 0;
 var _lastDropTarget2 = null;
@@ -13299,7 +13300,18 @@ var _moveHandler = null;
 var _upHandler = null;
 var _clickSuppressor = null;
 var _clickSuppressorTimer = null;
+var _rafId = null;
+var _pendingPointerX = 0;
+var _pendingPointerY = 0;
+var _overlayTx = 0;
+var _overlayTy = 0;
+var _originalParent = null;
+var _originalNextSibling = null;
+var _sourceIsInCanvasList = false;
+var _geometryCache = null;
+var _geomDirty = false;
 var _installed = new WeakSet;
+var _flipActiveTimer = null;
 var DND_STYLE_ID = "canvas-tab-list-dnd-styles";
 function injectDndStyles() {
   if (typeof document === "undefined")
@@ -13309,12 +13321,13 @@ function injectDndStyles() {
   const style = document.createElement("style");
   style.id = DND_STYLE_ID;
   style.textContent = `
-    /* Floating overlay clone — matches configure-modal overlay-clone treatment */
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment ── */
     .canvas-tab-list-dnd-overlay-clone {
       position: fixed;
       z-index: 13000;
       pointer-events: none;
       margin: 0;
+      padding: 0;
       box-sizing: border-box;
       display: flex;
       align-items: center;
@@ -13327,28 +13340,101 @@ function injectDndStyles() {
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
       opacity: 1;
-      will-change: left, top;
+      will-change: transform;
       cursor: grabbing;
     }
 
-    /* Source button while being dragged — same dim as .row-dragging */
+    /* ── Inner button clone — preserves original classes, reset outer chrome so
+         the wrapper provides the overlay treatment ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      border: none !important;
+      background: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+    }
+
+    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
+      font-weight: 500 !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: 48px !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Override icon size for overlay clone ── */
+    .canvas-tab-list-dnd-overlay-clone > button > span > svg {
+      width: 20px !important;
+      height: 20px !important;
+    }
+
+    /* ── Override button height/width — use the rect-measured dimensions ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Source button while being dragged — same dim as .row-dragging ── */
     .canvas-tab-list-dnd-placeholder {
       opacity: 0.35 !important;
     }
 
-    /* Drop-insert indicator: a subtle primary underline at the top of the
-       target button where the tab will be inserted. */
+    /* ── Drop-insert indicator: a subtle primary underline at the top of the
+         target button where the tab will be inserted. ── */
     .canvas-tab-list-dnd-insert-before {
       box-shadow: inset 0 2px 0 0 var(--lumiverse-primary, #4a9eff) !important;
+    }
+
+    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
+    .canvas-tab-list-dnd-flipping {
+      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
     }
   `;
   document.head.appendChild(style);
 }
+var MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror";
+var MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main";
+var MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom";
+var MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn";
+var TAB_LIST_CLASS = "sidebar-ux-tab-list";
 function isSecondaryButton(btn) {
-  return !!btn.closest(".sidebar-ux-tab-list");
+  if (btn.classList.contains(MIRROR_BTN_CLASS))
+    return false;
+  if (btn.closest(`.${MIRROR_LIST_CLASS}`))
+    return false;
+  return !!btn.closest(`.${TAB_LIST_CLASS}`);
 }
 function getButtonTabId(btn) {
   return btn.getAttribute("data-tab-id");
+}
+function isCanvasOwnedContainer(el) {
+  if (el.classList.contains(MIRROR_MAIN_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_BOTTOM_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_LIST_CLASS))
+    return true;
+  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
+    return true;
+  }
+  return false;
+}
+function getCanvasReorderParent(btn) {
+  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
+    const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
+    return section ?? btn.parentElement;
+  }
+  if (isSecondaryButton(btn)) {
+    const list = btn.closest(`.${TAB_LIST_CLASS}`);
+    if (list && !list.classList.contains(MIRROR_LIST_CLASS))
+      return list;
+  }
+  return null;
 }
 function getDropContainers() {
   const containers = [];
@@ -13357,9 +13443,17 @@ function getDropContainers() {
     if (secList)
       containers.push({ el: secList, secondary: true });
   }
-  const mirrorList = document.querySelector(".sidebar-ux-main-tab-list-mirror");
+  const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
   if (mirrorList) {
-    containers.push({ el: mirrorList, secondary: false });
+    const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
+    const bottom = mirrorList.querySelector(`:scope > .${MIRROR_BOTTOM_CLASS}`);
+    if (main)
+      containers.push({ el: main, secondary: false });
+    if (bottom)
+      containers.push({ el: bottom, secondary: false });
+    if (!main && !bottom) {
+      containers.push({ el: mirrorList, secondary: false });
+    }
   }
   if (!mirrorList) {
     const hostSidebar = document.querySelector('[class*="sidebarLeft" i], [class*="sidebarRight" i]');
@@ -13372,15 +13466,20 @@ function getDropContainers() {
   }
   return containers;
 }
-function getButtonsInContainer(container, secondary, excludeTabId) {
-  let buttons;
-  if (secondary) {
-    buttons = Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
-  } else if (container.classList.contains("sidebar-ux-main-tab-list-mirror")) {
-    buttons = Array.from(container.querySelectorAll(":scope > button.sidebar-ux-main-tab-mirror-btn"));
-  } else {
-    buttons = Array.from(container.querySelectorAll(":scope button[data-tab-id]"));
+function getAllButtonsInContainer(container) {
+  if (container.classList.contains(MIRROR_MAIN_CLASS) || container.classList.contains(MIRROR_BOTTOM_CLASS)) {
+    return Array.from(container.querySelectorAll(`:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`));
   }
+  if (container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`));
+  }
+  if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+  }
+  return Array.from(container.querySelectorAll("button[data-tab-id]"));
+}
+function getButtonsInContainer(container, _secondary, excludeTabId) {
+  const buttons = getAllButtonsInContainer(container);
   if (!excludeTabId)
     return buttons;
   return buttons.filter((el) => el.getAttribute("data-tab-id") !== excludeTabId);
@@ -13406,7 +13505,7 @@ function buildDraftAndBase() {
   return { draft, base, catalog };
 }
 function hitTestDropTarget2(x2, y3) {
-  const containers = getDropContainers();
+  const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
   for (const { el: container, secondary } of containers) {
     const rect = container.getBoundingClientRect();
     if (x2 < rect.left || x2 > rect.right)
@@ -13443,16 +13542,134 @@ function setInsertIndicator(target) {
   targetBtn.classList.add("canvas-tab-list-dnd-insert-before");
   _insertIndicatorEl = targetBtn;
 }
+function snapshotButtonRects(container) {
+  const rects = new Map;
+  for (const btn of getAllButtonsInContainer(container)) {
+    const id = btn.getAttribute("data-tab-id");
+    if (id)
+      rects.set(id, btn.getBoundingClientRect());
+  }
+  return rects;
+}
+function mergeRects(into, from) {
+  for (const [k3, v3] of from)
+    into.set(k3, v3);
+}
+function applyFLIP2(prevRects, excludeTabId, containers) {
+  const animated = [];
+  const seen = new Set;
+  for (const container of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      if (seen.has(btn))
+        continue;
+      seen.add(btn);
+      const id = btn.getAttribute("data-tab-id");
+      if (!id || id === excludeTabId || !prevRects.has(id))
+        continue;
+      const prev = prevRects.get(id);
+      const curr = btn.getBoundingClientRect();
+      const deltaY = prev.top - curr.top;
+      if (Math.abs(deltaY) <= 0.5)
+        continue;
+      btn.style.setProperty("transition", "none", "important");
+      btn.style.setProperty("transform", `translateY(${deltaY}px)`, "important");
+      animated.push(btn);
+    }
+  }
+  if (animated.length === 0)
+    return;
+  document.body.offsetHeight;
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
+      node.style.setProperty("transform", "", "important");
+      node.style.removeProperty("transform");
+    }
+    if (_flipActiveTimer)
+      clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = setTimeout(() => {
+      for (const node of animated) {
+        node.style.removeProperty("transition");
+        node.style.removeProperty("transform");
+      }
+      _flipActiveTimer = null;
+    }, 220);
+  });
+}
+function clearFLIPStyles() {
+  if (_flipActiveTimer) {
+    clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = null;
+  }
+  const containers = _geometryCache?.containers ?? getDropContainers();
+  for (const { el: container } of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      btn.style.removeProperty("transition");
+      btn.style.removeProperty("transform");
+    }
+  }
+}
+function reorderCanvasListDOM(container, target, sourceTabId) {
+  if (!sourceTabId)
+    return false;
+  if (!isCanvasOwnedContainer(container))
+    return false;
+  const sourceBtn = _dragElement && _dragElement.getAttribute("data-tab-id") === sourceTabId ? _dragElement : getAllButtonsInContainer(container).find((b2) => b2.getAttribute("data-tab-id") === sourceTabId) ?? null;
+  if (!sourceBtn)
+    return false;
+  const buttons = getAllButtonsInContainer(container);
+  const buttonsWithoutSource = buttons.filter((b2) => b2 !== sourceBtn);
+  if (target.index >= buttonsWithoutSource.length) {
+    if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === null) {
+      return false;
+    }
+    container.appendChild(sourceBtn);
+    return true;
+  }
+  const referenceBtn = buttonsWithoutSource[target.index];
+  if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
+    return false;
+  }
+  container.insertBefore(sourceBtn, referenceBtn);
+  return true;
+}
+function restoreSourceButtonDOM() {
+  if (!_dragElement || !_originalParent)
+    return;
+  const parent = _dragElement.parentNode;
+  if (parent === _originalParent) {
+    if (_originalNextSibling) {
+      if (_dragElement.nextElementSibling === _originalNextSibling)
+        return;
+      _originalParent.insertBefore(_dragElement, _originalNextSibling);
+    } else {
+      if (_dragElement.nextElementSibling === null && _dragElement.parentNode === _originalParent)
+        return;
+      _originalParent.insertBefore(_dragElement, null);
+    }
+  } else {
+    if (_originalNextSibling && _originalNextSibling.parentNode === _originalParent) {
+      _originalParent.insertBefore(_dragElement, _originalNextSibling);
+    } else {
+      _originalParent.appendChild(_dragElement);
+    }
+  }
+}
 function createDragOverlay2(sourceBtn) {
-  const overlay = sourceBtn.cloneNode(true);
-  overlay.className = "canvas-tab-list-dnd-overlay-clone";
+  const wrapper = document.createElement("div");
+  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
+  const clone = sourceBtn.cloneNode(true);
+  clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
   const rect = sourceBtn.getBoundingClientRect();
-  overlay.style.width = rect.width + "px";
-  overlay.style.height = rect.height + "px";
-  overlay.style.left = rect.left + "px";
-  overlay.style.top = rect.top + "px";
-  document.body.appendChild(overlay);
-  return overlay;
+  wrapper.style.width = rect.width + "px";
+  wrapper.style.height = rect.height + "px";
+  wrapper.style.left = "0px";
+  wrapper.style.top = "0px";
+  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+  _dragOverlayInner = clone;
+  return wrapper;
 }
 function installClickSuppressor(el) {
   const handler = (e3) => {
@@ -13480,6 +13697,65 @@ function removeClickSuppressorNow() {
   }
   _clickSuppressor = null;
 }
+function scheduleDragFrame() {
+  if (_rafId !== null)
+    return;
+  _rafId = requestAnimationFrame(() => {
+    _rafId = null;
+    if (!_isDragging)
+      return;
+    const x2 = _pendingPointerX;
+    const y3 = _pendingPointerY;
+    if (_geomDirty || !_geometryCache) {
+      _geometryCache = { containers: getDropContainers() };
+      _geomDirty = false;
+    }
+    const target = hitTestDropTarget2(x2, y3);
+    const prev = _lastDropTarget2;
+    const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
+    if (!target) {
+      if (prev) {
+        clearInsertIndicator();
+        _lastDropTarget2 = null;
+      }
+      return;
+    }
+    if (!sameTarget) {
+      const isCanvas = isCanvasOwnedContainer(target.container);
+      const prevCanvas = prev ? isCanvasOwnedContainer(prev.container) : false;
+      if (isCanvas && _sourceIsInCanvasList) {
+        const prevRects = new Map;
+        const flipContainers = [];
+        const sourceParent = _dragElement?.parentElement;
+        if (sourceParent && isCanvasOwnedContainer(sourceParent)) {
+          mergeRects(prevRects, snapshotButtonRects(sourceParent));
+          flipContainers.push(sourceParent);
+        }
+        if (prev?.container && prev.container !== sourceParent) {
+          mergeRects(prevRects, snapshotButtonRects(prev.container));
+          if (!flipContainers.includes(prev.container)) {
+            flipContainers.push(prev.container);
+          }
+        }
+        mergeRects(prevRects, snapshotButtonRects(target.container));
+        if (!flipContainers.includes(target.container)) {
+          flipContainers.push(target.container);
+        }
+        const didReorder = reorderCanvasListDOM(target.container, target, _dragTabId2);
+        if (didReorder) {
+          applyFLIP2(prevRects, _dragTabId2, flipContainers);
+          _geomDirty = true;
+        }
+      } else if (prevCanvas && !isCanvas && prev) {
+        restoreSourceButtonDOM();
+        clearFLIPStyles();
+        _geomDirty = true;
+      }
+      _lastDropTarget2 = target;
+      setInsertIndicator(target);
+    }
+  });
+}
 function startDrag(btn, pointerEvent) {
   const tabId = getButtonTabId(btn);
   if (!tabId)
@@ -13488,11 +13764,18 @@ function startDrag(btn, pointerEvent) {
   _dragTabId2 = tabId;
   _dragElement = btn;
   _isDragging = true;
+  _originalParent = btn.parentElement;
+  _originalNextSibling = btn.nextElementSibling;
+  _sourceIsInCanvasList = getCanvasReorderParent(btn) != null;
   const rect = btn.getBoundingClientRect();
   _dragOffsetX2 = pointerEvent.clientX - rect.left;
   _dragOffsetY2 = pointerEvent.clientY - rect.top;
+  _overlayTx = rect.left;
+  _overlayTy = rect.top;
   btn.classList.add("canvas-tab-list-dnd-placeholder");
   _dragOverlay2 = createDragOverlay2(btn);
+  _geometryCache = { containers: getDropContainers() };
+  _geomDirty = false;
   document.body.style.userSelect = "none";
   document.body.style.cursor = "grabbing";
   const suppressCtx = (e3) => {
@@ -13504,29 +13787,28 @@ function startDrag(btn, pointerEvent) {
   const onMove = (ev) => {
     if (!_dragOverlay2)
       return;
-    _dragOverlay2.style.left = `${ev.clientX - _dragOffsetX2}px`;
-    _dragOverlay2.style.top = `${ev.clientY - _dragOffsetY2}px`;
-    const target = hitTestDropTarget2(ev.clientX, ev.clientY);
-    if (!target) {
-      clearInsertIndicator();
-      _lastDropTarget2 = null;
-      return;
-    }
-    const prev = _lastDropTarget2;
-    if (prev && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary) {
-      return;
-    }
-    _lastDropTarget2 = target;
-    setInsertIndicator(target);
+    _overlayTx = ev.clientX - _dragOffsetX2;
+    _overlayTy = ev.clientY - _dragOffsetY2;
+    _dragOverlay2.style.transform = `translate3d(${_overlayTx}px, ${_overlayTy}px, 0)`;
+    _pendingPointerX = ev.clientX;
+    _pendingPointerY = ev.clientY;
+    scheduleDragFrame();
   };
   const onUp = async (_ev) => {
     const capturedTabId = _dragTabId2;
     const capturedFromSecondary = _dragFromSecondary;
     const capturedTarget = _lastDropTarget2;
     document.removeEventListener("contextmenu", suppressCtx, true);
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId);
+      _rafId = null;
+    }
     clearDragState2();
     if (capturedTarget && capturedTabId) {
+      restoreSourceButtonDOM();
       await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
+    } else {
+      restoreSourceButtonDOM();
     }
     cleanupDragVisuals();
   };
@@ -13548,12 +13830,20 @@ function clearDragState2() {
   }
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
+  if (_rafId !== null) {
+    cancelAnimationFrame(_rafId);
+    _rafId = null;
+  }
+  _geometryCache = null;
+  _geomDirty = false;
 }
 function cleanupDragVisuals() {
+  clearFLIPStyles();
   if (_dragOverlay2) {
     _dragOverlay2.remove();
     _dragOverlay2 = null;
   }
+  _dragOverlayInner = null;
   if (_dragElement) {
     _dragElement.classList.remove("canvas-tab-list-dnd-placeholder");
   }
@@ -13563,6 +13853,9 @@ function cleanupDragVisuals() {
   _dragElement = null;
   _dragFromSecondary = false;
   _lastDropTarget2 = null;
+  _originalParent = null;
+  _originalNextSibling = null;
+  _sourceIsInCanvasList = false;
 }
 async function performDrop(tabId, fromSecondary, target) {
   try {
@@ -13710,6 +14003,11 @@ function tearDownTabListDnd() {
   }
   if (_isDragging) {
     removeClickSuppressorNow();
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId);
+      _rafId = null;
+    }
+    restoreSourceButtonDOM();
     cleanupDragVisuals();
     clearDragState2();
   }
@@ -13729,7 +14027,7 @@ var WEAVER_INSET_L_VAR = "--sidebar-ux-weaver-inset-l";
 var WEAVER_INSET_R_VAR = "--sidebar-ux-weaver-inset-r";
 var PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host";
 var _observer3 = null;
-var _rafId = null;
+var _rafId2 = null;
 var _active3 = false;
 var _resizeListening = false;
 var _pollTimer = null;
@@ -14040,10 +14338,10 @@ function applyWeaverLane() {
   _drawersClosedForWeaver = false;
 }
 function scheduleApply() {
-  if (_rafId !== null)
+  if (_rafId2 !== null)
     return;
-  _rafId = requestAnimationFrame(() => {
-    _rafId = null;
+  _rafId2 = requestAnimationFrame(() => {
+    _rafId2 = null;
     applyWeaverLane();
   });
 }
@@ -14062,9 +14360,9 @@ function startWeaverLane() {
   _observer3.observe(document.body, { childList: true, subtree: true });
   return () => {
     _active3 = false;
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId);
-      _rafId = null;
+    if (_rafId2 !== null) {
+      cancelAnimationFrame(_rafId2);
+      _rafId2 = null;
     }
     if (_observer3) {
       _observer3.disconnect();
