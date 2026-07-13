@@ -358,9 +358,11 @@ function injectModalStyles(): void {
     .canvas-configure-tabs-row.row-hidden {
       opacity: 0.6;
     }
-    /* Placeholder left in list while the floating clone follows the pointer */
+    /* Invisible slot holder while the floating clone is the visible row
+       (matches live tab-list DnD placeholder). Overlay uses its own className
+       so cloneNode + class replace never inherits opacity:0. */
     .canvas-configure-tabs-row.row-dragging {
-      opacity: 0.35;
+      opacity: 0 !important;
     }
 
     /* ── Drag handle (host GripVertical style) ── */
