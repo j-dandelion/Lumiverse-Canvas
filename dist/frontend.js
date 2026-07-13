@@ -1350,6 +1350,7 @@ var init_strip_gutter = __esm(() => {
 var exports_main_tab_pin = {};
 __export(exports_main_tab_pin, {
   reconcileMainTabListPin: () => reconcileMainTabListPin,
+  isMainTabPinEnabled: () => isMainTabPinEnabled,
   isMainTabListPinActive: () => isMainTabListPinActive,
   getMainMirrorActiveTabId: () => getMainMirrorActiveTabId,
   getActiveMainMirrorKey: () => getActiveMainMirrorKey,
@@ -1416,6 +1417,9 @@ function __resetMainTabPinForTest() {
 }
 function getActiveMainMirrorKey() {
   return _activeMainMirrorKey;
+}
+function isMainTabPinEnabled() {
+  return _enabled;
 }
 function getMainMirrorActiveTabId() {
   if (!_enabled)
@@ -4004,9 +4008,9 @@ __export(exports_configure_commit, {
   commitConfigureDraft: () => commitConfigureDraft
 });
 function resolvePrimaryActiveTabIdForQuiet() {
-  const mirrorId = getMainMirrorActiveTabId();
-  if (mirrorId)
-    return mirrorId;
+  if (isMainTabPinEnabled()) {
+    return getMainMirrorActiveTabId();
+  }
   const sidebar = getMainSidebar();
   if (sidebar) {
     const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
@@ -4017,6 +4021,10 @@ function resolvePrimaryActiveTabIdForQuiet() {
   return null;
 }
 function isPrimaryActiveForQuiet(tabId) {
+  if (isMainTabPinEnabled()) {
+    const mirrorId = getMainMirrorActiveTabId();
+    return mirrorId != null && mirrorId === tabId;
+  }
   const resolved = resolvePrimaryActiveTabIdForQuiet();
   if (resolved != null)
     return resolved === tabId;
@@ -4051,7 +4059,7 @@ function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
     }
     const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
     try {
-      adoptMainMirrorHostActivation(btn, title);
+      adoptMainMirrorHostActivation(btn, title, { open: isCanvasMainOpen() });
     } catch {}
   };
   let observer = new MutationObserver(() => {
@@ -4452,6 +4460,7 @@ var init_configure_commit = __esm(() => {
   init_store();
   init_secondary();
   init_main_tab_pin();
+  init_main_mirror_drawer();
   init_mobile_exclusion();
   _commitChain = Promise.resolve();
 });

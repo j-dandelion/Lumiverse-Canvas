@@ -1692,6 +1692,187 @@ function wireSecondaryShell(
 }
 
 // =====================================================================
+// C17: closed main-mirror, no Canvas exclusive selection — drag primary
+//      → secondary must NOT treat host parked tabBtnActive as user-active.
+//      Regression: strip closed / key null + host Profile parked → quiet
+//      preserve re-clicked park target and force-opened/activated a tab.
+// =====================================================================
+{
+  setup()
+  if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
+    ;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) =>
+      setTimeout(() => cb(0), 0) as unknown as number
+  }
+
+  const { setSettings, getSettings } = await import('../../settings/state')
+  const savedTaskbar = getSettings().taskbarMode
+  const savedOuter = getSettings().moveControlsToOuterEdge
+  setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+
+  const {
+    __setActiveMainMirrorKeyForTest,
+    __setMainTabPinEnabledForTest,
+    __resetMainTabPinForTest,
+    getActiveMainMirrorKey,
+  } = await import('../../sidebar/main-tab-pin')
+
+  __resetMainTabPinForTest()
+  __setMainTabPinEnabledForTest(true)
+  // Closed strip: no exclusive selection (user never activated / cleared).
+  __setActiveMainMirrorKeyForTest(null)
+
+  const clicks: string[] = []
+  const makeMainBtn = (id: string, active: boolean) => {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    btn.setAttribute('title', id)
+    btn.className = active ? 'tabBtn tabBtnActive' : 'tabBtn'
+    btn.click = () => {
+      clicks.push(id)
+      for (const b of mainButtons) {
+        b.className = b === btn ? 'tabBtn tabBtnActive' : 'tabBtn'
+      }
+    }
+    btn.querySelector = () => null
+    return btn
+  }
+
+  // Host parks top tab-a; user has no Canvas selection. Drag inactive tab-c.
+  const btnA = makeMainBtn('tab-a', true)
+  const btnB = makeMainBtn('tab-b', false)
+  const btnC = makeMainBtn('tab-c', false)
+  const mainButtons = [btnA, btnB, btnC]
+
+  const mainSidebar: any = document.createElement('div')
+  mainSidebar.setAttribute('data-spindle-mount', 'sidebar')
+  for (const b of mainButtons) mainSidebar.appendChild(b)
+  mainSidebar.querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('tabBtnActive')) {
+      return mainButtons.find((b) => String(b.className).includes('tabBtnActive')) ?? null
+    }
+    const idM = typeof sel === 'string' ? sel.match(/data-tab-id="([^"]+)"/) : null
+    if (idM) return mainButtons.find((b) => b.getAttribute('data-tab-id') === idM[1]) ?? null
+    const titleM = typeof sel === 'string' ? sel.match(/title="([^"]+)"/) : null
+    if (titleM) return mainButtons.find((b) => b.getAttribute('title') === titleM[1]) ?? null
+    return null
+  }
+  mainSidebar.querySelectorAll = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-tab-id')) return mainButtons.slice()
+    if (typeof sel === 'string' && sel.includes('button')) return mainButtons.slice()
+    return []
+  }
+
+  ;(document as any).querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-spindle-mount')) return mainSidebar
+    return null
+  }
+
+  const rootC: any = document.createElement('div')
+  rootC.querySelector = () => null
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.children = panelContent.children || []
+  const origAppend = panelContent.appendChild.bind(panelContent)
+  panelContent.appendChild = (c: unknown) => {
+    origAppend(c)
+    if (Array.isArray(panelContent.children) && !panelContent.children.includes(c)) {
+      panelContent.children.push(c)
+    }
+    return c
+  }
+
+  const tabList: any = makeStubTabList()
+  if (!Array.isArray(tabList.children)) tabList.children = []
+  tabList.querySelectorAll = (sel: string) => {
+    if (!sel.includes('data-tab-id')) return []
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return []
+    return (tabList.children as any[]).filter(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    )
+  }
+  tabList.querySelector = (sel: string) => tabList.querySelectorAll(sel)[0] ?? null
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [])
+  __setSecondaryWrapperForTest(wrapper)
+
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: (id: string) => (id === 'tab-c' ? rootC : undefined),
+        getBuiltInTabTitle: (id: string) => id,
+        requestTabLocation: () => {
+          btnA.className = 'tabBtn tabBtnActive'
+          btnB.className = 'tabBtn'
+          btnC.className = 'tabBtn'
+        },
+        getTabLocation: () => ({ kind: 'container', containerId: 'canvas-secondary-drawer' }),
+      },
+      containers: {},
+    },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  }
+
+  __setHostSetSettingForTest(
+    () => {},
+    {
+      side: 'right',
+      tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+      hiddenTabIds: [],
+      showTabLabels: false,
+    },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-a', 'tab-b'],
+    secondaryIds: ['tab-c'],
+    builtinOrder: ['tab-a', 'tab-b', 'tab-c'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'primary'],
+      ['tab-b', 'primary'],
+      ['tab-c', 'primary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C17: commit ok')
+  assertEqual(getTabAssignments().get('tab-c'), 'secondary', 'C17: tab-c moved to secondary')
+  assert(
+    clicks.length === 0,
+    `C17: no host tab re-click when Canvas key was null (got clicks=${JSON.stringify(clicks)})`,
+  )
+  assert(
+    getActiveMainMirrorKey() == null,
+    `C17: main-mirror key stays null (got ${getActiveMainMirrorKey()})`,
+  )
+  const { getActiveSecondaryTabId: getSecC17 } = await import('../assignment')
+  assert(
+    getSecC17() !== 'tab-c',
+    'C17: moved tab not activated in secondary',
+  )
+  assert(
+    rootC.getAttribute('data-canvas-active') == null,
+    'C17: moved root has no data-canvas-active',
+  )
+
+  __setSecondaryWrapperForTest(null)
+  __resetMainTabPinForTest()
+  setSettings({ taskbarMode: savedTaskbar, moveControlsToOuterEdge: savedOuter })
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

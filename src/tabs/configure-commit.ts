@@ -59,7 +59,9 @@ import { getMainSidebar } from '../dom/lumiverse'
 import {
   adoptMainMirrorHostActivation,
   getMainMirrorActiveTabId,
+  isMainTabPinEnabled,
 } from '../sidebar/main-tab-pin'
+import { isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
@@ -67,13 +69,17 @@ export type CommitResult = { ok: true } | { ok: false; error: string }
 /**
  * User-visible primary active tab id for quiet DnD / Configure handoff.
  *
- * Prefer Canvas main-mirror exclusive key when taskbar mode owns the strip
- * (host tabBtnActive often stays on a parked/top tab). Fall back to host
- * DOM, then store/DOM isTabActive checks are used only for id equality.
+ * When taskbar main-mirror pin owns the strip, **only** the Canvas exclusive
+ * key counts. Host `tabBtnActive` often stays on a parked/top tab while the
+ * closed strip has no selection — falling back re-clicks that park target
+ * and opens/activates a tab the user never chose.
+ *
+ * When pin is off, fall back to host DOM tabBtnActive.
  */
 function resolvePrimaryActiveTabIdForQuiet(): string | null {
-  const mirrorId = getMainMirrorActiveTabId()
-  if (mirrorId) return mirrorId
+  if (isMainTabPinEnabled()) {
+    return getMainMirrorActiveTabId()
+  }
 
   const sidebar = getMainSidebar()
   if (sidebar) {
@@ -91,6 +97,12 @@ function resolvePrimaryActiveTabIdForQuiet(): string | null {
 
 /** True when `tabId` is the user-visible primary active tab (mirror-aware). */
 function isPrimaryActiveForQuiet(tabId: string): boolean {
+  if (isMainTabPinEnabled()) {
+    // Key null = no exclusive selection (closed strip / never activated).
+    // Do not treat host parked tabBtnActive as user-active.
+    const mirrorId = getMainMirrorActiveTabId()
+    return mirrorId != null && mirrorId === tabId
+  }
   const resolved = resolvePrimaryActiveTabIdForQuiet()
   if (resolved != null) return resolved === tabId
   return isTabActiveInMainDrawer(tabId)
@@ -161,7 +173,9 @@ function armPreservePrimaryActiveOnQuietToSecondary(
       || btn.getAttribute('aria-label')
       || undefined
     try {
-      adoptMainMirrorHostActivation(btn, title)
+      // Preserve key/host active without force-opening a closed main-mirror.
+      // Default adopt open:true would re-open the drawer mid quiet DnD.
+      adoptMainMirrorHostActivation(btn, title, { open: isCanvasMainOpen() })
     } catch {
       /* mirror may be off / mid-teardown */
     }

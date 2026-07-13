@@ -150,6 +150,16 @@ export function getActiveMainMirrorKey(): string | null {
 }
 
 /**
+ * True while taskbar main-mirror pin owns the primary strip chrome.
+ * Quiet DnD uses this to decide whether host `tabBtnActive` is meaningful
+ * for user-visible selection (it is not — host parks a tab while the
+ * closed strip has no Canvas exclusive selection).
+ */
+export function isMainTabPinEnabled(): boolean {
+  return _enabled
+}
+
+/**
  * User-visible primary active tab id when taskbar main-mirror owns chrome.
  *
  * Host `tabBtnActive` often lags or stays on a parked tab (e.g. Profile)
@@ -158,7 +168,9 @@ export function getActiveMainMirrorKey(): string | null {
  * to the top-most host tab on every primary→secondary drop.
  *
  * Returns bare `data-tab-id` or title fallback from the key, or null when
- * pin is off / no key is set (callers fall back to host).
+ * pin is off / no key is set. When pin is on and key is null, callers must
+ * treat that as **no user-visible primary selection** (do not fall back to
+ * host) or a closed strip will force-activate the parked host tab.
  */
 export function getMainMirrorActiveTabId(): string | null {
   // Pin enabled is enough — shell may be mid-mount; exclusive key is still truth.
