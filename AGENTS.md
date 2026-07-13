@@ -6,11 +6,24 @@ Canvas is a Spindle extension for Lumiverse (an AI chat frontend) that adds a se
 
 **Global protocol:** `~/.grok/AGENTS.md` → Session catch-up (WORKFLOW.md). Skill: `/workflow`.
 
-This repo keeps a **rich local** `WORKFLOW.md` (main-mirror epic, pitfalls tables, deploy notes). Read it first for WIP/gotchas; then `docs/README.md` for durable architecture. Prefer WORKFLOW over session memory for open bugs. **Never commit** `WORKFLOW.md` (gitignored).
+This repo keeps a **product-only** local `WORKFLOW.md` (main-mirror epic, pitfalls, deploy notes). Read it first for Canvas WIP/gotchas; then `docs/README.md` for durable architecture. Prefer WORKFLOW over session memory for open bugs. **Never commit** `WORKFLOW.md` (gitignored).
+
+Meta/process work on the **global WORKFLOW system** (hooks, gates, template) lives in `~/WORKFLOW.md` and `~/.grok/docs/workflow-md.md` — do not dump that into this repo’s WORKFLOW.
+
+## Build / deploy when finalizing
+
+The live app loads from the Spindle runtime path, **not** from repo `dist/` alone. When finishing a change that affects UI or extension behavior (before handoff, live verify, or wrapping a major round):
+
+1. Run **`npm run deploy` only** — it builds and copies into `~/Lumiverse/data/extensions/canvas/repo/`.
+2. Do **not** also run `npm run build` first (that builds twice; `deploy` already builds via `build.sh`).
+3. Hard-refresh the browser (**Ctrl+F5**) so Lumiverse picks up the new bundle.
+4. Use `npm run build` alone only when you need repo `dist/` without updating the runtime (e.g. CI-style check). Unit tests: `bun test …` as needed.
+
+If a “fix didn’t work” after a correct code change, the usual miss is build-only or no hard refresh — redeploy + Ctrl+F5.
 
 ## Documentation
 
-For durable architecture you MUST start with `/docs/README.md` (reading order and quick reference). For *current* WIP and gotchas, read `WORKFLOW.md` first when it exists.
+For durable architecture and in-depth documentation, start with the /docs/ folder: `/docs/README.md` (reading order and quick reference). For *current* WIP and gotchas, prioritize `WORKFLOW.md` first when it exists.
 
 ```
 docs/

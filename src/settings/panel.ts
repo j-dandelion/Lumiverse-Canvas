@@ -302,14 +302,12 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
 
   const resizeSidebars = makeToggle(
     () => getSettings().resizeSidebars,
-    (v) => setSettings({ resizeSidebars: v }),
-    { disabled: () => !getSettings().secondSidebarEnabled }
+    (v) => setSettings({ resizeSidebars: v })
   )
   secSidebars.appendChild(buildSettingRow({
     label: 'Drag to resize drawers',
     hint: 'Adds a 4px grab handle on the inner edge of both drawers.',
     control: resizeSidebars.btn,
-    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const shadowsDesktop = makeToggle(
@@ -420,8 +418,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    // Sub-features gated by the second-drawer master toggle.
-    for (const row of [resizeSidebars, compact]) {
+    // compact gated by second-drawer master toggle (resizeSidebars is always-on).
+    for (const row of [compact]) {
       const d = !getSettings().secondSidebarEnabled
       row.btn.disabled = d
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'
