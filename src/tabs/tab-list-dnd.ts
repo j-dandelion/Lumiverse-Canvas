@@ -148,9 +148,15 @@ function injectDndStyles(): void {
         0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
-      opacity: 1;
+      opacity: 1 !important;
       will-change: transform;
       cursor: grabbing;
+    }
+    /* Defense: never inherit invisible-placeholder opacity onto the float */
+    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
+    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
+      opacity: 1 !important;
+      pointer-events: none !important;
     }
 
     /* ── Inner button clone — host CSS-module classes may not reflow the
@@ -237,7 +243,7 @@ function injectDndStyles(): void {
       box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
         0 0 0 1px var(--lumiverse-border, #333);
       cursor: default;
-      opacity: 0.92;
+      opacity: 0.92 !important;
     }
   `
   document.head.appendChild(style)
@@ -945,8 +951,11 @@ function createDragOverlay(sourceBtn: HTMLElement): HTMLElement {
   const wrapper = document.createElement('div')
   wrapper.className = 'canvas-tab-list-dnd-overlay-clone'
 
-  // Clone the source button preserving all original classes
+  // Clone the source button preserving all original classes.
+  // Strip the live placeholder class if present — cloneNode would copy
+  // opacity:0 and the floating tab would appear empty (icon + label gone).
   const clone = sourceBtn.cloneNode(true) as HTMLElement
+  clone.classList.remove('canvas-tab-list-dnd-placeholder')
   clone.classList.add('canvas-tab-list-dnd-overlay-clone-btn')
 
   const rect = sourceBtn.getBoundingClientRect()
@@ -1138,11 +1147,12 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   _overlayWidth = rect.width
   _overlayHeight = rect.height
 
-  // Dim the source
-  btn.classList.add('canvas-tab-list-dnd-placeholder')
-
-  // Create overlay
+  // Create overlay *before* hiding the source — cloneNode copies classes,
+  // so adding the invisible placeholder first would blank the floating tab.
   _dragOverlay = createDragOverlay(btn)
+
+  // Invisible slot holder (layout only); overlay is the visible tab.
+  btn.classList.add('canvas-tab-list-dnd-placeholder')
 
   // Initialize geometry cache
   _geometryCache = { containers: getDropContainers() }

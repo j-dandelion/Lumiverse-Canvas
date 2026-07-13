@@ -10322,9 +10322,15 @@ function injectDndStyles() {
         0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
-      opacity: 1;
+      opacity: 1 !important;
       will-change: transform;
       cursor: grabbing;
+    }
+    /* Defense: never inherit invisible-placeholder opacity onto the float */
+    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
+    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
+      opacity: 1 !important;
+      pointer-events: none !important;
     }
 
     /* ── Inner button clone — host CSS-module classes may not reflow the
@@ -10411,7 +10417,7 @@ function injectDndStyles() {
       box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
         0 0 0 1px var(--lumiverse-border, #333);
       cursor: default;
-      opacity: 0.92;
+      opacity: 0.92 !important;
     }
   `;
   document.head.appendChild(style);
@@ -10802,6 +10808,7 @@ function createDragOverlay2(sourceBtn) {
   const wrapper = document.createElement("div");
   wrapper.className = "canvas-tab-list-dnd-overlay-clone";
   const clone = sourceBtn.cloneNode(true);
+  clone.classList.remove("canvas-tab-list-dnd-placeholder");
   clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
   const rect = sourceBtn.getBoundingClientRect();
   wrapper.style.width = rect.width + "px";
@@ -10925,8 +10932,8 @@ function startDrag(btn, pointerEvent) {
   _overlayTy = rect.top;
   _overlayWidth = rect.width;
   _overlayHeight = rect.height;
-  btn.classList.add("canvas-tab-list-dnd-placeholder");
   _dragOverlay2 = createDragOverlay2(btn);
+  btn.classList.add("canvas-tab-list-dnd-placeholder");
   _geometryCache = { containers: getDropContainers() };
   _geomDirty = false;
   document.body.style.userSelect = "none";
