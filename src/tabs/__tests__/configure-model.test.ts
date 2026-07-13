@@ -1,5 +1,6 @@
 // Tests for configure-model.ts
 import {
+  baseSnapshotFromDraft,
   createDraft,
   encodeHostTabOrder,
   isDraftDirty,
@@ -845,6 +846,112 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
     ]),
   }
   assert(isDraftDirty(draft, base), 'post-disable: draft is dirty when base has secondary tabs that draft no longer has')
+}
+
+// =====================================================================
+// baseSnapshotFromDraft — returns correct BaseSnapshot from draft
+// =====================================================================
+{
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'ext-a'],
+    secondaryIds: ['weaver', 'ext-b'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: ['ext-a', 'ext-b'],
+    hiddenIds: new Set(['ext-b']),
+  }
+  const base = baseSnapshotFromDraft(draft)
+
+  assertArraysEqual(base.tabOrder, ['profile', 'presets', 'weaver', 'ext-a', 'ext-b'],
+    'baseSnapshotFromDraft: tabOrder = encodeHostTabOrder(draft)')
+  assertArraysEqual(base.hiddenTabIds, ['ext-b'],
+    'baseSnapshotFromDraft: hiddenTabIds from draft.hiddenIds')
+  assertEqual(base.drawerSide, 'right', 'baseSnapshotFromDraft: drawerSide matches')
+  assertEqual(base.assignments.get('profile'), 'primary', 'baseSnapshotFromDraft: profile assigned primary')
+  assertEqual(base.assignments.get('presets'), 'primary', 'baseSnapshotFromDraft: presets assigned primary')
+  assertEqual(base.assignments.get('ext-a'), 'primary', 'baseSnapshotFromDraft: ext-a assigned primary')
+  assertEqual(base.assignments.get('weaver'), 'secondary', 'baseSnapshotFromDraft: weaver assigned secondary')
+  assertEqual(base.assignments.get('ext-b'), 'secondary', 'baseSnapshotFromDraft: ext-b assigned secondary')
+  assertEqual(base.assignments.size, 5, 'baseSnapshotFromDraft: 5 assignment entries')
+}
+
+// =====================================================================
+// baseSnapshotFromDraft — isDraftDirty is false when baseSnapshot from draft
+// =====================================================================
+{
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'ext-a'],
+    secondaryIds: ['weaver'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: ['ext-a'],
+    hiddenIds: new Set(),
+  }
+  const base = baseSnapshotFromDraft(draft)
+  assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty when base built from draft')
+}
+
+// =====================================================================
+// baseSnapshotFromDraft — isDraftDirty is false after reorderWithin + rebase
+// (simulates autoCommit rebase contract)
+// =====================================================================
+{
+  let draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'ext-a', 'loom'],
+    secondaryIds: ['weaver'],
+    builtinOrder: ['profile', 'presets', 'loom', 'weaver'],
+    extensionOrder: ['ext-a'],
+    hiddenIds: new Set(),
+  }
+  // Reorder: move preset from index 1 to index 3 in primary
+  draft = reorderWithin(draft, 'right', 1, 3)
+  // Rebase base from the reordered draft (autoCommit's happy path)
+  const base = baseSnapshotFromDraft(draft)
+  assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty after reorderWithin + rebase')
+  assertArraysEqual(draft.primaryIds, ['profile', 'ext-a', 'loom', 'presets'],
+    'baseSnapshotFromDraft: reorderWithin preserved through rebase')
+}
+
+// =====================================================================
+// baseSnapshotFromDraft — isDraftDirty is false after moveTab + rebase
+// =====================================================================
+{
+  let draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'ext-a'],
+    secondaryIds: ['weaver'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: ['ext-a'],
+    hiddenIds: new Set(),
+  }
+  // Move ext-a to secondary
+  draft = moveTab(draft, 'ext-a', 'secondary', 0)
+  // Rebase base from the moved draft
+  const base = baseSnapshotFromDraft(draft)
+  assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty after moveTab + rebase')
+  assertArraysEqual(draft.secondaryIds, ['ext-a', 'weaver'],
+    'baseSnapshotFromDraft: moveTab result preserved through rebase')
+  assertArraysEqual(draft.primaryIds, ['profile', 'presets'],
+    'baseSnapshotFromDraft: moveTab primary reduced through rebase')
+}
+
+// =====================================================================
+// baseSnapshotFromDraft — isDraftDirty is false after setHidden + rebase
+// =====================================================================
+{
+  let draft: ConfigureDraft = {
+    drawerSide: 'left',
+    primaryIds: ['profile', 'presets', 'ext-a'],
+    secondaryIds: ['weaver'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: ['ext-a'],
+    hiddenIds: new Set(),
+  }
+  draft = setHidden(draft, 'ext-a', true)
+  const base = baseSnapshotFromDraft(draft)
+  assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty after setHidden + rebase')
+  assert(draft.hiddenIds.has('ext-a'), 'baseSnapshotFromDraft: hidden state preserved through rebase')
 }
 
 // =====================================================================

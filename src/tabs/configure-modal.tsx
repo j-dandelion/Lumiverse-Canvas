@@ -12,6 +12,7 @@
 import { h, render } from 'preact'
 import { useEffect, useCallback, useRef } from 'preact/hooks'
 import {
+  baseSnapshotFromDraft,
   createDraft,
   encodeHostTabOrder,
   isDraftDirty,
@@ -790,12 +791,10 @@ async function autoCommit(): Promise<void> {
     const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
 
     if (result.ok) {
-      // Rebase from live state so dirty check is clean.
-      try {
-        const fresh = buildLiveDraftAndBase()
-        _draftRef = fresh.draft
-        _baseSnapshotRef = fresh.base
-      } catch { /* keep current state */ }
+      // Rebase baseSnapshot from the committed draft — don't rebuild from
+      // host state, which may lag behind (NO-GO path + cross-kind
+      // interleaving). Keeping _draftRef preserves the user's reorder.
+      _baseSnapshotRef = baseSnapshotFromDraft(_draftRef!)
       if (_draftRef) {
         renderModal(_draftRef, _catalogRef, null, false)
       }

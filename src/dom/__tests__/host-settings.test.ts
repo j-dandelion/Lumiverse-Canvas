@@ -79,6 +79,13 @@ function reset() {
   // Original fields preserved
   assertArraysEqual(merged.tabOrder as string[], ['profile', 'presets'], 'merged tabOrder preserved')
   assertArraysEqual(merged.hiddenTabIds as string[], [], 'merged hiddenTabIds preserved')
+
+  // getHostDrawerSettings reflects the write immediately
+  const readBack = getHostDrawerSettings()
+  assertEqual(readBack?.side, 'left', 'getHostDrawerSettings side is left after patch')
+  assertEqual(readBack?.showTabLabels, true, 'getHostDrawerSettings showTabLabels after patch')
+  assertArraysEqual(readBack?.tabOrder ?? [], ['profile', 'presets'], 'getHostDrawerSettings tabOrder preserved')
+  assertArraysEqual(readBack?.hiddenTabIds ?? [], [], 'getHostDrawerSettings hiddenTabIds preserved')
 }
 
 // =====================================================================
@@ -97,6 +104,10 @@ function reset() {
 
   const merged = written[0].value as Record<string, unknown>
   assertArraysEqual(merged.tabOrder as string[], ['profile'], 'merged tabOrder set')
+
+  // getHostDrawerSettings reflects the write
+  const readBack = getHostDrawerSettings()
+  assertArraysEqual(readBack?.tabOrder ?? [], ['profile'], 'getHostDrawerSettings tabOrder after no-current patch')
 }
 
 // =====================================================================
@@ -110,6 +121,34 @@ function reset() {
   clearHostSettingsCache()
   assert(!isHostDrawerSettingsWritable(), 'not writable after clear')
   assertEqual(getHostDrawerSettings(), null, 'settings null after clear')
+}
+
+// =====================================================================
+// Failed write (no setter) does not change cache
+// =====================================================================
+{
+  reset()
+  const written: Array<{ key: string; value: unknown }> = []
+  __setHostSetSettingForTest(
+    (key: string, value: unknown) => { written.push({ key, value }) },
+    { side: 'right', tabOrder: ['a', 'b'], hiddenTabIds: [] },
+  )
+
+  // Successful write populates cache
+  assert(patchHostDrawerSettings({ side: 'left' }), 'first patch succeeds')
+  assertEqual(getHostDrawerSettings()?.side, 'left', 'cache reflects first patch')
+
+  // Clear mock setter but keep cached settings
+  __setHostSetSettingForTest(null)
+
+  // Without a setter, write should fail
+  const result = patchHostDrawerSettings({ side: 'right' })
+  assert(!result, 'patch returns false without setter')
+
+  // Cache should be unchanged from the last successful write
+  const settings = getHostDrawerSettings()
+  assertEqual(settings?.side, 'left', 'cache unchanged after failed write')
+  assertArraysEqual(settings?.tabOrder ?? [], ['a', 'b'], 'tabOrder unchanged after failed write')
 }
 
 // =====================================================================
@@ -134,6 +173,12 @@ function reset() {
 
   const secondMerge = written[1].value as Record<string, unknown>
   assertEqual(secondMerge.side as string, 'left', 'second patch: side updated')
+
+  // getHostDrawerSettings reflects cumulative changes
+  const readBack = getHostDrawerSettings()
+  assertArraysEqual(readBack?.hiddenTabIds ?? [], ['b'], 'getHostDrawerSettings hiddenTabIds after multi-patch')
+  assertEqual(readBack?.side, 'left', 'getHostDrawerSettings side after multi-patch')
+  assertArraysEqual(readBack?.tabOrder ?? [], ['a', 'b'], 'getHostDrawerSettings tabOrder after multi-patch')
 }
 
 // =====================================================================

@@ -170,7 +170,11 @@ export function patchHostDrawerSettings(
   // Prefer test seam.
   if (_testSetSetting) {
     const current = getHostDrawerSettings() ?? {}
-    _testSetSetting('drawerSettings', { ...current, ...partial })
+    const merged = { ...current, ...partial }
+    _testSetSetting('drawerSettings', merged)
+    // Update cache so subsequent getHostDrawerSettings() reflects the write.
+    _cachedDrawerSettings = merged as HostDrawerSettings
+    _cacheTimestamp = Date.now()
     // Bust the store cache so getDrawerTabs etc. see the new state.
     findStoreData(true)
     return true
@@ -183,7 +187,11 @@ export function patchHostDrawerSettings(
   }
 
   const current = _cachedDrawerSettings ?? {}
-  _cachedSetSetting('drawerSettings', { ...current, ...partial })
+  const merged = { ...current, ...partial }
+  _cachedSetSetting('drawerSettings', merged)
+  // Update cache so subsequent getHostDrawerSettings() reflects the write.
+  _cachedDrawerSettings = merged as HostDrawerSettings
+  _cacheTimestamp = Date.now()
   // Bust the 3s store cache so downstream readers see the new state.
   findStoreData(true)
   return true

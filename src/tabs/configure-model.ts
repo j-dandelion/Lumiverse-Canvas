@@ -149,6 +149,31 @@ export function encodeHostTabOrder(draft: ConfigureDraft): string[] {
   return [...draft.builtinOrder, ...draft.extensionOrder]
 }
 
+// ── BaseSnapshot from Draft ──
+
+/**
+ * Build a BaseSnapshot from a ConfigureDraft so that
+ * `isDraftDirty(draft, baseSnapshotFromDraft(draft))` is always false.
+ *
+ * Used by autoCommit() after a successful commit to rebase the dirty-check
+ * baseline without re-reading host state (which may lag behind the write).
+ */
+export function baseSnapshotFromDraft(draft: ConfigureDraft): BaseSnapshot {
+  const assignments = new Map<string, TabSide>()
+  for (const id of draft.primaryIds) {
+    assignments.set(id, 'primary')
+  }
+  for (const id of draft.secondaryIds) {
+    assignments.set(id, 'secondary')
+  }
+  return {
+    tabOrder: encodeHostTabOrder(draft),
+    hiddenTabIds: [...draft.hiddenIds],
+    drawerSide: draft.drawerSide,
+    assignments,
+  }
+}
+
 // ── Dirty check ──
 
 export function isDraftDirty(
