@@ -16,7 +16,9 @@
 //     strips). addSecondaryTabButton replaces foreign node in-place.
 //   - Fail / cancel / tearDown while dragging: restore source DOM.
 //
-// Settings (isSettingsButton) is never long-press installed.
+// Settings (isSettingsButton) is never drag-arm installed.
+// Activation: mouse = ~16px Euclidean distance; touch/pen = ~200ms long-press
+// (movement past threshold cancels long-press arming).
 //
 // Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
 // hit-test indices (would otherwise animate mid-drag then snap back).
@@ -51,6 +53,8 @@ import {
   insertIndexFromMidpoints,
   settleDestFromButtonRects,
   isLiveTabListDndAllowed,
+  shouldActivateDragFromDistance,
+  DRAG_ACTIVATE_DISTANCE_PX,
 } from '../tab-list-dnd'
 
 let passed = 0
@@ -222,7 +226,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   )
 })()
 
-// Settings host chrome is excluded from live DnD long-press (isSettingsButton).
+// Settings host chrome is excluded from live DnD install (isSettingsButton).
 ;(() => {
   const settings = {
     className: 'tabBtn tabBtnSettings',
@@ -249,6 +253,50 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     isSettingsButton(normal),
     false,
     'isSettingsButton: normal tab → false (DnD may install)',
+  )
+})()
+
+// Distance-based mouse activation (~16px Euclidean).
+;(() => {
+  assertEqual(
+    DRAG_ACTIVATE_DISTANCE_PX,
+    16,
+    'DRAG_ACTIVATE_DISTANCE_PX = 16',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(0, 0),
+    false,
+    'distance: no movement → no activate',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(15, 0),
+    false,
+    'distance: 15px axis < 16 → no activate',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(16, 0),
+    true,
+    'distance: 16px axis ≥ 16 → activate',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(11, 11),
+    false,
+    'distance: sqrt(242)≈15.56 < 16 → no activate',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(12, 12),
+    true,
+    'distance: sqrt(288)≈16.97 ≥ 16 → activate',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(4, 0, 4),
+    true,
+    'distance: custom threshold inclusive',
+  )
+  assertEqual(
+    shouldActivateDragFromDistance(3.9, 0, 4),
+    false,
+    'distance: just under custom threshold',
   )
 })()
 
@@ -345,7 +393,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   )
 })()
 
-// Live strip long-press is desktop-only (≤600px = no-op; Configure Tabs only).
+// Live strip DnD is desktop-only (≤600px = no-op; Configure Tabs only).
 ;(() => {
   const g = globalThis as any
   const prevWindow = g.window

@@ -1,10 +1,16 @@
 // Drag-and-drop tab reorder on live drawer tabs.
 //
-// Long-press (~200ms) on any tab button lifts it into a floating overlay
-// clone. While dragging, hit-test finds the drop target (within or across
-// drawers). On pointerup, builds a ConfigureDraft from current state,
-// applies the reorder/move, and commits via the configure pipeline
-// (commitConfigureDraft) — same backend as the Configure Tabs modal.
+// Activation:
+//   - Mouse / non-touch: distance-based (~16px Euclidean). pointerdown arms;
+//     first pointermove past threshold calls startDrag with the *move* event
+//     so grab offset is correct. Pure click does not lift or suppress clicks.
+//   - Touch / pen: long-press (~200ms), then startDrag. Moving >~16px while
+//     arming cancels (avoids lift during scroll/tap jitter).
+//
+// While dragging, hit-test finds the drop target (within or across drawers).
+// On pointerup, builds a ConfigureDraft from current state, applies the
+// reorder/move, and commits via the configure pipeline (commitConfigureDraft)
+// — same backend as the Configure Tabs modal.
 //
 // Performance: overlay transform via translate3d updated immediately on
 // every pointermove (cheap compositor work). Hit-test, DOM reorder, and
@@ -16,9 +22,9 @@
 // uses visible-index helpers so hidden tabs do not make primary reorder a
 // no-op, and reorders host + mirror DOM so primary sticks before React.
 //
-// Mobile (≤600px): live strip long-press is a no-op. Reorder/move tabs via
+// Mobile (≤600px): live strip DnD is a no-op. Reorder/move tabs via
 // Configure Tabs only (modal DnD stays enabled). Avoids fighting mobile
-// full-bleed drawers and accidental long-press during scroll/tap.
+// full-bleed drawers and accidental lift during scroll/tap.
 //
 // Style: overlay clone preserves original classes so label/icon sizing
 // inherits from the existing tab stylesheet. A wrapper div provides the
@@ -50,11 +56,37 @@ import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { dwarn } from '../debug/log'
 
 /**
- * Live drawer tab-list long-press DnD is desktop-only.
+ * Live drawer tab-list DnD is desktop-only.
  * Configure Tabs modal drag is separate and remains available on mobile.
  */
 export function isLiveTabListDndAllowed(): boolean {
   return !isMobileViewport()
+}
+
+/**
+ * Euclidean distance (px) before mouse drag activates.
+ * Also cancels touch/pen long-press arming when exceeded.
+ */
+export const DRAG_ACTIVATE_DISTANCE_PX = 16
+
+/** Long-press delay (ms) for touch/pen before drag activates. */
+export const LONG_PRESS_MS = 200
+
+/**
+ * True when pointer travel from arming point should start a distance-based
+ * drag (or cancel a touch long-press). Pure helper — exported for testing.
+ */
+export function shouldActivateDragFromDistance(
+  dx: number,
+  dy: number,
+  threshold: number = DRAG_ACTIVATE_DISTANCE_PX,
+): boolean {
+  return Math.sqrt(dx * dx + dy * dy) >= threshold
+}
+
+/** Touch/pen keep long-press; mouse and empty/unknown use distance. */
+function usesLongPressActivation(pointerType: string): boolean {
+  return pointerType === 'touch' || pointerType === 'pen'
 }
 
 // ── Module-level drag state ──
@@ -123,9 +155,9 @@ let _geometryCache: ContainerCache | null = null
 /** True after a DOM reorder — next rAF must rebuild cache. */
 let _geomDirty = false
 
-// ── Long-press state per button ──
+// ── Drag install state per button ──
 
-/** Buttons that already have long-press handlers installed. */
+/** Buttons that already have drag-arming handlers installed. */
 const _installed = new WeakSet<HTMLElement>()
 
 // ── FLIP state ──
@@ -1542,9 +1574,9 @@ async function performDrop(
   }
 }
 
-// ── Long-press installation ──
+// ── Drag-arming installation ──
 
-function installLongPressOnButton(btn: HTMLElement): void {
+function installDragOnButton(btn: HTMLElement): void {
   if (_installed.has(btn)) return
 
   // Skip buttons without a tab id
@@ -1558,8 +1590,8 @@ function installLongPressOnButton(btn: HTMLElement): void {
   _installed.add(btn)
 
   let longPressTimer: ReturnType<typeof setTimeout> | null = null
-  let longPressActivated = false
-  let moveCancelled = false
+  let dragActivated = false
+  let armingCancelled = false
 
   /** Cleanup listeners registered during pointerdown. */
   let pendingPointerMove: ((e: PointerEvent) => void) | null = null
@@ -1581,7 +1613,7 @@ function installLongPressOnButton(btn: HTMLElement): void {
     }
   }
 
-  const cancelTimer = () => {
+  const cancelArming = () => {
     if (longPressTimer != null) {
       clearTimeout(longPressTimer)
       longPressTimer = null
@@ -1600,41 +1632,55 @@ function installLongPressOnButton(btn: HTMLElement): void {
     // Do not activate if already dragging
     if (_isDragging) return
 
-    longPressActivated = false
-    moveCancelled = false
+    dragActivated = false
+    armingCancelled = false
 
     const startX = e.clientX
     const startY = e.clientY
+    // Touch/pen: long-press. Mouse (and empty/unknown desktop): distance.
+    const longPress = usesLongPressActivation(e.pointerType)
 
-    // Start long-press timer (~200ms)
-    longPressTimer = setTimeout(() => {
-      longPressTimer = null
-      cleanupPendingListeners()
-      if (moveCancelled) return
-      // Re-check mobile at fire time (viewport may have crossed while held).
-      if (!isLiveTabListDndAllowed()) return
-      longPressActivated = true
-
-      // Activate drag
-      startDrag(btn, e)
-    }, 200)
-
-    // Document-level move listener — stays until timer fires, pointerup,
-    // or cancel threshold is crossed. Using document-level ensures that
-    // moving the pointer off the button still cancels the long-press.
-    const onMove = (ev: PointerEvent) => {
-      if (longPressActivated) return // Drag mode handles move itself
-      const dx = ev.clientX - startX
-      const dy = ev.clientY - startY
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
-        moveCancelled = true
-        cancelTimer()
-      }
+    if (longPress) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null
+        cleanupPendingListeners()
+        if (armingCancelled) return
+        // Re-check mobile at fire time (viewport may have crossed while held).
+        if (!isLiveTabListDndAllowed()) return
+        dragActivated = true
+        // Finger still near down-point (movement would have cancelled).
+        startDrag(btn, e)
+      }, LONG_PRESS_MS)
     }
 
-    // Cancel on up / cancel (click or touch end)
+    // Document-level move: distance-activate (mouse) or cancel long-press
+    // (touch). Document-level so leaving the button still counts.
+    const onMove = (ev: PointerEvent) => {
+      if (dragActivated) return // Drag mode handles move itself
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+
+      if (longPress) {
+        // Scroll / tap jitter: cancel long-press past threshold.
+        if (shouldActivateDragFromDistance(dx, dy)) {
+          armingCancelled = true
+          cancelArming()
+        }
+        return
+      }
+
+      // Mouse path: arm until distance crossed, then lift with *move* event
+      // so grab offset matches current pointer (Configure Tabs pattern).
+      if (!shouldActivateDragFromDistance(dx, dy)) return
+      dragActivated = true
+      cleanupPendingListeners()
+      if (!isLiveTabListDndAllowed()) return
+      startDrag(btn, ev)
+    }
+
+    // Cancel arming on up / cancel (click or touch end without lift)
     const onUp = () => {
-      cancelTimer()
+      cancelArming()
     }
 
     pendingPointerMove = onMove
@@ -1675,7 +1721,7 @@ export function installTabListDnd(): (() => void) | null {
     'button[data-tab-id], .sidebar-ux-main-tab-mirror-btn',
   )
   for (const btn of existing) {
-    installLongPressOnButton(btn)
+    installDragOnButton(btn)
   }
 
   // Watch for new buttons
@@ -1691,14 +1737,14 @@ export function installTabListDnd(): (() => void) | null {
               'sidebar-ux-main-tab-mirror-btn',
             ))
         ) {
-          installLongPressOnButton(node)
+          installDragOnButton(node)
         }
         // Check descendants
         const descendants = node.querySelectorAll<HTMLElement>(
           'button[data-tab-id], .sidebar-ux-main-tab-mirror-btn',
         )
         for (const child of descendants) {
-          installLongPressOnButton(child)
+          installDragOnButton(child)
         }
       }
     }
