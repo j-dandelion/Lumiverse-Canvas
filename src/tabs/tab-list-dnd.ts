@@ -16,6 +16,10 @@
 // uses visible-index helpers so hidden tabs do not make primary reorder a
 // no-op, and reorders host + mirror DOM so primary sticks before React.
 //
+// Mobile (≤600px): live strip long-press is a no-op. Reorder/move tabs via
+// Configure Tabs only (modal DnD stays enabled). Avoids fighting mobile
+// full-bleed drawers and accidental long-press during scroll/tap.
+//
 // Style: overlay clone preserves original classes so label/icon sizing
 // inherits from the existing tab stylesheet. A wrapper div provides the
 // floating chrome (border + primary ring + background treatment).
@@ -42,7 +46,16 @@ import {
   showMainTabButton,
 } from './buttons'
 import { getMainSidebar } from '../dom/lumiverse'
+import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { dwarn } from '../debug/log'
+
+/**
+ * Live drawer tab-list long-press DnD is desktop-only.
+ * Configure Tabs modal drag is separate and remains available on mobile.
+ */
+export function isLiveTabListDndAllowed(): boolean {
+  return !isMobileViewport()
+}
 
 // ── Module-level drag state ──
 
@@ -1176,6 +1189,8 @@ function scheduleDragFrame(): void {
 }
 
 function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
+  // Belt-and-suspenders: never lift on mobile (Configure Tabs only).
+  if (!isLiveTabListDndAllowed()) return
   const tabId = getButtonTabId(btn)
   if (!tabId) return
 
@@ -1578,6 +1593,8 @@ function installLongPressOnButton(btn: HTMLElement): void {
     // Feature off / torn down — handlers may remain on buttons (WeakSet);
     // only start a drag while the module is active.
     if (!_active) return
+    // Mobile: live strip DnD is a no-op — use Configure Tabs instead.
+    if (!isLiveTabListDndAllowed()) return
     // Only respond to left button
     if (e.button !== 0) return
     // Do not activate if already dragging
@@ -1594,6 +1611,8 @@ function installLongPressOnButton(btn: HTMLElement): void {
       longPressTimer = null
       cleanupPendingListeners()
       if (moveCancelled) return
+      // Re-check mobile at fire time (viewport may have crossed while held).
+      if (!isLiveTabListDndAllowed()) return
       longPressActivated = true
 
       // Activate drag

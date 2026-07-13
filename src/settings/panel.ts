@@ -307,7 +307,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   const dragAndDropDrawerTabsRow = buildSettingRow({
     label: 'Drag and drop drawer tabs',
-    hint: 'Long-press a tab button to reorder it within a drawer or move it to the other drawer. Requires "Taskbar mode".',
+    hint: 'Long-press a tab button to reorder it within a drawer or move it to the other drawer. Requires "Taskbar mode". Desktop only (viewport wider than 600px); on mobile use Configure Tabs.',
     control: dragAndDropDrawerTabs.btn,
     disabled: !getSettings().taskbarMode,
   })

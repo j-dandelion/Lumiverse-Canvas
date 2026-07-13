@@ -50,6 +50,7 @@ import {
   overlayOverlapsContainer,
   insertIndexFromMidpoints,
   settleDestFromButtonRects,
+  isLiveTabListDndAllowed,
 } from '../tab-list-dnd'
 
 let passed = 0
@@ -342,6 +343,47 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     0,
     'settleDest: empty list → fallback',
   )
+})()
+
+// Live strip long-press is desktop-only (≤600px = no-op; Configure Tabs only).
+;(() => {
+  const g = globalThis as any
+  const prevWindow = g.window
+  const prevMatchMedia = g.window?.matchMedia ?? g.matchMedia
+
+  const withViewport = (mobile: boolean) => {
+    const mm = (q: string) => ({
+      matches: mobile && String(q).includes('max-width'),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    })
+    g.window = { ...(g.window || {}), matchMedia: mm }
+    g.matchMedia = mm
+  }
+
+  try {
+    withViewport(true)
+    assertEqual(
+      isLiveTabListDndAllowed(),
+      false,
+      'isLiveTabListDndAllowed: false on mobile (≤600px)',
+    )
+    withViewport(false)
+    assertEqual(
+      isLiveTabListDndAllowed(),
+      true,
+      'isLiveTabListDndAllowed: true on desktop',
+    )
+  } finally {
+    if (prevWindow === undefined) delete g.window
+    else g.window = prevWindow
+    if (prevMatchMedia) {
+      g.matchMedia = prevMatchMedia
+      if (g.window) g.window.matchMedia = prevMatchMedia
+    }
+  }
 })()
 
 // Report

@@ -10678,6 +10678,9 @@ var init_state = __esm(() => {
 });
 
 // src/tabs/tab-list-dnd.ts
+function isLiveTabListDndAllowed() {
+  return !isMobileViewport();
+}
 function injectDndStyles() {
   if (typeof document === "undefined")
     return;
@@ -11332,6 +11335,8 @@ function scheduleDragFrame() {
   });
 }
 function startDrag(btn, pointerEvent) {
+  if (!isLiveTabListDndAllowed())
+    return;
   const tabId = getButtonTabId(btn);
   if (!tabId)
     return;
@@ -11559,6 +11564,8 @@ function installLongPressOnButton(btn) {
   const onPointerDown = (e3) => {
     if (!_active2)
       return;
+    if (!isLiveTabListDndAllowed())
+      return;
     if (e3.button !== 0)
       return;
     if (_isDragging)
@@ -11571,6 +11578,8 @@ function installLongPressOnButton(btn) {
       longPressTimer = null;
       cleanupPendingListeners();
       if (moveCancelled)
+        return;
+      if (!isLiveTabListDndAllowed())
         return;
       longPressActivated = true;
       startDrag(btn, e3);
@@ -11658,6 +11667,7 @@ var init_tab_list_dnd = __esm(() => {
   init_store();
   init_secondary();
   init_buttons();
+  init_mobile_exclusion();
   init_log();
   _installed = new WeakSet;
 });
@@ -14440,7 +14450,7 @@ function buildSettingsPanelDOM() {
   const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }), { disabled: () => !getSettings().taskbarMode });
   const dragAndDropDrawerTabsRow = buildSettingRow({
     label: "Drag and drop drawer tabs",
-    hint: 'Long-press a tab button to reorder it within a drawer or move it to the other drawer. Requires "Taskbar mode".',
+    hint: 'Long-press a tab button to reorder it within a drawer or move it to the other drawer. Requires "Taskbar mode". Desktop only (viewport wider than 600px); on mobile use Configure Tabs.',
     control: dragAndDropDrawerTabs.btn,
     disabled: !getSettings().taskbarMode
   });
