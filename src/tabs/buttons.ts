@@ -325,6 +325,53 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
 }
 
 /**
+ * Reorder main-mirror primary strip buttons to match the given id order.
+ * Targets `.sidebar-ux-tab-list-main` only (Settings stays in bottom dock).
+ * Missing ids are skipped. Used by configure-commit so primary reorder
+ * sticks even when host React has not yet re-rendered host button order.
+ */
+export function reorderMainMirrorTabButtons(ids: string[]): void {
+  const main = document.querySelector(
+    '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main',
+  ) as HTMLElement | null
+  if (!main) return
+  for (const id of ids) {
+    const btn = main.querySelector(
+      `button[data-tab-id="${cssEscape(id)}"]`,
+    ) as HTMLElement | null
+    if (btn && btn.parentElement === main) {
+      main.appendChild(btn)
+    }
+  }
+}
+
+/**
+ * Reorder host React main tab-list buttons to match the given id order.
+ * Targets the host `.tabList` under `.tabListWrap` (not Settings bottom).
+ * React may re-render later from tabOrder; when tabOrder matches this
+ * order the visual is stable. Used so primary DnD sticks immediately.
+ */
+export function reorderHostMainTabButtons(ids: string[]): void {
+  const sidebar = getMainSidebar()
+  if (!sidebar) return
+  // Prefer the scrollable tab list (sibling of sidebarBottom), not the wrap.
+  const tabList =
+    (sidebar.querySelector(
+      '[class*="tabListWrap"] > [class*="tabList"]',
+    ) as HTMLElement | null) ||
+    (sidebar.querySelector('[class*="tabList"]') as HTMLElement | null)
+  if (!tabList) return
+  for (const id of ids) {
+    const btn = tabList.querySelector(
+      `button[data-tab-id="${cssEscape(id)}"]`,
+    ) as HTMLElement | null
+    if (btn && btn.parentElement === tabList) {
+      tabList.appendChild(btn)
+    }
+  }
+}
+
+/**
  * Apply the hidden set to secondary tab buttons.
  * Buttons whose data-tab-id is in hiddenIds get `display: none`;
  * those not in the set (but still assigned and present) are shown.

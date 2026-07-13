@@ -270,6 +270,138 @@ export function reorderWithin(
 }
 
 /**
+ * Reorder `movedId` among the *visible* subset of `fullIds` (ids not in
+ * `hiddenIds`), then write that order back into the full list while keeping
+ * hidden slots in place.
+ *
+ * Live drawer lists only show non-hidden tabs, so hit-test indices are
+ * visible-list indices. Applying them as full-list indices (via
+ * reorderWithin) can no-op the visible order when hidden tabs exist —
+ * the classic "animates then snaps back" bug for primary reorder.
+ *
+ * `toVisibleIndex` is the post-removal insert index among visible ids
+ * (same convention as hitTestDropTarget / reorderWithin).
+ */
+export function reorderVisibleInList(
+  fullIds: readonly string[],
+  movedId: string,
+  toVisibleIndex: number,
+  hiddenIds: ReadonlySet<string>,
+): string[] {
+  const isVisible = (id: string) => !hiddenIds.has(id)
+  const visible = fullIds.filter(isVisible)
+  const from = visible.indexOf(movedId)
+  if (from === -1) return fullIds.slice()
+
+  const nextVis = visible.slice()
+  nextVis.splice(from, 1)
+  const insertAt =
+    toVisibleIndex < 0
+      ? nextVis.length
+      : Math.min(toVisibleIndex, nextVis.length)
+  nextVis.splice(insertAt, 0, movedId)
+
+  let vi = 0
+  return fullIds.map((id) => (isVisible(id) ? nextVis[vi++]! : id))
+}
+
+/**
+ * Insert `tabId` into `fullIds` at a *visible* insert index (post-removal
+ * among non-hidden ids). Removes an existing occurrence first (cross-list
+ * move when the id was already present, or same-list safety).
+ */
+export function insertAtVisibleIndex(
+  fullIds: readonly string[],
+  tabId: string,
+  toVisibleIndex: number,
+  hiddenIds: ReadonlySet<string>,
+): string[] {
+  const without = fullIds.filter((id) => id !== tabId)
+  const visibleCount = without.reduce(
+    (n, id) => n + (hiddenIds.has(id) ? 0 : 1),
+    0,
+  )
+  const targetVis =
+    toVisibleIndex < 0
+      ? visibleCount
+      : Math.min(toVisibleIndex, visibleCount)
+
+  if (targetVis >= visibleCount) {
+    return [...without, tabId]
+  }
+
+  let seen = 0
+  for (let i = 0; i < without.length; i++) {
+    if (hiddenIds.has(without[i]!)) continue
+    if (seen === targetVis) {
+      const next = without.slice()
+      next.splice(i, 0, tabId)
+      return next
+    }
+    seen++
+  }
+  return [...without, tabId]
+}
+
+/**
+ * Reorder a tab within primaryIds or secondaryIds using a visible-list
+ * hit-test index (live drawer DnD).
+ */
+export function reorderWithinVisible(
+  draft: ConfigureDraft,
+  listKey: 'primaryIds' | 'secondaryIds',
+  tabId: string,
+  toVisibleIndex: number,
+): ConfigureDraft {
+  const list = draft[listKey]
+  const nextList = reorderVisibleInList(
+    list,
+    tabId,
+    toVisibleIndex,
+    draft.hiddenIds,
+  )
+  if (
+    nextList.length === list.length &&
+    nextList.every((id, i) => id === list[i])
+  ) {
+    return draft
+  }
+  const next = { ...draft, [listKey]: nextList }
+  const { builtinOrder, extensionOrder } = syncKindOrders(next)
+  return { ...next, builtinOrder, extensionOrder }
+}
+
+/**
+ * Move tabId to the given side at a *visible* insert index (live drawer DnD).
+ */
+export function moveTabVisible(
+  draft: ConfigureDraft,
+  tabId: string,
+  to: TabSide,
+  toVisibleIndex: number,
+): ConfigureDraft {
+  const fromList = draft.primaryIds.includes(tabId)
+    ? 'primaryIds'
+    : 'secondaryIds'
+  const toList = to === 'primary' ? 'primaryIds' : 'secondaryIds'
+
+  if (fromList === toList) {
+    return reorderWithinVisible(draft, fromList, tabId, toVisibleIndex)
+  }
+
+  const source = draft[fromList].filter((id) => id !== tabId)
+  const target = insertAtVisibleIndex(
+    draft[toList],
+    tabId,
+    toVisibleIndex,
+    draft.hiddenIds,
+  )
+  const next = { ...draft, [fromList]: source, [toList]: target }
+  const { builtinOrder, extensionOrder } = syncKindOrders(next)
+  return { ...next, builtinOrder, extensionOrder }
+}
+
+/**
  * Set a tab's hidden state. No-op if the tab is hide-locked.
  */
 export function setHidden(

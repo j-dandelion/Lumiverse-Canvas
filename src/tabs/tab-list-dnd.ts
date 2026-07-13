@@ -10,10 +10,11 @@
 // every pointermove (cheap compositor work). Hit-test, DOM reorder, and
 // FLIP animation are coalesced via requestAnimationFrame.
 //
-// Canvas-owned lists (secondary .sidebar-ux-tab-list and main-mirror
-// .sidebar-ux-main-tab-list-mirror) get mid-drag FLIP-animated DOM reorder.
-// The host React-owned main list gets indicator + hit-test only — no
-// mid-drag DOM reorder.
+// Reorderable lists get mid-drag FLIP-animated DOM reorder: secondary
+// .sidebar-ux-tab-list, main-mirror .sidebar-ux-tab-list-main, and the host
+// React .tabList (taskbar mode off). Commit uses visible-index helpers so
+// hidden tabs do not make primary reorder a no-op, and explicitly reorders
+// host + mirror DOM so primary sticks even before React re-renders.
 //
 // Style: overlay clone preserves original classes so label/icon sizing
 // inherits from the existing tab stylesheet. A wrapper div provides the
@@ -21,8 +22,8 @@
 
 import {
   createDraft,
-  moveTab,
-  reorderWithin,
+  moveTabVisible,
+  reorderWithinVisible,
   type ConfigureDraft,
   type BaseSnapshot,
   type DrawerSide,
@@ -127,17 +128,30 @@ function injectDndStyles(): void {
       cursor: grabbing;
     }
 
-    /* ── Inner button clone — preserves original classes, reset outer chrome so
-         the wrapper provides the overlay treatment ── */
+    /* ── Inner button clone — host CSS-module classes may not reflow the
+         floating clone the same way; force tab-btn layout so icons stay
+         centered (was left-biased after lift). ── */
     .canvas-tab-list-dnd-overlay-clone-btn {
       border: none !important;
       background: none !important;
       box-shadow: none !important;
       outline: none !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 1px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
     }
 
     /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
-    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label {
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
+    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
       font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
       font-weight: 500 !important;
       line-height: 1 !important;
@@ -149,17 +163,26 @@ function injectDndStyles(): void {
       flex-shrink: 0 !important;
     }
 
-    /* ── Override icon size for overlay clone ── */
-    .canvas-tab-list-dnd-overlay-clone > button > span > svg {
+    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
+    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
       width: 20px !important;
       height: 20px !important;
     }
-
-    /* ── Override button height/width — use the rect-measured dimensions ── */
-    .canvas-tab-list-dnd-overlay-clone-btn {
-      width: 100% !important;
-      height: 100% !important;
+    .canvas-tab-list-dnd-overlay-clone-btn svg {
+      width: 20px !important;
+      height: 20px !important;
       flex-shrink: 0 !important;
+      display: block !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn img {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
     }
 
     /* ── Source button while being dragged — same dim as .row-dragging ── */
@@ -210,10 +233,11 @@ function getButtonTabId(btn: HTMLElement): string | null {
 }
 
 /**
- * True when the container is Canvas-owned (eligible for mid-drag FLIP reorder).
- * Includes secondary list, mirror outer, and mirror main/bottom sections.
+ * True when the container is eligible for mid-drag FLIP reorder.
+ * Includes secondary list, mirror main/bottom sections, and the host
+ * React tab list (taskbar mode off).
  */
-function isCanvasOwnedContainer(el: HTMLElement): boolean {
+function isReorderableContainer(el: HTMLElement): boolean {
   if (el.classList.contains(MIRROR_MAIN_CLASS)) return true
   if (el.classList.contains(MIRROR_BOTTOM_CLASS)) return true
   if (el.classList.contains(MIRROR_LIST_CLASS)) return true
@@ -221,16 +245,29 @@ function isCanvasOwnedContainer(el: HTMLElement): boolean {
   if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
     return true
   }
+  // Host Lumiverse tab list (CSS-module class contains "tabList", not wrap/scroll)
+  if (isHostTabListEl(el)) return true
   return false
+}
+
+/** Host `.tabList` node (not tabListWrap / scroll chrome). */
+function isHostTabListEl(el: HTMLElement): boolean {
+  const cn = String(el.className || '')
+  if (!cn.includes('tabList')) return false
+  if (cn.includes('tabListWrap')) return false
+  if (cn.includes('tabListScroll')) return false
+  // Canvas lists use sidebar-ux-tab-list — already handled above
+  if (el.classList.contains(TAB_LIST_CLASS)) return false
+  return true
 }
 
 /**
  * Parent element that owns mid-drag insertBefore for this button.
  * Mirror: .sidebar-ux-tab-list-main or .sidebar-ux-tab-list-bottom.
  * Secondary: the .sidebar-ux-tab-list itself.
- * Host React: null (no mid-drag DOM reorder).
+ * Host React: the `.tabList` flex column (not tabListWrap).
  */
-function getCanvasReorderParent(btn: HTMLElement): HTMLElement | null {
+function getReorderParent(btn: HTMLElement): HTMLElement | null {
   if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
     const section = btn.closest(
       `.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`,
@@ -241,6 +278,9 @@ function getCanvasReorderParent(btn: HTMLElement): HTMLElement | null {
     const list = btn.closest(`.${TAB_LIST_CLASS}`) as HTMLElement | null
     if (list && !list.classList.contains(MIRROR_LIST_CLASS)) return list
   }
+  // Host main drawer tab button
+  const hostList = btn.closest('[class*="tabList"]') as HTMLElement | null
+  if (hostList && isHostTabListEl(hostList)) return hostList
   return null
 }
 
@@ -258,7 +298,8 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     if (secList) containers.push({ el: secList, secondary: true })
   }
 
-  // 2. Main-mirror sections (Canvas-owned primary strip when taskbar mode on)
+  // 2. Main-mirror primary strip (Canvas-owned when taskbar mode on).
+  //    Settings bottom dock is not a drop target — host chrome stays pinned.
   const mirrorList = document.querySelector(
     `.${MIRROR_LIST_CLASS}`,
   ) as HTMLElement | null
@@ -266,26 +307,31 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     const main = mirrorList.querySelector(
       `:scope > .${MIRROR_MAIN_CLASS}`,
     ) as HTMLElement | null
-    const bottom = mirrorList.querySelector(
-      `:scope > .${MIRROR_BOTTOM_CLASS}`,
-    ) as HTMLElement | null
-    if (main) containers.push({ el: main, secondary: false })
-    if (bottom) containers.push({ el: bottom, secondary: false })
-    // Fallback if structure not yet built (legacy flat list)
-    if (!main && !bottom) {
+    if (main) {
+      containers.push({ el: main, secondary: false })
+    } else {
+      // Fallback if structure not yet built (legacy flat list)
       containers.push({ el: mirrorList, secondary: false })
     }
   }
 
-  // 3. Host sidebar fallback (no main-mirror, e.g. taskbar mode off)
+  // 3. Host React tab list (no main-mirror, e.g. taskbar mode off).
+  //    Prefer the inner `.tabList` (button parent) — not tabListWrap —
+  //    so mid-drag insertBefore keeps buttons inside the flex column.
   if (!mirrorList) {
     const hostSidebar = document.querySelector(
       '[class*="sidebarLeft" i], [class*="sidebarRight" i]',
     ) as HTMLElement | null
     const tabListWrap = hostSidebar?.querySelector(
-      ':scope > [class*="tabListWrap"], :scope > div > [class*="tabListWrap"]',
+      '[class*="tabListWrap"]',
     ) as HTMLElement | null
-    if (tabListWrap) {
+    const tabList = (tabListWrap?.querySelector(
+      ':scope > [class*="tabList"]',
+    ) as HTMLElement | null) ||
+      (hostSidebar?.querySelector('[class*="tabList"]') as HTMLElement | null)
+    if (tabList && isHostTabListEl(tabList)) {
+      containers.push({ el: tabList, secondary: false })
+    } else if (tabListWrap) {
       containers.push({ el: tabListWrap, secondary: false })
     } else if (hostSidebar) {
       containers.push({ el: hostSidebar, secondary: false })
@@ -326,7 +372,14 @@ function getAllButtonsInContainer(container: HTMLElement): HTMLElement[] {
       container.querySelectorAll(':scope > button[data-tab-id]'),
     )
   }
-  // Host sidebar
+  // Host React .tabList — prefer direct button children (skip divider noise)
+  if (isHostTabListEl(container)) {
+    const direct = Array.from(
+      container.querySelectorAll(':scope > button[data-tab-id]'),
+    ) as HTMLElement[]
+    if (direct.length > 0) return direct
+  }
+  // Host sidebar / wrap fallback
   return Array.from(
     container.querySelectorAll('button[data-tab-id]'),
   )
@@ -576,8 +629,6 @@ function clearFLIPStyles(): void {
  * (post-removal insert position). Supports same-list and cross-list
  * (secondary ↔ mirror section) moves among Canvas-owned parents.
  *
- * Host React-owned list: never call this (isCanvasOwnedContainer false).
- *
  * Returns true if a DOM mutation was performed.
  */
 function reorderCanvasListDOM(
@@ -586,7 +637,7 @@ function reorderCanvasListDOM(
   sourceTabId: string | null,
 ): boolean {
   if (!sourceTabId) return false
-  if (!isCanvasOwnedContainer(container)) return false
+  if (!isReorderableContainer(container)) return false
 
   // Prefer the live drag element so cross-list moves work even when the
   // source is not yet a child of the target container.
@@ -746,17 +797,20 @@ function scheduleDragFrame(): void {
     }
 
     if (!sameTarget) {
-      // Target changed — check if we need mid-drag FLIP reorder
-      const isCanvas = isCanvasOwnedContainer(target.container)
-      const prevCanvas = prev ? isCanvasOwnedContainer(prev.container) : false
+      // Target changed — mid-drag FLIP reorder on any reorderable list
+      // (secondary, main-mirror sections, host React tabList).
+      const isReorderable = isReorderableContainer(target.container)
+      const prevReorderable = prev
+        ? isReorderableContainer(prev.container)
+        : false
 
-      if (isCanvas && _sourceIsInCanvasList) {
+      if (isReorderable && _sourceIsInCanvasList) {
         // Snapshot source parent + target (and prev target) so siblings on
         // both lists animate when crossing secondary ↔ mirror / main ↔ bottom.
         const prevRects = new Map<string, DOMRect>()
         const flipContainers: HTMLElement[] = []
         const sourceParent = _dragElement?.parentElement
-        if (sourceParent && isCanvasOwnedContainer(sourceParent)) {
+        if (sourceParent && isReorderableContainer(sourceParent)) {
           mergeRects(prevRects, snapshotButtonRects(sourceParent))
           flipContainers.push(sourceParent)
         }
@@ -781,8 +835,8 @@ function scheduleDragFrame(): void {
           applyFLIP(prevRects, _dragTabId, flipContainers)
           _geomDirty = true
         }
-      } else if (prevCanvas && !isCanvas && prev) {
-        // Leaving Canvas-owned surface for host — restore source DOM
+      } else if (prevReorderable && !isReorderable && prev) {
+        // Leaving a reorderable surface — restore source DOM
         restoreSourceButtonDOM()
         clearFLIPStyles()
         _geomDirty = true
@@ -807,9 +861,9 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Save original DOM position for cancel-restore
   _originalParent = btn.parentElement
   _originalNextSibling = btn.nextElementSibling as HTMLElement | null
-  // Mirror buttons live under .sidebar-ux-tab-list-main / -bottom, not the
-  // outer list — use getCanvasReorderParent, not parent.classList alone.
-  _sourceIsInCanvasList = getCanvasReorderParent(btn) != null
+  // Mirror: section parent; secondary: tab list; host: .tabList.
+  // _sourceIsInCanvasList gates mid-drag DOM reorder (name kept for brevity).
+  _sourceIsInCanvasList = getReorderParent(btn) != null
 
   // Calculate overlay offset from pointer
   const rect = btn.getBoundingClientRect()
@@ -885,10 +939,17 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     clearDragState()
 
     if (capturedTarget && capturedTabId) {
-      // Restore source to original DOM position before commit
-      // (the commit pipeline handles everything from the draft state)
-      restoreSourceButtonDOM()
-      await performDrop(capturedTabId, capturedFromSecondary, capturedTarget)
+      // Keep mid-drag DOM order through commit so primary/mirror do not
+      // flash the pre-drag order. Commit re-applies draft order to
+      // secondary + host main + main-mirror. Restore only if commit fails.
+      const ok = await performDrop(
+        capturedTabId,
+        capturedFromSecondary,
+        capturedTarget,
+      )
+      if (!ok) {
+        restoreSourceButtonDOM()
+      }
     } else {
       // Cancel: restore original DOM order, no commit
       restoreSourceButtonDOM()
@@ -961,15 +1022,12 @@ function cleanupDragVisuals(): void {
 /**
  * Build a draft from live state, apply the user's drop action, and commit.
  *
- * Same-side reorder: passes target.index directly to reorderWithin.
- * The hit-test index is a post-removal insert position (same convention as
- * configure-modal's hitTestDropTarget), and reorderWithin also expects a
- * post-removal toIndex — it first splices the source out, then inserts at
- * toIndex. No ±1 adjustment needed. (See configure-modal performDragMove.)
+ * Live drawer hit-test indices are among *visible* tabs only. Hidden tabs
+ * still live in primaryIds/secondaryIds, so we use reorderWithinVisible /
+ * moveTabVisible rather than full-list reorderWithin/moveTab.
  *
- * Cross-drawer move: passes target.index to moveTab, which also expects
- * the insert index in the target list (the source is not in the target list
- * so there is no removal).
+ * Returns true when the commit succeeded (or the drop was a no-op with a
+ * clean draft). False means caller should restore mid-drag DOM.
  */
 async function performDrop(
   tabId: string,
@@ -979,67 +1037,64 @@ async function performDrop(
     index: number
     secondary: boolean
   },
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { draft, base } = buildDraftAndBase()
 
     if (fromSecondary !== target.secondary) {
       // ── Cross-drawer move ──
       const targetSide = target.secondary ? 'secondary' : 'primary'
-      const updated = moveTab(draft, tabId, targetSide, target.index)
+      const updated = moveTabVisible(
+        draft,
+        tabId,
+        targetSide,
+        target.index,
+      )
       const result = await commitConfigureDraft(updated, base)
       if (!result.ok) {
         dwarn(
           '[tab-list-dnd] cross-drawer commit failed:',
           result.error,
         )
+        return false
       }
-    } else {
-      // ── Within-drawer reorder ──
-      // Pass the post-removal hit-test index directly to reorderWithin
-      // (same convention as configure-modal performDragMove).
-      const isSecondaryList = target.secondary
-      const fullList = isSecondaryList
-        ? draft.secondaryIds
-        : draft.primaryIds
-      const fromIndex = fullList.indexOf(tabId)
-      if (fromIndex === -1) {
-        dwarn(
-          '[tab-list-dnd] tab not found in draft for reorder:',
-          tabId,
-        )
-        return
-      }
-
-      // reorderWithin expects a spatial DrawerSide ('left' | 'right').
-      // The secondary list is on the side opposite the main drawer.
-      let spatialSide: DrawerSide
-      if (isSecondaryList) {
-        spatialSide =
-          draft.drawerSide === 'right' ? 'left' : 'right'
-      } else {
-        spatialSide = draft.drawerSide
-      }
-
-      // toIndex is the post-removal insert index (same as hit-test).
-      // reorderWithin first splices out the source, then inserts at toIndex
-      // in the already-spliced list — matching our hit-test convention.
-      const updated = reorderWithin(
-        draft,
-        spatialSide,
-        fromIndex,
-        target.index,
-      )
-      const result = await commitConfigureDraft(updated, base)
-      if (!result.ok) {
-        dwarn(
-          '[tab-list-dnd] reorder commit failed:',
-          result.error,
-        )
-      }
+      return true
     }
+
+    // ── Within-drawer reorder ──
+    const listKey = target.secondary ? 'secondaryIds' : 'primaryIds'
+    const fullList = draft[listKey]
+    if (!fullList.includes(tabId)) {
+      dwarn(
+        '[tab-list-dnd] tab not found in draft for reorder:',
+        tabId,
+      )
+      return false
+    }
+
+    // target.index is the post-removal visible insert index.
+    const updated = reorderWithinVisible(
+      draft,
+      listKey,
+      tabId,
+      target.index,
+    )
+    // No-op reorder: still success (DOM already shows intended order).
+    if (updated === draft) {
+      return true
+    }
+    const result = await commitConfigureDraft(updated, base)
+    if (!result.ok) {
+      dwarn(
+        '[tab-list-dnd] reorder commit failed:',
+        result.error,
+      )
+      return false
+    }
+    return true
   } catch (err) {
     dwarn('[tab-list-dnd] drop failed:', err)
+    return false
   }
 }
 

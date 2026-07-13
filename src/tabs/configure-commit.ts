@@ -24,6 +24,8 @@ import {
   addSecondaryTabButton,
   removeSecondaryTabButton,
   reorderSecondaryTabButtons,
+  reorderMainMirrorTabButtons,
+  reorderHostMainTabButtons,
   applyHiddenTabIdsToSecondary,
   applyHiddenTabIdsToMirror,
   updateDrawerTabVisibility,
@@ -140,8 +142,14 @@ export async function commitConfigureDraft(
     }
     await Promise.all(movePromises)
 
-    // 5. Reorder secondary buttons.
+    // 5. Reorder buttons to match draft (Canvas lists + host main).
+    //    Secondary is Canvas-owned. Primary also needs an explicit DOM apply:
+    //    reconcileMainTabListPin mirrors host button order, and host React
+    //    may not have flushed the new tabOrder yet — without this, live
+    //    primary DnD animates mid-drag then snaps back on release.
     reorderSecondaryTabButtons(draft.secondaryIds)
+    reorderHostMainTabButtons(draft.primaryIds)
+    reorderMainMirrorTabButtons(draft.primaryIds)
 
     // 6. Apply hidden state.
     applyHiddenTabIdsToSecondary(draft.hiddenIds)

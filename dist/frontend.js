@@ -3463,11 +3463,15 @@ var exports_configure_model = {};
 __export(exports_configure_model, {
   swapDrawerSide: () => swapDrawerSide,
   setHidden: () => setHidden,
+  reorderWithinVisible: () => reorderWithinVisible,
   reorderWithin: () => reorderWithin,
+  reorderVisibleInList: () => reorderVisibleInList,
   partitionDisplayLists: () => partitionDisplayLists,
+  moveTabVisible: () => moveTabVisible,
   moveTab: () => moveTab,
   leftColumnIsSecondary: () => leftColumnIsSecondary,
   isDraftDirty: () => isDraftDirty,
+  insertAtVisibleIndex: () => insertAtVisibleIndex,
   encodeHostTabOrder: () => encodeHostTabOrder,
   createDraft: () => createDraft,
   baseSnapshotFromDraft: () => baseSnapshotFromDraft
@@ -3619,6 +3623,61 @@ function reorderWithin(draft, side, fromIndex, toIndex) {
   const { builtinOrder, extensionOrder } = syncKindOrders(next);
   return { ...next, builtinOrder, extensionOrder };
 }
+function reorderVisibleInList(fullIds, movedId, toVisibleIndex, hiddenIds) {
+  const isVisible = (id) => !hiddenIds.has(id);
+  const visible = fullIds.filter(isVisible);
+  const from = visible.indexOf(movedId);
+  if (from === -1)
+    return fullIds.slice();
+  const nextVis = visible.slice();
+  nextVis.splice(from, 1);
+  const insertAt = toVisibleIndex < 0 ? nextVis.length : Math.min(toVisibleIndex, nextVis.length);
+  nextVis.splice(insertAt, 0, movedId);
+  let vi = 0;
+  return fullIds.map((id) => isVisible(id) ? nextVis[vi++] : id);
+}
+function insertAtVisibleIndex(fullIds, tabId, toVisibleIndex, hiddenIds) {
+  const without = fullIds.filter((id) => id !== tabId);
+  const visibleCount = without.reduce((n2, id) => n2 + (hiddenIds.has(id) ? 0 : 1), 0);
+  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
+  if (targetVis >= visibleCount) {
+    return [...without, tabId];
+  }
+  let seen = 0;
+  for (let i3 = 0;i3 < without.length; i3++) {
+    if (hiddenIds.has(without[i3]))
+      continue;
+    if (seen === targetVis) {
+      const next = without.slice();
+      next.splice(i3, 0, tabId);
+      return next;
+    }
+    seen++;
+  }
+  return [...without, tabId];
+}
+function reorderWithinVisible(draft, listKey, tabId, toVisibleIndex) {
+  const list = draft[listKey];
+  const nextList = reorderVisibleInList(list, tabId, toVisibleIndex, draft.hiddenIds);
+  if (nextList.length === list.length && nextList.every((id, i3) => id === list[i3])) {
+    return draft;
+  }
+  const next = { ...draft, [listKey]: nextList };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function moveTabVisible(draft, tabId, to, toVisibleIndex) {
+  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
+  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
+  if (fromList === toList) {
+    return reorderWithinVisible(draft, fromList, tabId, toVisibleIndex);
+  }
+  const source = draft[fromList].filter((id) => id !== tabId);
+  const target = insertAtVisibleIndex(draft[toList], tabId, toVisibleIndex, draft.hiddenIds);
+  const next = { ...draft, [fromList]: source, [toList]: target };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
 function setHidden(draft, tabId, hidden) {
   if (isHideLocked(tabId))
     return draft;
@@ -3712,6 +3771,8 @@ async function commitConfigureDraft(draft, _base) {
     }
     await Promise.all(movePromises);
     reorderSecondaryTabButtons(draft.secondaryIds);
+    reorderHostMainTabButtons(draft.primaryIds);
+    reorderMainMirrorTabButtons(draft.primaryIds);
     applyHiddenTabIdsToSecondary(draft.hiddenIds);
     applyHiddenTabIdsToMirror(draft.hiddenIds);
     updateDrawerTabVisibility();
@@ -5832,6 +5893,8 @@ __export(exports_buttons, {
   showSecondaryTab: () => showSecondaryTab,
   showMainTabButton: () => showMainTabButton,
   reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
+  reorderMainMirrorTabButtons: () => reorderMainMirrorTabButtons,
+  reorderHostMainTabButtons: () => reorderHostMainTabButtons,
   removeSecondaryTabButton: () => removeSecondaryTabButton,
   readMainButtonShortName: () => readMainButtonShortName,
   isSettingsButton: () => isSettingsButton,
@@ -6014,6 +6077,31 @@ function reorderSecondaryTabButtons(ids) {
   for (const id of ids) {
     const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
     if (btn) {
+      tabList.appendChild(btn);
+    }
+  }
+}
+function reorderMainMirrorTabButtons(ids) {
+  const main = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
+  if (!main)
+    return;
+  for (const id of ids) {
+    const btn = main.querySelector(`button[data-tab-id="${cssEscape2(id)}"]`);
+    if (btn && btn.parentElement === main) {
+      main.appendChild(btn);
+    }
+  }
+}
+function reorderHostMainTabButtons(ids) {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
+  if (!tabList)
+    return;
+  for (const id of ids) {
+    const btn = tabList.querySelector(`button[data-tab-id="${cssEscape2(id)}"]`);
+    if (btn && btn.parentElement === tabList) {
       tabList.appendChild(btn);
     }
   }
@@ -13344,17 +13432,30 @@ function injectDndStyles() {
       cursor: grabbing;
     }
 
-    /* ── Inner button clone — preserves original classes, reset outer chrome so
-         the wrapper provides the overlay treatment ── */
+    /* ── Inner button clone — host CSS-module classes may not reflow the
+         floating clone the same way; force tab-btn layout so icons stay
+         centered (was left-biased after lift). ── */
     .canvas-tab-list-dnd-overlay-clone-btn {
       border: none !important;
       background: none !important;
       box-shadow: none !important;
       outline: none !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 1px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
     }
 
     /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
-    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label {
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
+    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
       font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
       font-weight: 500 !important;
       line-height: 1 !important;
@@ -13366,17 +13467,26 @@ function injectDndStyles() {
       flex-shrink: 0 !important;
     }
 
-    /* ── Override icon size for overlay clone ── */
-    .canvas-tab-list-dnd-overlay-clone > button > span > svg {
+    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
+    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
       width: 20px !important;
       height: 20px !important;
     }
-
-    /* ── Override button height/width — use the rect-measured dimensions ── */
-    .canvas-tab-list-dnd-overlay-clone-btn {
-      width: 100% !important;
-      height: 100% !important;
+    .canvas-tab-list-dnd-overlay-clone-btn svg {
+      width: 20px !important;
+      height: 20px !important;
       flex-shrink: 0 !important;
+      display: block !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn img {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
     }
 
     /* ── Source button while being dragged — same dim as .row-dragging ── */
@@ -13412,7 +13522,7 @@ function isSecondaryButton(btn) {
 function getButtonTabId(btn) {
   return btn.getAttribute("data-tab-id");
 }
-function isCanvasOwnedContainer(el) {
+function isReorderableContainer(el) {
   if (el.classList.contains(MIRROR_MAIN_CLASS))
     return true;
   if (el.classList.contains(MIRROR_BOTTOM_CLASS))
@@ -13422,9 +13532,23 @@ function isCanvasOwnedContainer(el) {
   if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
     return true;
   }
+  if (isHostTabListEl(el))
+    return true;
   return false;
 }
-function getCanvasReorderParent(btn) {
+function isHostTabListEl(el) {
+  const cn = String(el.className || "");
+  if (!cn.includes("tabList"))
+    return false;
+  if (cn.includes("tabListWrap"))
+    return false;
+  if (cn.includes("tabListScroll"))
+    return false;
+  if (el.classList.contains(TAB_LIST_CLASS))
+    return false;
+  return true;
+}
+function getReorderParent(btn) {
   if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
     const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
     return section ?? btn.parentElement;
@@ -13434,6 +13558,9 @@ function getCanvasReorderParent(btn) {
     if (list && !list.classList.contains(MIRROR_LIST_CLASS))
       return list;
   }
+  const hostList = btn.closest('[class*="tabList"]');
+  if (hostList && isHostTabListEl(hostList))
+    return hostList;
   return null;
 }
 function getDropContainers() {
@@ -13446,19 +13573,19 @@ function getDropContainers() {
   const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
   if (mirrorList) {
     const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
-    const bottom = mirrorList.querySelector(`:scope > .${MIRROR_BOTTOM_CLASS}`);
-    if (main)
+    if (main) {
       containers.push({ el: main, secondary: false });
-    if (bottom)
-      containers.push({ el: bottom, secondary: false });
-    if (!main && !bottom) {
+    } else {
       containers.push({ el: mirrorList, secondary: false });
     }
   }
   if (!mirrorList) {
     const hostSidebar = document.querySelector('[class*="sidebarLeft" i], [class*="sidebarRight" i]');
-    const tabListWrap = hostSidebar?.querySelector(':scope > [class*="tabListWrap"], :scope > div > [class*="tabListWrap"]');
-    if (tabListWrap) {
+    const tabListWrap = hostSidebar?.querySelector('[class*="tabListWrap"]');
+    const tabList = tabListWrap?.querySelector(':scope > [class*="tabList"]') || hostSidebar?.querySelector('[class*="tabList"]');
+    if (tabList && isHostTabListEl(tabList)) {
+      containers.push({ el: tabList, secondary: false });
+    } else if (tabListWrap) {
       containers.push({ el: tabListWrap, secondary: false });
     } else if (hostSidebar) {
       containers.push({ el: hostSidebar, secondary: false });
@@ -13475,6 +13602,11 @@ function getAllButtonsInContainer(container) {
   }
   if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
     return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+  }
+  if (isHostTabListEl(container)) {
+    const direct = Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+    if (direct.length > 0)
+      return direct;
   }
   return Array.from(container.querySelectorAll("button[data-tab-id]"));
 }
@@ -13612,7 +13744,7 @@ function clearFLIPStyles() {
 function reorderCanvasListDOM(container, target, sourceTabId) {
   if (!sourceTabId)
     return false;
-  if (!isCanvasOwnedContainer(container))
+  if (!isReorderableContainer(container))
     return false;
   const sourceBtn = _dragElement && _dragElement.getAttribute("data-tab-id") === sourceTabId ? _dragElement : getAllButtonsInContainer(container).find((b2) => b2.getAttribute("data-tab-id") === sourceTabId) ?? null;
   if (!sourceBtn)
@@ -13721,13 +13853,13 @@ function scheduleDragFrame() {
       return;
     }
     if (!sameTarget) {
-      const isCanvas = isCanvasOwnedContainer(target.container);
-      const prevCanvas = prev ? isCanvasOwnedContainer(prev.container) : false;
-      if (isCanvas && _sourceIsInCanvasList) {
+      const isReorderable = isReorderableContainer(target.container);
+      const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
+      if (isReorderable && _sourceIsInCanvasList) {
         const prevRects = new Map;
         const flipContainers = [];
         const sourceParent = _dragElement?.parentElement;
-        if (sourceParent && isCanvasOwnedContainer(sourceParent)) {
+        if (sourceParent && isReorderableContainer(sourceParent)) {
           mergeRects(prevRects, snapshotButtonRects(sourceParent));
           flipContainers.push(sourceParent);
         }
@@ -13746,7 +13878,7 @@ function scheduleDragFrame() {
           applyFLIP2(prevRects, _dragTabId2, flipContainers);
           _geomDirty = true;
         }
-      } else if (prevCanvas && !isCanvas && prev) {
+      } else if (prevReorderable && !isReorderable && prev) {
         restoreSourceButtonDOM();
         clearFLIPStyles();
         _geomDirty = true;
@@ -13766,7 +13898,7 @@ function startDrag(btn, pointerEvent) {
   _isDragging = true;
   _originalParent = btn.parentElement;
   _originalNextSibling = btn.nextElementSibling;
-  _sourceIsInCanvasList = getCanvasReorderParent(btn) != null;
+  _sourceIsInCanvasList = getReorderParent(btn) != null;
   const rect = btn.getBoundingClientRect();
   _dragOffsetX2 = pointerEvent.clientX - rect.left;
   _dragOffsetY2 = pointerEvent.clientY - rect.top;
@@ -13805,8 +13937,10 @@ function startDrag(btn, pointerEvent) {
     }
     clearDragState2();
     if (capturedTarget && capturedTabId) {
-      restoreSourceButtonDOM();
-      await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
+      const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
+      if (!ok) {
+        restoreSourceButtonDOM();
+      }
     } else {
       restoreSourceButtonDOM();
     }
@@ -13862,33 +13996,33 @@ async function performDrop(tabId, fromSecondary, target) {
     const { draft, base } = buildDraftAndBase();
     if (fromSecondary !== target.secondary) {
       const targetSide = target.secondary ? "secondary" : "primary";
-      const updated = moveTab(draft, tabId, targetSide, target.index);
-      const result = await commitConfigureDraft(updated, base);
-      if (!result.ok) {
-        dwarn("[tab-list-dnd] cross-drawer commit failed:", result.error);
+      const updated2 = moveTabVisible(draft, tabId, targetSide, target.index);
+      const result2 = await commitConfigureDraft(updated2, base);
+      if (!result2.ok) {
+        dwarn("[tab-list-dnd] cross-drawer commit failed:", result2.error);
+        return false;
       }
-    } else {
-      const isSecondaryList = target.secondary;
-      const fullList = isSecondaryList ? draft.secondaryIds : draft.primaryIds;
-      const fromIndex = fullList.indexOf(tabId);
-      if (fromIndex === -1) {
-        dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
-        return;
-      }
-      let spatialSide;
-      if (isSecondaryList) {
-        spatialSide = draft.drawerSide === "right" ? "left" : "right";
-      } else {
-        spatialSide = draft.drawerSide;
-      }
-      const updated = reorderWithin(draft, spatialSide, fromIndex, target.index);
-      const result = await commitConfigureDraft(updated, base);
-      if (!result.ok) {
-        dwarn("[tab-list-dnd] reorder commit failed:", result.error);
-      }
+      return true;
     }
+    const listKey = target.secondary ? "secondaryIds" : "primaryIds";
+    const fullList = draft[listKey];
+    if (!fullList.includes(tabId)) {
+      dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
+      return false;
+    }
+    const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
+    if (updated === draft) {
+      return true;
+    }
+    const result = await commitConfigureDraft(updated, base);
+    if (!result.ok) {
+      dwarn("[tab-list-dnd] reorder commit failed:", result.error);
+      return false;
+    }
+    return true;
   } catch (err) {
     dwarn("[tab-list-dnd] drop failed:", err);
+    return false;
   }
 }
 function installLongPressOnButton(btn) {
