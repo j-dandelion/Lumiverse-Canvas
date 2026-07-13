@@ -36,7 +36,11 @@ import { getHostDrawerSettings } from '../dom/host-settings'
 import { getTabAssignments } from './assignment'
 import { getMainDrawerSide } from '../store'
 import { getSecondaryWrapper, getSecondaryTabList } from '../sidebar/secondary'
-import { isSettingsButton } from './buttons'
+import {
+  isSettingsButton,
+  hideMainTabButton,
+  showMainTabButton,
+} from './buttons'
 import { getMainSidebar } from '../dom/lumiverse'
 import { dwarn } from '../debug/log'
 
@@ -1275,11 +1279,17 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
       if (capturedTarget && capturedTabId) {
         // Same-list: keep mid-drag DOM through successful commit so primary/
         // mirror do not flash pre-drag order (commit re-applies draft order).
-        // Cross-list: mid-drag parks the wrong node type (mirror btn in
-        // secondary, or secondary btn in mirror). Restore is required before
-        // commit so addSecondaryTabButton / removeSecondary see clean lists,
-        // but must NOT collapse the drop slot under the settling overlay —
-        // hold height with a spacer, settle first, then restore + commit.
+        //
+        // Cross-list is asymmetric:
+        //   secondary → primary: secondary btn is parked in main-mirror (wrong
+        //     type). Restore + height spacer before commit so removeSecondary
+        //     / showMain see a clean secondary list and the mirror slot does
+        //     not collapse under the settling overlay.
+        //   primary → secondary: mirror btn is parked in secondary (wrong type).
+        //     Do NOT restore before commit — that flashes the tab back onto
+        //     main-mirror and rearranges both drawers for a frame. Leave the
+        //     foreign node in the drop slot; addSecondaryTabButton strips it
+        //     and inserts the real secondary button in the same place.
         const crossList = capturedFromSecondary !== capturedTarget.secondary
 
         // Prefer live placeholder rect while it still sits in the drop list
@@ -1295,11 +1305,23 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
           await animateOverlaySettle(dest.left, dest.top)
         }
 
-        if (crossList) {
-          // Spacer holds the gap while the wrong-type node returns home and
-          // commit installs the correct button type in the drop list.
+        if (crossList && capturedFromSecondary) {
+          // secondary → primary only
           slotSpacer = installDropSlotSpacer(_dragElement)
           restoreSourceButtonDOM()
+        }
+
+        if (crossList && !capturedFromSecondary) {
+          // primary → secondary: only the mirror node moved mid-drag; the host
+          // button stayed visible. Hide it before commit so pin reconcile does
+          // not re-materialize a main-mirror button (dual-list rearrange flash).
+          hideMainTabButton(capturedTabId)
+          try {
+            const mp = await import('../sidebar/main-tab-pin')
+            mp.reconcileMainTabListPin?.()
+          } catch {
+            /* pin module optional during tests */
+          }
         }
 
         const ok = await performDrop(
@@ -1307,7 +1329,12 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
           capturedFromSecondary,
           capturedTarget,
         )
-        if (!ok && !crossList) {
+        if (!ok) {
+          if (crossList && !capturedFromSecondary) {
+            showMainTabButton(capturedTabId)
+          }
+          // Same-list or primary→secondary left source mid-drag; put it back.
+          // secondary→primary already restored above (no-op if still home).
           restoreSourceButtonDOM()
         }
       } else {

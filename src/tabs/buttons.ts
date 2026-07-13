@@ -237,6 +237,9 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   }
   const seen = new Set<Element>()
   let hasRealSecondary = false
+  // Live DnD parks a main-mirror button in this list; replace it in-place so
+  // siblings do not collapse then re-expand when the real secondary btn lands.
+  let insertBefore: ChildNode | null = null
   for (const sel of idSels) {
     for (const el of Array.from(tabList.querySelectorAll(sel))) {
       if (seen.has(el)) continue
@@ -244,8 +247,9 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
       if (isOwnedSecondaryTabButton(el)) {
         hasRealSecondary = true
       } else {
-        // Foreign node (e.g. mirror btn parked mid-drag) — remove so commit
-        // can create a proper secondary control.
+        // Foreign node (e.g. mirror btn parked mid-drag) — remember slot,
+        // then remove so we can create a proper secondary control there.
+        if (insertBefore == null) insertBefore = el.nextSibling
         el.remove()
       }
     }
@@ -318,7 +322,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn)
   })
 
-  tabList.appendChild(btn)
+  if (insertBefore && insertBefore.parentNode === tabList) {
+    tabList.insertBefore(btn, insertBefore)
+  } else {
+    tabList.appendChild(btn)
+  }
   // Taskbar pin tracks secondary assignment count — re-evaluate after first tab.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }

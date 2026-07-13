@@ -645,10 +645,19 @@ function makeListStub(initialButtons: Array<{
   appendChild: (child: unknown) => void
 } {
   // Each "button" is a lightweight object with data-tab-id attribute via getAttribute.
+  const listStub: {
+    className: string
+    children: unknown[]
+    querySelector: (sel: string) => unknown
+    querySelectorAll: (sel: string) => unknown[]
+    appendChild: (child: unknown) => void
+    insertBefore: (child: unknown, ref: unknown) => void
+  } = {} as any
+
   const items: any[] = initialButtons.map((b) => {
     const classes = new Set<string>()
     if (b.mirrorOrphan) classes.add('sidebar-ux-main-tab-mirror-btn')
-    const el = {
+    const el: any = {
       _id: b.id,
       style: { display: b.style?.display ?? '' },
       classList: {
@@ -657,6 +666,11 @@ function makeListStub(initialButtons: Array<{
       },
       getAttribute(name: string) { return name === 'data-tab-id' ? b.id : null },
       closest(_sel: string) { return null },
+      get parentNode() { return listStub },
+      get nextSibling() {
+        const idx = items.indexOf(el)
+        return idx >= 0 && idx < items.length - 1 ? items[idx + 1] : null
+      },
       remove() {
         const idx = items.indexOf(el)
         if (idx >= 0) items.splice(idx, 1)
@@ -665,7 +679,7 @@ function makeListStub(initialButtons: Array<{
     return el
   })
 
-  return {
+  Object.assign(listStub, {
     className: 'sidebar-ux-tab-list',
     children: items as unknown[],
     querySelector(sel: string) {
@@ -694,7 +708,23 @@ function makeListStub(initialButtons: Array<{
       }
       items.push(child as any)
     },
-  }
+    insertBefore(child: unknown, ref: unknown) {
+      const fromIdx = items.indexOf(child as any)
+      if (fromIdx >= 0) items.splice(fromIdx, 1)
+      if (ref == null) {
+        items.push(child as any)
+        return
+      }
+      const refIdx = items.indexOf(ref as any)
+      if (refIdx < 0) {
+        items.push(child as any)
+        return
+      }
+      items.splice(refIdx, 0, child as any)
+    },
+  })
+
+  return listStub
 }
 
 // ============================================================
@@ -895,6 +925,54 @@ function makeListStub(initialButtons: Array<{
     (listStub.children as any[]).length,
     1,
     'B28.d: already-has real secondary → no duplicate',
+  )
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// B28e: foreign mid-drag mirror orphan is replaced *in place* (not append)
+// so neighbors do not collapse/re-expand when the real secondary button lands.
+{
+  const listStub = makeListStub([
+    { id: 'keep-a' },
+    { id: 'moved-tab', mirrorOrphan: true },
+    { id: 'keep-b' },
+  ])
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  addSecondaryTabButton({
+    id: 'moved-tab',
+    title: 'Moved Tab',
+    root: document.createElement('div') as unknown as HTMLElement,
+  })
+
+  const items = listStub.children as any[]
+  assertEqual(items.length, 3, 'B28e.a: still three slots after in-place replace')
+  assertEqual(
+    items[0]?.getAttribute?.('data-tab-id') ?? items[0]?._id,
+    'keep-a',
+    'B28e.b: first sibling unchanged',
+  )
+  assertEqual(
+    items[1]?.getAttribute?.('data-tab-id') ?? items[1]?._id,
+    'moved-tab',
+    'B28e.c: real secondary sits where orphan was (middle)',
+  )
+  assertEqual(
+    items[2]?.getAttribute?.('data-tab-id') ?? items[2]?._id,
+    'keep-b',
+    'B28e.d: last sibling unchanged',
+  )
+  assert(
+    !items[1]?.classList?.contains?.('sidebar-ux-main-tab-mirror-btn'),
+    'B28e.e: middle button is not a mirror orphan',
   )
 
   __setSecondaryWrapperForTest(null)

@@ -6577,6 +6577,7 @@ function addSecondaryTabButton(tab) {
   }
   const seen = new Set;
   let hasRealSecondary = false;
+  let insertBefore = null;
   for (const sel of idSels) {
     for (const el of Array.from(tabList.querySelectorAll(sel))) {
       if (seen.has(el))
@@ -6585,6 +6586,8 @@ function addSecondaryTabButton(tab) {
       if (isOwnedSecondaryTabButton(el)) {
         hasRealSecondary = true;
       } else {
+        if (insertBefore == null)
+          insertBefore = el.nextSibling;
         el.remove();
       }
     }
@@ -6648,7 +6651,11 @@ function addSecondaryTabButton(tab) {
     e3.stopPropagation();
     showAssignmentMenu(e3.clientX, e3.clientY, tab.id, tab.title, btn);
   });
-  tabList.appendChild(btn);
+  if (insertBefore && insertBefore.parentNode === tabList) {
+    tabList.insertBefore(btn, insertBefore);
+  } else {
+    tabList.appendChild(btn);
+  }
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
 function removeSecondaryTabButton(tabId) {
@@ -11248,12 +11255,22 @@ function startDrag(btn, pointerEvent) {
         if (dest) {
           await animateOverlaySettle2(dest.left, dest.top);
         }
-        if (crossList) {
+        if (crossList && capturedFromSecondary) {
           slotSpacer = installDropSlotSpacer(_dragElement);
           restoreSourceButtonDOM();
         }
+        if (crossList && !capturedFromSecondary) {
+          hideMainTabButton(capturedTabId);
+          try {
+            const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+            mp.reconcileMainTabListPin?.();
+          } catch {}
+        }
         const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
-        if (!ok && !crossList) {
+        if (!ok) {
+          if (crossList && !capturedFromSecondary) {
+            showMainTabButton(capturedTabId);
+          }
           restoreSourceButtonDOM();
         }
       } else {
