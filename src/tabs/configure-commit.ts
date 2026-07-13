@@ -17,6 +17,9 @@ import {
   getTabAssignments,
   setTabAssignment,
   deleteTabAssignment,
+  hasSecondaryAssignedTabs,
+  getActiveSecondaryTabId,
+  setActiveSecondaryTabId,
 } from './assignment'
 import {
   hideMainTabButton,
@@ -29,6 +32,9 @@ import {
   applyHiddenTabIdsToSecondary,
   applyHiddenTabIdsToMirror,
   updateDrawerTabVisibility,
+  clearSecondaryTabButtonActive,
+  showSecondaryTab,
+  cssEscape,
 } from './buttons'
 import {
   patchHostDrawerSettings,
@@ -40,8 +46,11 @@ import { persistLayout } from '../layout/persist'
 import { dlog, dwarn } from '../debug/log'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getHostBridge } from '../dom/host-bridge'
-import { getSecondaryWrapper } from '../sidebar/secondary'
-import { cssEscape } from './buttons'
+import {
+  getSecondaryWrapper,
+  closeSecondarySidebar,
+  isSecondarySidebarOpen,
+} from '../sidebar/secondary'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
 
@@ -141,6 +150,18 @@ export async function commitConfigureDraft(
       }))
     }
     await Promise.all(movePromises)
+
+    // 4b. Quiet toPrimary skips runHandoff / unassignFromSecondary. Without
+    //     this, secondary stays open with no active content after live DnD
+    //     (or Configure drag) secondary → primary — empty panel left behind.
+    //     Only when we actually moved something out of secondary.
+    if (toPrimary.length > 0) {
+      try {
+        reconcileSecondaryAfterQuietPrimaryMoves(draft.secondaryIds)
+      } catch (err) {
+        dwarn('[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:', err)
+      }
+    }
 
     // 5. Reorder buttons to match draft (Canvas lists + host main).
     //    Secondary is Canvas-owned. Primary also needs an explicit DOM apply:
@@ -272,12 +293,83 @@ async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
 }
 
 /**
+ * Clear Canvas placement attrs on a root (and any residual secondary match).
+ * Mirrors unassignFromSecondary attr cleanup without reparent/persist.
+ */
+function clearCanvasMovedAttrs(tabId: string, root?: HTMLElement | null): void {
+  const clear = (el: HTMLElement | null | undefined) => {
+    if (!el) return
+    el.removeAttribute('data-canvas-moved')
+    el.removeAttribute('data-canvas-active')
+  }
+  clear(root)
+  const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+  if (secondaryContent) {
+    const residual = secondaryContent.querySelector(
+      `[data-canvas-moved="${cssEscape(tabId)}"]`,
+    ) as HTMLElement | null
+    clear(residual)
+  }
+  // Residual may already be outside secondary after host requestTabLocation.
+  if (typeof document !== 'undefined' && !root) {
+    const residual = document.querySelector(
+      `[data-canvas-moved="${cssEscape(tabId)}"]`,
+    ) as HTMLElement | null
+    clear(residual)
+  }
+}
+
+/**
+ * After quiet toPrimary moves: close empty secondary, or activate a remaining
+ * tab so the open drawer is not a blank panel. Full assignTab runs handoff;
+ * quiet path does not — live drawer DnD hits this gap.
+ */
+function reconcileSecondaryAfterQuietPrimaryMoves(secondaryIds: string[]): void {
+  const remaining = secondaryIds.filter((id) => {
+    const side = getTabAssignments().get(id)
+    // After quiet moves, secondary assignments are deleted for moved tabs.
+    // Prefer draft secondaryIds ∩ live secondary map; fall back to map scan.
+    return side === 'secondary'
+  })
+  const liveSecondary: string[] = []
+  for (const [id, side] of getTabAssignments()) {
+    if (side === 'secondary') liveSecondary.push(id)
+  }
+  const ids = remaining.length > 0 ? remaining : liveSecondary
+
+  if (!hasSecondaryAssignedTabs() || ids.length === 0) {
+    setActiveSecondaryTabId(null)
+    clearSecondaryTabButtonActive()
+    if (isSecondarySidebarOpen()) {
+      // Persist closed (default silent=false) so reload does not reopen empty.
+      closeSecondarySidebar()
+    }
+    updateDrawerTabVisibility()
+    return
+  }
+
+  const active = getActiveSecondaryTabId()
+  const activeStillHere =
+    !!active &&
+    (ids.includes(active) || getTabAssignments().get(active) === 'secondary')
+  if (!activeStillHere) {
+    // Neighbor / first remaining — avoids open secondary with all roots
+    // hidden via [data-canvas-moved]:not([data-canvas-active]).
+    showSecondaryTab(ids[0]!)
+  }
+}
+
+/**
  * Move a tab to the primary drawer without handoff, auto-close, or per-tab persist.
+ * Still clears Canvas attrs + secondary active flag so panel content does not
+ * linger; post-batch reconcile closes empty secondary or activates a neighbor.
  */
 async function moveTabToPrimaryQuiet(tabId: string): Promise<void> {
   const bridge = getHostBridge()
   const ui = bridge?.ui
   const isBuiltIn = !!ui?.getBuiltInTabRoot?.(tabId)
+  const activeId = getActiveSecondaryTabId()
+  const wasActive = activeId === tabId
 
   if (isBuiltIn) {
     // Built-in: requestTabLocation back to main-drawer.
@@ -288,6 +380,8 @@ async function moveTabToPrimaryQuiet(tabId: string): Promise<void> {
         dwarn(`[configure-commit] requestTabLocation(main-drawer) failed for "${tabId}":`, err)
       }
     }
+    const bridgeRoot = ui?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
+    clearCanvasMovedAttrs(tabId, bridgeRoot)
     // Clean up assignment + buttons without full unassignFromSecondary (avoids persist).
     deleteTabAssignment(tabId)
     showMainTabButton(tabId)
@@ -310,9 +404,15 @@ async function moveTabToPrimaryQuiet(tabId: string): Promise<void> {
       } catch (err) {
         dwarn(`[configure-commit] reparent "${tabId}" to main panel failed:`, err)
       }
-      storeTab.root.removeAttribute('data-canvas-moved')
-      storeTab.root.removeAttribute('data-canvas-active')
+      clearCanvasMovedAttrs(tabId, storeTab.root)
+    } else {
+      clearCanvasMovedAttrs(tabId)
     }
+  }
+
+  if (wasActive) {
+    setActiveSecondaryTabId(null)
+    clearSecondaryTabButtonActive()
   }
   updateDrawerTabVisibility()
 }

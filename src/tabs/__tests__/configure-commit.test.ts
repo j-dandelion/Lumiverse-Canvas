@@ -483,6 +483,257 @@ function setup() {
   assert(result.ok === true, 'C9: commit with clean (matching) state returns ok')
 }
 
+/** Wire querySelector on secondary shell stubs so quiet-move cleanup can find content. */
+function wireSecondaryShell(
+  wrapper: any,
+  tabList: any,
+  panelContent: any,
+  movedRoots: any[],
+): void {
+  const matchMoved = (sel: string, roots: any[]) => {
+    const m = sel.match(/data-canvas-moved="([^"]+)"/)
+    if (!m) return null
+    return roots.find((r) => r.getAttribute?.('data-canvas-moved') === m[1]) ?? null
+  }
+  panelContent.querySelector = (sel: string) => matchMoved(sel, movedRoots)
+  panelContent.querySelectorAll = (sel: string) => {
+    if (sel.includes('data-canvas-moved')) return movedRoots.slice()
+    return []
+  }
+  tabList.querySelector = (sel: string) => {
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return null
+    return (tabList.children as any[]).find(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    ) ?? null
+  }
+  tabList.querySelectorAll = (sel: string) => {
+    if (sel.includes('sidebar-ux-tab-active') || sel.includes('button')) {
+      return (tabList.children as any[]).filter((c) => {
+        if (sel.includes('sidebar-ux-tab-active')) {
+          return String(c.className || '').includes('sidebar-ux-tab-active')
+        }
+        return true
+      })
+    }
+    return []
+  }
+  wrapper.querySelector = (sel: string) => {
+    if (sel === '.sidebar-ux-panel-content' || sel.includes('panel-content')) return panelContent
+    if (sel === '.sidebar-ux-tab-list' || sel.includes('tab-list')) return tabList
+    if (sel.includes('data-tab-id')) return tabList.querySelector(sel)
+    return null
+  }
+}
+
+// =====================================================================
+// C10: secondary → primary (last tab) clears active + assignment
+//     Regression: quiet move left secondary open with empty panel after
+//     live DnD / Configure drag to main-mirror.
+// =====================================================================
+{
+  setup()
+  const { getActiveSecondaryTabId, setActiveSecondaryTabId } = await import('../assignment')
+  const { setSecondarySidebarOpen } = await import('../../sidebar/secondary')
+
+  const movedRoot: any = document.createElement('div')
+  movedRoot.setAttribute('data-canvas-moved', 'profile')
+  movedRoot.setAttribute('data-canvas-active', '')
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.appendChild(movedRoot)
+
+  const tabList: any = makeStubTabList()
+  const secBtn = document.createElement('button')
+  secBtn.setAttribute('data-tab-id', 'profile')
+  tabList.appendChild(secBtn)
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [movedRoot])
+  __setSecondaryWrapperForTest(wrapper)
+  setSecondarySidebarOpen(true)
+
+  // Built-in path: getBuiltInTabRoot returns the moved root.
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: (id: string) => (id === 'profile' ? movedRoot : undefined),
+        getBuiltInTabTitle: () => 'Profile',
+        requestTabLocation: () => {
+          // Host reparents root out of secondary; quiet path must clear attrs.
+          const idx = (panelContent.children as unknown[]).indexOf(movedRoot)
+          if (idx >= 0) (panelContent.children as unknown[]).splice(idx, 1)
+        },
+        getTabLocation: () => null,
+      },
+      containers: {},
+    },
+    matchMedia: (q: string) => ({ matches: q === '(max-width: 600px)' }),
+  }
+
+  setTabAssignment('profile', 'secondary')
+  setActiveSecondaryTabId('profile')
+
+  __setHostSetSettingForTest(
+    () => {},
+    { side: 'right', tabOrder: ['profile'], hiddenTabIds: [] },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile'],
+    secondaryIds: [],
+    builtinOrder: ['profile'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['profile'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([['profile', 'secondary']]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C10: last secondary→primary commit ok')
+  assertEqual(getTabAssignments().get('profile'), undefined, 'C10: assignment deleted')
+  assertEqual(getActiveSecondaryTabId(), null, 'C10: active secondary cleared')
+  assertEqual(
+    movedRoot.getAttribute('data-canvas-moved'),
+    null,
+    'C10: data-canvas-moved cleared on built-in root',
+  )
+  assertEqual(
+    movedRoot.getAttribute('data-canvas-active'),
+    null,
+    'C10: data-canvas-active cleared on built-in root',
+  )
+  // closeSecondarySidebar no-ops without full shell drawer; active+attrs
+  // are the critical empty-panel fix.
+  setSecondarySidebarOpen(false)
+  __setSecondaryWrapperForTest(null)
+}
+
+// =====================================================================
+// C11: secondary → primary with sibling remaining activates neighbor
+// =====================================================================
+{
+  setup()
+  const { getActiveSecondaryTabId, setActiveSecondaryTabId } = await import('../assignment')
+
+  const rootA: any = document.createElement('div')
+  rootA.setAttribute('data-canvas-moved', 'tab-a')
+  rootA.setAttribute('data-canvas-active', '')
+  const rootB: any = document.createElement('div')
+  rootB.setAttribute('data-canvas-moved', 'tab-b')
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.appendChild(rootA)
+  panelContent.appendChild(rootB)
+
+  const tabList: any = makeStubTabList()
+  for (const id of ['tab-a', 'tab-b']) {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    // showSecondaryTab toggles classList on secondary buttons.
+    const classes = new Set<string>()
+    btn.classList = {
+      add: (c: string) => { classes.add(c); btn.className = [...classes].join(' ') },
+      remove: (c: string) => { classes.delete(c); btn.className = [...classes].join(' ') },
+      toggle: (c: string, force?: boolean) => {
+        const on = force === undefined ? !classes.has(c) : !!force
+        if (on) classes.add(c); else classes.delete(c)
+        btn.className = [...classes].join(' ')
+        return on
+      },
+      contains: (c: string) => classes.has(c),
+    }
+    btn.querySelector = () => null
+    tabList.appendChild(btn)
+  }
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  // After tab-a move, only rootB remains moved in secondary for showSecondaryTab.
+  wireSecondaryShell(wrapper, tabList, panelContent, [rootA, rootB])
+  // getSecondaryTabList → querySelector('.sidebar-ux-tab-list') then button[data-tab-id]
+  tabList.querySelectorAll = (sel: string) => {
+    if (sel.includes('data-tab-id') || sel.includes('button')) {
+      return [...(tabList.children as any[])]
+    }
+    return []
+  }
+  __setSecondaryWrapperForTest(wrapper)
+
+  // Extension path (no built-in roots) so reparent + showSecondaryTab run.
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: () => undefined,
+        getBuiltInTabTitle: () => undefined,
+        requestTabLocation: () => {},
+        getTabLocation: () => null,
+      },
+      containers: {},
+    },
+    matchMedia: (q: string) => ({ matches: q === '(max-width: 600px)' }),
+  }
+
+  // Store roots for extension reparent.
+  __setDrawerTabsForTest([
+    { id: 'tab-a', title: 'A', root: rootA, extensionId: 'ext' },
+    { id: 'tab-b', title: 'B', root: rootB, extensionId: 'ext' },
+  ] as any)
+
+  setTabAssignment('tab-a', 'secondary')
+  setTabAssignment('tab-b', 'secondary')
+  setActiveSecondaryTabId('tab-a')
+
+  __setHostSetSettingForTest(
+    () => {},
+    { side: 'right', tabOrder: ['tab-a', 'tab-b'], hiddenTabIds: [] },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-a'],
+    secondaryIds: ['tab-b'],
+    builtinOrder: [],
+    extensionOrder: ['tab-a', 'tab-b'],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'secondary'],
+      ['tab-b', 'secondary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C11: sibling secondary→primary commit ok')
+  assertEqual(getTabAssignments().get('tab-a'), undefined, 'C11: tab-a assignment deleted')
+  assertEqual(getTabAssignments().get('tab-b'), 'secondary', 'C11: tab-b still secondary')
+  assertEqual(getActiveSecondaryTabId(), 'tab-b', 'C11: neighbor tab-b activated')
+  assertEqual(
+    rootB.getAttribute('data-canvas-active'),
+    '',
+    'C11: tab-b root has data-canvas-active',
+  )
+  assertEqual(
+    rootA.getAttribute('data-canvas-moved'),
+    null,
+    'C11: moved tab attrs cleared',
+  )
+  __setSecondaryWrapperForTest(null)
+}
+
 // =====================================================================
 // Summary
 // =====================================================================

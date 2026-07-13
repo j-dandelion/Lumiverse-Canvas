@@ -3774,6 +3774,13 @@ async function commitConfigureDraft(draft, _base) {
       }));
     }
     await Promise.all(movePromises);
+    if (toPrimary.length > 0) {
+      try {
+        reconcileSecondaryAfterQuietPrimaryMoves(draft.secondaryIds);
+      } catch (err) {
+        dwarn("[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:", err);
+      }
+    }
     reorderSecondaryTabButtons(draft.secondaryIds);
     reorderHostMainTabButtons(draft.primaryIds);
     reorderMainMirrorTabButtons(draft.primaryIds);
@@ -3867,10 +3874,56 @@ async function moveTabToSecondaryQuiet(tabId) {
     updateDrawerTabVisibility();
   }
 }
+function clearCanvasMovedAttrs(tabId, root) {
+  const clear = (el) => {
+    if (!el)
+      return;
+    el.removeAttribute("data-canvas-moved");
+    el.removeAttribute("data-canvas-active");
+  };
+  clear(root);
+  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  if (secondaryContent) {
+    const residual = secondaryContent.querySelector(`[data-canvas-moved="${cssEscape(tabId)}"]`);
+    clear(residual);
+  }
+  if (typeof document !== "undefined" && !root) {
+    const residual = document.querySelector(`[data-canvas-moved="${cssEscape(tabId)}"]`);
+    clear(residual);
+  }
+}
+function reconcileSecondaryAfterQuietPrimaryMoves(secondaryIds) {
+  const remaining = secondaryIds.filter((id) => {
+    const side = getTabAssignments().get(id);
+    return side === "secondary";
+  });
+  const liveSecondary = [];
+  for (const [id, side] of getTabAssignments()) {
+    if (side === "secondary")
+      liveSecondary.push(id);
+  }
+  const ids = remaining.length > 0 ? remaining : liveSecondary;
+  if (!hasSecondaryAssignedTabs() || ids.length === 0) {
+    setActiveSecondaryTabId(null);
+    clearSecondaryTabButtonActive();
+    if (isSecondarySidebarOpen()) {
+      closeSecondarySidebar();
+    }
+    updateDrawerTabVisibility();
+    return;
+  }
+  const active = getActiveSecondaryTabId();
+  const activeStillHere = !!active && (ids.includes(active) || getTabAssignments().get(active) === "secondary");
+  if (!activeStillHere) {
+    showSecondaryTab(ids[0]);
+  }
+}
 async function moveTabToPrimaryQuiet(tabId) {
   const bridge = getHostBridge();
   const ui = bridge?.ui;
   const isBuiltIn = !!ui?.getBuiltInTabRoot?.(tabId);
+  const activeId = getActiveSecondaryTabId();
+  const wasActive = activeId === tabId;
   if (isBuiltIn) {
     if (ui?.requestTabLocation) {
       try {
@@ -3879,6 +3932,8 @@ async function moveTabToPrimaryQuiet(tabId) {
         dwarn(`[configure-commit] requestTabLocation(main-drawer) failed for "${tabId}":`, err);
       }
     }
+    const bridgeRoot = ui?.getBuiltInTabRoot?.(tabId);
+    clearCanvasMovedAttrs(tabId, bridgeRoot);
     deleteTabAssignment(tabId);
     showMainTabButton(tabId);
     removeSecondaryTabButton(tabId);
@@ -3897,9 +3952,14 @@ async function moveTabToPrimaryQuiet(tabId) {
       } catch (err) {
         dwarn(`[configure-commit] reparent "${tabId}" to main panel failed:`, err);
       }
-      storeTab.root.removeAttribute("data-canvas-moved");
-      storeTab.root.removeAttribute("data-canvas-active");
+      clearCanvasMovedAttrs(tabId, storeTab.root);
+    } else {
+      clearCanvasMovedAttrs(tabId);
     }
+  }
+  if (wasActive) {
+    setActiveSecondaryTabId(null);
+    clearSecondaryTabButtonActive();
   }
   updateDrawerTabVisibility();
 }
@@ -4136,21 +4196,21 @@ function findHostTabButton(tabId) {
   const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
   if (!sidebar)
     return null;
-  const exact = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`);
+  const exact = sidebar.querySelector(`button[data-tab-id="${cssEscape2(tabId)}"]`);
   if (exact)
     return exact;
-  const title = sidebar.querySelector(`button[title="${cssEscape(tabId)}"]`);
+  const title = sidebar.querySelector(`button[title="${cssEscape2(tabId)}"]`);
   if (title)
     return title;
   if (tabId.includes(":")) {
     const bare = tabId.replace(/:\d+$/, "").split(":").pop();
     if (bare) {
-      return sidebar.querySelector(`button[data-tab-id="${cssEscape(bare)}"]`);
+      return sidebar.querySelector(`button[data-tab-id="${cssEscape2(bare)}"]`);
     }
   }
   return null;
 }
-function cssEscape(s3) {
+function cssEscape2(s3) {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
     return CSS.escape(s3);
   }
@@ -5906,7 +5966,7 @@ __export(exports_buttons, {
   findSafeFallbackButton: () => findSafeFallbackButton,
   findMainTabButton: () => findMainTabButton,
   deriveShortName: () => deriveShortName,
-  cssEscape: () => cssEscape2,
+  cssEscape: () => cssEscape,
   clearSecondaryTabButtonActive: () => clearSecondaryTabButtonActive,
   applyHiddenTabIdsToSecondary: () => applyHiddenTabIdsToSecondary,
   applyHiddenTabIdsToMirror: () => applyHiddenTabIdsToMirror,
@@ -5944,10 +6004,10 @@ function findMainTabButton(tabId) {
     dwarn("findMainTabButton: no sidebar found");
     return null;
   }
-  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape2(tabId)}"]`);
+  const byId = sidebar.querySelector(`button[data-tab-id="${cssEscape(tabId)}"]`);
   if (byId)
     return byId;
-  const byTitle = sidebar.querySelector(`button[title="${cssEscape2(tabId)}"]`);
+  const byTitle = sidebar.querySelector(`button[title="${cssEscape(tabId)}"]`);
   if (byTitle) {
     byTitle.setAttribute("data-tab-id", tabId);
     return byTitle;
@@ -5968,7 +6028,7 @@ function findMainTabButton(tabId) {
   dwarn(`findMainTabButton: no button for id="${tabId}" (title="${tab.title}") found among ${buttons.length} buttons`);
   return null;
 }
-function cssEscape2(value) {
+function cssEscape(value) {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
     return CSS.escape(value);
   }
@@ -6118,7 +6178,7 @@ function reorderMainMirrorTabButtons(ids) {
   if (!main)
     return;
   for (const id of ids) {
-    const btn = main.querySelector(`button[data-tab-id="${cssEscape2(id)}"]`);
+    const btn = main.querySelector(`button[data-tab-id="${cssEscape(id)}"]`);
     if (btn && btn.parentElement === main) {
       main.appendChild(btn);
     }
@@ -6132,7 +6192,7 @@ function reorderHostMainTabButtons(ids) {
   if (!tabList)
     return;
   for (const id of ids) {
-    const btn = tabList.querySelector(`button[data-tab-id="${cssEscape2(id)}"]`);
+    const btn = tabList.querySelector(`button[data-tab-id="${cssEscape(id)}"]`);
     if (btn && btn.parentElement === tabList) {
       tabList.appendChild(btn);
     }
