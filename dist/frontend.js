@@ -13277,6 +13277,444 @@ function dismissHostContextMenu() {
   }));
 }
 
+// src/tabs/tab-list-dnd.ts
+init_configure_model();
+init_configure_commit();
+init_configure_catalog();
+init_host_settings();
+init_assignment();
+init_store();
+init_secondary();
+init_log();
+var _isDragging = false;
+var _dragTabId2 = null;
+var _dragElement = null;
+var _dragFromSecondary = false;
+var _dragOverlay2 = null;
+var _dragOffsetX2 = 0;
+var _dragOffsetY2 = 0;
+var _lastDropTarget2 = null;
+var _insertIndicatorEl = null;
+var _moveHandler = null;
+var _upHandler = null;
+var _clickSuppressor = null;
+var _clickSuppressorTimer = null;
+var _installed = new WeakSet;
+var DND_STYLE_ID = "canvas-tab-list-dnd-styles";
+function injectDndStyles() {
+  if (typeof document === "undefined")
+    return;
+  if (document.getElementById(DND_STYLE_ID))
+    return;
+  const style = document.createElement("style");
+  style.id = DND_STYLE_ID;
+  style.textContent = `
+    /* Floating overlay clone — matches configure-modal overlay-clone treatment */
+    .canvas-tab-list-dnd-overlay-clone {
+      position: fixed;
+      z-index: 13000;
+      pointer-events: none;
+      margin: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--lumiverse-border, #333);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
+      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+        0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
+      color: var(--lumiverse-text, #eee);
+      font-family: var(--lumiverse-font-family, sans-serif);
+      opacity: 1;
+      will-change: left, top;
+      cursor: grabbing;
+    }
+
+    /* Source button while being dragged — same dim as .row-dragging */
+    .canvas-tab-list-dnd-placeholder {
+      opacity: 0.35 !important;
+    }
+
+    /* Drop-insert indicator: a subtle primary underline at the top of the
+       target button where the tab will be inserted. */
+    .canvas-tab-list-dnd-insert-before {
+      box-shadow: inset 0 2px 0 0 var(--lumiverse-primary, #4a9eff) !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+function isSecondaryButton(btn) {
+  return !!btn.closest(".sidebar-ux-tab-list");
+}
+function getButtonTabId(btn) {
+  return btn.getAttribute("data-tab-id");
+}
+function getDropContainers() {
+  const containers = [];
+  if (getSecondaryWrapper()) {
+    const secList = getSecondaryTabList();
+    if (secList)
+      containers.push({ el: secList, secondary: true });
+  }
+  const mirrorList = document.querySelector(".sidebar-ux-main-tab-list-mirror");
+  if (mirrorList) {
+    containers.push({ el: mirrorList, secondary: false });
+  }
+  if (!mirrorList) {
+    const hostSidebar = document.querySelector('[class*="sidebarLeft" i], [class*="sidebarRight" i]');
+    const tabListWrap = hostSidebar?.querySelector(':scope > [class*="tabListWrap"], :scope > div > [class*="tabListWrap"]');
+    if (tabListWrap) {
+      containers.push({ el: tabListWrap, secondary: false });
+    } else if (hostSidebar) {
+      containers.push({ el: hostSidebar, secondary: false });
+    }
+  }
+  return containers;
+}
+function getButtonsInContainer(container, secondary, excludeTabId) {
+  let buttons;
+  if (secondary) {
+    buttons = Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+  } else if (container.classList.contains("sidebar-ux-main-tab-list-mirror")) {
+    buttons = Array.from(container.querySelectorAll(":scope > button.sidebar-ux-main-tab-mirror-btn"));
+  } else {
+    buttons = Array.from(container.querySelectorAll(":scope button[data-tab-id]"));
+  }
+  if (!excludeTabId)
+    return buttons;
+  return buttons.filter((el) => el.getAttribute("data-tab-id") !== excludeTabId);
+}
+function buildDraftAndBase() {
+  const catalog = getFullCatalog();
+  const hostSettings = getHostDrawerSettings();
+  const currentAssignments = new Map(getTabAssignments());
+  const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const draft = createDraft({
+    catalog,
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: currentAssignments
+  });
+  const base = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    drawerSide,
+    assignments: new Map(currentAssignments)
+  };
+  return { draft, base, catalog };
+}
+function hitTestDropTarget2(x2, y3) {
+  const containers = getDropContainers();
+  for (const { el: container, secondary } of containers) {
+    const rect = container.getBoundingClientRect();
+    if (x2 < rect.left || x2 > rect.right)
+      continue;
+    if (y3 < rect.top - 8 || y3 > rect.bottom + 8)
+      continue;
+    const buttons = getButtonsInContainer(container, secondary, _dragTabId2);
+    if (buttons.length === 0) {
+      return { container, index: 0, secondary };
+    }
+    for (let i3 = 0;i3 < buttons.length; i3++) {
+      const btnRect = buttons[i3].getBoundingClientRect();
+      const mid = btnRect.top + btnRect.height / 2;
+      if (y3 < mid)
+        return { container, index: i3, secondary };
+    }
+    return { container, index: buttons.length, secondary };
+  }
+  return null;
+}
+function clearInsertIndicator() {
+  if (_insertIndicatorEl) {
+    _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
+    _insertIndicatorEl = null;
+  }
+}
+function setInsertIndicator(target) {
+  clearInsertIndicator();
+  const buttons = getButtonsInContainer(target.container, target.secondary, _dragTabId2);
+  if (buttons.length === 0 || target.index >= buttons.length) {
+    return;
+  }
+  const targetBtn = buttons[target.index];
+  targetBtn.classList.add("canvas-tab-list-dnd-insert-before");
+  _insertIndicatorEl = targetBtn;
+}
+function createDragOverlay2(sourceBtn) {
+  const overlay = sourceBtn.cloneNode(true);
+  overlay.className = "canvas-tab-list-dnd-overlay-clone";
+  const rect = sourceBtn.getBoundingClientRect();
+  overlay.style.width = rect.width + "px";
+  overlay.style.height = rect.height + "px";
+  overlay.style.left = rect.left + "px";
+  overlay.style.top = rect.top + "px";
+  document.body.appendChild(overlay);
+  return overlay;
+}
+function installClickSuppressor(el) {
+  const handler = (e3) => {
+    e3.stopImmediatePropagation();
+  };
+  el.addEventListener("click", handler, true);
+  _clickSuppressor = handler;
+  if (_clickSuppressorTimer !== null)
+    clearTimeout(_clickSuppressorTimer);
+  _clickSuppressorTimer = setTimeout(() => {
+    if (_clickSuppressor && _dragElement) {
+      _dragElement.removeEventListener("click", _clickSuppressor, true);
+    }
+    _clickSuppressor = null;
+    _clickSuppressorTimer = null;
+  }, 0);
+}
+function removeClickSuppressorNow() {
+  if (_clickSuppressorTimer !== null) {
+    clearTimeout(_clickSuppressorTimer);
+    _clickSuppressorTimer = null;
+  }
+  if (_clickSuppressor && _dragElement) {
+    _dragElement.removeEventListener("click", _clickSuppressor, true);
+  }
+  _clickSuppressor = null;
+}
+function startDrag(btn, pointerEvent) {
+  const tabId = getButtonTabId(btn);
+  if (!tabId)
+    return;
+  _dragFromSecondary = isSecondaryButton(btn);
+  _dragTabId2 = tabId;
+  _dragElement = btn;
+  _isDragging = true;
+  const rect = btn.getBoundingClientRect();
+  _dragOffsetX2 = pointerEvent.clientX - rect.left;
+  _dragOffsetY2 = pointerEvent.clientY - rect.top;
+  btn.classList.add("canvas-tab-list-dnd-placeholder");
+  _dragOverlay2 = createDragOverlay2(btn);
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+  const suppressCtx = (e3) => {
+    e3.preventDefault();
+    e3.stopPropagation();
+  };
+  document.addEventListener("contextmenu", suppressCtx, true);
+  installClickSuppressor(btn);
+  const onMove = (ev) => {
+    if (!_dragOverlay2)
+      return;
+    _dragOverlay2.style.left = `${ev.clientX - _dragOffsetX2}px`;
+    _dragOverlay2.style.top = `${ev.clientY - _dragOffsetY2}px`;
+    const target = hitTestDropTarget2(ev.clientX, ev.clientY);
+    if (!target) {
+      clearInsertIndicator();
+      _lastDropTarget2 = null;
+      return;
+    }
+    const prev = _lastDropTarget2;
+    if (prev && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary) {
+      return;
+    }
+    _lastDropTarget2 = target;
+    setInsertIndicator(target);
+  };
+  const onUp = async (_ev) => {
+    const capturedTabId = _dragTabId2;
+    const capturedFromSecondary = _dragFromSecondary;
+    const capturedTarget = _lastDropTarget2;
+    document.removeEventListener("contextmenu", suppressCtx, true);
+    clearDragState2();
+    if (capturedTarget && capturedTabId) {
+      await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
+    }
+    cleanupDragVisuals();
+  };
+  _moveHandler = onMove;
+  _upHandler = onUp;
+  document.addEventListener("pointermove", onMove, { passive: true });
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+function clearDragState2() {
+  if (_moveHandler) {
+    document.removeEventListener("pointermove", _moveHandler);
+    _moveHandler = null;
+  }
+  if (_upHandler) {
+    document.removeEventListener("pointerup", _upHandler);
+    document.removeEventListener("pointercancel", _upHandler);
+    _upHandler = null;
+  }
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+}
+function cleanupDragVisuals() {
+  if (_dragOverlay2) {
+    _dragOverlay2.remove();
+    _dragOverlay2 = null;
+  }
+  if (_dragElement) {
+    _dragElement.classList.remove("canvas-tab-list-dnd-placeholder");
+  }
+  clearInsertIndicator();
+  _isDragging = false;
+  _dragTabId2 = null;
+  _dragElement = null;
+  _dragFromSecondary = false;
+  _lastDropTarget2 = null;
+}
+async function performDrop(tabId, fromSecondary, target) {
+  try {
+    const { draft, base } = buildDraftAndBase();
+    if (fromSecondary !== target.secondary) {
+      const targetSide = target.secondary ? "secondary" : "primary";
+      const updated = moveTab(draft, tabId, targetSide, target.index);
+      const result = await commitConfigureDraft(updated, base);
+      if (!result.ok) {
+        dwarn("[tab-list-dnd] cross-drawer commit failed:", result.error);
+      }
+    } else {
+      const isSecondaryList = target.secondary;
+      const fullList = isSecondaryList ? draft.secondaryIds : draft.primaryIds;
+      const fromIndex = fullList.indexOf(tabId);
+      if (fromIndex === -1) {
+        dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
+        return;
+      }
+      let spatialSide;
+      if (isSecondaryList) {
+        spatialSide = draft.drawerSide === "right" ? "left" : "right";
+      } else {
+        spatialSide = draft.drawerSide;
+      }
+      const updated = reorderWithin(draft, spatialSide, fromIndex, target.index);
+      const result = await commitConfigureDraft(updated, base);
+      if (!result.ok) {
+        dwarn("[tab-list-dnd] reorder commit failed:", result.error);
+      }
+    }
+  } catch (err) {
+    dwarn("[tab-list-dnd] drop failed:", err);
+  }
+}
+function installLongPressOnButton(btn) {
+  if (_installed.has(btn))
+    return;
+  const tabId = getButtonTabId(btn);
+  if (!tabId)
+    return;
+  _installed.add(btn);
+  let longPressTimer = null;
+  let longPressActivated = false;
+  let moveCancelled = false;
+  let pendingPointerMove = null;
+  let pendingPointerUp = null;
+  let pendingPointerCancel = null;
+  const cleanupPendingListeners = () => {
+    if (pendingPointerMove) {
+      document.removeEventListener("pointermove", pendingPointerMove);
+      pendingPointerMove = null;
+    }
+    if (pendingPointerUp) {
+      document.removeEventListener("pointerup", pendingPointerUp);
+      pendingPointerUp = null;
+    }
+    if (pendingPointerCancel) {
+      document.removeEventListener("pointercancel", pendingPointerCancel);
+      pendingPointerCancel = null;
+    }
+  };
+  const cancelTimer = () => {
+    if (longPressTimer != null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    cleanupPendingListeners();
+  };
+  const onPointerDown = (e3) => {
+    if (e3.button !== 0)
+      return;
+    if (_isDragging)
+      return;
+    longPressActivated = false;
+    moveCancelled = false;
+    const startX = e3.clientX;
+    const startY = e3.clientY;
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      cleanupPendingListeners();
+      if (moveCancelled)
+        return;
+      longPressActivated = true;
+      startDrag(btn, e3);
+    }, 300);
+    const onMove = (ev) => {
+      if (longPressActivated)
+        return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        moveCancelled = true;
+        cancelTimer();
+      }
+    };
+    const onUp = () => {
+      cancelTimer();
+    };
+    pendingPointerMove = onMove;
+    pendingPointerUp = onUp;
+    pendingPointerCancel = onUp;
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  };
+  btn.addEventListener("pointerdown", onPointerDown);
+}
+var _active2 = false;
+var _observer2 = null;
+function installTabListDnd() {
+  if (_active2)
+    return () => {};
+  _active2 = true;
+  injectDndStyles();
+  const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+  for (const btn of existing) {
+    installLongPressOnButton(btn);
+  }
+  _observer2 = new MutationObserver((mutations) => {
+    for (const mut of mutations) {
+      for (const node of mut.addedNodes) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        if (node.tagName === "BUTTON" && (node.hasAttribute("data-tab-id") || node.classList.contains("sidebar-ux-main-tab-mirror-btn"))) {
+          installLongPressOnButton(node);
+        }
+        const descendants = node.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+        for (const child of descendants) {
+          installLongPressOnButton(child);
+        }
+      }
+    }
+  });
+  _observer2.observe(document.body, { childList: true, subtree: true });
+  return () => {
+    tearDownTabListDnd();
+  };
+}
+function tearDownTabListDnd() {
+  _active2 = false;
+  if (_observer2) {
+    _observer2.disconnect();
+    _observer2 = null;
+  }
+  if (_isDragging) {
+    removeClickSuppressorNow();
+    cleanupDragVisuals();
+    clearDragState2();
+  }
+}
+
 // src/modals/weaver-lane.ts
 init_store();
 init_reflow();
@@ -13290,9 +13728,9 @@ var WEAVER_LANE_ATTR = "data-canvas-weaver-lane";
 var WEAVER_INSET_L_VAR = "--sidebar-ux-weaver-inset-l";
 var WEAVER_INSET_R_VAR = "--sidebar-ux-weaver-inset-r";
 var PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host";
-var _observer2 = null;
+var _observer3 = null;
 var _rafId = null;
-var _active2 = false;
+var _active3 = false;
 var _resizeListening = false;
 var _pollTimer = null;
 var _taggedDialog = null;
@@ -13564,7 +14002,7 @@ function setResizeListening(on) {
 function setPoll(on) {
   if (on && _pollTimer === null) {
     _pollTimer = setInterval(() => {
-      if (!_active2) {
+      if (!_active3) {
         setPoll(false);
         return;
       }
@@ -13576,7 +14014,7 @@ function setPoll(on) {
   }
 }
 function applyWeaverLane() {
-  if (!_active2)
+  if (!_active3)
     return;
   const dialog = findWeaverDialog();
   if (dialog) {
@@ -13610,27 +14048,27 @@ function scheduleApply() {
   });
 }
 function startWeaverLane() {
-  if (_observer2) {
+  if (_observer3) {
     return () => {};
   }
   injectWeaverLaneStyles();
-  _active2 = true;
+  _active3 = true;
   scheduleApply();
-  _observer2 = new MutationObserver(() => {
-    if (!_active2)
+  _observer3 = new MutationObserver(() => {
+    if (!_active3)
       return;
     scheduleApply();
   });
-  _observer2.observe(document.body, { childList: true, subtree: true });
+  _observer3.observe(document.body, { childList: true, subtree: true });
   return () => {
-    _active2 = false;
+    _active3 = false;
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId);
       _rafId = null;
     }
-    if (_observer2) {
-      _observer2.disconnect();
-      _observer2 = null;
+    if (_observer3) {
+      _observer3.disconnect();
+      _observer3 = null;
     }
     setPoll(false);
     clearTaggedDialog();
@@ -13719,6 +14157,8 @@ function setup(ctx) {
     registerCleanup(stopContextMenuListener);
     startConfigureTabsIntercept();
     registerCleanup(stopConfigureTabsIntercept);
+    installTabListDnd();
+    registerCleanup(tearDownTabListDnd);
     registerCleanup(startWeaverLane());
     registerCleanup(() => {
       teardownSecondaryDrawer();

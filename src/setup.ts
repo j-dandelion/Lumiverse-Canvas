@@ -52,6 +52,7 @@ import { startContextMenuListener, stopContextMenuListener } from './context-men
 import { setDebug, dwarn } from './debug/log'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
+import { installTabListDnd, tearDownTabListDnd } from './tabs/tab-list-dnd'
 import { startWeaverLane } from './modals/weaver-lane'
 
 export function setup(ctx: SpindleFrontendContext) {
@@ -214,6 +215,12 @@ export function setup(ctx: SpindleFrontendContext) {
     // from the footer toggle inside the modal.
     startConfigureTabsIntercept()
     registerCleanup(stopConfigureTabsIntercept)
+
+    // Tab-list drag-and-drop reorder is always on while Canvas is loaded.
+    // Long-press (~300ms) to lift a tab button and drag it within or between
+    // drawers. Reuses the Configure Tabs commit pipeline.
+    installTabListDnd()
+    registerCleanup(tearDownTabListDnd)
 
     // Weaver Studio content-lane containment is always on while Canvas is
     // loaded, independent of chatReflow setting. It constrains the weaver
