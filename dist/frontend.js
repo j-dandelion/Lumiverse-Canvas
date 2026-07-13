@@ -10397,12 +10397,6 @@ function injectDndStyles() {
       pointer-events: none !important;
     }
 
-    /* ── Drop-insert indicator: a subtle primary underline at the top of the
-         target button where the tab will be inserted. ── */
-    .canvas-tab-list-dnd-insert-before {
-      box-shadow: inset 0 2px 0 0 var(--lumiverse-primary, #4a9eff) !important;
-    }
-
     /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
@@ -10680,16 +10674,11 @@ function clearInsertIndicator() {
     _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
     _insertIndicatorEl = null;
   }
-}
-function setInsertIndicator(target) {
-  clearInsertIndicator();
-  const buttons = getButtonsInContainer(target.container, target.secondary, _dragTabId2);
-  if (buttons.length === 0 || target.index >= buttons.length) {
-    return;
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-insert-before"))) {
+      el.classList.remove("canvas-tab-list-dnd-insert-before");
+    }
   }
-  const targetBtn = buttons[target.index];
-  targetBtn.classList.add("canvas-tab-list-dnd-insert-before");
-  _insertIndicatorEl = targetBtn;
 }
 function snapshotButtonRects(container) {
   const rects = new Map;
@@ -10910,7 +10899,6 @@ function scheduleDragFrame() {
         _geomDirty = true;
       }
       _lastDropTarget2 = target;
-      setInsertIndicator(target);
     }
   });
 }

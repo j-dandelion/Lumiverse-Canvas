@@ -223,12 +223,6 @@ function injectDndStyles(): void {
       pointer-events: none !important;
     }
 
-    /* ── Drop-insert indicator: a subtle primary underline at the top of the
-         target button where the tab will be inserted. ── */
-    .canvas-tab-list-dnd-insert-before {
-      box-shadow: inset 0 2px 0 0 var(--lumiverse-primary, #4a9eff) !important;
-    }
-
     /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
@@ -729,32 +723,14 @@ function clearInsertIndicator(): void {
     )
     _insertIndicatorEl = null
   }
-}
-
-function setInsertIndicator(
-  target: {
-    container: HTMLElement
-    index: number
-    secondary: boolean
-  },
-): void {
-  clearInsertIndicator()
-
-  const buttons = getButtonsInContainer(
-    target.container,
-    target.secondary,
-    _dragTabId,
-  )
-
-  if (buttons.length === 0 || target.index >= buttons.length) {
-    // Dropping after the last button — no good element to highlight.
-    // Leave no indicator (insert-after-last is self-evident).
-    return
+  // Legacy class cleanup (indicator UI removed; strip if any stuck).
+  if (typeof document !== 'undefined') {
+    for (const el of Array.from(
+      document.querySelectorAll('.canvas-tab-list-dnd-insert-before'),
+    )) {
+      el.classList.remove('canvas-tab-list-dnd-insert-before')
+    }
   }
-
-  const targetBtn = buttons[target.index]
-  targetBtn.classList.add('canvas-tab-list-dnd-insert-before')
-  _insertIndicatorEl = targetBtn
 }
 
 // ── FLIP animation helpers ──
@@ -1115,7 +1091,6 @@ function scheduleDragFrame(): void {
       }
 
       _lastDropTarget = target
-      setInsertIndicator(target)
     }
   })
 }
