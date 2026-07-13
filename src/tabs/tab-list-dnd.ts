@@ -89,6 +89,13 @@ let _originalParent: HTMLElement | null = null
 let _originalNextSibling: HTMLElement | null = null
 /** True when the source button is in a Canvas-owned list (mid-drag reorder eligible). */
 let _sourceIsInCanvasList = false
+/** In-flight drop-settle timeout (transitionend fallback). */
+let _settleTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Drop-settle duration — keep in sync with CSS transition on .overlay-settling. */
+const SETTLE_DURATION_MS = 180
+/** Skip settle animation when already within this many CSS pixels of dest. */
+const SETTLE_MIN_DISTANCE_PX = 2
 
 // ── Geometry cache (rebuilt each rAF, invalidated on DOM reorder) ──
 
@@ -217,6 +224,18 @@ function injectDndStyles(): void {
     /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
+    }
+
+    /* ── Drop settle: floating clone eases into its destination slot ── */
+    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
+      transition:
+        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
+        0 0 0 1px var(--lumiverse-border, #333);
+      cursor: default;
+      opacity: 0.92;
     }
   `
   document.head.appendChild(style)
@@ -566,6 +585,131 @@ function hitTestDropTarget(
   return best
     ? { container: best.container, index: best.index, secondary: best.secondary }
     : null
+}
+
+/**
+ * Predicted top-left of the drop slot from sibling button rects (post-removal
+ * insert index). Used for cross-list settle before commit creates the real btn.
+ *
+ * Pure helper — unit-tested.
+ */
+export function settleDestFromButtonRects(
+  index: number,
+  rects: { left: number; top: number; width: number; height: number }[],
+  emptyFallback: { left: number; top: number },
+): { left: number; top: number } {
+  if (rects.length === 0) return emptyFallback
+  if (index >= rects.length) {
+    const last = rects[rects.length - 1]
+    return { left: last.left, top: last.top + last.height }
+  }
+  const ref = rects[index]
+  return { left: ref.left, top: ref.top }
+}
+
+/**
+ * Destination top-left for the floating overlay on release.
+ * Same-list: live source button (already mid-drag reordered into the slot).
+ * Cross-list: predicted slot among target list buttons (exclude dragged id).
+ * Cancel: caller restores source first, then pass target=null.
+ */
+function resolveSettleDestination(
+  tabId: string | null,
+  target: { container: HTMLElement; index: number; secondary: boolean } | null,
+  crossList: boolean,
+): { left: number; top: number } | null {
+  // Same-list drop: source placeholder is already in the final slot.
+  if (!crossList && _dragElement) {
+    const r = _dragElement.getBoundingClientRect()
+    return { left: r.left, top: r.top }
+  }
+
+  if (target && tabId) {
+    const buttons = getButtonsInContainer(
+      target.container,
+      target.secondary,
+      tabId,
+    )
+    const rects = buttons.map((b) => {
+      const r = b.getBoundingClientRect()
+      return { left: r.left, top: r.top, width: r.width, height: r.height }
+    })
+    const cr = target.container.getBoundingClientRect()
+    const emptyFallback = {
+      left: cr.left + Math.max(0, (cr.width - (_overlayWidth || 48)) / 2),
+      top: cr.top,
+    }
+    return settleDestFromButtonRects(target.index, rects, emptyFallback)
+  }
+
+  // Cancel / no target after restore
+  if (_dragElement) {
+    const r = _dragElement.getBoundingClientRect()
+    return { left: r.left, top: r.top }
+  }
+  return null
+}
+
+/**
+ * Animate the floating overlay from its current translate to dest top-left.
+ * Resolves when the transition ends (or after a timeout fallback).
+ */
+function animateOverlaySettle(
+  destLeft: number,
+  destTop: number,
+): Promise<void> {
+  const overlay = _dragOverlay
+  if (!overlay) return Promise.resolve()
+
+  const dx = destLeft - _overlayTx
+  const dy = destTop - _overlayTy
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    _overlayTx = destLeft
+    _overlayTy = destTop
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      overlay.removeEventListener('transitionend', onEnd)
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer)
+        _settleTimer = null
+      }
+      _overlayTx = destLeft
+      _overlayTy = destTop
+      resolve()
+    }
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target !== overlay) return
+      // Only complete on transform (box-shadow/opacity also transition).
+      if (e.propertyName && e.propertyName !== 'transform') return
+      finish()
+    }
+
+    overlay.addEventListener('transitionend', onEnd)
+    overlay.classList.add('canvas-tab-list-dnd-overlay-settling')
+    // Ensure the settling class applies before changing transform.
+    void overlay.offsetWidth
+    _overlayTx = destLeft
+    _overlayTy = destTop
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40)
+  })
+}
+
+function cancelOverlaySettle(): void {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer)
+    _settleTimer = null
+  }
+  if (_dragOverlay) {
+    _dragOverlay.classList.remove('canvas-tab-list-dnd-overlay-settling')
+  }
 }
 
 // ── Insert indicator management ──
@@ -1058,33 +1202,58 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
       _rafId = null
     }
 
+    // Stop tracking pointer; keep overlay + placeholder for settle anim.
     clearDragState()
+    clearInsertIndicator()
 
-    if (capturedTarget && capturedTabId) {
-      // Same-list: keep mid-drag DOM through successful commit so primary/
-      // mirror do not flash pre-drag order (commit re-applies draft order).
-      // Cross-list: mid-drag parks the wrong node type (mirror btn in
-      // secondary, or secondary btn in mirror). Restore first so
-      // addSecondaryTabButton / removeSecondary see clean lists; commit
-      // owns create/remove/reorder.
-      const crossList = capturedFromSecondary !== capturedTarget.secondary
-      if (crossList) {
+    try {
+      if (capturedTarget && capturedTabId) {
+        // Same-list: keep mid-drag DOM through successful commit so primary/
+        // mirror do not flash pre-drag order (commit re-applies draft order).
+        // Cross-list: mid-drag parks the wrong node type (mirror btn in
+        // secondary, or secondary btn in mirror). Restore first so
+        // addSecondaryTabButton / removeSecondary see clean lists; commit
+        // owns create/remove/reorder.
+        const crossList = capturedFromSecondary !== capturedTarget.secondary
+
+        // Capture settle dest *before* cross-list restore when possible:
+        // same-list uses the live placeholder slot; cross-list predicts
+        // from target siblings (exclude dragged id — may still be parked).
+        const dest = resolveSettleDestination(
+          capturedTabId,
+          capturedTarget,
+          crossList,
+        )
+
+        if (crossList) {
+          restoreSourceButtonDOM()
+        }
+
+        // Quick ease of the floating tab into its destination slot.
+        if (dest) {
+          await animateOverlaySettle(dest.left, dest.top)
+        }
+
+        const ok = await performDrop(
+          capturedTabId,
+          capturedFromSecondary,
+          capturedTarget,
+        )
+        if (!ok && !crossList) {
+          restoreSourceButtonDOM()
+        }
+      } else {
+        // Cancel: restore original DOM order, snap overlay home, no commit
         restoreSourceButtonDOM()
+        const dest = resolveSettleDestination(capturedTabId, null, false)
+        if (dest) {
+          await animateOverlaySettle(dest.left, dest.top)
+        }
       }
-      const ok = await performDrop(
-        capturedTabId,
-        capturedFromSecondary,
-        capturedTarget,
-      )
-      if (!ok && !crossList) {
-        restoreSourceButtonDOM()
-      }
-    } else {
-      // Cancel: restore original DOM order, no commit
-      restoreSourceButtonDOM()
+    } finally {
+      cancelOverlaySettle()
+      cleanupDragVisuals()
     }
-
-    cleanupDragVisuals()
   }
 
   _moveHandler = onMove
@@ -1411,11 +1580,12 @@ export function tearDownTabListDnd(): void {
   }
   if (_isDragging) {
     removeClickSuppressorNow()
-    // Cancel any pending rAF
+    // Cancel any pending rAF / settle
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId)
       _rafId = null
     }
+    cancelOverlaySettle()
     restoreSourceButtonDOM()
     cleanupDragVisuals()
     clearDragState()

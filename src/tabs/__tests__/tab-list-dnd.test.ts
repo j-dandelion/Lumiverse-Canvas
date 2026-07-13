@@ -47,6 +47,7 @@ import {
   dragHitGeometry,
   overlayOverlapsContainer,
   insertIndexFromMidpoints,
+  settleDestFromButtonRects,
 } from '../tab-list-dnd'
 
 let passed = 0
@@ -292,6 +293,36 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   assertEqual(insertIndexFromMidpoints(250, mids), 2, 'insertIndex: between 1 and 2 → 2')
   assertEqual(insertIndexFromMidpoints(350, mids), 3, 'insertIndex: below last → length')
   assertEqual(insertIndexFromMidpoints(0, []), 0, 'insertIndex: empty list → 0')
+})()
+
+// Drop-settle destination from sibling rects (cross-list predicted slot).
+;(() => {
+  const rects = [
+    { left: 10, top: 0, width: 48, height: 48 },
+    { left: 10, top: 48, width: 48, height: 48 },
+    { left: 10, top: 96, width: 48, height: 48 },
+  ]
+  const empty = { left: 10, top: 0 }
+  assertEqual(
+    settleDestFromButtonRects(0, rects, empty).top,
+    0,
+    'settleDest: index 0 → first rect top',
+  )
+  assertEqual(
+    settleDestFromButtonRects(1, rects, empty).top,
+    48,
+    'settleDest: index 1 → second rect top',
+  )
+  assertEqual(
+    settleDestFromButtonRects(3, rects, empty).top,
+    144,
+    'settleDest: append past last → last.bottom',
+  )
+  assertEqual(
+    settleDestFromButtonRects(0, [], empty).top,
+    0,
+    'settleDest: empty list → fallback',
+  )
 })()
 
 // Report

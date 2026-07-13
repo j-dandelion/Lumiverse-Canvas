@@ -10399,6 +10399,18 @@ function injectDndStyles() {
     .canvas-tab-list-dnd-flipping {
       transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
     }
+
+    /* ── Drop settle: floating clone eases into its destination slot ── */
+    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
+      transition:
+        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
+        0 0 0 1px var(--lumiverse-border, #333);
+      cursor: default;
+      opacity: 0.92;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -10568,6 +10580,92 @@ function hitTestDropTarget2(geom) {
     }
   }
   return best ? { container: best.container, index: best.index, secondary: best.secondary } : null;
+}
+function settleDestFromButtonRects(index, rects, emptyFallback) {
+  if (rects.length === 0)
+    return emptyFallback;
+  if (index >= rects.length) {
+    const last = rects[rects.length - 1];
+    return { left: last.left, top: last.top + last.height };
+  }
+  const ref = rects[index];
+  return { left: ref.left, top: ref.top };
+}
+function resolveSettleDestination(tabId, target, crossList) {
+  if (!crossList && _dragElement) {
+    const r3 = _dragElement.getBoundingClientRect();
+    return { left: r3.left, top: r3.top };
+  }
+  if (target && tabId) {
+    const buttons = getButtonsInContainer(target.container, target.secondary, tabId);
+    const rects = buttons.map((b2) => {
+      const r3 = b2.getBoundingClientRect();
+      return { left: r3.left, top: r3.top, width: r3.width, height: r3.height };
+    });
+    const cr = target.container.getBoundingClientRect();
+    const emptyFallback = {
+      left: cr.left + Math.max(0, (cr.width - (_overlayWidth || 48)) / 2),
+      top: cr.top
+    };
+    return settleDestFromButtonRects(target.index, rects, emptyFallback);
+  }
+  if (_dragElement) {
+    const r3 = _dragElement.getBoundingClientRect();
+    return { left: r3.left, top: r3.top };
+  }
+  return null;
+}
+function animateOverlaySettle(destLeft, destTop) {
+  const overlay = _dragOverlay2;
+  if (!overlay)
+    return Promise.resolve();
+  const dx = destLeft - _overlayTx;
+  const dy = destTop - _overlayTy;
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    _overlayTx = destLeft;
+    _overlayTy = destTop;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done)
+        return;
+      done = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer);
+        _settleTimer = null;
+      }
+      _overlayTx = destLeft;
+      _overlayTy = destTop;
+      resolve();
+    };
+    const onEnd = (e3) => {
+      if (e3.target !== overlay)
+        return;
+      if (e3.propertyName && e3.propertyName !== "transform")
+        return;
+      finish();
+    };
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
+    overlay.offsetWidth;
+    _overlayTx = destLeft;
+    _overlayTy = destTop;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+  });
+}
+function cancelOverlaySettle() {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer);
+    _settleTimer = null;
+  }
+  if (_dragOverlay2) {
+    _dragOverlay2.classList.remove("canvas-tab-list-dnd-overlay-settling");
+  }
 }
 function clearInsertIndicator() {
   if (_insertIndicatorEl) {
@@ -10858,19 +10956,32 @@ function startDrag(btn, pointerEvent) {
       _rafId = null;
     }
     clearDragState2();
-    if (capturedTarget && capturedTabId) {
-      const crossList = capturedFromSecondary !== capturedTarget.secondary;
-      if (crossList) {
+    clearInsertIndicator();
+    try {
+      if (capturedTarget && capturedTabId) {
+        const crossList = capturedFromSecondary !== capturedTarget.secondary;
+        const dest = resolveSettleDestination(capturedTabId, capturedTarget, crossList);
+        if (crossList) {
+          restoreSourceButtonDOM();
+        }
+        if (dest) {
+          await animateOverlaySettle(dest.left, dest.top);
+        }
+        const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
+        if (!ok && !crossList) {
+          restoreSourceButtonDOM();
+        }
+      } else {
         restoreSourceButtonDOM();
+        const dest = resolveSettleDestination(capturedTabId, null, false);
+        if (dest) {
+          await animateOverlaySettle(dest.left, dest.top);
+        }
       }
-      const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
-      if (!ok && !crossList) {
-        restoreSourceButtonDOM();
-      }
-    } else {
-      restoreSourceButtonDOM();
+    } finally {
+      cancelOverlaySettle();
+      cleanupDragVisuals();
     }
-    cleanupDragVisuals();
   };
   _moveHandler = onMove;
   _upHandler = onUp;
@@ -11073,6 +11184,7 @@ function tearDownTabListDnd() {
       cancelAnimationFrame(_rafId);
       _rafId = null;
     }
+    cancelOverlaySettle();
     restoreSourceButtonDOM();
     cleanupDragVisuals();
     clearDragState2();
@@ -11081,7 +11193,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer = null, SETTLE_DURATION_MS = 180, SETTLE_MIN_DISTANCE_PX = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();
