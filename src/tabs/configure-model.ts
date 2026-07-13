@@ -270,6 +270,76 @@ export function reorderWithin(
 }
 
 /**
+ * Rebuild a side's id list so *visible* order matches live DOM order, while
+ * keeping hidden tab slots in their relative positions from `sideIds`.
+ *
+ * Live drawer DnD must seed the draft from what the user sees. Host
+ * `tabOrder` often lags dual layout (or never matched the strips) — the first
+ * commit would otherwise rewrite both lists to host/catalog order
+ * ("shuffles as if loading another layout"). Subsequent drops look fine
+ * because the first commit rewrote host to match that shuffled state.
+ *
+ * `liveVisibleIds` = data-tab-id order of currently displayed buttons on
+ * that side (exclude Settings / display:none). Ids not in `sideIds` are
+ * ignored; side ids missing from live stay after the live prefix.
+ */
+export function alignIdsToLiveVisibleOrder(
+  sideIds: readonly string[],
+  liveVisibleIds: readonly string[],
+  hiddenIds: ReadonlySet<string>,
+): string[] {
+  if (sideIds.length === 0) return []
+  const sideSet = new Set(sideIds)
+  const liveOnSide = liveVisibleIds.filter((id) => sideSet.has(id))
+  const liveSet = new Set(liveOnSide)
+  const missingVisible = sideIds.filter(
+    (id) => !hiddenIds.has(id) && !liveSet.has(id),
+  )
+  const nextVisible = [...liveOnSide, ...missingVisible]
+  if (nextVisible.length === 0) {
+    // All hidden or empty live — keep sideIds as-is.
+    return sideIds.slice()
+  }
+
+  let vi = 0
+  return sideIds.map((id) =>
+    hiddenIds.has(id) ? id : nextVisible[vi++]!,
+  )
+}
+
+/**
+ * Apply {@link alignIdsToLiveVisibleOrder} to both sides of a draft and
+ * resync kind orders for encodeHostTabOrder.
+ */
+export function alignDraftToLiveVisibleOrder(
+  draft: ConfigureDraft,
+  livePrimaryIds: readonly string[],
+  liveSecondaryIds: readonly string[],
+): ConfigureDraft {
+  const primaryIds = alignIdsToLiveVisibleOrder(
+    draft.primaryIds,
+    livePrimaryIds,
+    draft.hiddenIds,
+  )
+  const secondaryIds = alignIdsToLiveVisibleOrder(
+    draft.secondaryIds,
+    liveSecondaryIds,
+    draft.hiddenIds,
+  )
+  const primarySame =
+    primaryIds.length === draft.primaryIds.length &&
+    primaryIds.every((id, i) => id === draft.primaryIds[i])
+  const secondarySame =
+    secondaryIds.length === draft.secondaryIds.length &&
+    secondaryIds.every((id, i) => id === draft.secondaryIds[i])
+  if (primarySame && secondarySame) return draft
+
+  const next = { ...draft, primaryIds, secondaryIds }
+  const { builtinOrder, extensionOrder } = syncKindOrders(next)
+  return { ...next, builtinOrder, extensionOrder }
+}
+
+/**
  * Reorder `movedId` among the *visible* subset of `fullIds` (ids not in
  * `hiddenIds`), then write that order back into the full list while keeping
  * hidden slots in place.

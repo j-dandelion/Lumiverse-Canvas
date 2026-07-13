@@ -24,6 +24,8 @@ import {
   createDraft,
   moveTabVisible,
   reorderWithinVisible,
+  alignDraftToLiveVisibleOrder,
+  isDraftDirty,
   type ConfigureDraft,
   type BaseSnapshot,
   type DrawerSide,
@@ -35,6 +37,7 @@ import { getTabAssignments } from './assignment'
 import { getMainDrawerSide } from '../store'
 import { getSecondaryWrapper, getSecondaryTabList } from '../sidebar/secondary'
 import { isSettingsButton } from './buttons'
+import { getMainSidebar } from '../dom/lumiverse'
 import { dwarn } from '../debug/log'
 
 // ── Module-level drag state ──
@@ -357,6 +360,47 @@ function getButtonsInContainer(
 
 // ── Build ConfigureDraft from live state ──
 
+/**
+ * data-tab-id order of displayed (not display:none) tab buttons in a list.
+ * Skips Settings chrome.
+ */
+function readVisibleTabIdsFromList(list: HTMLElement | null): string[] {
+  if (!list) return []
+  const out: string[] = []
+  for (const el of Array.from(
+    list.querySelectorAll('button[data-tab-id]'),
+  ) as HTMLElement[]) {
+    if (isSettingsButton(el)) continue
+    // Hidden tabs keep display:none via applyHiddenTabIds*; omit so
+    // alignIdsToLiveVisibleOrder can park them via hiddenIds slots.
+    if (el.style?.display === 'none') continue
+    const id = el.getAttribute('data-tab-id') || ''
+    if (id) out.push(id)
+  }
+  return out
+}
+
+/** Live primary strip: main-mirror main section (taskbar DnD) or host tabList. */
+function readLivePrimaryTabIds(): string[] {
+  const mirrorMain = document.querySelector(
+    '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main',
+  ) as HTMLElement | null
+  if (mirrorMain) return readVisibleTabIdsFromList(mirrorMain)
+
+  const sidebar = getMainSidebar()
+  if (!sidebar) return []
+  const tabList =
+    (sidebar.querySelector(
+      '[class*="tabListWrap"] > [class*="tabList"]',
+    ) as HTMLElement | null) ||
+    (sidebar.querySelector('[class*="tabList"]') as HTMLElement | null)
+  return readVisibleTabIdsFromList(tabList)
+}
+
+function readLiveSecondaryTabIds(): string[] {
+  return readVisibleTabIdsFromList(getSecondaryTabList())
+}
+
 function buildDraftAndBase(): {
   draft: ConfigureDraft
   base: BaseSnapshot
@@ -368,13 +412,21 @@ function buildDraftAndBase(): {
   const drawerSide =
     (hostSettings?.side as DrawerSide) || getMainDrawerSide()
 
-  const draft = createDraft({
+  // Host tabOrder alone can disagree with what the strips actually show
+  // (especially before the first live DnD commit). Align both sides to
+  // live DOM so commit does not reshuffle to host/catalog order.
+  const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
     hiddenTabIds: hostSettings?.hiddenTabIds || [],
     drawerSide,
     assignments: currentAssignments,
   })
+  const draft = alignDraftToLiveVisibleOrder(
+    draftFromHost,
+    readLivePrimaryTabIds(),
+    readLiveSecondaryTabIds(),
+  )
 
   const base: BaseSnapshot = {
     tabOrder: hostSettings?.tabOrder || [],
@@ -1033,14 +1085,16 @@ async function performDrop(
     }
 
     // target.index is the post-removal visible insert index.
+    // Mid-drag DOM may already match the drop — then reorderWithinVisible
+    // is a no-op. Still commit when the live-aligned draft is dirty vs
+    // host base so the first drop syncs host tabOrder without reshuffling.
     const updated = reorderWithinVisible(
       draft,
       listKey,
       tabId,
       target.index,
     )
-    // No-op reorder: still success (DOM already shows intended order).
-    if (updated === draft) {
+    if (updated === draft && !isDraftDirty(draft, base)) {
       return true
     }
     const result = await commitConfigureDraft(updated, base)

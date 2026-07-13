@@ -10,6 +10,8 @@ import {
   setHidden,
   partitionDisplayLists,
   leftColumnIsSecondary,
+  alignIdsToLiveVisibleOrder,
+  alignDraftToLiveVisibleOrder,
   type ConfigureDraft,
   type BaseSnapshot,
 } from '../configure-model'
@@ -952,6 +954,102 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
   const base = baseSnapshotFromDraft(draft)
   assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty after setHidden + rebase')
   assert(draft.hiddenIds.has('ext-a'), 'baseSnapshotFromDraft: hidden state preserved through rebase')
+}
+
+// =====================================================================
+// alignIdsToLiveVisibleOrder — first live DnD must not reshuffle to host order
+// =====================================================================
+{
+  // Host/catalog order vs live strip order (classic first-drop shuffle).
+  assertArraysEqual(
+    alignIdsToLiveVisibleOrder(
+      ['a', 'b', 'c', 'd'],
+      ['c', 'a', 'd', 'b'],
+      new Set(),
+    ),
+    ['c', 'a', 'd', 'b'],
+    'alignIds: full visible reorder matches live',
+  )
+
+  // Hidden slot stays put while visible order follows live.
+  assertArraysEqual(
+    alignIdsToLiveVisibleOrder(
+      ['a', 'hidden', 'b', 'c'],
+      ['c', 'a', 'b'],
+      new Set(['hidden']),
+    ),
+    ['c', 'hidden', 'a', 'b'],
+    'alignIds: hidden slot preserved between live-visible order',
+  )
+
+  // Live ids not on this side ignored; missing visible appended.
+  assertArraysEqual(
+    alignIdsToLiveVisibleOrder(
+      ['a', 'b'],
+      ['x', 'b', 'a'],
+      new Set(),
+    ),
+    ['b', 'a'],
+    'alignIds: ignore foreign live ids',
+  )
+
+  assertArraysEqual(
+    alignIdsToLiveVisibleOrder(
+      ['a', 'b', 'c'],
+      ['b'],
+      new Set(),
+    ),
+    ['b', 'a', 'c'],
+    'alignIds: missing live visibles append in prior relative order',
+  )
+}
+
+// =====================================================================
+// alignDraftToLiveVisibleOrder — both sides + kind sync
+// =====================================================================
+{
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['profile', 'presets', 'ext-a'],
+    secondaryIds: ['weaver', 'ext-b'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: ['ext-a', 'ext-b'],
+    hiddenIds: new Set(),
+  }
+  const aligned = alignDraftToLiveVisibleOrder(
+    draft,
+    ['ext-a', 'profile', 'presets'],
+    ['ext-b', 'weaver'],
+  )
+  assertArraysEqual(
+    aligned.primaryIds,
+    ['ext-a', 'profile', 'presets'],
+    'alignDraft: primary follows live',
+  )
+  assertArraysEqual(
+    aligned.secondaryIds,
+    ['ext-b', 'weaver'],
+    'alignDraft: secondary follows live',
+  )
+  // Kind orders resynced from primary+secondary walk.
+  assertArraysEqual(
+    aligned.builtinOrder,
+    ['profile', 'presets', 'weaver'],
+    'alignDraft: builtinOrder from side walk',
+  )
+  assertArraysEqual(
+    aligned.extensionOrder,
+    ['ext-a', 'ext-b'],
+    'alignDraft: extensionOrder from side walk',
+  )
+
+  // Identity when live already matches.
+  const same = alignDraftToLiveVisibleOrder(
+    draft,
+    draft.primaryIds,
+    draft.secondaryIds,
+  )
+  assert(same === draft, 'alignDraft: returns same ref when already aligned')
 }
 
 // =====================================================================

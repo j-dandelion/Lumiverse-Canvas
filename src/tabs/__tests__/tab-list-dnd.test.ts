@@ -18,6 +18,10 @@
 //
 // Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
 // hit-test indices (would otherwise animate mid-drag then snap back).
+//
+// First-drop shuffle fix: buildDraftAndBase aligns primary/secondary ids to
+// live strip order (alignDraftToLiveVisibleOrder) so commit does not rewrite
+// both drawers to stale host tabOrder / catalog append order.
 
 // Verify reorderWithin takes a post-removal toIndex (integration safe-check):
 // configure-model.ts reorderWithin: splices fromIndex first, then inserts at

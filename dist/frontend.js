@@ -3478,7 +3478,9 @@ __export(exports_configure_model, {
   insertAtVisibleIndex: () => insertAtVisibleIndex,
   encodeHostTabOrder: () => encodeHostTabOrder,
   createDraft: () => createDraft,
-  baseSnapshotFromDraft: () => baseSnapshotFromDraft
+  baseSnapshotFromDraft: () => baseSnapshotFromDraft,
+  alignIdsToLiveVisibleOrder: () => alignIdsToLiveVisibleOrder,
+  alignDraftToLiveVisibleOrder: () => alignDraftToLiveVisibleOrder
 });
 function partitionOrderByCatalog(tabOrder, catalog) {
   const builtinOrder = [];
@@ -3624,6 +3626,31 @@ function reorderWithin(draft, side, fromIndex, toIndex) {
   const insertAt = toIndex < 0 ? list.length : Math.min(toIndex, list.length);
   list.splice(insertAt, 0, moved);
   const next = { ...draft, [listKey]: list };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function alignIdsToLiveVisibleOrder(sideIds, liveVisibleIds, hiddenIds) {
+  if (sideIds.length === 0)
+    return [];
+  const sideSet = new Set(sideIds);
+  const liveOnSide = liveVisibleIds.filter((id) => sideSet.has(id));
+  const liveSet = new Set(liveOnSide);
+  const missingVisible = sideIds.filter((id) => !hiddenIds.has(id) && !liveSet.has(id));
+  const nextVisible = [...liveOnSide, ...missingVisible];
+  if (nextVisible.length === 0) {
+    return sideIds.slice();
+  }
+  let vi = 0;
+  return sideIds.map((id) => hiddenIds.has(id) ? id : nextVisible[vi++]);
+}
+function alignDraftToLiveVisibleOrder(draft, livePrimaryIds, liveSecondaryIds) {
+  const primaryIds = alignIdsToLiveVisibleOrder(draft.primaryIds, livePrimaryIds, draft.hiddenIds);
+  const secondaryIds = alignIdsToLiveVisibleOrder(draft.secondaryIds, liveSecondaryIds, draft.hiddenIds);
+  const primarySame = primaryIds.length === draft.primaryIds.length && primaryIds.every((id, i3) => id === draft.primaryIds[i3]);
+  const secondarySame = secondaryIds.length === draft.secondaryIds.length && secondaryIds.every((id, i3) => id === draft.secondaryIds[i3]);
+  if (primarySame && secondarySame)
+    return draft;
+  const next = { ...draft, primaryIds, secondaryIds };
   const { builtinOrder, extensionOrder } = syncKindOrders(next);
   return { ...next, builtinOrder, extensionOrder };
 }
@@ -10430,18 +10457,47 @@ function getButtonsInContainer(container, _secondary, excludeTabId) {
     return buttons;
   return buttons.filter((el) => el.getAttribute("data-tab-id") !== excludeTabId);
 }
+function readVisibleTabIdsFromList(list) {
+  if (!list)
+    return [];
+  const out = [];
+  for (const el of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+    if (isSettingsButton(el))
+      continue;
+    if (el.style?.display === "none")
+      continue;
+    const id = el.getAttribute("data-tab-id") || "";
+    if (id)
+      out.push(id);
+  }
+  return out;
+}
+function readLivePrimaryTabIds() {
+  const mirrorMain = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
+  if (mirrorMain)
+    return readVisibleTabIdsFromList(mirrorMain);
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return [];
+  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
+  return readVisibleTabIdsFromList(tabList);
+}
+function readLiveSecondaryTabIds() {
+  return readVisibleTabIdsFromList(getSecondaryTabList());
+}
 function buildDraftAndBase() {
   const catalog = getFullCatalog();
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const draft = createDraft({
+  const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
     hiddenTabIds: hostSettings?.hiddenTabIds || [],
     drawerSide,
     assignments: currentAssignments
   });
+  const draft = alignDraftToLiveVisibleOrder(draftFromHost, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
   const base = {
     tabOrder: hostSettings?.tabOrder || [],
     hiddenTabIds: hostSettings?.hiddenTabIds || [],
@@ -10829,7 +10885,7 @@ async function performDrop(tabId, fromSecondary, target) {
       return false;
     }
     const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
-    if (updated === draft) {
+    if (updated === draft && !isDraftDirty(draft, base)) {
       return true;
     }
     const result = await commitConfigureDraft(updated, base);
