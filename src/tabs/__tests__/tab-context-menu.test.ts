@@ -152,16 +152,14 @@ const stubBody = new StubElement('body')
 import { mock } from 'bun:test'
 
 let _mockSyncCalled = false
-const _tracker = { called: false }
 
 // Mock drawer-sync to avoid Preact/TSX transitive chain.
 // Must include ALL exports that any static-import chain needs — features/registry
 // imports syncDrawerTabSettings, so if we omit it the import fails.
 mock.module('../../sidebar/drawer-sync', () => {
-  console.log('DBG: drawer-sync mock factory called')
   return {
-    isShowTabLabels: () => { console.log('DBG: isShowTabLabels called'); return false },
-    syncSecondaryTabLabels: () => { console.log('DBG: syncSecondaryTabLabels called!'); _mockSyncCalled = true; _tracker.called = true },
+    isShowTabLabels: () => false,
+    syncSecondaryTabLabels: () => { _mockSyncCalled = true },
     syncDrawerTabSettings: () => {},
     checkSideChanged: () => {},
     restoreSecondaryTabButtons: () => {},
@@ -309,7 +307,6 @@ try {
 
   const toggleItem = menu!.children[0]
   toggleItem.click()
-  console.log('DBG: after click _mockSyncCalled =', _mockSyncCalled, '_tracker.called =', _tracker.called)
   assert(_mockSyncCalled, 'patch ok: toggle click calls syncSecondaryTabLabels when patch succeeds')
 } finally {
   setSettings({ secondSidebarEnabled: prev5 })

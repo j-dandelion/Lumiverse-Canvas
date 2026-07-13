@@ -5617,7 +5617,7 @@ function showAssignmentMenu(x2, y3, tabId, tabTitle, originatingTarget) {
   const toggleItem = createAssignmentContextMenuItem(toggleLabel, () => {
     const next = !showLabels;
     const ok = patchHostDrawerSettings({ showTabLabels: next });
-    if (ok && next) {
+    if (ok) {
       syncSecondaryTabLabels();
     }
   });
