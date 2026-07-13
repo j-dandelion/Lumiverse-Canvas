@@ -1332,6 +1332,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         if (!ok) {
           if (crossList && !capturedFromSecondary) {
             showMainTabButton(capturedTabId)
+            // Early hide + pin reconcile may have dropped the mirror button;
+            // rebuild strip after unhide so the tab is visible again.
+            try {
+              const mp = await import('../sidebar/main-tab-pin')
+              mp.reconcileMainTabListPin?.()
+            } catch {
+              /* pin module optional during tests */
+            }
           }
           // Same-list or primary→secondary left source mid-drag; put it back.
           // secondary→primary already restored above (no-op if still home).

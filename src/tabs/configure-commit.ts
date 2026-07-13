@@ -237,14 +237,31 @@ function computeDeltas(
 // ── Public API ──
 
 /**
- * True when a configure-batch commit is currently running.
+ * True when a configure-batch commit is currently running (not merely queued).
  * Can be used as a guard elsewhere (e.g. skip observers).
  */
 let _batchActive = false
 export function isConfigureBatchActive(): boolean { return _batchActive }
 
 /**
+ * Serial chain for all configure commits (Configure modal, live DnD, mode-switch).
+ * Concurrent callers wait their turn instead of getting "already in progress".
+ */
+let _commitChain: Promise<void> = Promise.resolve()
+
+/**
+ * Resolve when every enqueued `commitConfigureDraft` has finished (ok or fail).
+ * Mode-switch / Done use this so dirty checks see a rebased base.
+ */
+export function waitForConfigureCommitIdle(): Promise<void> {
+  return _commitChain.then(() => undefined, () => undefined)
+}
+
+/**
  * Commit a ConfigureDraft to the live host state and DOM.
+ *
+ * Concurrent calls are **serialized** on a module queue (not rejected). Each
+ * call runs the full algorithm in order with the draft/base it was given.
  *
  * Algorithm:
  *   1. Compute deltas from current assignments.
@@ -262,7 +279,31 @@ export async function commitConfigureDraft(
   draft: ConfigureDraft,
   _base: BaseSnapshot,
 ): Promise<CommitResult> {
-  if (_batchActive) return { ok: false, error: 'Commit already in progress' }
+  const prev = _commitChain
+  let result: CommitResult = { ok: false, error: 'Commit did not run' }
+
+  const myTurn = prev.then(
+    () => runCommitConfigureDraft(draft, _base),
+    () => runCommitConfigureDraft(draft, _base),
+  ).then((r) => {
+    result = r
+    return r
+  })
+
+  // Keep the chain alive even if a commit rejects unexpectedly.
+  _commitChain = myTurn.then(
+    () => undefined,
+    () => undefined,
+  )
+
+  await myTurn
+  return result
+}
+
+async function runCommitConfigureDraft(
+  draft: ConfigureDraft,
+  _base: BaseSnapshot,
+): Promise<CommitResult> {
   _batchActive = true
 
   try {
@@ -570,24 +611,26 @@ async function moveTabToSecondaryQuiet(tabId: string): Promise<void> {
     // Built-in path: use moveBuiltInTabToSecondaryContainer.
     const { moveBuiltInTabToSecondaryContainer } = await import('./builtin-move')
     const root = await moveBuiltInTabToSecondaryContainer({ tabId, deferActivation: true })
+    if (!root) {
+      // Do not record secondary assignment without a panel root — that leaves
+      // the map claiming secondary while the host button/DOM stay primary.
+      dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment unchanged.`)
+      return
+    }
     setTabAssignment(tabId, 'secondary')
     // Capture chrome before hide so main-button SVG is still in a normal
     // layout tree (display:none still works, but order matches assignTab).
     const storeTab = findDrawerTab(tabId)
     const chrome = resolveSecondaryButtonChrome(tabId, { root, storeTab })
     hideMainTabButton(tabId)
-    if (root) {
-      addSecondaryTabButton({
-        id: tabId,
-        title: chrome.title,
-        root,
-        iconSvg: chrome.iconSvg,
-        iconUrl: chrome.iconUrl,
-        shortName: chrome.shortName,
-      })
-    } else {
-      dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment recorded.`)
-    }
+    addSecondaryTabButton({
+      id: tabId,
+      title: chrome.title,
+      root,
+      iconSvg: chrome.iconSvg,
+      iconUrl: chrome.iconUrl,
+      shortName: chrome.shortName,
+    })
   } else {
     // Extension path: quiet move without persist, open, or handoff.
     const storeTab = findDrawerTab(tabId)

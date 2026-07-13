@@ -30,7 +30,11 @@ import { getFullCatalog, type CatalogTab } from './configure-catalog'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
 import { getTabAssignments } from './assignment'
-import { commitConfigureDraft, isConfigureBatchActive, type CommitResult } from './configure-commit'
+import {
+  commitConfigureDraft,
+  waitForConfigureCommitIdle,
+  type CommitResult,
+} from './configure-commit'
 import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
@@ -58,6 +62,8 @@ let _settleTimer: ReturnType<typeof setTimeout> | null = null
 /** True while overlay eases into its drop slot after pointerup. */
 let _settling = false
 let _commitPromise: Promise<CommitResult> | null = null
+/** Draft clone at pointerdown — Esc mid-drag restores this (not mid-settle). */
+let _dragDraftSnapshot: ConfigureDraft | null = null
 
 /** Drop-settle duration — keep in sync with CSS on .overlay-settling + live DnD. */
 const SETTLE_DURATION_MS = 140
@@ -702,6 +708,17 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
   })
 }
 
+function cloneConfigureDraft(d: ConfigureDraft): ConfigureDraft {
+  return {
+    drawerSide: d.drawerSide,
+    primaryIds: [...d.primaryIds],
+    secondaryIds: [...d.secondaryIds],
+    builtinOrder: [...d.builtinOrder],
+    extensionOrder: [...d.extensionOrder],
+    hiddenIds: new Set(d.hiddenIds),
+  }
+}
+
 /** Clean up all DnD state. */
 function clearDragState(): void {
   cancelOverlaySettle()
@@ -724,6 +741,10 @@ function clearDragState(): void {
   _flipRects = null
   _dragTabId = null
   _dragFromSide = null
+  _dragDraftSnapshot = null
+  _settling = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
 }
 
 /**
@@ -863,10 +884,19 @@ function performDragMove(tabId: string, toSide: 'primary' | 'secondary', toIndex
 
 /**
  * Cancel an active drag: remove overlay, placeholder, listeners.
- * Works for both active and pending (pre-activation) states.
+ * When `revertDraft` is true (Esc mid-drag before release), restore the
+ * draft captured at pointerdown so residual dirty does not stick.
+ * After pointerup (settle), draft placement is intentional — do not revert.
  */
-function cancelDrag(): void {
+function cancelDrag(opts?: { revertDraft?: boolean }): void {
+  const revert = opts?.revertDraft === true && !_settling && _dragDraftSnapshot
+  if (revert && _dragDraftSnapshot) {
+    _draftRef = cloneConfigureDraft(_dragDraftSnapshot)
+  }
   clearDragState()
+  if (revert && _draftRef) {
+    renderModal(_draftRef, _catalogRef, null, false)
+  }
 }
 
 /**
@@ -876,7 +906,7 @@ function cancelDrag(): void {
  * for any in-flight auto-commit before proceeding. After the previous
  * commit finishes, the draft is re-checked and committed again if still
  * dirty (e.g. user made another edit during the previous commit).
- * This avoids the "Commit already in progress" error from racing calls.
+ * Global commit queue in configure-commit also serializes with live DnD.
  */
 async function autoCommit(): Promise<void> {
   // Chain behind any in-flight auto-commit.
@@ -890,19 +920,21 @@ async function autoCommit(): Promise<void> {
     if (!_draftRef || !_baseSnapshotRef) return { ok: true as const }
     if (!isDraftDirty(_draftRef, _baseSnapshotRef)) return { ok: true as const }
 
-    const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
+    // Capture draft at commit time so a concurrent refresh cannot change
+    // what we pass while still rebasing from the same object on success.
+    const draftToCommit = _draftRef
+    const result = await commitConfigureDraft(draftToCommit, _baseSnapshotRef)
 
     if (result.ok) {
-      // Rebase baseSnapshot from the committed draft — don't rebuild from
-      // host state, which may lag behind (NO-GO path + cross-kind
-      // interleaving). Keeping _draftRef preserves the user's reorder.
-      _baseSnapshotRef = baseSnapshotFromDraft(_draftRef!)
-      if (_draftRef) {
-        renderModal(_draftRef, _catalogRef, null, false)
+      // Rebase only if this draft is still the live ref (or equal intent).
+      // refreshConfigureDraftFromLive may have replaced _draftRef mid-await.
+      if (_draftRef === draftToCommit) {
+        _baseSnapshotRef = baseSnapshotFromDraft(draftToCommit)
+        renderModal(draftToCommit, _catalogRef, null, false)
       }
     } else {
-      if (_draftRef) {
-        renderModal(_draftRef, _catalogRef, result.error, false)
+      if (_draftRef === draftToCommit) {
+        renderModal(draftToCommit, _catalogRef, result.error, false)
       }
     }
     return result
@@ -914,6 +946,19 @@ async function autoCommit(): Promise<void> {
   )
 
   await myWork
+}
+
+/**
+ * Drain modal auto-commit chain + global configure commit queue.
+ * Used by mode-switch before dirty check / Apply so residual in-flight
+ * edits finish and base can rebase.
+ */
+export async function flushConfigureCommits(): Promise<void> {
+  await autoCommit()
+  await waitForConfigureCommitIdle()
+  // One more autoCommit pass: if a live-DnD commit changed host state while
+  // we waited, re-check dirty. Usually a no-op.
+  await autoCommit()
 }
 
 
@@ -960,7 +1005,9 @@ function ConfigureTabsModalInner(props: ModalProps) {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (_dragActive || _dragTabId) {
-          cancelDrag()
+          // Mid-drag (before release): revert draft. During settle after
+          // release, keep placement — release already means commit intent.
+          cancelDrag({ revertDraft: !_settling })
           return
         }
         if (!committingRef.current) cancelRef.current()
@@ -988,6 +1035,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
     _dragStartX = e.clientX
     _dragStartY = e.clientY
     _lastDropTarget = null
+    // Snapshot for Esc cancel before any performDragMove mutates draft.
+    _dragDraftSnapshot = _draftRef ? cloneConfigureDraft(_draftRef) : null
 
     // Define move handler
     const onMove = (ev: PointerEvent) => {
@@ -1032,6 +1081,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
     const onUp = async (_ev: PointerEvent) => {
       // Stop tracking pointer; keep overlay + placeholder for settle anim.
       detachDragListeners()
+      // Release = keep placement; drop Esc-revert snapshot.
+      _dragDraftSnapshot = null
 
       try {
         if (_dragActive && _dragOverlay && _dragTabId) {
@@ -1465,15 +1516,28 @@ function renderModal(
       onDone={async () => {
         if (!_draftRef || !_baseSnapshotRef) return
 
-        // With auto-commit, edits are already persisted. Flush only if
-        // residual dirty (e.g. a commit was still in-flight).
+        // Drain in-flight auto-commits / live-DnD / mode commits first so we
+        // never race the batch mutex or show "already in progress".
+        renderModal(_draftRef, catalog, null, true)
+        try {
+          await flushConfigureCommits()
+        } catch (err) {
+          dwarn('[configure-modal] Done flush failed:', err)
+        }
+
+        if (!_draftRef || !_baseSnapshotRef) return
+
+        // Residual dirty after flush (failed prior commit, external race).
         if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
-          renderModal(_draftRef, catalog, null, true)
-          const result: CommitResult = await commitConfigureDraft(_draftRef, _baseSnapshotRef)
+          const result: CommitResult = await commitConfigureDraft(
+            _draftRef,
+            _baseSnapshotRef,
+          )
           if (!result.ok) {
             renderModal(_draftRef, catalog, result.error, false)
             return
           }
+          _baseSnapshotRef = baseSnapshotFromDraft(_draftRef)
         }
 
         unmountModal()

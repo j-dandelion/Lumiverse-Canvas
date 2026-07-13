@@ -3999,6 +3999,7 @@ var init_activation_handoff = __esm(() => {
 // src/tabs/configure-commit.ts
 var exports_configure_commit = {};
 __export(exports_configure_commit, {
+  waitForConfigureCommitIdle: () => waitForConfigureCommitIdle,
   isConfigureBatchActive: () => isConfigureBatchActive,
   commitConfigureDraft: () => commitConfigureDraft
 });
@@ -4101,9 +4102,29 @@ function computeDeltas(draft) {
 function isConfigureBatchActive() {
   return _batchActive;
 }
+function waitForConfigureCommitIdle() {
+  return _commitChain.then(() => {
+    return;
+  }, () => {
+    return;
+  });
+}
 async function commitConfigureDraft(draft, _base) {
-  if (_batchActive)
-    return { ok: false, error: "Commit already in progress" };
+  const prev = _commitChain;
+  let result = { ok: false, error: "Commit did not run" };
+  const myTurn = prev.then(() => runCommitConfigureDraft(draft, _base), () => runCommitConfigureDraft(draft, _base)).then((r3) => {
+    result = r3;
+    return r3;
+  });
+  _commitChain = myTurn.then(() => {
+    return;
+  }, () => {
+    return;
+  });
+  await myTurn;
+  return result;
+}
+async function runCommitConfigureDraft(draft, _base) {
   _batchActive = true;
   try {
     const { toSecondary, toPrimary } = computeDeltas(draft);
@@ -4283,22 +4304,22 @@ async function moveTabToSecondaryQuiet(tabId) {
   if (isBuiltIn) {
     const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
     const root = await moveBuiltInTabToSecondaryContainer2({ tabId, deferActivation: true });
+    if (!root) {
+      dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment unchanged.`);
+      return;
+    }
     setTabAssignment(tabId, "secondary");
     const storeTab = findDrawerTab(tabId);
     const chrome = resolveSecondaryButtonChrome(tabId, { root, storeTab });
     hideMainTabButton(tabId);
-    if (root) {
-      addSecondaryTabButton({
-        id: tabId,
-        title: chrome.title,
-        root,
-        iconSvg: chrome.iconSvg,
-        iconUrl: chrome.iconUrl,
-        shortName: chrome.shortName
-      });
-    } else {
-      dwarn(`[configure-commit] built-in "${tabId}" move returned no root; assignment recorded.`);
-    }
+    addSecondaryTabButton({
+      id: tabId,
+      title: chrome.title,
+      root,
+      iconSvg: chrome.iconSvg,
+      iconUrl: chrome.iconUrl,
+      shortName: chrome.shortName
+    });
   } else {
     const storeTab = findDrawerTab(tabId);
     if (!storeTab?.root) {
@@ -4418,7 +4439,7 @@ async function moveTabToPrimaryQuiet(tabId) {
   }
   updateDrawerTabVisibility();
 }
-var _batchActive = false;
+var _batchActive = false, _commitChain;
 var init_configure_commit = __esm(() => {
   init_configure_model();
   init_assignment();
@@ -4432,6 +4453,7 @@ var init_configure_commit = __esm(() => {
   init_secondary();
   init_main_tab_pin();
   init_mobile_exclusion();
+  _commitChain = Promise.resolve();
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
@@ -4987,6 +5009,9 @@ async function requestSecondDrawerMode(next) {
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
       if (m3.isConfigureTabsModalOpen()) {
+        try {
+          await m3.flushConfigureCommits();
+        } catch {}
         m3.refreshConfigureDraftFromLive();
       }
     } catch {}
@@ -4997,6 +5022,11 @@ async function requestSecondDrawerMode(next) {
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
       if (m3.isConfigureTabsModalOpen()) {
+        try {
+          await m3.flushConfigureCommits();
+        } catch (err) {
+          dwarn("[second-drawer-mode] flushConfigureCommits failed:", err);
+        }
         const draft = m3.getConfigureDraftRef();
         const base = m3.getConfigureBaseRef();
         if (draft && base) {
@@ -5021,10 +5051,12 @@ async function requestSecondDrawerMode(next) {
           const result = await commitConfigureDraft2(draft, base);
           if (!result.ok) {
             dwarn("[second-drawer-mode] commit failed on mode switch:", result.error);
+            return;
           }
         }
       } catch (err) {
         dwarn("[second-drawer-mode] error applying draft on mode switch:", err);
+        return;
       }
     } else if (userChoice === "discard") {}
     await finishDisable();
@@ -5048,6 +5080,7 @@ __export(exports_configure_modal, {
   getConfigureDraftRef: () => getConfigureDraftRef,
   getConfigureBaseRef: () => getConfigureBaseRef,
   forceUnmountConfigureTabsModal: () => forceUnmountConfigureTabsModal,
+  flushConfigureCommits: () => flushConfigureCommits,
   closeConfigureTabsModal: () => closeConfigureTabsModal
 });
 function injectModalStyles() {
@@ -5636,6 +5669,16 @@ function animateOverlaySettle(destLeft, destTop) {
     _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
   });
 }
+function cloneConfigureDraft(d3) {
+  return {
+    drawerSide: d3.drawerSide,
+    primaryIds: [...d3.primaryIds],
+    secondaryIds: [...d3.secondaryIds],
+    builtinOrder: [...d3.builtinOrder],
+    extensionOrder: [...d3.extensionOrder],
+    hiddenIds: new Set(d3.hiddenIds)
+  };
+}
 function clearDragState() {
   cancelOverlaySettle();
   if (_dragOverlay) {
@@ -5657,6 +5700,10 @@ function clearDragState() {
   _flipRects = null;
   _dragTabId = null;
   _dragFromSide = null;
+  _dragDraftSnapshot = null;
+  _settling = false;
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
 }
 function snapshotFLIPRects() {
   const rects = new Map;
@@ -5764,8 +5811,15 @@ function performDragMove(tabId, toSide, toIndex) {
     }
   }
 }
-function cancelDrag() {
+function cancelDrag(opts) {
+  const revert = opts?.revertDraft === true && !_settling && _dragDraftSnapshot;
+  if (revert && _dragDraftSnapshot) {
+    _draftRef = cloneConfigureDraft(_dragDraftSnapshot);
+  }
   clearDragState();
+  if (revert && _draftRef) {
+    renderModal(_draftRef, _catalogRef, null, false);
+  }
 }
 async function autoCommit() {
   const prev = _commitPromise;
@@ -5779,21 +5833,27 @@ async function autoCommit() {
       return { ok: true };
     if (!isDraftDirty(_draftRef, _baseSnapshotRef))
       return { ok: true };
-    const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef);
+    const draftToCommit = _draftRef;
+    const result = await commitConfigureDraft(draftToCommit, _baseSnapshotRef);
     if (result.ok) {
-      _baseSnapshotRef = baseSnapshotFromDraft(_draftRef);
-      if (_draftRef) {
-        renderModal(_draftRef, _catalogRef, null, false);
+      if (_draftRef === draftToCommit) {
+        _baseSnapshotRef = baseSnapshotFromDraft(draftToCommit);
+        renderModal(draftToCommit, _catalogRef, null, false);
       }
     } else {
-      if (_draftRef) {
-        renderModal(_draftRef, _catalogRef, result.error, false);
+      if (_draftRef === draftToCommit) {
+        renderModal(draftToCommit, _catalogRef, result.error, false);
       }
     }
     return result;
   })();
   _commitPromise = myWork.then((r3) => r3).catch(() => ({ ok: false, error: "auto-commit failed" }));
   await myWork;
+}
+async function flushConfigureCommits() {
+  await autoCommit();
+  await waitForConfigureCommitIdle();
+  await autoCommit();
 }
 function ConfigureTabsModalInner(props) {
   const {
@@ -5819,7 +5879,7 @@ function ConfigureTabsModalInner(props) {
     const handler = (e3) => {
       if (e3.key === "Escape") {
         if (_dragActive || _dragTabId) {
-          cancelDrag();
+          cancelDrag({ revertDraft: !_settling });
           return;
         }
         if (!committingRef.current)
@@ -5842,6 +5902,7 @@ function ConfigureTabsModalInner(props) {
     _dragStartX = e3.clientX;
     _dragStartY = e3.clientY;
     _lastDropTarget = null;
+    _dragDraftSnapshot = _draftRef ? cloneConfigureDraft(_draftRef) : null;
     const onMove = (ev) => {
       if (_settling)
         return;
@@ -5878,6 +5939,7 @@ function ConfigureTabsModalInner(props) {
     };
     const onUp = async (_ev) => {
       detachDragListeners();
+      _dragDraftSnapshot = null;
       try {
         if (_dragActive && _dragOverlay && _dragTabId) {
           const dest = resolveConfigureSettleDestination(_dragTabId);
@@ -6290,13 +6352,21 @@ function renderModal(draft, catalog, commitError, committing) {
     onDone: async () => {
       if (!_draftRef || !_baseSnapshotRef)
         return;
+      renderModal(_draftRef, catalog, null, true);
+      try {
+        await flushConfigureCommits();
+      } catch (err) {
+        dwarn("[configure-modal] Done flush failed:", err);
+      }
+      if (!_draftRef || !_baseSnapshotRef)
+        return;
       if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
-        renderModal(_draftRef, catalog, null, true);
         const result = await commitConfigureDraft(_draftRef, _baseSnapshotRef);
         if (!result.ok) {
           renderModal(_draftRef, catalog, result.error, false);
           return;
         }
+        _baseSnapshotRef = baseSnapshotFromDraft(_draftRef);
       }
       unmountModal();
     }
@@ -6313,7 +6383,7 @@ function unmountModal() {
   clearDragState();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -11328,6 +11398,10 @@ function startDrag(btn, pointerEvent) {
         if (!ok) {
           if (crossList && !capturedFromSecondary) {
             showMainTabButton(capturedTabId);
+            try {
+              const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+              mp.reconcileMainTabListPin?.();
+            } catch {}
           }
           restoreSourceButtonDOM();
         }

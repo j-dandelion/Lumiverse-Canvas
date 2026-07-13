@@ -7,6 +7,7 @@
 import {
   commitConfigureDraft,
   isConfigureBatchActive,
+  waitForConfigureCommitIdle,
   type CommitResult,
 } from '../configure-commit'
 import {
@@ -254,7 +255,7 @@ function setup() {
 }
 
 // =====================================================================
-// C3: commitConfigureDraft returns error when already active (guard)
+// C3: concurrent commitConfigureDraft calls are serialized (both succeed)
 // =====================================================================
 {
   setup()
@@ -263,15 +264,13 @@ function setup() {
     { side: 'right', tabOrder: [], hiddenTabIds: [] },
   )
 
-  // First call starts the batch.
+  // First call starts the batch; second waits on the queue.
   const p1 = commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
-  // Second call while first is still in-flight.
   const result: CommitResult = await commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
-  assert(result.ok === false, 'C3: second concurrent call returns error')
-  assert(typeof (result as any).error === 'string', 'C3: error message present')
-
-  // Wait for first to complete.
-  await p1
+  assert(result.ok === true, 'C3: queued second concurrent call succeeds')
+  const r1 = await p1
+  assert(r1.ok === true, 'C3: first concurrent call succeeds')
+  assert(!isConfigureBatchActive(), 'C3: batch guard reset after both complete')
 }
 
 // =====================================================================
@@ -479,8 +478,7 @@ function setup() {
 }
 
 // =====================================================================
-// C8: concurrent commits are rejected (guard) — same as C3 but explicit
-//     about the auto-commit serialization pattern
+// C8: concurrent commits both succeed when serialized on the queue
 // =====================================================================
 {
   setup()
@@ -489,19 +487,18 @@ function setup() {
     { side: 'right', tabOrder: [], hiddenTabIds: [] },
   )
 
-  // Fire two commits concurrently (simulates rapid auto-commit calls).
+  // Fire two commits concurrently (simulates Configure auto-commit + live DnD).
   const p1 = commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
   const p2 = commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
 
   const r1 = await p1
   const r2 = await p2
 
-  // Exactly one of the two should succeed; the other returns busy error.
-  const okCount = [r1, r2].filter(r => r.ok === true).length
-  const errCount = [r1, r2].filter(r => r.ok === false).length
-  assert(okCount === 1, 'C8: exactly one concurrent commit succeeds')
-  assert(errCount === 1, 'C8: exactly one concurrent commit returns busy')
+  assert(r1.ok === true, 'C8: first concurrent commit succeeds')
+  assert(r2.ok === true, 'C8: second concurrent commit succeeds (queued)')
   assert(!isConfigureBatchActive(), 'C8: batch guard reset after both complete')
+  await waitForConfigureCommitIdle()
+  assert(!isConfigureBatchActive(), 'C8: waitForConfigureCommitIdle leaves idle')
 }
 
 // =====================================================================

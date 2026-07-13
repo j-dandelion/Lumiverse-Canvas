@@ -28,9 +28,11 @@ import { mock } from 'bun:test'
 // configure-modal mock (process-global; one factory is enough)
 const isConfigureTabsModalOpenSpy = mock(() => false)
 const refreshConfigureDraftFromLiveSpy = mock(() => {})
+const flushConfigureCommitsSpy = mock(async () => {})
 mock.module('../../tabs/configure-modal', () => ({
   isConfigureTabsModalOpen: isConfigureTabsModalOpenSpy,
   refreshConfigureDraftFromLive: refreshConfigureDraftFromLiveSpy,
+  flushConfigureCommits: flushConfigureCommitsSpy,
   getConfigureDraftRef: () => null,
   getConfigureBaseRef: () => null,
   openConfigureTabsModal: () => {},
@@ -139,6 +141,7 @@ function resetSpies() {
   applyLayoutCallCount = 0
   isConfigureTabsModalOpenSpy.mockClear()
   refreshConfigureDraftFromLiveSpy.mockClear()
+  flushConfigureCommitsSpy.mockClear()
   clearSessionDualProfile()
   // Reset real state to defaults so the next test file starts clean.
   resetHydrationGuard()
@@ -224,6 +227,8 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 
   assert(refreshConfigureDraftFromLiveSpy.mock.calls.length === 1,
     'A: refresh called exactly once AFTER applyLayout resolves')
+  assert(flushConfigureCommitsSpy.mock.calls.length === 1,
+    'A: flushConfigureCommits called once before refresh when modal open')
 }
 
 // =====================================================================

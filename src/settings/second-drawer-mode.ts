@@ -508,10 +508,14 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // If the Configure Tabs modal is still open, refresh its draft from
     // the now-enabled live state so it reflects the re-enabled layout.
     // Runs AFTER the restore attempt above so the modal shows the dual
-    // tabs (not the pre-restore empty state).
+    // tabs (not the pre-restore empty state). Flush any in-flight commits
+    // first so refresh does not clobber a mid-flight rebase.
     try {
       const m = await import('../tabs/configure-modal')
       if (m.isConfigureTabsModalOpen()) {
+        try {
+          await m.flushConfigureCommits()
+        } catch { /* best-effort */ }
         m.refreshConfigureDraftFromLive()
       }
     } catch { /* module may not be loaded */ }
@@ -519,11 +523,18 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // ── DISABLE ──
     if (!getSettings().secondSidebarEnabled) return
 
-    // Check if Configure Tabs modal is open with a dirty draft.
+    // Drain in-flight Configure auto-commits + global commit queue before
+    // dirty check so we do not treat a still-rebasing base as residual dirty,
+    // and so Apply does not race "Commit already in progress".
     let userChoice: ModeSwitchChoice | 'clean' = 'clean'
     try {
       const m = await import('../tabs/configure-modal')
       if (m.isConfigureTabsModalOpen()) {
+        try {
+          await m.flushConfigureCommits()
+        } catch (err) {
+          dwarn('[second-drawer-mode] flushConfigureCommits failed:', err)
+        }
         const draft = m.getConfigureDraftRef()
         const base = m.getConfigureBaseRef()
         if (draft && base) {
@@ -540,7 +551,8 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     if (userChoice === 'cancel') return
 
     if (userChoice === 'apply') {
-      // Apply and switch: commit draft, then finishDisable.
+      // Apply and switch: commit residual draft, then finishDisable.
+      // On commit failure, stay dual so the user can retry (do not tear down).
       try {
         const m = await import('../tabs/configure-modal')
         const draft = m.getConfigureDraftRef()
@@ -550,19 +562,19 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
           const result = await commitConfigureDraft(draft, base)
           if (!result.ok) {
             dwarn('[second-drawer-mode] commit failed on mode switch:', result.error)
-            // Fall through to finishDisable anyway — the partial commit is
-            // still better than leaving the drawer on.
+            return
           }
         }
       } catch (err) {
         dwarn('[second-drawer-mode] error applying draft on mode switch:', err)
+        return
       }
     } else if (userChoice === 'discard') {
       // Discard and switch: fall through to finishDisable, which refreshes
       // the still-open modal from the now-disabled live state.
     }
 
-    // userChoice is 'apply', 'discard', or 'clean' — all proceed to finishDisable.
+    // userChoice is 'apply' (success), 'discard', or 'clean' — proceed.
     await finishDisable()
   }
 }
