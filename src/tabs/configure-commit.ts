@@ -55,8 +55,111 @@ import {
   closeSecondarySidebar,
   isSecondarySidebarOpen,
 } from '../sidebar/secondary'
+import { getMainSidebar } from '../dom/lumiverse'
+import { adoptMainMirrorHostActivation } from '../sidebar/main-tab-pin'
+import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Host sets pendingActiveTabReset on any requestTabLocation move and then
+ * ViewportDrawer resets drawerTab to the first non-moved tab. rClick assignTab
+ * re-clicks the pre-move active tab when the moved tab was *not* active.
+ * Quiet live-DnD / Configure must do the same or main-mirror panel content
+ * jumps to the top-most primary tab.
+ *
+ * Returns disconnect + optional reassert helpers; no-op when the active tab
+ * itself is among the moved set (handoff owns neighbor selection then).
+ */
+function armPreservePrimaryActiveOnQuietToSecondary(
+  toSecondary: string[],
+): { disconnect: () => void; reassert: () => void } | null {
+  if (toSecondary.length === 0 || isMobileViewport()) return null
+
+  const sidebar = getMainSidebar()
+  if (!sidebar) return null
+
+  const preActiveBtn = sidebar.querySelector(
+    'button.tabBtnActive, button[class*="tabBtnActive"]',
+  ) as HTMLElement | null
+  const preActiveId =
+    preActiveBtn?.getAttribute('data-tab-id')
+    || preActiveBtn?.getAttribute('title')
+    || null
+  if (!preActiveBtn || !preActiveId) return null
+
+  // Active tab is being moved away — handoff will pick a neighbor; do not
+  // re-activate the departing tab.
+  if (toSecondary.includes(preActiveId)) return null
+  // Also skip if any moved tab claims active via store/DOM (id alias).
+  if (toSecondary.some((id) => isTabActiveInMainDrawer(id))) return null
+
+  let observer: MutationObserver | null = new MutationObserver(() => {
+    const active = sidebar.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null
+    const activeId =
+      active?.getAttribute('data-tab-id')
+      || active?.getAttribute('title')
+      || null
+    if (activeId && activeId !== preActiveId) {
+      if (observer) {
+        observer.disconnect()
+        observer = null
+      }
+      // Prefer live button by id (React may have replaced the node).
+      const btn =
+        (findMainTabButton(preActiveId) as HTMLElement | null) || preActiveBtn
+      btn.click()
+      const title =
+        btn.getAttribute('title')
+        || btn.getAttribute('aria-label')
+        || undefined
+      adoptMainMirrorHostActivation(btn, title)
+    }
+  })
+  observer.observe(sidebar, {
+    attributes: true,
+    attributeFilter: ['class'],
+    subtree: true,
+  })
+  const safetyTimer = setTimeout(() => {
+    if (observer) {
+      observer.disconnect()
+      observer = null
+    }
+  }, 250)
+
+  const disconnect = () => {
+    clearTimeout(safetyTimer)
+    if (observer) {
+      observer.disconnect()
+      observer = null
+    }
+  }
+
+  const reassert = () => {
+    const btn =
+      (findMainTabButton(preActiveId) as HTMLElement | null) || preActiveBtn
+    const active = sidebar.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null
+    const activeId =
+      active?.getAttribute('data-tab-id')
+      || active?.getAttribute('title')
+      || null
+    if (activeId !== preActiveId) {
+      btn.click()
+    }
+    const title =
+      btn.getAttribute('title')
+      || btn.getAttribute('aria-label')
+      || undefined
+    adoptMainMirrorHostActivation(btn, title)
+  }
+
+  return { disconnect, reassert }
+}
 
 // ── Helpers ──
 
@@ -176,7 +279,11 @@ export async function commitConfigureDraft(
       }
     }
 
-    // 4b. Move tabs (quiet — no per-tab handoff/persist; handoff runs in 4c).
+    // 4b. Preserve primary/main-mirror active when moving a *non-active* tab
+    //     to secondary (host pendingActiveTabReset → first non-moved tab).
+    const preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(toSecondary)
+
+    // 4c. Move tabs (quiet — no per-tab handoff/persist; handoff runs in 4d).
     const movePromises: Promise<void>[] = []
 
     for (const tabId of toSecondary) {
@@ -191,7 +298,13 @@ export async function commitConfigureDraft(
     }
     await Promise.all(movePromises)
 
-    // 4c. Source neighbor + destination activation (same rules as assignTab /
+    // Let host React commit pendingActiveTabReset, then stop the observer.
+    if (preservePrimary) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      preservePrimary.disconnect()
+    }
+
+    // 4d. Source neighbor + destination activation (same rules as assignTab /
     //     rClick Move). Suppress-auto-open stays on; handoff does not open.
     for (const h of pendingHandoffs) {
       try {
@@ -201,7 +314,18 @@ export async function commitConfigureDraft(
       }
     }
 
-    // 4d. Empty secondary shell: handoff leaves active null when no neighbor.
+    // Re-assert original primary active after handoff/reorder side effects.
+    // Main-mirror panel follows host/mirror key — without this, content jumps
+    // to the top-most primary tab after live DnD of an inactive tab.
+    if (preservePrimary) {
+      try {
+        preservePrimary.reassert()
+      } catch (err) {
+        dwarn('[configure-commit] preserve primary active reassert failed:', err)
+      }
+    }
+
+    // 4e. Empty secondary shell: handoff leaves active null when no neighbor.
     //     Close the open panel so live DnD last-tab→primary is not blank.
     if (toPrimary.length > 0) {
       try {
@@ -229,6 +353,11 @@ export async function commitConfigureDraft(
     try {
       const mm = await import('../sidebar/main-mirror-drawer')
       mm.updateMainMirrorDrawerTabVisibility?.()
+      // Keep host content parked under taskbar-mode after primary→secondary
+      // (same as assignTab). Prevents main panel flash while mirror shows content.
+      if (toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
+        mm.ensureHostContentParkedPublic?.()
+      }
     } catch (err) {
       dwarn('[configure-commit] updateMainMirrorDrawerTabVisibility failed:', err)
     }
@@ -243,6 +372,20 @@ export async function commitConfigureDraft(
       mp.reconcileMainTabListPin()
     } catch (err) {
       dwarn('[configure-commit] reconcileMainTabListPin failed:', err)
+    }
+
+    // Reconcile can re-sync mirror chrome from host; reassert once more if we
+    // were preserving a non-moved primary active tab.
+    if (preservePrimary) {
+      try {
+        preservePrimary.reassert()
+      } catch (err) {
+        dwarn('[configure-commit] post-reconcile primary active reassert failed:', err)
+      }
+      try {
+        const mm = await import('../sidebar/main-mirror-drawer')
+        if (mm.isMainMirrorActive?.()) mm.ensureHostContentParkedPublic?.()
+      } catch { /* ignore */ }
     }
 
     // 8. One persist. Tab-assignment persistence is always-on (built-in),

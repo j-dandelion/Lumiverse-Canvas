@@ -3967,6 +3967,64 @@ __export(exports_configure_commit, {
   isConfigureBatchActive: () => isConfigureBatchActive,
   commitConfigureDraft: () => commitConfigureDraft
 });
+function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
+  if (toSecondary.length === 0 || isMobileViewport())
+    return null;
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return null;
+  const preActiveBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  const preActiveId = preActiveBtn?.getAttribute("data-tab-id") || preActiveBtn?.getAttribute("title") || null;
+  if (!preActiveBtn || !preActiveId)
+    return null;
+  if (toSecondary.includes(preActiveId))
+    return null;
+  if (toSecondary.some((id) => isTabActiveInMainDrawer(id)))
+    return null;
+  let observer = new MutationObserver(() => {
+    const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
+    if (activeId && activeId !== preActiveId) {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      const btn = findMainTabButton(preActiveId) || preActiveBtn;
+      btn.click();
+      const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
+      adoptMainMirrorHostActivation(btn, title);
+    }
+  });
+  observer.observe(sidebar, {
+    attributes: true,
+    attributeFilter: ["class"],
+    subtree: true
+  });
+  const safetyTimer = setTimeout(() => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  }, 250);
+  const disconnect = () => {
+    clearTimeout(safetyTimer);
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  };
+  const reassert = () => {
+    const btn = findMainTabButton(preActiveId) || preActiveBtn;
+    const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const activeId = active?.getAttribute("data-tab-id") || active?.getAttribute("title") || null;
+    if (activeId !== preActiveId) {
+      btn.click();
+    }
+    const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || undefined;
+    adoptMainMirrorHostActivation(btn, title);
+  };
+  return { disconnect, reassert };
+}
 function computeDeltas(draft) {
   const currentAssignments = getTabAssignments();
   const toSecondary = [];
@@ -4028,6 +4086,7 @@ async function commitConfigureDraft(draft, _base) {
         });
       }
     }
+    const preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(toSecondary);
     const movePromises = [];
     for (const tabId of toSecondary) {
       movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
@@ -4040,11 +4099,22 @@ async function commitConfigureDraft(draft, _base) {
       }));
     }
     await Promise.all(movePromises);
+    if (preservePrimary) {
+      await new Promise((r3) => requestAnimationFrame(() => r3()));
+      preservePrimary.disconnect();
+    }
     for (const h3 of pendingHandoffs) {
       try {
         await runHandoff(h3);
       } catch (err) {
         dwarn(`[configure-commit] runHandoff failed for "${h3.tabId}":`, err);
+      }
+    }
+    if (preservePrimary) {
+      try {
+        preservePrimary.reassert();
+      } catch (err) {
+        dwarn("[configure-commit] preserve primary active reassert failed:", err);
       }
     }
     if (toPrimary.length > 0) {
@@ -4063,6 +4133,9 @@ async function commitConfigureDraft(draft, _base) {
     try {
       const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
       mm.updateMainMirrorDrawerTabVisibility?.();
+      if (toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
+        mm.ensureHostContentParkedPublic?.();
+      }
     } catch (err) {
       dwarn("[configure-commit] updateMainMirrorDrawerTabVisibility failed:", err);
     }
@@ -4077,6 +4150,18 @@ async function commitConfigureDraft(draft, _base) {
       mp.reconcileMainTabListPin();
     } catch (err) {
       dwarn("[configure-commit] reconcileMainTabListPin failed:", err);
+    }
+    if (preservePrimary) {
+      try {
+        preservePrimary.reassert();
+      } catch (err) {
+        dwarn("[configure-commit] post-reconcile primary active reassert failed:", err);
+      }
+      try {
+        const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        if (mm.isMainMirrorActive?.())
+          mm.ensureHostContentParkedPublic?.();
+      } catch {}
     }
     persistLayout();
     findStoreData(true);
@@ -4261,6 +4346,8 @@ var init_configure_commit = __esm(() => {
   init_log();
   init_store();
   init_secondary();
+  init_main_tab_pin();
+  init_mobile_exclusion();
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
