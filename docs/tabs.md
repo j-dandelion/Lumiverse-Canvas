@@ -101,6 +101,18 @@ Canvas intercepts "Configure tabs" from Lumiverse's context menu regardless of w
 
 The host `drawerSettings` are patched in one atomic-like write via `commitConfigureDraft` (see `tabs/configure-commit.ts`).
 
+### Three dual-mode state paths
+
+Canvas maintains three distinct state paths for the second drawer lifecycle:
+
+| Path | When | Source | Behaviour |
+|------|------|--------|-----------|
+| **First-enable seed** | First time user enables second drawer (no prior dual tabs anywhere) | Live `snapshotLayout()` | Seeds `lastLoaded` with live primary, secondary closed/empty. Runs **before** `setSettings`. |
+| **Re-enable dual restore** | User re-enables after a prior dual session | `lastLoaded` (synced during disable) or session profile | `applyLayout()` or `restoreSessionDualProfile()` to restore prior tab assignments. |
+| **Vanilla baseline (disable)** | On disable (off path) | Session-only `vanilla-baseline.ts` | Restores host `drawerSettings` + main open/active to pre-dual state. |
+
+The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks both `lastLoaded` and the session dual profile. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
+
 ### Conflict rule: baseline wins on disable
 
 A **session-only vanilla baseline** is captured the first time the user enables the second drawer. It contains the pre-dual host `drawerSettings` + main open/active state. On disable:
@@ -138,52 +150,9 @@ automatically on toggle hide, swap side, and drag-end (not mid-drag).
 
 | Action | Behavior |
 |--------|----------|
-| Toggle hide | Mutate → render → auto-commit |
-| Swap side | Mutate → render → auto-commit |
-| Drag pointermove | Draft-only (no commit) |
-| Drag pointerup | One auto-commit if dirty |
-| Done / Cancel / X / Esc / outside | Close, **no** discard confirm; re-commits if residual dirty |
-| Commit failure | Stay open + inline error; no native confirm |
-
-On auto-commit success, the base snapshot is rebased so `isDraftDirty`
-returns false. Cancel closes the modal without rolling back (the edits
-were already committed). Done also closes when clean; if there is a
-residual dirty state (e.g., a commit raced with closure), Done flushes
-first.
-
-The mode-switch dirty dialog (second-drawer-mode.ts) still shows the
-Apply/Discard/Cancel 3-way when toggling the second drawer off with
-residual dirty — unchanged safety net.
-
-The plan locks the rule: "Enabling the second drawer may establish a temporary dual layout, but returning to single-drawer mode must restore the vanilla state from immediately before that dual session." This guarantees the user always sees the same vanilla Lumiverse layout they had before enabling, regardless of what they did in dual mode. The dual session's Configure changes are an isolated experiment; the baseline is the contract for the round trip.
-
-## Context Menus
-
-### Main Sidebar (`context-menu/index.ts`)
-
-Injects a "Move to second drawer" / "Move to main drawer" item into Lumiverse's built-in ContextMenu:
-
-1. User right-clicks → `contextmenu` capture phase sets `_pendingTabInfo`
-2. Lumiverse renders its ContextMenu portal
-3. MutationObserver detects the new menu
-4. rAF → Canvas appends divider + move button
-5. Click → `assignTab(tabId, targetSidebar)`
-6. Escape key closes Lumiverse's menu
-
-Detection heuristics for Lumiverse's menu: last child of body, DIV, position:fixed, z-index:11000, contains buttons.
-
-### Secondary Sidebar (`tabs/tab-context-menu.ts`)
-
-Canvas-owned context menu for secondary tabs:
-- `showAssignmentMenu(x, y, tabId, tabTitle)` — shows the menu at coordinates
-- `hideAssignmentMenu()` — removes the menu
-- Items: "Move to main drawer" (secondary tabs) / "Move to second drawer" (primary tabs)
-- Styling matches Lumiverse's theme variables
-
-## Visibility Observer (`tabs/visibility-observer.ts`)
-
-Watches extension root elements for `display` transitions via `MutationObserver` on the `style` attribute. Used for knowing when a tab becomes visible after being hidden.
-
-## Tab Button Tagging (`chat/tag-buttons.ts`)
-
-Walks the store's `drawerTabs` and matches by title to set `data-tab-id` on extension tab buttons in the main sidebar. This enables the fast id-based `findMainTabButton` lookup. Runs via a `MutationObserver` on the sidebar for childList+subtree, re-tagging on tab add/replace.
+| Toggle tab hidden (eye icon) | Draft commits immediately (no Done needed). |
+| Swap drawer side radio | Draft commits immediately (no Done needed). |
+| Drag-end within or between columns | Draft commits immediately (no Done needed). |
+| Mid-drag | No draft commit; the previous committed state is unchanged. If drag-tab and drop-tab change order, only the final drop commits. |
+| Close modal (X / Escape) | No special behavior — regular draft-based close dialog applies. |
+| Enable/disable second drawer | No special behavior — full mode-switch dialog. |

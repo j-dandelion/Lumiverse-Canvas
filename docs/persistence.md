@@ -153,6 +153,25 @@ The vanilla baseline is a **session-only** snapshot of the pre-dual host state, 
 
 **Clear:** on successful restore, `finishDisable()` calls `clearVanillaBaseline()`. The next single → dual transition captures a fresh snapshot of the (now restored) vanilla state.
 
+## First-Enable Seed (`layout/persist.ts` — `seedDualLayoutFromLive`)
+
+When the user enables the second drawer for the **first time** (no prior dual tabs exist on disk or in the session profile), Canvas seeds the dual layout from the current live single-drawer state rather than restoring stale or empty defaults.
+
+**Trigger:** `requestSecondDrawerMode(true)` checks `hasDetachedTabs(lastLoaded)` and `hasDetachedTabs(sessionProfile)` after capturing the vanilla baseline but **before** `setSettings({ secondSidebarEnabled: true })`. If both are empty/missing, the seed runs.
+
+**Seed contents:**
+- `primary`: copied from `snapshotLayout()` — preserves the current drawer open state, width, and active tab.
+- `secondary`: hard-coded to `open: false`, width matching the primary width, `activeTabId: null`.
+- `detachedTabs`: empty array.
+
+**Why before setSettings:** the seed is written to `_lastLoadedLayout` so `secondSidebarFeature.apply` reads it during its mount callback. Without the seed, the feature would see a stale lastLoaded (possibly with ghost secondary state from a prior session) and attempt to restore tabs that don't exist.
+
+**Re-enable (has dual tabs):** skipped entirely — `hasDetachedTabs` returns true for lastLoaded or the session profile, so the restore path (`applyLayout` or `restoreSessionDualProfile`) runs unchanged. The seed does not overwrite real dual tabs.
+
+**Helper functions:**
+- `hasDetachedTabs(layoutOrProfile)` — null-safe check for at least one entry in `detachedTabs`.
+- `seedDualLayoutFromLive()` — snapshots live layout, builds and writes the seed.
+
 ## Layout Restore (`layout/apply.ts`)
 
 Restores the secondary sidebar state:

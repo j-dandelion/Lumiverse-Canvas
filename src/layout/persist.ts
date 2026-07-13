@@ -207,6 +207,15 @@ function readPrimaryWidth(): number {
 }
 
 /**
+ * Read the --sidebar-ux-secondary-w CSS variable value, returning a default
+ * when document is unavailable (headless test / SSR).
+ */
+function readSecondaryWidth(): number {
+  if (typeof document === 'undefined') return 420
+  return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+}
+
+/**
  * Build the current layout snapshot from in-memory state. Pure — no side effects.
  */
 export function snapshotLayout(): any {
@@ -223,7 +232,8 @@ export function snapshotLayout(): any {
     },
     secondary: {
       open: isSecondarySidebarOpen(),
-      width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
+      // Guard against missing document (headless test / SSR).
+      width: readSecondaryWidth(),
       // The active secondary tab. Persisted so layout restore brings back
       // the same tab the user was on before refresh. Old layouts (saved
       // before this field existed) will have undefined; applyLayout falls
@@ -240,6 +250,47 @@ export function snapshotLayout(): any {
       }),
   }
   return result
+}
+
+/**
+ * True when the given layout or session profile has at least one detached tab.
+ * Accepts `null` / `undefined` / any object shape — returns false gracefully.
+ * Used by the first-enable seed guard in second-drawer-mode.ts.
+ */
+export function hasDetachedTabs(
+  layoutOrProfile: { detachedTabs?: unknown } | null | undefined,
+): boolean {
+  if (!layoutOrProfile) return false
+  return Array.isArray(layoutOrProfile.detachedTabs) && layoutOrProfile.detachedTabs.length > 0
+}
+
+/**
+ * Seed the dual `lastLoaded` from the current live single-drawer layout.
+ *
+ * Called on **first enable** (no prior dual tabs on disk or in session profile)
+ * so the secondary starts closed/empty while preserving the primary drawer's
+ * current open state, width, and active tab. The seed is written to
+ * `_lastLoadedLayout` *before* `setSettings({ secondSidebarEnabled: true })`,
+ * so `secondSidebarFeature.apply` reads a clean state on mount.
+ */
+export function seedDualLayoutFromLive(): void {
+  const live = snapshotLayout()
+  const primaryWidth = (live.primary?.width > 0) ? live.primary.width : 420
+  const seed = {
+    version: live.version,
+    primary: {
+      open: live.primary?.open ?? false,
+      width: primaryWidth,
+      tabId: live.primary?.tabId ?? null,
+    },
+    secondary: {
+      open: false,
+      width: primaryWidth,
+      activeTabId: null,
+    },
+    detachedTabs: [],
+  }
+  setLastLoadedLayout(seed)
 }
 
 /**

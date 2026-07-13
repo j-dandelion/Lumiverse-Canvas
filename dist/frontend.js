@@ -4336,6 +4336,12 @@ async function requestSecondDrawerMode(next) {
       side: capture.baseline.host.side,
       mainOpen: capture.baseline.mainOpen
     });
+    const layoutBefore = getLastLoadedLayout();
+    const profileBefore = getSessionDualProfile();
+    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore)) {
+      dlog("[second-drawer-mode] first enable — seeding dual layout from live");
+      seedDualLayoutFromLive();
+    }
     setSettings({ secondSidebarEnabled: true });
     const profile = getSessionDualProfile();
     cancelSettingsSave();
@@ -9528,6 +9534,7 @@ __export(exports_persist, {
   snapshotLayout: () => snapshotLayout,
   setMainDrawerState: () => setMainDrawerState,
   setBackendCtx: () => setBackendCtx,
+  seedDualLayoutFromLive: () => seedDualLayoutFromLive,
   persistOpenState: () => persistOpenState,
   persistLayout: () => persistLayout,
   loadSavedLayout: () => loadSavedLayout,
@@ -9537,6 +9544,7 @@ __export(exports_persist, {
   isLoadInProgress: () => isLoadInProgress,
   isLayoutRestoreActive: () => isLayoutRestoreActive,
   isAnyLayoutPersistenceEnabled: () => isAnyLayoutPersistenceEnabled,
+  hasDetachedTabs: () => hasDetachedTabs,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
   cancelLayoutSave: () => cancelLayoutSave,
@@ -9625,6 +9633,11 @@ function readPrimaryWidth() {
   }
   return 420;
 }
+function readSecondaryWidth() {
+  if (typeof document === "undefined")
+    return 420;
+  return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420;
+}
 function snapshotLayout() {
   const assignments = Array.from(getTabAssignments().entries());
   const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
@@ -9637,7 +9650,7 @@ function snapshotLayout() {
     },
     secondary: {
       open: isSecondarySidebarOpen(),
-      width: parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420,
+      width: readSecondaryWidth(),
       activeTabId: getActiveSecondaryTabId()
     },
     detachedTabs: secondaryAssignments.map(([tabId, side]) => {
@@ -9647,6 +9660,30 @@ function snapshotLayout() {
     })
   };
   return result;
+}
+function hasDetachedTabs(layoutOrProfile) {
+  if (!layoutOrProfile)
+    return false;
+  return Array.isArray(layoutOrProfile.detachedTabs) && layoutOrProfile.detachedTabs.length > 0;
+}
+function seedDualLayoutFromLive() {
+  const live = snapshotLayout();
+  const primaryWidth = live.primary?.width > 0 ? live.primary.width : 420;
+  const seed = {
+    version: live.version,
+    primary: {
+      open: live.primary?.open ?? false,
+      width: primaryWidth,
+      tabId: live.primary?.tabId ?? null
+    },
+    secondary: {
+      open: false,
+      width: primaryWidth,
+      activeTabId: null
+    },
+    detachedTabs: []
+  };
+  setLastLoadedLayout(seed);
 }
 function isAnyLayoutPersistenceEnabled() {
   return true;

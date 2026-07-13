@@ -7,6 +7,8 @@
 //      always-on, so the facet-ON path is always taken).
 //   D. Empty lastLoaded + non-empty session profile → fallback before refresh.
 //   E. applyLayout rejects → still completes, modal still refreshes.
+//   F-I. Vanilla baseline capture/restore behavior.
+//   J-N. First-enable seed behavior.
 //
 // Tab-assignment persistence is always-on (built-in). The
 // persistTabAssignments setting was removed, so the enable path always
@@ -103,6 +105,7 @@ mock.module('../../sidebar/main-persist', () => ({
 import { requestSecondDrawerMode } from '../second-drawer-mode'
 import {
   getSettings,
+  getLastLoadedLayout,
   setLastLoadedLayout,
   hydrateSettings,
   resetHydrationGuard,
@@ -457,6 +460,148 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   await sut.requestSecondDrawerMode(false)
 
   assert(getVanillaBaseline() === null, 'I: still no baseline after disable (no-op)')
+}
+
+// =====================================================================
+// J. First enable, lastLoaded null → seed from live
+// =====================================================================
+// When no lastLoaded and no session profile, first-enable seed populates
+// lastLoaded with the current single-drawer snapshot.
+{
+  resetSpies()
+  seedState({ secondSidebarEnabled: false })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  clearSessionDualProfile()
+  setLastLoadedLayout(null)
+  mockApplyLayout(async () => { throw new Error('J: applyLayout should NOT be called') })
+
+  await requestSecondDrawerMode(true)
+
+  const seeded = getLastLoadedLayout()
+  assert(seeded !== null, 'J: lastLoaded is not null after first enable')
+  assert(Array.isArray(seeded.detachedTabs), 'J: detachedTabs is an array')
+  assertEqual(seeded.detachedTabs.length, 0, 'J: detachedTabs is empty after seed')
+  assert(seeded.secondary?.open === false, 'J: secondary.open is false after seed')
+  assert(seeded.secondary?.activeTabId === null, 'J: secondary.activeTabId is null after seed')
+  assert(typeof seeded.primary?.width === 'number' && seeded.primary.width > 0,
+    'J: primary.width is a positive number from live snapshot')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'J: setting flipped to true')
+  assertEqual(applyLayoutCallCount, 0, 'J: applyLayout NOT called (no tabs to restore)')
+}
+
+// =====================================================================
+// K. First enable, lastLoaded empty + stale secondary → seed replaces
+// =====================================================================
+// When lastLoaded has empty detachedTabs but stale secondary open/width,
+// the first-enable seed must overwrite the stale values.
+{
+  resetSpies()
+  seedState({ secondSidebarEnabled: false })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  clearSessionDualProfile()
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { open: true, width: 999, activeTabId: 'old-tab' },
+    detachedTabs: [],
+  })
+  mockApplyLayout(async () => { throw new Error('K: applyLayout should NOT be called') })
+
+  await requestSecondDrawerMode(true)
+
+  const seeded = getLastLoadedLayout()
+  assert(seeded !== null, 'K: lastLoaded is not null')
+  assert(seeded.secondary?.open === false, 'K: secondary.open overwritten to false by seed')
+  assert(seeded.secondary?.activeTabId === null, 'K: secondary.activeTabId overwritten to null by seed')
+  assert(seeded.secondary?.width !== 999, 'K: secondary.width overwritten (not stale 999)')
+  assertEqual(seeded.detachedTabs.length, 0, 'K: detachedTabs still empty')
+  assertEqual(applyLayoutCallCount, 0, 'K: applyLayout NOT called')
+}
+
+// =====================================================================
+// L. Re-enable with lastLoaded detachedTabs → applyLayout, no seed
+// =====================================================================
+// When lastLoaded already has tabs, the first-enable seed must NOT run.
+// applyLayout is called with the full saved layout.
+{
+  resetSpies()
+  seedState({ secondSidebarEnabled: false })
+  const savedLayout = {
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: 'tab-l', open: false, width: 420 },
+    detachedTabs: [
+      { tabId: 'tab-l', tabTitle: 'Tab L', sidebar: 'secondary' },
+    ],
+  }
+  setLastLoadedLayout(savedLayout)
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  clearSessionDualProfile()
+  mockApplyLayout(async () => { /* no-op */ })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 1, 'L: applyLayout called once for re-enable')
+  assert(applyLayoutArgs[0] === savedLayout, 'L: applyLayout called with the exact saved layout')
+  assert(getLastLoadedLayout() === savedLayout, 'L: lastLoaded unchanged by seed (reference identity)')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'L: setting flipped to true')
+}
+
+// =====================================================================
+// M. Re-enable with session profile tabs only → profile restore, no seed
+// =====================================================================
+// When lastLoaded has no tabs but session profile has tabs, the seed is
+// skipped (profile has tabs) and the session profile restore runs.
+{
+  resetSpies()
+  seedState({ secondSidebarEnabled: false })
+  setLastLoadedLayout({
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { activeTabId: null, open: false, width: 420 },
+    detachedTabs: [],
+  })
+  isConfigureTabsModalOpenSpy.mockReturnValue(true)
+  setSessionDualProfile({
+    detachedTabs: [
+      { tabId: 'sess-m', tabTitle: 'Sess M', sidebar: 'secondary' },
+    ],
+    activeTabId: 'sess-m',
+  })
+  mockApplyLayout(async () => {
+    throw new Error('M: applyLayout should NOT be called (lastLoaded has no tabs)')
+  })
+
+  await requestSecondDrawerMode(true)
+
+  assertEqual(applyLayoutCallCount, 0, 'M: applyLayout NOT called (lastLoaded empty)')
+  assertEqual(getSettings().secondSidebarEnabled, true, 'M: setting flipped to true')
+  assertEqual(refreshConfigureDraftFromLiveSpy.mock.calls.length, 1,
+    'M: refresh called AFTER session profile restore')
+  // Verify lastLoaded was NOT overwritten by seed (profile prevented seed)
+  const after = getLastLoadedLayout()
+  assert(Array.isArray(after?.detachedTabs), 'M: detachedTabs is an array')
+  assertEqual(after.detachedTabs.length, 0, 'M: detachedTabs still empty (seed did not run)')
+
+  clearSessionDualProfile()
+}
+
+// =====================================================================
+// N. Vanilla baseline: capture still runs on first enable
+// =====================================================================
+// Ensure captureVanillaBaseline runs on first enable even when seed runs.
+// Uses a resolving mock (not throw) to avoid leaking into subsequent test
+// files via bun's process-global mock.module.
+{
+  const sut = await import('../second-drawer-mode')
+  resetSpies()
+  seedState({ secondSidebarEnabled: false })
+  isConfigureTabsModalOpenSpy.mockReturnValue(false)
+  clearSessionDualProfile()
+  setLastLoadedLayout(null)
+  clearVanillaBaseline()
+  mockApplyLayout(async () => { /* resolves cleanly — baseline capture is the assertion */ })
+
+  await sut.requestSecondDrawerMode(true)
+
+  assert(getVanillaBaseline() !== null, 'N: captureVanillaBaseline ran on first enable (baseline present)')
 }
 
 // Final cleanup so the next test file (vanilla-baseline.test.ts and

@@ -7,6 +7,9 @@
 //   - Merging dual into lastLoaded (OFF path; tab-assignment persistence
 //     is always-on, so this always runs)
 //   - Restoring dual layout on re-enable (ON path)
+//   - First-enable seed: on first transition to dual mode (no prior
+//     detached tabs anywhere), seeds lastLoaded from live single-drawer
+//     layout so the secondary starts closed/empty (ON path)
 //   - Feature lifecycle (setSettings triggers feature.apply)
 //   - Refreshing the still-open Configure Tabs modal from live on both
 //     the enable and disable paths (modal stays open across mode switches)
@@ -27,6 +30,8 @@ import {
   flushPendingSaves,
   syncLastLoadedFromPersistedLayout,
   cancelLayoutSave,
+  hasDetachedTabs,
+  seedDualLayoutFromLive,
 } from '../layout/persist'
 import {
   captureSessionDualProfileFromLive,
@@ -409,11 +414,19 @@ async function finishDisable(): Promise<void> {
  * **Enable path** (`next === true`):
  *   1. If already on → return
  *   2. Capture vanilla baseline (idempotent)
- *   3. setSettings({ secondSidebarEnabled: true }) — feature mount runs
- *   4. Cancel debounced saves, await applyLayout from lastLoaded (which
+ *   3. **First-enable seed:** if neither lastLoaded nor session profile
+ *      has any detached tabs, this is the first time dual mode is being
+ *      enabled. Seed lastLoaded from the current live single-drawer
+ *      layout so `feature.apply` sees a clean state (secondary closed
+ *      and empty, primary preserved from live). The seed is written
+ *      BEFORE setSettings so `secondSidebarFeature.apply` reads it on mount.
+ *   4. setSettings({ secondSidebarEnabled: true }) — feature mount runs
+ *   5. Cancel debounced saves, await applyLayout from lastLoaded (which
  *      was synced with the session profile before disable). Fall back to
- *      session profile if lastLoaded has no tabs.
- *   5. If modal is still open, refresh its draft from live so it reflects
+ *      session profile if lastLoaded has no tabs. After a first-enable
+ *      seed, lastLoaded has detachedTabs: [], so neither restore path
+ *      runs — the secondary stays closed/empty.
+ *   6. If modal is still open, refresh its draft from live so it reflects
  *      the re-enabled layout. The refresh runs AFTER the restore attempt
  *      so dual tabs are visible in the modal.
  *
@@ -438,12 +451,31 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       mainOpen: capture.baseline.mainOpen,
     })
 
+    // First-enable seed: if no dual tabs exist anywhere (lastLoaded has no
+    // detachedTabs AND session dual profile is missing or empty), this is
+    // the first time dual mode has ever been enabled. Seed lastLoaded from
+    // the current live single-drawer layout so feature.apply's mount reads
+    // a clean state (secondary closed/empty, primary preserved from live).
+    //
+    // Must happen BEFORE setSettings so secondSidebarFeature.apply sees the
+    // seeded state (not stale pre-dual layout with a ghost secondary).
+    const layoutBefore = getLastLoadedLayout()
+    const profileBefore = getSessionDualProfile()
+    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore)) {
+      dlog('[second-drawer-mode] first enable — seeding dual layout from live')
+      seedDualLayoutFromLive()
+    }
+
     setSettings({ secondSidebarEnabled: true })
 
     // Restore dual assignments. Tab-assignment persistence is always-on,
     // so we always use the facet-ON path: lastLoaded was merged with the
     // session profile in finishDisable; applyLayout restores from it.
     // Fall back to the session profile if lastLoaded has no tabs.
+    //
+    // After a first-enable seed, lastLoaded has detachedTabs: [], so
+    // neither the applyLayout nor the profile-restore branch runs —
+    // the secondary stays empty/closed.
     //
     // Cancel debounced saves first so the post-setSettings write does not
     // clobber disk with pre-restore live empty tabs.
