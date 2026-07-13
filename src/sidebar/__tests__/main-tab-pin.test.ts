@@ -6,6 +6,7 @@
 // - Open main drawer hides mirror host
 // - Mobile force-off
 // - Unpin clears main host without touching secondary
+// - Header title survives force remount / side change (M17)
 
 let passed = 0
 let failed = 0
@@ -469,7 +470,7 @@ import {
   MAIN_MIRROR_LIST_BOTTOM_CLASS,
   __resetMainTabPinForTest,
 } from '../main-tab-pin'
-import { isCanvasMainOpen } from '../main-mirror-drawer'
+import { isCanvasMainOpen, getMainMirrorTitleEl } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 import {
   __setHostSetSettingForTest,
@@ -1169,6 +1170,74 @@ function resetAll() {
   assert(
     String(mirror.innerHTML || '').includes('Profile'),
     'M16: label text from title fallback',
+  )
+
+  clearHostSettingsCache()
+}
+
+// M17: header title survives force remount (side-change scenario).
+// mountMainMirror always creates the shell with title 'Drawer'; reconcile
+// must re-stamp the active tab's title after the remount.
+{
+  resetAll()
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const b1 = makeHostBtn('profile', 'Profile', false)
+  const b2 = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(b1)
+  mainSidebar.appendChild(b2)
+
+  // Mount and activate Profile via click.
+  applyMainTabListPin(true, { force: true })
+  const list0 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const profileMirror0 = collectMirrorButtons(list0).find(
+    (m) => m.getAttribute('data-tab-id') === 'profile',
+  )!
+  profileMirror0.click()
+
+  // Verify title was set after click (drawer opens + header stamped).
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Profile',
+    'M17a: title = Profile after click',
+  )
+
+  // Force remount (simulates side change) — resets shell title to 'Drawer',
+  // then reconcileMainMirror must re-stamp.
+  applyMainTabListPin(true, { force: true })
+
+  // Verify reconcile re-stamped the header title (not still 'Drawer').
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Profile',
+    'M17b: title = Profile after force remount (not "Drawer")',
+  )
+
+  // Click Memory to switch, verify title updates + survives another remount.
+  const list1 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const memoryMirror1 = collectMirrorButtons(list1).find(
+    (m) => m.getAttribute('data-tab-id') === 'memory',
+  )!
+  memoryMirror1.click()
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Memory',
+    'M17c: title = Memory after switch',
+  )
+
+  // Force remount again — title should stay Memory.
+  applyMainTabListPin(true, { force: true })
+  assertEqual(
+    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
+    'Memory',
+    'M17d: title = Memory after second remount',
   )
 
   clearHostSettingsCache()

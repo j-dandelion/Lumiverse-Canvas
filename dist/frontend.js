@@ -1494,6 +1494,13 @@ function reconcileMainMirror() {
     while (bottomSection.firstChild)
       bottomSection.removeChild(bottomSection.firstChild);
   }
+  if (_activeMainMirrorKey != null) {
+    const activeMirror = list.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_activeMainMirrorKey)}"]`);
+    const title = activeMirror?.getAttribute("title") || activeMirror?.getAttribute("aria-label") || "";
+    if (title) {
+      setCanvasMainTitle(title);
+    }
+  }
   dlog("[main-mirror] reconcile tabs", {
     hostCount: hostButtons.length,
     regularCount: regularButtons.length,
@@ -1658,7 +1665,7 @@ function collectHostTabButtons(sidebar) {
     if (b.style.display === "none")
       return false;
     if (!String(b.className || "").includes("tabBtn"))
-      return false;
+      return true;
     return true;
   });
 }

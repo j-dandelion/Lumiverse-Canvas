@@ -63,7 +63,7 @@ let _observedSidebar: HTMLElement | null = null
 
 /**
  * Last mirror tab the user activated while Canvas owns main UX.
- * Keyed like hostButtonKey (`id__…` / `title__…`). Survives host
+ * Keyed like hostButtonKey (`id__` / `title__`). Survives host
  * tabBtnActive loss (headless host / repark); not cleared on drawer
  * close (secondary `_activeSecondaryTabId` parity for toggle-close).
  */
@@ -324,6 +324,23 @@ function reconcileMainMirror(): void {
     while (bottomSection.firstChild) bottomSection.removeChild(bottomSection.firstChild)
   }
 
+  // Re-stamp header title from active key.  mountMainMirror always creates
+  // the shell with title 'Drawer', and the stale-key heal above only
+  // re-stamps when the key is stale.  When the key survived the remount
+  // unchanged, restore the title here.
+  if (_activeMainMirrorKey != null) {
+    const activeMirror = list.querySelector(
+      `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_activeMainMirrorKey)}"]`,
+    ) as HTMLElement | null
+    const title =
+      activeMirror?.getAttribute('title') ||
+      activeMirror?.getAttribute('aria-label') ||
+      ''
+    if (title) {
+      setCanvasMainTitle(title)
+    }
+  }
+
   dlog('[main-mirror] reconcile tabs', {
     hostCount: hostButtons.length,
     regularCount: regularButtons.length,
@@ -540,7 +557,7 @@ function collectHostTabButtons(sidebar: HTMLElement): HTMLElement[] {
   ) as HTMLElement[]
   return buttons.filter((b) => {
     if (b.style.display === 'none') return false
-    if (!String(b.className || '').includes('tabBtn')) return false
+    if (!String(b.className || '').includes('tabBtn')) return true
     return true
   })
 }
