@@ -1730,10 +1730,14 @@ function buildMirrorInnerHtml(hostBtn, labeled) {
   if (svg) {
     parts.push(`<span>${svg.outerHTML}</span>`);
   }
-  const label = hostBtn.querySelector('span[class*="tabLabel"]');
-  const text = label ? (label.textContent || "").trim() : "";
-  if (labeled && text) {
-    parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
+  if (labeled) {
+    const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]');
+    const fromHost = hostLabel ? (hostLabel.textContent || "").trim() : "";
+    const title = hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || "";
+    const text = fromHost || (title ? deriveShortName(title) : "");
+    if (text) {
+      parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
+    }
   }
   return parts.join("");
 }
@@ -2700,6 +2704,11 @@ function syncSecondaryTabLabels(forceShow) {
       btn.style.height = showLabels ? "56px" : "48px";
     }
   }
+  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => {
+    try {
+      m.reconcileMainTabListPin();
+    } catch {}
+  });
 }
 function checkSideChanged() {
   const currentSide = getMainDrawerSide();

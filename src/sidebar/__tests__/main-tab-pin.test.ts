@@ -1125,5 +1125,54 @@ function resetAll() {
   clearHostSettingsCache()
 }
 
+// M16: Show labels after hide rebuilds main-mirror label HTML (title
+// fallback when host .tabLabel not mounted yet — host React lag).
+{
+  resetAll()
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  // Host after hide: no tabLabel span (Lumiverse unmounts it).
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const hostLabel = profile.children.find((c) => String(c.className).includes('tabLabel'))
+  if (hostLabel) profile.removeChild(hostLabel)
+  mainSidebar.appendChild(profile)
+
+  applyMainTabListPin(true, { force: true })
+  let list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  let mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  assert(
+    !String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
+    'M16: no label HTML while showTabLabels false',
+  )
+
+  // Secondary Show path: patch cache then reconcile (same as sync → pin).
+  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
+  applyMainTabListPin(true, { force: true })
+  list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  assert(
+    mirror.classList.contains('sidebar-ux-tab-labeled'),
+    'M16: labeled class after showTabLabels true',
+  )
+  assertEqual(mirror.style.height, '56px', 'M16: labeled height 56px after show')
+  assert(
+    String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
+    'M16: label span rebuilt from title when host tabLabel missing',
+  )
+  assert(
+    String(mirror.innerHTML || '').includes('Profile'),
+    'M16: label text from title fallback',
+  )
+
+  clearHostSettingsCache()
+}
+
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

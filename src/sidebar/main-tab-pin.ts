@@ -34,7 +34,7 @@ import {
   ensureMainPinHost,
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
-import { isSettingsButton } from '../tabs/buttons'
+import { deriveShortName, isSettingsButton } from '../tabs/buttons'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -627,14 +627,21 @@ function buildMirrorInnerHtml(hostBtn: HTMLElement, labeled: boolean): string {
   if (svg) {
     parts.push(`<span>${svg.outerHTML}</span>`)
   }
-  const label = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
-  const text = label ? (label.textContent || '').trim() : ''
-  // Host only renders .tabLabel when showTabLabels is on. Emitting a zero-
-  // height label still costs the button's 1px flex gap and can read taller.
-  if (labeled && text) {
-    parts.push(
-      `<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
-    )
+  // Host only mounts .tabLabel when showTabLabels is on — and can lag after
+  // Canvas Show. Prefer host short name; fall back to title-derived short
+  // name so main-mirror can rebuild labels immediately after secondary Show.
+  // Omit the span entirely when unlabeled (zero-height still costs 1px flex gap).
+  if (labeled) {
+    const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
+    const fromHost = hostLabel ? (hostLabel.textContent || '').trim() : ''
+    const title =
+      hostBtn.getAttribute('title') || hostBtn.getAttribute('aria-label') || ''
+    const text = fromHost || (title ? deriveShortName(title) : '')
+    if (text) {
+      parts.push(
+        `<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
+      )
+    }
   }
   return parts.join('')
 }

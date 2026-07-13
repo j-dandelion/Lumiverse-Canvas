@@ -340,6 +340,18 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
       btn.style.height = showLabels ? '56px' : '48px'
     }
   }
+
+  // Main-mirror omits `.sidebar-ux-tab-label` while labels are off (no flex
+  // gap). Stamping existing labels alone cannot Show them on mirror — rebuild
+  // mirror HTML from host settings. Hide drops spans again on reconcile.
+  // Dynamic import avoids a static cycle (main-tab-pin → isShowTabLabels).
+  void import('./main-tab-pin').then((m) => {
+    try {
+      m.reconcileMainTabListPin()
+    } catch {
+      /* ignore teardown races */
+    }
+  })
 }
 
 export function checkSideChanged(): void {
