@@ -10289,11 +10289,13 @@ function injectDndStyles() {
   const style = document.createElement("style");
   style.id = DND_STYLE_ID;
   style.textContent = `
-    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment ── */
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
+         pointer-events:none so synthetic click targets the real tab under the
+         cursor (document capture suppressor can stop activation). ── */
     .canvas-tab-list-dnd-overlay-clone {
       position: fixed;
       z-index: 13000;
-      pointer-events: none;
+      pointer-events: none !important;
       margin: 0;
       padding: 0;
       box-sizing: border-box;
@@ -10673,20 +10675,24 @@ function createDragOverlay2(sourceBtn) {
   _dragOverlayInner = clone;
   return wrapper;
 }
+function suppressSyntheticClick(e3) {
+  e3.preventDefault();
+  e3.stopPropagation();
+  e3.stopImmediatePropagation();
+}
 function installClickSuppressor(el) {
-  const handler = (e3) => {
-    e3.stopImmediatePropagation();
-  };
-  el.addEventListener("click", handler, true);
-  _clickSuppressor = handler;
+  removeClickSuppressorNow();
+  _clickSuppressor = suppressSyntheticClick;
+  _clickSuppressorEl = el;
+  el.addEventListener("click", _clickSuppressor, true);
+  _docClickSuppressor = suppressSyntheticClick;
+  document.addEventListener("click", _docClickSuppressor, true);
+}
+function scheduleClickSuppressorRemoval() {
   if (_clickSuppressorTimer !== null)
     clearTimeout(_clickSuppressorTimer);
   _clickSuppressorTimer = setTimeout(() => {
-    if (_clickSuppressor && _dragElement) {
-      _dragElement.removeEventListener("click", _clickSuppressor, true);
-    }
-    _clickSuppressor = null;
-    _clickSuppressorTimer = null;
+    removeClickSuppressorNow();
   }, 0);
 }
 function removeClickSuppressorNow() {
@@ -10694,10 +10700,15 @@ function removeClickSuppressorNow() {
     clearTimeout(_clickSuppressorTimer);
     _clickSuppressorTimer = null;
   }
-  if (_clickSuppressor && _dragElement) {
-    _dragElement.removeEventListener("click", _clickSuppressor, true);
+  if (_clickSuppressor && _clickSuppressorEl) {
+    _clickSuppressorEl.removeEventListener("click", _clickSuppressor, true);
   }
   _clickSuppressor = null;
+  _clickSuppressorEl = null;
+  if (_docClickSuppressor) {
+    document.removeEventListener("click", _docClickSuppressor, true);
+    _docClickSuppressor = null;
+  }
 }
 function scheduleDragFrame() {
   if (_rafId !== null)
@@ -10801,6 +10812,7 @@ function startDrag(btn, pointerEvent) {
     const capturedFromSecondary = _dragFromSecondary;
     const capturedTarget = _lastDropTarget2;
     document.removeEventListener("contextmenu", suppressCtx, true);
+    scheduleClickSuppressorRemoval();
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId);
       _rafId = null;
@@ -11025,7 +11037,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();

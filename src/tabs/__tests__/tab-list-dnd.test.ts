@@ -22,6 +22,10 @@
 // First-drop shuffle fix: buildDraftAndBase aligns primary/secondary ids to
 // live strip order (alignDraftToLiveVisibleOrder) so commit does not rewrite
 // both drawers to stale host tabOrder / catalog append order.
+//
+// Click after release: capture suppressors stay installed for the whole drag;
+// removal is scheduled only on pointerup (setTimeout 0). Scheduling removal
+// at drag-start cleared the listener mid-drag → every drop activated the tab.
 
 // Verify reorderWithin takes a post-removal toIndex (integration safe-check):
 // configure-model.ts reorderWithin: splices fromIndex first, then inserts at

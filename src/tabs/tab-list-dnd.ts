@@ -61,8 +61,17 @@ let _insertIndicatorEl: HTMLElement | null = null
 let _moveHandler: ((e: PointerEvent) => void) | null = null
 let _upHandler: ((e: PointerEvent) => void) | null = null
 
-/** Capture-phase click suppressor — installed during drag, removed on next task. */
+/**
+ * Capture-phase click suppressors — kill the browser's synthetic click after
+ * pointerup so the tab does not activate / toggle-close.
+ *
+ * Important: removal is deferred until AFTER pointerup (setTimeout 0), not at
+ * install time. An early setTimeout(0) at drag start removed the listener
+ * before the user ever released — regression: every drop activated the tab.
+ */
 let _clickSuppressor: ((e: Event) => void) | null = null
+let _clickSuppressorEl: HTMLElement | null = null
+let _docClickSuppressor: ((e: Event) => void) | null = null
 let _clickSuppressorTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── rAF-coalesced drag-frame state ──
@@ -109,11 +118,13 @@ function injectDndStyles(): void {
   const style = document.createElement('style')
   style.id = DND_STYLE_ID
   style.textContent = `
-    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment ── */
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
+         pointer-events:none so synthetic click targets the real tab under the
+         cursor (document capture suppressor can stop activation). ── */
     .canvas-tab-list-dnd-overlay-clone {
       position: fixed;
       z-index: 13000;
-      pointer-events: none;
+      pointer-events: none !important;
       margin: 0;
       padding: 0;
       box-sizing: border-box;
@@ -737,21 +748,41 @@ function createDragOverlay(sourceBtn: HTMLElement): HTMLElement {
   return wrapper
 }
 
+function suppressSyntheticClick(e: Event): void {
+  e.preventDefault()
+  e.stopPropagation()
+  e.stopImmediatePropagation()
+}
+
+/**
+ * Install capture click blockers for the duration of a drag.
+ * Call {@link scheduleClickSuppressorRemoval} from pointerup so the
+ * browser's same-task synthetic click is still caught; do NOT schedule
+ * removal at install time.
+ */
 function installClickSuppressor(el: HTMLElement): void {
-  const handler = (e: Event) => {
-    e.stopImmediatePropagation()
-  }
-  el.addEventListener('click', handler, true)
-  _clickSuppressor = handler
-  // Deferred removal after synthetic click has passed (same pattern as
-  // drawerTabPosition/drag.ts).
+  // Replace any prior suppressors (re-entrant startDrag should not stack).
+  removeClickSuppressorNow()
+
+  _clickSuppressor = suppressSyntheticClick
+  _clickSuppressorEl = el
+  el.addEventListener('click', _clickSuppressor, true)
+
+  // Document capture: mid-drag reorders can put a *different* tab under the
+  // pointer; the synthetic click may target that node, not the source.
+  _docClickSuppressor = suppressSyntheticClick
+  document.addEventListener('click', _docClickSuppressor, true)
+}
+
+/**
+ * After pointerup: keep suppressors through the current task so the
+ * compatibility `click` (dispatched sync after pointerup returns) is
+ * blocked, then remove on the next macrotask (drawerTabPosition/drag.ts).
+ */
+function scheduleClickSuppressorRemoval(): void {
   if (_clickSuppressorTimer !== null) clearTimeout(_clickSuppressorTimer)
   _clickSuppressorTimer = setTimeout(() => {
-    if (_clickSuppressor && _dragElement) {
-      _dragElement.removeEventListener('click', _clickSuppressor, true)
-    }
-    _clickSuppressor = null
-    _clickSuppressorTimer = null
+    removeClickSuppressorNow()
   }, 0)
 }
 
@@ -760,10 +791,15 @@ function removeClickSuppressorNow(): void {
     clearTimeout(_clickSuppressorTimer)
     _clickSuppressorTimer = null
   }
-  if (_clickSuppressor && _dragElement) {
-    _dragElement.removeEventListener('click', _clickSuppressor, true)
+  if (_clickSuppressor && _clickSuppressorEl) {
+    _clickSuppressorEl.removeEventListener('click', _clickSuppressor, true)
   }
   _clickSuppressor = null
+  _clickSuppressorEl = null
+  if (_docClickSuppressor) {
+    document.removeEventListener('click', _docClickSuppressor, true)
+    _docClickSuppressor = null
+  }
 }
 
 /** Schedule rAF-coalesced hit-test + reorder + FLIP work. */
@@ -901,10 +937,9 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   }
   document.addEventListener('contextmenu', suppressCtx, true)
 
-  // Suppress click on the dragged button after drag ends, so the
-  // browser's compatibility click (from pointerup) does not activate
-  // the tab. Installed immediately so it catches any synthesised click
-  // in the same task as pointerup.
+  // Suppress post-drag synthetic click (source + document capture).
+  // Stay installed until pointerup schedules deferred removal — NOT a
+  // setTimeout at install time (that cleared the listener mid-drag).
   installClickSuppressor(btn)
 
   // Pointer move — updates overlay transform IMMEDIATELY (cheap compositor work)
@@ -934,6 +969,11 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     const capturedTarget = _lastDropTarget
 
     document.removeEventListener('contextmenu', suppressCtx, true)
+
+    // Keep click suppressors through this task so the browser's
+    // compatibility click (after pointerup returns / at await yield)
+    // is still blocked; remove on next macrotask.
+    scheduleClickSuppressorRemoval()
 
     // Cancel any pending rAF
     if (_rafId !== null) {
