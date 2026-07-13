@@ -1351,10 +1351,13 @@ var exports_main_tab_pin = {};
 __export(exports_main_tab_pin, {
   reconcileMainTabListPin: () => reconcileMainTabListPin,
   isMainTabListPinActive: () => isMainTabListPinActive,
+  getMainMirrorActiveTabId: () => getMainMirrorActiveTabId,
   getActiveMainMirrorKey: () => getActiveMainMirrorKey,
   applyMainTabListPin: () => applyMainTabListPin,
   adoptMainMirrorHostActivation: () => adoptMainMirrorHostActivation,
   activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
+  __setMainTabPinEnabledForTest: () => __setMainTabPinEnabledForTest,
+  __setActiveMainMirrorKeyForTest: () => __setActiveMainMirrorKeyForTest,
   __resetMainTabPinForTest: () => __resetMainTabPinForTest,
   MAIN_MIRROR_LIST_MAIN_CLASS: () => MAIN_MIRROR_LIST_MAIN_CLASS,
   MAIN_MIRROR_LIST_CLASS: () => MAIN_MIRROR_LIST_CLASS,
@@ -1414,6 +1417,24 @@ function __resetMainTabPinForTest() {
 function getActiveMainMirrorKey() {
   return _activeMainMirrorKey;
 }
+function getMainMirrorActiveTabId() {
+  if (!_enabled)
+    return null;
+  const key = _activeMainMirrorKey;
+  if (!key)
+    return null;
+  if (key.startsWith("id__"))
+    return key.slice(4) || null;
+  if (key.startsWith("title__"))
+    return key.slice(7) || null;
+  return null;
+}
+function __setActiveMainMirrorKeyForTest(key) {
+  _activeMainMirrorKey = key;
+}
+function __setMainTabPinEnabledForTest(on) {
+  _enabled = on;
+}
 function activateMainMirrorFromRestore(hostBtn, title) {
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
@@ -1427,13 +1448,20 @@ function activateMainMirrorFromRestore(hostBtn, title) {
   onMainMirrorTabActivated(resolvedTitle);
 }
 function adoptMainMirrorHostActivation(hostBtn, title, opts) {
-  if (!_enabled || !isMainMirrorActive())
+  if (!_enabled)
     return;
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
     _activeMainMirrorKey = hostButtonKey(hostBtn);
   } else if (resolvedTitle) {
     _activeMainMirrorKey = `title__${resolvedTitle}`;
+  }
+  if (!isMainMirrorActive()) {
+    dlog("[main-mirror] adopt host activation (key only; shell inactive)", {
+      key: _activeMainMirrorKey,
+      title: resolvedTitle
+    });
+    return;
   }
   const shouldOpen = opts?.open !== false;
   if (shouldOpen) {
@@ -3859,10 +3887,6 @@ async function activateInPrimary(tabId, h3) {
         const currentActive = stickSidebar.querySelector('button[class*="tabBtnActive"]');
         const currentActiveId = currentActive?.getAttribute("data-tab-id");
         if (currentActiveId && currentActiveId !== resolvedId) {
-          if (stickObserver) {
-            stickObserver.disconnect();
-            stickObserver = null;
-          }
           mainBtn.click();
         }
       });
@@ -3872,7 +3896,7 @@ async function activateInPrimary(tabId, h3) {
           stickObserver.disconnect();
           stickObserver = null;
         }
-      }, 200);
+      }, 350);
     }
     await new Promise((resolve) => {
       setTimeout(() => {
@@ -3967,19 +3991,40 @@ __export(exports_configure_commit, {
   isConfigureBatchActive: () => isConfigureBatchActive,
   commitConfigureDraft: () => commitConfigureDraft
 });
+function resolvePrimaryActiveTabIdForQuiet() {
+  const mirrorId = getMainMirrorActiveTabId();
+  if (mirrorId)
+    return mirrorId;
+  const sidebar = getMainSidebar();
+  if (sidebar) {
+    const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const id = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || null;
+    if (id)
+      return id;
+  }
+  return null;
+}
+function isPrimaryActiveForQuiet(tabId) {
+  const resolved = resolvePrimaryActiveTabIdForQuiet();
+  if (resolved != null)
+    return resolved === tabId;
+  return isTabActiveInMainDrawer(tabId);
+}
 function armPreservePrimaryActiveOnQuietToSecondary(toSecondary) {
   if (toSecondary.length === 0 || isMobileViewport())
     return null;
   const sidebar = getMainSidebar();
   if (!sidebar)
     return null;
-  const preActiveBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  const preActiveId = preActiveBtn?.getAttribute("data-tab-id") || preActiveBtn?.getAttribute("title") || null;
-  if (!preActiveBtn || !preActiveId)
+  const preActiveId = resolvePrimaryActiveTabIdForQuiet();
+  if (!preActiveId)
+    return null;
+  const preActiveBtn = findMainTabButton(preActiveId) || sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  if (!preActiveBtn)
     return null;
   if (toSecondary.includes(preActiveId))
     return null;
-  if (toSecondary.some((id) => isTabActiveInMainDrawer(id)))
+  if (toSecondary.some((id) => isPrimaryActiveForQuiet(id)))
     return null;
   const restorePrimaryActive = () => {
     const btn = findMainTabButton(preActiveId) || preActiveBtn;
@@ -4069,7 +4114,7 @@ async function commitConfigureDraft(draft, _base) {
           source: "primary",
           destination: "secondary",
           sourceList: primaryList,
-          preMoveSourceActiveTab: isTabActiveInMainDrawer(tabId)
+          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId)
         });
       }
     }

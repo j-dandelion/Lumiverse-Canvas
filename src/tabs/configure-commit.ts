@@ -56,10 +56,45 @@ import {
   isSecondarySidebarOpen,
 } from '../sidebar/secondary'
 import { getMainSidebar } from '../dom/lumiverse'
-import { adoptMainMirrorHostActivation } from '../sidebar/main-tab-pin'
+import {
+  adoptMainMirrorHostActivation,
+  getMainMirrorActiveTabId,
+} from '../sidebar/main-tab-pin'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * User-visible primary active tab id for quiet DnD / Configure handoff.
+ *
+ * Prefer Canvas main-mirror exclusive key when taskbar mode owns the strip
+ * (host tabBtnActive often stays on a parked/top tab). Fall back to host
+ * DOM, then store/DOM isTabActive checks are used only for id equality.
+ */
+function resolvePrimaryActiveTabIdForQuiet(): string | null {
+  const mirrorId = getMainMirrorActiveTabId()
+  if (mirrorId) return mirrorId
+
+  const sidebar = getMainSidebar()
+  if (sidebar) {
+    const activeBtn = sidebar.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null
+    const id =
+      activeBtn?.getAttribute('data-tab-id')
+      || activeBtn?.getAttribute('title')
+      || null
+    if (id) return id
+  }
+  return null
+}
+
+/** True when `tabId` is the user-visible primary active tab (mirror-aware). */
+function isPrimaryActiveForQuiet(tabId: string): boolean {
+  const resolved = resolvePrimaryActiveTabIdForQuiet()
+  if (resolved != null) return resolved === tabId
+  return isTabActiveInMainDrawer(tabId)
+}
 
 /**
  * Host sets pendingActiveTabReset on any requestTabLocation move and then
@@ -85,20 +120,23 @@ function armPreservePrimaryActiveOnQuietToSecondary(
   const sidebar = getMainSidebar()
   if (!sidebar) return null
 
-  const preActiveBtn = sidebar.querySelector(
-    'button.tabBtnActive, button[class*="tabBtnActive"]',
-  ) as HTMLElement | null
-  const preActiveId =
-    preActiveBtn?.getAttribute('data-tab-id')
-    || preActiveBtn?.getAttribute('title')
-    || null
-  if (!preActiveBtn || !preActiveId) return null
+  // Mirror key first: under taskbar mode host tabBtnActive is often the
+  // parked/top tab while Canvas exclusive key is the real strip selection.
+  const preActiveId = resolvePrimaryActiveTabIdForQuiet()
+  if (!preActiveId) return null
+
+  const preActiveBtn =
+    (findMainTabButton(preActiveId) as HTMLElement | null)
+    || (sidebar.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null)
+  if (!preActiveBtn) return null
 
   // Active tab is being moved away — handoff will pick a neighbor; do not
   // re-activate the departing tab.
   if (toSecondary.includes(preActiveId)) return null
-  // Also skip if any moved tab claims active via store/DOM (id alias).
-  if (toSecondary.some((id) => isTabActiveInMainDrawer(id))) return null
+  // Also skip if any moved tab claims active via store/DOM/mirror (id alias).
+  if (toSecondary.some((id) => isPrimaryActiveForQuiet(id))) return null
 
   const restorePrimaryActive = (): void => {
     const btn =
@@ -267,7 +305,9 @@ export async function commitConfigureDraft(
           source: 'primary',
           destination: 'secondary',
           sourceList: primaryList,
-          preMoveSourceActiveTab: isTabActiveInMainDrawer(tabId),
+          // Mirror-aware: host store/DOM alone falsely reports inactive when
+          // Canvas exclusive key is the real selection (top-most host stuck).
+          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
         })
       }
     }

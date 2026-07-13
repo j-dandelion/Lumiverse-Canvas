@@ -150,6 +150,37 @@ export function getActiveMainMirrorKey(): string | null {
 }
 
 /**
+ * User-visible primary active tab id when taskbar main-mirror owns chrome.
+ *
+ * Host `tabBtnActive` often lags or stays on a parked tab (e.g. Profile)
+ * while Canvas `_activeMainMirrorKey` is exclusive for the strip/header.
+ * Quiet DnD / handoff must prefer this over host DOM or panel content jumps
+ * to the top-most host tab on every primary→secondary drop.
+ *
+ * Returns bare `data-tab-id` or title fallback from the key, or null when
+ * pin is off / no key is set (callers fall back to host).
+ */
+export function getMainMirrorActiveTabId(): string | null {
+  // Pin enabled is enough — shell may be mid-mount; exclusive key is still truth.
+  if (!_enabled) return null
+  const key = _activeMainMirrorKey
+  if (!key) return null
+  if (key.startsWith('id__')) return key.slice(4) || null
+  if (key.startsWith('title__')) return key.slice(7) || null
+  return null
+}
+
+/** Test seam: set Canvas-owned mirror active key without host click. */
+export function __setActiveMainMirrorKeyForTest(key: string | null): void {
+  _activeMainMirrorKey = key
+}
+
+/** Test seam: mark main-tab pin enabled so getMainMirrorActiveTabId reads the key. */
+export function __setMainTabPinEnabledForTest(on: boolean): void {
+  _enabled = on
+}
+
+/**
  * Activate a main tab for layout restore without going through
  * onMirrorClick (which would toggle-close if the drawer is already open
  * on that tab). Clicks the host button for React content, sets the
@@ -190,7 +221,10 @@ export function adoptMainMirrorHostActivation(
   title?: string,
   opts?: { open?: boolean },
 ): void {
-  if (!_enabled || !isMainMirrorActive()) return
+  // Stamp exclusive key whenever pin is enabled — quiet DnD / handoff need
+  // the key even if the shell is mid-mount or briefly inactive. Skip open /
+  // park chrome until the mirror shell is live.
+  if (!_enabled) return
 
   const resolvedTitle =
     title ||
@@ -202,6 +236,14 @@ export function adoptMainMirrorHostActivation(
     _activeMainMirrorKey = hostButtonKey(hostBtn)
   } else if (resolvedTitle) {
     _activeMainMirrorKey = `title__${resolvedTitle}`
+  }
+
+  if (!isMainMirrorActive()) {
+    dlog('[main-mirror] adopt host activation (key only; shell inactive)', {
+      key: _activeMainMirrorKey,
+      title: resolvedTitle,
+    })
+    return
   }
 
   const shouldOpen = opts?.open !== false

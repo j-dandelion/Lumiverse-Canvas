@@ -279,6 +279,11 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
     // our click; the stick observer catches the case where the host
     // fires AFTER. The 200ms safety timeout prevents fighting a
     // legitimate user tab swap.
+    // Keep re-clicking while wrong for the full safety window — do NOT
+    // disconnect on the first correction. Quiet primary→secondary can flip
+    // host active twice (ensureBuiltIn pre-activate, then pendingActiveTabReset
+    // to the first remaining primary). Early disconnect left the second flip
+    // stuck on the top-most tab instead of the handoff neighbor.
     const stickSidebar = (h?.getMainSidebar ?? getMainSidebar)()
     let stickObserver: MutationObserver | null = null
     if (stickSidebar && typeof MutationObserver !== 'undefined') {
@@ -286,12 +291,11 @@ async function activateInPrimary(tabId: string, h?: TestHooks): Promise<void> {
         const currentActive = stickSidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
         const currentActiveId = currentActive?.getAttribute('data-tab-id')
         if (currentActiveId && currentActiveId !== resolvedId) {
-          if (stickObserver) { stickObserver.disconnect(); stickObserver = null }
           mainBtn.click()
         }
       })
       stickObserver.observe(stickSidebar, { attributes: true, attributeFilter: ['class'], subtree: true })
-      setTimeout(() => { if (stickObserver) { stickObserver.disconnect(); stickObserver = null } }, 200)
+      setTimeout(() => { if (stickObserver) { stickObserver.disconnect(); stickObserver = null } }, 350)
     }
 
     // 100ms post-click verification (Q5 user-confirmed).
