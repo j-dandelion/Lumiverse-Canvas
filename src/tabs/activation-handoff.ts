@@ -148,18 +148,32 @@ export async function captureSourceList(side: 'primary' | 'secondary', h?: TestH
     if (mainSidebarEl) {
       const filtered: string[] = []
       const filteredOut: string[] = []
+      const _getLoc =
+        h?.getTabLocation
+        ?? ((id: string) => getHostBridge()?.ui?.getTabLocation?.(id) ?? null)
       for (const id of merged) {
-        // Find the button for this tab in the main sidebar. If the
-        // button exists and is hidden (display=none), the tab is in
-        // secondary — exclude it. If the button is not found, include
-        // the tab defensively (could be a tab not yet rendered in the
-        // sidebar, e.g., a freshly mounted extension tab).
+        // Find the button for this tab in the main sidebar.
+        // display:none alone is not enough to exclude: live primary→
+        // secondary DnD hides the host button *before* quiet commit so
+        // pin reconcile does not re-materialize a main-mirror clone, while
+        // host location is still main-drawer. Excluding those ids drops the
+        // moved tab from the handoff list (idx=-1 → first remaining instead
+        // of above/below) and can skip neighbor activation entirely.
+        //
+        // Authoritative secondary signal: host getTabLocation kind=container
+        // (set by requestTabLocation). When location is unavailable (tests /
+        // no bridge), fall back to legacy display:none = secondary.
         const btn = mainSidebarEl.querySelector(`button[data-tab-id="${id}"]`) as HTMLElement | null
         if (btn && btn.style.display === 'none') {
-          filteredOut.push(id)
-
-          continue
+          const loc = _getLoc(id)
+          if (loc == null || loc.kind === 'container') {
+            filteredOut.push(id)
+            continue
+          }
+          // loc.kind === 'main-drawer' (or other non-container): early hide
+          // mid-drag — keep in list for pickSourceReplacement.
         }
+        // Button not found: include defensively (fresh extension tab).
         filtered.push(id)
       }
 

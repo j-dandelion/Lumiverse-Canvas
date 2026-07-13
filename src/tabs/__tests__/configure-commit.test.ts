@@ -8,6 +8,7 @@ import {
   commitConfigureDraft,
   isConfigureBatchActive,
   waitForConfigureCommitIdle,
+  __setApplyMainDrawerSideChangeForTest,
   type CommitResult,
 } from '../configure-commit'
 import {
@@ -225,6 +226,7 @@ function setup() {
   __setSecondaryWrapperForTest(null)
   __setStoreSnapshotForTest(null)
   __setDrawerTabsForTest(null)
+  __setApplyMainDrawerSideChangeForTest(null)
   stubDocument()
   stubHostBridge()
 }
@@ -1550,6 +1552,185 @@ function wireSecondaryShell(
 }
 
 // =====================================================================
+// C15b: active primary→secondary after *early host hide* (live DnD path)
+//      Primary→secondary drop hides the host button before commit so pin
+//      reconcile does not rematerialize a mirror clone. Capture must still
+//      include the tab (location still main-drawer) and wasActive via mirror
+//      key must fire neighbor handoff — not leave empty panel / no strip switch.
+// =====================================================================
+{
+  setup()
+  if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
+    ;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) =>
+      setTimeout(() => cb(0), 0) as unknown as number
+  }
+
+  const { setSettings, getSettings } = await import('../../settings/state')
+  const savedTaskbar = getSettings().taskbarMode
+  const savedOuter = getSettings().moveControlsToOuterEdge
+  setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+
+  const {
+    __setActiveMainMirrorKeyForTest,
+    __setMainTabPinEnabledForTest,
+    __resetMainTabPinForTest,
+    getActiveMainMirrorKey,
+  } = await import('../../sidebar/main-tab-pin')
+
+  __resetMainTabPinForTest()
+  __setMainTabPinEnabledForTest(true)
+  __setActiveMainMirrorKeyForTest('id__tab-c')
+
+  const clicks: string[] = []
+  const makeMainBtn = (id: string, active: boolean) => {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    btn.setAttribute('title', id)
+    btn.className = active ? 'tabBtn tabBtnActive' : 'tabBtn'
+    btn.click = () => {
+      clicks.push(id)
+      for (const b of mainButtons) {
+        b.className = b === btn ? 'tabBtn tabBtnActive' : 'tabBtn'
+      }
+    }
+    btn.querySelector = () => null
+    return btn
+  }
+
+  const btnA = makeMainBtn('tab-a', false)
+  const btnB = makeMainBtn('tab-b', false)
+  const btnC = makeMainBtn('tab-c', true)
+  const mainButtons = [btnA, btnB, btnC]
+  // Live DnD early hide *before* commit (host location still main-drawer).
+  btnC.style.display = 'none'
+
+  const mainSidebar: any = document.createElement('div')
+  mainSidebar.setAttribute('data-spindle-mount', 'sidebar')
+  for (const b of mainButtons) mainSidebar.appendChild(b)
+  mainSidebar.querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('tabBtnActive')) {
+      return mainButtons.find((b) => String(b.className).includes('tabBtnActive')) ?? null
+    }
+    const idM = typeof sel === 'string' ? sel.match(/data-tab-id="([^"]+)"/) : null
+    if (idM) return mainButtons.find((b) => b.getAttribute('data-tab-id') === idM[1]) ?? null
+    return null
+  }
+  mainSidebar.querySelectorAll = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-tab-id')) return mainButtons.slice()
+    if (typeof sel === 'string' && sel.includes('button')) return mainButtons.slice()
+    return []
+  }
+
+  ;(document as any).querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-spindle-mount')) return mainSidebar
+    return null
+  }
+
+  const rootC: any = document.createElement('div')
+  rootC.querySelector = () => null
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.appendChild = (c: unknown) => c
+
+  const tabList: any = makeStubTabList()
+  if (!Array.isArray(tabList.children)) tabList.children = []
+  tabList.querySelectorAll = (sel: string) => {
+    if (!sel.includes('data-tab-id')) return []
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return []
+    return (tabList.children as any[]).filter(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    )
+  }
+  tabList.querySelector = (sel: string) => tabList.querySelectorAll(sel)[0] ?? null
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [])
+  __setSecondaryWrapperForTest(wrapper)
+
+  const locations: Record<string, { kind: string; containerId?: string }> = {
+    'tab-a': { kind: 'main-drawer' },
+    'tab-b': { kind: 'main-drawer' },
+    'tab-c': { kind: 'main-drawer' },
+  }
+
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: (id: string) => (id === 'tab-c' ? rootC : undefined),
+        getBuiltInTabTitle: (id: string) => id,
+        requestTabLocation: (id: string) => {
+          if (id === 'tab-c') {
+            locations['tab-c'] = {
+              kind: 'container',
+              containerId: 'canvas-secondary-drawer',
+            }
+            btnA.className = 'tabBtn tabBtnActive'
+            btnB.className = 'tabBtn'
+            btnC.className = 'tabBtn'
+          }
+        },
+        getTabLocation: (id: string) => locations[id] ?? { kind: 'main-drawer' },
+      },
+      containers: {},
+    },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  }
+
+  __setHostSetSettingForTest(
+    () => {},
+    {
+      side: 'right',
+      tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+      hiddenTabIds: [],
+      showTabLabels: false,
+    },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-a', 'tab-b'],
+    secondaryIds: ['tab-c'],
+    builtinOrder: ['tab-a', 'tab-b', 'tab-c'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'primary'],
+      ['tab-b', 'primary'],
+      ['tab-c', 'primary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C15b: commit ok after early hide')
+  assertEqual(getTabAssignments().get('tab-c'), 'secondary', 'C15b: tab-c secondary')
+  assert(
+    clicks.includes('tab-b'),
+    'C15b: neighbor tab-b activated (not skipped wasActive=false)',
+  )
+  assert(
+    String(btnB.className).includes('tabBtnActive'),
+    'C15b: tab-b host-active after early-hide active move',
+  )
+  const mirrorKey = getActiveMainMirrorKey()
+  assert(
+    mirrorKey === 'id__tab-b' || mirrorKey === 'title__tab-b',
+    `C15b: mirror key switched to neighbor (got ${mirrorKey})`,
+  )
+
+  __setSecondaryWrapperForTest(null)
+  __resetMainTabPinForTest()
+  setSettings({ taskbarMode: savedTaskbar, moveControlsToOuterEdge: savedOuter })
+}
+
+// =====================================================================
 // C16: quiet primary→secondary of inactive tab must not auto-activate it
 //      in secondary (drag release must not select the moved tab).
 // =====================================================================
@@ -1870,6 +2051,97 @@ function wireSecondaryShell(
   __setSecondaryWrapperForTest(null)
   __resetMainTabPinForTest()
   setSettings({ taskbarMode: savedTaskbar, moveControlsToOuterEdge: savedOuter })
+}
+
+// =====================================================================
+// C18: commit with only drawerSide flipped invokes side-change remount path
+// =====================================================================
+{
+  setup()
+  const sideCalls: Array<'left' | 'right'> = []
+  __setApplyMainDrawerSideChangeForTest((desired) => {
+    sideCalls.push(desired)
+  })
+  __setHostSetSettingForTest(
+    (_key: string, _value: unknown) => { /* no-op */ },
+    { side: 'right', tabOrder: ['profile'], hiddenTabIds: [] },
+  )
+  setTabAssignment('profile', 'primary')
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'left',
+    primaryIds: ['profile'],
+    secondaryIds: [],
+    builtinOrder: ['profile'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['profile'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([['profile', 'primary']]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C18: side-only commit returns ok')
+  assertEqual(sideCalls.length, 1, 'C18: forceMainDrawerSideChange called once')
+  assertEqual(sideCalls[0], 'left', 'C18: remount path receives desired side left')
+  __setApplyMainDrawerSideChangeForTest(null)
+}
+
+// =====================================================================
+// C19: commit without drawerSide change does not invoke side remount
+// =====================================================================
+{
+  setup()
+  const sideCalls: Array<'left' | 'right'> = []
+  __setApplyMainDrawerSideChangeForTest((desired) => {
+    sideCalls.push(desired)
+  })
+  __setHostSetSettingForTest(
+    (_key: string, _value: unknown) => { /* no-op */ },
+    { side: 'right', tabOrder: [], hiddenTabIds: [] },
+  )
+
+  const result: CommitResult = await commitConfigureDraft(NO_TABS_DRAFT, NO_TABS_BASE)
+  assert(result.ok === true, 'C19: matching-side commit returns ok')
+  assertEqual(sideCalls.length, 0, 'C19: no side remount when drawerSide unchanged')
+  __setApplyMainDrawerSideChangeForTest(null)
+}
+
+// =====================================================================
+// C20: side remount still runs when host patch fails (swap must not no-op)
+// =====================================================================
+{
+  setup()
+  const sideCalls: Array<'left' | 'right'> = []
+  __setApplyMainDrawerSideChangeForTest((desired) => {
+    sideCalls.push(desired)
+  })
+  // No host-settings seam → patchHostDrawerSettings returns false.
+  clearHostSettingsCache()
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'left',
+    primaryIds: [],
+    secondaryIds: [],
+    builtinOrder: [],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: [],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map(),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C20: commit ok even when host patch fails')
+  assertEqual(sideCalls.length, 1, 'C20: side remount still attempted after host write fail')
+  assertEqual(sideCalls[0], 'left', 'C20: desired side left')
+  __setApplyMainDrawerSideChangeForTest(null)
 }
 
 // =====================================================================

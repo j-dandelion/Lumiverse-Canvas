@@ -66,6 +66,26 @@ import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
 
+/** Injectable side-change applier (production uses drawer-sync.applyMainDrawerSideChange). */
+type MainDrawerSideChangeApplier = (desired: 'left' | 'right') => void | Promise<void>
+let _applyMainDrawerSideChangeImpl: MainDrawerSideChangeApplier | null = null
+
+/** Test-only: inject a spy for the side-change remount path. Pass null to reset. */
+export function __setApplyMainDrawerSideChangeForTest(
+  fn: MainDrawerSideChangeApplier | null,
+): void {
+  _applyMainDrawerSideChangeImpl = fn
+}
+
+async function forceMainDrawerSideChange(desired: 'left' | 'right'): Promise<void> {
+  if (_applyMainDrawerSideChangeImpl) {
+    await _applyMainDrawerSideChangeImpl(desired)
+    return
+  }
+  const { applyMainDrawerSideChange } = await import('../sidebar/drawer-sync')
+  await applyMainDrawerSideChange(desired)
+}
+
 /**
  * User-visible primary active tab id for quiet DnD / Configure handoff.
  *
@@ -328,6 +348,8 @@ async function runCommitConfigureDraft(
     setSuppressAutoActivation(true)
 
     // 3. Patch host drawer settings (order, hidden, side).
+    const prevSide = _base.drawerSide
+    const sideChanged = draft.drawerSide !== prevSide
     const hostWriteOk = patchHostDrawerSettings({
       tabOrder: encodeHostTabOrder(draft),
       hiddenTabIds: [...draft.hiddenIds],
@@ -338,6 +360,19 @@ async function runCommitConfigureDraft(
         '[configure-commit] patchHostDrawerSettings returned false; ' +
         'host order/hide/side may not persist. Continuing with DOM moves.',
       )
+    }
+
+    // 3b. Configure "Swap drawer locations": host store write alone does not
+    //     flip the main wrapper class in the same tick (React lag / headless
+    //     taskbar-mode). Force Canvas remount for the desired main side so
+    //     secondary + main-mirror move immediately. Still attempt remount if
+    //     the host write failed — user-visible swap should not silently no-op.
+    if (sideChanged) {
+      try {
+        await forceMainDrawerSideChange(draft.drawerSide)
+      } catch (err) {
+        dwarn('[configure-commit] forceMainDrawerSideChange failed:', err)
+      }
     }
 
     // 4. Capture source lists + active flags *before* quiet moves so handoff

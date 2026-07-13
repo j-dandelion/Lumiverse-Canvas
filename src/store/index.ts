@@ -200,7 +200,31 @@ export function isMainDrawerOpen(): boolean {
   return false
 }
 
+/**
+ * Short-lived override for intentional side writes (Configure "Swap drawer
+ * locations"). Host React may lag a frame (or longer under taskbar-mode)
+ * before flipping wrapperLeft/wrapperRight; without this override,
+ * getMainDrawerSide still returns the old DOM side and checkSideChanged
+ * never remounts secondary / main-mirror.
+ */
+let _mainDrawerSideOverride: 'left' | 'right' | null = null
+
+/** Set or clear the main-drawer-side override used by getMainDrawerSide. */
+export function setMainDrawerSideOverride(side: 'left' | 'right' | null): void {
+  _mainDrawerSideOverride = side
+}
+
+/** Current override value (null when none). Exported for settle helpers / tests. */
+export function getMainDrawerSideOverride(): 'left' | 'right' | null {
+  return _mainDrawerSideOverride
+}
+
 export function getMainDrawerSide(): 'left' | 'right' {
+  // Intentional write path (Configure swap): prefer override until host DOM
+  // catches up. See applyMainDrawerSideChange in drawer-sync.ts.
+  if (_mainDrawerSideOverride === 'left' || _mainDrawerSideOverride === 'right') {
+    return _mainDrawerSideOverride
+  }
   // DOM first: the wrapper's className updates synchronously when the user
   // changes drawer side in Lumiverse settings. The Zustand store snapshot is
   // cached with a 3-second TTL (see getStoreSnapshot), so for up to 3s after

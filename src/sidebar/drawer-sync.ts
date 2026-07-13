@@ -27,7 +27,15 @@
 
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { getHostDrawerSettings } from '../dom/host-settings'
-import { getDrawerTabs, getMainDrawerSide, getStoreSnapshot, asDrawerStore, findStoreData } from '../store'
+import {
+  getDrawerTabs,
+  getMainDrawerSide,
+  getStoreSnapshot,
+  asDrawerStore,
+  findStoreData,
+  setMainDrawerSideOverride,
+  getMainDrawerSideOverride,
+} from '../store'
 import { dlog, dwarn } from '../debug/log'
 // NOTE: secondary.tsx imports from this module (bidirectional). Both modules
 // only call each other from inside function bodies — never at module init time.
@@ -513,6 +521,106 @@ export function restoreSecondaryTabButtons(): void {
 }
 
 let _sideObserver: MutationObserver | null = null
+/** Wrapper node currently observed by _sideObserver (for rebind-on-replace). */
+let _observedMainWrapper: HTMLElement | null = null
+let _sideWatcherCleanupRegistered = false
+
+/**
+ * Force Canvas to remount/reposition for a newly written main drawer side.
+ *
+ * Used by Configure "Swap drawer locations": patchHostDrawerSettings updates
+ * the Zustand store, but host React may lag before flipping wrapperLeft /
+ * wrapperRight. getMainDrawerSide prefers live DOM, so without an override
+ * checkSideChanged sees no change and secondary + main-mirror stay put.
+ *
+ * Steps:
+ *   1. Install short-lived main-side override (desired).
+ *   2. Ensure checkSideChanged remounts (seed _lastKnownSide if needed).
+ *   3. Poll briefly for host DOM class to match; clear override when it does
+ *      (or after ~800ms timeout).
+ *   4. Re-attach the side MutationObserver if the host replaced the wrapper.
+ */
+export async function applyMainDrawerSideChange(
+  desired: 'left' | 'right',
+): Promise<void> {
+  setMainDrawerSideOverride(desired)
+
+  // Force remount when last-known differs or was never set (tests / early boot).
+  // If already aligned with desired, skip remount but still settle override.
+  if (_lastKnownSide === null || _lastKnownSide !== desired) {
+    if (_lastKnownSide === null) {
+      _lastKnownSide = desired === 'left' ? 'right' : 'left'
+    }
+    try {
+      checkSideChanged()
+    } catch (err) {
+      dwarn('[drawer-sync] applyMainDrawerSideChange remount failed:', err)
+    }
+  }
+
+  await settleMainDrawerSideDom(desired)
+  rebindSideChangeWatcherIfNeeded()
+}
+
+/** Read main wrapper side from live class tokens only (ignores override). */
+function readMainWrapperSideFromDom(): 'left' | 'right' | null {
+  const wrapper = getMainWrapper()
+  if (!wrapper) return null
+  const cls = wrapper.classList.toString()
+  if (cls.includes('wrapperLeft')) return 'left'
+  if (cls.includes('wrapperRight')) return 'right'
+  // Host sometimes only stamps wrapperLeft for left and omits both tokens on right.
+  // Only treat as right when some wrapper* class is present without wrapperLeft.
+  if (/\bwrapper\w*/.test(cls) && !cls.includes('wrapperLeft')) return 'right'
+  return null
+}
+
+/** Wait for host wrapper class to match desired; clear override when settled. */
+async function settleMainDrawerSideDom(desired: 'left' | 'right'): Promise<void> {
+  const deadline = Date.now() + 800
+  while (Date.now() < deadline) {
+    if (readMainWrapperSideFromDom() === desired) {
+      setMainDrawerSideOverride(null)
+      return
+    }
+    await new Promise<void>((r) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => r())
+      } else {
+        setTimeout(() => r(), 16)
+      }
+    })
+  }
+
+  // Timeout: drop override so future Settings UI side changes use live DOM.
+  if (getMainDrawerSideOverride() === desired) {
+    dwarn(
+      `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within 800ms; clearing override`,
+    )
+    setMainDrawerSideOverride(null)
+  }
+}
+
+/**
+ * Re-attach the side watcher when the host replaces the main wrapper element
+ * (React remount). No-op if already observing the live wrapper.
+ */
+export function rebindSideChangeWatcherIfNeeded(): void {
+  const wrapper = getMainWrapper()
+  if (!wrapper) return
+  if (_sideObserver !== null && _observedMainWrapper === wrapper) return
+  // Drop stale observer (disconnected node) and re-observe current wrapper.
+  if (_sideObserver !== null) {
+    try {
+      _sideObserver.disconnect()
+    } catch {
+      /* ignore */
+    }
+    _sideObserver = null
+    _observedMainWrapper = null
+  }
+  startSideChangeWatcher()
+}
 
 export function startSideChangeWatcher(): void {
   if (_sideObserver !== null) return // already running
@@ -531,16 +639,30 @@ export function startSideChangeWatcher(): void {
     checkSideChanged()
   })
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
+  _observedMainWrapper = wrapper
   // Cleanup is registered here (not at call sites) because these functions
   // are also called from settings/panel.ts which doesn't have its own
   // cleanup chain.
-  registerCleanup(() => stopSideChangeWatcher())
+  if (!_sideWatcherCleanupRegistered) {
+    _sideWatcherCleanupRegistered = true
+    registerCleanup(() => stopSideChangeWatcher())
+  }
 }
 
 export function stopSideChangeWatcher(): void {
   if (_sideObserver === null) return
   _sideObserver.disconnect()
   _sideObserver = null
+  _observedMainWrapper = null
+}
+
+/** Test-only: seed / read last-known main side for remount-path tests. */
+export function __setLastKnownSideForTest(side: 'left' | 'right' | null): void {
+  _lastKnownSide = side
+}
+
+export function __getLastKnownSideForTest(): 'left' | 'right' | null {
+  return _lastKnownSide
 }
 
 export function stopDrawerTabResizeWatcher(): void {

@@ -713,6 +713,48 @@ async function testT_BI_9() {
 }
 
 // =====================================================================
+// T-BI-9b: display:none + host location still main-drawer stays in list
+// (live primary→secondary early hide before quiet commit).
+// =====================================================================
+async function testT_BI_9b_early_hide_main_drawer() {
+  const fakeSidebar = fakeMainSidebarWithDisplay([
+    { id: 'profile', display: '' },
+    { id: 'library', display: '' },
+    { id: 'notes', display: 'none' }, // early-hidden, not yet requestTabLocation
+    { id: 'calendar', display: '' },
+  ])
+  const { hooks } = buildHooks({
+    mainSidebar: fakeSidebar,
+  })
+  hooks.getTabLocation = () => ({ kind: 'main-drawer' })
+  const result = await captureSourceList('primary', hooks)
+  assertEqual(result.length, 4, 'T-BI-9b: early-hidden main-drawer tab stays in list')
+  assert(result.indexOf('notes') >= 0, 'T-BI-9b: notes kept for handoff neighbor pick')
+  assertEqual(result[2], 'notes', 'T-BI-9b: notes keeps slot index for above/below')
+}
+
+// =====================================================================
+// T-BI-9c: display:none + container location is filtered (true secondary)
+// =====================================================================
+async function testT_BI_9c_container_hidden() {
+  const fakeSidebar = fakeMainSidebarWithDisplay([
+    { id: 'profile', display: '' },
+    { id: 'notes', display: 'none' },
+    { id: 'calendar', display: '' },
+  ])
+  const { hooks } = buildHooks({
+    mainSidebar: fakeSidebar,
+  })
+  hooks.getTabLocation = (id: string) =>
+    id === 'notes'
+      ? { kind: 'container', containerId: 'canvas-secondary-drawer' }
+      : { kind: 'main-drawer' }
+  const result = await captureSourceList('primary', hooks)
+  assertEqual(result.length, 2, 'T-BI-9c: container-hidden tab filtered')
+  assert(result.indexOf('notes') === -1, 'T-BI-9c: notes excluded when in secondary')
+}
+
+// =====================================================================
 // T-ACT-drag: activateDestination=false skips Part C; source neighbor still runs
 // =====================================================================
 async function testT_ACT_drag_skip_dest() {
@@ -761,6 +803,8 @@ async function main() {
   await testT_BI_7()
   await testT_BI_8()
   await testT_BI_9()
+  await testT_BI_9b_early_hide_main_drawer()
+  await testT_BI_9c_container_hidden()
   await testT_ACT_drag_skip_dest()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -51,9 +51,12 @@ import {
   hideMainTabButton,
   showMainTabButton,
 } from './buttons'
-import { getMainSidebar } from '../dom/lumiverse'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { dwarn } from '../debug/log'
+import {
+  readLivePrimaryTabIds,
+  readLiveSecondaryTabIds,
+} from './live-tab-order'
 
 /**
  * Live drawer tab-list DnD is desktop-only.
@@ -457,47 +460,6 @@ function getButtonsInContainer(
 }
 
 // ── Build ConfigureDraft from live state ──
-
-/**
- * data-tab-id order of displayed (not display:none) tab buttons in a list.
- * Skips Settings chrome.
- */
-function readVisibleTabIdsFromList(list: HTMLElement | null): string[] {
-  if (!list) return []
-  const out: string[] = []
-  for (const el of Array.from(
-    list.querySelectorAll('button[data-tab-id]'),
-  ) as HTMLElement[]) {
-    if (isSettingsButton(el)) continue
-    // Hidden tabs keep display:none via applyHiddenTabIds*; omit so
-    // alignIdsToLiveVisibleOrder can park them via hiddenIds slots.
-    if (el.style?.display === 'none') continue
-    const id = el.getAttribute('data-tab-id') || ''
-    if (id) out.push(id)
-  }
-  return out
-}
-
-/** Live primary strip: main-mirror main section (taskbar DnD) or host tabList. */
-function readLivePrimaryTabIds(): string[] {
-  const mirrorMain = document.querySelector(
-    '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main',
-  ) as HTMLElement | null
-  if (mirrorMain) return readVisibleTabIdsFromList(mirrorMain)
-
-  const sidebar = getMainSidebar()
-  if (!sidebar) return []
-  const tabList =
-    (sidebar.querySelector(
-      '[class*="tabListWrap"] > [class*="tabList"]',
-    ) as HTMLElement | null) ||
-    (sidebar.querySelector('[class*="tabList"]') as HTMLElement | null)
-  return readVisibleTabIdsFromList(tabList)
-}
-
-function readLiveSecondaryTabIds(): string[] {
-  return readVisibleTabIdsFromList(getSecondaryTabList())
-}
 
 function buildDraftAndBase(): {
   draft: ConfigureDraft
@@ -1360,15 +1322,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
 
         if (crossList && !capturedFromSecondary) {
           // primary → secondary: only the mirror node moved mid-drag; the host
-          // button stayed visible. Hide it before commit so pin reconcile does
-          // not re-materialize a main-mirror button (dual-list rearrange flash).
+          // button stayed visible. Hide it before commit so a later pin
+          // reconcile does not re-materialize a main-mirror button (dual-list
+          // rearrange flash). Do NOT reconcile here: heal would drop
+          // `_activeMainMirrorKey` when the active host button is display:none
+          // and no remaining host tab has tabBtnActive yet — quiet handoff
+          // then sees wasActive=false and leaves main panel empty with no
+          // mirror strip switch.
           hideMainTabButton(capturedTabId)
-          try {
-            const mp = await import('../sidebar/main-tab-pin')
-            mp.reconcileMainTabListPin?.()
-          } catch {
-            /* pin module optional during tests */
-          }
         }
 
         const ok = await performDrop(
@@ -1532,6 +1493,9 @@ async function performDrop(
         )
         return false
       }
+      // Keep an open Configure modal in sync with the live strip order.
+      const m = await import('./configure-modal')
+      m.refreshConfigureDraftFromLive()
       return true
     }
 
@@ -1567,6 +1531,9 @@ async function performDrop(
       )
       return false
     }
+    // Keep an open Configure modal in sync with the live strip order.
+    const m = await import('./configure-modal')
+    m.refreshConfigureDraftFromLive()
     return true
   } catch (err) {
     dwarn('[tab-list-dnd] drop failed:', err)

@@ -14,6 +14,9 @@
 //   - Cross primary→secondary: settle with mirror btn still in secondary;
 //     do NOT restore (would flash tab back on main-mirror + rearrange both
 //     strips). addSecondaryTabButton replaces foreign node in-place.
+//     Hide host button before commit (no dual rematerialize) but do NOT
+//     reconcileMainTabListPin first — heal would clear _activeMainMirrorKey
+//     and skip quiet handoff neighbor (empty panel / no strip switch).
 //   - Fail / cancel / tearDown while dragging: restore source DOM.
 //
 // Settings (isSettingsButton) is never drag-arm installed.
@@ -26,6 +29,12 @@
 // First-drop shuffle fix: buildDraftAndBase aligns primary/secondary ids to
 // live strip order (alignDraftToLiveVisibleOrder) so commit does not rewrite
 // both drawers to stale host tabOrder / catalog append order.
+//
+// Configure modal sync (performDrop after successful commitConfigureDraft):
+//   - Cross-drawer and within-drawer success paths dynamic-import
+//     configure-modal and call refreshConfigureDraftFromLive() (no-op if
+//     modal closed). Failed commits do NOT refresh. Clean no-op drops
+//     (no commit) also skip refresh. Refresh is not inside configure-commit.
 //
 // Click after release: capture suppressors stay installed for the whole drag;
 // removal is scheduled only on pointerup (setTimeout 0). Scheduling removal
@@ -56,6 +65,7 @@ import {
   shouldActivateDragFromDistance,
   DRAG_ACTIVATE_DISTANCE_PX,
 } from '../tab-list-dnd'
+import { readVisibleTabIdsFromList } from '../live-tab-order'
 
 let passed = 0
 let failed = 0
@@ -432,6 +442,45 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
       if (g.window) g.window.matchMedia = prevMatchMedia
     }
   }
+})()
+
+// ── live-tab-order: readVisibleTabIdsFromList skips Settings + display:none ──
+// Uses a minimal list mock (no full DOM) so the filter contract is pure-testable.
+;(() => {
+  const mk = (
+    id: string,
+    opts?: { settings?: boolean; hidden?: boolean },
+  ): HTMLElement => {
+    const attrs: Record<string, string> = { 'data-tab-id': id }
+    if (opts?.settings) {
+      attrs['aria-label'] = 'Settings'
+    }
+    return {
+      className: opts?.settings ? 'tabBtnSettings' : '',
+      style: { display: opts?.hidden ? 'none' : '' },
+      getAttribute: (k: string) => attrs[k] ?? null,
+    } as unknown as HTMLElement
+  }
+  const buttons = [
+    mk('a'),
+    mk('settings', { settings: true }),
+    mk('b', { hidden: true }),
+    mk('c'),
+  ]
+  const list = {
+    querySelectorAll: (_sel: string) => buttons,
+  } as unknown as HTMLElement
+  const ids = readVisibleTabIdsFromList(list)
+  assertEqual(
+    ids.join(','),
+    'a,c',
+    'readVisibleTabIdsFromList: skips Settings + display:none',
+  )
+  assertEqual(
+    readVisibleTabIdsFromList(null).length,
+    0,
+    'readVisibleTabIdsFromList: null list → []',
+  )
 })()
 
 // Report

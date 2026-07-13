@@ -1053,6 +1053,71 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
 }
 
 // =====================================================================
+// Open-alignment sequence (Configure modal buildLiveDraftAndBase contract)
+// createDraft → alignDraftToLiveVisibleOrder(live ids) → baseSnapshotFromDraft
+// Open/refresh must match live strip order and not be spuriously dirty.
+// =====================================================================
+{
+  // Host tabOrder disagrees with live strips (stale host after strip-only
+  // reorders / mid-session DnD before host settles).
+  const catalog = makeTestCatalog()
+  const draftFromHost = createDraft({
+    catalog,
+    tabOrder: [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['weaver', 'secondary'],
+      ['ext-b', 'secondary'],
+    ]),
+  })
+  // Live strips: primary reordered (subset of visibles), secondary swapped.
+  // Missing primary visibles (loom, connections) append in prior relative order.
+  const livePrimary = ['ext-a', 'profile', 'presets']
+  const liveSecondary = ['ext-b', 'weaver']
+  const aligned = alignDraftToLiveVisibleOrder(
+    draftFromHost,
+    livePrimary,
+    liveSecondary,
+  )
+  assertArraysEqual(
+    aligned.primaryIds,
+    ['ext-a', 'profile', 'presets', 'loom', 'connections'],
+    'open-align: primaryIds = live prefix + missing visibles',
+  )
+  assertArraysEqual(
+    aligned.secondaryIds,
+    ['ext-b', 'weaver'],
+    'open-align: secondaryIds match live strip order',
+  )
+  // Modal open uses baseSnapshotFromDraft(aligned) — not raw host base.
+  const base = baseSnapshotFromDraft(aligned)
+  assert(
+    !isDraftDirty(aligned, base),
+    'open-align: aligned draft + baseSnapshotFromDraft is not dirty',
+  )
+  // Contrast: raw host base would be dirty after alignment.
+  const hostBase: BaseSnapshot = {
+    tabOrder: [...TEST_BUILTIN_IDS, ...TEST_EXT_IDS],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['profile', 'primary'],
+      ['presets', 'primary'],
+      ['loom', 'primary'],
+      ['connections', 'primary'],
+      ['ext-a', 'primary'],
+      ['weaver', 'secondary'],
+      ['ext-b', 'secondary'],
+    ]),
+  }
+  assert(
+    isDraftDirty(aligned, hostBase),
+    'open-align: aligned draft IS dirty vs stale host base (why we rebase)',
+  )
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

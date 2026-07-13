@@ -12,6 +12,7 @@
 import { h, render } from 'preact'
 import { useEffect, useCallback, useRef } from 'preact/hooks'
 import {
+  alignDraftToLiveVisibleOrder,
   baseSnapshotFromDraft,
   createDraft,
   encodeHostTabOrder,
@@ -35,6 +36,10 @@ import {
   waitForConfigureCommitIdle,
   type CommitResult,
 } from './configure-commit'
+import {
+  readLivePrimaryTabIds,
+  readLiveSecondaryTabIds,
+} from './live-tab-order'
 import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
@@ -1362,20 +1367,25 @@ function buildLiveDraftAndBase(): {
   const currentAssignments = new Map(getTabAssignments())
   const drawerSide = (hostSettings?.side as DrawerSide) || getMainDrawerSide()
 
-  const draft = createDraft({
+  // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
+  // open after strip-only reorders). Align both sides so the modal matches
+  // what the user sees in the drawers.
+  const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
     hiddenTabIds: hostSettings?.hiddenTabIds || [],
     drawerSide,
     assignments: currentAssignments,
   })
+  const draft = alignDraftToLiveVisibleOrder(
+    draftFromHost,
+    readLivePrimaryTabIds(),
+    readLiveSecondaryTabIds(),
+  )
 
-  const base: BaseSnapshot = {
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
-    drawerSide,
-    assignments: new Map(currentAssignments),
-  }
+  // Base from the aligned draft so open/refresh is clean (not spuriously
+  // dirty vs host tabOrder that disagrees with the live strips).
+  const base = baseSnapshotFromDraft(draft)
 
   return { draft, base, catalog }
 }

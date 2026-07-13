@@ -332,11 +332,15 @@ function reconcileMainMirror(): void {
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)))
 
   // When the Canvas-owned active key is missing or no longer maps to any
-  // host button, adopt host tabBtnActive (or clear). Covers:
+  // *visible* host button, adopt host tabBtnActive (or clear). Covers:
   //   - first enable of taskbar mode (key starts null; shell title is 'Drawer')
   //   - tab moved off primary (stale key)
   // Does not run while a restored key still exists in wantedKeys
   // (preserves exclusive dual-active guard). Settings is host chrome only.
+  //
+  // Mid quiet primary→secondary: host button is display:none before handoff
+  // finishes. Do not clear the key to null in that window — handoff still
+  // needs getMainMirrorActiveTabId() === moved tab for wasActive / neighbor.
   if (_activeMainMirrorKey == null || !wantedKeys.has(_activeMainMirrorKey)) {
     const hostActiveBtn =
       hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
@@ -349,7 +353,12 @@ function reconcileMainMirror(): void {
         ''
       if (t) setCanvasMainTitle(t)
     } else if (prevKey != null) {
-      _activeMainMirrorKey = null
+      const hiddenHostForKey = findHostButtonByKeyIncludingHidden(sidebar, prevKey)
+      if (hiddenHostForKey && hiddenHostForKey.style.display === 'none') {
+        // Keep key for handoff; mirror clone already dropped via wantedKeys.
+      } else {
+        _activeMainMirrorKey = null
+      }
     }
     if (prevKey !== _activeMainMirrorKey) {
       dlog('[main-mirror] active key healed/seeded', {
@@ -626,6 +635,17 @@ function hostButtonKey(btn: HTMLElement): string {
   const title = btn.getAttribute('title') || btn.getAttribute('aria-label') || ''
   if (title) return `title__${title}`
   return `node__${btn.tagName}__${btn.className}`
+}
+
+/** Host button for a mirror key, including display:none (mid-move hide). */
+function findHostButtonByKeyIncludingHidden(
+  sidebar: HTMLElement,
+  key: string,
+): HTMLElement | null {
+  const buttons = Array.from(
+    sidebar.querySelectorAll('button[class*="tabBtn"]'),
+  ) as HTMLElement[]
+  return buttons.find((b) => hostButtonKey(b) === key) ?? null
 }
 
 /** Key for a mirror button (mirrors hostButtonKey from data-tab-id / title). */
