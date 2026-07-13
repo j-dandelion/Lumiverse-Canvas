@@ -4314,6 +4314,12 @@ async function finishDisable() {
     }
   }
   try {
+    const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+    mp.reconcileMainTabListPin();
+  } catch (err) {
+    dwarn("[second-drawer-mode] reconcileMainTabListPin after disable failed:", err);
+  }
+  try {
     const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
     if (m3.isConfigureTabsModalOpen()) {
       m3.refreshConfigureDraftFromLive();
@@ -9013,6 +9019,9 @@ function tearDownSecondarySidebar() {
   setMobileOpenClass("secondary", false);
   updateChatReflow();
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m3) => m3.updateStripGutters());
+  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => m3.reconcileMainTabListPin()).catch((err) => {
+    dwarn("[tabmove] teardown: reconcileMainTabListPin failed:", err);
+  });
   const handles = document.querySelectorAll(".sidebar-ux-resize-handle");
   for (const h4 of Array.from(handles)) {
     if (h4.parentElement && h4.parentElement.classList.contains("sidebar-ux-drawer")) {

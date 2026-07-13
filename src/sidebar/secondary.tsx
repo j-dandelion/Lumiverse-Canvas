@@ -429,6 +429,12 @@ export function tearDownSecondarySidebar(): void {
   updateChatReflow()
   // Opposite-edge strip gutter drops when secondary list is gone.
   void import('./strip-gutter').then((m) => m.updateStripGutters())
+  // Main-mirror filters display:none host buttons and only rebuilds on its
+  // own reconcile (observer does not watch style). Teardown unhides secondary
+  // tabs via showMainTabButton — force pin strip to pick them up.
+  void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => {
+    dwarn('[tabmove] teardown: reconcileMainTabListPin failed:', err)
+  })
   // Drop any in-flight resize handle bound to the wrapper, so a re-mount
   // creates a fresh one.
   const handles = document.querySelectorAll('.sidebar-ux-resize-handle')

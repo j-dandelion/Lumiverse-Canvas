@@ -362,6 +362,51 @@ async function testT5_NoAssignments() {
 }
 
 // =====================================================================
+// T6: tearDownSecondarySidebar reconciles main-mirror pin strip
+// (reconcileMainTabListPin called via dynamic import)
+// =====================================================================
+//
+// Main-mirror filters display:none host buttons; its observer does NOT
+// watch style. teardown unhides secondary tabs via showMainTabButton,
+// so reconcileMainTabListPin must be called to pick them up.
+import { mock } from 'bun:test'
+
+let _reconcilePinCallCount = 0
+
+async function testT6_ReconcilePinOnTeardown() {
+  setupEnv({ builtInTabIds: ['databank'] })
+  _reconcilePinCallCount = 0
+
+  // Mock main-tab-pin so the dynamic import('./main-tab-pin') inside
+  // tearDownSecondarySidebar resolves to a spy.
+  mock.module('../main-tab-pin', () => ({
+    reconcileMainTabListPin: () => { _reconcilePinCallCount++ },
+  }))
+
+  try {
+    setTabAssignment('databank', 'secondary')
+
+    const { tearDownSecondarySidebar } = await import('../secondary')
+    tearDownSecondarySidebar()
+
+    // Yield microtasks so the dynamic import promise resolves and the
+    // reconcile call fires.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert(_reconcilePinCallCount >= 1,
+      'T6: reconcileMainTabListPin called at least once during teardown')
+  } finally {
+    // Un-register the mock by returning the original module. Since mock.module
+    // is process-global, replace with a pass-through that re-exports the real
+    // module for any subsequent tests in this process.
+    mock.module('../main-tab-pin', () => ({}))
+    restoreEnv()
+  }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 
@@ -371,6 +416,7 @@ async function main() {
   await testT3_MultipleBuiltins()
   await testT4_OrderBeforeRemoval()
   await testT5_NoAssignments()
+  await testT6_ReconcilePinOnTeardown()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

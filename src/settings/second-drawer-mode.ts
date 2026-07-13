@@ -372,6 +372,15 @@ async function finishDisable(): Promise<void> {
     }
   }
 
+  // 4b. After baseline restore (and even if no baseline): main-mirror must
+  //     rebuild from host after teardown unhide + any host patch.
+  try {
+    const mp = await import('../sidebar/main-tab-pin')
+    mp.reconcileMainTabListPin()
+  } catch (err) {
+    dwarn('[second-drawer-mode] reconcileMainTabListPin after disable failed:', err)
+  }
+
   // 5. Modal stays open. After teardown + restore, refresh its draft from
   //    the now-restored live state so the user sees a clean (non-dirty)
   //    view of the disabled layout.
