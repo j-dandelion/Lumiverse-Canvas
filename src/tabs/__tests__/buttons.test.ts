@@ -203,30 +203,53 @@ const secondaryWrapper = {
 // Preserve addEventListener/removeEventListener for cross-file compatibility.
 {
   const _doc = typeof document !== 'undefined' ? document : {} as Document
-  const _origCreateElement = typeof document !== 'undefined'
-    ? document.createElement.bind(document)
-    : (tag: string) => {
-        // Minimal stub for bun environments without DOM.
-        const children: unknown[] = []
-        const attrs: Record<string, string> = {}
-        return {
-          tag,
-          className: '',
-          children,
-          attributes: attrs,
-          style: { display: '' } as Record<string, string>,
-          setAttribute(name: string, value: string) { attrs[name] = value },
-          getAttribute(name: string) { return attrs[name] ?? null },
-          removeAttribute(name: string) { delete attrs[name] },
-          appendChild(child: unknown) { children.push(child) },
-          querySelector(_sel: string): unknown { return null },
-          querySelectorAll(_sel: string): unknown[] { return children },
-          remove() {},
-        }
-      }
+  // Always use a full stub createElement — bun's document may exist but
+  // return incomplete nodes (no classList) when mixed with test stubs.
+  const _stubCreateElement = (tag: string) => {
+    const children: unknown[] = []
+    const attrs: Record<string, string> = {}
+    const classSet = new Set<string>()
+    const style: Record<string, string> = { display: '' }
+    const el = {
+      tagName: tag.toUpperCase(),
+      tag,
+      className: '',
+      children,
+      attributes: attrs,
+      style,
+      classList: {
+        add(...cs: string[]) {
+          for (const c of cs) classSet.add(c)
+          el.className = Array.from(classSet).join(' ')
+        },
+        remove(...cs: string[]) {
+          for (const c of cs) classSet.delete(c)
+          el.className = Array.from(classSet).join(' ')
+        },
+        contains(c: string) { return classSet.has(c) },
+        toggle(c: string, force?: boolean) {
+          if (force === true) classSet.add(c)
+          else if (force === false) classSet.delete(c)
+          else if (classSet.has(c)) classSet.delete(c)
+          else classSet.add(c)
+          el.className = Array.from(classSet).join(' ')
+        },
+      },
+      setAttribute(name: string, value: string) { attrs[name] = value },
+      getAttribute(name: string) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null },
+      removeAttribute(name: string) { delete attrs[name] },
+      appendChild(child: unknown) { children.push(child); return child },
+      addEventListener() {},
+      removeEventListener() {},
+      querySelector(_sel: string): unknown { return null },
+      querySelectorAll(_sel: string): unknown[] { return children },
+      remove() {},
+    }
+    return el
+  }
   ;(globalThis as any).document = {
     ..._doc,
-    createElement: _origCreateElement,
+    createElement: _stubCreateElement,
     querySelector(_sel: string): unknown { return null },
     // Resilient documentElement for transitive imports (strip-gutter, main-mirror-drawer).
     documentElement: (_doc as any)?.documentElement || {
@@ -598,13 +621,23 @@ setSettings({
 })
 
 // ============================================================
-// B22-B27: reorderSecondaryTabButtons and applyHiddenTabIdsToSecondary
+// B22-B28: reorderSecondaryTabButtons, applyHiddenTabIdsToSecondary,
+// addSecondaryTabButton (mirror-orphan guard)
 // ============================================================
-import { reorderSecondaryTabButtons, applyHiddenTabIdsToSecondary } from '../buttons'
+import {
+  reorderSecondaryTabButtons,
+  applyHiddenTabIdsToSecondary,
+  addSecondaryTabButton,
+} from '../buttons'
 
 // Factory for tab list stubs used by reorder/hide tests.
 // Returns a stub with DOM-like querySelector/appendChild/children.
-function makeListStub(initialButtons: Array<{ id: string; style: { display?: string } }>): {
+function makeListStub(initialButtons: Array<{
+  id: string
+  style?: { display?: string }
+  /** When true, simulate a mid-drag main-mirror orphan (not a real secondary btn). */
+  mirrorOrphan?: boolean
+}>): {
   className: string
   children: unknown[]
   querySelector: (sel: string) => unknown
@@ -612,11 +645,22 @@ function makeListStub(initialButtons: Array<{ id: string; style: { display?: str
   appendChild: (child: unknown) => void
 } {
   // Each "button" is a lightweight object with data-tab-id attribute via getAttribute.
-  const items = initialButtons.map((b) => {
+  const items: any[] = initialButtons.map((b) => {
+    const classes = new Set<string>()
+    if (b.mirrorOrphan) classes.add('sidebar-ux-main-tab-mirror-btn')
     const el = {
       _id: b.id,
       style: { display: b.style?.display ?? '' },
+      classList: {
+        contains(c: string) { return classes.has(c) },
+        add(c: string) { classes.add(c) },
+      },
       getAttribute(name: string) { return name === 'data-tab-id' ? b.id : null },
+      closest(_sel: string) { return null },
+      remove() {
+        const idx = items.indexOf(el)
+        if (idx >= 0) items.splice(idx, 1)
+      },
     }
     return el
   })
@@ -628,12 +672,18 @@ function makeListStub(initialButtons: Array<{ id: string; style: { display?: str
       // Handle [data-tab-id="..."]
       const match = sel.match(/\[data-tab-id="([^"]+)"\]/)
       if (match) {
-        return items.find((i) => i._id === match[1]) ?? null
+        return items.find((i) => i._id === match[1] || i.getAttribute?.('data-tab-id') === match[1]) ?? null
       }
       return null
     },
     querySelectorAll(sel: string) {
       if (sel === 'button[data-tab-id]') return items as unknown[]
+      const match = sel.match(/\[data-tab-id="([^"]+)"\]/)
+      if (match) {
+        return items.filter(
+          (i) => i._id === match[1] || i.getAttribute?.('data-tab-id') === match[1],
+        ) as unknown[]
+      }
       return []
     },
     appendChild(child: unknown) {
@@ -789,6 +839,63 @@ function makeListStub(initialButtons: Array<{ id: string; style: { display?: str
 
   const items = listStub.children as any[]
   assertEqual(items[0].style.display, '', 'B27: toggle-tab button shown')
+
+  __setSecondaryWrapperForTest(null)
+}
+
+// ============================================================
+// B28: addSecondaryTabButton ignores mid-drag mirror orphans
+//
+// Live DnD can park a .sidebar-ux-main-tab-mirror-btn with the same
+// data-tab-id in the secondary list. That must not block creating a
+// real secondary button (and the orphan should be removed).
+// ============================================================
+{
+  const listStub = makeListStub([
+    { id: 'moved-tab', mirrorOrphan: true },
+  ])
+
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  const root = document.createElement('div')
+  addSecondaryTabButton({
+    id: 'moved-tab',
+    title: 'Moved Tab',
+    root: root as unknown as HTMLElement,
+  })
+
+  const items = listStub.children as any[]
+  // Orphan mirror removed; real secondary button appended.
+  assertEqual(items.length, 1, 'B28.a: one child after add (orphan replaced)')
+  const created = items[0]
+  const createdId =
+    created?.getAttribute?.('data-tab-id') ??
+    created?.attrs?.['data-tab-id'] ??
+    created?._id
+  assertEqual(createdId, 'moved-tab', 'B28.b: created button has data-tab-id=moved-tab')
+  assert(
+    !created?.classList?.contains?.('sidebar-ux-main-tab-mirror-btn'),
+    'B28.c: created button is not a mirror orphan',
+  )
+
+  // Second call with real button present is a no-op (still one child).
+  addSecondaryTabButton({
+    id: 'moved-tab',
+    title: 'Moved Tab',
+    root: root as unknown as HTMLElement,
+  })
+  assertEqual(
+    (listStub.children as any[]).length,
+    1,
+    'B28.d: already-has real secondary → no duplicate',
+  )
 
   __setSecondaryWrapperForTest(null)
 }

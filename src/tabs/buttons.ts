@@ -208,18 +208,49 @@ interface SecondaryTabDescriptor {
   root: HTMLElement
 }
 
+/**
+ * True when `el` is a real Canvas secondary tab button.
+ * Mid-drag live DnD can park a main-mirror button (same data-tab-id) in the
+ * secondary list; those must not count as "already has button" or block create.
+ */
+function isOwnedSecondaryTabButton(el: Element): boolean {
+  const h = el as HTMLElement
+  if (h.classList?.contains?.('sidebar-ux-main-tab-mirror-btn')) return false
+  if (typeof h.closest === 'function' && h.closest('.sidebar-ux-main-tab-list-mirror')) {
+    return false
+  }
+  return true
+}
+
 export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   // Use getSecondaryTabList() so this works when taskbarMode has
   // reparented the list onto the body-level pin host (outside the wrapper).
   const tabList = getSecondaryTabList()
+  if (!tabList) return
   const _bareId = tab.id.includes(':')
     ? (tab.id.replace(/:\d+$/, '').split(':').pop() ?? tab.id)
     : tab.id
-  const alreadyHasButton = !!(tabList && (
-    tabList.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`) ||
-    tabList.querySelector(`[data-tab-id="${CSS.escape(_bareId)}"]`)
-  ))
-  if (!tabList || alreadyHasButton) return
+  // Collect every node with this tab id (may include mid-drag mirror orphans).
+  const idSels = [`[data-tab-id="${CSS.escape(tab.id)}"]`]
+  if (_bareId !== tab.id) {
+    idSels.push(`[data-tab-id="${CSS.escape(_bareId)}"]`)
+  }
+  const seen = new Set<Element>()
+  let hasRealSecondary = false
+  for (const sel of idSels) {
+    for (const el of Array.from(tabList.querySelectorAll(sel))) {
+      if (seen.has(el)) continue
+      seen.add(el)
+      if (isOwnedSecondaryTabButton(el)) {
+        hasRealSecondary = true
+      } else {
+        // Foreign node (e.g. mirror btn parked mid-drag) — remove so commit
+        // can create a proper secondary control.
+        el.remove()
+      }
+    }
+  }
+  if (hasRealSecondary) return
   const showLabels = isShowTabLabels()
   dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`)
 

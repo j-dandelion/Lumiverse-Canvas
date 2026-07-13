@@ -1,4 +1,4 @@
-// Tests for tab-list-dnd.ts — index convention documentation.
+// Tests for tab-list-dnd.ts — index convention + policy documentation.
 //
 // The hit-test in tab-list-dnd.ts excludes the dragged tab's button from
 // midpoint math, producing a post-removal insertion index. This is the same
@@ -6,23 +6,24 @@
 // reorderWithin (configure-model.ts), which first splices the source out
 // then inserts at toIndex. No ±1 adjustment is needed.
 //
-// Since the pure helper visualIndexToReorderIndex was removed (it
-// incorrectly added +1 for the after-source case), there are no exported
-// pure functions from tab-list-dnd.ts to test. The drag interaction logic
-// (pointer events, MutationObserver, overlay, hit-test, draft commit)
-// requires a live browser DOM and is exercised via integration testing.
+// Drop / restore policy (pointerup → performDrop):
+//   - Same-list reorder: keep mid-drag DOM through successful commit
+//     (primary stick; host+mirror reordered in configure-commit).
+//   - Cross-list move: restoreSourceButtonDOM() BEFORE commit so mirror
+//     nodes are not parked in the secondary list (would block
+//     addSecondaryTabButton via data-tab-id match).
+//   - Fail / cancel / tearDown while dragging: restore source DOM.
 //
-// This file exists as a placeholder for any future pure helpers extracted
-// from the drag logic. If none are needed, it remains empty to document
-// the convention and prevent accidental re-introduction of the off-by-one.
+// Settings (isSettingsButton) is never long-press installed.
+//
+// Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
+// hit-test indices (would otherwise animate mid-drag then snap back).
 
 // Verify reorderWithin takes a post-removal toIndex (integration safe-check):
 // configure-model.ts reorderWithin: splices fromIndex first, then inserts at
 // toIndex. This matches the hit-test convention (post-removal, insert at).
 // No cross-boundary index adjustment is needed — pass the visual index as-is.
 //
-// Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
-// hit-test indices (would otherwise animate mid-drag then snap back).
 import {
   reorderWithin,
   reorderVisibleInList,
@@ -30,6 +31,7 @@ import {
   reorderWithinVisible,
 } from '../configure-model'
 import type { ConfigureDraft } from '../configure-model'
+import { isSettingsButton } from '../buttons'
 
 let passed = 0
 let failed = 0
@@ -197,6 +199,36 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     naive.primaryIds.join(','),
     'H,a,b,c',
     'document naive reorderWithin(0,1) with hidden → H,a,b,c (visible a,b,c unchanged)',
+  )
+})()
+
+// Settings host chrome is excluded from live DnD long-press (isSettingsButton).
+;(() => {
+  const settings = {
+    className: 'tabBtn tabBtnSettings',
+    getAttribute(name: string) {
+      if (name === 'title') return 'Settings'
+      if (name === 'aria-label') return 'Settings'
+      return null
+    },
+  } as unknown as HTMLElement
+  assertEqual(
+    isSettingsButton(settings),
+    true,
+    'isSettingsButton: tabBtnSettings → true (DnD must skip)',
+  )
+  const normal = {
+    className: 'tabBtn',
+    getAttribute(name: string) {
+      if (name === 'title') return 'Profile'
+      if (name === 'aria-label') return 'Profile'
+      return null
+    },
+  } as unknown as HTMLElement
+  assertEqual(
+    isSettingsButton(normal),
+    false,
+    'isSettingsButton: normal tab → false (DnD may install)',
   )
 })()
 

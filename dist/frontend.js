@@ -1698,13 +1698,7 @@ function resolveMirrorList() {
 }
 function collectHostTabButtons(sidebar) {
   const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
-  return buttons.filter((b) => {
-    if (b.style.display === "none")
-      return false;
-    if (!String(b.className || "").includes("tabBtn"))
-      return true;
-    return true;
-  });
+  return buttons.filter((b) => b.style.display !== "none");
 }
 function hostButtonKey(btn) {
   const id = btn.getAttribute("data-tab-id");
@@ -6009,11 +6003,39 @@ function readMainButtonShortName(mainBtn) {
     return label.textContent.trim();
   return;
 }
+function isOwnedSecondaryTabButton(el) {
+  const h4 = el;
+  if (h4.classList?.contains?.("sidebar-ux-main-tab-mirror-btn"))
+    return false;
+  if (typeof h4.closest === "function" && h4.closest(".sidebar-ux-main-tab-list-mirror")) {
+    return false;
+  }
+  return true;
+}
 function addSecondaryTabButton(tab) {
   const tabList = getSecondaryTabList();
+  if (!tabList)
+    return;
   const _bareId = tab.id.includes(":") ? tab.id.replace(/:\d+$/, "").split(":").pop() ?? tab.id : tab.id;
-  const alreadyHasButton = !!(tabList && (tabList.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`) || tabList.querySelector(`[data-tab-id="${CSS.escape(_bareId)}"]`)));
-  if (!tabList || alreadyHasButton)
+  const idSels = [`[data-tab-id="${CSS.escape(tab.id)}"]`];
+  if (_bareId !== tab.id) {
+    idSels.push(`[data-tab-id="${CSS.escape(_bareId)}"]`);
+  }
+  const seen = new Set;
+  let hasRealSecondary = false;
+  for (const sel of idSels) {
+    for (const el of Array.from(tabList.querySelectorAll(sel))) {
+      if (seen.has(el))
+        continue;
+      seen.add(el);
+      if (isOwnedSecondaryTabButton(el)) {
+        hasRealSecondary = true;
+      } else {
+        el.remove();
+      }
+    }
+  }
+  if (hasRealSecondary)
     return;
   const showLabels = isShowTabLabels();
   dlog(`addSecondaryTabButton: id=${tab.id} title="${tab.title}" iconSvg=${!!tab.iconSvg} iconUrl=${!!tab.iconUrl} shortName="${tab.shortName}" showLabels=${showLabels}`);
@@ -10669,8 +10691,12 @@ function startDrag(btn, pointerEvent) {
     }
     clearDragState2();
     if (capturedTarget && capturedTabId) {
+      const crossList = capturedFromSecondary !== capturedTarget.secondary;
+      if (crossList) {
+        restoreSourceButtonDOM();
+      }
       const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedTarget);
-      if (!ok) {
+      if (!ok && !crossList) {
         restoreSourceButtonDOM();
       }
     } else {
@@ -10762,6 +10788,8 @@ function installLongPressOnButton(btn) {
     return;
   const tabId = getButtonTabId(btn);
   if (!tabId)
+    return;
+  if (isSettingsButton(btn))
     return;
   _installed.add(btn);
   let longPressTimer = null;
@@ -10890,6 +10918,7 @@ var init_tab_list_dnd = __esm(() => {
   init_assignment();
   init_store();
   init_secondary();
+  init_buttons();
   init_log();
   _installed = new WeakSet;
 });

@@ -561,11 +561,9 @@ function collectHostTabButtons(sidebar: HTMLElement): HTMLElement[] {
   const buttons = Array.from(
     sidebar.querySelectorAll('button[class*="tabBtn"]'),
   ) as HTMLElement[]
-  return buttons.filter((b) => {
-    if (b.style.display === 'none') return false
-    if (!String(b.className || '').includes('tabBtn')) return true
-    return true
-  })
+  // querySelector already requires tabBtn; only filter host-hidden buttons
+  // (secondary-assigned tabs use display:none via hideMainTabButton).
+  return buttons.filter((b) => b.style.display !== 'none')
 }
 
 function hostButtonKey(btn: HTMLElement): string {

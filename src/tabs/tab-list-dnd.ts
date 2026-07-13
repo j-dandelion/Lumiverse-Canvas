@@ -34,6 +34,7 @@ import { getHostDrawerSettings } from '../dom/host-settings'
 import { getTabAssignments } from './assignment'
 import { getMainDrawerSide } from '../store'
 import { getSecondaryWrapper, getSecondaryTabList } from '../sidebar/secondary'
+import { isSettingsButton } from './buttons'
 import { dwarn } from '../debug/log'
 
 // ── Module-level drag state ──
@@ -891,15 +892,22 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     clearDragState()
 
     if (capturedTarget && capturedTabId) {
-      // Keep mid-drag DOM order through commit so primary/mirror do not
-      // flash the pre-drag order. Commit re-applies draft order to
-      // secondary + host main + main-mirror. Restore only if commit fails.
+      // Same-list: keep mid-drag DOM through successful commit so primary/
+      // mirror do not flash pre-drag order (commit re-applies draft order).
+      // Cross-list: mid-drag parks the wrong node type (mirror btn in
+      // secondary, or secondary btn in mirror). Restore first so
+      // addSecondaryTabButton / removeSecondary see clean lists; commit
+      // owns create/remove/reorder.
+      const crossList = capturedFromSecondary !== capturedTarget.secondary
+      if (crossList) {
+        restoreSourceButtonDOM()
+      }
       const ok = await performDrop(
         capturedTabId,
         capturedFromSecondary,
         capturedTarget,
       )
-      if (!ok) {
+      if (!ok && !crossList) {
         restoreSourceButtonDOM()
       }
     } else {
@@ -1058,6 +1066,10 @@ function installLongPressOnButton(btn: HTMLElement): void {
   // Skip buttons without a tab id
   const tabId = getButtonTabId(btn)
   if (!tabId) return
+
+  // Settings is host chrome (gear only) — never live-reorder or move.
+  // Matches main-mirror click/contextmenu policy (isSettingsButton).
+  if (isSettingsButton(btn)) return
 
   _installed.add(btn)
 
