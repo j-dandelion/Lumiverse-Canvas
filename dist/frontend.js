@@ -4874,6 +4874,7 @@ function injectModalStyles() {
     }
 
     /* ── Row card (host .row) ── */
+    /* Non-core (hideable) tabs use host hover surface; core keeps .row-locked tint. */
     .canvas-configure-tabs-row {
       display: flex;
       align-items: center;
@@ -4882,7 +4883,7 @@ function injectModalStyles() {
       padding: 10px 12px;
       border: 1px solid var(--lumiverse-border, #333);
       border-radius: 14px;
-      background: color-mix(in srgb, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)) 92%, white 8%);
+      background: var(--lumiverse-bg-hover, var(--lumiverse-bg, #1a1a2e));
       touch-action: manipulation;
       user-select: none;
     }
