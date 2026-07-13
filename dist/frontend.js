@@ -3943,11 +3943,20 @@ function activateInSecondary(tabId, h3) {
     }
   }
 }
-async function runHandoff({ tabId, source, destination, sourceList, preMoveSourceActiveTab, _testHooks: h3 }) {
+async function runHandoff({
+  tabId,
+  source,
+  destination,
+  sourceList,
+  preMoveSourceActiveTab,
+  activateDestination = true,
+  _testHooks: h3
+}) {
   const wasActive = await isMovedTabActiveInSource(tabId, source, h3, preMoveSourceActiveTab);
   const replacementId = pickSourceReplacement(tabId, sourceList);
   const isMobile = (h3?.isMobileViewport ?? isMobileViewport)();
-  dlog(`[canvas-debug] HANDOFF_DECIDE movedTab=${tabId} source=${source} destination=${destination} ` + `wasActive=${wasActive} replacement=${replacementId ?? "NONE"} mobile=${isMobile} ` + `activateSource=${wasActive && replacementId !== null} activateDestination=${!isMobile}`);
+  const doDest = activateDestination && !isMobile;
+  dlog(`[canvas-debug] HANDOFF_DECIDE movedTab=${tabId} source=${source} destination=${destination} ` + `wasActive=${wasActive} replacement=${replacementId ?? "NONE"} mobile=${isMobile} ` + `activateSource=${wasActive && replacementId !== null} activateDestination=${doDest}`);
   const above = replacementId !== null ? sourceList.indexOf(replacementId) < sourceList.indexOf(tabId) ? replacementId : null : null;
   const below = replacementId !== null ? sourceList.indexOf(replacementId) > sourceList.indexOf(tabId) ? replacementId : null : null;
   dlog(`[canvas-debug] HANDOFF_REPLACE_PICK source=${source} movedTab=${tabId} ` + `above=${above ?? "NONE"} below=${below ?? "NONE"} picked=${replacementId ?? "NONE"}`);
@@ -3962,7 +3971,7 @@ async function runHandoff({ tabId, source, destination, sourceList, preMoveSourc
       dlog(`[canvas-debug] HANDOFF_ERROR gate=source source=${source} replacement=${replacementId} err=${err}`);
     }
   }
-  if (!isMobile) {
+  if (doDest) {
     dlog(`[canvas-debug] HANDOFF_DEST_ACTIVATE destination=${destination} tabId=${tabId} ` + `method=${destination === "primary" ? "click-main-button" : "setActiveSecondaryTabId+data-canvas-active"} ` + `skippedMobile=${isMobile}`);
     try {
       if (destination === "primary") {
@@ -3973,6 +3982,8 @@ async function runHandoff({ tabId, source, destination, sourceList, preMoveSourc
     } catch (err) {
       dlog(`[canvas-debug] HANDOFF_ERROR gate=destination destination=${destination} tabId=${tabId} err=${err}`);
     }
+  } else if (!activateDestination) {
+    dlog(`[canvas-debug] HANDOFF_DEST_SKIP destination=${destination} tabId=${tabId} reason=activateDestination=false`);
   }
 }
 var init_activation_handoff = __esm(() => {
@@ -4114,7 +4125,8 @@ async function commitConfigureDraft(draft, _base) {
           source: "primary",
           destination: "secondary",
           sourceList: primaryList,
-          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId)
+          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
+          activateDestination: false
         });
       }
     }
@@ -4126,7 +4138,8 @@ async function commitConfigureDraft(draft, _base) {
           source: "secondary",
           destination: "primary",
           sourceList: secondaryList,
-          preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId
+          preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
+          activateDestination: false
         });
       }
     }

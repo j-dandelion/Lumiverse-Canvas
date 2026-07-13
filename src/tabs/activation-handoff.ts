@@ -8,12 +8,14 @@
  *   Part B: when Part A fires, activate the tab immediately above the
  *           moved tab's prior slot, or the tab immediately below if no
  *           tab exists above.  'Slot' = position before removal.
- *   Part C: destination activates the moved tab on every move, except on
- *           mobile (isMobileViewport() === true).  Unconditional on
- *           active-status.
+ *   Part C: destination activates the moved tab, except on mobile
+ *           (isMobileViewport() === true) and when the caller opts out
+ *           (`activateDestination: false`). rClick Move keeps Part C on;
+ *           live DnD / Configure quiet commit pass false so a drag does
+ *           not select the moved tab on release.
  *
- * Part A and Part B apply on ALL viewports.  Part C is mobile-skipped.
- * Symmetric for primary and secondary drawers.
+ * Part A and Part B apply on ALL viewports.  Part C is mobile-skipped
+ * (and optional for drag). Symmetric for primary and secondary drawers.
  *
  * PUBLIC API: runHandoff, captureSourceList only.
  */
@@ -401,6 +403,12 @@ export interface HandoffArgs {
   destination: 'primary' | 'secondary'
   sourceList: string[]
   preMoveSourceActiveTab?: boolean
+  /**
+   * When false, skip Part C (do not activate the moved tab in the destination).
+   * Default true (rClick Move / assignTab). Live drawer DnD and Configure
+   * quiet commit pass false so drag-release does not select the moved tab.
+   */
+  activateDestination?: boolean
   _testHooks?: TestHooks
 }
 
@@ -409,16 +417,25 @@ export interface HandoffArgs {
  * activation) independently.  Each gate is wrapped in try/catch so
  * that a failure in one does not prevent the other from executing.
  */
-export async function runHandoff({ tabId, source, destination, sourceList, preMoveSourceActiveTab, _testHooks: h }: HandoffArgs): Promise<void> {
+export async function runHandoff({
+  tabId,
+  source,
+  destination,
+  sourceList,
+  preMoveSourceActiveTab,
+  activateDestination = true,
+  _testHooks: h,
+}: HandoffArgs): Promise<void> {
   const wasActive = await isMovedTabActiveInSource(tabId, source, h, preMoveSourceActiveTab)
   const replacementId = pickSourceReplacement(tabId, sourceList)
   const isMobile = (h?.isMobileViewport ?? isMobileViewport)()
+  const doDest = activateDestination && !isMobile
 
   // [canvas-debug] HANDOFF_DECIDE — emitted at the top of runHandoff
   dlog(
     `[canvas-debug] HANDOFF_DECIDE movedTab=${tabId} source=${source} destination=${destination} ` +
     `wasActive=${wasActive} replacement=${replacementId ?? 'NONE'} mobile=${isMobile} ` +
-    `activateSource=${wasActive && replacementId !== null} activateDestination=${!isMobile}`
+    `activateSource=${wasActive && replacementId !== null} activateDestination=${doDest}`
   )
 
   // [canvas-debug] HANDOFF_REPLACE_PICK — after pickSourceReplacement returns
@@ -446,8 +463,8 @@ export async function runHandoff({ tabId, source, destination, sourceList, preMo
     }
   }
 
-  // Gate B: destination activation — unconditional except mobile
-  if (!isMobile) {
+  // Gate B: destination activation — default on (rClick); off for drag quiet path
+  if (doDest) {
     // [canvas-debug] HANDOFF_DEST_ACTIVATE
     dlog(
       `[canvas-debug] HANDOFF_DEST_ACTIVATE destination=${destination} tabId=${tabId} ` +
@@ -463,5 +480,9 @@ export async function runHandoff({ tabId, source, destination, sourceList, preMo
     } catch (err) {
       dlog(`[canvas-debug] HANDOFF_ERROR gate=destination destination=${destination} tabId=${tabId} err=${err}`)
     }
+  } else if (!activateDestination) {
+    dlog(
+      `[canvas-debug] HANDOFF_DEST_SKIP destination=${destination} tabId=${tabId} reason=activateDestination=false`,
+    )
   }
 }

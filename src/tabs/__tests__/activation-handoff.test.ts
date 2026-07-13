@@ -713,6 +713,27 @@ async function testT_BI_9() {
 }
 
 // =====================================================================
+// T-ACT-drag: activateDestination=false skips Part C; source neighbor still runs
+// =====================================================================
+async function testT_ACT_drag_skip_dest() {
+  const { hooks, state } = buildHooks({
+    activePrimary: (tabId) => tabId === 'tab-C',
+    mainBtnTabId: 'tab-B',
+  })
+  await runHandoff({
+    tabId: 'tab-C',
+    source: 'primary',
+    destination: 'secondary',
+    sourceList: ['tab-A', 'tab-B', 'tab-C', 'tab-D'],
+    activateDestination: false,
+    _testHooks: hooks,
+  })
+  assertEqual(state.activatePrimaryCalls[0], 'tab-B', 'T-ACT-drag: source neighbor still activated')
+  assertEqual(state.secondaryTabIdSetTo, null, 'T-ACT-drag: destination NOT activated (drag path)')
+  assertEqual(state.activatePrimaryCalls.length, 1, 'T-ACT-drag: only source activate, not dest in primary')
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 
@@ -740,6 +761,7 @@ async function main() {
   await testT_BI_7()
   await testT_BI_8()
   await testT_BI_9()
+  await testT_ACT_drag_skip_dest()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

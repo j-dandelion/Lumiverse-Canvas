@@ -1541,10 +1541,157 @@ function wireSecondaryShell(
     mirrorKeyNeighbor === 'id__tab-b' || mirrorKeyNeighbor === 'title__tab-b',
     `C15: main-mirror key adopted neighbor tab-b (got ${mirrorKeyNeighbor})`,
   )
+  const { getActiveSecondaryTabId: getSecAfterC15 } = await import('../assignment')
+  assert(
+    getSecAfterC15() !== 'tab-c',
+    'C15: quiet drag does not activate moved tab in secondary',
+  )
 
   __setSecondaryWrapperForTest(null)
   __resetMainTabPinForTest()
   setSettings({ taskbarMode: savedTaskbar, moveControlsToOuterEdge: savedOuter })
+}
+
+// =====================================================================
+// C16: quiet primary→secondary of inactive tab must not auto-activate it
+//      in secondary (drag release must not select the moved tab).
+// =====================================================================
+{
+  setup()
+  if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
+    ;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) =>
+      setTimeout(() => cb(0), 0) as unknown as number
+  }
+
+  const { getActiveSecondaryTabId, setActiveSecondaryTabId } = await import('../assignment')
+  setActiveSecondaryTabId('existing-sec')
+
+  const makeMainBtn = (id: string, active: boolean) => {
+    const btn: any = document.createElement('button')
+    btn.setAttribute('data-tab-id', id)
+    btn.setAttribute('title', id)
+    btn.className = active ? 'tabBtn tabBtnActive' : 'tabBtn'
+    btn.click = () => {
+      for (const b of mainButtons) {
+        b.className = b === btn ? 'tabBtn tabBtnActive' : 'tabBtn'
+      }
+    }
+    btn.querySelector = () => null
+    return btn
+  }
+
+  const btnA = makeMainBtn('tab-a', true)
+  const btnB = makeMainBtn('tab-b', false) // inactive, dragged to secondary
+  const mainButtons = [btnA, btnB]
+
+  const mainSidebar: any = document.createElement('div')
+  mainSidebar.setAttribute('data-spindle-mount', 'sidebar')
+  for (const b of mainButtons) mainSidebar.appendChild(b)
+  mainSidebar.querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('tabBtnActive')) {
+      return mainButtons.find((b) => String(b.className).includes('tabBtnActive')) ?? null
+    }
+    const idM = typeof sel === 'string' ? sel.match(/data-tab-id="([^"]+)"/) : null
+    if (idM) return mainButtons.find((b) => b.getAttribute('data-tab-id') === idM[1]) ?? null
+    return null
+  }
+  mainSidebar.querySelectorAll = () => mainButtons.slice()
+
+  ;(document as any).querySelector = (sel: string) => {
+    if (typeof sel === 'string' && sel.includes('data-spindle-mount')) return mainSidebar
+    return null
+  }
+
+  const rootB: any = document.createElement('div')
+  rootB.querySelector = () => null
+
+  const panelContent: any = document.createElement('div')
+  panelContent.className = 'sidebar-ux-panel-content'
+  panelContent.children = panelContent.children || []
+  const origAppend = panelContent.appendChild.bind(panelContent)
+  panelContent.appendChild = (c: unknown) => {
+    origAppend(c)
+    if (Array.isArray(panelContent.children) && !panelContent.children.includes(c)) {
+      panelContent.children.push(c)
+    }
+    return c
+  }
+
+  const tabList: any = makeStubTabList()
+  if (!Array.isArray(tabList.children)) tabList.children = []
+  tabList.querySelectorAll = (sel: string) => {
+    if (!sel.includes('data-tab-id')) return []
+    const m = sel.match(/data-tab-id="([^"]+)"/)
+    if (!m) return []
+    return (tabList.children as any[]).filter(
+      (c) => c.getAttribute?.('data-tab-id') === m[1],
+    )
+  }
+  tabList.querySelector = (sel: string) => tabList.querySelectorAll(sel)[0] ?? null
+
+  const wrapper: any = makeStubWrapper(tabList)
+  wrapper.appendChild(panelContent)
+  wireSecondaryShell(wrapper, tabList, panelContent, [])
+  __setSecondaryWrapperForTest(wrapper)
+
+  ;(globalThis as any).window = {
+    ...(globalThis as any).window,
+    spindle: {
+      ui: {
+        getBuiltInTabRoot: (id: string) => (id === 'tab-b' ? rootB : undefined),
+        getBuiltInTabTitle: (id: string) => id,
+        requestTabLocation: () => {
+          btnB.style.display = 'none'
+        },
+        getTabLocation: () => ({ kind: 'container', containerId: 'canvas-secondary-drawer' }),
+      },
+      containers: {},
+    },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  }
+
+  __setHostSetSettingForTest(
+    () => {},
+    {
+      side: 'right',
+      tabOrder: ['tab-a', 'tab-b'],
+      hiddenTabIds: [],
+      showTabLabels: false,
+    },
+  )
+
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: ['tab-a'],
+    secondaryIds: ['tab-b'],
+    builtinOrder: ['tab-a', 'tab-b'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const base: BaseSnapshot = {
+    tabOrder: ['tab-a', 'tab-b'],
+    hiddenTabIds: [],
+    drawerSide: 'right',
+    assignments: new Map([
+      ['tab-a', 'primary'],
+      ['tab-b', 'primary'],
+    ]),
+  }
+
+  const result: CommitResult = await commitConfigureDraft(draft, base)
+  assert(result.ok === true, 'C16: commit ok')
+  assertEqual(getTabAssignments().get('tab-b'), 'secondary', 'C16: tab-b moved to secondary')
+  assertEqual(
+    getActiveSecondaryTabId(),
+    'existing-sec',
+    'C16: pre-existing secondary active unchanged (moved tab not auto-activated)',
+  )
+  assert(
+    rootB.getAttribute('data-canvas-active') == null,
+    'C16: moved root has no data-canvas-active',
+  )
+
+  __setSecondaryWrapperForTest(null)
 }
 
 // =====================================================================

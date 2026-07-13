@@ -295,6 +295,8 @@ export async function commitConfigureDraft(
       destination: 'primary' | 'secondary'
       sourceList: string[]
       preMoveSourceActiveTab: boolean
+      /** Drag/Configure quiet path: never select the moved tab on release. */
+      activateDestination: false
     }
     const pendingHandoffs: QuietHandoff[] = []
     if (toSecondary.length > 0) {
@@ -308,6 +310,7 @@ export async function commitConfigureDraft(
           // Mirror-aware: host store/DOM alone falsely reports inactive when
           // Canvas exclusive key is the real selection (top-most host stuck).
           preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
+          activateDestination: false,
         })
       }
     }
@@ -320,6 +323,7 @@ export async function commitConfigureDraft(
           destination: 'primary',
           sourceList: secondaryList,
           preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
+          activateDestination: false,
         })
       }
     }
@@ -368,8 +372,10 @@ export async function commitConfigureDraft(
       reorderMainMirrorTabButtons(draft.primaryIds)
     }
 
-    // 4d. Source neighbor + destination activation (same rules as assignTab /
-    //     rClick Move). Suppress-auto-open stays on; handoff does not open.
+    // 4d. Source neighbor when the moved tab was active (rClick Part A/B).
+    //     Skip destination activate (Part C): live DnD / Configure drag must
+    //     not select the moved tab on release. rClick assignTab still runs
+    //     full runHandoff with default activateDestination.
     for (const h of pendingHandoffs) {
       try {
         await runHandoff(h)
