@@ -1,10 +1,10 @@
 // Drag-and-drop tab reorder on live drawer tabs.
 //
 // Activation:
-//   - Mouse / non-touch: distance-based (~16px Euclidean). pointerdown arms;
+//   - Mouse / non-touch: distance-based (~6px Euclidean). pointerdown arms;
 //     first pointermove past threshold calls startDrag with the *move* event
 //     so grab offset is correct. Pure click does not lift or suppress clicks.
-//   - Touch / pen: long-press (~200ms), then startDrag. Moving >~16px while
+//   - Touch / pen: long-press (~200ms), then startDrag. Moving >~6px while
 //     arming cancels (avoids lift during scroll/tap jitter).
 //
 // While dragging, hit-test finds the drop target (within or across drawers).
@@ -70,7 +70,7 @@ export function isLiveTabListDndAllowed(): boolean {
  * Euclidean distance (px) before mouse drag activates.
  * Also cancels touch/pen long-press arming when exceeded.
  */
-export const DRAG_ACTIVATE_DISTANCE_PX = 16
+export const DRAG_ACTIVATE_DISTANCE_PX = 6
 
 /** Long-press delay (ms) for touch/pen before drag activates. */
 export const LONG_PRESS_MS = 200

@@ -70,7 +70,7 @@ export interface CanvasSettings {
   hideDrawerOpenCloseButtons?: boolean
 
   /** Drag-and-drop to reorder drawer tabs within a list or move them
-   *  between primary and secondary. Mouse: distance-based lift (~16px);
+   *  between primary and secondary. Mouse: distance-based lift (~6px);
    *  touch/pen: long-press. Requires `taskbarMode` (primary surface is
    *  the Canvas main-mirror strip). Desktop only (≤600px no-op). Default on. */
   dragAndDropDrawerTabs?: boolean

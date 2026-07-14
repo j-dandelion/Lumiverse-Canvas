@@ -20,7 +20,7 @@
 //   - Fail / cancel / tearDown while dragging: restore source DOM.
 //
 // Settings (isSettingsButton) is never drag-arm installed.
-// Activation: mouse = ~16px Euclidean distance; touch/pen = ~200ms long-press
+// Activation: mouse = ~6px Euclidean distance; touch/pen = ~200ms long-press
 // (movement past threshold cancels long-press arming).
 //
 // Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
@@ -266,12 +266,12 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   )
 })()
 
-// Distance-based mouse activation (~16px Euclidean).
+// Distance-based mouse activation (~6px Euclidean).
 ;(() => {
   assertEqual(
     DRAG_ACTIVATE_DISTANCE_PX,
-    16,
-    'DRAG_ACTIVATE_DISTANCE_PX = 16',
+    6,
+    'DRAG_ACTIVATE_DISTANCE_PX = 6',
   )
   assertEqual(
     shouldActivateDragFromDistance(0, 0),
@@ -279,24 +279,24 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     'distance: no movement → no activate',
   )
   assertEqual(
-    shouldActivateDragFromDistance(15, 0),
+    shouldActivateDragFromDistance(5, 0),
     false,
-    'distance: 15px axis < 16 → no activate',
+    'distance: 5px axis < 6 → no activate',
   )
   assertEqual(
-    shouldActivateDragFromDistance(16, 0),
+    shouldActivateDragFromDistance(6, 0),
     true,
-    'distance: 16px axis ≥ 16 → activate',
+    'distance: 6px axis ≥ 6 → activate',
   )
   assertEqual(
-    shouldActivateDragFromDistance(11, 11),
+    shouldActivateDragFromDistance(4, 4),
     false,
-    'distance: sqrt(242)≈15.56 < 16 → no activate',
+    'distance: sqrt(32)≈5.66 < 6 → no activate',
   )
   assertEqual(
-    shouldActivateDragFromDistance(12, 12),
+    shouldActivateDragFromDistance(5, 5),
     true,
-    'distance: sqrt(288)≈16.97 ≥ 16 → activate',
+    'distance: sqrt(50)≈7.07 ≥ 6 → activate',
   )
   assertEqual(
     shouldActivateDragFromDistance(4, 0, 4),
