@@ -40,15 +40,15 @@ let _clickHandler: ((e: MouseEvent) => void) | null = null
 
 /** Normalize host menu button text for stable English label matching. */
 export function normalizeMenuLabel(text: string | null | undefined): string {
-  return (text ?? '').replace(/\s+/g, ' ').trim()
+  return (text ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
 }
 
 export function isConfigureTabsLabel(label: string): boolean {
-  return label === 'Configure tabs'
+  return label === 'configure tabs'
 }
 
 export function isTabLabelsToggleLabel(label: string): boolean {
-  return label === 'Hide tab labels' || label === 'Show tab labels'
+  return label === 'hide tab labels' || label === 'show tab labels'
 }
 
 /**

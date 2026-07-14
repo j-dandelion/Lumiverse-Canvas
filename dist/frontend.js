@@ -10728,7 +10728,7 @@ function isOpenStatePersistenceEnabled() {
 function isWidthPersistenceEnabled() {
   return !!getSettings().persistDrawerWidth;
 }
-var CANVAS_VERSION = "1.8.0.4", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _loadCancel = null, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
+var CANVAS_VERSION = "1.8.0.5", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _loadCancel = null, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -14819,9 +14819,9 @@ function stampHostTabLabelsMenuItem(menu) {
   const buttons = Array.from(menu.querySelectorAll("button"));
   if (buttons.length === 0)
     return;
-  const norm = (t3) => (t3 ?? "").replace(/\s+/g, " ").trim();
-  const isLabelsLabel = (t3) => t3 === "Hide tab labels" || t3 === "Show tab labels";
-  const isConfigureLabel = (t3) => t3 === "Configure tabs";
+  const norm = (t3) => (t3 ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const isLabelsLabel = (t3) => t3 === "hide tab labels" || t3 === "show tab labels";
+  const isConfigureLabel = (t3) => t3 === "configure tabs";
   let btn = buttons.find((b2) => isLabelsLabel(norm(b2.textContent))) ?? null;
   if (!btn) {
     const looksLikeTabMenu = buttons.some((b2) => isConfigureLabel(norm(b2.textContent)));
@@ -15040,13 +15040,13 @@ init_log();
 var _interceptActive = false;
 var _clickHandler = null;
 function normalizeMenuLabel(text) {
-  return (text ?? "").replace(/\s+/g, " ").trim();
+  return (text ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
 function isConfigureTabsLabel(label) {
-  return label === "Configure tabs";
+  return label === "configure tabs";
 }
 function isTabLabelsToggleLabel(label) {
-  return label === "Hide tab labels" || label === "Show tab labels";
+  return label === "hide tab labels" || label === "show tab labels";
 }
 function startConfigureTabsIntercept() {
   if (_interceptActive)

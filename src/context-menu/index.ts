@@ -100,9 +100,10 @@ export function stampHostTabLabelsMenuItem(menu: HTMLElement): void {
   const buttons = Array.from(menu.querySelectorAll('button')) as HTMLElement[]
   if (buttons.length === 0) return
 
-  const norm = (t: string | null | undefined) => (t ?? '').replace(/\s+/g, ' ').trim()
-  const isLabelsLabel = (t: string) => t === 'Hide tab labels' || t === 'Show tab labels'
-  const isConfigureLabel = (t: string) => t === 'Configure tabs'
+  const norm = (t: string | null | undefined) =>
+    (t ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
+  const isLabelsLabel = (t: string) => t === 'hide tab labels' || t === 'show tab labels'
+  const isConfigureLabel = (t: string) => t === 'configure tabs'
 
   // Prefer an existing labels-worded button; else first button only if this
   // is a tab menu (has Configure tabs).

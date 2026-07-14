@@ -758,6 +758,41 @@ function cleanup(): void {
 }
 
 // =====================================================================
+// I10: Configure Tabs matching is case-insensitive
+// (host menu casing can differ between versions/locales)
+// =====================================================================
+{
+  cleanup()
+  openConfigureTabsModalSpy.mockClear()
+  let escapeDispatched = false
+
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') escapeDispatched = true
+  }
+  document.addEventListener('keydown', escapeHandler)
+
+  startConfigureTabsIntercept()
+
+  const menu = createFakeContextMenu(2, ['Hide tab labels', 'Configure Tabs'])
+  const configureBtn = menu.querySelectorAll('button')[1]
+  const clickEvent = new MouseEvent('click', {
+    bubbles: true, cancelable: true, composed: true,
+  })
+  Object.defineProperty(clickEvent, 'target', { value: configureBtn })
+  document.dispatchEvent(clickEvent)
+  await new Promise<void>(r => setTimeout(r, 0))
+
+  assert(escapeDispatched, 'I10: Escape dispatched for title-case Configure Tabs')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 1,
+    'I10: title-case Configure Tabs opens Canvas modal')
+
+  document.removeEventListener('keydown', escapeHandler)
+  menu.remove()
+  stopConfigureTabsIntercept()
+  cleanup()
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
