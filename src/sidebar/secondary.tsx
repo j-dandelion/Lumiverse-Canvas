@@ -440,7 +440,6 @@ export function tearDownSecondarySidebar(): void {
       }
       showMainTabButton(tabId)
     }
-    clearTabAssignments()
     // Unregister the container from the host bridge so re-enabling
     // (mount → registerContainer) doesn't conflict with a stale entry.
     try {
@@ -452,6 +451,10 @@ export function tearDownSecondarySidebar(): void {
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }
+  // Always clear assignments after the restore loop (or when the wrapper was
+  // already null). Leaving stale secondary entries with no wrapper poisons
+  // re-enable / side remount restore paths.
+  clearTabAssignments()
   _secondarySidebarOpen = false
   setMobileOpenClass('secondary', false)
   // Clear stale chat margins left by the now-removed secondary drawer.

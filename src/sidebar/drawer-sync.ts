@@ -386,106 +386,123 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
 export function checkSideChanged(): void {
   const currentSide = getMainDrawerSide()
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    // Capture open state BEFORE unmount — unmountSecondarySidebar()
-    // unconditionally sets _secondarySidebarOpen = false.
-    const wasOpen = isSecondarySidebarOpen()
-    // Bump remount gen before unmount so any in-flight async assign/pin
-    // from a prior remount is cancelled when its promise resolves.
-    const remountGen = ++_sideRemountGen
-    unmountSecondarySidebar()
-    // Bug fix (2026-06-19): invalidate caches and stop observers BEFORE
-    // mounting the new wrapper. The new wrapper has no CSS variables set
-    // (its style.cssText doesn't include them) and no observers attached
-    // to the new main drawer tab element. Without this reset:
-    //   1. _runSyncDrawerTabSettings computes newVars from the (possibly
-    //      new) main drawer tab, but newVars === _lastWrittenDrawerTabVars
-    //      (same dimensions, same padding, etc.) — the cache check at
-    //      line 159 short-circuits and the setProperty calls at lines
-    //      162-169 are SKIPPED. The new wrapper's drawer tab then falls
-    //      back to CSS defaults: width=48px, height=auto — the "open/close
-    //      tab becomes large" symptom reported on drawer side change.
-    //   2. _mainDrawerTabResizeObserver / _mainDrawerTabClassObserver /
-    //      _mainDrawerTabStyleObserver point at the OLD main drawer tab
-    //      (now detached). Subsequent syncs (drag resize, compact mode
-    //      toggle) never fire because the observers don't see mutations
-    //      on the new main drawer tab element.
-    //   3. _lastWrittenLabelsKey short-circuits the label visibility
-    //      update similarly (showLabels is a boolean so the cache key is
-    //      stable across mounts, but the new wrapper has no labels
-    //      styled yet).
-    // Resetting all three forces a full re-write on the new wrapper.
-    _lastWrittenDrawerTabVars = null
-    _lastWrittenLabelsKey = null
-    _lastKnownVerticalPos = null
-    stopDrawerTabResizeWatcher()
-    stopDrawerTabClassObserver()
-    stopDrawerTabStyleObserver()
-    // Force-walk the store so the rebuilt wrapper's tab buttons can find
-    // their tabs. The 3s cache (store/index.ts:97) may be stale or
-    // reference elements that were unmounted by Lumiverse's side-change
-    // re-render. getDrawerTabs() below will do a fresh fiber walk.
-    findStoreData(true)
-    mountSecondarySidebar({ initialOpen: wasOpen })
-    // The main mirror has its own side-aware shell lifecycle. Do not rely on
-    // the later pin-list reconciliation to notice that the shell itself is
-    // still mounted on the old edge.
-    reconcileMainMirrorDrawer()
-    // Reposition main-drawer mirror pin on the new main edge (does not
-    // reparent host DOM). Secondary pin is reconciled inside mount.
-    // Guard with remount gen so a late import after a newer flip is a no-op.
-    void import('./main-tab-pin').then((m) => {
-      if (remountGen !== _sideRemountGen) return
-      try {
-        m.reconcileMainTabListPin()
-      } catch {
-        /* ignore teardown races */
-      }
-    })
-    // Restore tab buttons for every tab still assigned to secondary. The
-    // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
-    // only builds the chrome), so without this the tab list is blank until
-    // the user re-drags every tab. _tabAssignments is the source of truth
-    // for what's been moved; the actual store data (iconSvg, root, etc.)
-    // comes from getDrawerTabs() inside addSecondaryTabButton.
-    restoreSecondaryTabButtons()
-    // Re-attach the moved tab roots to the freshly-mounted wrapper.
-    // assignToSecondary hits the primary path (root not yet in the new
-    // content) for each tab, appendChild-ing the root and re-tagging it.
-    // Fire-and-forget — DOM work is synchronous inside the async function.
-    // Generation guard: rapid side flips can resolve this promise after a
-    // newer remount already replaced the wrapper — skip stale assigns.
-    import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
-      if (remountGen !== _sideRemountGen) return
-      for (const [tabId, side] of getTabAssignments()) {
-        if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
-      }
-    })
-    // The drawerTab handle is created with display:none (secondary.tsx:112)
-    // and only becomes visible when this function runs. Without this call,
-    // the clickable edge handle stays hidden after the wrapper is recreated.
-    updateDrawerTabVisibility()
-    // The new wrapper has a hardcoded title "Second drawer" (secondary.tsx:225).
-    // On initial mount, applyLayout (apply.ts:226) calls showSecondaryTab()
-    // to set the title to the active tab's name — but that path is not reached
-    // on a side-change remount. Calling showSecondaryTab here restores the
-    // header text and the active state on tab buttons (sidebar-ux-tab-active
-    // class, box-shadow indicator, icon/label color) which are also lost
-    // because addSecondaryTabButton doesn't set the active class.
-    //
-    // Guard: only call if there's an active tab that's still assigned to
-    // secondary. Without this guard, a stale _activeSecondaryTabId (active
-    // tab was moved out before the side change) would cause showSecondaryTab
-    // to mark a non-existent button as active.
-    const activeTabId = getActiveSecondaryTabId()
-    if (activeTabId !== null) {
-      const assignments = getTabAssignments()
-      if (assignments.get(activeTabId) === 'secondary') {
-        showSecondaryTab(activeTabId)
+    // When the second drawer is off there is no secondary shell to rebuild.
+    // Still fall through to stamp _lastKnownSide + syncDrawerTabSettings so
+    // a later enable does not see a stale "side changed" remount against an
+    // empty assignment map (layout-loss race on disable → swap → re-enable).
+    if (getSettings().secondSidebarEnabled) {
+      // Capture open state BEFORE unmount — unmountSecondarySidebar()
+      // unconditionally sets _secondarySidebarOpen = false.
+      const wasOpen = isSecondarySidebarOpen()
+      // Bump remount gen before unmount so any in-flight async assign/pin
+      // from a prior remount is cancelled when its promise resolves.
+      const remountGen = ++_sideRemountGen
+      unmountSecondarySidebar()
+      // Bug fix (2026-06-19): invalidate caches and stop observers BEFORE
+      // mounting the new wrapper. The new wrapper has no CSS variables set
+      // (its style.cssText doesn't include them) and no observers attached
+      // to the new main drawer tab element. Without this reset:
+      //   1. _runSyncDrawerTabSettings computes newVars from the (possibly
+      //      new) main drawer tab, but newVars === _lastWrittenDrawerTabVars
+      //      (same dimensions, same padding, etc.) — the cache check at
+      //      line 159 short-circuits and the setProperty calls at lines
+      //      162-169 are SKIPPED. The new wrapper's drawer tab then falls
+      //      back to CSS defaults: width=48px, height=auto — the "open/close
+      //      tab becomes large" symptom reported on drawer side change.
+      //   2. _mainDrawerTabResizeObserver / _mainDrawerTabClassObserver /
+      //      _mainDrawerTabStyleObserver point at the OLD main drawer tab
+      //      (now detached). Subsequent syncs (drag resize, compact mode
+      //      toggle) never fire because the observers don't see mutations
+      //      on the new main drawer tab element.
+      //   3. _lastWrittenLabelsKey short-circuits the label visibility
+      //      update similarly (showLabels is a boolean so the cache key is
+      //      stable across mounts, but the new wrapper has no labels
+      //      styled yet).
+      // Resetting all three forces a full re-write on the new wrapper.
+      _lastWrittenDrawerTabVars = null
+      _lastWrittenLabelsKey = null
+      _lastKnownVerticalPos = null
+      stopDrawerTabResizeWatcher()
+      stopDrawerTabClassObserver()
+      stopDrawerTabStyleObserver()
+      // Force-walk the store so the rebuilt wrapper's tab buttons can find
+      // their tabs. The 3s cache (store/index.ts:97) may be stale or
+      // reference elements that were unmounted by Lumiverse's side-change
+      // re-render. getDrawerTabs() below will do a fresh fiber walk.
+      findStoreData(true)
+      mountSecondarySidebar({ initialOpen: wasOpen })
+      // The main mirror has its own side-aware shell lifecycle. Do not rely on
+      // the later pin-list reconciliation to notice that the shell itself is
+      // still mounted on the old edge.
+      reconcileMainMirrorDrawer()
+      // Reposition main-drawer mirror pin on the new main edge (does not
+      // reparent host DOM). Secondary pin is reconciled inside mount.
+      // Guard with remount gen so a late import after a newer flip is a no-op.
+      void import('./main-tab-pin').then((m) => {
+        if (remountGen !== _sideRemountGen) return
+        try {
+          m.reconcileMainTabListPin()
+        } catch {
+          /* ignore teardown races */
+        }
+      })
+      // Restore tab buttons for every tab still assigned to secondary. The
+      // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
+      // only builds the chrome), so without this the tab list is blank until
+      // the user re-drags every tab. _tabAssignments is the source of truth
+      // for what's been moved; the actual store data (iconSvg, root, etc.)
+      // comes from getDrawerTabs() inside addSecondaryTabButton.
+      restoreSecondaryTabButtons()
+      // Re-attach the moved tab roots to the freshly-mounted wrapper.
+      // assignToSecondary hits the primary path (root not yet in the new
+      // content) for each tab, appendChild-ing the root and re-tagging it.
+      // Fire-and-forget — DOM work is synchronous inside the async function.
+      // Generation guard: rapid side flips can resolve this promise after a
+      // newer remount already replaced the wrapper — skip stale assigns.
+      import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
+        if (remountGen !== _sideRemountGen) return
+        for (const [tabId, side] of getTabAssignments()) {
+          if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
+        }
+      })
+      // The drawerTab handle is created with display:none (secondary.tsx:112)
+      // and only becomes visible when this function runs. Without this call,
+      // the clickable edge handle stays hidden after the wrapper is recreated.
+      updateDrawerTabVisibility()
+      // The new wrapper has a hardcoded title "Second drawer" (secondary.tsx:225).
+      // On initial mount, applyLayout (apply.ts:226) calls showSecondaryTab()
+      // to set the title to the active tab's name — but that path is not reached
+      // on a side-change remount. Calling showSecondaryTab here restores the
+      // header text and the active state on tab buttons (sidebar-ux-tab-active
+      // class, box-shadow indicator, icon/label color) which are also lost
+      // because addSecondaryTabButton doesn't set the active class.
+      //
+      // Guard: only call if there's an active tab that's still assigned to
+      // secondary. Without this guard, a stale _activeSecondaryTabId (active
+      // tab was moved out before the side change) would cause showSecondaryTab
+      // to mark a non-existent button as active.
+      const activeTabId = getActiveSecondaryTabId()
+      if (activeTabId !== null) {
+        const assignments = getTabAssignments()
+        if (assignments.get(activeTabId) === 'secondary') {
+          showSecondaryTab(activeTabId)
+        }
       }
     }
   }
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
+}
+
+/**
+ * After second-drawer disable: invalidate in-flight side remount follow-ups,
+ * drop any intentional side override, and reseed last-known from live main
+ * side (post-baseline-restore). Does not remount or apply side changes.
+ */
+export function resetSideRemountStateAfterDisable(): void {
+  _sideRemountGen++
+  setMainDrawerSideOverride(null)
+  _lastKnownSide = getMainDrawerSide()
 }
 
 /**

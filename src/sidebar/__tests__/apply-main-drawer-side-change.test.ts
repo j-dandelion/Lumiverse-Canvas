@@ -37,6 +37,7 @@ import {
   checkSideChanged,
   startSideChangeWatcher,
   rebindSideChangeWatcherIfNeeded,
+  resetSideRemountStateAfterDisable,
   __setLastKnownSideForTest,
   __getLastKnownSideForTest,
   __resetSideApplyStateForTest,
@@ -50,6 +51,7 @@ import {
   getMainDrawerSideOverride,
   __setStoreSnapshotForTest,
 } from '../../store'
+import { getSettings, hydrateSettings, resetHydrationGuard } from '../../settings/state'
 
 let passed = 0
 let failed = 0
@@ -137,6 +139,10 @@ function reset() {
   __setStoreSnapshotForTest(null)
   stopSideChangeWatcher()
   __resetSideApplyStateForTest()
+  // Default second drawer ON so A1–A8 remount paths stay active.
+  // Prefer hydrate over setSettings so we do not run feature apply.
+  resetHydrationGuard()
+  hydrateSettings({ secondSidebarEnabled: true })
 }
 
 // ── A1: override makes getMainDrawerSide return desired while DOM lags ──
@@ -280,6 +286,54 @@ function reset() {
     'A8: remount gen increments on side change',
   )
   setMainDrawerSideOverride(null)
+}
+
+// ── A9: secondSidebarEnabled false — side change does NOT remount ──
+{
+  reset()
+  installMainWrapper('right')
+  __setLastKnownSideForTest('left')
+  setMainDrawerSideOverride('right')
+  resetHydrationGuard()
+  hydrateSettings({ secondSidebarEnabled: false })
+  assertEqual(getSettings().secondSidebarEnabled, false, 'A9: second drawer off')
+
+  const genBefore = __getSideRemountGenForTest()
+  mountCalls = 0
+  unmountCalls = 0
+  mirrorReconcileCalls = 0
+
+  checkSideChanged()
+
+  assertEqual(unmountCalls, 0, 'A9: no unmount when second drawer off')
+  assertEqual(mountCalls, 0, 'A9: no mount when second drawer off')
+  assertEqual(mirrorReconcileCalls, 0, 'A9: no mirror reconcile when second drawer off')
+  assertEqual(__getSideRemountGenForTest(), genBefore, 'A9: remount gen unchanged when gated off')
+  assertEqual(__getLastKnownSideForTest(), 'right', 'A9: lastKnown still updates to current side')
+  setMainDrawerSideOverride(null)
+}
+
+// ── A10: resetSideRemountStateAfterDisable bumps gen, clears override, reseeds ──
+{
+  reset()
+  installMainWrapper('left')
+  __setLastKnownSideForTest('right')
+  setMainDrawerSideOverride('right')
+  const genBefore = __getSideRemountGenForTest()
+
+  resetSideRemountStateAfterDisable()
+
+  assert(
+    __getSideRemountGenForTest() > genBefore,
+    'A10: remount gen increments on reset after disable',
+  )
+  assertEqual(getMainDrawerSideOverride(), null, 'A10: side override cleared')
+  assertEqual(
+    __getLastKnownSideForTest(),
+    getMainDrawerSide(),
+    'A10: lastKnown reseeded from getMainDrawerSide()',
+  )
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A10: lastKnown matches live DOM left')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -45,6 +45,7 @@ import {
   clearVanillaBaseline,
   restoreVanillaBaseline,
 } from '../layout/vanilla-baseline'
+import { resetSideRemountStateAfterDisable } from '../sidebar/drawer-sync'
 import { injectStyles } from '../debug/styles'
 import { dlog, dwarn } from '../debug/log'
 
@@ -307,6 +308,9 @@ function showModeSwitchDialog(): Promise<ModeSwitchChoice> {
  *      primary tab. The "baseline wins" rule means any Configure
  *      Apply / host edit / etc. that changed the host during the
  *      dual session is overwritten with the captured pre-dual state.
+ *   4a. resetSideRemountStateAfterDisable — clear dual-era side override,
+ *      bump remount gen, reseed lastKnown (no applyMainDrawerSideChange;
+ *      session dual profile kept).
  *   5. Modal stays open; refresh its draft from the now-restored
  *      live state (existing).
  *   6. Clear the baseline only on successful restore so the next
@@ -376,6 +380,12 @@ async function finishDisable(): Promise<void> {
       )
     }
   }
+
+  // 4a. Drop dual-era side override / remount gen so a host side flip while
+  //     second is off (or residual override after baseline) cannot remount an
+  //     empty secondary shell. Baseline owns side on disable — do not re-apply
+  //     dual-era side via applyMainDrawerSideChange; do not clear session dual.
+  resetSideRemountStateAfterDisable()
 
   // 4b. After baseline restore (and even if no baseline): main-mirror must
   //     rebuild from host after teardown unhide + any host patch.

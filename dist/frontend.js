@@ -2628,6 +2628,7 @@ __export(exports_drawer_sync, {
   stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
   startSideChangeWatcher: () => startSideChangeWatcher,
   restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
+  resetSideRemountStateAfterDisable: () => resetSideRemountStateAfterDisable,
   rebindSideChangeWatcherIfNeeded: () => rebindSideChangeWatcherIfNeeded,
   isShowTabLabels: () => isShowTabLabels,
   checkSideChanged: () => checkSideChanged,
@@ -2821,45 +2822,52 @@ function syncSecondaryTabLabels(forceShow) {
 function checkSideChanged() {
   const currentSide = getMainDrawerSide();
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    const wasOpen = isSecondarySidebarOpen();
-    const remountGen = ++_sideRemountGen;
-    unmountSecondarySidebar();
-    _lastWrittenDrawerTabVars = null;
-    _lastWrittenLabelsKey = null;
-    _lastKnownVerticalPos = null;
-    stopDrawerTabResizeWatcher();
-    stopDrawerTabClassObserver();
-    stopDrawerTabStyleObserver();
-    findStoreData(true);
-    mountSecondarySidebar({ initialOpen: wasOpen });
-    reconcileMainMirrorDrawer();
-    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => {
-      if (remountGen !== _sideRemountGen)
-        return;
-      try {
-        m.reconcileMainTabListPin();
-      } catch {}
-    });
-    restoreSecondaryTabButtons();
-    Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
-      if (remountGen !== _sideRemountGen)
-        return;
-      for (const [tabId, side] of getTabAssignments()) {
-        if (side === "secondary")
-          assignToSecondary2(tabId).catch(() => {});
-      }
-    });
-    updateDrawerTabVisibility();
-    const activeTabId = getActiveSecondaryTabId();
-    if (activeTabId !== null) {
-      const assignments = getTabAssignments();
-      if (assignments.get(activeTabId) === "secondary") {
-        showSecondaryTab(activeTabId);
+    if (getSettings().secondSidebarEnabled) {
+      const wasOpen = isSecondarySidebarOpen();
+      const remountGen = ++_sideRemountGen;
+      unmountSecondarySidebar();
+      _lastWrittenDrawerTabVars = null;
+      _lastWrittenLabelsKey = null;
+      _lastKnownVerticalPos = null;
+      stopDrawerTabResizeWatcher();
+      stopDrawerTabClassObserver();
+      stopDrawerTabStyleObserver();
+      findStoreData(true);
+      mountSecondarySidebar({ initialOpen: wasOpen });
+      reconcileMainMirrorDrawer();
+      Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => {
+        if (remountGen !== _sideRemountGen)
+          return;
+        try {
+          m.reconcileMainTabListPin();
+        } catch {}
+      });
+      restoreSecondaryTabButtons();
+      Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
+        if (remountGen !== _sideRemountGen)
+          return;
+        for (const [tabId, side] of getTabAssignments()) {
+          if (side === "secondary")
+            assignToSecondary2(tabId).catch(() => {});
+        }
+      });
+      updateDrawerTabVisibility();
+      const activeTabId = getActiveSecondaryTabId();
+      if (activeTabId !== null) {
+        const assignments = getTabAssignments();
+        if (assignments.get(activeTabId) === "secondary") {
+          showSecondaryTab(activeTabId);
+        }
       }
     }
   }
   _lastKnownSide = currentSide;
   syncDrawerTabSettings();
+}
+function resetSideRemountStateAfterDisable() {
+  _sideRemountGen++;
+  setMainDrawerSideOverride(null);
+  _lastKnownSide = getMainDrawerSide();
 }
 function restoreSecondaryTabButtons() {
   const tabs = getDrawerTabs();
@@ -5200,6 +5208,7 @@ async function finishDisable() {
       dwarn("[second-drawer-mode] vanilla baseline restore did not complete cleanly; " + "baseline retained for retry. reason=" + result.reason + (result.reason === "partial" ? ` details=${result.details}` : ""));
     }
   }
+  resetSideRemountStateAfterDisable();
   try {
     const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
     mp.reconcileMainTabListPin();
@@ -5316,6 +5325,7 @@ var init_second_drawer_mode = __esm(() => {
   init_persist();
   init_dual_session_profile();
   init_vanilla_baseline();
+  init_drawer_sync();
   init_log();
 });
 
@@ -9992,7 +10002,6 @@ function tearDownSecondarySidebar() {
       }
       showMainTabButton(tabId);
     }
-    clearTabAssignments();
     try {
       const wContainers = getHostBridge()?.containers;
       wContainers?.unregisterContainer?.("canvas-secondary-drawer");
@@ -10002,6 +10011,7 @@ function tearDownSecondarySidebar() {
     _secondaryWrapper.remove();
     _secondaryWrapper = null;
   }
+  clearTabAssignments();
   _secondarySidebarOpen = false;
   setMobileOpenClass("secondary", false);
   updateChatReflow();
@@ -10837,7 +10847,7 @@ function isOpenStatePersistenceEnabled() {
 function isWidthPersistenceEnabled() {
   return !!getSettings().persistDrawerWidth;
 }
-var CANVAS_VERSION = "1.8.0.5", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _loadCancel = null, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
+var CANVAS_VERSION = "1.8.0.6", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _loadCancel = null, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -14325,8 +14335,6 @@ var init_registry = __esm(() => {
           const hasTabsToRestore = (layout?.detachedTabs?.length ?? 0) > 0;
           const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true && hasTabsToRestore);
           mountSecondarySidebar({ initialWidth, initialOpen });
-          if (layout)
-            applyLayout(layout);
         }
       } else {
         tearDownSecondarySidebar();

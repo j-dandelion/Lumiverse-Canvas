@@ -97,6 +97,19 @@ mock.module('../../sidebar/main-persist', () => ({
   stopMainDrawerPersistence: () => {},
 }))
 
+// drawer-sync: finishDisable calls resetSideRemountStateAfterDisable after
+// baseline restore. Mock so this suite does not load the full side-watcher
+// graph; behavior of the helper is covered in apply-main-drawer-side-change.
+const resetSideRemountStateAfterDisableSpy = mock(() => {})
+mock.module('../../sidebar/drawer-sync', () => ({
+  resetSideRemountStateAfterDisable: resetSideRemountStateAfterDisableSpy,
+  syncDrawerTabSettings: () => {},
+  checkSideChanged: () => {},
+  applyMainDrawerSideChange: async () => {},
+  startSideChangeWatcher: () => {},
+  stopSideChangeWatcher: () => {},
+}))
+
 // vanilla-baseline is NOT mocked. The SUT uses the real module; cases
 // F-I inspect the in-memory baseline (set by captureVanillaBaseline in
 // the SUT) via the real getVanillaBaseline / clearVanillaBaseline.
@@ -142,6 +155,7 @@ function resetSpies() {
   isConfigureTabsModalOpenSpy.mockClear()
   refreshConfigureDraftFromLiveSpy.mockClear()
   flushConfigureCommitsSpy.mockClear()
+  resetSideRemountStateAfterDisableSpy.mockClear()
   clearSessionDualProfile()
   // Reset real state to defaults so the next test file starts clean.
   resetHydrationGuard()
@@ -412,6 +426,8 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 
   assert(getVanillaBaseline() === null,
     'G: clearVanillaBaseline called after successful restore (baseline cleared)')
+  assertEqual(resetSideRemountStateAfterDisableSpy.mock.calls.length, 1,
+    'G: resetSideRemountStateAfterDisable called once after baseline restore')
 }
 
 // =====================================================================
@@ -442,6 +458,8 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
 
   assert(getVanillaBaseline() !== null,
     'H: clearVanillaBaseline NOT called on failure (baseline retained for retry)')
+  assertEqual(resetSideRemountStateAfterDisableSpy.mock.calls.length, 1,
+    'H: resetSideRemountStateAfterDisable still runs after partial/failed baseline')
 }
 
 // =====================================================================
@@ -465,6 +483,8 @@ function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   await sut.requestSecondDrawerMode(false)
 
   assert(getVanillaBaseline() === null, 'I: still no baseline after disable (no-op)')
+  assertEqual(resetSideRemountStateAfterDisableSpy.mock.calls.length, 1,
+    'I: resetSideRemountStateAfterDisable runs even when no baseline existed')
 }
 
 // =====================================================================

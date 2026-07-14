@@ -407,6 +407,26 @@ async function testT6_ReconcilePinOnTeardown() {
 }
 
 // =====================================================================
+// T7: null wrapper still clears tab assignments
+// =====================================================================
+async function testT7_NullWrapperClearsAssignments() {
+  setupEnv({ builtInTabIds: ['databank'] })
+  try {
+    // Ensure no secondary wrapper, but leave stale assignments as if a prior
+    // path left map entries after the shell was already gone.
+    __setSecondaryWrapperForTest(null)
+    setTabAssignment('databank', 'secondary')
+    setTabAssignment('ghost-tab', 'secondary')
+    assert(getTabAssignments().size >= 2, 'T7 precondition: assignments present')
+
+    const { tearDownSecondarySidebar } = await import('../secondary')
+    tearDownSecondarySidebar()
+
+    assertEqual(getTabAssignments().size, 0, 'T7: clearTabAssignments runs even when wrapper is null')
+  } finally { restoreEnv() }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 
@@ -417,6 +437,7 @@ async function main() {
   await testT4_OrderBeforeRemoval()
   await testT5_NoAssignments()
   await testT6_ReconcilePinOnTeardown()
+  await testT7_NullWrapperClearsAssignments()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

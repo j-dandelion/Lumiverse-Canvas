@@ -41,7 +41,7 @@ import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper } 
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../layout/persist'
-import { applyLayout, cancelApplyLayoutInterval } from '../layout/apply'
+import { cancelApplyLayoutInterval } from '../layout/apply'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
@@ -150,7 +150,8 @@ const chatReflowFeature: CanvasFeature = {
 /** Second sidebar: the master toggle for the entire mirror-drawer feature.
  *  Initial mount reads the layout's saved width/open so the wrapper renders
  *  at the right size on the first paint (gated per layout facet).
- *  Runtime re-apply re-uses the last loaded layout to restore tab assignments.
+ *  Runtime re-apply mounts the shell when missing; tab restore is owned by
+ *  requestSecondDrawerMode (awaited applyLayout) or setup cold-load.
  *
  *  The Configure Tabs intercept lifecycle is now owned by setup.ts (always-on
  *  while Canvas is loaded), not tied to second-drawer state.
@@ -191,8 +192,10 @@ const secondSidebarFeature: CanvasFeature = {
           layout?.secondary?.open === true &&
           hasTabsToRestore
         )
+        // Mount only — requestSecondDrawerMode awaits applyLayout after
+        // setSettings; cold-load restore is owned by setup.ts applyLayout.
+        // Calling applyLayout here races the awaited path and can drop layout.
         mountSecondarySidebar({ initialWidth, initialOpen })
-        if (layout) applyLayout(layout)
       }
     } else {
       tearDownSecondarySidebar()
