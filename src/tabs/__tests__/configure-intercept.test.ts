@@ -2,8 +2,9 @@
 //
 // Tests the context menu click interception logic:
 // - Lifecycle (start/stop)
-// - Intercept fires on the second menu button (Configure tabs)
-// - Intercept fires on the first menu button (Hide/Show tab labels)
+// - Intercept fires on "Configure tabs" by **label text** (not button index)
+// - Intercept fires on "Hide/Show tab labels" by label text
+// - Foreign host menus (Install / Edit / …) are NOT intercepted
 // - Intercept does NOT fire after stopConfigureTabsIntercept
 // - stopConfigureTabsIntercept does NOT force-close an open modal
 //   (modal lifecycle is owned by settings/second-drawer-mode.ts, not the intercept)
@@ -128,6 +129,12 @@ if (typeof MouseEvent === 'undefined') {
 if (typeof KeyboardEvent === 'undefined') {
   ;(globalThis as any).KeyboardEvent = FakeKeyboardEvent
 }
+// Labels intercept schedules a post-paint re-stamp via rAF.
+if (typeof (globalThis as any).requestAnimationFrame === 'undefined') {
+  ;(globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) => {
+    return setTimeout(() => cb(Date.now()), 0) as unknown as number
+  }
+}
 
 // Always override getComputedStyle so it works with our fake elements.
 // Bun's native getComputedStyle may not handle plain-object style stubs.
@@ -176,7 +183,7 @@ function makeElement(tag: string) {
   const children: unknown[] = []
   const attrs: Record<string, string> = {}
   const style: Record<string, string> = {}
-  return {
+  const el: any = {
     tag,
     tagName: tag.toUpperCase(),
     className: '',
@@ -184,20 +191,45 @@ function makeElement(tag: string) {
     attributes: attrs,
     style,
     textContent: '',
+    parentNode: null as any,
     setAttribute(name: string, value: string) { attrs[name] = value },
     getAttribute(name: string) { return attrs[name] ?? null },
     removeAttribute(name: string) { delete attrs[name] },
-    appendChild(c: unknown) { children.push(c) },
+    appendChild(c: unknown) {
+      children.push(c)
+      if (c && typeof c === 'object') (c as any).parentNode = el
+    },
     remove() {
-      const idx = children.indexOf(this as any)
+      const parent = el.parentNode
+      if (parent?.children) {
+        const idx = parent.children.indexOf(el)
+        if (idx >= 0) parent.children.splice(idx, 1)
+      }
+      // Also drop from body tracking list when used as a top-level menu.
+      const idx = children.indexOf(el)
       if (idx >= 0) children.splice(idx, 1)
     },
-    contains(other: unknown) { return children.includes(other) || this === other },
-    closest() { return null },
-    parentNode: null,
+    contains(other: unknown) {
+      if (other === el) return true
+      for (const c of children) {
+        if (c === other) return true
+        if (c && typeof (c as any).contains === 'function' && (c as any).contains(other)) return true
+      }
+      return false
+    },
+    // Label-based intercept uses target.closest('button').
+    closest(sel: string) {
+      let cur: any = el
+      while (cur) {
+        if (sel === 'button' && cur.tagName === 'BUTTON') return cur
+        if (typeof sel === 'string' && cur.tagName === sel.toUpperCase()) return cur
+        cur = cur.parentNode
+      }
+      return null
+    },
     querySelector(sel: string) {
       if (sel === 'button' || sel === 'button[data-tab-id]') {
-        return _findChildByTag(this, 'button')
+        return _findChildByTag(el, 'button')
       }
       const match = sel.match(/\[data-tab-id="([^"]+)"\]/)
       if (match) {
@@ -213,16 +245,17 @@ function makeElement(tag: string) {
     },
     querySelectorAll(sel: string) {
       if (sel === 'button') {
-        return _findAllChildrenByTag(this, 'button')
+        return _findAllChildrenByTag(el, 'button')
       }
       return []
     },
     addEventListener() {},
     removeEventListener() {},
-    dispatchEvent(e: any) {
+    dispatchEvent(_e: any) {
       return true
     },
   }
+  return el
 }
 
 // Always replace globalThis.document with our test stub so this file is
@@ -282,14 +315,22 @@ function makeElement(tag: string) {
  *   - style.position: fixed
  *   - style.zIndex: 11000
  *   - Contains at least one button
+ *
+ * Default labels match production tab menu English wording. Pass `labels`
+ * to build foreign menus (Install / Edit) for negative intercept tests.
  */
-function createFakeContextMenu(buttonCount: number): HTMLElement {
+function createFakeContextMenu(buttonCount: number, labels?: string[]): HTMLElement {
   const menu = document.createElement('div')
   menu.style.position = 'fixed'
   menu.style.zIndex = '11000'
   for (let i = 0; i < buttonCount; i++) {
     const btn = document.createElement('button')
-    btn.textContent = i === 0 ? 'Toggle labels' : 'Configure tabs'
+    if (labels && labels[i] != null) {
+      btn.textContent = labels[i]!
+    } else {
+      // Production tab-menu wording (intercept matches by text, not index).
+      btn.textContent = i === 0 ? 'Hide tab labels' : i === 1 ? 'Configure tabs' : `Item ${i}`
+    }
     menu.appendChild(btn)
   }
   document.body.appendChild(menu)
@@ -345,12 +386,11 @@ function cleanup(): void {
 }
 
 // =====================================================================
-// I2: Intercept fires on second context menu button
+// I2: Intercept fires on "Configure tabs" by label text
 // =====================================================================
 {
   cleanup()
   let escapeDispatched = false
-  let defaultPrevented = false
 
   // Listen for the Escape keydown that dismissHostContextMenu dispatches.
   const escapeHandler = (e: KeyboardEvent) => {
@@ -360,9 +400,10 @@ function cleanup(): void {
 
   startConfigureTabsIntercept()
 
-  // Create fake menu with 2 buttons.
+  // Create fake tab menu with 2 buttons (production wording).
   const menu = createFakeContextMenu(2)
   const configureBtn = menu.querySelectorAll('button')[1]
+  assertEqual(configureBtn.textContent, 'Configure tabs', 'I2: fixture button text')
 
   // Dispatch a click event on document with target set to the configure button.
   const clickEvent = new MouseEvent('click', {
@@ -592,6 +633,127 @@ function cleanup(): void {
   assertEqual(closeConfigureTabsModalSpy.mock.calls.length, 0,
     'I6: closeConfigureTabsModal NOT called on click after stop')
 
+  cleanup()
+}
+
+// =====================================================================
+// I7: Foreign host menu (Install / Cancel) — do NOT open Configure Tabs
+//
+// Host reuses the same z-index 11000 ContextMenu for extension install.
+// Matching by button index would treat button[1] as Configure tabs.
+// =====================================================================
+{
+  cleanup()
+  let escapeDispatched = false
+  openConfigureTabsModalSpy.mockClear()
+  patchHostDrawerSettingsSpy.mockClear()
+
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') escapeDispatched = true
+  }
+  document.addEventListener('keydown', escapeHandler)
+
+  startConfigureTabsIntercept()
+
+  const menu = createFakeContextMenu(2, ['Install', 'Cancel'])
+  const secondBtn = menu.querySelectorAll('button')[1]
+
+  const clickEvent = new MouseEvent('click', {
+    bubbles: true, cancelable: true, composed: true,
+  })
+  Object.defineProperty(clickEvent, 'target', { value: secondBtn })
+  document.dispatchEvent(clickEvent)
+  await new Promise<void>(r => setTimeout(r, 0))
+
+  assert(!clickEvent._propagationStopped, 'I7: foreign menu click not stopped')
+  assert(!escapeDispatched, 'I7: Escape NOT dispatched for Install/Cancel menu')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 0,
+    'I7: Configure modal NOT opened for foreign second button')
+  assertEqual(patchHostDrawerSettingsSpy.mock.calls.length, 0,
+    'I7: labels patch NOT called for Install button path')
+
+  document.removeEventListener('keydown', escapeHandler)
+  menu.remove()
+  stopConfigureTabsIntercept()
+}
+
+// =====================================================================
+// I8: Foreign host menu (Copy / Edit) — message long-press style
+// =====================================================================
+{
+  cleanup()
+  let escapeDispatched = false
+  openConfigureTabsModalSpy.mockClear()
+  patchHostDrawerSettingsSpy.mockClear()
+  _mockPatchPartial = null
+
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') escapeDispatched = true
+  }
+  document.addEventListener('keydown', escapeHandler)
+
+  startConfigureTabsIntercept()
+
+  const menu = createFakeContextMenu(2, ['Copy', 'Edit'])
+
+  for (const btn of menu.querySelectorAll('button')) {
+    const clickEvent = new MouseEvent('click', {
+      bubbles: true, cancelable: true, composed: true,
+    })
+    Object.defineProperty(clickEvent, 'target', { value: btn })
+    document.dispatchEvent(clickEvent)
+  }
+  await new Promise<void>(r => setTimeout(r, 0))
+
+  assert(!escapeDispatched, 'I8: Escape NOT dispatched for Copy/Edit menu')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 0,
+    'I8: Configure modal NOT opened for message menu')
+  assertEqual(patchHostDrawerSettingsSpy.mock.calls.length, 0,
+    'I8: labels patch NOT called for Copy/Edit')
+
+  document.removeEventListener('keydown', escapeHandler)
+  menu.remove()
+  stopConfigureTabsIntercept()
+}
+
+// =====================================================================
+// I9: "Configure tabs" still works when it is NOT buttons[1]
+// (proves label matching, not index)
+// =====================================================================
+{
+  cleanup()
+  openConfigureTabsModalSpy.mockClear()
+  let escapeDispatched = false
+
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') escapeDispatched = true
+  }
+  document.addEventListener('keydown', escapeHandler)
+
+  startConfigureTabsIntercept()
+
+  // Extra leading item so Configure is button[2], not button[1].
+  const menu = createFakeContextMenu(3, [
+    'Something else',
+    'Hide tab labels',
+    'Configure tabs',
+  ])
+  const configureBtn = menu.querySelectorAll('button')[2]
+
+  const clickEvent = new MouseEvent('click', {
+    bubbles: true, cancelable: true, composed: true,
+  })
+  Object.defineProperty(clickEvent, 'target', { value: configureBtn })
+  document.dispatchEvent(clickEvent)
+  await new Promise<void>(r => setTimeout(r, 0))
+
+  assert(escapeDispatched, 'I9: Escape dispatched for Configure tabs at non-index-1')
+  assertEqual(openConfigureTabsModalSpy.mock.calls.length, 1,
+    'I9: openConfigureTabsModal called when Configure tabs is buttons[2]')
+
+  document.removeEventListener('keydown', escapeHandler)
+  menu.remove()
+  stopConfigureTabsIntercept()
   cleanup()
 }
 

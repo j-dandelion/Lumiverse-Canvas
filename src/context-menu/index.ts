@@ -83,17 +83,41 @@ export function findLumiverseContextMenu(): HTMLElement | null {
 }
 
 /**
- * Align host ContextMenu button[0] (Hide/Show tab labels) with Canvas's
+ * Align host tab ContextMenu "Hide/Show tab labels" item with Canvas's
  * isShowTabLabels() — the optimistic host-settings cache after intercept
  * Hide/Show. Host React can lag or miss fiber setSetting (NO-GO), so the
  * main-mirror menu kept saying "Hide tab labels" after labels were already
  * hidden. Secondary uses a Canvas-owned menu; main-mirror uses host menu.
  *
  * English wording matches secondary tab-context-menu and host en i18n.
+ *
+ * Host reuses the same ContextMenu portal for non-tab surfaces (message
+ * long-press, extension install, …). Only rewrite a button that already
+ * looks like the labels toggle, or a menu that clearly is the tab menu
+ * (contains "Configure tabs"). Never rewrite foreign first items by index.
  */
 export function stampHostTabLabelsMenuItem(menu: HTMLElement): void {
-  const btn = menu.querySelector('button') as HTMLElement | null
+  const buttons = Array.from(menu.querySelectorAll('button')) as HTMLElement[]
+  if (buttons.length === 0) return
+
+  const norm = (t: string | null | undefined) => (t ?? '').replace(/\s+/g, ' ').trim()
+  const isLabelsLabel = (t: string) => t === 'Hide tab labels' || t === 'Show tab labels'
+  const isConfigureLabel = (t: string) => t === 'Configure tabs'
+
+  // Prefer an existing labels-worded button; else first button only if this
+  // is a tab menu (has Configure tabs).
+  let btn: HTMLElement | null =
+    buttons.find((b) => isLabelsLabel(norm(b.textContent))) ?? null
+  if (!btn) {
+    const looksLikeTabMenu = buttons.some((b) => isConfigureLabel(norm(b.textContent)))
+    if (!looksLikeTabMenu) {
+      dlog('[tabmove] stampHostTabLabelsMenuItem: skip non-tab menu')
+      return
+    }
+    btn = buttons[0] ?? null
+  }
   if (!btn) return
+
   const show = isShowTabLabels()
   const label = show ? 'Hide tab labels' : 'Show tab labels'
   if (btn.textContent !== label) {

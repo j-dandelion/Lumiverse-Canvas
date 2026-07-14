@@ -34,6 +34,10 @@ class StubEl {
     if (sel === 'button') return this.children.find((c) => c.tagName === 'BUTTON') ?? null
     return null
   }
+  querySelectorAll(sel: string): StubEl[] {
+    if (sel === 'button') return this.children.filter((c) => c.tagName === 'BUTTON')
+    return []
+  }
 }
 
 ;(globalThis as any).document = {
@@ -112,6 +116,35 @@ const { stampHostTabLabelsMenuItem } = await import('../index')
   const menu = new StubEl()
   stampHostTabLabelsMenuItem(menu as unknown as HTMLElement)
   assert(true, 'S3: no button is a no-op')
+}
+
+// S4: foreign host menu (no labels / Configure wording) — do not rewrite
+{
+  _mockShow = true
+  const menu = new StubEl()
+  const btn = new StubEl()
+  btn.tagName = 'BUTTON'
+  btn.textContent = 'Install'
+  menu.children.push(btn)
+
+  stampHostTabLabelsMenuItem(menu as unknown as HTMLElement)
+  assertEqual(btn.textContent, 'Install', 'S4: foreign first button left unchanged')
+}
+
+// S5: tab menu with Configure tabs but stale first labels text — still stamps
+{
+  _mockShow = false
+  const menu = new StubEl()
+  const labelsBtn = new StubEl()
+  labelsBtn.tagName = 'BUTTON'
+  labelsBtn.textContent = 'Hide tab labels' // stale while show=false
+  const configureBtn = new StubEl()
+  configureBtn.tagName = 'BUTTON'
+  configureBtn.textContent = 'Configure tabs'
+  menu.children.push(labelsBtn, configureBtn)
+
+  stampHostTabLabelsMenuItem(menu as unknown as HTMLElement)
+  assertEqual(labelsBtn.textContent, 'Show tab labels', 'S5: tab menu labels stamped when Configure present')
 }
 
 console.log(`stamp-host-labels tests: ${passed} passed, ${failed} failed`)

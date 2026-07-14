@@ -2,17 +2,23 @@
 //
 // When the user right-clicks a main-drawer (or main-mirror) tab, Lumiverse
 // renders its own ContextMenu with items like "Hide/Show tab labels",
-// "Configure tabs". This module intercepts those clicks:
+// "Configure tabs". This module intercepts those clicks by **label text**:
 //
-//   button[0] = Hide/Show tab labels — patch host showTabLabels + stamp
+//   "Hide tab labels" / "Show tab labels" — patch host showTabLabels + stamp
 //               Canvas secondary/mirror labels so both drawers stay synced
 //               (host alone only updates the main strip; secondary is Canvas).
-//   button[1] = Configure tabs — open the Canvas Configure Tabs modal
+//   "Configure tabs" — open the Canvas Configure Tabs modal
+//
+// CRITICAL: Lumiverse reuses one portal ContextMenu (z-index 11000) for many
+// surfaces — tab strip, message long-press, extension install, etc. Matching
+// by button **index** (button[0]/button[1]) falsely intercepts foreign menus
+// (e.g. Install → Configure Tabs, Edit message → Configure Tabs). Always match
+// the clicked button's text, never position.
 //
 // Design: capture-phase click listener that detects Lumiverse's context menu
 // via `findLumiverseContextMenu`, then checks if the click landed on a known
-// host menu button. If so, it intercepts: dismisses the host menu and runs
-// the Canvas path (so host does not double-toggle labels).
+// **tab-menu** button by label. If so, it intercepts: dismisses the host menu
+// and runs the Canvas path (so host does not double-toggle labels).
 //
 // Active whenever Canvas is loaded: started from setup.ts on boot, stopped
 // on extension cleanup. This guarantees "Configure tabs" always routes to
@@ -32,6 +38,19 @@ import { dlog, dwarn } from '../debug/log'
 let _interceptActive = false
 let _clickHandler: ((e: MouseEvent) => void) | null = null
 
+/** Normalize host menu button text for stable English label matching. */
+export function normalizeMenuLabel(text: string | null | undefined): string {
+  return (text ?? '').replace(/\s+/g, ' ').trim()
+}
+
+export function isConfigureTabsLabel(label: string): boolean {
+  return label === 'Configure tabs'
+}
+
+export function isTabLabelsToggleLabel(label: string): boolean {
+  return label === 'Hide tab labels' || label === 'Show tab labels'
+}
+
 /**
  * Start intercepting host context-menu clicks (labels + Configure tabs).
  * Safe to call multiple times — idempotent.
@@ -44,23 +63,21 @@ export function startConfigureTabsIntercept(): void {
     if (!_interceptActive) return
 
     // Check if a Lumiverse context menu is currently visible.
+    // Shared host component — many non-tab menus also match detection.
     const menu = findLumiverseContextMenu()
     if (!menu) return
 
-    // Lumiverse's context menu buttons are rendered in DOM order.
-    // The menu typically has:
-    //   button[0] = "Hide/Show tab labels" (first item)
-    //   button[1] = "Configure tabs" (second item)
-    // Canvas may inject "Move to …" after that — ignore it (own handler).
-    const buttons = menu.querySelectorAll('button')
     const target = e.target as HTMLElement | null
-    if (!target) return
+    if (!target || typeof target.closest !== 'function') return
 
-    const labelsBtn = buttons.length >= 1 ? buttons[0] : null
-    const configureBtn = buttons.length >= 2 ? buttons[1] : null
+    // Resolve the clicked button (clicks may land on text nodes / children).
+    const btn = target.closest('button') as HTMLElement | null
+    if (!btn || !menu.contains(btn)) return
+
+    const label = normalizeMenuLabel(btn.textContent)
 
     // ── Hide / Show tab labels (main + main-mirror path) ──
-    if (labelsBtn && (labelsBtn.contains(target) || labelsBtn === target)) {
+    if (isTabLabelsToggleLabel(label)) {
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
@@ -75,14 +92,12 @@ export function startConfigureTabsIntercept(): void {
       if (ok) {
         requestAnimationFrame(() => syncSecondaryTabLabels(next))
       }
-      dlog('[configure-intercept] intercepted Hide/Show tab labels', { next, ok })
+      dlog('[configure-intercept] intercepted Hide/Show tab labels', { next, ok, label })
       return
     }
 
     // ── Configure tabs ──
-    if (!configureBtn) return
-    const clickedConfigureBtn = configureBtn.contains(target) || configureBtn === target
-    if (!clickedConfigureBtn) return
+    if (!isConfigureTabsLabel(label)) return
 
     // Intercept: prevent default + stop propagation so Lumiverse doesn't process the click.
     e.preventDefault()

@@ -14792,7 +14792,21 @@ function findLumiverseContextMenu() {
   return last;
 }
 function stampHostTabLabelsMenuItem(menu) {
-  const btn = menu.querySelector("button");
+  const buttons = Array.from(menu.querySelectorAll("button"));
+  if (buttons.length === 0)
+    return;
+  const norm = (t3) => (t3 ?? "").replace(/\s+/g, " ").trim();
+  const isLabelsLabel = (t3) => t3 === "Hide tab labels" || t3 === "Show tab labels";
+  const isConfigureLabel = (t3) => t3 === "Configure tabs";
+  let btn = buttons.find((b2) => isLabelsLabel(norm(b2.textContent))) ?? null;
+  if (!btn) {
+    const looksLikeTabMenu = buttons.some((b2) => isConfigureLabel(norm(b2.textContent)));
+    if (!looksLikeTabMenu) {
+      dlog("[tabmove] stampHostTabLabelsMenuItem: skip non-tab menu");
+      return;
+    }
+    btn = buttons[0] ?? null;
+  }
   if (!btn)
     return;
   const show = isShowTabLabels();
@@ -15001,6 +15015,15 @@ init_drawer_sync();
 init_log();
 var _interceptActive = false;
 var _clickHandler = null;
+function normalizeMenuLabel(text) {
+  return (text ?? "").replace(/\s+/g, " ").trim();
+}
+function isConfigureTabsLabel(label) {
+  return label === "Configure tabs";
+}
+function isTabLabelsToggleLabel(label) {
+  return label === "Hide tab labels" || label === "Show tab labels";
+}
 function startConfigureTabsIntercept() {
   if (_interceptActive)
     return;
@@ -15011,13 +15034,14 @@ function startConfigureTabsIntercept() {
     const menu = findLumiverseContextMenu();
     if (!menu)
       return;
-    const buttons = menu.querySelectorAll("button");
     const target = e3.target;
-    if (!target)
+    if (!target || typeof target.closest !== "function")
       return;
-    const labelsBtn = buttons.length >= 1 ? buttons[0] : null;
-    const configureBtn = buttons.length >= 2 ? buttons[1] : null;
-    if (labelsBtn && (labelsBtn.contains(target) || labelsBtn === target)) {
+    const btn = target.closest("button");
+    if (!btn || !menu.contains(btn))
+      return;
+    const label = normalizeMenuLabel(btn.textContent);
+    if (isTabLabelsToggleLabel(label)) {
       e3.preventDefault();
       e3.stopPropagation();
       e3.stopImmediatePropagation();
@@ -15029,13 +15053,10 @@ function startConfigureTabsIntercept() {
       if (ok) {
         requestAnimationFrame(() => syncSecondaryTabLabels(next));
       }
-      dlog("[configure-intercept] intercepted Hide/Show tab labels", { next, ok });
+      dlog("[configure-intercept] intercepted Hide/Show tab labels", { next, ok, label });
       return;
     }
-    if (!configureBtn)
-      return;
-    const clickedConfigureBtn = configureBtn.contains(target) || configureBtn === target;
-    if (!clickedConfigureBtn)
+    if (!isConfigureTabsLabel(label))
       return;
     e3.preventDefault();
     e3.stopPropagation();
