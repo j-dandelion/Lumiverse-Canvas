@@ -10704,7 +10704,7 @@ function isOpenStatePersistenceEnabled() {
 function isWidthPersistenceEnabled() {
   return !!getSettings().persistDrawerWidth;
 }
-var CANVAS_VERSION = "1.8.0.2", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
+var CANVAS_VERSION = "1.8.0.3", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -11813,7 +11813,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var DRAG_ACTIVATE_DISTANCE_PX = 16, LONG_PRESS_MS = 200, _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();
