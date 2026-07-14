@@ -2,8 +2,6 @@
 
 How to make your own CSS look good with **Canvas drawers** (the main drawer in taskbar mode, and the second drawer) without fighting two different UIs.
 
-You do **not** need to read Canvas source code. Start with **colors** (section 1). Only dig into class names if colors alone are not enough.
-
 ---
 
 ## The short version
