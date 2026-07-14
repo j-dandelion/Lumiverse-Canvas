@@ -41,7 +41,12 @@ import { dlog, dwarn } from '../debug/log'
 // only call each other from inside function bodies — never at module init time.
 // Keep it that way to avoid initialization races.
 import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
-import { getMainMirrorWrapper, isCanvasMainOpen, isMainMirrorActive } from './main-mirror-drawer'
+import {
+  getMainMirrorWrapper,
+  isCanvasMainOpen,
+  isMainMirrorActive,
+  reconcileMainMirrorDrawer,
+} from './main-mirror-drawer'
 import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
 import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -56,6 +61,22 @@ let _lastKnownVerticalPos: number | null = null
 let _mainDrawerTabResizeObserver: ResizeObserver | null = null
 let _mainDrawerTabClassObserver: MutationObserver | null = null
 let _mainDrawerTabStyleObserver: MutationObserver | null = null
+
+/**
+ * Generation for side remounts in checkSideChanged. Async follow-ups
+ * (assignToSecondary, reconcileMainTabListPin) capture gen at remount and
+ * no-op if a newer remount already ran — prevents applying tabs to a
+ * previous wrapper after rapid flips.
+ */
+let _sideRemountGen = 0
+
+/**
+ * Serialize intentional applyMainDrawerSideChange calls so two rapid swaps
+ * do not interleave settle loops / override clears.
+ */
+let _applySideChain: Promise<void> = Promise.resolve()
+/** Monotonic id of the latest applyMainDrawerSideChange; stale settles exit early. */
+let _sideApplyGen = 0
 
 // Coalescing: when syncDrawerTabSettings is called multiple times in the
 // same tick (from ResizeObserver, 2x MutationObserver, 2s setInterval, and
@@ -368,6 +389,9 @@ export function checkSideChanged(): void {
     // Capture open state BEFORE unmount — unmountSecondarySidebar()
     // unconditionally sets _secondarySidebarOpen = false.
     const wasOpen = isSecondarySidebarOpen()
+    // Bump remount gen before unmount so any in-flight async assign/pin
+    // from a prior remount is cancelled when its promise resolves.
+    const remountGen = ++_sideRemountGen
     unmountSecondarySidebar()
     // Bug fix (2026-06-19): invalidate caches and stop observers BEFORE
     // mounting the new wrapper. The new wrapper has no CSS variables set
@@ -402,9 +426,21 @@ export function checkSideChanged(): void {
     // re-render. getDrawerTabs() below will do a fresh fiber walk.
     findStoreData(true)
     mountSecondarySidebar({ initialOpen: wasOpen })
+    // The main mirror has its own side-aware shell lifecycle. Do not rely on
+    // the later pin-list reconciliation to notice that the shell itself is
+    // still mounted on the old edge.
+    reconcileMainMirrorDrawer()
     // Reposition main-drawer mirror pin on the new main edge (does not
     // reparent host DOM). Secondary pin is reconciled inside mount.
-    void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
+    // Guard with remount gen so a late import after a newer flip is a no-op.
+    void import('./main-tab-pin').then((m) => {
+      if (remountGen !== _sideRemountGen) return
+      try {
+        m.reconcileMainTabListPin()
+      } catch {
+        /* ignore teardown races */
+      }
+    })
     // Restore tab buttons for every tab still assigned to secondary. The
     // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
     // only builds the chrome), so without this the tab list is blank until
@@ -416,7 +452,10 @@ export function checkSideChanged(): void {
     // assignToSecondary hits the primary path (root not yet in the new
     // content) for each tab, appendChild-ing the root and re-tagging it.
     // Fire-and-forget — DOM work is synchronous inside the async function.
+    // Generation guard: rapid side flips can resolve this promise after a
+    // newer remount already replaced the wrapper — skip stale assigns.
     import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
+      if (remountGen !== _sideRemountGen) return
       for (const [tabId, side] of getTabAssignments()) {
         if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
       }
@@ -526,6 +565,16 @@ let _observedMainWrapper: HTMLElement | null = null
 let _sideWatcherCleanupRegistered = false
 
 /**
+ * Hard settle cap (ms). After this we stamp lastKnown to desired and keep
+ * the override until DOM matches or MO sees a host-driven different side.
+ * Clearing override while DOM still lags is what caused flip-back remounts.
+ * (Host React usually settles well under ~800ms; we poll up to this hard cap.)
+ */
+const SIDE_SETTLE_HARD_MS = 2500
+/** Runtime hard settle cap (overridable in tests). */
+let _sideSettleHardMs = SIDE_SETTLE_HARD_MS
+
+/**
  * Force Canvas to remount/reposition for a newly written main drawer side.
  *
  * Used by Configure "Swap drawer locations": patchHostDrawerSettings updates
@@ -534,32 +583,56 @@ let _sideWatcherCleanupRegistered = false
  * checkSideChanged sees no change and secondary + main-mirror stay put.
  *
  * Steps:
- *   1. Install short-lived main-side override (desired).
+ *   1. Install main-side override (desired); serialize concurrent applies.
  *   2. Ensure checkSideChanged remounts (seed _lastKnownSide if needed).
- *   3. Poll briefly for host DOM class to match; clear override when it does
- *      (or after ~800ms timeout).
+ *   3. Poll for host DOM class to match; clear override when it does.
+ *      On timeout: keep override + stamp lastKnown to desired (do not clear
+ *      while DOM still lags — that causes reverse remounts).
  *   4. Re-attach the side MutationObserver if the host replaced the wrapper.
  */
 export async function applyMainDrawerSideChange(
   desired: 'left' | 'right',
 ): Promise<void> {
-  setMainDrawerSideOverride(desired)
+  const gen = ++_sideApplyGen
+  const run = async (): Promise<void> => {
+    // A newer apply may have started while we waited on the chain.
+    if (gen !== _sideApplyGen) return
 
-  // Force remount when last-known differs or was never set (tests / early boot).
-  // If already aligned with desired, skip remount but still settle override.
-  if (_lastKnownSide === null || _lastKnownSide !== desired) {
-    if (_lastKnownSide === null) {
-      _lastKnownSide = desired === 'left' ? 'right' : 'left'
+    setMainDrawerSideOverride(desired)
+
+    // Force remount when last-known differs or was never set (tests / early boot).
+    // If already aligned with desired, skip remount but still settle override.
+    if (_lastKnownSide === null || _lastKnownSide !== desired) {
+      if (_lastKnownSide === null) {
+        _lastKnownSide = desired === 'left' ? 'right' : 'left'
+      }
+      try {
+        checkSideChanged()
+      } catch (err) {
+        dwarn('[drawer-sync] applyMainDrawerSideChange remount failed:', err)
+      }
     }
-    try {
-      checkSideChanged()
-    } catch (err) {
-      dwarn('[drawer-sync] applyMainDrawerSideChange remount failed:', err)
-    }
+
+    // Always stamp lastKnown to desired after intentional apply so a
+    // subsequent rebind / startSideChangeWatcher cannot re-seed from lagging
+    // DOM while shells already sit on desired.
+    _lastKnownSide = desired
+
+    await settleMainDrawerSideDom(desired, gen)
+
+    // Stale apply — a newer one owns settle/rebind.
+    if (gen !== _sideApplyGen) return
+
+    // Ensure lastKnown still matches what we wrote (settle may have run
+    // under a concurrent MO that shouldn't reverse intentional side).
+    _lastKnownSide = desired
+    rebindSideChangeWatcherIfNeeded()
   }
 
-  await settleMainDrawerSideDom(desired)
-  rebindSideChangeWatcherIfNeeded()
+  // Chain: rapid A then B must not run two settles in parallel. B waits on A.
+  const next = _applySideChain.then(run, run)
+  _applySideChain = next.catch(() => {})
+  await next
 }
 
 /** Read main wrapper side from live class tokens only (ignores override). */
@@ -575,12 +648,57 @@ function readMainWrapperSideFromDom(): 'left' | 'right' | null {
   return null
 }
 
+/**
+ * If a side override is active, reconcile it with live DOM:
+ *   - DOM matches override → settled; clear override.
+ *   - DOM differs from override → only clear when host store side also
+ *     disagrees with the override AND matches DOM (genuine Settings flip).
+ *     During React lag after Configure swap, store already matches override
+ *     while DOM is still old — must NOT clear or checkSideChanged remounts
+ *     reverse to the lagging DOM side.
+ * Call before checkSideChanged from the MutationObserver path.
+ */
+function reconcileSideOverrideFromDom(): void {
+  const override = getMainDrawerSideOverride()
+  if (override === null) return
+  const domSide = readMainWrapperSideFromDom()
+  // No readable side yet (wrapper mid-replace) — leave override in place.
+  if (domSide === null) return
+  if (domSide === override) {
+    setMainDrawerSideOverride(null)
+    return
+  }
+  // DOM lags or host wrote a different side. Prefer host-settings cache
+  // (patchHostDrawerSettings updates it sync); fiber snapshot can lag.
+  const hostSide = getHostDrawerSettings()?.side
+  if (
+    (hostSide === 'left' || hostSide === 'right') &&
+    hostSide !== override &&
+    hostSide === domSide
+  ) {
+    // Store + DOM agree on a side other than our intentional override →
+    // Settings (or another host write) won. Drop override so remount follows DOM.
+    setMainDrawerSideOverride(null)
+  }
+  // else: keep override (React lag after our write, or store not yet readable)
+}
+
 /** Wait for host wrapper class to match desired; clear override when settled. */
-async function settleMainDrawerSideDom(desired: 'left' | 'right'): Promise<void> {
-  const deadline = Date.now() + 800
-  while (Date.now() < deadline) {
+async function settleMainDrawerSideDom(
+  desired: 'left' | 'right',
+  gen: number,
+): Promise<void> {
+  const hardMs = _sideSettleHardMs
+  const hardDeadline = Date.now() + hardMs
+  while (Date.now() < hardDeadline) {
+    // Newer intentional apply supersedes this settle.
+    if (gen !== _sideApplyGen) return
+
     if (readMainWrapperSideFromDom() === desired) {
-      setMainDrawerSideOverride(null)
+      // Only clear if we still own the override for this desired side.
+      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+        setMainDrawerSideOverride(null)
+      }
       return
     }
     await new Promise<void>((r) => {
@@ -592,12 +710,17 @@ async function settleMainDrawerSideDom(desired: 'left' | 'right'): Promise<void>
     })
   }
 
-  // Timeout: drop override so future Settings UI side changes use live DOM.
+  // Hard timeout: do NOT clear override while DOM still lags. Clearing here
+  // makes getMainDrawerSide() return old DOM while shells/_lastKnown sit on
+  // desired — next accidental checkSideChanged remounts back to old side.
+  // Keep override until DOM matches or MO sees a different host side.
+  // Stamp lastKnown so rebind cannot re-seed from lagging DOM.
+  if (gen !== _sideApplyGen) return
+  _lastKnownSide = desired
   if (getMainDrawerSideOverride() === desired) {
     dwarn(
-      `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within 800ms; clearing override`,
+      `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${hardMs}ms; keeping override until DOM matches or host writes a different side`,
     )
-    setMainDrawerSideOverride(null)
   }
 }
 
@@ -624,7 +747,13 @@ export function rebindSideChangeWatcherIfNeeded(): void {
 
 export function startSideChangeWatcher(): void {
   if (_sideObserver !== null) return // already running
-  _lastKnownSide = getMainDrawerSide()
+  // Only seed lastKnown when never set. After applyMainDrawerSideChange,
+  // shells may already sit on desired while DOM still lags; stomping
+  // lastKnown from getMainDrawerSide() (DOM after override clear) desyncs
+  // and can reverse-remount on the next check.
+  if (_lastKnownSide === null) {
+    _lastKnownSide = getMainDrawerSide()
+  }
   // Observe the main wrapper's class attribute. The host toggles
   // `wrapperLeft` / `wrapperRight` on the wrapper when the user changes
   // drawer side in Lumiverse settings. MutationObserver fires on the
@@ -636,6 +765,9 @@ export function startSideChangeWatcher(): void {
     return
   }
   _sideObserver = new MutationObserver(() => {
+    // Host class flip: clear override when DOM settled to override OR when
+    // DOM shows a different side (Settings path won). Then remount.
+    reconcileSideOverrideFromDom()
     checkSideChanged()
   })
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
@@ -663,6 +795,24 @@ export function __setLastKnownSideForTest(side: 'left' | 'right' | null): void {
 
 export function __getLastKnownSideForTest(): 'left' | 'right' | null {
   return _lastKnownSide
+}
+
+/** Test-only: remount generation (async assign/pin guards). */
+export function __getSideRemountGenForTest(): number {
+  return _sideRemountGen
+}
+
+/** Test-only: reset apply chain / gen between tests. */
+export function __resetSideApplyStateForTest(): void {
+  _sideApplyGen = 0
+  _applySideChain = Promise.resolve()
+  _sideRemountGen = 0
+  _sideSettleHardMs = SIDE_SETTLE_HARD_MS
+}
+
+/** Test-only: shorten/lengthen hard settle timeout (default 2500). */
+export function __setSideSettleHardMsForTest(ms: number): void {
+  _sideSettleHardMs = ms
 }
 
 export function stopDrawerTabResizeWatcher(): void {

@@ -2632,7 +2632,10 @@ __export(exports_drawer_sync, {
   isShowTabLabels: () => isShowTabLabels,
   checkSideChanged: () => checkSideChanged,
   applyMainDrawerSideChange: () => applyMainDrawerSideChange,
+  __setSideSettleHardMsForTest: () => __setSideSettleHardMsForTest,
   __setLastKnownSideForTest: () => __setLastKnownSideForTest,
+  __resetSideApplyStateForTest: () => __resetSideApplyStateForTest,
+  __getSideRemountGenForTest: () => __getSideRemountGenForTest,
   __getLastKnownSideForTest: () => __getLastKnownSideForTest
 });
 function isShowTabLabels() {
@@ -2819,6 +2822,7 @@ function checkSideChanged() {
   const currentSide = getMainDrawerSide();
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
     const wasOpen = isSecondarySidebarOpen();
+    const remountGen = ++_sideRemountGen;
     unmountSecondarySidebar();
     _lastWrittenDrawerTabVars = null;
     _lastWrittenLabelsKey = null;
@@ -2828,9 +2832,18 @@ function checkSideChanged() {
     stopDrawerTabStyleObserver();
     findStoreData(true);
     mountSecondarySidebar({ initialOpen: wasOpen });
-    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => m.reconcileMainTabListPin());
+    reconcileMainMirrorDrawer();
+    Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m) => {
+      if (remountGen !== _sideRemountGen)
+        return;
+      try {
+        m.reconcileMainTabListPin();
+      } catch {}
+    });
     restoreSecondaryTabButtons();
     Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
+      if (remountGen !== _sideRemountGen)
+        return;
       for (const [tabId, side] of getTabAssignments()) {
         if (side === "secondary")
           assignToSecondary2(tabId).catch(() => {});
@@ -2891,19 +2904,31 @@ function restoreSecondaryTabButtons() {
   }
 }
 async function applyMainDrawerSideChange(desired) {
-  setMainDrawerSideOverride(desired);
-  if (_lastKnownSide === null || _lastKnownSide !== desired) {
-    if (_lastKnownSide === null) {
-      _lastKnownSide = desired === "left" ? "right" : "left";
+  const gen = ++_sideApplyGen;
+  const run = async () => {
+    if (gen !== _sideApplyGen)
+      return;
+    setMainDrawerSideOverride(desired);
+    if (_lastKnownSide === null || _lastKnownSide !== desired) {
+      if (_lastKnownSide === null) {
+        _lastKnownSide = desired === "left" ? "right" : "left";
+      }
+      try {
+        checkSideChanged();
+      } catch (err) {
+        dwarn("[drawer-sync] applyMainDrawerSideChange remount failed:", err);
+      }
     }
-    try {
-      checkSideChanged();
-    } catch (err) {
-      dwarn("[drawer-sync] applyMainDrawerSideChange remount failed:", err);
-    }
-  }
-  await settleMainDrawerSideDom(desired);
-  rebindSideChangeWatcherIfNeeded();
+    _lastKnownSide = desired;
+    await settleMainDrawerSideDom(desired, gen);
+    if (gen !== _sideApplyGen)
+      return;
+    _lastKnownSide = desired;
+    rebindSideChangeWatcherIfNeeded();
+  };
+  const next = _applySideChain.then(run, run);
+  _applySideChain = next.catch(() => {});
+  await next;
 }
 function readMainWrapperSideFromDom() {
   const wrapper = getMainWrapper();
@@ -2918,11 +2943,32 @@ function readMainWrapperSideFromDom() {
     return "right";
   return null;
 }
-async function settleMainDrawerSideDom(desired) {
-  const deadline = Date.now() + 800;
-  while (Date.now() < deadline) {
+function reconcileSideOverrideFromDom() {
+  const override = getMainDrawerSideOverride();
+  if (override === null)
+    return;
+  const domSide = readMainWrapperSideFromDom();
+  if (domSide === null)
+    return;
+  if (domSide === override) {
+    setMainDrawerSideOverride(null);
+    return;
+  }
+  const hostSide = getHostDrawerSettings()?.side;
+  if ((hostSide === "left" || hostSide === "right") && hostSide !== override && hostSide === domSide) {
+    setMainDrawerSideOverride(null);
+  }
+}
+async function settleMainDrawerSideDom(desired, gen) {
+  const hardMs = _sideSettleHardMs;
+  const hardDeadline = Date.now() + hardMs;
+  while (Date.now() < hardDeadline) {
+    if (gen !== _sideApplyGen)
+      return;
     if (readMainWrapperSideFromDom() === desired) {
-      setMainDrawerSideOverride(null);
+      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+        setMainDrawerSideOverride(null);
+      }
       return;
     }
     await new Promise((r) => {
@@ -2933,9 +2979,11 @@ async function settleMainDrawerSideDom(desired) {
       }
     });
   }
+  if (gen !== _sideApplyGen)
+    return;
+  _lastKnownSide = desired;
   if (getMainDrawerSideOverride() === desired) {
-    dwarn(`[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within 800ms; clearing override`);
-    setMainDrawerSideOverride(null);
+    dwarn(`[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${hardMs}ms; keeping override until DOM matches or host writes a different side`);
   }
 }
 function rebindSideChangeWatcherIfNeeded() {
@@ -2956,13 +3004,16 @@ function rebindSideChangeWatcherIfNeeded() {
 function startSideChangeWatcher() {
   if (_sideObserver !== null)
     return;
-  _lastKnownSide = getMainDrawerSide();
+  if (_lastKnownSide === null) {
+    _lastKnownSide = getMainDrawerSide();
+  }
   const wrapper = getMainWrapper();
   if (!wrapper) {
     dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
     return;
   }
   _sideObserver = new MutationObserver(() => {
+    reconcileSideOverrideFromDom();
     checkSideChanged();
   });
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
@@ -2985,6 +3036,18 @@ function __setLastKnownSideForTest(side) {
 function __getLastKnownSideForTest() {
   return _lastKnownSide;
 }
+function __getSideRemountGenForTest() {
+  return _sideRemountGen;
+}
+function __resetSideApplyStateForTest() {
+  _sideApplyGen = 0;
+  _applySideChain = Promise.resolve();
+  _sideRemountGen = 0;
+  _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
+}
+function __setSideSettleHardMsForTest(ms) {
+  _sideSettleHardMs = ms;
+}
 function stopDrawerTabResizeWatcher() {
   if (_mainDrawerTabResizeObserver) {
     _mainDrawerTabResizeObserver.disconnect();
@@ -3003,7 +3066,7 @@ function stopDrawerTabStyleObserver() {
     _mainDrawerTabStyleObserver = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false;
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
 var init_drawer_sync = __esm(() => {
   init_host_settings();
   init_store();
@@ -3015,6 +3078,8 @@ var init_drawer_sync = __esm(() => {
   init_state();
   init_buttons();
   init_active_tab();
+  _applySideChain = Promise.resolve();
+  _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
@@ -3611,6 +3676,7 @@ __export(exports_configure_model, {
   reorderWithinVisible: () => reorderWithinVisible,
   reorderWithin: () => reorderWithin,
   reorderVisibleInList: () => reorderVisibleInList,
+  rebaseBaseIfEpochUnchanged: () => rebaseBaseIfEpochUnchanged,
   partitionDisplayLists: () => partitionDisplayLists,
   moveTabVisible: () => moveTabVisible,
   moveTab: () => moveTab,
@@ -3710,6 +3776,11 @@ function baseSnapshotFromDraft(draft) {
     drawerSide: draft.drawerSide,
     assignments
   };
+}
+function rebaseBaseIfEpochUnchanged(draftToCommit, epochAtStart, currentEpoch) {
+  if (epochAtStart !== currentEpoch)
+    return null;
+  return baseSnapshotFromDraft(draftToCommit);
 }
 function isDraftDirty(draft, base) {
   const order = encodeHostTabOrder(draft);
@@ -6011,10 +6082,15 @@ async function autoCommit() {
     if (!isDraftDirty(_draftRef, _baseSnapshotRef))
       return { ok: true };
     const draftToCommit = _draftRef;
-    const result = await commitConfigureDraft(draftToCommit, _baseSnapshotRef);
+    const baseToCommit = _baseSnapshotRef;
+    const epochAtStart = _baseEpoch;
+    const result = await commitConfigureDraft(draftToCommit, baseToCommit);
     if (result.ok) {
+      const rebased = rebaseBaseIfEpochUnchanged(draftToCommit, epochAtStart, _baseEpoch);
+      if (rebased) {
+        _baseSnapshotRef = rebased;
+      }
       if (_draftRef === draftToCommit) {
-        _baseSnapshotRef = baseSnapshotFromDraft(draftToCommit);
         renderModal(draftToCommit, _catalogRef, null, false);
       }
     } else {
@@ -6452,6 +6528,7 @@ function openConfigureTabsModal() {
   const { draft, base, catalog } = buildLiveDraftAndBase();
   _draftRef = draft;
   _baseSnapshotRef = base;
+  _baseEpoch++;
   _modalContainer = document.createElement("div");
   _modalContainer.id = "canvas-configure-tabs-modal";
   document.body.appendChild(_modalContainer);
@@ -6463,6 +6540,7 @@ function refreshConfigureDraftFromLive() {
   const { draft, base, catalog } = buildLiveDraftAndBase();
   _draftRef = draft;
   _baseSnapshotRef = base;
+  _baseEpoch++;
   renderModal(draft, catalog, null, false);
 }
 function closeConfigureTabsModal(_opts) {
@@ -6556,7 +6634,7 @@ function unmountModal() {
   clearDragState();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -8122,6 +8200,7 @@ function mountMainMirror(opts) {
   _shell.content.style.padding = "0";
   _shell.content.setAttribute("data-canvas-main-content-slot", "1");
   document.body.appendChild(_shell.wrapper);
+  sweepOrphanMainMirrorWrappers();
   _active = true;
   _open = opts.initialOpen;
   _mountedSide = side;
@@ -8337,6 +8416,19 @@ function clearHostWrapperInline() {
     wrap.style.removeProperty(prop);
   }
 }
+function sweepOrphanMainMirrorWrappers() {
+  if (typeof document === "undefined" || !document.querySelectorAll)
+    return;
+  const keep = _shell?.wrapper ?? null;
+  const all = document.querySelectorAll(".sidebar-ux-main-mirror-wrapper");
+  for (const el of Array.from(all)) {
+    if (el !== keep) {
+      try {
+        el.remove();
+      } catch {}
+    }
+  }
+}
 function teardownMainMirror(opts) {
   stopReparkWatch();
   restoreHostContent();
@@ -8349,6 +8441,7 @@ function teardownMainMirror(opts) {
     _shell.wrapper.remove();
     _shell = null;
   }
+  sweepOrphanMainMirrorWrappers();
   if (!opts?.keepWidthVar) {
     const w3 = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0);
     if (w3 > 0) {
@@ -9752,6 +9845,9 @@ function createSecondarySidebar(options) {
     const wSpindle = getHostBridge();
     const wContainers = wSpindle?.containers;
     if (wContainers?.registerContainer) {
+      try {
+        wContainers.unregisterContainer?.("canvas-secondary-drawer");
+      } catch {}
       wContainers.registerContainer({
         id: "canvas-secondary-drawer",
         side,
@@ -9765,6 +9861,18 @@ function createSecondarySidebar(options) {
   }
   _secondaryDrawer = shell.drawer;
   return shell.wrapper;
+}
+function sweepOrphanSecondaryWrappers() {
+  if (typeof document === "undefined" || !document.querySelectorAll)
+    return;
+  const all = document.querySelectorAll(".sidebar-ux-secondary-wrapper");
+  for (const el of Array.from(all)) {
+    if (el !== _secondaryWrapper) {
+      try {
+        el.remove();
+      } catch {}
+    }
+  }
 }
 function openSecondarySidebar() {
   if (!_secondaryWrapper || !_secondaryDrawer)
@@ -9828,6 +9936,7 @@ function mountSecondarySidebar(options) {
     return;
   _secondaryWrapper = createSecondarySidebar(options);
   document.body.appendChild(_secondaryWrapper);
+  sweepOrphanSecondaryWrappers();
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     drawer: _secondaryWrapper.querySelector(".sidebar-ux-drawer"),
     tabList: _secondaryWrapper.querySelector(".sidebar-ux-tab-list"),

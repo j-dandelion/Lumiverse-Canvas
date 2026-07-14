@@ -381,6 +381,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   _shell.content.setAttribute('data-canvas-main-content-slot', '1')
 
   document.body.appendChild(_shell.wrapper)
+  // Drop orphan main-mirror shells left by incomplete teardown / rapid
+  // side remounts. Keep only the module-owned wrapper.
+  sweepOrphanMainMirrorWrappers()
   _active = true
   _open = opts.initialOpen
   _mountedSide = side
@@ -624,6 +627,25 @@ function clearHostWrapperInline(): void {
   }
 }
 
+/**
+ * Remove document main-mirror wrappers that are not the module-owned shell.
+ * Mirrors secondary sweepOrphanSecondaryWrappers / tab-position sweepStrayPinHosts.
+ */
+function sweepOrphanMainMirrorWrappers(): void {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return
+  const keep = _shell?.wrapper ?? null
+  const all = document.querySelectorAll('.sidebar-ux-main-mirror-wrapper')
+  for (const el of Array.from(all)) {
+    if (el !== keep) {
+      try {
+        el.remove()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   stopReparkWatch()
   restoreHostContent()
@@ -636,6 +658,9 @@ function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
     _shell.wrapper.remove()
     _shell = null
   }
+  // Also sweep any residual orphans (e.g. body-level duplicates without
+  // module ownership after a partial failure).
+  sweepOrphanMainMirrorWrappers()
 
   if (!opts?.keepWidthVar) {
     const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0)

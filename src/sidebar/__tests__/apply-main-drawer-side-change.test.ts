@@ -11,6 +11,7 @@ import { mock } from 'bun:test'
 // Track remount-related calls without mounting full secondary chrome.
 let mountCalls = 0
 let unmountCalls = 0
+let mirrorReconcileCalls = 0
 
 mock.module('../secondary', () => ({
   getSecondaryWrapper: () => null,
@@ -23,6 +24,7 @@ mock.module('../main-mirror-drawer', () => ({
   getMainMirrorWrapper: () => null,
   isCanvasMainOpen: () => false,
   isMainMirrorActive: () => false,
+  reconcileMainMirrorDrawer: () => { mirrorReconcileCalls++ },
 }))
 
 mock.module('../main-tab-pin', () => ({
@@ -33,8 +35,13 @@ mock.module('../main-tab-pin', () => ({
 import {
   applyMainDrawerSideChange,
   checkSideChanged,
+  startSideChangeWatcher,
+  rebindSideChangeWatcherIfNeeded,
   __setLastKnownSideForTest,
   __getLastKnownSideForTest,
+  __resetSideApplyStateForTest,
+  __setSideSettleHardMsForTest,
+  __getSideRemountGenForTest,
   stopSideChangeWatcher,
 } from '../drawer-sync'
 import {
@@ -124,10 +131,12 @@ function installMainWrapper(side: 'left' | 'right') {
 function reset() {
   mountCalls = 0
   unmountCalls = 0
+  mirrorReconcileCalls = 0
   setMainDrawerSideOverride(null)
   __setLastKnownSideForTest(null)
   __setStoreSnapshotForTest(null)
   stopSideChangeWatcher()
+  __resetSideApplyStateForTest()
 }
 
 // ── A1: override makes getMainDrawerSide return desired while DOM lags ──
@@ -143,6 +152,7 @@ function reset() {
   checkSideChanged()
   assert(unmountCalls >= 1, 'A1: side change unmounts secondary')
   assert(mountCalls >= 1, 'A1: side change remounts secondary')
+  assert(mirrorReconcileCalls >= 1, 'A1: side change explicitly reconciles main mirror')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A1: last known updated to left via override')
   setMainDrawerSideOverride(null)
 }
@@ -162,6 +172,7 @@ function reset() {
 
   assert(unmountCalls >= 1, 'A2: apply remounts (unmount)')
   assert(mountCalls >= 1, 'A2: apply remounts (mount)')
+  assert(mirrorReconcileCalls >= 1, 'A2: apply reconciles main mirror')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A2: last known is left')
   assertEqual(getMainDrawerSideOverride(), null, 'A2: override cleared after DOM settles')
   assertEqual(getMainDrawerSide(), 'left', 'A2: getMainDrawerSide is left after settle')
@@ -193,6 +204,82 @@ function reset() {
   assertEqual(unmountCalls, 0, 'A4: no unmount when already on desired side')
   assertEqual(mountCalls, 0, 'A4: no mount when already on desired side')
   assertEqual(getMainDrawerSideOverride(), null, 'A4: override cleared (DOM already matches)')
+}
+
+// ── A5: DOM never settles — keep override + lastKnown stays desired ──
+// Old bug: timeout cleared override while shells sat on desired → getMainDrawerSide
+// returned lagging DOM → next check could remount reverse.
+{
+  reset()
+  installMainWrapper('right') // never flips
+  __setLastKnownSideForTest('right')
+  __setSideSettleHardMsForTest(40) // exercise hard-timeout without 2.5s wait
+
+  await applyMainDrawerSideChange('left')
+
+  assertEqual(getMainDrawerSideOverride(), 'left', 'A5: override kept when DOM never settles')
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A5: lastKnown stamped to desired')
+  assertEqual(getMainDrawerSide(), 'left', 'A5: getMainDrawerSide still returns override')
+  assert(unmountCalls >= 1, 'A5: remount still ran under override')
+}
+
+// ── A6: concurrent applies serialize; final side is last desired ──
+{
+  reset()
+  const { setSide } = installMainWrapper('right')
+  __setLastKnownSideForTest('right')
+
+  // Start left then right rapidly. DOM settles to right only.
+  const p1 = applyMainDrawerSideChange('left')
+  const p2 = applyMainDrawerSideChange('right')
+  // Flip DOM to final desired after a tick so settle can clear.
+  void Promise.resolve().then(() => setSide('right'))
+  await Promise.all([p1, p2])
+
+  assertEqual(__getLastKnownSideForTest(), 'right', 'A6: last known ends on last apply (right)')
+  // Override should be cleared once DOM matches right (or still right if lagging).
+  const ov = getMainDrawerSideOverride()
+  assert(ov === null || ov === 'right', 'A6: override null or final desired, never left')
+  assertEqual(getMainDrawerSide(), 'right', 'A6: getMainDrawerSide is right')
+}
+
+// ── A7: rebind / startSideChangeWatcher must not stomp lastKnown after apply ──
+{
+  reset()
+  installMainWrapper('right') // DOM lags on right
+  __setLastKnownSideForTest('left') // shells already on left after apply
+  setMainDrawerSideOverride('left')
+
+  // startSideChangeWatcher used to set lastKnown = getMainDrawerSide() which
+  // under override is left (ok) — but after settle-clear + lagging DOM it
+  // would stomp to right. With null-only seed, non-null lastKnown is preserved.
+  startSideChangeWatcher()
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A7: start does not stomp non-null lastKnown')
+
+  // rebind path also must not stomp.
+  rebindSideChangeWatcherIfNeeded()
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A7: rebind preserves lastKnown')
+
+  stopSideChangeWatcher()
+  setMainDrawerSideOverride(null)
+  // After clear, lastKnown still left even though DOM is right — intentional
+  // stamp from apply; only checkSideChanged should update on real change.
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A7: lastKnown still left after clear')
+}
+
+// ── A8: checkSideChanged bumps remount gen (async assign guard contract) ──
+{
+  reset()
+  installMainWrapper('right')
+  __setLastKnownSideForTest('left')
+  setMainDrawerSideOverride('right')
+  const genBefore = __getSideRemountGenForTest()
+  checkSideChanged()
+  assert(
+    __getSideRemountGenForTest() > genBefore,
+    'A8: remount gen increments on side change',
+  )
+  setMainDrawerSideOverride(null)
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

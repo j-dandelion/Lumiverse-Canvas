@@ -174,6 +174,33 @@ export function baseSnapshotFromDraft(draft: ConfigureDraft): BaseSnapshot {
   }
 }
 
+/**
+ * After a successful auto-commit, rebase the dirty-check baseline from the
+ * draft that was actually committed — but only when the base epoch is
+ * unchanged.
+ *
+ * Why epoch: open / refreshConfigureDraftFromLive install a fresh draft+base
+ * from live host state and bump the epoch. A commit that was in flight must
+ * not overwrite that newer baseline with stale `draftToCommit`.
+ *
+ * Why always rebase when epoch matches (even if live draft ≠ draftToCommit):
+ * rapid Swap A→B→A can leave base stuck on the pre-A side if we only rebase
+ * when `_draftRef === draftToCommit`. Then the second commit sees
+ * `isDraftDirty(draft, base) === false` and no-ops while live drawers are
+ * already on A's side. Advancing base to what was committed keeps the next
+ * queued auto-commit dirty when the user swapped again mid-flight.
+ *
+ * @returns New base snapshot, or null when rebase must be skipped.
+ */
+export function rebaseBaseIfEpochUnchanged(
+  draftToCommit: ConfigureDraft,
+  epochAtStart: number,
+  currentEpoch: number,
+): BaseSnapshot | null {
+  if (epochAtStart !== currentEpoch) return null
+  return baseSnapshotFromDraft(draftToCommit)
+}
+
 // ── Dirty check ──
 
 export function isDraftDirty(

@@ -4,6 +4,7 @@ import {
   createDraft,
   encodeHostTabOrder,
   isDraftDirty,
+  rebaseBaseIfEpochUnchanged,
   swapDrawerSide,
   moveTab,
   reorderWithin,
@@ -891,6 +892,46 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
   }
   const base = baseSnapshotFromDraft(draft)
   assert(!isDraftDirty(draft, base), 'baseSnapshotFromDraft: not dirty when base built from draft')
+}
+
+// =====================================================================
+// rebaseBaseIfEpochUnchanged — autoCommit rapid-swap cancel-out contract
+//
+// Repro: base.side=right; Swap→left (commit A); Swap→right mid-flight.
+// A must still rebase base to left so B sees dirty (right vs left).
+// Old bug: only rebased when _draftRef === draftToCommit → base stayed
+// right → B isDraftDirty(right, right)=false → no-op while drawers left.
+// =====================================================================
+{
+  const mk = (side: 'left' | 'right'): ConfigureDraft => ({
+    drawerSide: side,
+    primaryIds: ['profile', 'presets'],
+    secondaryIds: ['weaver'],
+    builtinOrder: ['profile', 'presets', 'weaver'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  })
+  const baseRight = baseSnapshotFromDraft(mk('right'))
+  const draftA = mk('left') // what commit A wrote
+  const liveDraftAfterSecondSwap = mk('right') // user swapped back mid-await
+
+  // Epoch unchanged → always rebase from draftToCommit, even when live draft moved on.
+  const rebased = rebaseBaseIfEpochUnchanged(draftA, 1, 1)
+  assert(rebased !== null, 'rebase: epoch unchanged returns base')
+  assertEqual(rebased!.drawerSide, 'left', 'rebase: base advances to committed left')
+  assert(
+    isDraftDirty(liveDraftAfterSecondSwap, rebased!),
+    'rebase: second swap is dirty vs rebased base (right vs left)',
+  )
+  // Contrast: if we skipped rebase (old identity-only guard), base stays right → not dirty.
+  assert(
+    !isDraftDirty(liveDraftAfterSecondSwap, baseRight),
+    'rebase: without rebase, cancel-out would falsely look clean',
+  )
+
+  // Epoch advanced (open/refresh) → skip rebase so live baseline is not stomped.
+  const skipped = rebaseBaseIfEpochUnchanged(draftA, 1, 2)
+  assertEqual(skipped, null, 'rebase: epoch advanced → skip')
 }
 
 // =====================================================================

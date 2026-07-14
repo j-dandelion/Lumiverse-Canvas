@@ -152,11 +152,18 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
   // Register the secondary drawer content area with Spindle so built-in
   // tabs can use requestTabLocation to move into this container.
   // System-level registration — not gated by extension permissions.
+  // Unregister first on remount so a stale container entry cannot conflict
+  // with the new shell content element (only when the API exists).
   try {
     const wSpindle = getHostBridge()
     const wContainers = wSpindle?.containers
 
     if (wContainers?.registerContainer) {
+      try {
+        wContainers.unregisterContainer?.('canvas-secondary-drawer')
+      } catch {
+        /* ignore — host may not have had a prior registration */
+      }
       wContainers.registerContainer({
         id: 'canvas-secondary-drawer',
         side,
@@ -175,6 +182,25 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
 
   _secondaryDrawer = shell.drawer
   return shell.wrapper
+}
+
+/**
+ * Remove document secondary wrappers that are not the module-owned one.
+ * Rapid remount / incomplete teardown can leave orphan shells stacked on
+ * the same edge. Mirrors sweepStrayPinHosts in tab-position.ts.
+ */
+function sweepOrphanSecondaryWrappers(): void {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return
+  const all = document.querySelectorAll('.sidebar-ux-secondary-wrapper')
+  for (const el of Array.from(all)) {
+    if (el !== _secondaryWrapper) {
+      try {
+        el.remove()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }
 
 export function openSecondarySidebar() {
@@ -289,6 +315,9 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   if (_secondaryWrapper) return
   _secondaryWrapper = createSecondarySidebar(options)
   document.body.appendChild(_secondaryWrapper)
+  // Drop any orphan wrappers left by lost module state / failed unmount
+  // before a prior remount (rapid side flips). Keep only module-owned.
+  sweepOrphanSecondaryWrappers()
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     drawer: _secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement,
     tabList: _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement,

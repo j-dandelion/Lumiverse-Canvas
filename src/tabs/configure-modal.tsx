@@ -17,6 +17,7 @@ import {
   createDraft,
   encodeHostTabOrder,
   isDraftDirty,
+  rebaseBaseIfEpochUnchanged,
   swapDrawerSide,
   moveTab,
   reorderWithin,
@@ -48,6 +49,12 @@ import { dlog, dwarn } from '../debug/log'
 let _modalContainer: HTMLElement | null = null
 let _draftRef: ConfigureDraft | null = null
 let _baseSnapshotRef: BaseSnapshot | null = null
+/**
+ * Bumped whenever open/refresh installs a new live draft+base. Successful
+ * auto-commits only rebase base when the epoch is unchanged — so a mid-flight
+ * refreshConfigureDraftFromLive cannot be stomped by a stale commit.
+ */
+let _baseEpoch = 0
 
 // ── Drag state (module-level, no re-render during drag) ──
 let _dragTabId: string | null = null
@@ -925,16 +932,32 @@ async function autoCommit(): Promise<void> {
     if (!_draftRef || !_baseSnapshotRef) return { ok: true as const }
     if (!isDraftDirty(_draftRef, _baseSnapshotRef)) return { ok: true as const }
 
-    // Capture draft at commit time so a concurrent refresh cannot change
-    // what we pass while still rebasing from the same object on success.
+    // Capture draft + base + epoch at commit decision time. Base must be
+    // captured here (not re-read after await) so a concurrent successful
+    // rebase does not feed a stale sideChanged comparison into a mid-flight
+    // commit — and so we always pass the baseline that made us dirty.
     const draftToCommit = _draftRef
-    const result = await commitConfigureDraft(draftToCommit, _baseSnapshotRef)
+    const baseToCommit = _baseSnapshotRef
+    const epochAtStart = _baseEpoch
+    const result = await commitConfigureDraft(draftToCommit, baseToCommit)
 
     if (result.ok) {
-      // Rebase only if this draft is still the live ref (or equal intent).
-      // refreshConfigureDraftFromLive may have replaced _draftRef mid-await.
+      // Always advance base to what was committed when epoch is unchanged,
+      // even if the user swapped/edited again (_draftRef !== draftToCommit).
+      // Skipping that rebase is the rapid-swap cancel-out bug: second commit
+      // sees draft===base and no-ops while live drawers already match A.
+      // Epoch advanced means open/refresh already installed a fresh baseline.
+      const rebased = rebaseBaseIfEpochUnchanged(
+        draftToCommit,
+        epochAtStart,
+        _baseEpoch,
+      )
+      if (rebased) {
+        _baseSnapshotRef = rebased
+      }
+      // Only re-render from this draft when it is still the live ref —
+      // otherwise a newer draft already owns the UI.
       if (_draftRef === draftToCommit) {
-        _baseSnapshotRef = baseSnapshotFromDraft(draftToCommit)
         renderModal(draftToCommit, _catalogRef, null, false)
       }
     } else {
@@ -1409,6 +1432,7 @@ export function openConfigureTabsModal(): void {
   const { draft, base, catalog } = buildLiveDraftAndBase()
   _draftRef = draft
   _baseSnapshotRef = base
+  _baseEpoch++
 
   // Create container and render.
   _modalContainer = document.createElement('div')
@@ -1431,6 +1455,7 @@ export function refreshConfigureDraftFromLive(): void {
   const { draft, base, catalog } = buildLiveDraftAndBase()
   _draftRef = draft
   _baseSnapshotRef = base
+  _baseEpoch++
   renderModal(draft, catalog, null, false)
 }
 
