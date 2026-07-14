@@ -3,7 +3,7 @@ Convenient tweaks and features to enhance your Lumiverse UI!
 
 - Everything is optional, toggle each behavior
 - Most tweaks are aimed at deeper UI customization and quality-of-life improvements
-- Fits well with your Lumiverse theme (though if you have custom CSS it might need some adjusting) 
+- Fits well with your Lumiverse theme — prefer CSS variables; for drawer chrome use stable Canvas selectors (`.sidebar-ux-shell`, pin hosts). See [`docs/custom-css.md`](docs/custom-css.md) 
 
 ## Features included so far
 - Drag sidebar/drawer panel edges to resize them

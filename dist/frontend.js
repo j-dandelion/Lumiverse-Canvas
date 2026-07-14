@@ -886,7 +886,7 @@ function createDrawerShell(options) {
   } = options;
   const wrapperClass = owner === "secondary" ? "sidebar-ux-secondary-wrapper" : "sidebar-ux-main-mirror-wrapper";
   const wrapper = document.createElement("div");
-  wrapper.className = `${wrapperClass} sidebar-ux-side-${side}`;
+  wrapper.className = `${wrapperClass} sidebar-ux-shell sidebar-ux-side-${side}`;
   wrapper.setAttribute("data-drawer-owner", owner);
   wrapper.dataset.drawerOpen = initialOpen ? "true" : "false";
   const cssVarWidth = parseFloat(document.documentElement.style.getPropertyValue(widthCssVar));

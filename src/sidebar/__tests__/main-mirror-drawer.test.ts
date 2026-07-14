@@ -41,6 +41,7 @@ class StubElement {
   parentElement: StubElement | null = null
   children: StubElement[] = []
   isConnected = true
+  dataset: Record<string, string> = {}
   private _classSet = new Set<string>()
   private _attrs: Record<string, string> = {}
 
@@ -255,6 +256,18 @@ export {}
   assert(isMainMirrorActive(), 'T9: active after apply(true) on desktop')
   // Verify a wrapper was appended to body
   assert(_bodyChildren.length > 0, 'T9: wrapper appended to body')
+  const shell = _bodyChildren.find((c) =>
+    String(c.className || '').includes('sidebar-ux-main-mirror-wrapper'),
+  )
+  assert(!!shell, 'T9: main-mirror wrapper present')
+  assert(
+    !!shell && shell.classList.contains('sidebar-ux-shell'),
+    'T9: main-mirror wrapper has sidebar-ux-shell',
+  )
+  assert(
+    !!shell && shell.classList.contains('sidebar-ux-main-mirror-wrapper'),
+    'T9: main-mirror wrapper keeps owner class',
+  )
 }
 
 // --- T10: applyMainMirrorDrawer(false) after mount tears down ---

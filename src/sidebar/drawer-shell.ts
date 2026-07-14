@@ -113,7 +113,8 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
       : 'sidebar-ux-main-mirror-wrapper'
 
   const wrapper = document.createElement('div')
-  wrapper.className = `${wrapperClass} sidebar-ux-side-${side}`
+  // sidebar-ux-shell: public stable hook for user/theme CSS (both Canvas drawers).
+  wrapper.className = `${wrapperClass} sidebar-ux-shell sidebar-ux-side-${side}`
   wrapper.setAttribute('data-drawer-owner', owner)
   wrapper.dataset.drawerOpen = initialOpen ? 'true' : 'false'
 

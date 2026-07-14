@@ -7,13 +7,14 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 1. **[architecture.md](architecture.md)** — High-level overview: what Canvas is, build system, entry points, module graph, key design patterns
 2. **[features.md](features.md)** — Feature registry, settings system, settings panel, live-apply dispatch
 3. **[sidebar.md](sidebar.md)** — Secondary sidebar: DOM construction, state machine, DrawerObserver, cross-drawer sync, side-change detection, mobile support, animation
-4. **[tabs.md](tabs.md)** — Tab management: assignment system, button management, active-tab tracking, activation handoff, context menus, button tagging
-5. **[persistence.md](persistence.md)** — Layout persistence: storage format, IPC, backend, frontend save/load, main drawer persistence, layout restore
-6. **[slash-commands.md](slash-commands.md)** — Slash command system: runtime, registry, intercept, suggest popup, dispatch, intent, DOM utilities, built-in commands, extension API, toast surface
-7. **[chat-reflow.md](chat-reflow.md)** — Chat column reflow: margin calculation, observer architecture, button tagging
-8. **[dom-layer.md](dom-layer.md)** — DOM helpers: Lumiverse element queries, React fiber access, Zustand store walk, host bridge, selectors, width clamp
-9. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
-10. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
+4. **[custom-css.md](custom-css.md)** — Theming: stable Canvas selectors (`.sidebar-ux-shell`), Lumiverse tokens, dual-mode host+Canvas recipes, pin-host pitfalls
+5. **[tabs.md](tabs.md)** — Tab management: assignment system, button management, active-tab tracking, activation handoff, context menus, button tagging
+6. **[persistence.md](persistence.md)** — Layout persistence: storage format, IPC, backend, frontend save/load, main drawer persistence, layout restore
+7. **[slash-commands.md](slash-commands.md)** — Slash command system: runtime, registry, intercept, suggest popup, dispatch, intent, DOM utilities, built-in commands, extension API, toast surface
+8. **[chat-reflow.md](chat-reflow.md)** — Chat column reflow: margin calculation, observer architecture, button tagging
+9. **[dom-layer.md](dom-layer.md)** — DOM helpers: Lumiverse element queries, React fiber access, Zustand store walk, host bridge, selectors, width clamp
+10. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
+11. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
 
 ## Quick Reference
 
@@ -54,3 +55,4 @@ User toggles setting in panel
 - **Slash commands**: register via `canvas:slash-register` CustomEvent
 - **Features**: add `CanvasFeature` to `FEATURES` array in `features/registry.ts`
 - **Settings**: add field to `CanvasSettings` interface in `types.ts`, add default in `DEFAULT_CANVAS_SETTINGS`, add toggle in `settings/panel.ts`
+- **Custom CSS / themes**: prefer Lumiverse tokens + `.sidebar-ux-shell` / pin hosts — see [custom-css.md](custom-css.md)
