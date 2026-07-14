@@ -80,12 +80,14 @@ try {
 }
 
 // --- cancelLayoutSave is callable ---
-import { cancelLayoutSave, isPersistenceEnabled } from '../persist'
+import { cancelLayoutSave, cancelLoadSavedLayout, isPersistenceEnabled } from '../persist'
 try {
   cancelLayoutSave()
   assert(true, 'cancelLayoutSave does not throw')
+  cancelLoadSavedLayout()
+  assert(true, 'cancelLoadSavedLayout does not throw')
 } catch {
-  assert(false, 'cancelLayoutSave threw')
+  assert(false, 'persistence cancellation threw')
 }
 
 // --- isPersistenceEnabled is always true (tabs always-on) ---

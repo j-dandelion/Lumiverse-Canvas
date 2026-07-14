@@ -1030,6 +1030,13 @@ export function restoreMainDrawerFromDom(
 
 export function stopMainDrawerPersistence(): void {
   if (_stopped) return
+  // Extension updates do not necessarily emit pagehide. Preserve a width
+  // change whose local debounce has not reached persistLayout yet.
+  if (_resizeDebounce) {
+    clearTimeout(_resizeDebounce)
+    _resizeDebounce = null
+    persistOpenState()
+  }
   _stopped = true
   if (_classObserver) { _classObserver.disconnect(); _classObserver = null }
   if (_tabObserver) { _tabObserver.disconnect(); _tabObserver = null }

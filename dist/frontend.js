@@ -9259,6 +9259,11 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
 function stopMainDrawerPersistence() {
   if (_stopped)
     return;
+  if (_resizeDebounce) {
+    clearTimeout(_resizeDebounce);
+    _resizeDebounce = null;
+    persistOpenState();
+  }
   _stopped = true;
   if (_classObserver) {
     _classObserver.disconnect();
@@ -10414,6 +10419,7 @@ __export(exports_persist, {
   hasDetachedTabs: () => hasDetachedTabs,
   getBackendCtx: () => getBackendCtx,
   flushPendingSaves: () => flushPendingSaves,
+  cancelLoadSavedLayout: () => cancelLoadSavedLayout,
   cancelLayoutSave: () => cancelLayoutSave,
   buildPersistedLayout: () => buildPersistedLayout,
   applyMainDrawer: () => applyMainDrawer,
@@ -10428,6 +10434,13 @@ function setBackendCtx(ctx) {
 }
 function isLoadInProgress() {
   return _loadInProgress;
+}
+function cancelLoadSavedLayout(options) {
+  if (_loadCancel)
+    _loadCancel();
+  _loadCancel = null;
+  if (!options?.preserveGuard)
+    _loadInProgress = false;
 }
 function cancelLayoutSave() {
   if (_saveLayoutTimer !== null) {
@@ -10639,6 +10652,7 @@ function loadSavedLayout() {
         clearTimeout(timeoutId);
         if (typeof unsub === "function")
           unsub();
+        _loadCancel = null;
         resolve(payload.layout);
       }
     };
@@ -10651,8 +10665,18 @@ function loadSavedLayout() {
       _loadInProgress = false;
       if (typeof unsub === "function")
         unsub();
+      _loadCancel = null;
       resolve(null);
     }, 2000);
+    _loadCancel = () => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (typeof unsub === "function")
+        unsub();
+      resolve(null);
+    };
   });
 }
 function applyMainDrawer(layout) {
@@ -10704,7 +10728,7 @@ function isOpenStatePersistenceEnabled() {
 function isWidthPersistenceEnabled() {
   return !!getSettings().persistDrawerWidth;
 }
-var CANVAS_VERSION = "1.8.0.3", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
+var CANVAS_VERSION = "1.8.0.3", _backendCtx = null, _saveLayoutTimer = null, _loadInProgress = false, _loadCancel = null, _mainDrawerOpen = false, _mainDrawerTabId = null, _lastKnownPrimaryWidth = null;
 var init_persist = __esm(() => {
   init_store();
   init_secondary();
@@ -15450,9 +15474,16 @@ function startWeaverLane() {
 }
 
 // src/setup.ts
+var _setupGeneration = 0;
 function setup(ctx) {
+  const generation = ++_setupGeneration;
+  cancelLoadSavedLayout({ preserveGuard: true });
+  cleanupAll();
   setBackendCtx(ctx);
+  let active = true;
+  const isCurrent = () => active && generation === _setupGeneration;
   beginMainDrawerRestoreGuard();
+  registerCleanup(unsuppressMainDrawer);
   const flushOnUnload = () => {
     try {
       flushPendingSaves();
@@ -15473,6 +15504,13 @@ function setup(ctx) {
     document.removeEventListener("visibilitychange", onVisibilityChange);
   });
   registerCleanup(() => {
+    try {
+      flushPendingSaves();
+    } catch (err) {
+      dwarn("flushPendingSaves on teardown failed:", err);
+    }
+  });
+  registerCleanup(() => {
     document.getElementById("canvas-ux-context-menu-styles")?.remove();
     document.getElementById("sidebar-ux-reflow")?.remove();
     document.getElementById("canvas-ux-secondary-mobile")?.remove();
@@ -15485,6 +15523,8 @@ function setup(ctx) {
     registerCleanup(teardown);
   }
   loadSavedLayout().then(async (layout) => {
+    if (!isCurrent())
+      return;
     if (layout?.version && layout.version !== CANVAS_VERSION) {
       dwarn(`Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` + `Hard-refresh (Ctrl+F5) to load the updated extension.`);
     }
@@ -15497,9 +15537,13 @@ function setup(ctx) {
       installDebugEscapeHatch();
     beginMainDrawerRestoreGuard();
     for (const feature of FEATURES) {
+      if (!isCurrent())
+        return;
       feature.init?.(ctx);
     }
     for (const feature of FEATURES) {
+      if (!isCurrent())
+        return;
       if (!feature.mount)
         continue;
       if (!getSettings()[feature.id])
@@ -15549,12 +15593,26 @@ function setup(ctx) {
       unsuppressMainDrawer();
     }
   }).catch((err) => {
+    if (!isCurrent())
+      return;
     dwarn("Canvas: loadSavedLayout failed, mounting with defaults:", err);
     try {
       unsuppressMainDrawer();
     } catch {}
   });
-  return cleanupAll;
+  let disposed = false;
+  return () => {
+    if (disposed)
+      return;
+    disposed = true;
+    active = false;
+    if (generation !== _setupGeneration)
+      return;
+    cleanupAll();
+    cancelLoadSavedLayout();
+    if (getBackendCtx() === ctx)
+      setBackendCtx(null);
+  };
 }
 export {
   setup

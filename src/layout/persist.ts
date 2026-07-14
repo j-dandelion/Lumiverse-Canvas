@@ -56,7 +56,7 @@ interface BackendCtx {
 let _backendCtx: BackendCtx | null = null
 
 export function getBackendCtx(): BackendCtx | null { return _backendCtx }
-export function setBackendCtx(ctx: BackendCtx): void { _backendCtx = ctx }
+export function setBackendCtx(ctx: BackendCtx | null): void { _backendCtx = ctx }
 
 // Debounce timer for persistLayout (tab assignments, width)
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
@@ -66,6 +66,15 @@ let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
 // real layout on disk.
 let _loadInProgress = false
 export function isLoadInProgress(): boolean { return _loadInProgress }
+
+let _loadCancel: (() => void) | null = null
+
+/** Stop an in-flight load when the extension is replaced or disabled. */
+export function cancelLoadSavedLayout(options?: { preserveGuard?: boolean }): void {
+  if (_loadCancel) _loadCancel()
+  _loadCancel = null
+  if (!options?.preserveGuard) _loadInProgress = false
+}
 // Called by sidebar/cleanup.cleanupAll on teardown.
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
@@ -422,6 +431,7 @@ export function loadSavedLayout(): Promise<any> {
         _loadInProgress = false
         clearTimeout(timeoutId)
         if (typeof unsub === 'function') unsub()
+        _loadCancel = null
         resolve(payload.layout)
       }
     }
@@ -436,8 +446,16 @@ export function loadSavedLayout(): Promise<any> {
       settled = true
       _loadInProgress = false
       if (typeof unsub === 'function') unsub()
+      _loadCancel = null
       resolve(null)
     }, 2000)
+    _loadCancel = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      if (typeof unsub === 'function') unsub()
+      resolve(null)
+    }
   })
 }
 

@@ -3,6 +3,7 @@
 var STORAGE_KEY = "layout.json";
 var STORAGE_TMP_KEY = STORAGE_KEY + ".tmp";
 var DEBUG = false;
+var saveQueue = Promise.resolve();
 async function loadLayout() {
   try {
     const data = await spindle.storage.read(STORAGE_KEY);
@@ -43,8 +44,14 @@ spindle.onFrontendMessage(async (payload) => {
     return;
   }
   if (payload.type === "SAVE_LAYOUT") {
-    await saveLayout(payload.layout);
+    saveQueue = saveQueue.then(() => saveLayout(payload.layout)).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (DEBUG)
+        spindle.log.warn(`[SidebarUX] Queued layout save failed: ${msg}`);
+    });
+    await saveQueue;
   } else if (payload.type === "LOAD_LAYOUT") {
+    await saveQueue;
     const layout = await loadLayout();
     spindle.sendToFrontend({ type: "LAYOUT_DATA", layout });
   }

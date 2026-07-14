@@ -53,6 +53,7 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 - `loadLayout()` — reads `layout.json` via `spindle.storage.read()`
 - `saveLayout(state)` — atomic write: writes to `layout.json.tmp`, then `storage.move()` to `layout.json`. Falls back to direct write on cross-device/Windows errors.
 - Uses `spindle.storage.*` (not raw `fs`) because the host resolves paths against a per-extension, per-user storage root.
+- Serializes `SAVE_LAYOUT` requests and makes `LOAD_LAYOUT` wait for queued saves. Extension updates can overlap IPC handlers; without this ordering, an older slower write can overwrite a newer layout or a reload can read stale settings.
 
 ## Frontend Persistence (`layout/persist.ts`)
 
@@ -94,6 +95,8 @@ Tab-assignment persistence (`detachedTabs`, `secondary.activeTabId`) is **always
 ### `flushPendingSaves()`
 
 Drains both layout and settings debounce timers, posts a single merged SAVE_LAYOUT. Called on `pagehide`/`beforeunload`/`visibilitychange` to prevent data loss.
+
+The same flush runs during extension teardown because the Extension tab's update/unload path does not reliably emit page lifecycle events. Teardown also cancels the in-flight layout load and prevents a late async load from mounting stale Canvas features after the replacement bundle starts.
 
 ### `applyMainDrawer(layout)`
 

@@ -16,6 +16,11 @@ const STORAGE_TMP_KEY = STORAGE_KEY + '.tmp'
 // are gated behind this flag.
 let DEBUG = false
 
+// Frontend IPC handlers are async and may overlap. Serialize writes so a
+// slower older save cannot finish after a newer save and roll layout.json
+// back. Loads wait for the queue so an update/reload observes the last save.
+let saveQueue: Promise<void> = Promise.resolve()
+
 async function loadLayout(): Promise<any> {
   try {
     const data = await spindle.storage.read(STORAGE_KEY)
@@ -59,8 +64,15 @@ spindle.onFrontendMessage(async (payload: any) => {
     return
   }
   if (payload.type === 'SAVE_LAYOUT') {
-    await saveLayout(payload.layout)
+    saveQueue = saveQueue
+      .then(() => saveLayout(payload.layout))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (DEBUG) spindle.log.warn(`[SidebarUX] Queued layout save failed: ${msg}`)
+      })
+    await saveQueue
   } else if (payload.type === 'LOAD_LAYOUT') {
+    await saveQueue
     const layout = await loadLayout()
     spindle.sendToFrontend({ type: 'LAYOUT_DATA', layout })
   }

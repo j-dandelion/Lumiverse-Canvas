@@ -32,7 +32,7 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
-import { setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave } from './layout/persist'
+import { getBackendCtx, setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave, cancelLoadSavedLayout } from './layout/persist'
 import { getTabAssignments, deleteTabAssignment } from './tabs/assignment'
 import { removeSecondaryTabButton } from './tabs/buttons'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
@@ -54,13 +54,27 @@ import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
 import { startWeaverLane } from './modals/weaver-lane'
 
+let _setupGeneration = 0
+
 export function setup(ctx: SpindleFrontendContext) {
+  const generation = ++_setupGeneration
+  // Cancel the previous instance's IPC listener before its global cancel
+  // handle can be overwritten by this instance's load.
+  cancelLoadSavedLayout({ preserveGuard: true })
+  // A host update normally tears down the old bundle first, but do not depend
+  // on that ordering. This also clears a partially mounted prior instance.
+  cleanupAll()
   setBackendCtx(ctx)
+  let active = true
+  const isCurrent = () => active && generation === _setupGeneration
 
   // Hide host main (and later main-mirror) immediately — do not wait for
   // LOAD_LAYOUT. Host defaults the open drawer to "profile"; without this
   // the default paints for the whole IPC round-trip.
   beginMainDrawerRestoreGuard()
+  // A hot extension replacement can happen before the async layout load
+  // finishes. Always lift the guard when the old bundle is torn down.
+  registerCleanup(unsuppressMainDrawer)
 
   // Force-flush any pending debounced save before the page unloads.
   // Without these, a settings change made <100ms before close is lost.
@@ -80,6 +94,12 @@ export function setup(ctx: SpindleFrontendContext) {
     window.removeEventListener('pagehide', flushOnUnload)
     window.removeEventListener('beforeunload', flushOnUnload)
     document.removeEventListener('visibilitychange', onVisibilityChange)
+  })
+
+  // Extension updates call the old setup teardown without a page unload. Flush
+  // here as well; page lifecycle events are not guaranteed during hot reload.
+  registerCleanup(() => {
+    try { flushPendingSaves() } catch (err) { dwarn('flushPendingSaves on teardown failed:', err) }
   })
 
   // Clean up injected <style> elements on teardown. Without these,
@@ -115,6 +135,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // settings from the same blob so every feature mount downstream sees the
   // correct gate.
   loadSavedLayout().then(async (layout) => {
+    if (!isCurrent()) return
     // Version check: if the layout was saved by a different Canvas version,
     // the user is running a stale frontend bundle. Log a warning so they
     // know to hard-refresh. This is a visibility mechanism, not auto-reload.
@@ -151,6 +172,7 @@ export function setup(ctx: SpindleFrontendContext) {
     // can inject CSS (e.g. shadow-disable) that must be present on the
     // first paint regardless of the feature's mount gate.
     for (const feature of FEATURES) {
+      if (!isCurrent()) return
       feature.init?.(ctx)
     }
 
@@ -161,6 +183,7 @@ export function setup(ctx: SpindleFrontendContext) {
     // the master toggle, so a non-master-gated sub-feature is a one-liner
     // addition to the registry.
     for (const feature of FEATURES) {
+      if (!isCurrent()) return
       if (!feature.mount) continue
       if (!getSettings()[feature.id]) continue
       const teardown = feature.mount(ctx, layout)
@@ -260,6 +283,7 @@ export function setup(ctx: SpindleFrontendContext) {
       unsuppressMainDrawer()
     }
   }).catch((err) => {
+    if (!isCurrent()) return
     dwarn('Canvas: loadSavedLayout failed, mounting with defaults:', err)
     // If the restore guard was never lifted (or load failed before
     // beginMainDrawerRestoreGuard), ensure the drawer is visible.
@@ -274,5 +298,18 @@ export function setup(ctx: SpindleFrontendContext) {
   // (a duplicate LAYOUT_DATA send) if the backend ever started sending one.
 
   // Return teardown — called when extension is disabled
-  return cleanupAll
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    active = false
+    // A newer setup owns the shared cleanup registry and backend context.
+    if (generation !== _setupGeneration) return
+    cleanupAll()
+    // Keep the load guard active while cleanup tears down observers. This
+    // prevents stopMainDrawerPersistence from saving host defaults during
+    // hydration; cancellation is the final teardown step.
+    cancelLoadSavedLayout()
+    if (getBackendCtx() === ctx) setBackendCtx(null)
+  }
 }
