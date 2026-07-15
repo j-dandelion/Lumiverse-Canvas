@@ -55,19 +55,42 @@ export const MAIN_MIRROR_LIST_MAIN_CLASS = 'sidebar-ux-tab-list-main'
  */
 export const MAIN_MIRROR_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
-let _enabled = false
-let _sidebarObserver: MutationObserver | null = null
-let _reconcileRaf: number | null = null
-/** Observed host sidebar element (re-attach if Lumiverse replaces it). */
-let _observedSidebar: HTMLElement | null = null
+/**
+ * Transactional state container.
+ *
+ * All mutable state lives in a single object so that mutations can be
+ * applied atomically via `commitState()`. This prevents partial updates
+ * from leaving the mirror in an inconsistent state when a step fails
+ * (e.g. host button click throws during teardown).
+ */
+interface MirrorState {
+  enabled: boolean
+  activeKey: string | null
+  sidebar: HTMLElement | null
+  observer: MutationObserver | null
+  reconcileRaf: number | null
+}
+
+const initialState: MirrorState = {
+  enabled: false,
+  activeKey: null,
+  sidebar: null,
+  observer: null,
+  reconcileRaf: null,
+}
+
+let _state: MirrorState = { ...initialState }
 
 /**
- * Last mirror tab the user activated while Canvas owns main UX.
- * Keyed like hostButtonKey (`id__` / `title__`). Survives host
- * tabBtnActive loss (headless host / repark); not cleared on drawer
- * close (secondary `_activeSecondaryTabId` parity for toggle-close).
+ * Apply a partial state update atomically.
+ *
+ * The updater receives the current state and returns the next state.
+ * Only the fields present in the returned object are written.
  */
-let _activeMainMirrorKey: string | null = null
+function commitState(updater: (prev: MirrorState) => Partial<MirrorState>): void {
+  const patch = updater(_state)
+  Object.assign(_state, patch)
+}
 
 /** Mirror button → host button. WeakMap so host GC is free. */
 const _mirrorToHost = new WeakMap<HTMLElement, HTMLElement>()
@@ -94,12 +117,12 @@ export function applyMainTabListPin(
   // Mount Canvas main shell + hide host (soft apply unless force).
   applyMainMirrorDrawer(true, { force: !!opts?.force })
 
-  if (_enabled && !opts?.force) {
+  if (_state.enabled && !opts?.force) {
     scheduleReconcile()
     return
   }
 
-  _enabled = true
+  commitState(() => ({ enabled: true }))
   ensureObservers()
   reconcileMainMirror()
 }
@@ -121,7 +144,7 @@ export function reconcileMainTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
-  _enabled = true
+  commitState(() => ({ enabled: true }))
   ensureObservers()
   reconcileMainMirror()
   // Side-change remaps main/secondary strip gutters to left/right.
@@ -130,23 +153,20 @@ export function reconcileMainTabListPin(): void {
 
 /** True when main pin / mirror mode is enabled (setting applied, not mobile). */
 export function isMainTabListPinActive(): boolean {
-  return _enabled && isMainMirrorActive()
+  return _state.enabled && isMainMirrorActive()
 }
 
 /** Test-only: reset module state without requiring a full document. */
 export function __resetMainTabPinForTest(): void {
   stopObservers()
-  _enabled = false
-  _reconcileRaf = null
-  _observedSidebar = null
-  _activeMainMirrorKey = null
+  _state = { ...initialState }
   __resetMainMirrorForTest()
   destroyMainPinHost()
 }
 
 /** Test / restore: last Canvas-owned active mirror key (or null). */
 export function getActiveMainMirrorKey(): string | null {
-  return _activeMainMirrorKey
+  return _state.activeKey
 }
 
 /**
@@ -156,14 +176,14 @@ export function getActiveMainMirrorKey(): string | null {
  * closed strip has no Canvas exclusive selection).
  */
 export function isMainTabPinEnabled(): boolean {
-  return _enabled
+  return _state.enabled
 }
 
 /**
  * User-visible primary active tab id when taskbar main-mirror owns chrome.
  *
  * Host `tabBtnActive` often lags or stays on a parked tab (e.g. Profile)
- * while Canvas `_activeMainMirrorKey` is exclusive for the strip/header.
+ * while Canvas `_state.activeKey` is exclusive for the strip/header.
  * Quiet DnD / handoff must prefer this over host DOM or panel content jumps
  * to the top-most host tab on every primary→secondary drop.
  *
@@ -174,8 +194,8 @@ export function isMainTabPinEnabled(): boolean {
  */
 export function getMainMirrorActiveTabId(): string | null {
   // Pin enabled is enough — shell may be mid-mount; exclusive key is still truth.
-  if (!_enabled) return null
-  const key = _activeMainMirrorKey
+  if (!_state.enabled) return null
+  const key = _state.activeKey
   if (!key) return null
   if (key.startsWith('id__')) return key.slice(4) || null
   if (key.startsWith('title__')) return key.slice(7) || null
@@ -184,12 +204,12 @@ export function getMainMirrorActiveTabId(): string | null {
 
 /** Test seam: set Canvas-owned mirror active key without host click. */
 export function __setActiveMainMirrorKeyForTest(key: string | null): void {
-  _activeMainMirrorKey = key
+  _state.activeKey = key
 }
 
 /** Test seam: mark main-tab pin enabled so getMainMirrorActiveTabId reads the key. */
 export function __setMainTabPinEnabledForTest(on: boolean): void {
-  _enabled = on
+  _state.enabled = on
 }
 
 /**
@@ -208,14 +228,16 @@ export function activateMainMirrorFromRestore(
     hostBtn?.getAttribute('aria-label') ||
     undefined
   if (hostBtn && hostBtn.isConnected) {
-    _activeMainMirrorKey = hostButtonKey(hostBtn)
+    const key = hostButtonKey(hostBtn)
     try {
       hostBtn.click()
+      commitState(() => ({ activeKey: key }))
     } catch {
       /* host may throw during teardown */
+      commitState(() => ({ activeKey: key }))
     }
   } else if (resolvedTitle) {
-    _activeMainMirrorKey = `title__${resolvedTitle}`
+    commitState(() => ({ activeKey: `title__${resolvedTitle}` }))
   }
   onMainMirrorTabActivated(resolvedTitle)
 }
@@ -236,7 +258,7 @@ export function adoptMainMirrorHostActivation(
   // Stamp exclusive key whenever pin is enabled — quiet DnD / handoff need
   // the key even if the shell is mid-mount or briefly inactive. Skip open /
   // park chrome until the mirror shell is live.
-  if (!_enabled) return
+  if (!_state.enabled) return
 
   const resolvedTitle =
     title ||
@@ -245,14 +267,14 @@ export function adoptMainMirrorHostActivation(
     undefined
 
   if (hostBtn && hostBtn.isConnected) {
-    _activeMainMirrorKey = hostButtonKey(hostBtn)
+    commitState(() => ({ activeKey: hostButtonKey(hostBtn) }))
   } else if (resolvedTitle) {
-    _activeMainMirrorKey = `title__${resolvedTitle}`
+    commitState(() => ({ activeKey: `title__${resolvedTitle}` }))
   }
 
   if (!isMainMirrorActive()) {
     dlog('[main-mirror] adopt host activation (key only; shell inactive)', {
-      key: _activeMainMirrorKey,
+      key: _state.activeKey,
       title: resolvedTitle,
     })
     return
@@ -267,30 +289,31 @@ export function adoptMainMirrorHostActivation(
 
   scheduleReconcile()
   dlog('[main-mirror] adopt host activation', {
-    key: _activeMainMirrorKey,
+    key: _state.activeKey,
     title: resolvedTitle,
     open: shouldOpen,
   })
 }
 
 function teardownMainPin(): void {
-  _enabled = false
-  _activeMainMirrorKey = null
+  commitState(() => ({ enabled: false, activeKey: null }))
   stopObservers()
   applyMainMirrorDrawer(false, { force: true })
   destroyMainPinHost()
 }
 
 function scheduleReconcile(): void {
-  if (_reconcileRaf !== null) return
-  _reconcileRaf = requestAnimationFrame(() => {
-    _reconcileRaf = null
-    if (_enabled) reconcileMainMirror()
-  })
+  if (_state.reconcileRaf !== null) return
+  commitState(() => ({
+    reconcileRaf: requestAnimationFrame(() => {
+      commitState(() => ({ reconcileRaf: null }))
+      if (_state.enabled) reconcileMainMirror()
+    }),
+  }))
 }
 
 function reconcileMainMirror(): void {
-  if (!_enabled) return
+  if (!_state.enabled) return
 
   const side = getMainDrawerSide()
   // Ensure pin host exists (shell mount also creates it).
@@ -320,7 +343,7 @@ function reconcileMainMirror(): void {
     return
   }
 
-  if (sidebar !== _observedSidebar) {
+  if (sidebar !== _state.sidebar) {
     attachSidebarObserver(sidebar)
   }
 
@@ -341,12 +364,13 @@ function reconcileMainMirror(): void {
   // Mid quiet primary→secondary: host button is display:none before handoff
   // finishes. Do not clear the key to null in that window — handoff still
   // needs getMainMirrorActiveTabId() === moved tab for wasActive / neighbor.
-  if (_activeMainMirrorKey == null || !wantedKeys.has(_activeMainMirrorKey)) {
+  if (_state.activeKey == null || !wantedKeys.has(_state.activeKey)) {
     const hostActiveBtn =
       hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
-    const prevKey = _activeMainMirrorKey
+    const prevKey = _state.activeKey
     if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
-      _activeMainMirrorKey = hostButtonKey(hostActiveBtn)
+      const newKey = hostButtonKey(hostActiveBtn)
+      commitState(() => ({ activeKey: newKey }))
       const t =
         hostActiveBtn.getAttribute('title') ||
         hostActiveBtn.getAttribute('aria-label') ||
@@ -357,13 +381,13 @@ function reconcileMainMirror(): void {
       if (hiddenHostForKey && hiddenHostForKey.style.display === 'none') {
         // Keep key for handoff; mirror clone already dropped via wantedKeys.
       } else {
-        _activeMainMirrorKey = null
+        commitState(() => ({ activeKey: null }))
       }
     }
-    if (prevKey !== _activeMainMirrorKey) {
+    if (prevKey !== _state.activeKey) {
       dlog('[main-mirror] active key healed/seeded', {
         prevKey,
-        nextKey: _activeMainMirrorKey,
+        nextKey: _state.activeKey,
       })
     }
   }
@@ -393,9 +417,9 @@ function reconcileMainMirror(): void {
   // Re-stamp header title from active key. mountMainMirror always creates
   // the shell with title 'Drawer'; seed/heal above covers first-enable and
   // stale keys; this path re-stamps when the key survived a remount.
-  if (_activeMainMirrorKey != null) {
+  if (_state.activeKey != null) {
     const activeMirror = list.querySelector(
-      `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_activeMainMirrorKey)}"]`,
+      `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_state.activeKey)}"]`,
     ) as HTMLElement | null
     const title =
       activeMirror?.getAttribute('title') ||
@@ -686,10 +710,10 @@ function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
   const key = hostButtonKey(hostBtn)
   const hostActive = hostHasTabBtnActive(hostBtn)
   const canvasActive =
-    _activeMainMirrorKey != null && key === _activeMainMirrorKey
+    _state.activeKey != null && key === _state.activeKey
   const showActive =
     isCanvasMainOpen() &&
-    (_activeMainMirrorKey != null ? canvasActive : hostActive)
+    (_state.activeKey != null ? canvasActive : hostActive)
   const wasActive = mirror.classList.contains('sidebar-ux-tab-active')
   mirror.classList.toggle('sidebar-ux-tab-active', showActive)
   if (showActive !== wasActive) {
@@ -698,7 +722,7 @@ function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
       showActive,
       hostActive,
       canvasActive,
-      canvasKey: _activeMainMirrorKey,
+      canvasKey: _state.activeKey,
       open: isCanvasMainOpen(),
     })
   }
@@ -798,8 +822,8 @@ function onMirrorClick(ev: Event): void {
   // while Canvas key points at another tab; OR would close on Profile click).
   // Fall back to host/mirror only when no Canvas key is set yet.
   const wasActive =
-    _activeMainMirrorKey != null
-      ? key === _activeMainMirrorKey
+    _state.activeKey != null
+      ? key === _state.activeKey
       : mirror.classList.contains('sidebar-ux-tab-active') ||
         hostHasTabBtnActive(hostBtn)
   if (isCanvasMainOpen() && wasActive) {
@@ -818,24 +842,27 @@ function onMirrorClick(ev: Event): void {
     reconcileMainMirror()
     const again = _mirrorToHost.get(mirror)
     if (again && again.isConnected) {
-      _activeMainMirrorKey = hostButtonKey(again)
+      const againKey = hostButtonKey(again)
       try {
         again.click()
+        commitState(() => ({ activeKey: againKey }))
       } catch {
         /* host may throw during teardown */
+        commitState(() => ({ activeKey: againKey }))
       }
     } else {
-      _activeMainMirrorKey = key
+      commitState(() => ({ activeKey: key }))
     }
     onMainMirrorTabActivated(title)
     return
   }
   try {
     hostBtn.click()
+    commitState(() => ({ activeKey: key }))
   } catch {
     /* ignore */
+    commitState(() => ({ activeKey: key }))
   }
-  _activeMainMirrorKey = key
   onMainMirrorTabActivated(title)
 }
 
@@ -902,33 +929,33 @@ function ensureObservers(): void {
 }
 
 function attachSidebarObserver(sidebar: HTMLElement): void {
-  if (_sidebarObserver && _observedSidebar === sidebar) return
-  if (_sidebarObserver) {
-    _sidebarObserver.disconnect()
-    _sidebarObserver = null
+  if (_state.observer && _state.sidebar === sidebar) return
+  if (_state.observer) {
+    _state.observer.disconnect()
+    commitState(() => ({ observer: null }))
   }
-  _observedSidebar = sidebar
+  commitState(() => ({ sidebar }))
   if (typeof MutationObserver === 'undefined') return
   // Coalesce heavily — host React mutates often; never do work sync in
   // the observer callback beyond scheduling one rAF reconcile.
-  _sidebarObserver = new MutationObserver(() => scheduleReconcile())
-  _sidebarObserver.observe(sidebar, {
+  const observer = new MutationObserver(() => scheduleReconcile())
+  observer.observe(sidebar, {
     childList: true,
     subtree: true,
     attributes: true,
     // Do not watch style — host may thrash style during layout.
     attributeFilter: ['class', 'data-tab-id', 'title', 'aria-label'],
   })
+  commitState(() => ({ observer }))
 }
 
 function stopObservers(): void {
-  if (_sidebarObserver) {
-    _sidebarObserver.disconnect()
-    _sidebarObserver = null
+  if (_state.observer) {
+    _state.observer.disconnect()
+    commitState(() => ({ observer: null, sidebar: null }))
   }
-  _observedSidebar = null
-  if (_reconcileRaf !== null && typeof cancelAnimationFrame === 'function') {
-    cancelAnimationFrame(_reconcileRaf)
-    _reconcileRaf = null
+  if (_state.reconcileRaf !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(_state.reconcileRaf)
+    commitState(() => ({ reconcileRaf: null }))
   }
 }

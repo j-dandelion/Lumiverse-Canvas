@@ -12,8 +12,8 @@
 | 4 | configure-commit.ts — Imperative Pipeline → Command Queue | ✅ Complete |
 | 5 | configure-modal.tsx — useEffect Orchestration → State Machine | ✅ Complete |
 | 6 | drawer-sync.ts — Side Settle Polling → One-shot MutationObserver Predicate | ✅ Complete |
-| 7 | main-tab-pin.ts — Pin/Unpin Cascade → Transactional State | Pending |
-| 8 | shared.ts — Utility Functions → Domain-Specific Modules | Pending |
+| 7 | main-tab-pin.ts — Pin/Unpin Cascade → Transactional State | ✅ Complete |
+| 8 | shared.ts — Utility Functions → Domain-Specific Modules | ✅ Complete (N/A — no shared.ts exists) |
 
 ## Methodology
 
