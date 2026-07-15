@@ -4076,6 +4076,182 @@ var init_configure_model = __esm(() => {
   _builtinIdSet = new Set(BUILTIN_TAB_IDS);
 });
 
+// src/layout/tab-id-heal.ts
+function stripTabIdSuffix(id) {
+  return id.replace(/:\d+$/, "");
+}
+function pairStoredToLiveIds(storedIds, liveIds) {
+  const result = new Map;
+  const available = new Set(liveIds);
+  for (const stored of storedIds) {
+    if (available.has(stored)) {
+      result.set(stored, stored);
+      available.delete(stored);
+    }
+  }
+  const leftoverStored = storedIds.filter((s3) => !result.has(s3));
+  const byPrefix = new Map;
+  for (const stored of leftoverStored) {
+    const prefix = stripTabIdSuffix(stored);
+    let g2 = byPrefix.get(prefix);
+    if (!g2) {
+      g2 = { stored: [], live: [] };
+      byPrefix.set(prefix, g2);
+    }
+    g2.stored.push(stored);
+  }
+  for (const live of available) {
+    const prefix = stripTabIdSuffix(live);
+    const g2 = byPrefix.get(prefix);
+    if (g2)
+      g2.live.push(live);
+  }
+  for (const [, g2] of byPrefix) {
+    g2.stored.sort();
+    g2.live.sort();
+    const n2 = Math.min(g2.stored.length, g2.live.length);
+    for (let i3 = 0;i3 < n2; i3++) {
+      result.set(g2.stored[i3], g2.live[i3]);
+      available.delete(g2.live[i3]);
+    }
+    for (let i3 = n2;i3 < g2.stored.length; i3++) {
+      result.set(g2.stored[i3], null);
+    }
+  }
+  for (const stored of storedIds) {
+    if (!result.has(stored))
+      result.set(stored, null);
+  }
+  return result;
+}
+function isTabIdHidden(tabId, hiddenIds, liveIds) {
+  if (!tabId)
+    return false;
+  const stored = hiddenIds instanceof Set ? [...hiddenIds] : [...hiddenIds];
+  if (stored.includes(tabId))
+    return true;
+  if (!liveIds || liveIds.length === 0)
+    return false;
+  const pairing = pairStoredToLiveIds(stored, [...liveIds]);
+  for (const live of pairing.values()) {
+    if (live === tabId)
+      return true;
+  }
+  return false;
+}
+function healHiddenTabIds(storedHidden, liveIds, opts) {
+  if (!storedHidden.length)
+    return [];
+  const keepUnmatched = opts?.keepUnmatched === true;
+  const pairing = pairStoredToLiveIds([...storedHidden], [...liveIds]);
+  const out = [];
+  const seen = new Set;
+  for (const stored of storedHidden) {
+    const live = pairing.get(stored) ?? null;
+    if (live) {
+      if (seen.has(live))
+        continue;
+      seen.add(live);
+      out.push(live);
+      continue;
+    }
+    if (keepUnmatched && !seen.has(stored)) {
+      seen.add(stored);
+      out.push(stored);
+    }
+  }
+  return out;
+}
+
+// src/tabs/hidden-tabs.ts
+var exports_hidden_tabs = {};
+__export(exports_hidden_tabs, {
+  syncHiddenTabsFromHost: () => syncHiddenTabsFromHost,
+  scheduleSyncHiddenTabsFromHost: () => scheduleSyncHiddenTabsFromHost,
+  resolveHiddenTabIdsForDraft: () => resolveHiddenTabIdsForDraft,
+  isTabIdHidden: () => isTabIdHidden,
+  healHiddenTabIds: () => healHiddenTabIds,
+  collectLiveTabIdsForHiddenHeal: () => collectLiveTabIdsForHiddenHeal
+});
+function collectLiveTabIdsForHiddenHeal() {
+  const ids = new Set;
+  for (const id of BUILTIN_TAB_IDS)
+    ids.add(id);
+  for (const t3 of getDrawerTabs()) {
+    if (t3?.id)
+      ids.add(t3.id);
+  }
+  try {
+    const list = getSecondaryTabList();
+    if (list) {
+      for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+        const tid = btn.getAttribute("data-tab-id");
+        if (tid)
+          ids.add(tid);
+      }
+    }
+  } catch {}
+  if (typeof document !== "undefined") {
+    for (const btn of Array.from(document.querySelectorAll('.sidebar button[data-tab-id], [class*="tabList"] button[data-tab-id]'))) {
+      const tid = btn.getAttribute("data-tab-id");
+      if (tid)
+        ids.add(tid);
+    }
+  }
+  return [...ids];
+}
+function scheduleSyncHiddenTabsFromHost(opts) {
+  const delayMs = opts?.delayMs ?? 50;
+  if (_debouncedSyncTimer !== null)
+    clearTimeout(_debouncedSyncTimer);
+  _debouncedSyncTimer = setTimeout(() => {
+    _debouncedSyncTimer = null;
+    try {
+      syncHiddenTabsFromHost({ writeBack: opts?.writeBack !== false });
+    } catch {}
+  }, delayMs);
+}
+function syncHiddenTabsFromHost(opts) {
+  const writeBack = opts?.writeBack !== false;
+  const host = getHostDrawerSettings();
+  const stored = Array.isArray(host?.hiddenTabIds) ? host.hiddenTabIds.filter((id) => typeof id === "string" && id.length > 0) : [];
+  const liveIds = collectLiveTabIdsForHiddenHeal();
+  const forHost = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
+  const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
+  let wroteBack = false;
+  if (writeBack && stored.length > 0) {
+    const same = forHost.length === stored.length && forHost.every((id, i3) => id === stored[i3]);
+    if (!same) {
+      wroteBack = patchHostDrawerSettings({ hiddenTabIds: forHost });
+      if (wroteBack) {
+        dlog("[hidden-tabs] healed hiddenTabIds write-back", {
+          from: stored,
+          to: forHost
+        });
+      }
+    }
+  }
+  const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
+  applyHiddenTabIdsToSecondary(applySet);
+  applyHiddenTabIdsToMirror(applySet);
+  return { hiddenIds: forHost, wroteBack };
+}
+function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
+  const stored = Array.isArray(storedHidden) ? storedHidden.filter((id) => typeof id === "string" && id.length > 0) : [];
+  if (!stored.length)
+    return [];
+  return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
+}
+var _debouncedSyncTimer = null;
+var init_hidden_tabs = __esm(() => {
+  init_host_settings();
+  init_store();
+  init_configure_catalog();
+  init_buttons();
+  init_secondary();
+  init_log();
+});
+
 // src/tabs/activation-handoff.ts
 async function captureSourceList(side, h3) {
   if (side === "primary") {
@@ -6819,10 +6995,11 @@ function buildLiveDraftAndBase() {
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const healedHidden = resolveHiddenTabIdsForDraft(hostSettings?.hiddenTabIds, catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: currentAssignments
   });
@@ -6954,6 +7131,7 @@ var init_configure_modal = __esm(() => {
   init_hooks_module();
   init_configure_model();
   init_configure_catalog();
+  init_hidden_tabs();
   init_host_settings();
   init_store();
   init_assignment();
@@ -7345,6 +7523,19 @@ function addSecondaryTabButton(tab) {
     e3.stopPropagation();
     showAssignmentMenu(e3.clientX, e3.clientY, tab.id, tab.title, btn);
   });
+  const hostHidden = getHostDrawerSettings()?.hiddenTabIds;
+  if (hostHidden) {
+    const liveOnStrip = [];
+    for (const el of Array.from(tabList.querySelectorAll("button[data-tab-id]"))) {
+      const tid = el.getAttribute("data-tab-id");
+      if (tid)
+        liveOnStrip.push(tid);
+    }
+    liveOnStrip.push(tab.id);
+    if (isTabIdHidden(tab.id, hostHidden, liveOnStrip)) {
+      btn.style.display = "none";
+    }
+  }
   if (insertBefore && insertBefore.parentNode === tabList) {
     tabList.insertBefore(btn, insertBefore);
   } else {
@@ -7397,9 +7588,11 @@ function applyHiddenTabIdsToSecondary(hiddenIds) {
   const tabList = getSecondaryTabList();
   if (!tabList)
     return;
-  for (const btn of Array.from(tabList.querySelectorAll("button[data-tab-id]"))) {
+  const buttons = Array.from(tabList.querySelectorAll("button[data-tab-id]"));
+  const liveIds = buttons.map((b2) => b2.getAttribute("data-tab-id") || "").filter(Boolean);
+  for (const btn of buttons) {
     const tid = btn.getAttribute("data-tab-id") || "";
-    if (hiddenIds.has(tid)) {
+    if (isTabIdHidden(tid, hiddenIds, liveIds)) {
       btn.style.display = "none";
     } else {
       btn.style.display = "";
@@ -7411,9 +7604,11 @@ function applyHiddenTabIdsToMirror(hiddenIds) {
     const list = m3.getMainMirrorTabList();
     if (!list)
       return;
-    for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+    const buttons = Array.from(list.querySelectorAll("button[data-tab-id]"));
+    const liveIds = buttons.map((b2) => b2.getAttribute("data-tab-id") || "").filter(Boolean);
+    for (const btn of buttons) {
       const tid = btn.getAttribute("data-tab-id") || "";
-      if (hiddenIds.has(tid)) {
+      if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = "none";
       } else {
         btn.style.display = "";
@@ -7488,6 +7683,7 @@ function showSecondaryTab(tabId) {
 }
 var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null;
 var init_buttons = __esm(() => {
+  init_host_settings();
   init_store();
   init_log();
   init_drawer_sync();
@@ -10418,55 +10614,6 @@ var init_parse_layout = __esm(() => {
   init_log();
 });
 
-// src/layout/tab-id-heal.ts
-function stripTabIdSuffix(id) {
-  return id.replace(/:\d+$/, "");
-}
-function pairStoredToLiveIds(storedIds, liveIds) {
-  const result = new Map;
-  const available = new Set(liveIds);
-  for (const stored of storedIds) {
-    if (available.has(stored)) {
-      result.set(stored, stored);
-      available.delete(stored);
-    }
-  }
-  const leftoverStored = storedIds.filter((s3) => !result.has(s3));
-  const byPrefix = new Map;
-  for (const stored of leftoverStored) {
-    const prefix = stripTabIdSuffix(stored);
-    let g2 = byPrefix.get(prefix);
-    if (!g2) {
-      g2 = { stored: [], live: [] };
-      byPrefix.set(prefix, g2);
-    }
-    g2.stored.push(stored);
-  }
-  for (const live of available) {
-    const prefix = stripTabIdSuffix(live);
-    const g2 = byPrefix.get(prefix);
-    if (g2)
-      g2.live.push(live);
-  }
-  for (const [, g2] of byPrefix) {
-    g2.stored.sort();
-    g2.live.sort();
-    const n2 = Math.min(g2.stored.length, g2.live.length);
-    for (let i3 = 0;i3 < n2; i3++) {
-      result.set(g2.stored[i3], g2.live[i3]);
-      available.delete(g2.live[i3]);
-    }
-    for (let i3 = n2;i3 < g2.stored.length; i3++) {
-      result.set(g2.stored[i3], null);
-    }
-  }
-  for (const stored of storedIds) {
-    if (!result.has(stored))
-      result.set(stored, null);
-  }
-  return result;
-}
-
 // src/layout/apply.ts
 function isLayoutRestoreActive() {
   return _layoutRestoreActive;
@@ -10612,6 +10759,11 @@ async function applyLayout(layout) {
           clearSecondaryTabButtonActive();
         }
         updateDrawerTabVisibility();
+        try {
+          syncHiddenTabsFromHost({ writeBack: true });
+        } catch (err) {
+          dwarn("applyLayout: syncHiddenTabsFromHost failed:", err);
+        }
         if (restoreOpen) {
           const primaryTabId = typeof layout.primary?.tabId === "string" ? layout.primary.tabId : null;
           if (primaryTabId && layout.primary?.open !== false) {
@@ -10814,6 +10966,7 @@ var init_apply = __esm(() => {
   init_assignment();
   init_secondary_drawer();
   init_buttons();
+  init_hidden_tabs();
   init_log();
   init_mobile_exclusion();
   init_state();
@@ -11508,17 +11661,18 @@ function buildDraftAndBase() {
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const healedHidden = resolveHiddenTabIdsForDraft(hostSettings?.hiddenTabIds, catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: currentAssignments
   });
   const draft = alignDraftToLiveVisibleOrder(draftFromHost, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
   const base = {
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: new Map(currentAssignments)
   };
@@ -12267,6 +12421,7 @@ var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();
   init_configure_catalog();
+  init_hidden_tabs();
   init_host_settings();
   init_assignment();
   init_store();
@@ -15982,6 +16137,9 @@ function setup(ctx) {
     registerCleanup(startMobileExclusion());
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons();
+      Promise.resolve().then(() => (init_hidden_tabs(), exports_hidden_tabs)).then((m3) => {
+        m3.scheduleSyncHiddenTabsFromHost({ writeBack: true });
+      }).catch(() => {});
     });
     drawerObserver.onTabUnregistered((tabId) => {
       if (getTabAssignments().has(tabId)) {
@@ -16009,6 +16167,12 @@ function setup(ctx) {
     if (layout && restoreAny && s3.secondSidebarEnabled) {
       applyLayout(layout).catch((err) => {
         dwarn("Canvas: applyLayout failed:", err);
+      });
+    } else {
+      Promise.resolve().then(() => (init_hidden_tabs(), exports_hidden_tabs)).then((m3) => {
+        m3.syncHiddenTabsFromHost({ writeBack: true });
+      }).catch((err) => {
+        dwarn("Canvas: syncHiddenTabsFromHost failed:", err);
       });
     }
     if (restoreOpen || restoreWidth) {

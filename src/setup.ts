@@ -206,6 +206,13 @@ export function setup(ctx: SpindleFrontendContext) {
     // Wire DrawerObserver to handle tab registration/unregistration
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons()
+      // Late extension tabs re-register with a new :N suffix. Heal host
+      // hiddenTabIds and re-apply to secondary/mirror so Configure hide
+      // still sticks after hard refresh. Debounced: many tabs register
+      // in a burst at boot.
+      void import('./tabs/hidden-tabs').then((m) => {
+        m.scheduleSyncHiddenTabsFromHost({ writeBack: true })
+      }).catch(() => { /* ignore */ })
     })
     drawerObserver.onTabUnregistered((tabId) => {
       if (getTabAssignments().has(tabId)) {
@@ -273,6 +280,14 @@ export function setup(ctx: SpindleFrontendContext) {
     if (layout && restoreAny && s.secondSidebarEnabled) {
       void applyLayout(layout).catch((err) => {
         dwarn('Canvas: applyLayout failed:', err)
+      })
+    } else {
+      // Second drawer off (or no layout): still heal + re-apply host hide so
+      // primary/mirror honor Configure hiddenTabIds after hard refresh.
+      void import('./tabs/hidden-tabs').then((m) => {
+        m.syncHiddenTabsFromHost({ writeBack: true })
+      }).catch((err) => {
+        dwarn('Canvas: syncHiddenTabsFromHost failed:', err)
       })
     }
 

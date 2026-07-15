@@ -89,3 +89,70 @@ export function pickSingleHealCandidate(
   if (candidates.length === 1) return candidates[0]
   return null
 }
+
+/**
+ * True when `tabId` is covered by the hidden set given the current live pool.
+ *
+ * Uses bipartite suffix pairing (not raw prefix equality) so hiding one of
+ * two multi-instance siblings does not hide both. When `liveIds` is omitted,
+ * only exact membership is checked (safe default for call sites without a
+ * live pool).
+ */
+export function isTabIdHidden(
+  tabId: string,
+  hiddenIds: ReadonlySet<string> | readonly string[],
+  liveIds?: readonly string[],
+): boolean {
+  if (!tabId) return false
+  const stored = hiddenIds instanceof Set
+    ? [...hiddenIds]
+    : [...hiddenIds]
+  if (stored.includes(tabId)) return true
+  if (!liveIds || liveIds.length === 0) return false
+  const pairing = pairStoredToLiveIds(stored, [...liveIds])
+  for (const live of pairing.values()) {
+    if (live === tabId) return true
+  }
+  return false
+}
+
+export type HealHiddenOptions = {
+  /**
+   * When true (write-back / host merge), keep stored ids that have no live
+   * counterpart yet — extensions often register after first sync. Dropping
+   * them would permanently unhide those tabs.
+   * When false (DOM apply against a known strip), drop unmatched so we only
+   * hide buttons that actually exist.
+   */
+  keepUnmatched?: boolean
+}
+
+/**
+ * Map stored hidden ids onto currently live tab ids (exact first, then
+ * suffix-drift bipartite pairing).
+ */
+export function healHiddenTabIds(
+  storedHidden: readonly string[],
+  liveIds: readonly string[],
+  opts?: HealHiddenOptions,
+): string[] {
+  if (!storedHidden.length) return []
+  const keepUnmatched = opts?.keepUnmatched === true
+  const pairing = pairStoredToLiveIds([...storedHidden], [...liveIds])
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const stored of storedHidden) {
+    const live = pairing.get(stored) ?? null
+    if (live) {
+      if (seen.has(live)) continue
+      seen.add(live)
+      out.push(live)
+      continue
+    }
+    if (keepUnmatched && !seen.has(stored)) {
+      seen.add(stored)
+      out.push(stored)
+    }
+  }
+  return out
+}

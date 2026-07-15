@@ -25,6 +25,7 @@ import {
   hideMainTabButton, showSecondaryTab, findMainTabButton, updateDrawerTabVisibility,
   clearSecondaryTabButtonActive,
 } from '../tabs/buttons'
+import { syncHiddenTabsFromHost } from '../tabs/hidden-tabs'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport, enforceExclusionOnOpen } from '../sidebar/mobile-exclusion'
 import { getSettings } from '../settings/state'
@@ -363,6 +364,14 @@ export async function applyLayout(layout: any): Promise<void> {
         }
         // Refresh strip/gutter after assigns and after empty-layout unassigns.
         updateDrawerTabVisibility()
+        // Re-apply host Configure hide (secondary/mirror are Canvas-owned and
+        // were not hidden on recreate). Heal extension :N suffix drift and
+        // write back so host primary filter matches the new session ids.
+        try {
+          syncHiddenTabsFromHost({ writeBack: true })
+        } catch (err) {
+          dwarn('applyLayout: syncHiddenTabsFromHost failed:', err)
+        }
         // Re-assert primary tab after secondary assigns (open facet owns primary.tabId).
         // Moving tabs off main can leave the host on "profile" even if applyMainDrawer already ran.
         // Guards release below regardless of this import — never block resolve on it.

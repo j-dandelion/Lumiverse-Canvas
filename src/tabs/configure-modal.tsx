@@ -29,6 +29,7 @@ import {
   type DrawerSide,
 } from './configure-model'
 import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
 import { getTabAssignments } from './assignment'
@@ -1394,10 +1395,16 @@ function buildLiveDraftAndBase(): {
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
   // what the user sees in the drawers.
+  // Heal extension :N drift so hide toggles match live catalog after refresh.
+  const healedHidden = resolveHiddenTabIdsForDraft(
+    hostSettings?.hiddenTabIds,
+    catalog.map((t) => t.id),
+  )
+
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: currentAssignments,
   })

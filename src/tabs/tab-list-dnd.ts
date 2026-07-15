@@ -49,6 +49,7 @@ import {
 } from './configure-model'
 import { commitConfigureDraft } from './configure-commit'
 import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getTabAssignments } from './assignment'
 import { getMainDrawerSide } from '../store'
@@ -492,10 +493,14 @@ function buildDraftAndBase(): {
   // Host tabOrder alone can disagree with what the strips actually show
   // (especially before the first live DnD commit). Align both sides to
   // live DOM so commit does not reshuffle to host/catalog order.
+  const healedHidden = resolveHiddenTabIdsForDraft(
+    hostSettings?.hiddenTabIds,
+    catalog.map((t) => t.id),
+  )
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: currentAssignments,
   })
@@ -507,7 +512,7 @@ function buildDraftAndBase(): {
 
   const base: BaseSnapshot = {
     tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: hostSettings?.hiddenTabIds || [],
+    hiddenTabIds: healedHidden,
     drawerSide,
     assignments: new Map(currentAssignments),
   }

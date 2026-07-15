@@ -14,6 +14,7 @@
 //   commit helpers.
 // - deriveShortName: short name adapter matching Lumiverse's logic.
 import { getMainSidebar } from '../dom/lumiverse'
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
@@ -30,6 +31,7 @@ import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
+import { isTabIdHidden } from '../layout/tab-id-heal'
 
 // Test seams for hideMainTabButton / showMainTabButton — allows tests to override the real implementations
 let _hideMainTabButtonOverride: ((tabId: string) => void) | null = null
@@ -322,6 +324,24 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn)
   })
 
+  // Host Configure hide survives hard refresh only if we honor hiddenTabIds
+  // when (re)creating secondary buttons — finishRestore also re-syncs, but
+  // mid-restore assigns land before that pass.
+  const hostHidden = getHostDrawerSettings()?.hiddenTabIds
+  if (hostHidden) {
+    const liveOnStrip: string[] = []
+    for (const el of Array.from(
+      tabList.querySelectorAll('button[data-tab-id]'),
+    ) as HTMLElement[]) {
+      const tid = el.getAttribute('data-tab-id')
+      if (tid) liveOnStrip.push(tid)
+    }
+    liveOnStrip.push(tab.id)
+    if (isTabIdHidden(tab.id, hostHidden, liveOnStrip)) {
+      btn.style.display = 'none'
+    }
+  }
+
   if (insertBefore && insertBefore.parentNode === tabList) {
     tabList.insertBefore(btn, insertBefore)
   } else {
@@ -418,9 +438,16 @@ export function reorderHostMainTabButtons(ids: string[]): void {
 export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): void {
   const tabList = getSecondaryTabList()
   if (!tabList) return
-  for (const btn of Array.from(tabList.querySelectorAll('button[data-tab-id]')) as HTMLElement[]) {
+  const buttons = Array.from(
+    tabList.querySelectorAll('button[data-tab-id]'),
+  ) as HTMLElement[]
+  const liveIds = buttons
+    .map((b) => b.getAttribute('data-tab-id') || '')
+    .filter(Boolean)
+  for (const btn of buttons) {
     const tid = btn.getAttribute('data-tab-id') || ''
-    if (hiddenIds.has(tid)) {
+    // Pair against the full strip so multi-instance siblings are not all hidden.
+    if (isTabIdHidden(tid, hiddenIds, liveIds)) {
       btn.style.display = 'none'
     } else {
       btn.style.display = ''
@@ -437,9 +464,15 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
   void import('../sidebar/main-mirror-drawer').then((m) => {
     const list = m.getMainMirrorTabList()
     if (!list) return
-    for (const btn of Array.from(list.querySelectorAll('button[data-tab-id]')) as HTMLElement[]) {
+    const buttons = Array.from(
+      list.querySelectorAll('button[data-tab-id]'),
+    ) as HTMLElement[]
+    const liveIds = buttons
+      .map((b) => b.getAttribute('data-tab-id') || '')
+      .filter(Boolean)
+    for (const btn of buttons) {
       const tid = btn.getAttribute('data-tab-id') || ''
-      if (hiddenIds.has(tid)) {
+      if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = 'none'
       } else {
         btn.style.display = ''
