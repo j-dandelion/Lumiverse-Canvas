@@ -29,6 +29,10 @@ import {
   type DrawerSide,
 } from './configure-model'
 import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import {
+  getCanvasHiddenTabIds,
+  mergeHiddenTabIdLists,
+} from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
@@ -1395,9 +1399,10 @@ function buildLiveDraftAndBase(): {
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
   // what the user sees in the drawers.
-  // Heal extension :N drift so hide toggles match live catalog after refresh.
+  // Merge host + Canvas-owned hide (host DB often never got Configure hides);
+  // heal extension :N drift so toggles match live catalog after refresh.
   const healedHidden = resolveHiddenTabIdsForDraft(
-    hostSettings?.hiddenTabIds,
+    mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()),
     catalog.map((t) => t.id),
   )
 

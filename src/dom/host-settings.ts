@@ -11,7 +11,7 @@
 //
 // For unit tests, inject a mock setter via __setHostSetSettingForTest.
 
-import { getMainSidebar } from './lumiverse'
+import { getMainSidebar, getMainPanel, getMainWrapper } from './lumiverse'
 import { getFiberFromElement } from './fiber'
 import { dlog } from '../debug/log'
 import { findStoreData, getStoreSnapshot } from '../store'
@@ -102,6 +102,33 @@ function scanForHostSettings(
   scanForHostSettings((fiber as any).sibling, depth, maxDepth, visited)
 }
 
+/**
+ * Walk fiber ancestry of a DOM node looking for drawerSettings + setSetting.
+ * Host often uses fine-grained useStore selectors, so the full store (with
+ * both keys) may only appear under useStore() without a selector (e.g. some
+ * panels) or deep in the app tree — not only under the sidebar mount.
+ */
+function walkElementForHostSettings(el: Element | null, visited: Set<Record<string, unknown>>): void {
+  if (!el) return
+  const rootFiber = getFiberFromElement(el)
+  if (!rootFiber) return
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let fiber: any = rootFiber
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ancestors: any[] = []
+  while (fiber) {
+    ancestors.push(fiber)
+    fiber = fiber.return
+  }
+
+  // Prefer top ancestors (closer to app root / full store subscriptions).
+  for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 8); i--) {
+    scanForHostSettings(ancestors[i], 0, 40, visited)
+    if (_cachedSetSetting && _cachedDrawerSettings) return
+  }
+}
+
 function findHostSettings(force = false): void {
   const now = Date.now()
   if (!force && _cachedSetSetting && _cachedDrawerSettings && (now - _cacheTimestamp) < CACHE_TTL_MS) {
@@ -118,28 +145,27 @@ function findHostSettings(force = false): void {
   // Guard: DOM not available (headless test / SSR).
   if (typeof document === 'undefined') return
 
-  const sidebar = getMainSidebar()
-  if (!sidebar) return
-
-  const rootFiber = getFiberFromElement(sidebar)
-  if (!rootFiber) return
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let fiber: any = rootFiber
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ancestors: any[] = []
-  while (fiber) {
-    ancestors.push(fiber)
-    fiber = fiber.return
-  }
-
   const visited = new Set<Record<string, unknown>>()
-  for (let i = ancestors.length - 1; i >= Math.max(0, ancestors.length - 5); i--) {
-    scanForHostSettings(ancestors[i], 0, 30, visited)
-    if (_cachedSetSetting && _cachedDrawerSettings) {
-      _cacheTimestamp = Date.now()
-      break
-    }
+  // Sidebar first (historical path), then panel / wrapper / app root so we
+  // can reach components that subscribe to the full store (useStore()).
+  walkElementForHostSettings(getMainSidebar(), visited)
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainPanel(), visited)
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainWrapper(), visited)
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    // Test stubs / partial documents may lack getElementById.
+    const getById =
+      typeof document.getElementById === 'function'
+        ? (id: string) => document.getElementById(id)
+        : () => null
+    const appRoot = getById('root') || getById('app') || document.body || null
+    walkElementForHostSettings(appRoot, visited)
+  }
+  if (_cachedSetSetting || _cachedDrawerSettings) {
+    _cacheTimestamp = Date.now()
   }
 }
 

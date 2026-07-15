@@ -32,6 +32,10 @@ import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } f
 import { showAssignmentMenu } from './tab-context-menu'
 import { persistLayout } from '../layout/persist'
 import { isTabIdHidden } from '../layout/tab-id-heal'
+import {
+  getCanvasHiddenTabIds,
+  mergeHiddenTabIdLists,
+} from './canvas-hidden'
 
 // Test seams for hideMainTabButton / showMainTabButton — allows tests to override the real implementations
 let _hideMainTabButtonOverride: ((tabId: string) => void) | null = null
@@ -324,11 +328,14 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn)
   })
 
-  // Host Configure hide survives hard refresh only if we honor hiddenTabIds
-  // when (re)creating secondary buttons — finishRestore also re-syncs, but
-  // mid-restore assigns land before that pass.
-  const hostHidden = getHostDrawerSettings()?.hiddenTabIds
-  if (hostHidden) {
+  // Configure hide: merge host + Canvas-owned lists. Host DB often never
+  // persisted builtins; layout.hiddenTabIds is the durable copy. finishRestore
+  // also re-syncs, but mid-restore assigns land before that pass.
+  const effectiveHidden = mergeHiddenTabIdLists(
+    getHostDrawerSettings()?.hiddenTabIds,
+    getCanvasHiddenTabIds(),
+  )
+  if (effectiveHidden.length > 0) {
     const liveOnStrip: string[] = []
     for (const el of Array.from(
       tabList.querySelectorAll('button[data-tab-id]'),
@@ -337,7 +344,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
       if (tid) liveOnStrip.push(tid)
     }
     liveOnStrip.push(tab.id)
-    if (isTabIdHidden(tab.id, hostHidden, liveOnStrip)) {
+    if (isTabIdHidden(tab.id, effectiveHidden, liveOnStrip)) {
       btn.style.display = 'none'
     }
   }

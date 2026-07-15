@@ -153,6 +153,15 @@ export function setup(ctx: SpindleFrontendContext) {
     hydrateSettings(layout?.settings)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
+    // Canvas-owned Configure hide (layout.hiddenTabIds) — host DB often never
+    // persisted drawerSettings.hiddenTabIds for builtins. Hydrate before
+    // applyLayout / sync so secondary/mirror re-apply after hard refresh.
+    try {
+      const { hydrateCanvasHiddenFromLayout } = await import('./tabs/hidden-tabs')
+      hydrateCanvasHiddenFromLayout(layout)
+    } catch {
+      // non-fatal
+    }
     // The settings panel was mounted earlier in setup() with the default
     // getSettings(). Now that we've hydrated from the saved layout, re-render
     // the panel so the toggles reflect the loaded values rather than the

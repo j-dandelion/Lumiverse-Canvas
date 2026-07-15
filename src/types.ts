@@ -15,6 +15,12 @@ export interface LayoutState {
   secondary: SidebarState
   detachedTabs: DetachedTab[]
   /**
+   * Tab ids hidden via Configure Tabs. Canvas-owned so hide survives hard
+   * refresh even when host `drawerSettings.hiddenTabIds` never persists
+   * (fiber setSetting NO-GO). Optional on old layouts; missing → [].
+   */
+  hiddenTabIds?: string[]
+  /**
    * Canvas user preferences. Optional on read for backward compatibility
    * with layouts written by older versions; `mergeCanvasSettings` fills in
    * defaults for any missing field. New fields should be added with

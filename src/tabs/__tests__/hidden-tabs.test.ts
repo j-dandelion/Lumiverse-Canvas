@@ -1,7 +1,5 @@
-// syncHiddenTabsFromHost: re-apply host hide after restore + heal write-back.
-//
-// Mocks host-settings + store + buttons apply; pure heal is covered in
-// tab-id-heal.test.ts.
+// syncHiddenTabsFromHost: re-apply hide after restore + heal write-back.
+// Canvas-owned layout.hiddenTabIds is the durable source when host DB is empty.
 
 import { mock } from 'bun:test'
 
@@ -56,7 +54,6 @@ mock.module('../buttons', () => ({
   applyHiddenTabIdsToMirror: (ids: ReadonlySet<string>) => {
     _appliedMirror = [...ids]
   },
-  // re-exports unused by hidden-tabs but may be demanded if other imports load
   hideMainTabButton: () => {},
   showMainTabButton: () => {},
   updateDrawerTabVisibility: () => {},
@@ -88,9 +85,19 @@ mock.module('../../sidebar/secondary', () => ({
 const {
   syncHiddenTabsFromHost,
   resolveHiddenTabIdsForDraft,
+  setCanvasHiddenTabIds,
+  getCanvasHiddenTabIds,
+  hydrateCanvasHiddenFromLayout,
+  __resetCanvasHiddenTabIdsForTest,
+  mergeHiddenTabIdLists,
 } = await import('../hidden-tabs')
 
+function resetCanvas() {
+  __resetCanvasHiddenTabIdsForTest()
+}
+
 // H1: after hard refresh, stored :2 heals to live :1 and write-backs + applies
+resetCanvas()
 _hostSettings = {
   side: 'right',
   tabOrder: [],
@@ -112,13 +119,15 @@ assertEqual(
 assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1: apply secondary healed')
 assert(_appliedMirror.includes('weaver'), 'H1: apply mirror weaver')
 
-// H2: no write-back when already healed
+// H2: no write-back when already healed (and canvas matches host)
+resetCanvas()
 _patchCalls = []
 _hostSettings = {
   side: 'right',
   tabOrder: [],
   hiddenTabIds: ['spindle:uuid:tab:prompt-viewer:1', 'weaver'],
 }
+setCanvasHiddenTabIds(['spindle:uuid:tab:prompt-viewer:1', 'weaver'])
 const r2 = syncHiddenTabsFromHost({ writeBack: true })
 assert(!r2.wroteBack, 'H2: no write-back when ids match live')
 assertEqual(_patchCalls.length, 0, 'H2: no patch calls')
@@ -132,7 +141,8 @@ assertEqual(_patchCalls.length, 0, 'H2: no patch calls')
   assertEqual(healed[0], 'spindle:uuid:tab:prompt-viewer:1', 'H3: draft heal')
 }
 
-// H4: empty host hidden → empty apply sets
+// H4: empty host + empty canvas → empty apply sets
+resetCanvas()
 _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
 _appliedSecondary = ['stale']
 const r4 = syncHiddenTabsFromHost()
@@ -147,6 +157,44 @@ assertEqual(_appliedSecondary.length, 0, 'H4: apply empty secondary set')
   )
   assert(healedDraft.includes('spindle:missing:tab:x:9'), 'H5: draft keeps unmatched')
   assert(healedDraft.includes('weaver'), 'H5: draft keeps weaver')
+}
+
+// H6: host empty but Canvas layout has builtins → apply + host write-back
+// (the live user bug: council/cortex/create reappear after hard refresh)
+resetCanvas()
+_hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+_patchCalls = []
+_appliedSecondary = []
+_appliedMirror = []
+hydrateCanvasHiddenFromLayout({ hiddenTabIds: ['council', 'cortex', 'create'] })
+const r6 = syncHiddenTabsFromHost({ writeBack: true })
+assert(r6.hiddenIds.includes('council'), 'H6: council from canvas layout')
+assert(r6.hiddenIds.includes('cortex'), 'H6: cortex from canvas layout')
+assert(r6.hiddenIds.includes('create'), 'H6: create from canvas layout')
+assert(_appliedSecondary.includes('council'), 'H6: apply secondary council')
+assert(_appliedMirror.includes('create'), 'H6: apply mirror create')
+assert(r6.wroteBack, 'H6: write-back host when canvas has ids host lacks')
+assertEqual(
+  (_patchCalls[0]?.hiddenTabIds as string[])?.includes('council'),
+  true,
+  'H6: host patch includes council',
+)
+assertEqual(getCanvasHiddenTabIds().includes('council'), true, 'H6: canvas retains after sync')
+
+// H7: hydrate ignores missing field (does not wipe)
+resetCanvas()
+setCanvasHiddenTabIds(['council'])
+hydrateCanvasHiddenFromLayout({ detachedTabs: [] })
+assertEqual(getCanvasHiddenTabIds()[0], 'council', 'H7: missing field does not wipe')
+
+// H8: hydrate empty array clears
+hydrateCanvasHiddenFromLayout({ hiddenTabIds: [] })
+assertEqual(getCanvasHiddenTabIds().length, 0, 'H8: empty array clears canvas hide')
+
+// H9: merge lists de-dupes
+{
+  const m = mergeHiddenTabIdLists(['a', 'b'], ['b', 'c'])
+  assertEqual(m.join(','), 'a,b,c', 'H9: merge de-dupes')
 }
 
 console.log(`PASS: ${passed}`)

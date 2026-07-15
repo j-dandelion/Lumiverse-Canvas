@@ -27,7 +27,8 @@
 // main-mirror only. Reorderable lists get mid-drag FLIP: secondary
 // .sidebar-ux-tab-list and main-mirror .sidebar-ux-tab-list-main. Commit
 // uses visible-index helpers so hidden tabs do not make primary reorder a
-// no-op, and reorders host + mirror DOM so primary sticks before React.
+// no-op; hit-test + mid-drag also skip display:none so settle DOM matches
+// commit (post-hide shuffle fix). Reorders host + mirror so primary sticks.
 //
 // Mobile (≤600px): live strip DnD is a no-op. Reorder/move tabs via
 // Configure Tabs only (modal DnD stays enabled). Avoids fighting mobile
@@ -49,6 +50,10 @@ import {
 } from './configure-model'
 import { commitConfigureDraft } from './configure-commit'
 import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import {
+  getCanvasHiddenTabIds,
+  mergeHiddenTabIdLists,
+} from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getTabAssignments } from './assignment'
@@ -462,19 +467,75 @@ function getAllButtonsInContainer(container: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * True when a strip button participates in live DnD geometry.
+ * Configure hide sets `style.display = 'none'`; those nodes stay in the DOM
+ * and would otherwise contribute zero rects and skew hit-test / mid-drag
+ * indices vs commit's visible-only reorderWithinVisible.
+ */
+export function isDisplayedTabButton(el: HTMLElement): boolean {
+  return el.style?.display !== 'none'
+}
+
+/**
+ * Map a post-removal *visible* insert index onto DOM siblings that may still
+ * include display:none hidden tabs (kept for slot stability).
+ *
+ * Returns the index in `siblingHidden` to insertBefore, or `length` to
+ * append after the last *visible* sibling (not after trailing hidden —
+ * that would put the tab after hidden slots and disagree with
+ * reorderVisibleInList / insertAtVisibleIndex).
+ *
+ * Pure helper — unit-tested.
+ */
+export function domInsertIndexFromVisibleIndex(
+  siblingHidden: readonly boolean[],
+  toVisibleIndex: number,
+): number {
+  const visibleCount = siblingHidden.reduce(
+    (n, hidden) => n + (hidden ? 0 : 1),
+    0,
+  )
+  const targetVis =
+    toVisibleIndex < 0
+      ? visibleCount
+      : Math.min(toVisibleIndex, visibleCount)
+
+  if (targetVis >= visibleCount) {
+    // After last visible — leave trailing hidden after the insert point.
+    let lastVisible = -1
+    for (let i = 0; i < siblingHidden.length; i++) {
+      if (!siblingHidden[i]) lastVisible = i
+    }
+    return lastVisible + 1
+  }
+
+  let seen = 0
+  for (let i = 0; i < siblingHidden.length; i++) {
+    if (siblingHidden[i]) continue
+    if (seen === targetVis) return i
+    seen++
+  }
+  return siblingHidden.length
+}
+
+/**
  * Collect tab buttons from a drop container for hit-test math.
- * Filters out the dragged tab (excludeTabId) if present.
+ * Filters out the dragged tab (excludeTabId) and Configure-hidden
+ * (display:none) buttons so indices are *visible*-list indices matching
+ * reorderWithinVisible / moveTabVisible on commit.
  */
 function getButtonsInContainer(
   container: HTMLElement,
   _secondary: boolean,
   excludeTabId: string | null,
 ): HTMLElement[] {
-  const buttons = getAllButtonsInContainer(container)
-  if (!excludeTabId) return buttons
-  return buttons.filter(
-    (el) => el.getAttribute('data-tab-id') !== excludeTabId,
-  )
+  return getAllButtonsInContainer(container).filter((el) => {
+    if (!isDisplayedTabButton(el)) return false
+    if (excludeTabId && el.getAttribute('data-tab-id') === excludeTabId) {
+      return false
+    }
+    return true
+  })
 }
 
 // ── Build ConfigureDraft from live state ──
@@ -494,7 +555,7 @@ function buildDraftAndBase(): {
   // (especially before the first live DnD commit). Align both sides to
   // live DOM so commit does not reshuffle to host/catalog order.
   const healedHidden = resolveHiddenTabIdsForDraft(
-    hostSettings?.hiddenTabIds,
+    mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()),
     catalog.map((t) => t.id),
   )
   const draftFromHost = createDraft({
@@ -969,11 +1030,22 @@ function reorderCanvasListDOM(
         ) ?? null
   if (!sourceBtn) return false
 
-  const buttons = getAllButtonsInContainer(container)
-  const buttonsWithoutSource = buttons.filter((b) => b !== sourceBtn)
+  // target.index is among *visible* siblings only (hit-test skips
+  // display:none). Map to a real DOM insert so hidden slots stay put and
+  // mid-drag order matches commit's reorderWithinVisible.
+  const buttonsWithoutSource = getAllButtonsInContainer(container).filter(
+    (b) => b !== sourceBtn,
+  )
+  const siblingHidden = buttonsWithoutSource.map(
+    (b) => !isDisplayedTabButton(b),
+  )
+  const insertIdx = domInsertIndexFromVisibleIndex(
+    siblingHidden,
+    target.index,
+  )
 
-  if (target.index >= buttonsWithoutSource.length) {
-    // Append to end of container
+  if (insertIdx >= buttonsWithoutSource.length) {
+    // After last sibling (no trailing hidden after last visible, or empty).
     if (
       sourceBtn.parentElement === container &&
       sourceBtn.nextElementSibling === null
@@ -984,7 +1056,7 @@ function reorderCanvasListDOM(
     return true
   }
 
-  const referenceBtn = buttonsWithoutSource[target.index]
+  const referenceBtn = buttonsWithoutSource[insertIdx]!
   if (
     sourceBtn.parentElement === container &&
     sourceBtn.nextElementSibling === referenceBtn

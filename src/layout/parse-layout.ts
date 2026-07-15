@@ -22,6 +22,8 @@ export interface ParsedLayout {
   primary?: ParsedLayoutPrimary
   secondary?: ParsedLayoutSecondary
   detachedTabs: { tabId: string; [key: string]: unknown }[]
+  /** Canvas-owned Configure hide list (optional on older layouts). */
+  hiddenTabIds?: string[]
   settings?: unknown
   [key: string]: unknown
 }
@@ -46,6 +48,14 @@ export function parseLayoutBlob(input: unknown): ParsedLayout | null {
 
   if (typeof input.version === 'string') out.version = input.version
   if ('settings' in input) out.settings = input.settings
+
+  if (Array.isArray(input.hiddenTabIds)) {
+    const ids: string[] = []
+    for (const id of input.hiddenTabIds) {
+      if (typeof id === 'string' && id.length > 0) ids.push(id)
+    }
+    out.hiddenTabIds = ids
+  }
 
   if (isPlainObject(input.primary)) {
     const p = input.primary
@@ -85,7 +95,14 @@ export function parseLayoutBlob(input: unknown): ParsedLayout | null {
 
   // Preserve other top-level keys (forward-compat) without trusting shape.
   for (const key of Object.keys(input)) {
-    if (key === 'primary' || key === 'secondary' || key === 'detachedTabs' || key === 'version' || key === 'settings') {
+    if (
+      key === 'primary'
+      || key === 'secondary'
+      || key === 'detachedTabs'
+      || key === 'version'
+      || key === 'settings'
+      || key === 'hiddenTabIds'
+    ) {
       continue
     }
     out[key] = input[key]

@@ -1,11 +1,15 @@
-// Host hidden-tab sync: re-apply drawerSettings.hiddenTabIds after hard refresh,
-// and heal extension id suffix drift so hide survives re-registration.
+// Hidden-tab sync: re-apply Configure hide after hard refresh, and heal
+// extension id suffix drift so hide survives re-registration.
 //
-// Host React filters primary buttons by exact hiddenTabIds. Canvas-owned
-// secondary / main-mirror buttons only got display:none at Configure commit —
-// finishRestore and late assigns never re-read host, so hidden tabs reappeared.
-// Extension ids (`…:tab:name:N`) change the :N suffix across sessions; without
-// heal, host exact-match also fails for primary after reload.
+// Host React filters primary buttons by exact drawerSettings.hiddenTabIds.
+// Canvas-owned secondary / main-mirror buttons only got display:none at
+// Configure commit — finishRestore and late assigns never re-read host.
+//
+// Additionally: host setSetting is often unreachable from the fiber walk
+// (NO-GO or silent no-persist), so live hide worked via Canvas DOM apply
+// while DB drawerSettings never received council/cortex/create. Canvas now
+// owns a copy of hiddenTabIds in layout.json and merges it with host on
+// every sync.
 
 import {
   getHostDrawerSettings,
@@ -23,8 +27,23 @@ import {
 } from './buttons'
 import { getSecondaryTabList } from '../sidebar/secondary'
 import { dlog } from '../debug/log'
+import {
+  getCanvasHiddenTabIds,
+  hydrateCanvasHiddenFromLayout,
+  mergeHiddenTabIdLists,
+  normalizeHiddenIds,
+  setCanvasHiddenTabIds,
+  __resetCanvasHiddenTabIdsForTest,
+} from './canvas-hidden'
 
 export { healHiddenTabIds, isTabIdHidden } from '../layout/tab-id-heal'
+export {
+  getCanvasHiddenTabIds,
+  hydrateCanvasHiddenFromLayout,
+  mergeHiddenTabIdLists,
+  setCanvasHiddenTabIds,
+  __resetCanvasHiddenTabIdsForTest,
+} from './canvas-hidden'
 
 /** Collect live tab ids from catalog sources + secondary strip DOM. */
 export function collectLiveTabIdsForHiddenHeal(): string[] {
@@ -61,7 +80,7 @@ export function collectLiveTabIdsForHiddenHeal(): string[] {
 }
 
 export type SyncHiddenTabsResult = {
-  /** Effective hidden ids after heal (what we applied). */
+  /** Effective hidden ids after heal (what we applied / stored on Canvas). */
   hiddenIds: string[]
   /** True when host store was patched with healed ids. */
   wroteBack: boolean
@@ -91,21 +110,21 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
 }
 
 /**
- * Re-read host hiddenTabIds, heal against live tabs, optionally write healed
- * ids back to host (so React primary filter matches), and apply to Canvas
- * secondary + main-mirror strips.
+ * Re-read host + Canvas hiddenTabIds, heal against live tabs, keep Canvas
+ * copy, optionally write healed ids back to host (so React primary filter
+ * matches), and apply to Canvas secondary + main-mirror strips.
  *
  * Safe to call repeatedly (on finishRestore, tab register, setup).
  */
 export function syncHiddenTabsFromHost(opts?: {
-  /** Patch host when heal rewrites ids (default true). */
+  /** Patch host when heal rewrites ids or Canvas has ids host lacks (default true). */
   writeBack?: boolean
 }): SyncHiddenTabsResult {
   const writeBack = opts?.writeBack !== false
   const host = getHostDrawerSettings()
-  const stored = Array.isArray(host?.hiddenTabIds)
-    ? host!.hiddenTabIds!.filter((id): id is string => typeof id === 'string' && id.length > 0)
-    : []
+  const hostStored = normalizeHiddenIds(host?.hiddenTabIds)
+  const canvasStored = getCanvasHiddenTabIds()
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored)
 
   const liveIds = collectLiveTabIdsForHiddenHeal()
   // Write-back path: never drop unmatched (late extension register).
@@ -113,17 +132,25 @@ export function syncHiddenTabsFromHost(opts?: {
   // DOM path: only ids that map onto something currently live on strips.
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false })
 
+  // Always keep Canvas layout copy aligned with effective hide (healed).
+  // This is what survives hard refresh even when host setSetting is NO-GO.
+  setCanvasHiddenTabIds(forHost)
+
   let wroteBack = false
-  if (writeBack && stored.length > 0) {
-    const same =
-      forHost.length === stored.length
-      && forHost.every((id, i) => id === stored[i])
-    if (!same) {
+  if (writeBack && forHost.length > 0) {
+    const hostSame =
+      forHost.length === hostStored.length
+      && forHost.every((id, i) => id === hostStored[i])
+    if (!hostSame) {
       wroteBack = patchHostDrawerSettings({ hiddenTabIds: forHost })
       if (wroteBack) {
         dlog('[hidden-tabs] healed hiddenTabIds write-back', {
-          from: stored,
+          from: hostStored,
           to: forHost,
+        })
+      } else {
+        dlog('[hidden-tabs] host write-back NO-GO; Canvas layout copy retained', {
+          hidden: forHost,
         })
       }
     }
@@ -139,16 +166,14 @@ export function syncHiddenTabsFromHost(opts?: {
 }
 
 /**
- * Resolve host hidden list for Configure draft construction: heal against
- * live catalog so toggles match what the user sees after refresh.
+ * Resolve host + Canvas hidden list for Configure draft construction: heal
+ * against live catalog so toggles match what the user sees after refresh.
  */
 export function resolveHiddenTabIdsForDraft(
   storedHidden: readonly string[] | undefined | null,
   liveCatalogIds: readonly string[],
 ): string[] {
-  const stored = Array.isArray(storedHidden)
-    ? storedHidden.filter((id): id is string => typeof id === 'string' && id.length > 0)
-    : []
+  const stored = normalizeHiddenIds(storedHidden)
   if (!stored.length) return []
   // Keep unmatched so a Configure auto-commit before extensions register
   // does not wipe host hides for tabs not yet in the catalog.

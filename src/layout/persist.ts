@@ -36,6 +36,7 @@ import {
 } from '../sidebar/styles'
 import { getTabAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
+import { getCanvasHiddenTabIds } from '../tabs/canvas-hidden'
 import {
   getSettings, cancelSettingsSave, getLastLoadedLayout, setLastLoadedLayout,
 } from '../settings/state'
@@ -257,6 +258,8 @@ export function snapshotLayout(): any {
         const tab = tabs.find(t => t.id === tabId)
         return { tabId, tabTitle: tab?.title || tabId, sidebar: side }
       }),
+    // Configure hide — Canvas-owned (host drawerSettings often never persists).
+    hiddenTabIds: getCanvasHiddenTabIds(),
   }
   return result
 }
@@ -298,6 +301,8 @@ export function seedDualLayoutFromLive(): void {
       activeTabId: null,
     },
     detachedTabs: [],
+    // Preserve Configure hide across first dual enable.
+    hiddenTabIds: Array.isArray(live.hiddenTabIds) ? live.hiddenTabIds.slice() : getCanvasHiddenTabIds(),
   }
   setLastLoadedLayout(seed)
 }
@@ -329,6 +334,7 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
     primary: last?.primary ?? { open: false, width: 420 },
     secondary: last?.secondary ?? { open: false, width: 420 },
     detachedTabs: last?.detachedTabs ?? [],
+    hiddenTabIds: Array.isArray(last?.hiddenTabIds) ? last.hiddenTabIds : [],
   }
   const s = getSettings()
   // Dual-profile freeze: when the second drawer is disabled, lock detachedTabs
@@ -338,6 +344,8 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
   // persistTabAssignments was removed — tabs always contribute to the write,
   // but the second-sidebar gate still controls the live/freeze boundary.
   const tabsLive = s.secondSidebarEnabled
+  // Hide is global (not dual-only): always write live Canvas hidden list so
+  // Configure hide sticks whether or not the second drawer is enabled.
   return {
     version: live.version,
     primary: {
@@ -355,6 +363,7 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
         : (base.secondary as { activeTabId?: string | null }).activeTabId,
     },
     detachedTabs: tabsLive ? live.detachedTabs : (base.detachedTabs ?? []),
+    hiddenTabIds: Array.isArray(live.hiddenTabIds) ? live.hiddenTabIds : (base.hiddenTabIds ?? []),
   }
 }
 

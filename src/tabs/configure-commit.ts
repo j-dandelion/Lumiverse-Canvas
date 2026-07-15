@@ -50,6 +50,7 @@ import {
   patchHostDrawerSettings,
   getHostDrawerSettings,
 } from '../dom/host-settings'
+import { setCanvasHiddenTabIds } from './canvas-hidden'
 import {
   setSuppressAutoActivation,
 } from '../sidebar/secondary-drawer'
@@ -387,12 +388,17 @@ const commitSteps: CommitStep[] = [
       // Pre-step hidden set from base (not draft targets).
       ctx.rollbackState.previousHiddenIds = new Set(ctx.base.hiddenTabIds)
 
+      // Canvas-owned copy so hide survives hard refresh when host setSetting
+      // is NO-GO / never flushes drawerSettings to DB.
+      setCanvasHiddenTabIds([...ctx.draft.hiddenIds])
+
       applyHiddenTabIdsToSecondary(ctx.draft.hiddenIds)
       applyHiddenTabIdsToMirror(ctx.draft.hiddenIds)
     },
     rollback: async (ctx) => {
       // Best-effort reverse; persist/side may already be irreversible.
       if (ctx.rollbackState.previousHiddenIds) {
+        setCanvasHiddenTabIds([...ctx.rollbackState.previousHiddenIds])
         applyHiddenTabIdsToSecondary(ctx.rollbackState.previousHiddenIds)
         applyHiddenTabIdsToMirror(ctx.rollbackState.previousHiddenIds)
       }

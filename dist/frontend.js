@@ -1072,6 +1072,24 @@ function scanForHostSettings(fiber, depth, maxDepth, visited) {
   scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
   scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
 }
+function walkElementForHostSettings(el, visited) {
+  if (!el)
+    return;
+  const rootFiber = getFiberFromElement(el);
+  if (!rootFiber)
+    return;
+  let fiber = rootFiber;
+  const ancestors = [];
+  while (fiber) {
+    ancestors.push(fiber);
+    fiber = fiber.return;
+  }
+  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 8); i--) {
+    scanForHostSettings(ancestors[i], 0, 40, visited);
+    if (_cachedSetSetting && _cachedDrawerSettings)
+      return;
+  }
+}
 function findHostSettings(force = false) {
   const now = Date.now();
   if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp2 < CACHE_TTL_MS2) {
@@ -1085,25 +1103,21 @@ function findHostSettings(force = false) {
   }
   if (typeof document === "undefined")
     return;
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return;
-  const rootFiber = getFiberFromElement(sidebar);
-  if (!rootFiber)
-    return;
-  let fiber = rootFiber;
-  const ancestors = [];
-  while (fiber) {
-    ancestors.push(fiber);
-    fiber = fiber.return;
-  }
   const visited = new Set;
-  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 5); i--) {
-    scanForHostSettings(ancestors[i], 0, 30, visited);
-    if (_cachedSetSetting && _cachedDrawerSettings) {
-      _cacheTimestamp2 = Date.now();
-      break;
-    }
+  walkElementForHostSettings(getMainSidebar(), visited);
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainPanel(), visited);
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainWrapper(), visited);
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    const getById = typeof document.getElementById === "function" ? (id) => document.getElementById(id) : () => null;
+    const appRoot = getById("root") || getById("app") || document.body || null;
+    walkElementForHostSettings(appRoot, visited);
+  }
+  if (_cachedSetSetting || _cachedDrawerSettings) {
+    _cacheTimestamp2 = Date.now();
   }
 }
 function getHostDrawerSettings() {
@@ -4076,6 +4090,55 @@ var init_configure_model = __esm(() => {
   _builtinIdSet = new Set(BUILTIN_TAB_IDS);
 });
 
+// src/tabs/canvas-hidden.ts
+function normalizeHiddenIds(ids) {
+  if (!Array.isArray(ids))
+    return [];
+  const out = [];
+  const seen = new Set;
+  for (const id of ids) {
+    if (typeof id !== "string" || !id.length)
+      continue;
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+function getCanvasHiddenTabIds() {
+  return _canvasHiddenTabIds.slice();
+}
+function setCanvasHiddenTabIds(ids) {
+  _canvasHiddenTabIds = normalizeHiddenIds(ids);
+}
+function hydrateCanvasHiddenFromLayout(layout) {
+  if (!layout || typeof layout !== "object")
+    return;
+  const raw = layout.hiddenTabIds;
+  if (!Array.isArray(raw))
+    return;
+  _canvasHiddenTabIds = normalizeHiddenIds(raw);
+}
+function mergeHiddenTabIdLists(hostIds, canvasIds) {
+  const out = [];
+  const seen = new Set;
+  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+function __resetCanvasHiddenTabIdsForTest() {
+  _canvasHiddenTabIds = [];
+}
+var _canvasHiddenTabIds;
+var init_canvas_hidden = __esm(() => {
+  _canvasHiddenTabIds = [];
+});
+
 // src/layout/tab-id-heal.ts
 function stripTabIdSuffix(id) {
   return id.replace(/:\d+$/, "");
@@ -4167,11 +4230,16 @@ function healHiddenTabIds(storedHidden, liveIds, opts) {
 var exports_hidden_tabs = {};
 __export(exports_hidden_tabs, {
   syncHiddenTabsFromHost: () => syncHiddenTabsFromHost,
+  setCanvasHiddenTabIds: () => setCanvasHiddenTabIds,
   scheduleSyncHiddenTabsFromHost: () => scheduleSyncHiddenTabsFromHost,
   resolveHiddenTabIdsForDraft: () => resolveHiddenTabIdsForDraft,
+  mergeHiddenTabIdLists: () => mergeHiddenTabIdLists,
   isTabIdHidden: () => isTabIdHidden,
+  hydrateCanvasHiddenFromLayout: () => hydrateCanvasHiddenFromLayout,
   healHiddenTabIds: () => healHiddenTabIds,
-  collectLiveTabIdsForHiddenHeal: () => collectLiveTabIdsForHiddenHeal
+  getCanvasHiddenTabIds: () => getCanvasHiddenTabIds,
+  collectLiveTabIdsForHiddenHeal: () => collectLiveTabIdsForHiddenHeal,
+  __resetCanvasHiddenTabIdsForTest: () => __resetCanvasHiddenTabIdsForTest
 });
 function collectLiveTabIdsForHiddenHeal() {
   const ids = new Set;
@@ -4214,19 +4282,26 @@ function scheduleSyncHiddenTabsFromHost(opts) {
 function syncHiddenTabsFromHost(opts) {
   const writeBack = opts?.writeBack !== false;
   const host = getHostDrawerSettings();
-  const stored = Array.isArray(host?.hiddenTabIds) ? host.hiddenTabIds.filter((id) => typeof id === "string" && id.length > 0) : [];
+  const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
+  const canvasStored = getCanvasHiddenTabIds();
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
   const liveIds = collectLiveTabIdsForHiddenHeal();
   const forHost = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
+  setCanvasHiddenTabIds(forHost);
   let wroteBack = false;
-  if (writeBack && stored.length > 0) {
-    const same = forHost.length === stored.length && forHost.every((id, i3) => id === stored[i3]);
-    if (!same) {
+  if (writeBack && forHost.length > 0) {
+    const hostSame = forHost.length === hostStored.length && forHost.every((id, i3) => id === hostStored[i3]);
+    if (!hostSame) {
       wroteBack = patchHostDrawerSettings({ hiddenTabIds: forHost });
       if (wroteBack) {
         dlog("[hidden-tabs] healed hiddenTabIds write-back", {
-          from: stored,
+          from: hostStored,
           to: forHost
+        });
+      } else {
+        dlog("[hidden-tabs] host write-back NO-GO; Canvas layout copy retained", {
+          hidden: forHost
         });
       }
     }
@@ -4237,7 +4312,7 @@ function syncHiddenTabsFromHost(opts) {
   return { hiddenIds: forHost, wroteBack };
 }
 function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
-  const stored = Array.isArray(storedHidden) ? storedHidden.filter((id) => typeof id === "string" && id.length > 0) : [];
+  const stored = normalizeHiddenIds(storedHidden);
   if (!stored.length)
     return [];
   return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
@@ -4250,6 +4325,8 @@ var init_hidden_tabs = __esm(() => {
   init_buttons();
   init_secondary();
   init_log();
+  init_canvas_hidden();
+  init_canvas_hidden();
 });
 
 // src/tabs/activation-handoff.ts
@@ -4873,6 +4950,7 @@ var init_configure_commit = __esm(() => {
   init_live_tab_order();
   init_buttons();
   init_host_settings();
+  init_canvas_hidden();
   init_secondary_drawer();
   init_persist();
   init_log();
@@ -5101,11 +5179,13 @@ var init_configure_commit = __esm(() => {
       name: "apply-hidden-state",
       run: async (ctx) => {
         ctx.rollbackState.previousHiddenIds = new Set(ctx.base.hiddenTabIds);
+        setCanvasHiddenTabIds([...ctx.draft.hiddenIds]);
         applyHiddenTabIdsToSecondary(ctx.draft.hiddenIds);
         applyHiddenTabIdsToMirror(ctx.draft.hiddenIds);
       },
       rollback: async (ctx) => {
         if (ctx.rollbackState.previousHiddenIds) {
+          setCanvasHiddenTabIds([...ctx.rollbackState.previousHiddenIds]);
           applyHiddenTabIdsToSecondary(ctx.rollbackState.previousHiddenIds);
           applyHiddenTabIdsToMirror(ctx.rollbackState.previousHiddenIds);
         }
@@ -6995,7 +7075,7 @@ function buildLiveDraftAndBase() {
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const healedHidden = resolveHiddenTabIdsForDraft(hostSettings?.hiddenTabIds, catalog.map((t3) => t3.id));
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
@@ -7131,6 +7211,7 @@ var init_configure_modal = __esm(() => {
   init_hooks_module();
   init_configure_model();
   init_configure_catalog();
+  init_canvas_hidden();
   init_hidden_tabs();
   init_host_settings();
   init_store();
@@ -7523,8 +7604,8 @@ function addSecondaryTabButton(tab) {
     e3.stopPropagation();
     showAssignmentMenu(e3.clientX, e3.clientY, tab.id, tab.title, btn);
   });
-  const hostHidden = getHostDrawerSettings()?.hiddenTabIds;
-  if (hostHidden) {
+  const effectiveHidden = mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, getCanvasHiddenTabIds());
+  if (effectiveHidden.length > 0) {
     const liveOnStrip = [];
     for (const el of Array.from(tabList.querySelectorAll("button[data-tab-id]"))) {
       const tid = el.getAttribute("data-tab-id");
@@ -7532,7 +7613,7 @@ function addSecondaryTabButton(tab) {
         liveOnStrip.push(tid);
     }
     liveOnStrip.push(tab.id);
-    if (isTabIdHidden(tab.id, hostHidden, liveOnStrip)) {
+    if (isTabIdHidden(tab.id, effectiveHidden, liveOnStrip)) {
       btn.style.display = "none";
     }
   }
@@ -7692,6 +7773,7 @@ var init_buttons = __esm(() => {
   init_assignment();
   init_tab_context_menu();
   init_persist();
+  init_canvas_hidden();
 });
 
 // src/tabs/assignment.ts
@@ -10564,6 +10646,14 @@ function parseLayoutBlob(input) {
     out.version = input.version;
   if ("settings" in input)
     out.settings = input.settings;
+  if (Array.isArray(input.hiddenTabIds)) {
+    const ids = [];
+    for (const id of input.hiddenTabIds) {
+      if (typeof id === "string" && id.length > 0)
+        ids.push(id);
+    }
+    out.hiddenTabIds = ids;
+  }
   if (isPlainObject(input.primary)) {
     const p3 = input.primary;
     const primary = {};
@@ -10603,7 +10693,7 @@ function parseLayoutBlob(input) {
     dlog("parseLayoutBlob: detachedTabs is not an array; treating as empty");
   }
   for (const key of Object.keys(input)) {
-    if (key === "primary" || key === "secondary" || key === "detachedTabs" || key === "version" || key === "settings") {
+    if (key === "primary" || key === "secondary" || key === "detachedTabs" || key === "version" || key === "settings" || key === "hiddenTabIds") {
       continue;
     }
     out[key] = input[key];
@@ -11111,7 +11201,8 @@ function snapshotLayout() {
       const tabs = getDrawerTabs();
       const tab = tabs.find((t3) => t3.id === tabId);
       return { tabId, tabTitle: tab?.title || tabId, sidebar: side };
-    })
+    }),
+    hiddenTabIds: getCanvasHiddenTabIds()
   };
   return result;
 }
@@ -11135,7 +11226,8 @@ function seedDualLayoutFromLive() {
       width: primaryWidth,
       activeTabId: null
     },
-    detachedTabs: []
+    detachedTabs: [],
+    hiddenTabIds: Array.isArray(live.hiddenTabIds) ? live.hiddenTabIds.slice() : getCanvasHiddenTabIds()
   };
   setLastLoadedLayout(seed);
 }
@@ -11151,7 +11243,8 @@ function buildPersistedLayout() {
   const base = {
     primary: last?.primary ?? { open: false, width: 420 },
     secondary: last?.secondary ?? { open: false, width: 420 },
-    detachedTabs: last?.detachedTabs ?? []
+    detachedTabs: last?.detachedTabs ?? [],
+    hiddenTabIds: Array.isArray(last?.hiddenTabIds) ? last.hiddenTabIds : []
   };
   const s3 = getSettings();
   const tabsLive = s3.secondSidebarEnabled;
@@ -11167,7 +11260,8 @@ function buildPersistedLayout() {
       width: s3.persistDrawerWidth ? live.secondary.width : base.secondary.width ?? 420,
       activeTabId: tabsLive ? live.secondary.activeTabId : base.secondary.activeTabId
     },
-    detachedTabs: tabsLive ? live.detachedTabs : base.detachedTabs ?? []
+    detachedTabs: tabsLive ? live.detachedTabs : base.detachedTabs ?? [],
+    hiddenTabIds: Array.isArray(live.hiddenTabIds) ? live.hiddenTabIds : base.hiddenTabIds ?? []
   };
 }
 function persistOpenState() {
@@ -11309,6 +11403,7 @@ var init_persist = __esm(() => {
   init_styles();
   init_assignment();
   init_active_tab();
+  init_canvas_hidden();
   init_state();
   init_log();
   init_parse_layout();
@@ -11650,18 +11745,46 @@ function getAllButtonsInContainer(container) {
   }
   return Array.from(container.querySelectorAll("button[data-tab-id]"));
 }
+function isDisplayedTabButton(el) {
+  return el.style?.display !== "none";
+}
+function domInsertIndexFromVisibleIndex(siblingHidden, toVisibleIndex) {
+  const visibleCount = siblingHidden.reduce((n2, hidden) => n2 + (hidden ? 0 : 1), 0);
+  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
+  if (targetVis >= visibleCount) {
+    let lastVisible = -1;
+    for (let i3 = 0;i3 < siblingHidden.length; i3++) {
+      if (!siblingHidden[i3])
+        lastVisible = i3;
+    }
+    return lastVisible + 1;
+  }
+  let seen = 0;
+  for (let i3 = 0;i3 < siblingHidden.length; i3++) {
+    if (siblingHidden[i3])
+      continue;
+    if (seen === targetVis)
+      return i3;
+    seen++;
+  }
+  return siblingHidden.length;
+}
 function getButtonsInContainer(container, _secondary, excludeTabId) {
-  const buttons = getAllButtonsInContainer(container);
-  if (!excludeTabId)
-    return buttons;
-  return buttons.filter((el) => el.getAttribute("data-tab-id") !== excludeTabId);
+  return getAllButtonsInContainer(container).filter((el) => {
+    if (!isDisplayedTabButton(el))
+      return false;
+    if (excludeTabId && el.getAttribute("data-tab-id") === excludeTabId) {
+      return false;
+    }
+    return true;
+  });
 }
 function buildDraftAndBase() {
   const catalog = getFullCatalog();
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getTabAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const healedHidden = resolveHiddenTabIdsForDraft(hostSettings?.hiddenTabIds, catalog.map((t3) => t3.id));
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
@@ -11921,16 +12044,17 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
   const sourceBtn = dragElement && dragElement.getAttribute("data-tab-id") === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => b2.getAttribute("data-tab-id") === sourceTabId) ?? null;
   if (!sourceBtn)
     return false;
-  const buttons = getAllButtonsInContainer(container);
-  const buttonsWithoutSource = buttons.filter((b2) => b2 !== sourceBtn);
-  if (target.index >= buttonsWithoutSource.length) {
+  const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b2) => b2 !== sourceBtn);
+  const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
+  const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
+  if (insertIdx >= buttonsWithoutSource.length) {
     if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === null) {
       return false;
     }
     container.appendChild(sourceBtn);
     return true;
   }
-  const referenceBtn = buttonsWithoutSource[target.index];
+  const referenceBtn = buttonsWithoutSource[insertIdx];
   if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
     return false;
   }
@@ -12421,6 +12545,7 @@ var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();
   init_configure_catalog();
+  init_canvas_hidden();
   init_hidden_tabs();
   init_host_settings();
   init_assignment();
@@ -16111,6 +16236,10 @@ function setup(ctx) {
     hydrateSettings(layout?.settings);
     setDebug(getSettings().debugMode);
     setLastLoadedLayout(layout);
+    try {
+      const { hydrateCanvasHiddenFromLayout: hydrateCanvasHiddenFromLayout3 } = await Promise.resolve().then(() => (init_hidden_tabs(), exports_hidden_tabs));
+      hydrateCanvasHiddenFromLayout3(layout);
+    } catch {}
     refreshSettingsPanel();
     if (getSettings().debugMode)
       installDebugEscapeHatch();

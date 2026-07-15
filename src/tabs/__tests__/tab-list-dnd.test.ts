@@ -23,8 +23,10 @@
 // Activation: mouse = ~6px Euclidean distance; touch/pen = ~200ms long-press
 // (movement past threshold cancels long-press arming).
 //
-// Live drawer DnD also uses reorderVisibleInList so hidden tabs do not skew
-// hit-test indices (would otherwise animate mid-drag then snap back).
+// Live drawer DnD uses reorderVisibleInList on commit AND visible-only
+// hit-test / mid-drag insert (domInsertIndexFromVisibleIndex). Counting
+// display:none hidden buttons in mid-drag (zero rects) while commit used
+// visible indices caused post-settle icon shuffle after Configure hide.
 //
 // First-drop shuffle fix: buildDraftAndBase aligns primary/secondary ids to
 // live strip order (alignDraftToLiveVisibleOrder) so commit does not rewrite
@@ -64,6 +66,8 @@ import {
   isLiveTabListDndAllowed,
   shouldActivateDragFromDistance,
   DRAG_ACTIVATE_DISTANCE_PX,
+  domInsertIndexFromVisibleIndex,
+  isDisplayedTabButton,
 } from '../tab-list-dnd'
 import { readVisibleTabIdsFromList } from '../live-tab-order'
 
@@ -233,6 +237,68 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     naive.primaryIds.join(','),
     'H,a,b,c',
     'document naive reorderWithin(0,1) with hidden → H,a,b,c (visible a,b,c unchanged)',
+  )
+})()
+
+// ── domInsertIndexFromVisibleIndex: mid-drag must park like commit ──
+//
+// Siblings after removing drag source, with H display:none:
+//   [H, b, c] — insert visible index 1 (before c among [b,c]) → DOM idx 2 (c)
+//   [a, H, b] — insert at end of visible (idx 2) → after last visible b (DOM 3)
+//   [a, H, b] not append after trailing H when target is "end of visibles"
+;(() => {
+  // Post-removal siblings: H hidden, b, c visible. Move a before c → vis 1.
+  assertEqual(
+    domInsertIndexFromVisibleIndex([true, false, false], 1),
+    2,
+    'domInsert: before 2nd visible with leading hidden → index of that visible',
+  )
+  assertEqual(
+    domInsertIndexFromVisibleIndex([true, false, false], 0),
+    1,
+    'domInsert: before first visible with leading hidden → skip leading H',
+  )
+  // Trailing hidden: visibles [a,b] then H. End of visible → insert before H.
+  assertEqual(
+    domInsertIndexFromVisibleIndex([false, false, true], 2),
+    2,
+    'domInsert: append after last visible leaves trailing H after insert',
+  )
+  assertEqual(
+    domInsertIndexFromVisibleIndex([false, false, true], 99),
+    2,
+    'domInsert: oversized visible index clamps like end-after-last-visible',
+  )
+  // All hidden — treat as empty visible list → insert at 0 (before all).
+  assertEqual(
+    domInsertIndexFromVisibleIndex([true, true], 0),
+    0,
+    'domInsert: all-hidden siblings → insert at 0',
+  )
+  assertEqual(
+    domInsertIndexFromVisibleIndex([], 0),
+    0,
+    'domInsert: empty siblings → 0 (append)',
+  )
+  // Middle hidden between visibles: [a, H, b], insert before b (vis 1) → idx 2
+  assertEqual(
+    domInsertIndexFromVisibleIndex([false, true, false], 1),
+    2,
+    'domInsert: middle hidden — before 2nd visible → index of b',
+  )
+})()
+
+// isDisplayedTabButton: style.display === 'none' is Configure-hide
+;(() => {
+  assertEqual(
+    isDisplayedTabButton({ style: { display: 'none' } } as HTMLElement),
+    false,
+    'isDisplayedTabButton: display none → false',
+  )
+  assertEqual(
+    isDisplayedTabButton({ style: { display: '' } } as HTMLElement),
+    true,
+    'isDisplayedTabButton: empty display → true',
   )
 })()
 
