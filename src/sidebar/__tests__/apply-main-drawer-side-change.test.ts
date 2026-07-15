@@ -336,5 +336,48 @@ function reset() {
   assertEqual(__getLastKnownSideForTest(), 'left', 'A10: lastKnown matches live DOM left')
 }
 
+// ── A11: apply returns immediately; does not await host DOM settle ──
+// Old bug: configure auto-commit blocked on waitForSideSettle (up to 2.5s),
+// so rapid "Swap drawer locations" clicks queued multi-second remount delays.
+{
+  reset()
+  installMainWrapper('right') // never flips
+  __setLastKnownSideForTest('right')
+  // Long hard settle — if apply awaited this, the test would hang ~800ms+.
+  __setSideSettleHardMsForTest(800)
+
+  const t0 = Date.now()
+  await applyMainDrawerSideChange('left')
+  const elapsed = Date.now() - t0
+
+  assert(elapsed < 200, `A11: apply returns without awaiting settle (elapsed=${elapsed}ms)`)
+  assertEqual(getMainDrawerSideOverride(), 'left', 'A11: override still held while DOM lags')
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A11: lastKnown desired after remount')
+  assert(unmountCalls >= 1, 'A11: remount still ran before return')
+  assertEqual(getMainDrawerSide(), 'left', 'A11: getMainDrawerSide is override left immediately')
+}
+
+// ── A12: rapid applies both return quickly; final side is last desired ──
+{
+  reset()
+  installMainWrapper('right') // never flips during applies
+  __setLastKnownSideForTest('right')
+  __setSideSettleHardMsForTest(800)
+
+  const t0 = Date.now()
+  const p1 = applyMainDrawerSideChange('left')
+  const p2 = applyMainDrawerSideChange('right')
+  await Promise.all([p1, p2])
+  const elapsed = Date.now() - t0
+
+  assert(elapsed < 200, `A12: rapid applies do not stack settle waits (elapsed=${elapsed}ms)`)
+  assertEqual(__getLastKnownSideForTest(), 'right', 'A12: last known is final desired')
+  // DOM never left 'right', so final apply settles immediately (override null)
+  // or briefly holds 'right'. Never left over from the cancelled first apply.
+  const ov = getMainDrawerSideOverride()
+  assert(ov === null || ov === 'right', 'A12: override null or final desired, never left')
+  assertEqual(getMainDrawerSide(), 'right', 'A12: getMainDrawerSide is right immediately')
+}
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}/${passed + failed}`)

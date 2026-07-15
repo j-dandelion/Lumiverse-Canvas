@@ -670,12 +670,19 @@ let _sideSettleHardMs = SIDE_SETTLE_HARD_MS
  * checkSideChanged sees no change and secondary + main-mirror stay put.
  *
  * Steps:
- *   1. Install main-side override (desired); serialize concurrent applies.
+ *   1. Install main-side override (desired); serialize concurrent remounts.
  *   2. Ensure checkSideChanged remounts (seed _lastKnownSide if needed).
- *   3. Poll for host DOM class to match; clear override when it does.
- *      On timeout: keep override + stamp lastKnown to desired (do not clear
- *      while DOM still lags — that causes reverse remounts).
- *   4. Re-attach the side MutationObserver if the host replaced the wrapper.
+ *   3. Return as soon as Canvas shells are on the desired side.
+ *   4. In the background: wait for host DOM class to match and clear the
+ *      override (or keep it on hard timeout so lagging DOM cannot reverse-
+ *      remount). Re-attach the side MutationObserver if the host replaced
+ *      the wrapper.
+ *
+ * Why settle is not awaited: configure auto-commit used to block the whole
+ * commit queue on host React lag (up to SIDE_SETTLE_HARD_MS). Rapid "Swap
+ * drawer locations" clicks then stacked multi-second delays before the next
+ * remount. Canvas remount is synchronous under the override; host settle
+ * only needs gen-guarded background cleanup.
  */
 export async function applyMainDrawerSideChange(
   desired: 'left' | 'right',
@@ -705,18 +712,18 @@ export async function applyMainDrawerSideChange(
     // DOM while shells already sit on desired.
     _lastKnownSide = desired
 
-    await waitForSideSettle(desired, gen)
-
-    // Stale apply — a newer one owns settle/rebind.
-    if (gen !== _sideApplyGen) return
-
-    // Ensure lastKnown still matches what we wrote (settle may have run
-    // under a concurrent MO that shouldn't reverse intentional side).
-    _lastKnownSide = desired
-    rebindSideChangeWatcherIfNeeded()
+    // Background settle only — do not block configure commit / next swap.
+    // Latest gen owns settle; stale settles exit early via gen checks.
+    void waitForSideSettle(desired, gen).then(() => {
+      if (gen !== _sideApplyGen) return
+      // Ensure lastKnown still matches what we wrote (settle may have run
+      // under a concurrent MO that shouldn't reverse intentional side).
+      _lastKnownSide = desired
+      rebindSideChangeWatcherIfNeeded()
+    })
   }
 
-  // Chain: rapid A then B must not run two settles in parallel. B waits on A.
+  // Chain: rapid A then B must not interleave remounts. Settle is background.
   const next = _applySideChain.then(run, run)
   _applySideChain = next.catch(() => {})
   await next

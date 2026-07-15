@@ -2998,11 +2998,12 @@ async function applyMainDrawerSideChange(desired) {
       }
     }
     _lastKnownSide = desired;
-    await waitForSideSettle(desired, gen);
-    if (gen !== _sideApplyGen)
-      return;
-    _lastKnownSide = desired;
-    rebindSideChangeWatcherIfNeeded();
+    waitForSideSettle(desired, gen).then(() => {
+      if (gen !== _sideApplyGen)
+        return;
+      _lastKnownSide = desired;
+      rebindSideChangeWatcherIfNeeded();
+    });
   };
   const next = _applySideChain.then(run, run);
   _applySideChain = next.catch(() => {});
