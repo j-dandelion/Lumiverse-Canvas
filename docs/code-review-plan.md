@@ -10,7 +10,7 @@
 | 2 | drawer-sync.ts — Observer Explosion → Unified Observation Bus | ✅ Complete |
 | 3 | main-persist.ts — Polling Restore → Promise-based Settlement | ✅ Complete |
 | 4 | configure-commit.ts — Imperative Pipeline → Command Queue | ✅ Complete |
-| 5 | configure-modal.tsx — useEffect Orchestration → State Machine | Pending |
+| 5 | configure-modal.tsx — useEffect Orchestration → State Machine | ✅ Complete |
 | 6 | drawer-sync.ts — Side Settle Polling → One-shot MutationObserver Predicate | ✅ Complete |
 | 7 | main-tab-pin.ts — Pin/Unpin Cascade → Transactional State | Pending |
 | 8 | shared.ts — Utility Functions → Domain-Specific Modules | Pending |
