@@ -43,22 +43,10 @@ import {
 } from './live-tab-order'
 import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
-import {
-  INITIAL_MODAL_STATE,
-  modalTransition,
-  type ModalMachineState,
-  type ModalEvent,
-} from './configure-modal-machine'
 
-// ── Module state (backed by state machine) ──
+// ── Module state (SoT: legacy refs — machine extraction is parked / unused) ──
+// See configure-modal-machine.unused.ts; dual-write migration not live.
 
-let _machine: ModalMachineState = { ...INITIAL_MODAL_STATE }
-
-function _dispatch(event: ModalEvent): void {
-  _machine = modalTransition(_machine, event)
-}
-
-// Legacy accessors for backward compatibility during incremental migration
 let _modalContainer: HTMLElement | null = null
 let _draftRef: ConfigureDraft | null = null
 let _baseSnapshotRef: BaseSnapshot | null = null

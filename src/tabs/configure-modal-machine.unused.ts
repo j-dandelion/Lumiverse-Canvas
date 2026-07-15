@@ -1,4 +1,12 @@
 /**
+ * PARKED — not imported by runtime.
+ *
+ * Pure reducer extracted for configure-modal.tsx (Move 5). Live SoT remains
+ * legacy module refs (`_draftRef`, epoch, drag, commit chain). Dual-write
+ * migration deliberately deferred. Safe to delete once a real machine lands.
+ *
+ * ---
+ *
  * State machine for Configure Tabs modal.
  *
  * Encapsulates the modal lifecycle, drag-and-drop state, and auto-commit

@@ -106,6 +106,22 @@ const { restoreMainDrawerFromDom, unsuppressMainDrawer, stampPanelBodyHide } = m
 
 export {}
 
+/** Run queued fake timers so sequential restore awaits (poll + settle) finish. */
+async function drainFakeTimers(maxRounds = 200): Promise<void> {
+  for (let round = 0; round < maxRounds; round++) {
+    await Promise.resolve()
+    if (_pendingTimers.length === 0) return
+    const batch = _pendingTimers.splice(0)
+    for (const t of batch) {
+      try {
+        t.fn()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -115,7 +131,9 @@ export {}
   _unsuppressCalled = false
   _hostActive = false
   _docEl.classList = makeClassList()
+  _pendingTimers = []
   restoreMainDrawerFromDom(false, null, undefined, { restoreOpen: false, restoreWidth: false })
+  await drainFakeTimers()
   // When targetOpen=false and restoreOpen=false, it should call unsuppressMainDrawer directly
   assert(true, 'T1: restoreMainDrawerFromDom(false) completes without error')
 }
@@ -138,12 +156,12 @@ export {}
 // --- T4: restoreMainDrawerFromDom with targetOpen=true and drawer not open ---
 {
   _docEl.classList = makeClassList()
+  _pendingTimers = []
   // The drawer wrapper has no wrapperOpen class, so currentOpen is false
   // This should scheduleRestoreTabThenUnsuppress
   restoreMainDrawerFromDom(true, 'memory', 380, { restoreOpen: true, restoreWidth: true })
-  // Since the fake sidebar doesn't have the right tab button, the restore
-  // will fall through to the poll-max path (50 polls at 16ms)
-  // With our fake timers this runs immediately
+  // Host never becomes active → poll budget + content settle; drain fake timers.
+  await drainFakeTimers()
   assert(true, 'T4: restoreMainDrawerFromDom(true) schedules restore without error')
 }
 
@@ -151,11 +169,13 @@ export {}
 {
   // Set up wrapper with wrapperOpen class to simulate drawer already open
   _docEl.classList = makeClassList()
+  _pendingTimers = []
   // Force wrapperOpen on the wrapper element used by readWrapperOpen
   // This requires a wrapper element in the DOM - we'll use the sidebar querySelector
   // Since the test stub returns null for wrapper, readWrapperOpen will return false
   // and the path goes through the "open by clicking" branch
   restoreMainDrawerFromDom(true, 'profile', undefined, { restoreOpen: true, restoreWidth: false })
+  await drainFakeTimers()
   assert(true, 'T5: restoreMainDrawerFromDom with open=true, closed drawer')
 }
 

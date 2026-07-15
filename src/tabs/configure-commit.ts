@@ -1,9 +1,11 @@
 // Batch commit for the Configure Tabs UI.
 //
-// Applies a ConfigureDraft to the live DOM and host settings in one
-// atomic-like pass. Avoids the per-tab side effects of assignTab (no
-// runHandoff, no auto-open, no per-tab persist), coalescing all writes
-// into a single patchHostDrawerSettings + persistLayout call.
+// Serialized fail-forward step queue (not a real transaction). Concurrent
+// callers share `_commitChain` and are never rejected as "already in progress".
+// On step failure, best-effort reverse of prior reversible steps may run;
+// persist / side apply may already be irreversible. Avoids per-tab assignTab
+// side effects (no runHandoff, no auto-open, no per-tab persist), coalescing
+// writes into patchHostDrawerSettings + persistLayout where possible.
 //
 // Tab-assignment persistence is always-on (built-in), so persistLayout
 // is always called after commit (no longer gated on a setting).
@@ -23,6 +25,10 @@ import {
   isTabActiveInMainDrawer,
 } from './assignment'
 import { runHandoff, captureSourceList } from './activation-handoff'
+import {
+  readLivePrimaryTabIds,
+  readLiveSecondaryTabIds,
+} from './live-tab-order'
 import {
   hideMainTabButton,
   showMainTabButton,
@@ -232,9 +238,9 @@ const commitSteps: CommitStep[] = [
   {
     name: 'move-tabs',
     run: async (ctx) => {
-      // Save pre-move state for rollback
-      ctx.rollbackState.preMoveSecondaryIds = [...ctx.draft.secondaryIds]
-      ctx.rollbackState.preMovePrimaryIds = [...ctx.draft.primaryIds]
+      // Pre-move live order for rollback (never draft — draft is post-edit targets).
+      ctx.rollbackState.preMoveSecondaryIds = readLiveSecondaryTabIds()
+      ctx.rollbackState.preMovePrimaryIds = readLivePrimaryTabIds()
 
       const movePromises: Promise<void>[] = []
 
@@ -251,7 +257,7 @@ const commitSteps: CommitStep[] = [
       await Promise.all(movePromises)
     },
     rollback: async (ctx) => {
-      // Move tabs back to their original locations
+      // Best-effort reverse; persist/side may already be irreversible.
       const movePromises: Promise<void>[] = []
 
       // Move tabs that were moved to secondary back to primary
@@ -270,7 +276,7 @@ const commitSteps: CommitStep[] = [
 
       await Promise.all(movePromises)
 
-      // Restore original order
+      // Restore pre-move live order captured at step entry
       reorderSecondaryTabButtons(ctx.rollbackState.preMoveSecondaryIds || [])
       reorderHostMainTabButtons(ctx.rollbackState.preMovePrimaryIds || [])
       reorderMainMirrorTabButtons(ctx.rollbackState.preMovePrimaryIds || [])
@@ -281,16 +287,16 @@ const commitSteps: CommitStep[] = [
   {
     name: 'reorder-buttons',
     run: async (ctx) => {
-      // Save previous order for rollback
-      ctx.rollbackState.preReorderSecondaryIds = [...ctx.draft.secondaryIds]
-      ctx.rollbackState.preReorderPrimaryIds = [...ctx.draft.primaryIds]
+      // Live DOM order immediately before applying draft (post-move if any).
+      ctx.rollbackState.preReorderSecondaryIds = readLiveSecondaryTabIds()
+      ctx.rollbackState.preReorderPrimaryIds = readLivePrimaryTabIds()
 
       reorderSecondaryTabButtons(ctx.draft.secondaryIds)
       reorderHostMainTabButtons(ctx.draft.primaryIds)
       reorderMainMirrorTabButtons(ctx.draft.primaryIds)
     },
     rollback: async (ctx) => {
-      // Restore previous order
+      // Best-effort reverse to pre-step live order.
       if (ctx.rollbackState.preReorderSecondaryIds) {
         reorderSecondaryTabButtons(ctx.rollbackState.preReorderSecondaryIds)
       }
@@ -378,14 +384,14 @@ const commitSteps: CommitStep[] = [
   {
     name: 'apply-hidden-state',
     run: async (ctx) => {
-      // Save previous hidden state for rollback
-      ctx.rollbackState.previousHiddenIds = new Set(ctx.draft.hiddenIds)
+      // Pre-step hidden set from base (not draft targets).
+      ctx.rollbackState.previousHiddenIds = new Set(ctx.base.hiddenTabIds)
 
       applyHiddenTabIdsToSecondary(ctx.draft.hiddenIds)
       applyHiddenTabIdsToMirror(ctx.draft.hiddenIds)
     },
     rollback: async (ctx) => {
-      // Restore previous hidden state
+      // Best-effort reverse; persist/side may already be irreversible.
       if (ctx.rollbackState.previousHiddenIds) {
         applyHiddenTabIdsToSecondary(ctx.rollbackState.previousHiddenIds)
         applyHiddenTabIdsToMirror(ctx.rollbackState.previousHiddenIds)

@@ -1,5 +1,12 @@
 // Drag-and-drop tab reorder on live drawer tabs.
 //
+// Runtime drag phases (module `_drag`):
+//   idle → dragging → settling → idle
+// Pointer arming (long-press / distance threshold) uses local vars only —
+// not a `_drag` phase. Settling keeps element + overlay so cleanup can
+// remove the ghost after animate/commit; concurrent drag is gated by
+// `phase !== idle`.
+//
 // Activation:
 //   - Mouse / non-touch: distance-based (~6px Euclidean). pointerdown arms;
 //     first pointermove past threshold calls startDrag with the *move* event
@@ -93,18 +100,10 @@ function usesLongPressActivation(pointerType: string): boolean {
 }
 
 // ── Discriminated union for drag state ──
+// Runtime: idle | dragging | settling only (arming is local to install handlers).
 
 type DragState =
   | { phase: 'idle' }
-  | {
-      phase: 'arming'
-      tabId: string
-      element: HTMLElement
-      fromSecondary: boolean
-      pointerX: number
-      pointerY: number
-      armTimer: ReturnType<typeof setTimeout> | null
-    }
   | {
       phase: 'dragging'
       tabId: string
@@ -131,14 +130,6 @@ type DragState =
       element: HTMLElement
       fromSecondary: boolean
       overlay: HTMLElement
-      settleTimer: ReturnType<typeof setTimeout> | null
-    }
-  | {
-      phase: 'dropping'
-      tabId: string
-      element: HTMLElement
-      fromSecondary: boolean
-      target: { container: HTMLElement; index: number; secondary: boolean }
     }
 
 let _drag: DragState = { phase: 'idle' }
@@ -1282,9 +1273,13 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Capture all data into locals BEFORE any cleanup / await, so we
   // never rely on module fields that clearDragState zeroes.
   const onUp = async (_ev: PointerEvent) => {
+    // Only the active drag's up handler may settle. If phase already left
+    // dragging (duplicate event or tearDown), ignore.
+    if (_drag.phase !== 'dragging') return
+
     const capturedTabId = tabId
     const capturedFromSecondary = fromSecondary
-    const capturedTarget = _drag.phase === 'dragging' ? _drag.lastDropTarget : null
+    const capturedTarget = _drag.lastDropTarget
 
     document.removeEventListener('contextmenu', suppressCtx, true)
 
@@ -1293,14 +1288,16 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     // is still blocked; remove on next macrotask.
     scheduleClickSuppressorRemoval()
 
-    // Cancel any pending rAF
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId)
-      _rafId = null
+    // Detach move/up while still `dragging` (settling has no handlers).
+    // Do NOT idle yet — keep element/overlay for settle + cleanupDragVisuals.
+    detachDragPointerListeners()
+    _drag = {
+      phase: 'settling',
+      tabId: capturedTabId,
+      element,
+      fromSecondary: capturedFromSecondary,
+      overlay,
     }
-
-    // Stop tracking pointer; keep overlay + placeholder for settle anim.
-    clearDragState()
     clearInsertIndicator()
 
     let slotSpacer: HTMLElement | null = null
@@ -1429,7 +1426,13 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   document.addEventListener('pointercancel', onUp)
 }
 
-function clearDragState(): void {
+/**
+ * Remove pointer listeners + rAF/geometry/body cursor while phase may still
+ * be `dragging`. Does **not** clear overlay/element or force idle — used
+ * before transitioning to `settling` so a second pointerup cannot re-enter
+ * onUp mid-await.
+ */
+function detachDragPointerListeners(): void {
   if (_drag.phase === 'dragging') {
     document.removeEventListener('pointermove', _drag.moveHandler)
     document.removeEventListener('pointerup', _drag.upHandler)
@@ -1438,17 +1441,18 @@ function clearDragState(): void {
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
 
-  // Clean up rAF
   if (_rafId !== null) {
     cancelAnimationFrame(_rafId)
     _rafId = null
   }
 
-  // Clear geometry cache
   _geometryCache = null
   _geomDirty = false
+}
 
-  // Reset drag state to idle
+/** Full abort reset: detach listeners then force idle (after visuals cleaned). */
+function clearDragState(): void {
+  detachDragPointerListeners()
   _drag = { phase: 'idle' }
 }
 
@@ -1460,7 +1464,7 @@ function cleanupDragVisuals(): void {
   // the overlay. Strip buttons use `transition: all 0.2s ease`, so dropping
   // opacity:0 placeholder without suppressing transition fades 0→1 (looks
   // like disappear-then-fade-in if the overlay is already gone).
-  if (_drag.phase === 'dragging' || _drag.phase === 'settling' || _drag.phase === 'dropping') {
+  if (_drag.phase === 'dragging' || _drag.phase === 'settling') {
     const el = _drag.element
     el.style.setProperty('transition', 'none', 'important')
     el.classList.remove('canvas-tab-list-dnd-placeholder')

@@ -770,53 +770,23 @@ function reconcileSideOverrideFromDom(): void {
   // else: keep override (React lag after our write, or store not yet readable)
 }
 
-/** Wait for host wrapper class to match desired; clear override when settled. */
-async function settleMainDrawerSideDom(
-  desired: 'left' | 'right',
-  gen: number,
-): Promise<void> {
-  const hardMs = _sideSettleHardMs
-  const hardDeadline = Date.now() + hardMs
-  while (Date.now() < hardDeadline) {
-    // Newer intentional apply supersedes this settle.
-    if (gen !== _sideApplyGen) return
-
-    if (readMainWrapperSideFromDom() === desired) {
-      // Only clear if we still own the override for this desired side.
-      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-        setMainDrawerSideOverride(null)
-      }
-      return
-    }
-    await new Promise<void>((r) => {
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => r())
-      } else {
-        setTimeout(() => r(), 16)
-      }
-    })
-  }
-
-  // Hard timeout: do NOT clear override while DOM still lags. Clearing here
-  // makes getMainDrawerSide() return old DOM while shells/_lastKnown sit on
-  // desired — next accidental checkSideChanged remounts back to old side.
-  // Keep override until DOM matches or MO sees a different host side.
-  // Stamp lastKnown so rebind cannot re-seed from lagging DOM.
-  if (gen !== _sideApplyGen) return
-  _lastKnownSide = desired
-  if (getMainDrawerSideOverride() === desired) {
-    dwarn(
-      `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${hardMs}ms; keeping override until DOM matches or host writes a different side`,
-    )
-  }
-}
-
+/**
+ * Wait for host wrapper class to match desired; clear override when settled.
+ * Hard timeout resolves without clearing override (avoids reverse remount).
+ * Timeout is cleared on success so late warn/disconnect cannot race.
+ */
 function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void> {
   return new Promise((resolve) => {
-    if (gen !== _sideApplyGen) { resolve(); return }
+    if (gen !== _sideApplyGen) {
+      resolve()
+      return
+    }
 
-    const wrapper = getMainWrapper()
-    if (!wrapper) { resolve(); return }
+    let observed = getMainWrapper()
+    if (!observed) {
+      resolve()
+      return
+    }
 
     // Check immediately
     if (readMainWrapperSideFromDom() === desired) {
@@ -827,36 +797,58 @@ function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void
       return
     }
 
-    const observer = new MutationObserver(() => {
-      if (gen !== _sideApplyGen) { observer.disconnect(); resolve(); return }
-      
-      // Rebind if wrapper was replaced
-      if (!wrapper.isConnected) {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let observer!: MutationObserver
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer != null) clearTimeout(timer)
+      try {
         observer.disconnect()
-        const newWrapper = getMainWrapper()
-        if (newWrapper) observer.observe(newWrapper, { attributes: true, attributeFilter: ['class'] })
+      } catch {
+        /* ignore */
+      }
+      resolve()
+    }
+
+    observer = new MutationObserver(() => {
+      if (settled) return
+      if (gen !== _sideApplyGen) {
+        finish()
         return
       }
-      
-      if (readMainWrapperSideFromDom() === desired) {
+
+      // Rebind if wrapper was replaced (keep `observed` in sync for connectivity).
+      if (!observed.isConnected) {
         observer.disconnect()
+        const next = getMainWrapper()
+        if (!next) return
+        observed = next
+        observer.observe(observed, { attributes: true, attributeFilter: ['class'] })
+        // Fall through to match check on the new node.
+      }
+
+      if (readMainWrapperSideFromDom() === desired) {
         if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
           setMainDrawerSideOverride(null)
         }
-        resolve()
+        finish()
       }
     })
-    observer.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
 
-    // Hard timeout — resolve, don't reject. Keep override.
-    setTimeout(() => {
-      observer.disconnect()
-      if (gen !== _sideApplyGen) { resolve(); return }
-      _lastKnownSide = desired
-      dwarn(
-        `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`,
-      )
-      resolve()
+    observer.observe(observed, { attributes: true, attributeFilter: ['class'] })
+
+    // Hard timeout — resolve, don't reject. Keep override while DOM lags.
+    timer = setTimeout(() => {
+      if (settled) return
+      if (gen === _sideApplyGen) {
+        _lastKnownSide = desired
+        dwarn(
+          `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`,
+        )
+      }
+      finish()
     }, _sideSettleHardMs)
   })
 }
@@ -901,11 +893,14 @@ export function startSideChangeWatcher(): void {
     dwarn('startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears')
     return
   }
+  // Side MO must always have a coordinator — setup may start this watcher
+  // without light-sync attach, so optional `?.signal` would no-op remounts.
+  const coordinator = ensureObserverCoordinator()
   _sideObserver = new MutationObserver(() => {
     // Host class flip: clear override when DOM settled to override OR when
     // DOM shows a different side (Settings path won). Then remount.
     reconcileSideOverrideFromDom()
-    _observerCoordinator?.signal('side')
+    coordinator.signal('side')
   })
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
   _observedMainWrapper = wrapper

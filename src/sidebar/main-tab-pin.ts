@@ -56,12 +56,11 @@ export const MAIN_MIRROR_LIST_MAIN_CLASS = 'sidebar-ux-tab-list-main'
 export const MAIN_MIRROR_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
 /**
- * Transactional state container.
+ * Single module state object for main-mirror pin mode.
  *
- * All mutable state lives in a single object so that mutations can be
- * applied atomically via `commitState()`. This prevents partial updates
- * from leaving the mirror in an inconsistent state when a step fails
- * (e.g. host button click throws during teardown).
+ * Updates go through `commitState()` as a single `Object.assign` patch —
+ * not a multi-step transaction and not copy-on-write. Grouping fields
+ * still keeps mutations in one place so callers do not scatter writes.
  */
 interface MirrorState {
   enabled: boolean
@@ -82,10 +81,10 @@ const initialState: MirrorState = {
 let _state: MirrorState = { ...initialState }
 
 /**
- * Apply a partial state update atomically.
+ * Apply a partial state patch via Object.assign (not transactional CoW).
  *
- * The updater receives the current state and returns the next state.
- * Only the fields present in the returned object are written.
+ * The updater receives the current state and returns fields to write.
+ * Only those fields are assigned onto `_state`.
  */
 function commitState(updater: (prev: MirrorState) => Partial<MirrorState>): void {
   const patch = updater(_state)
@@ -229,12 +228,13 @@ export function activateMainMirrorFromRestore(
     undefined
   if (hostBtn && hostBtn.isConnected) {
     const key = hostButtonKey(hostBtn)
+    // Set exclusive key *before* host click so reconcile/heal cannot see
+    // null and reseed park (tabBtnActive) in the gap.
+    commitState(() => ({ activeKey: key }))
     try {
       hostBtn.click()
-      commitState(() => ({ activeKey: key }))
     } catch {
-      /* host may throw during teardown */
-      commitState(() => ({ activeKey: key }))
+      /* host may throw during teardown; key already set */
     }
   } else if (resolvedTitle) {
     commitState(() => ({ activeKey: `title__${resolvedTitle}` }))
@@ -843,12 +843,12 @@ function onMirrorClick(ev: Event): void {
     const again = _mirrorToHost.get(mirror)
     if (again && again.isConnected) {
       const againKey = hostButtonKey(again)
+      // Key before click — same exclusive-pin rule as restore activate.
+      commitState(() => ({ activeKey: againKey }))
       try {
         again.click()
-        commitState(() => ({ activeKey: againKey }))
       } catch {
-        /* host may throw during teardown */
-        commitState(() => ({ activeKey: againKey }))
+        /* host may throw during teardown; key already set */
       }
     } else {
       commitState(() => ({ activeKey: key }))
@@ -856,12 +856,11 @@ function onMirrorClick(ev: Event): void {
     onMainMirrorTabActivated(title)
     return
   }
+  commitState(() => ({ activeKey: key }))
   try {
     hostBtn.click()
-    commitState(() => ({ activeKey: key }))
   } catch {
-    /* ignore */
-    commitState(() => ({ activeKey: key }))
+    /* ignore; key already set */
   }
   onMainMirrorTabActivated(title)
 }

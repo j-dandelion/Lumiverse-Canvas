@@ -441,46 +441,26 @@ function startContentSettleWatch(
  */
 function waitForSettle(timeout: number): Promise<void> {
   return new Promise((resolve) => {
-    if (_stopped) { resolve(); return }
+    if (_stopped) {
+      resolve()
+      return
+    }
 
     let settled = false
+    let hardTimer: ReturnType<typeof setTimeout> | null = null
     const settle = () => {
       if (settled) return
       settled = true
+      if (hardTimer != null) clearTimeout(hardTimer)
       stopContentSettleWatch()
       resolve()
     }
 
     startContentSettleWatch(() => settle())
 
-    // Hard timeout
-    setTimeout(() => settle(), timeout)
+    // Hard timeout (fail-forward)
+    hardTimer = setTimeout(() => settle(), Math.max(0, timeout))
   })
-}
-
-/**
- * Click until the target tab is active.
- * Returns an object with a stop() method to cancel the loop.
- */
-function clickUntilActive(
-  targetTabId: string,
-  preferMirror: boolean,
-  interval: number,
-): { stop: () => void } {
-  let stopped = false
-  let polls = 0
-  const poll = () => {
-    if (stopped || _stopped) return
-    if (isHostPrimaryTabActive(targetTabId)) return
-
-    if (polls % 3 === 0) {
-      clickRestoredPrimaryTab(targetTabId, preferMirror)
-    }
-    polls++
-    setTimeout(poll, interval)
-  }
-  requestAnimationFrame(() => poll())
-  return { stop: () => { stopped = true } }
 }
 
 /**
@@ -497,34 +477,77 @@ function unsuppressAfterTwoPaints(): Promise<void> {
   })
 }
 
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
- * Restore a tab and unsuppress the drawer.
- * Uses Promise.race to handle timeout and settle detection.
+ * Restore a tab then unsuppress.
+ *
+ * Sequential contract (not content-only race):
+ * 1. Phase H — poll every RESTORE_TAB_POLL_MS; re-click when polls%3===0 and
+ *    host not active; require RESTORE_HOST_STABLE_POLLS consecutive active polls.
+ * 2. Phase C — content settle (mutation quiet or short fallback).
+ * 3. Final stamp + repark, then two-rAF unsuppress.
+ *
+ * Mirror highlight alone is never "ready" — only host tabBtnActive.
  */
 async function restoreTab(
   targetTabId: string | null,
   preferMirror: boolean,
   timeout: number,
+  opts?: {
+    repark?: () => void
+    isMirrorMode?: boolean
+  },
 ): Promise<void> {
   if (_stopped) return
 
-  // If no target tab, just unsuppress
   if (!targetTabId) {
+    opts?.repark?.()
     await unsuppressAfterTwoPaints()
     return
   }
 
-  // Start clicking until active
-  const clickLoop = clickUntilActive(targetTabId, preferMirror, RESTORE_TAB_POLL_MS * 3)
+  const repark = opts?.repark
+  const isMirrorMode = opts?.isMirrorMode ?? false
+  const deadline = Date.now() + timeout
+  let polls = 0
+  let stable = 0
 
-  // Wait for settle or timeout
-  const settle = waitForSettle(timeout)
-  await Promise.race([settle, new Promise<void>((resolve) => setTimeout(resolve, timeout))])
+  // Phase H: host-stable polls
+  while (!_stopped && Date.now() < deadline) {
+    if (isHostPrimaryTabActive(targetTabId)) {
+      stable++
+      if (stable >= RESTORE_HOST_STABLE_POLLS) break
+    } else {
+      stable = 0
+      if (polls % 3 === 0) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror)
+      }
+    }
+    // Host mode needs per-tick stamp; mirror CSS covers shell while pending.
+    if (!isMirrorMode) {
+      stampPanelBodyHide()
+    }
+    repark?.()
+    polls++
+    await delayMs(RESTORE_TAB_POLL_MS)
+  }
 
-  // Stop clicking
-  clickLoop.stop()
+  // Phase C: content settle only after host stable (or overall timeout)
+  if (!_stopped) {
+    const remaining = Math.max(0, deadline - Date.now())
+    // Even on host timeout, give content a brief chance if budget left;
+    // if budget exhausted waitForSettle(0) still runs fallback path quickly.
+    await waitForSettle(remaining > 0 ? remaining : RESTORE_CONTENT_FALLBACK_MS)
+  }
 
-  // Unsuppress after two paints
+  // Final stamp + repark while still pending, then reveal.
+  if (!isMirrorMode) {
+    stampPanelBodyHide()
+  }
+  repark?.()
   await unsuppressAfterTwoPaints()
 }
 
@@ -670,11 +693,14 @@ function scheduleRestoreTabThenUnsuppress(
       }
     }
 
-    // Use the new Promise-based restore
+    // Host-stable N + content settle + repark; unsuppress inside restoreTab.
     const timeout = RESTORE_TAB_POLL_MAX * RESTORE_TAB_POLL_MS
-    await restoreTab(targetTabId, preferMirror, timeout)
+    await restoreTab(targetTabId, preferMirror, timeout, {
+      repark: reparkIfNeeded,
+      isMirrorMode,
+    })
 
-    dlog('main-persist restore: unsuppress (Promise-based)')
+    dlog('main-persist restore: unsuppress (host-stable + content settle)')
   }
 
   if (RESTORE_TAB_CLICK_MS > 0) {

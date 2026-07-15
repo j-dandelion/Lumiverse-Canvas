@@ -6,13 +6,13 @@
 
 | Move | Description | Status |
 |------|-------------|--------|
-| 1 | tab-list-dnd.ts — Ad-hoc State Machine → Discriminated Union | ✅ Complete |
-| 2 | drawer-sync.ts — Observer Explosion → Unified Observation Bus | ✅ Complete |
-| 3 | main-persist.ts — Polling Restore → Promise-based Settlement | ✅ Complete |
-| 4 | configure-commit.ts — Imperative Pipeline → Command Queue | ✅ Complete |
-| 5 | configure-modal.tsx — useEffect Orchestration → State Machine | ✅ Complete |
-| 6 | drawer-sync.ts — Side Settle Polling → One-shot MutationObserver Predicate | ✅ Complete |
-| 7 | main-tab-pin.ts — Pin/Unpin Cascade → Transactional State | ✅ Complete |
+| 1 | tab-list-dnd.ts — Ad-hoc State Machine → Discriminated Union | ✅ Complete (phases: idle/dragging/settling only; settle keeps overlay) |
+| 2 | drawer-sync.ts — Observer Explosion → Unified Observation Bus | ✅ Complete (side watcher ensures coordinator) |
+| 3 | main-persist.ts — Polling Restore → Promise-based Settlement | ✅ Complete (host-stable N + content settle sequential) |
+| 4 | configure-commit.ts — Imperative Pipeline → Command Queue | ✅ Complete (serialized fail-forward; not a real transaction) |
+| 5 | configure-modal.tsx — useEffect Orchestration → State Machine | ⏸ Parked — pure reducer in `configure-modal-machine.unused.ts`; live SoT remains legacy refs (`_draftRef`, epoch, drag, commit chain). No dual-write. |
+| 6 | drawer-sync.ts — Side Settle Polling → One-shot MutationObserver Predicate | ✅ Complete (`waitForSideSettle` only; dead rAF helper removed) |
+| 7 | main-tab-pin.ts — Pin/Unpin Cascade → Transactional State | ✅ Complete (single Object.assign patch, not CoW) |
 | 8 | shared.ts — Utility Functions → Domain-Specific Modules | ✅ Complete (N/A — no shared.ts exists) |
 
 ## Methodology

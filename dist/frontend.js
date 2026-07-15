@@ -1376,6 +1376,10 @@ __export(exports_main_tab_pin, {
   MAIN_MIRROR_LIST_BOTTOM_CLASS: () => MAIN_MIRROR_LIST_BOTTOM_CLASS,
   MAIN_MIRROR_BTN_CLASS: () => MAIN_MIRROR_BTN_CLASS
 });
+function commitState(updater) {
+  const patch = updater(_state);
+  Object.assign(_state, patch);
+}
 function applyMainTabListPin(enabled, opts) {
   if (isMobileViewport()) {
     if (enabled && !opts?.force)
@@ -1388,11 +1392,11 @@ function applyMainTabListPin(enabled, opts) {
     return;
   }
   applyMainMirrorDrawer(true, { force: !!opts?.force });
-  if (_enabled && !opts?.force) {
+  if (_state.enabled && !opts?.force) {
     scheduleReconcile();
     return;
   }
-  _enabled = true;
+  commitState(() => ({ enabled: true }));
   ensureObservers();
   reconcileMainMirror();
 }
@@ -1409,33 +1413,30 @@ function reconcileMainTabListPin() {
     Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
-  _enabled = true;
+  commitState(() => ({ enabled: true }));
   ensureObservers();
   reconcileMainMirror();
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
 }
 function isMainTabListPinActive() {
-  return _enabled && isMainMirrorActive();
+  return _state.enabled && isMainMirrorActive();
 }
 function __resetMainTabPinForTest() {
   stopObservers();
-  _enabled = false;
-  _reconcileRaf = null;
-  _observedSidebar = null;
-  _activeMainMirrorKey = null;
+  _state = { ...initialState };
   __resetMainMirrorForTest();
   destroyMainPinHost();
 }
 function getActiveMainMirrorKey() {
-  return _activeMainMirrorKey;
+  return _state.activeKey;
 }
 function isMainTabPinEnabled() {
-  return _enabled;
+  return _state.enabled;
 }
 function getMainMirrorActiveTabId() {
-  if (!_enabled)
+  if (!_state.enabled)
     return null;
-  const key = _activeMainMirrorKey;
+  const key = _state.activeKey;
   if (!key)
     return null;
   if (key.startsWith("id__"))
@@ -1445,35 +1446,36 @@ function getMainMirrorActiveTabId() {
   return null;
 }
 function __setActiveMainMirrorKeyForTest(key) {
-  _activeMainMirrorKey = key;
+  _state.activeKey = key;
 }
 function __setMainTabPinEnabledForTest(on) {
-  _enabled = on;
+  _state.enabled = on;
 }
 function activateMainMirrorFromRestore(hostBtn, title) {
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
-    _activeMainMirrorKey = hostButtonKey(hostBtn);
+    const key = hostButtonKey(hostBtn);
+    commitState(() => ({ activeKey: key }));
     try {
       hostBtn.click();
     } catch {}
   } else if (resolvedTitle) {
-    _activeMainMirrorKey = `title__${resolvedTitle}`;
+    commitState(() => ({ activeKey: `title__${resolvedTitle}` }));
   }
   onMainMirrorTabActivated(resolvedTitle);
 }
 function adoptMainMirrorHostActivation(hostBtn, title, opts) {
-  if (!_enabled)
+  if (!_state.enabled)
     return;
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
-    _activeMainMirrorKey = hostButtonKey(hostBtn);
+    commitState(() => ({ activeKey: hostButtonKey(hostBtn) }));
   } else if (resolvedTitle) {
-    _activeMainMirrorKey = `title__${resolvedTitle}`;
+    commitState(() => ({ activeKey: `title__${resolvedTitle}` }));
   }
   if (!isMainMirrorActive()) {
     dlog("[main-mirror] adopt host activation (key only; shell inactive)", {
-      key: _activeMainMirrorKey,
+      key: _state.activeKey,
       title: resolvedTitle
     });
     return;
@@ -1486,29 +1488,30 @@ function adoptMainMirrorHostActivation(hostBtn, title, opts) {
   }
   scheduleReconcile();
   dlog("[main-mirror] adopt host activation", {
-    key: _activeMainMirrorKey,
+    key: _state.activeKey,
     title: resolvedTitle,
     open: shouldOpen
   });
 }
 function teardownMainPin() {
-  _enabled = false;
-  _activeMainMirrorKey = null;
+  commitState(() => ({ enabled: false, activeKey: null }));
   stopObservers();
   applyMainMirrorDrawer(false, { force: true });
   destroyMainPinHost();
 }
 function scheduleReconcile() {
-  if (_reconcileRaf !== null)
+  if (_state.reconcileRaf !== null)
     return;
-  _reconcileRaf = requestAnimationFrame(() => {
-    _reconcileRaf = null;
-    if (_enabled)
-      reconcileMainMirror();
-  });
+  commitState(() => ({
+    reconcileRaf: requestAnimationFrame(() => {
+      commitState(() => ({ reconcileRaf: null }));
+      if (_state.enabled)
+        reconcileMainMirror();
+    })
+  }));
 }
 function reconcileMainMirror() {
-  if (!_enabled)
+  if (!_state.enabled)
     return;
   const side = getMainDrawerSide();
   ensureMainPinHost(side);
@@ -1531,7 +1534,7 @@ function reconcileMainMirror() {
       list.removeChild(list.firstChild);
     return;
   }
-  if (sidebar !== _observedSidebar) {
+  if (sidebar !== _state.sidebar) {
     attachSidebarObserver(sidebar);
   }
   const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list);
@@ -1539,24 +1542,25 @@ function reconcileMainMirror() {
   const regularButtons = hostButtons.filter((b) => !isSettingsButton(b));
   const settingsButtons = hostButtons.filter((b) => isSettingsButton(b));
   const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)));
-  if (_activeMainMirrorKey == null || !wantedKeys.has(_activeMainMirrorKey)) {
+  if (_state.activeKey == null || !wantedKeys.has(_state.activeKey)) {
     const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
-    const prevKey = _activeMainMirrorKey;
+    const prevKey = _state.activeKey;
     if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
-      _activeMainMirrorKey = hostButtonKey(hostActiveBtn);
+      const newKey = hostButtonKey(hostActiveBtn);
+      commitState(() => ({ activeKey: newKey }));
       const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
       if (t)
         setCanvasMainTitle(t);
     } else if (prevKey != null) {
       const hiddenHostForKey = findHostButtonByKeyIncludingHidden(sidebar, prevKey);
       if (hiddenHostForKey && hiddenHostForKey.style.display === "none") {} else {
-        _activeMainMirrorKey = null;
+        commitState(() => ({ activeKey: null }));
       }
     }
-    if (prevKey !== _activeMainMirrorKey) {
+    if (prevKey !== _state.activeKey) {
       dlog("[main-mirror] active key healed/seeded", {
         prevKey,
-        nextKey: _activeMainMirrorKey
+        nextKey: _state.activeKey
       });
     }
   }
@@ -1575,8 +1579,8 @@ function reconcileMainMirror() {
     while (bottomSection.firstChild)
       bottomSection.removeChild(bottomSection.firstChild);
   }
-  if (_activeMainMirrorKey != null) {
-    const activeMirror = list.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_activeMainMirrorKey)}"]`);
+  if (_state.activeKey != null) {
+    const activeMirror = list.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_state.activeKey)}"]`);
     const title = activeMirror?.getAttribute("title") || activeMirror?.getAttribute("aria-label") || "";
     if (title) {
       setCanvasMainTitle(title);
@@ -1789,8 +1793,8 @@ function syncMirrorFromHost(mirror, hostBtn) {
   }
   const key = hostButtonKey(hostBtn);
   const hostActive = hostHasTabBtnActive(hostBtn);
-  const canvasActive = _activeMainMirrorKey != null && key === _activeMainMirrorKey;
-  const showActive = isCanvasMainOpen() && (_activeMainMirrorKey != null ? canvasActive : hostActive);
+  const canvasActive = _state.activeKey != null && key === _state.activeKey;
+  const showActive = isCanvasMainOpen() && (_state.activeKey != null ? canvasActive : hostActive);
   const wasActive = mirror.classList.contains("sidebar-ux-tab-active");
   mirror.classList.toggle("sidebar-ux-tab-active", showActive);
   if (showActive !== wasActive) {
@@ -1799,7 +1803,7 @@ function syncMirrorFromHost(mirror, hostBtn) {
       showActive,
       hostActive,
       canvasActive,
-      canvasKey: _activeMainMirrorKey,
+      canvasKey: _state.activeKey,
       open: isCanvasMainOpen()
     });
   }
@@ -1861,7 +1865,7 @@ function onMirrorClick(ev) {
     }
     return;
   }
-  const wasActive = _activeMainMirrorKey != null ? key === _activeMainMirrorKey : mirror.classList.contains("sidebar-ux-tab-active") || hostHasTabBtnActive(hostBtn);
+  const wasActive = _state.activeKey != null ? key === _state.activeKey : mirror.classList.contains("sidebar-ux-tab-active") || hostHasTabBtnActive(hostBtn);
   if (isCanvasMainOpen() && wasActive) {
     dlog("[main-mirror] click → close (active tab)", { title, key });
     closeCanvasMainDrawer();
@@ -1877,20 +1881,21 @@ function onMirrorClick(ev) {
     reconcileMainMirror();
     const again = _mirrorToHost.get(mirror);
     if (again && again.isConnected) {
-      _activeMainMirrorKey = hostButtonKey(again);
+      const againKey = hostButtonKey(again);
+      commitState(() => ({ activeKey: againKey }));
       try {
         again.click();
       } catch {}
     } else {
-      _activeMainMirrorKey = key;
+      commitState(() => ({ activeKey: key }));
     }
     onMainMirrorTabActivated(title);
     return;
   }
+  commitState(() => ({ activeKey: key }));
   try {
     hostBtn.click();
   } catch {}
-  _activeMainMirrorKey = key;
   onMainMirrorTabActivated(title);
 }
 function onMirrorContextMenu(ev) {
@@ -1940,35 +1945,35 @@ function ensureObservers() {
     attachSidebarObserver(sidebar);
 }
 function attachSidebarObserver(sidebar) {
-  if (_sidebarObserver && _observedSidebar === sidebar)
+  if (_state.observer && _state.sidebar === sidebar)
     return;
-  if (_sidebarObserver) {
-    _sidebarObserver.disconnect();
-    _sidebarObserver = null;
+  if (_state.observer) {
+    _state.observer.disconnect();
+    commitState(() => ({ observer: null }));
   }
-  _observedSidebar = sidebar;
+  commitState(() => ({ sidebar }));
   if (typeof MutationObserver === "undefined")
     return;
-  _sidebarObserver = new MutationObserver(() => scheduleReconcile());
-  _sidebarObserver.observe(sidebar, {
+  const observer = new MutationObserver(() => scheduleReconcile());
+  observer.observe(sidebar, {
     childList: true,
     subtree: true,
     attributes: true,
     attributeFilter: ["class", "data-tab-id", "title", "aria-label"]
   });
+  commitState(() => ({ observer }));
 }
 function stopObservers() {
-  if (_sidebarObserver) {
-    _sidebarObserver.disconnect();
-    _sidebarObserver = null;
+  if (_state.observer) {
+    _state.observer.disconnect();
+    commitState(() => ({ observer: null, sidebar: null }));
   }
-  _observedSidebar = null;
-  if (_reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_reconcileRaf);
-    _reconcileRaf = null;
+  if (_state.reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_state.reconcileRaf);
+    commitState(() => ({ reconcileRaf: null }));
   }
 }
-var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _enabled = false, _sidebarObserver = null, _reconcileRaf = null, _observedSidebar = null, _activeMainMirrorKey = null, _mirrorToHost;
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", initialState, _state, _mirrorToHost;
 var init_main_tab_pin = __esm(() => {
   init_store();
   init_state();
@@ -1978,6 +1983,14 @@ var init_main_tab_pin = __esm(() => {
   init_main_mirror_drawer();
   init_tab_position();
   init_buttons();
+  initialState = {
+    enabled: false,
+    activeKey: null,
+    sidebar: null,
+    observer: null,
+    reconcileRaf: null
+  };
+  _state = { ...initialState };
   _mirrorToHost = new WeakMap;
 });
 
@@ -2216,8 +2229,8 @@ function initSecondaryDrawer(_ctx) {
       persistLayout();
       if (_activeTabId === tabId) {
         _activeTabId = null;
-        _state = getTabAssignments().size > 0 ? "open" : "closed";
-        if (_state === "closed") {
+        _state2 = getTabAssignments().size > 0 ? "open" : "closed";
+        if (_state2 === "closed") {
           closeSecondarySidebar();
           updateDrawerTabVisibility();
         }
@@ -2250,16 +2263,16 @@ async function finalizeAssignToSecondary(opts) {
     setTabAssignment(resolvedId, "secondary");
     hideMainTabButton(resolvedId);
   }
-  if (openOnClosed && _state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+  if (openOnClosed && _state2 === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
     await openSecondarySidebar();
     if (!deferActivation) {
-      _state = "tab_active";
+      _state2 = "tab_active";
       _activeTabId = resolvedId;
       setActiveSecondaryTabId(resolvedId);
     }
   } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
     _activeTabId = resolvedId;
-    _state = "tab_active";
+    _state2 = "tab_active";
     setActiveSecondaryTabId(resolvedId);
   }
   const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
@@ -2277,9 +2290,9 @@ async function assignExtensionTabToSecondary(ctx) {
   const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx;
   setTabAssignment(resolvedId, "secondary");
   hideMainTabButton(resolvedId);
-  if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+  if (_state2 === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
     await openSecondarySidebar();
-    _state = "open";
+    _state2 = "open";
   }
   const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
   const bareId = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
@@ -2334,7 +2347,7 @@ async function assignExtensionTabToSecondary(ctx) {
   }
   if (!isMobileViewport() && !deferActivation) {
     _activeTabId = resolvedId;
-    _state = "tab_active";
+    _state2 = "tab_active";
     setActiveSecondaryTabId(resolvedId);
   }
   const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
@@ -2582,7 +2595,7 @@ async function unassignFromSecondary(tabId) {
     m.reconcileMainTabListPin();
   } catch {}
   if (getTabAssignments().size === 0) {
-    _state = "closed";
+    _state2 = "closed";
     _activeTabId = null;
     closeSecondarySidebar();
     updateDrawerTabVisibility();
@@ -2591,20 +2604,20 @@ async function unassignFromSecondary(tabId) {
 }
 function activateSecondaryTab(tabId) {
   _activeTabId = tabId;
-  _state = "tab_active";
+  _state2 = "tab_active";
   showSecondaryTab(tabId);
 }
 function getActiveSecondaryTab() {
   return _activeTabId;
 }
 function getSecondaryDrawerState() {
-  return _state;
+  return _state2;
 }
 function teardownSecondaryDrawer() {
-  _state = "closed";
+  _state2 = "closed";
   _activeTabId = null;
 }
-var _state = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
+var _state2 = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
 var init_secondary_drawer = __esm(() => {
   init_drawer_observer();
   init_buttons();
@@ -2623,6 +2636,7 @@ __export(exports_drawer_sync, {
   syncSecondaryTabLabels: () => syncSecondaryTabLabels,
   syncDrawerTabSettings: () => syncDrawerTabSettings,
   stopSideChangeWatcher: () => stopSideChangeWatcher,
+  stopObserverCoordinator: () => stopObserverCoordinator,
   stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
   stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
   stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
@@ -2639,6 +2653,45 @@ __export(exports_drawer_sync, {
   __getSideRemountGenForTest: () => __getSideRemountGenForTest,
   __getLastKnownSideForTest: () => __getLastKnownSideForTest
 });
+
+class ObserverCoordinator {
+  pending = new Map;
+  frame = null;
+  _stopped = false;
+  signal(kind, payload) {
+    if (this._stopped)
+      return;
+    this.pending.set(kind, payload ?? null);
+    if (this.frame === null) {
+      this.frame = requestAnimationFrame(() => {
+        this.frame = null;
+        if (this._stopped)
+          return;
+        const entries = [...this.pending];
+        this.pending.clear();
+        this.flush(entries);
+      });
+    }
+  }
+  stop() {
+    this._stopped = true;
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    this.pending.clear();
+  }
+  flush(entries) {
+    const hasSideChange = entries.some(([kind]) => kind === "side");
+    const hasLightSignals = entries.some(([kind]) => kind !== "side");
+    if (hasSideChange) {
+      checkSideChanged();
+    }
+    if (hasLightSignals) {
+      syncDrawerTabSettings();
+    }
+  }
+}
 function isShowTabLabels() {
   const host = getHostDrawerSettings();
   if (host && typeof host.showTabLabels === "boolean") {
@@ -2690,22 +2743,25 @@ function _runSyncDrawerTabSettings() {
     return;
   }
   if (!_mainDrawerTabResizeObserver) {
+    const coordinator = ensureObserverCoordinator();
     _mainDrawerTabResizeObserver = new ResizeObserver(() => {
-      syncDrawerTabSettings();
+      coordinator.signal("resize");
     });
     _mainDrawerTabResizeObserver.observe(mainDrawerTab);
     registerCleanup(stopDrawerTabResizeWatcher);
   }
   if (!_mainDrawerTabClassObserver) {
+    const coordinator = ensureObserverCoordinator();
     _mainDrawerTabClassObserver = new MutationObserver(() => {
-      syncDrawerTabSettings();
+      coordinator.signal("class");
     });
     _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["class"] });
     registerCleanup(stopDrawerTabClassObserver);
   }
   if (!_mainDrawerTabStyleObserver) {
+    const coordinator = ensureObserverCoordinator();
     _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      syncDrawerTabSettings();
+      coordinator.signal("style");
     });
     _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
     registerCleanup(stopDrawerTabStyleObserver);
@@ -2928,7 +2984,7 @@ async function applyMainDrawerSideChange(desired) {
       }
     }
     _lastKnownSide = desired;
-    await settleMainDrawerSideDom(desired, gen);
+    await waitForSideSettle(desired, gen);
     if (gen !== _sideApplyGen)
       return;
     _lastKnownSide = desired;
@@ -2967,32 +3023,71 @@ function reconcileSideOverrideFromDom() {
     setMainDrawerSideOverride(null);
   }
 }
-async function settleMainDrawerSideDom(desired, gen) {
-  const hardMs = _sideSettleHardMs;
-  const hardDeadline = Date.now() + hardMs;
-  while (Date.now() < hardDeadline) {
-    if (gen !== _sideApplyGen)
+function waitForSideSettle(desired, gen) {
+  return new Promise((resolve) => {
+    if (gen !== _sideApplyGen) {
+      resolve();
       return;
+    }
+    let observed = getMainWrapper();
+    if (!observed) {
+      resolve();
+      return;
+    }
     if (readMainWrapperSideFromDom() === desired) {
       if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
         setMainDrawerSideOverride(null);
       }
+      resolve();
       return;
     }
-    await new Promise((r) => {
-      if (typeof requestAnimationFrame === "function") {
-        requestAnimationFrame(() => r());
-      } else {
-        setTimeout(() => r(), 16);
+    let settled = false;
+    let timer = null;
+    let observer;
+    const finish = () => {
+      if (settled)
+        return;
+      settled = true;
+      if (timer != null)
+        clearTimeout(timer);
+      try {
+        observer.disconnect();
+      } catch {}
+      resolve();
+    };
+    observer = new MutationObserver(() => {
+      if (settled)
+        return;
+      if (gen !== _sideApplyGen) {
+        finish();
+        return;
+      }
+      if (!observed.isConnected) {
+        observer.disconnect();
+        const next = getMainWrapper();
+        if (!next)
+          return;
+        observed = next;
+        observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
+      }
+      if (readMainWrapperSideFromDom() === desired) {
+        if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+          setMainDrawerSideOverride(null);
+        }
+        finish();
       }
     });
-  }
-  if (gen !== _sideApplyGen)
-    return;
-  _lastKnownSide = desired;
-  if (getMainDrawerSideOverride() === desired) {
-    dwarn(`[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${hardMs}ms; keeping override until DOM matches or host writes a different side`);
-  }
+    observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
+    timer = setTimeout(() => {
+      if (settled)
+        return;
+      if (gen === _sideApplyGen) {
+        _lastKnownSide = desired;
+        dwarn(`[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`);
+      }
+      finish();
+    }, _sideSettleHardMs);
+  });
 }
 function rebindSideChangeWatcherIfNeeded() {
   const wrapper = getMainWrapper();
@@ -3020,9 +3115,10 @@ function startSideChangeWatcher() {
     dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
     return;
   }
+  const coordinator = ensureObserverCoordinator();
   _sideObserver = new MutationObserver(() => {
     reconcileSideOverrideFromDom();
-    checkSideChanged();
+    coordinator.signal("side");
   });
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
   _observedMainWrapper = wrapper;
@@ -3074,7 +3170,20 @@ function stopDrawerTabStyleObserver() {
     _mainDrawerTabStyleObserver = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
+function ensureObserverCoordinator() {
+  if (!_observerCoordinator) {
+    _observerCoordinator = new ObserverCoordinator;
+    registerCleanup(stopObserverCoordinator);
+  }
+  return _observerCoordinator;
+}
+function stopObserverCoordinator() {
+  if (_observerCoordinator) {
+    _observerCoordinator.stop();
+    _observerCoordinator = null;
+  }
+}
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
 var init_drawer_sync = __esm(() => {
   init_host_settings();
   init_store();
@@ -4192,6 +4301,40 @@ var init_activation_handoff = __esm(() => {
   init_store();
 });
 
+// src/tabs/live-tab-order.ts
+function readVisibleTabIdsFromList(list) {
+  if (!list)
+    return [];
+  const out = [];
+  for (const el of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+    if (isSettingsButton(el))
+      continue;
+    if (el.style?.display === "none")
+      continue;
+    const id = el.getAttribute("data-tab-id") || "";
+    if (id)
+      out.push(id);
+  }
+  return out;
+}
+function readLivePrimaryTabIds() {
+  const mirrorMain = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
+  if (mirrorMain)
+    return readVisibleTabIdsFromList(mirrorMain);
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return [];
+  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
+  return readVisibleTabIdsFromList(tabList);
+}
+function readLiveSecondaryTabIds() {
+  return readVisibleTabIdsFromList(getSecondaryTabList());
+}
+var init_live_tab_order = __esm(() => {
+  init_buttons();
+  init_secondary();
+});
+
 // src/tabs/configure-commit.ts
 var exports_configure_commit = {};
 __export(exports_configure_commit, {
@@ -4338,157 +4481,43 @@ async function commitConfigureDraft(draft, _base) {
 }
 async function runCommitConfigureDraft(draft, _base) {
   _batchActive = true;
+  const ctx = {
+    draft,
+    base: _base,
+    toSecondary: [],
+    toPrimary: [],
+    sideChanged: false,
+    pendingHandoffs: [],
+    preservePrimary: null,
+    rollbackState: {}
+  };
   try {
-    const { toSecondary, toPrimary } = computeDeltas(draft);
-    setSuppressAutoActivation(true);
-    const prevSide = _base.drawerSide;
-    const sideChanged = draft.drawerSide !== prevSide;
-    const hostWriteOk = patchHostDrawerSettings({
-      tabOrder: encodeHostTabOrder(draft),
-      hiddenTabIds: [...draft.hiddenIds],
-      side: draft.drawerSide
-    });
-    if (!hostWriteOk) {
-      dwarn("[configure-commit] patchHostDrawerSettings returned false; host order/hide/side may not persist. Continuing with DOM moves.");
-    }
-    if (sideChanged) {
+    const executedSteps = [];
+    for (const step of commitSteps) {
+      if (step.shouldRun && !step.shouldRun(ctx)) {
+        continue;
+      }
       try {
-        await forceMainDrawerSideChange(draft.drawerSide);
+        await step.run(ctx);
+        executedSteps.push(step);
       } catch (err) {
-        dwarn("[configure-commit] forceMainDrawerSideChange failed:", err);
+        for (const executedStep of executedSteps.reverse()) {
+          if (!executedStep.irreversible && executedStep.rollback) {
+            try {
+              await executedStep.rollback(ctx);
+            } catch (rollbackErr) {
+              dwarn(`[configure-commit] rollback "${executedStep.name}" failed:`, rollbackErr);
+            }
+          }
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        dwarn("[configure-commit] commit failed:", msg);
+        return { ok: false, error: msg };
       }
     }
-    const pendingHandoffs = [];
-    if (toSecondary.length > 0) {
-      const primaryList = await captureSourceList("primary");
-      for (const tabId of toSecondary) {
-        pendingHandoffs.push({
-          tabId,
-          source: "primary",
-          destination: "secondary",
-          sourceList: primaryList,
-          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
-          activateDestination: false
-        });
-      }
-    }
-    if (toPrimary.length > 0) {
-      const secondaryList = await captureSourceList("secondary");
-      for (const tabId of toPrimary) {
-        pendingHandoffs.push({
-          tabId,
-          source: "secondary",
-          destination: "primary",
-          sourceList: secondaryList,
-          preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
-          activateDestination: false
-        });
-      }
-    }
-    const preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(toSecondary);
-    const movePromises = [];
-    for (const tabId of toSecondary) {
-      movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
-        dwarn(`[configure-commit] moveTabToSecondaryQuiet failed for "${tabId}":`, err);
-      }));
-    }
-    for (const tabId of toPrimary) {
-      movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
-        dwarn(`[configure-commit] moveTabToPrimaryQuiet failed for "${tabId}":`, err);
-      }));
-    }
-    await Promise.all(movePromises);
-    reorderSecondaryTabButtons(draft.secondaryIds);
-    reorderHostMainTabButtons(draft.primaryIds);
-    reorderMainMirrorTabButtons(draft.primaryIds);
-    if (preservePrimary) {
-      await new Promise((r3) => requestAnimationFrame(() => r3()));
-      try {
-        preservePrimary.reassert();
-      } catch (err) {
-        dwarn("[configure-commit] post-move primary active reassert failed:", err);
-      }
-      reorderHostMainTabButtons(draft.primaryIds);
-      reorderMainMirrorTabButtons(draft.primaryIds);
-    }
-    for (const h3 of pendingHandoffs) {
-      try {
-        await runHandoff(h3);
-      } catch (err) {
-        dwarn(`[configure-commit] runHandoff failed for "${h3.tabId}":`, err);
-      }
-    }
-    if (preservePrimary) {
-      try {
-        preservePrimary.reassert();
-      } catch (err) {
-        dwarn("[configure-commit] preserve primary active reassert failed:", err);
-      }
-    }
-    if (toPrimary.length > 0) {
-      try {
-        reconcileSecondaryAfterQuietPrimaryMoves(draft.secondaryIds);
-      } catch (err) {
-        dwarn("[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:", err);
-      }
-    }
-    reorderSecondaryTabButtons(draft.secondaryIds);
-    reorderHostMainTabButtons(draft.primaryIds);
-    reorderMainMirrorTabButtons(draft.primaryIds);
-    applyHiddenTabIdsToSecondary(draft.hiddenIds);
-    applyHiddenTabIdsToMirror(draft.hiddenIds);
-    updateDrawerTabVisibility();
-    try {
-      const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-      mm.updateMainMirrorDrawerTabVisibility?.();
-      if (toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
-        mm.ensureHostContentParkedPublic?.();
-      }
-    } catch (err) {
-      dwarn("[configure-commit] updateMainMirrorDrawerTabVisibility failed:", err);
-    }
-    try {
-      const tp = await Promise.resolve().then(() => (init_tab_position(), exports_tab_position));
-      tp.reconcileTabListPin();
-    } catch (err) {
-      dwarn("[configure-commit] reconcileTabListPin failed:", err);
-    }
-    try {
-      const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
-      mp.reconcileMainTabListPin();
-    } catch (err) {
-      dwarn("[configure-commit] reconcileMainTabListPin failed:", err);
-    }
-    if (toPrimary.length > 0 || toSecondary.length > 0) {
-      reorderHostMainTabButtons(draft.primaryIds);
-      reorderMainMirrorTabButtons(draft.primaryIds);
-    }
-    if (preservePrimary) {
-      try {
-        preservePrimary.reassert();
-      } catch (err) {
-        dwarn("[configure-commit] post-reconcile primary active reassert failed:", err);
-      }
-      try {
-        const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-        if (mm.isMainMirrorActive?.())
-          mm.ensureHostContentParkedPublic?.();
-      } catch {}
-      const stick = preservePrimary;
-      new Promise((r3) => setTimeout(() => r3(), 120)).then(() => {
-        try {
-          stick.reassert();
-        } catch {}
-        try {
-          stick.disconnect();
-        } catch {}
-      });
-    }
-    persistLayout();
-    findStoreData(true);
     dlog("[configure-commit] commit successful", {
-      toSecondary: toSecondary.length,
-      toPrimary: toPrimary.length,
+      toSecondary: ctx.toSecondary.length,
+      toPrimary: ctx.toPrimary.length,
       hidden: draft.hiddenIds.size
     });
     return { ok: true };
@@ -4660,11 +4689,12 @@ async function moveTabToPrimaryQuiet(tabId) {
   }
   updateDrawerTabVisibility();
 }
-var _applyMainDrawerSideChangeImpl = null, _batchActive = false, _commitChain;
+var commitSteps, _applyMainDrawerSideChangeImpl = null, _batchActive = false, _commitChain;
 var init_configure_commit = __esm(() => {
   init_configure_model();
   init_assignment();
   init_activation_handoff();
+  init_live_tab_order();
   init_buttons();
   init_host_settings();
   init_secondary_drawer();
@@ -4675,41 +4705,315 @@ var init_configure_commit = __esm(() => {
   init_main_tab_pin();
   init_main_mirror_drawer();
   init_mobile_exclusion();
+  commitSteps = [
+    {
+      name: "compute-deltas",
+      run: async (ctx) => {
+        const { toSecondary, toPrimary } = computeDeltas(ctx.draft);
+        ctx.toSecondary = toSecondary;
+        ctx.toPrimary = toPrimary;
+        ctx.sideChanged = ctx.draft.drawerSide !== ctx.base.drawerSide;
+      }
+    },
+    {
+      name: "suppress-auto-activation",
+      run: async () => {
+        setSuppressAutoActivation(true);
+      },
+      rollback: async () => {
+        setSuppressAutoActivation(false);
+      }
+    },
+    {
+      name: "patch-host-settings",
+      run: async (ctx) => {
+        const currentSettings = getHostDrawerSettings();
+        if (currentSettings) {
+          ctx.rollbackState.previousTabOrder = currentSettings.tabOrder;
+          ctx.rollbackState.previousHiddenTabIds = currentSettings.hiddenTabIds;
+          ctx.rollbackState.previousSide = currentSettings.side;
+        }
+        const hostWriteOk = patchHostDrawerSettings({
+          tabOrder: encodeHostTabOrder(ctx.draft),
+          hiddenTabIds: [...ctx.draft.hiddenIds],
+          side: ctx.draft.drawerSide
+        });
+        if (!hostWriteOk) {
+          dwarn("[configure-commit] patchHostDrawerSettings returned false; " + "host order/hide/side may not persist. Continuing with DOM moves.");
+        }
+      },
+      rollback: async (ctx) => {
+        if (ctx.rollbackState.previousTabOrder !== undefined) {
+          patchHostDrawerSettings({
+            tabOrder: ctx.rollbackState.previousTabOrder,
+            hiddenTabIds: ctx.rollbackState.previousHiddenTabIds || [],
+            side: ctx.rollbackState.previousSide || "left"
+          });
+        }
+      }
+    },
+    {
+      name: "apply-side-change",
+      run: async (ctx) => {
+        if (ctx.sideChanged) {
+          try {
+            await forceMainDrawerSideChange(ctx.draft.drawerSide);
+          } catch (err) {
+            dwarn("[configure-commit] forceMainDrawerSideChange failed:", err);
+          }
+        }
+      },
+      shouldRun: (ctx) => ctx.sideChanged
+    },
+    {
+      name: "capture-source-lists",
+      run: async (ctx) => {
+        const pendingHandoffs = [];
+        if (ctx.toSecondary.length > 0) {
+          const primaryList = await captureSourceList("primary");
+          for (const tabId of ctx.toSecondary) {
+            pendingHandoffs.push({
+              tabId,
+              source: "primary",
+              destination: "secondary",
+              sourceList: primaryList,
+              preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
+              activateDestination: false
+            });
+          }
+        }
+        if (ctx.toPrimary.length > 0) {
+          const secondaryList = await captureSourceList("secondary");
+          for (const tabId of ctx.toPrimary) {
+            pendingHandoffs.push({
+              tabId,
+              source: "secondary",
+              destination: "primary",
+              sourceList: secondaryList,
+              preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
+              activateDestination: false
+            });
+          }
+        }
+        ctx.pendingHandoffs = pendingHandoffs;
+      }
+    },
+    {
+      name: "preserve-primary-active",
+      run: async (ctx) => {
+        ctx.preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(ctx.toSecondary);
+      }
+    },
+    {
+      name: "move-tabs",
+      run: async (ctx) => {
+        ctx.rollbackState.preMoveSecondaryIds = readLiveSecondaryTabIds();
+        ctx.rollbackState.preMovePrimaryIds = readLivePrimaryTabIds();
+        const movePromises = [];
+        for (const tabId of ctx.toSecondary) {
+          movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
+            dwarn(`[configure-commit] moveTabToSecondaryQuiet failed for "${tabId}":`, err);
+          }));
+        }
+        for (const tabId of ctx.toPrimary) {
+          movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
+            dwarn(`[configure-commit] moveTabToPrimaryQuiet failed for "${tabId}":`, err);
+          }));
+        }
+        await Promise.all(movePromises);
+      },
+      rollback: async (ctx) => {
+        const movePromises = [];
+        for (const tabId of ctx.toSecondary) {
+          movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
+            dwarn(`[configure-commit] rollback moveTabToPrimaryQuiet failed for "${tabId}":`, err);
+          }));
+        }
+        for (const tabId of ctx.toPrimary) {
+          movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
+            dwarn(`[configure-commit] rollback moveTabToSecondaryQuiet failed for "${tabId}":`, err);
+          }));
+        }
+        await Promise.all(movePromises);
+        reorderSecondaryTabButtons(ctx.rollbackState.preMoveSecondaryIds || []);
+        reorderHostMainTabButtons(ctx.rollbackState.preMovePrimaryIds || []);
+        reorderMainMirrorTabButtons(ctx.rollbackState.preMovePrimaryIds || []);
+      }
+    },
+    {
+      name: "reorder-buttons",
+      run: async (ctx) => {
+        ctx.rollbackState.preReorderSecondaryIds = readLiveSecondaryTabIds();
+        ctx.rollbackState.preReorderPrimaryIds = readLivePrimaryTabIds();
+        reorderSecondaryTabButtons(ctx.draft.secondaryIds);
+        reorderHostMainTabButtons(ctx.draft.primaryIds);
+        reorderMainMirrorTabButtons(ctx.draft.primaryIds);
+      },
+      rollback: async (ctx) => {
+        if (ctx.rollbackState.preReorderSecondaryIds) {
+          reorderSecondaryTabButtons(ctx.rollbackState.preReorderSecondaryIds);
+        }
+        if (ctx.rollbackState.preReorderPrimaryIds) {
+          reorderHostMainTabButtons(ctx.rollbackState.preReorderPrimaryIds);
+          reorderMainMirrorTabButtons(ctx.rollbackState.preReorderPrimaryIds);
+        }
+      }
+    },
+    {
+      name: "preserve-primary-after-moves",
+      run: async (ctx) => {
+        if (ctx.preservePrimary) {
+          await new Promise((r3) => requestAnimationFrame(() => r3()));
+          try {
+            ctx.preservePrimary.reassert();
+          } catch (err) {
+            dwarn("[configure-commit] post-move primary active reassert failed:", err);
+          }
+          reorderHostMainTabButtons(ctx.draft.primaryIds);
+          reorderMainMirrorTabButtons(ctx.draft.primaryIds);
+        }
+      },
+      shouldRun: (ctx) => !!ctx.preservePrimary
+    },
+    {
+      name: "run-handoffs",
+      run: async (ctx) => {
+        for (const h3 of ctx.pendingHandoffs) {
+          try {
+            await runHandoff(h3);
+          } catch (err) {
+            dwarn(`[configure-commit] runHandoff failed for "${h3.tabId}":`, err);
+          }
+        }
+      }
+    },
+    {
+      name: "reassert-primary-after-handoff",
+      run: async (ctx) => {
+        if (ctx.preservePrimary) {
+          try {
+            ctx.preservePrimary.reassert();
+          } catch (err) {
+            dwarn("[configure-commit] preserve primary active reassert failed:", err);
+          }
+        }
+      },
+      shouldRun: (ctx) => !!ctx.preservePrimary
+    },
+    {
+      name: "reconcile-secondary",
+      run: async (ctx) => {
+        if (ctx.toPrimary.length > 0) {
+          try {
+            reconcileSecondaryAfterQuietPrimaryMoves(ctx.draft.secondaryIds);
+          } catch (err) {
+            dwarn("[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:", err);
+          }
+        }
+      },
+      shouldRun: (ctx) => ctx.toPrimary.length > 0
+    },
+    {
+      name: "final-reorder",
+      run: async (ctx) => {
+        reorderSecondaryTabButtons(ctx.draft.secondaryIds);
+        reorderHostMainTabButtons(ctx.draft.primaryIds);
+        reorderMainMirrorTabButtons(ctx.draft.primaryIds);
+      }
+    },
+    {
+      name: "apply-hidden-state",
+      run: async (ctx) => {
+        ctx.rollbackState.previousHiddenIds = new Set(ctx.base.hiddenTabIds);
+        applyHiddenTabIdsToSecondary(ctx.draft.hiddenIds);
+        applyHiddenTabIdsToMirror(ctx.draft.hiddenIds);
+      },
+      rollback: async (ctx) => {
+        if (ctx.rollbackState.previousHiddenIds) {
+          applyHiddenTabIdsToSecondary(ctx.rollbackState.previousHiddenIds);
+          applyHiddenTabIdsToMirror(ctx.rollbackState.previousHiddenIds);
+        }
+      }
+    },
+    {
+      name: "reconcile-visibility",
+      run: async (ctx) => {
+        updateDrawerTabVisibility();
+        try {
+          const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+          mm.updateMainMirrorDrawerTabVisibility?.();
+          if (ctx.toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
+            mm.ensureHostContentParkedPublic?.();
+          }
+        } catch (err) {
+          dwarn("[configure-commit] updateMainMirrorDrawerTabVisibility failed:", err);
+        }
+        try {
+          const tp = await Promise.resolve().then(() => (init_tab_position(), exports_tab_position));
+          tp.reconcileTabListPin();
+        } catch (err) {
+          dwarn("[configure-commit] reconcileTabListPin failed:", err);
+        }
+        try {
+          const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+          mp.reconcileMainTabListPin();
+        } catch (err) {
+          dwarn("[configure-commit] reconcileMainTabListPin failed:", err);
+        }
+      }
+    },
+    {
+      name: "reorder-after-reconcile",
+      run: async (ctx) => {
+        if (ctx.toPrimary.length > 0 || ctx.toSecondary.length > 0) {
+          reorderHostMainTabButtons(ctx.draft.primaryIds);
+          reorderMainMirrorTabButtons(ctx.draft.primaryIds);
+        }
+      },
+      shouldRun: (ctx) => ctx.toPrimary.length > 0 || ctx.toSecondary.length > 0
+    },
+    {
+      name: "final-reassert",
+      run: async (ctx) => {
+        if (ctx.preservePrimary) {
+          try {
+            ctx.preservePrimary.reassert();
+          } catch (err) {
+            dwarn("[configure-commit] post-reconcile primary active reassert failed:", err);
+          }
+          try {
+            const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+            if (mm.isMainMirrorActive?.())
+              mm.ensureHostContentParkedPublic?.();
+          } catch {}
+          const stick = ctx.preservePrimary;
+          new Promise((r3) => setTimeout(() => r3(), 120)).then(() => {
+            try {
+              stick.reassert();
+            } catch {}
+            try {
+              stick.disconnect();
+            } catch {}
+          });
+        }
+      },
+      shouldRun: (ctx) => !!ctx.preservePrimary
+    },
+    {
+      name: "persist-layout",
+      run: async () => {
+        persistLayout();
+      },
+      irreversible: true
+    },
+    {
+      name: "bust-store-cache",
+      run: async () => {
+        findStoreData(true);
+      }
+    }
+  ];
   _commitChain = Promise.resolve();
-});
-
-// src/tabs/live-tab-order.ts
-function readVisibleTabIdsFromList(list) {
-  if (!list)
-    return [];
-  const out = [];
-  for (const el of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
-    if (isSettingsButton(el))
-      continue;
-    if (el.style?.display === "none")
-      continue;
-    const id = el.getAttribute("data-tab-id") || "";
-    if (id)
-      out.push(id);
-  }
-  return out;
-}
-function readLivePrimaryTabIds() {
-  const mirrorMain = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
-  if (mirrorMain)
-    return readVisibleTabIdsFromList(mirrorMain);
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return [];
-  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
-  return readVisibleTabIdsFromList(tabList);
-}
-function readLiveSecondaryTabIds() {
-  return readVisibleTabIdsFromList(getSecondaryTabList());
-}
-var init_live_tab_order = __esm(() => {
-  init_buttons();
-  init_secondary();
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
@@ -8981,6 +9285,81 @@ function startContentSettleWatch(onSettled) {
       settle("fallback");
   }, RESTORE_CONTENT_FALLBACK_MS);
 }
+function waitForSettle(timeout) {
+  return new Promise((resolve) => {
+    if (_stopped) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    let hardTimer = null;
+    const settle = () => {
+      if (settled)
+        return;
+      settled = true;
+      if (hardTimer != null)
+        clearTimeout(hardTimer);
+      stopContentSettleWatch();
+      resolve();
+    };
+    startContentSettleWatch(() => settle());
+    hardTimer = setTimeout(() => settle(), Math.max(0, timeout));
+  });
+}
+function unsuppressAfterTwoPaints() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        unsuppressMainDrawer();
+        resolve();
+      });
+    });
+  });
+}
+function delayMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function restoreTab(targetTabId, preferMirror, timeout, opts) {
+  if (_stopped)
+    return;
+  if (!targetTabId) {
+    opts?.repark?.();
+    await unsuppressAfterTwoPaints();
+    return;
+  }
+  const repark = opts?.repark;
+  const isMirrorMode = opts?.isMirrorMode ?? false;
+  const deadline = Date.now() + timeout;
+  let polls = 0;
+  let stable = 0;
+  while (!_stopped && Date.now() < deadline) {
+    if (isHostPrimaryTabActive(targetTabId)) {
+      stable++;
+      if (stable >= RESTORE_HOST_STABLE_POLLS)
+        break;
+    } else {
+      stable = 0;
+      if (polls % 3 === 0) {
+        clickRestoredPrimaryTab(targetTabId, preferMirror);
+      }
+    }
+    if (!isMirrorMode) {
+      stampPanelBodyHide();
+    }
+    repark?.();
+    polls++;
+    await delayMs(RESTORE_TAB_POLL_MS);
+  }
+  if (!_stopped) {
+    const remaining = Math.max(0, deadline - Date.now());
+    await waitForSettle(remaining > 0 ? remaining : RESTORE_CONTENT_FALLBACK_MS);
+  }
+  if (!isMirrorMode) {
+    stampPanelBodyHide();
+  }
+  repark?.();
+  await unsuppressAfterTwoPaints();
+}
 function clickRestoredPrimaryTab(targetTabId, preferMirror) {
   if (!targetTabId)
     return false;
@@ -9024,7 +9403,7 @@ function clickRestoredPrimaryTab(targetTabId, preferMirror) {
   }
 }
 function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackClickFirstHostTab = false) {
-  const run = () => {
+  const run = async () => {
     if (_stopped) {
       unsuppressMainDrawer();
       return;
@@ -9060,89 +9439,12 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
         }
       }
     }
-    let polls = 0;
-    let stable = 0;
-    let contentSettled = false;
-    let watchingContent = false;
-    let finished = false;
-    const finish = (reason) => {
-      if (finished)
-        return;
-      finished = true;
-      stopContentSettleWatch();
-      if (!isMirrorMode) {
-        stampPanelBodyHide();
-      }
-      dlog(`main-persist restore: unsuppress (${reason})`);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          unsuppressMainDrawer();
-        });
-      });
-    };
-    const tryFinish = () => {
-      if (finished)
-        return;
-      if (!targetTabId) {
-        finish("no-target-tab");
-        return;
-      }
-      if (stable >= RESTORE_HOST_STABLE_POLLS && contentSettled) {
-        finish("host-active+content-settled");
-      }
-    };
-    const beginContentWatch = () => {
-      if (watchingContent || finished)
-        return;
-      watchingContent = true;
-      reparkIfNeeded();
-      if (!isMirrorMode) {
-        stampPanelBodyHide();
-      }
-      startContentSettleWatch((settleReason) => {
-        contentSettled = true;
-        dlog(`main-persist restore: content settled (${settleReason})`);
-        tryFinish();
-      });
-    };
-    const poll = () => {
-      if (_stopped) {
-        unsuppressMainDrawer();
-        return;
-      }
-      if (finished)
-        return;
-      if (!targetTabId) {
-        finish("no-target-tab");
-        return;
-      }
-      if (isHostPrimaryTabActive(targetTabId)) {
-        stable++;
-        if (stable === 1) {
-          beginContentWatch();
-        }
-        tryFinish();
-        if (finished)
-          return;
-      } else {
-        stable = 0;
-        contentSettled = false;
-        watchingContent = false;
-        stopContentSettleWatch();
-        if (polls % 3 === 0) {
-          clickRestoredPrimaryTab(targetTabId, preferMirror);
-          reparkIfNeeded();
-        }
-      }
-      polls++;
-      if (polls >= RESTORE_TAB_POLL_MAX) {
-        clickRestoredPrimaryTab(targetTabId, preferMirror);
-        finish(contentSettled ? "poll-max-content-ok" : "poll-max");
-        return;
-      }
-      setTimeout(poll, RESTORE_TAB_POLL_MS);
-    };
-    requestAnimationFrame(() => poll());
+    const timeout = RESTORE_TAB_POLL_MAX * RESTORE_TAB_POLL_MS;
+    await restoreTab(targetTabId, preferMirror, timeout, {
+      repark: reparkIfNeeded,
+      isMirrorMode
+    });
+    dlog("main-persist restore: unsuppress (host-stable + content settle)");
   };
   if (RESTORE_TAB_CLICK_MS > 0) {
     setTimeout(run, RESTORE_TAB_CLICK_MS);
@@ -11246,14 +11548,14 @@ function insertIndexFromMidpoints(y3, midpoints) {
   }
   return midpoints.length;
 }
-function hitTestDropTarget2(geom) {
+function hitTestDropTarget2(geom, dragTabId) {
   const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
   let best = null;
   for (const { el: container, secondary } of containers) {
     const rect = container.getBoundingClientRect();
     if (!overlayOverlapsContainer(geom, rect))
       continue;
-    const buttons = getButtonsInContainer(container, secondary, _dragTabId2);
+    const buttons = getButtonsInContainer(container, secondary, dragTabId);
     let index = 0;
     if (buttons.length > 0) {
       const midpoints = buttons.map((btn) => {
@@ -11280,9 +11582,9 @@ function settleDestFromButtonRects(index, rects, emptyFallback) {
   const ref = rects[index];
   return { left: ref.left, top: ref.top };
 }
-function resolveSettleDestination(tabId, target, _crossList) {
-  if (_dragElement && target && target.container.contains(_dragElement)) {
-    const r3 = _dragElement.getBoundingClientRect();
+function resolveSettleDestination(dragElement, tabId, target, overlayWidth) {
+  if (dragElement && target && target.container.contains(dragElement)) {
+    const r3 = dragElement.getBoundingClientRect();
     return { left: r3.left, top: r3.top };
   }
   if (target && tabId) {
@@ -11293,28 +11595,23 @@ function resolveSettleDestination(tabId, target, _crossList) {
     });
     const cr = target.container.getBoundingClientRect();
     const emptyFallback = {
-      left: cr.left + Math.max(0, (cr.width - (_overlayWidth || 48)) / 2),
+      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
       top: cr.top
     };
     return settleDestFromButtonRects(target.index, rects, emptyFallback);
   }
-  if (_dragElement) {
-    const r3 = _dragElement.getBoundingClientRect();
+  if (dragElement) {
+    const r3 = dragElement.getBoundingClientRect();
     return { left: r3.left, top: r3.top };
   }
   return null;
 }
-function animateOverlaySettle2(destLeft, destTop) {
-  const overlay = _dragOverlay2;
-  if (!overlay)
-    return Promise.resolve();
-  const dx = destLeft - _overlayTx;
-  const dy = destTop - _overlayTy;
+function animateOverlaySettle2(overlay, currentTx, currentTy, destLeft, destTop) {
+  const dx = destLeft - currentTx;
+  const dy = destTop - currentTy;
   if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
-    _overlayTx = destLeft;
-    _overlayTy = destTop;
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    return Promise.resolve();
+    return Promise.resolve({ tx: destLeft, ty: destTop });
   }
   return new Promise((resolve) => {
     let done = false;
@@ -11327,9 +11624,7 @@ function animateOverlaySettle2(destLeft, destTop) {
         clearTimeout(_settleTimer2);
         _settleTimer2 = null;
       }
-      _overlayTx = destLeft;
-      _overlayTy = destTop;
-      resolve();
+      resolve({ tx: destLeft, ty: destTop });
     };
     const onEnd = (e3) => {
       if (e3.target !== overlay)
@@ -11341,19 +11636,17 @@ function animateOverlaySettle2(destLeft, destTop) {
     overlay.addEventListener("transitionend", onEnd);
     overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
     overlay.offsetWidth;
-    _overlayTx = destLeft;
-    _overlayTy = destTop;
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
     _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
   });
 }
-function cancelOverlaySettle2() {
+function cancelOverlaySettle2(overlay) {
   if (_settleTimer2 !== null) {
     clearTimeout(_settleTimer2);
     _settleTimer2 = null;
   }
-  if (_dragOverlay2) {
-    _dragOverlay2.classList.remove("canvas-tab-list-dnd-overlay-settling");
+  if (overlay) {
+    overlay.classList.remove("canvas-tab-list-dnd-overlay-settling");
   }
 }
 function installDropSlotSpacer(placeholder) {
@@ -11466,12 +11759,12 @@ function clearFLIPStyles() {
     }
   }
 }
-function reorderCanvasListDOM(container, target, sourceTabId) {
+function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
   if (!sourceTabId)
     return false;
   if (!isReorderableContainer(container))
     return false;
-  const sourceBtn = _dragElement && _dragElement.getAttribute("data-tab-id") === sourceTabId ? _dragElement : getAllButtonsInContainer(container).find((b2) => b2.getAttribute("data-tab-id") === sourceTabId) ?? null;
+  const sourceBtn = dragElement && dragElement.getAttribute("data-tab-id") === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => b2.getAttribute("data-tab-id") === sourceTabId) ?? null;
   if (!sourceBtn)
     return false;
   const buttons = getAllButtonsInContainer(container);
@@ -11490,25 +11783,25 @@ function reorderCanvasListDOM(container, target, sourceTabId) {
   container.insertBefore(sourceBtn, referenceBtn);
   return true;
 }
-function restoreSourceButtonDOM() {
-  if (!_dragElement || !_originalParent)
+function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
+  if (!dragElement || !originalParent)
     return;
-  const parent = _dragElement.parentNode;
-  if (parent === _originalParent) {
-    if (_originalNextSibling) {
-      if (_dragElement.nextElementSibling === _originalNextSibling)
+  const parent = dragElement.parentNode;
+  if (parent === originalParent) {
+    if (originalNextSibling) {
+      if (dragElement.nextElementSibling === originalNextSibling)
         return;
-      _originalParent.insertBefore(_dragElement, _originalNextSibling);
+      originalParent.insertBefore(dragElement, originalNextSibling);
     } else {
-      if (_dragElement.nextElementSibling === null && _dragElement.parentNode === _originalParent)
+      if (dragElement.nextElementSibling === null && dragElement.parentNode === originalParent)
         return;
-      _originalParent.insertBefore(_dragElement, null);
+      originalParent.insertBefore(dragElement, null);
     }
   } else {
-    if (_originalNextSibling && _originalNextSibling.parentNode === _originalParent) {
-      _originalParent.insertBefore(_dragElement, _originalNextSibling);
+    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+      originalParent.insertBefore(dragElement, originalNextSibling);
     } else {
-      _originalParent.appendChild(_dragElement);
+      originalParent.appendChild(dragElement);
     }
   }
 }
@@ -11526,7 +11819,6 @@ function createDragOverlay2(sourceBtn) {
   wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
   wrapper.appendChild(clone);
   document.body.appendChild(wrapper);
-  _dragOverlayInner = clone;
   return wrapper;
 }
 function suppressSyntheticClick(e3) {
@@ -11569,15 +11861,15 @@ function scheduleDragFrame() {
     return;
   _rafId = requestAnimationFrame(() => {
     _rafId = null;
-    if (!_isDragging)
+    if (_drag.phase !== "dragging")
       return;
     if (_geomDirty || !_geometryCache) {
       _geometryCache = { containers: getDropContainers() };
       _geomDirty = false;
     }
-    const geom = dragHitGeometry(_overlayTx, _overlayTy, _overlayWidth || 48, _overlayHeight || 48);
-    const target = hitTestDropTarget2(geom);
-    const prev = _lastDropTarget2;
+    const geom = dragHitGeometry(_drag.overlayTx, _drag.overlayTy, _drag.overlayWidth || 48, _drag.overlayHeight || 48);
+    const target = hitTestDropTarget2(geom, _drag.tabId);
+    const prev = _drag.lastDropTarget;
     const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
     if (!target) {
       if (prev) {
@@ -11588,10 +11880,10 @@ function scheduleDragFrame() {
     if (!sameTarget) {
       const isReorderable = isReorderableContainer(target.container);
       const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
-      if (isReorderable && _sourceIsInCanvasList) {
+      if (isReorderable && _drag.sourceIsInCanvasList) {
         const prevRects = new Map;
         const flipContainers = [];
-        const sourceParent = _dragElement?.parentElement;
+        const sourceParent = _drag.element?.parentElement;
         if (sourceParent && isReorderableContainer(sourceParent)) {
           mergeRects(prevRects, snapshotButtonRects(sourceParent));
           flipContainers.push(sourceParent);
@@ -11606,17 +11898,17 @@ function scheduleDragFrame() {
         if (!flipContainers.includes(target.container)) {
           flipContainers.push(target.container);
         }
-        const didReorder = reorderCanvasListDOM(target.container, target, _dragTabId2);
+        const didReorder = reorderCanvasListDOM(target.container, target, _drag.tabId, _drag.element);
         if (didReorder) {
-          applyFLIP2(prevRects, _dragTabId2, flipContainers);
+          applyFLIP2(prevRects, _drag.tabId, flipContainers);
           _geomDirty = true;
         }
       } else if (prevReorderable && !isReorderable && prev) {
-        restoreSourceButtonDOM();
+        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
         clearFLIPStyles();
         _geomDirty = true;
       }
-      _lastDropTarget2 = target;
+      _drag.lastDropTarget = target;
     }
   });
 }
@@ -11626,21 +11918,16 @@ function startDrag(btn, pointerEvent) {
   const tabId = getButtonTabId(btn);
   if (!tabId)
     return;
-  _dragFromSecondary = isSecondaryButton(btn);
-  _dragTabId2 = tabId;
-  _dragElement = btn;
-  _isDragging = true;
-  _originalParent = btn.parentElement;
-  _originalNextSibling = btn.nextElementSibling;
-  _sourceIsInCanvasList = getReorderParent(btn) != null;
+  const fromSecondary = isSecondaryButton(btn);
+  const element = btn;
+  const originalParent = btn.parentElement;
+  const originalNextSibling = btn.nextElementSibling;
+  const sourceIsInCanvasList = getReorderParent(btn) != null;
   const rect = btn.getBoundingClientRect();
-  _dragOffsetX2 = pointerEvent.clientX - rect.left;
-  _dragOffsetY2 = pointerEvent.clientY - rect.top;
-  _overlayTx = rect.left;
-  _overlayTy = rect.top;
-  _overlayWidth = rect.width;
-  _overlayHeight = rect.height;
-  _dragOverlay2 = createDragOverlay2(btn);
+  const offsetX = pointerEvent.clientX - rect.left;
+  const offsetY = pointerEvent.clientY - rect.top;
+  const overlay = createDragOverlay2(btn);
+  const overlayInner = overlay.querySelector(".canvas-tab-list-dnd-overlay-clone-btn");
   btn.classList.add("canvas-tab-list-dnd-placeholder");
   _geometryCache = { containers: getDropContainers() };
   _geomDirty = false;
@@ -11654,38 +11941,45 @@ function startDrag(btn, pointerEvent) {
   document.addEventListener("contextmenu", suppressCtx, true);
   installClickSuppressor(btn);
   const onMove = (ev) => {
-    if (!_dragOverlay2)
+    if (_drag.phase !== "dragging")
       return;
-    _overlayTx = ev.clientX - _dragOffsetX2;
-    _overlayTy = ev.clientY - _dragOffsetY2;
-    _dragOverlay2.style.transform = `translate3d(${_overlayTx}px, ${_overlayTy}px, 0)`;
+    _drag.overlayTx = ev.clientX - _drag.offsetX;
+    _drag.overlayTy = ev.clientY - _drag.offsetY;
+    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`;
     _pendingPointerX = ev.clientX;
     _pendingPointerY = ev.clientY;
     scheduleDragFrame();
   };
   const onUp = async (_ev) => {
-    const capturedTabId = _dragTabId2;
-    const capturedFromSecondary = _dragFromSecondary;
-    const capturedTarget = _lastDropTarget2;
+    if (_drag.phase !== "dragging")
+      return;
+    const capturedTabId = tabId;
+    const capturedFromSecondary = fromSecondary;
+    const capturedTarget = _drag.lastDropTarget;
     document.removeEventListener("contextmenu", suppressCtx, true);
     scheduleClickSuppressorRemoval();
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId);
-      _rafId = null;
-    }
-    clearDragState2();
+    detachDragPointerListeners();
+    _drag = {
+      phase: "settling",
+      tabId: capturedTabId,
+      element,
+      fromSecondary: capturedFromSecondary,
+      overlay
+    };
     clearInsertIndicator();
     let slotSpacer = null;
     try {
       if (capturedTarget && capturedTabId) {
         const crossList = capturedFromSecondary !== capturedTarget.secondary;
-        const dest = resolveSettleDestination(capturedTabId, capturedTarget, crossList);
+        const dest = resolveSettleDestination(element, capturedTabId, capturedTarget, rect.width);
         if (dest) {
-          await animateOverlaySettle2(dest.left, dest.top);
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
         }
         if (crossList && capturedFromSecondary) {
-          slotSpacer = installDropSlotSpacer(_dragElement);
-          restoreSourceButtonDOM();
+          slotSpacer = installDropSlotSpacer(element);
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
         }
         if (crossList && !capturedFromSecondary) {
           hideMainTabButton(capturedTabId);
@@ -11699,36 +11993,52 @@ function startDrag(btn, pointerEvent) {
               mp.reconcileMainTabListPin?.();
             } catch {}
           }
-          restoreSourceButtonDOM();
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
         }
       } else {
-        restoreSourceButtonDOM();
-        const dest = resolveSettleDestination(capturedTabId, null, false);
+        restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width);
         if (dest) {
-          await animateOverlaySettle2(dest.left, dest.top);
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
         }
       }
     } finally {
       removeDropSlotSpacer(slotSpacer);
-      cancelOverlaySettle2();
+      cancelOverlaySettle2(overlay);
       cleanupDragVisuals();
     }
   };
-  _moveHandler = onMove;
-  _upHandler = onUp;
+  _drag = {
+    phase: "dragging",
+    tabId,
+    element,
+    fromSecondary,
+    overlay,
+    overlayInner,
+    offsetX,
+    offsetY,
+    overlayTx: rect.left,
+    overlayTy: rect.top,
+    overlayWidth: rect.width,
+    overlayHeight: rect.height,
+    originalParent,
+    originalNextSibling,
+    sourceIsInCanvasList,
+    lastDropTarget: null,
+    moveHandler: onMove,
+    upHandler: onUp
+  };
   document.addEventListener("pointermove", onMove, { passive: true });
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onUp);
 }
-function clearDragState2() {
-  if (_moveHandler) {
-    document.removeEventListener("pointermove", _moveHandler);
-    _moveHandler = null;
-  }
-  if (_upHandler) {
-    document.removeEventListener("pointerup", _upHandler);
-    document.removeEventListener("pointercancel", _upHandler);
-    _upHandler = null;
+function detachDragPointerListeners() {
+  if (_drag.phase === "dragging") {
+    document.removeEventListener("pointermove", _drag.moveHandler);
+    document.removeEventListener("pointerup", _drag.upHandler);
+    document.removeEventListener("pointercancel", _drag.upHandler);
   }
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
@@ -11739,10 +12049,14 @@ function clearDragState2() {
   _geometryCache = null;
   _geomDirty = false;
 }
+function clearDragState2() {
+  detachDragPointerListeners();
+  _drag = { phase: "idle" };
+}
 function cleanupDragVisuals() {
   clearFLIPStyles();
-  if (_dragElement) {
-    const el = _dragElement;
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const el = _drag.element;
     el.style.setProperty("transition", "none", "important");
     el.classList.remove("canvas-tab-list-dnd-placeholder");
     el.offsetWidth;
@@ -11750,28 +12064,16 @@ function cleanupDragVisuals() {
       el.style.removeProperty("transition");
     });
   }
-  if (_dragOverlay2) {
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const overlay = _drag.overlay;
     document.body.offsetWidth;
-    _dragOverlay2.remove();
-    _dragOverlay2 = null;
+    overlay.remove();
   }
-  _dragOverlayInner = null;
-  _overlayWidth = 0;
-  _overlayHeight = 0;
-  _overlayTx = 0;
-  _overlayTy = 0;
   clearInsertIndicator();
   if (typeof document !== "undefined") {
     document.body.classList.remove("canvas-tab-list-dnd-dragging");
   }
-  _isDragging = false;
-  _dragTabId2 = null;
-  _dragElement = null;
-  _dragFromSecondary = false;
-  _lastDropTarget2 = null;
-  _originalParent = null;
-  _originalNextSibling = null;
-  _sourceIsInCanvasList = false;
+  _drag = { phase: "idle" };
 }
 async function performDrop(tabId, fromSecondary, target) {
   try {
@@ -11854,7 +12156,7 @@ function installDragOnButton(btn) {
       return;
     if (e3.button !== 0)
       return;
-    if (_isDragging)
+    if (_drag.phase !== "idle")
       return;
     dragActivated = false;
     armingCancelled = false;
@@ -11940,14 +12242,18 @@ function tearDownTabListDnd() {
     _observer.disconnect();
     _observer = null;
   }
-  if (_isDragging) {
+  if (_drag.phase !== "idle") {
     removeClickSuppressorNow();
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId);
       _rafId = null;
     }
-    cancelOverlaySettle2();
-    restoreSourceButtonDOM();
+    if (_drag.phase === "dragging" || _drag.phase === "settling") {
+      cancelOverlaySettle2(_drag.overlay);
+    }
+    if (_drag.phase === "dragging") {
+      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
+    }
     cleanupDragVisuals();
     clearDragState2();
   }
@@ -11956,7 +12262,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _isDragging = false, _dragTabId2 = null, _dragElement = null, _dragFromSecondary = false, _dragOverlay2 = null, _dragOverlayInner = null, _dragOffsetX2 = 0, _dragOffsetY2 = 0, _lastDropTarget2 = null, _insertIndicatorEl = null, _moveHandler = null, _upHandler = null, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _overlayTx = 0, _overlayTy = 0, _overlayWidth = 0, _overlayHeight = 0, _originalParent = null, _originalNextSibling = null, _sourceIsInCanvasList = false, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_configure_commit();
@@ -11969,6 +12275,7 @@ var init_tab_list_dnd = __esm(() => {
   init_mobile_exclusion();
   init_log();
   init_live_tab_order();
+  _drag = { phase: "idle" };
   _installed = new WeakSet;
 });
 
