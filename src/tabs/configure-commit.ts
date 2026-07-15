@@ -42,6 +42,7 @@ import {
 } from './buttons'
 import {
   patchHostDrawerSettings,
+  getHostDrawerSettings,
 } from '../dom/host-settings'
 import {
   setSuppressAutoActivation,
@@ -65,6 +66,425 @@ import { isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
 export type CommitResult = { ok: true } | { ok: false; error: string }
+
+/** Context for commit steps */
+interface CommitContext {
+  draft: ConfigureDraft
+  base: BaseSnapshot
+  toSecondary: string[]
+  toPrimary: string[]
+  sideChanged: boolean
+  pendingHandoffs: Array<{
+    tabId: string
+    source: 'primary' | 'secondary'
+    destination: 'primary' | 'secondary'
+    sourceList: string[]
+    preMoveSourceActiveTab: boolean
+    activateDestination: false
+  }>
+  preservePrimary: ReturnType<typeof armPreservePrimaryActiveOnQuietToSecondary>
+  /** Rollback state storage */
+  rollbackState: {
+    previousTabOrder?: string[]
+    previousHiddenTabIds?: string[]
+    previousSide?: 'left' | 'right'
+    preMoveSecondaryIds?: string[]
+    preMovePrimaryIds?: string[]
+    preReorderSecondaryIds?: string[]
+    preReorderPrimaryIds?: string[]
+    previousHiddenIds?: Set<string>
+  }
+}
+
+/** A discrete step in the commit pipeline */
+interface CommitStep {
+  name: string
+  run: (ctx: CommitContext) => Promise<void>
+  rollback?: (ctx: CommitContext) => Promise<void>
+  /** Predicate to determine if this step should run */
+  shouldRun?: (ctx: CommitContext) => boolean
+  /** Whether this step is irreversible (no rollback) */
+  irreversible?: boolean
+}
+
+/** Commit steps pipeline */
+const commitSteps: CommitStep[] = [
+  // Step 1: Compute deltas and set up context
+  {
+    name: 'compute-deltas',
+    run: async (ctx) => {
+      const { toSecondary, toPrimary } = computeDeltas(ctx.draft)
+      ctx.toSecondary = toSecondary
+      ctx.toPrimary = toPrimary
+      ctx.sideChanged = ctx.draft.drawerSide !== ctx.base.drawerSide
+    },
+  },
+
+  // Step 2: Suppress auto-activation during moves
+  {
+    name: 'suppress-auto-activation',
+    run: async () => {
+      setSuppressAutoActivation(true)
+    },
+    rollback: async () => {
+      setSuppressAutoActivation(false)
+    },
+  },
+
+  // Step 3: Patch host drawer settings (order, hidden, side)
+  {
+    name: 'patch-host-settings',
+    run: async (ctx) => {
+      // Save previous settings for rollback
+      const currentSettings = getHostDrawerSettings()
+      if (currentSettings) {
+        ctx.rollbackState.previousTabOrder = currentSettings.tabOrder
+        ctx.rollbackState.previousHiddenTabIds = currentSettings.hiddenTabIds
+        ctx.rollbackState.previousSide = currentSettings.side
+      }
+
+      const hostWriteOk = patchHostDrawerSettings({
+        tabOrder: encodeHostTabOrder(ctx.draft),
+        hiddenTabIds: [...ctx.draft.hiddenIds],
+        side: ctx.draft.drawerSide,
+      })
+      if (!hostWriteOk) {
+        dwarn(
+          '[configure-commit] patchHostDrawerSettings returned false; ' +
+          'host order/hide/side may not persist. Continuing with DOM moves.',
+        )
+      }
+    },
+    rollback: async (ctx) => {
+      // Restore previous settings
+      if (ctx.rollbackState.previousTabOrder !== undefined) {
+        patchHostDrawerSettings({
+          tabOrder: ctx.rollbackState.previousTabOrder,
+          hiddenTabIds: ctx.rollbackState.previousHiddenTabIds || [],
+          side: ctx.rollbackState.previousSide || 'left',
+        })
+      }
+    },
+  },
+
+  // Step 4: Apply side change if needed
+  {
+    name: 'apply-side-change',
+    run: async (ctx) => {
+      if (ctx.sideChanged) {
+        try {
+          await forceMainDrawerSideChange(ctx.draft.drawerSide)
+        } catch (err) {
+          dwarn('[configure-commit] forceMainDrawerSideChange failed:', err)
+        }
+      }
+    },
+    shouldRun: (ctx) => ctx.sideChanged,
+  },
+
+  // Step 5: Capture source lists for handoff
+  {
+    name: 'capture-source-lists',
+    run: async (ctx) => {
+      const pendingHandoffs: CommitContext['pendingHandoffs'] = []
+
+      if (ctx.toSecondary.length > 0) {
+        const primaryList = await captureSourceList('primary')
+        for (const tabId of ctx.toSecondary) {
+          pendingHandoffs.push({
+            tabId,
+            source: 'primary',
+            destination: 'secondary',
+            sourceList: primaryList,
+            preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
+            activateDestination: false,
+          })
+        }
+      }
+
+      if (ctx.toPrimary.length > 0) {
+        const secondaryList = await captureSourceList('secondary')
+        for (const tabId of ctx.toPrimary) {
+          pendingHandoffs.push({
+            tabId,
+            source: 'secondary',
+            destination: 'primary',
+            sourceList: secondaryList,
+            preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
+            activateDestination: false,
+          })
+        }
+      }
+
+      ctx.pendingHandoffs = pendingHandoffs
+    },
+  },
+
+  // Step 6: Preserve primary active on quiet to-secondary
+  {
+    name: 'preserve-primary-active',
+    run: async (ctx) => {
+      ctx.preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(ctx.toSecondary)
+    },
+  },
+
+  // Step 7: Move tabs (quiet — no per-tab handoff/persist)
+  {
+    name: 'move-tabs',
+    run: async (ctx) => {
+      // Save pre-move state for rollback
+      ctx.rollbackState.preMoveSecondaryIds = [...ctx.draft.secondaryIds]
+      ctx.rollbackState.preMovePrimaryIds = [...ctx.draft.primaryIds]
+
+      const movePromises: Promise<void>[] = []
+
+      for (const tabId of ctx.toSecondary) {
+        movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
+          dwarn(`[configure-commit] moveTabToSecondaryQuiet failed for "${tabId}":`, err)
+        }))
+      }
+      for (const tabId of ctx.toPrimary) {
+        movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
+          dwarn(`[configure-commit] moveTabToPrimaryQuiet failed for "${tabId}":`, err)
+        }))
+      }
+      await Promise.all(movePromises)
+    },
+    rollback: async (ctx) => {
+      // Move tabs back to their original locations
+      const movePromises: Promise<void>[] = []
+
+      // Move tabs that were moved to secondary back to primary
+      for (const tabId of ctx.toSecondary) {
+        movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
+          dwarn(`[configure-commit] rollback moveTabToPrimaryQuiet failed for "${tabId}":`, err)
+        }))
+      }
+
+      // Move tabs that were moved to primary back to secondary
+      for (const tabId of ctx.toPrimary) {
+        movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
+          dwarn(`[configure-commit] rollback moveTabToSecondaryQuiet failed for "${tabId}":`, err)
+        }))
+      }
+
+      await Promise.all(movePromises)
+
+      // Restore original order
+      reorderSecondaryTabButtons(ctx.rollbackState.preMoveSecondaryIds || [])
+      reorderHostMainTabButtons(ctx.rollbackState.preMovePrimaryIds || [])
+      reorderMainMirrorTabButtons(ctx.rollbackState.preMovePrimaryIds || [])
+    },
+  },
+
+  // Step 8: Reorder secondary tab buttons
+  {
+    name: 'reorder-buttons',
+    run: async (ctx) => {
+      // Save previous order for rollback
+      ctx.rollbackState.preReorderSecondaryIds = [...ctx.draft.secondaryIds]
+      ctx.rollbackState.preReorderPrimaryIds = [...ctx.draft.primaryIds]
+
+      reorderSecondaryTabButtons(ctx.draft.secondaryIds)
+      reorderHostMainTabButtons(ctx.draft.primaryIds)
+      reorderMainMirrorTabButtons(ctx.draft.primaryIds)
+    },
+    rollback: async (ctx) => {
+      // Restore previous order
+      if (ctx.rollbackState.preReorderSecondaryIds) {
+        reorderSecondaryTabButtons(ctx.rollbackState.preReorderSecondaryIds)
+      }
+      if (ctx.rollbackState.preReorderPrimaryIds) {
+        reorderHostMainTabButtons(ctx.rollbackState.preReorderPrimaryIds)
+        reorderMainMirrorTabButtons(ctx.rollbackState.preReorderPrimaryIds)
+      }
+    },
+  },
+
+  // Step 9: Preserve primary active after moves
+  {
+    name: 'preserve-primary-after-moves',
+    run: async (ctx) => {
+      if (ctx.preservePrimary) {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+        try {
+          ctx.preservePrimary.reassert()
+        } catch (err) {
+          dwarn('[configure-commit] post-move primary active reassert failed:', err)
+        }
+        // Host React may reshuffle host buttons on the same frame as reset.
+        reorderHostMainTabButtons(ctx.draft.primaryIds)
+        reorderMainMirrorTabButtons(ctx.draft.primaryIds)
+      }
+    },
+    shouldRun: (ctx) => !!ctx.preservePrimary,
+  },
+
+  // Step 10: Run handoffs
+  {
+    name: 'run-handoffs',
+    run: async (ctx) => {
+      for (const h of ctx.pendingHandoffs) {
+        try {
+          await runHandoff(h)
+        } catch (err) {
+          dwarn(`[configure-commit] runHandoff failed for "${h.tabId}":`, err)
+        }
+      }
+    },
+  },
+
+  // Step 11: Re-assert primary active after handoff
+  {
+    name: 'reassert-primary-after-handoff',
+    run: async (ctx) => {
+      if (ctx.preservePrimary) {
+        try {
+          ctx.preservePrimary.reassert()
+        } catch (err) {
+          dwarn('[configure-commit] preserve primary active reassert failed:', err)
+        }
+      }
+    },
+    shouldRun: (ctx) => !!ctx.preservePrimary,
+  },
+
+  // Step 12: Reconcile secondary after quiet primary moves
+  {
+    name: 'reconcile-secondary',
+    run: async (ctx) => {
+      if (ctx.toPrimary.length > 0) {
+        try {
+          reconcileSecondaryAfterQuietPrimaryMoves(ctx.draft.secondaryIds)
+        } catch (err) {
+          dwarn('[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:', err)
+        }
+      }
+    },
+    shouldRun: (ctx) => ctx.toPrimary.length > 0,
+  },
+
+  // Step 13: Final reorder
+  {
+    name: 'final-reorder',
+    run: async (ctx) => {
+      reorderSecondaryTabButtons(ctx.draft.secondaryIds)
+      reorderHostMainTabButtons(ctx.draft.primaryIds)
+      reorderMainMirrorTabButtons(ctx.draft.primaryIds)
+    },
+  },
+
+  // Step 14: Apply hidden state
+  {
+    name: 'apply-hidden-state',
+    run: async (ctx) => {
+      // Save previous hidden state for rollback
+      ctx.rollbackState.previousHiddenIds = new Set(ctx.draft.hiddenIds)
+
+      applyHiddenTabIdsToSecondary(ctx.draft.hiddenIds)
+      applyHiddenTabIdsToMirror(ctx.draft.hiddenIds)
+    },
+    rollback: async (ctx) => {
+      // Restore previous hidden state
+      if (ctx.rollbackState.previousHiddenIds) {
+        applyHiddenTabIdsToSecondary(ctx.rollbackState.previousHiddenIds)
+        applyHiddenTabIdsToMirror(ctx.rollbackState.previousHiddenIds)
+      }
+    },
+  },
+
+  // Step 15: Reconcile drawer tab visibility
+  {
+    name: 'reconcile-visibility',
+    run: async (ctx) => {
+      updateDrawerTabVisibility()
+      try {
+        const mm = await import('../sidebar/main-mirror-drawer')
+        mm.updateMainMirrorDrawerTabVisibility?.()
+        // Keep host content parked under taskbar-mode after primary→secondary
+        if (ctx.toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
+          mm.ensureHostContentParkedPublic?.()
+        }
+      } catch (err) {
+        dwarn('[configure-commit] updateMainMirrorDrawerTabVisibility failed:', err)
+      }
+      try {
+        const tp = await import('../sidebar/tab-position')
+        tp.reconcileTabListPin()
+      } catch (err) {
+        dwarn('[configure-commit] reconcileTabListPin failed:', err)
+      }
+      try {
+        const mp = await import('../sidebar/main-tab-pin')
+        mp.reconcileMainTabListPin()
+      } catch (err) {
+        dwarn('[configure-commit] reconcileMainTabListPin failed:', err)
+      }
+    },
+  },
+
+  // Step 16: Reorder after reconcile
+  {
+    name: 'reorder-after-reconcile',
+    run: async (ctx) => {
+      if (ctx.toPrimary.length > 0 || ctx.toSecondary.length > 0) {
+        reorderHostMainTabButtons(ctx.draft.primaryIds)
+        reorderMainMirrorTabButtons(ctx.draft.primaryIds)
+      }
+    },
+    shouldRun: (ctx) => ctx.toPrimary.length > 0 || ctx.toSecondary.length > 0,
+  },
+
+  // Step 17: Reconcile can re-sync mirror chrome from host; reassert once more
+  {
+    name: 'final-reassert',
+    run: async (ctx) => {
+      if (ctx.preservePrimary) {
+        try {
+          ctx.preservePrimary.reassert()
+        } catch (err) {
+          dwarn('[configure-commit] post-reconcile primary active reassert failed:', err)
+        }
+        try {
+          const mm = await import('../sidebar/main-mirror-drawer')
+          if (mm.isMainMirrorActive?.()) mm.ensureHostContentParkedPublic?.()
+        } catch { /* ignore */ }
+        // Stick ~100ms more (activateInPrimary verification window), then drop.
+        const stick = ctx.preservePrimary
+        void new Promise<void>((r) => setTimeout(() => r(), 120)).then(() => {
+          try {
+            stick.reassert()
+          } catch {
+            /* ignore */
+          }
+          try {
+            stick.disconnect()
+          } catch {
+            /* ignore */
+          }
+        })
+      }
+    },
+    shouldRun: (ctx) => !!ctx.preservePrimary,
+  },
+
+  // Step 18: Persist layout
+  {
+    name: 'persist-layout',
+    run: async () => {
+      persistLayout()
+    },
+    irreversible: true,
+  },
+
+  // Step 19: Bust store cache
+  {
+    name: 'bust-store-cache',
+    run: async () => {
+      findStoreData(true)
+    },
+  },
+]
 
 /** Injectable side-change applier (production uses drawer-sync.applyMainDrawerSideChange). */
 type MainDrawerSideChangeApplier = (desired: 'left' | 'right') => void | Promise<void>
@@ -340,246 +760,53 @@ async function runCommitConfigureDraft(
 ): Promise<CommitResult> {
   _batchActive = true
 
+  // Create initial context
+  const ctx: CommitContext = {
+    draft,
+    base: _base,
+    toSecondary: [],
+    toPrimary: [],
+    sideChanged: false,
+    pendingHandoffs: [],
+    preservePrimary: null as any,
+    rollbackState: {},
+  }
+
   try {
-    // 1. Compute deltas.
-    const { toSecondary, toPrimary } = computeDeltas(draft)
+    // Execute steps sequentially with rollback on failure
+    const executedSteps: CommitStep[] = []
 
-    // 2. Suppress auto-activation during moves.
-    setSuppressAutoActivation(true)
+    for (const step of commitSteps) {
+      // Check if step should run
+      if (step.shouldRun && !step.shouldRun(ctx)) {
+        continue
+      }
 
-    // 3. Patch host drawer settings (order, hidden, side).
-    const prevSide = _base.drawerSide
-    const sideChanged = draft.drawerSide !== prevSide
-    const hostWriteOk = patchHostDrawerSettings({
-      tabOrder: encodeHostTabOrder(draft),
-      hiddenTabIds: [...draft.hiddenIds],
-      side: draft.drawerSide,
-    })
-    if (!hostWriteOk) {
-      dwarn(
-        '[configure-commit] patchHostDrawerSettings returned false; ' +
-        'host order/hide/side may not persist. Continuing with DOM moves.',
-      )
-    }
-
-    // 3b. Configure "Swap drawer locations": host store write alone does not
-    //     flip the main wrapper class in the same tick (React lag / headless
-    //     taskbar-mode). Force Canvas remount for the desired main side so
-    //     secondary + main-mirror move immediately. Still attempt remount if
-    //     the host write failed — user-visible swap should not silently no-op.
-    if (sideChanged) {
       try {
-        await forceMainDrawerSideChange(draft.drawerSide)
+        // Execute step
+        await step.run(ctx)
+        executedSteps.push(step)
       } catch (err) {
-        dwarn('[configure-commit] forceMainDrawerSideChange failed:', err)
-      }
-    }
-
-    // 4. Capture source lists + active flags *before* quiet moves so handoff
-    //    can pick the rClick neighbor (above, else below) — not first remaining.
-    //    Live drawer DnD uses this quiet path; without handoff, source kept
-    //    selecting the first tab in the strip after an active tab was moved.
-    type QuietHandoff = {
-      tabId: string
-      source: 'primary' | 'secondary'
-      destination: 'primary' | 'secondary'
-      sourceList: string[]
-      preMoveSourceActiveTab: boolean
-      /** Drag/Configure quiet path: never select the moved tab on release. */
-      activateDestination: false
-    }
-    const pendingHandoffs: QuietHandoff[] = []
-    if (toSecondary.length > 0) {
-      const primaryList = await captureSourceList('primary')
-      for (const tabId of toSecondary) {
-        pendingHandoffs.push({
-          tabId,
-          source: 'primary',
-          destination: 'secondary',
-          sourceList: primaryList,
-          // Mirror-aware: host store/DOM alone falsely reports inactive when
-          // Canvas exclusive key is the real selection (top-most host stuck).
-          preMoveSourceActiveTab: isPrimaryActiveForQuiet(tabId),
-          activateDestination: false,
-        })
-      }
-    }
-    if (toPrimary.length > 0) {
-      const secondaryList = await captureSourceList('secondary')
-      for (const tabId of toPrimary) {
-        pendingHandoffs.push({
-          tabId,
-          source: 'secondary',
-          destination: 'primary',
-          sourceList: secondaryList,
-          preMoveSourceActiveTab: getActiveSecondaryTabId() === tabId,
-          activateDestination: false,
-        })
-      }
-    }
-
-    // 4b. Preserve primary/main-mirror active when moving a *non-active* tab
-    //     to secondary (host pendingActiveTabReset → first non-moved tab).
-    const preservePrimary = armPreservePrimaryActiveOnQuietToSecondary(toSecondary)
-
-    // 4c. Move tabs (quiet — no per-tab handoff/persist; handoff runs in 4d).
-    const movePromises: Promise<void>[] = []
-
-    for (const tabId of toSecondary) {
-      movePromises.push(moveTabToSecondaryQuiet(tabId).catch((err) => {
-        dwarn(`[configure-commit] moveTabToSecondaryQuiet failed for "${tabId}":`, err)
-      }))
-    }
-    for (const tabId of toPrimary) {
-      movePromises.push(moveTabToPrimaryQuiet(tabId).catch((err) => {
-        dwarn(`[configure-commit] moveTabToPrimaryQuiet failed for "${tabId}":`, err)
-      }))
-    }
-    await Promise.all(movePromises)
-
-    // 4c2. Apply strip order *immediately* after quiet moves — before any
-    //      await that can yield a paint frame. Quiet to-primary only
-    //      unhides the host button (still at its pre-hide DOM index); host
-    //      React / mirror reconcile then briefly show that slot (often the
-    //      top of main-mirror) until reorder runs. Handoff alone can take
-    //      100ms+, so late reorder looked like a flash-to-top.
-    reorderSecondaryTabButtons(draft.secondaryIds)
-    reorderHostMainTabButtons(draft.primaryIds)
-    reorderMainMirrorTabButtons(draft.primaryIds)
-
-    // Give host React a frame to apply pendingActiveTabReset. Keep the stick
-    // observer armed through handoff + reorder + pin reconcile — disconnecting
-    // after one rAF raced a second host reset (ensureBuiltIn then first-tab).
-    if (preservePrimary) {
-      await new Promise<void>((r) => requestAnimationFrame(() => r()))
-      try {
-        preservePrimary.reassert()
-      } catch (err) {
-        dwarn('[configure-commit] post-move primary active reassert failed:', err)
-      }
-      // Host React may reshuffle host buttons on the same frame as reset.
-      reorderHostMainTabButtons(draft.primaryIds)
-      reorderMainMirrorTabButtons(draft.primaryIds)
-    }
-
-    // 4d. Source neighbor when the moved tab was active (rClick Part A/B).
-    //     Skip destination activate (Part C): live DnD / Configure drag must
-    //     not select the moved tab on release. rClick assignTab still runs
-    //     full runHandoff with default activateDestination.
-    for (const h of pendingHandoffs) {
-      try {
-        await runHandoff(h)
-      } catch (err) {
-        dwarn(`[configure-commit] runHandoff failed for "${h.tabId}":`, err)
-      }
-    }
-
-    // Re-assert original primary active after handoff/reorder side effects.
-    // Main-mirror panel follows host/mirror key — without this, content jumps
-    // to the top-most primary tab after live DnD of an inactive tab.
-    if (preservePrimary) {
-      try {
-        preservePrimary.reassert()
-      } catch (err) {
-        dwarn('[configure-commit] preserve primary active reassert failed:', err)
-      }
-    }
-
-    // 4e. Empty secondary shell: handoff leaves active null when no neighbor.
-    //     Close the open panel so live DnD last-tab→primary is not blank.
-    if (toPrimary.length > 0) {
-      try {
-        reconcileSecondaryAfterQuietPrimaryMoves(draft.secondaryIds)
-      } catch (err) {
-        dwarn('[configure-commit] reconcileSecondaryAfterQuietPrimaryMoves failed:', err)
-      }
-    }
-
-    // 5. Final reorder (Canvas lists + host main) after handoff/secondary
-    //    reconcile. Same apply as 4c2 — host React may have re-rendered from
-    //    tabOrder between then and now; primary DnD stick still needs this.
-    reorderSecondaryTabButtons(draft.secondaryIds)
-    reorderHostMainTabButtons(draft.primaryIds)
-    reorderMainMirrorTabButtons(draft.primaryIds)
-
-    // 6. Apply hidden state.
-    applyHiddenTabIdsToSecondary(draft.hiddenIds)
-    applyHiddenTabIdsToMirror(draft.hiddenIds)
-
-    // 7. Reconcile drawer tab visibility (awaited, guarded).
-    updateDrawerTabVisibility()
-    try {
-      const mm = await import('../sidebar/main-mirror-drawer')
-      mm.updateMainMirrorDrawerTabVisibility?.()
-      // Keep host content parked under taskbar-mode after primary→secondary
-      // (same as assignTab). Prevents main panel flash while mirror shows content.
-      if (toSecondary.length > 0 && mm.isMainMirrorActive?.()) {
-        mm.ensureHostContentParkedPublic?.()
-      }
-    } catch (err) {
-      dwarn('[configure-commit] updateMainMirrorDrawerTabVisibility failed:', err)
-    }
-    try {
-      const tp = await import('../sidebar/tab-position')
-      tp.reconcileTabListPin()
-    } catch (err) {
-      dwarn('[configure-commit] reconcileTabListPin failed:', err)
-    }
-    try {
-      const mp = await import('../sidebar/main-tab-pin')
-      mp.reconcileMainTabListPin()
-    } catch (err) {
-      dwarn('[configure-commit] reconcileMainTabListPin failed:', err)
-    }
-
-    // Pin reconcile rebuilds mirror from host DOM order. If host React has not
-    // flushed tabOrder yet, re-apply draft order so a secondary→primary drop
-    // does not leave the tab at the top for a frame after reconcile.
-    if (toPrimary.length > 0 || toSecondary.length > 0) {
-      reorderHostMainTabButtons(draft.primaryIds)
-      reorderMainMirrorTabButtons(draft.primaryIds)
-    }
-
-    // Reconcile can re-sync mirror chrome from host; reassert once more if we
-    // were preserving a non-moved primary active tab, then release the stick
-    // observer. A delayed reassert covers host useEffects that fire after
-    // this async function returns (pendingActiveTabReset lag).
-    if (preservePrimary) {
-      try {
-        preservePrimary.reassert()
-      } catch (err) {
-        dwarn('[configure-commit] post-reconcile primary active reassert failed:', err)
-      }
-      try {
-        const mm = await import('../sidebar/main-mirror-drawer')
-        if (mm.isMainMirrorActive?.()) mm.ensureHostContentParkedPublic?.()
-      } catch { /* ignore */ }
-      // Stick ~100ms more (activateInPrimary verification window), then drop.
-      const stick = preservePrimary
-      void new Promise<void>((r) => setTimeout(() => r(), 120)).then(() => {
-        try {
-          stick.reassert()
-        } catch {
-          /* ignore */
+        // Rollback executed steps in reverse order
+        for (const executedStep of executedSteps.reverse()) {
+          if (!executedStep.irreversible && executedStep.rollback) {
+            try {
+              await executedStep.rollback(ctx)
+            } catch (rollbackErr) {
+              dwarn(`[configure-commit] rollback "${executedStep.name}" failed:`, rollbackErr)
+            }
+          }
         }
-        try {
-          stick.disconnect()
-        } catch {
-          /* ignore */
-        }
-      })
+
+        const msg = err instanceof Error ? err.message : String(err)
+        dwarn('[configure-commit] commit failed:', msg)
+        return { ok: false, error: msg }
+      }
     }
-
-    // 8. One persist. Tab-assignment persistence is always-on (built-in),
-    //    so persistLayout always runs after commit.
-    persistLayout()
-
-    // 9. Bust store cache.
-    findStoreData(true)
 
     dlog('[configure-commit] commit successful', {
-      toSecondary: toSecondary.length,
-      toPrimary: toPrimary.length,
+      toSecondary: ctx.toSecondary.length,
+      toPrimary: ctx.toPrimary.length,
       hidden: draft.hiddenIds.size,
     })
 

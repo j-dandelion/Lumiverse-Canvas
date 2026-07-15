@@ -56,11 +56,79 @@ import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, upda
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { drawerObserver } from './drawer-observer'
 
+/**
+ * Unified observation bus that batches all DOM change signals into a single
+ * requestAnimationFrame callback. Replaces the previous pattern of 4 separate
+ * observers each calling syncDrawerTabSettings() independently.
+ *
+ * Signal kinds:
+ * - 'resize': ResizeObserver on main drawer tab (dimensions change)
+ * - 'class': MutationObserver on main drawer tab class (compact mode toggle)
+ * - 'style': MutationObserver on main drawer tab style (vertical position)
+ * - 'side': MutationObserver on main wrapper class (side change)
+ *
+ * Heavy signals ('side') always trigger their own handler (checkSideChanged).
+ * Light signals ('resize', 'class', 'style') are coalesced into a single
+ * syncDrawerTabSettings() call.
+ */
+class ObserverCoordinator {
+  private pending = new Map<string, unknown>()
+  private frame: number | null = null
+  private _stopped = false
+
+  /**
+   * Signal that a DOM change occurred. Batches multiple signals in the same
+   * animation frame into a single flush.
+   */
+  signal(kind: string, payload?: unknown): void {
+    if (this._stopped) return
+    this.pending.set(kind, payload ?? null)
+    if (this.frame === null) {
+      this.frame = requestAnimationFrame(() => {
+        this.frame = null
+        if (this._stopped) return
+        const entries = [...this.pending]
+        this.pending.clear()
+        this.flush(entries)
+      })
+    }
+  }
+
+  /** Stop the coordinator and prevent any pending flushes. */
+  stop(): void {
+    this._stopped = true
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame)
+      this.frame = null
+    }
+    this.pending.clear()
+  }
+
+  private flush(entries: [string, unknown][]): void {
+    // Heavy signals get their own handler
+    const hasSideChange = entries.some(([kind]) => kind === 'side')
+    const hasLightSignals = entries.some(([kind]) => kind !== 'side')
+
+    // Side-change is heavy: always triggers checkSideChanged
+    if (hasSideChange) {
+      checkSideChanged()
+    }
+
+    // Light signals (resize, class, style) are coalesced into one sync
+    if (hasLightSignals) {
+      syncDrawerTabSettings()
+    }
+  }
+}
+
 let _lastKnownSide: 'left' | 'right' | null = null
 let _lastKnownVerticalPos: number | null = null
 let _mainDrawerTabResizeObserver: ResizeObserver | null = null
 let _mainDrawerTabClassObserver: MutationObserver | null = null
 let _mainDrawerTabStyleObserver: MutationObserver | null = null
+
+// Unified observation coordinator that batches all DOM change signals
+let _observerCoordinator: ObserverCoordinator | null = null
 
 /**
  * Generation for side remounts in checkSideChanged. Async follow-ups
@@ -197,8 +265,9 @@ function _runSyncDrawerTabSettings(): void {
   // Attach ResizeObserver to the main drawer tab so we re-sync whenever
   // the user resizes it (e.g. drag to resize). Only attach once.
   if (!_mainDrawerTabResizeObserver) {
+    const coordinator = ensureObserverCoordinator()
     _mainDrawerTabResizeObserver = new ResizeObserver(() => {
-      syncDrawerTabSettings()
+      coordinator.signal('resize')
     })
     _mainDrawerTabResizeObserver.observe(mainDrawerTab)
     registerCleanup(stopDrawerTabResizeWatcher)
@@ -207,8 +276,9 @@ function _runSyncDrawerTabSettings(): void {
   // Attach MutationObserver to the main drawer tab so we re-sync whenever
   // Lumiverse toggles compact mode via a class change. Only attach once.
   if (!_mainDrawerTabClassObserver) {
+    const coordinator = ensureObserverCoordinator()
     _mainDrawerTabClassObserver = new MutationObserver(() => {
-      syncDrawerTabSettings()
+      coordinator.signal('class')
     })
     _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['class'] })
     registerCleanup(stopDrawerTabClassObserver)
@@ -227,9 +297,9 @@ function _runSyncDrawerTabSettings(): void {
   // into one sync call per tick. The work in this function is O(1) —
   // read main's style, write secondary's style. Only attach once.
   if (!_mainDrawerTabStyleObserver) {
+    const coordinator = ensureObserverCoordinator()
     _mainDrawerTabStyleObserver = new MutationObserver(() => {
-
-      syncDrawerTabSettings()
+      coordinator.signal('style')
     })
     _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ['style'] })
     registerCleanup(stopDrawerTabStyleObserver)
@@ -635,7 +705,7 @@ export async function applyMainDrawerSideChange(
     // DOM while shells already sit on desired.
     _lastKnownSide = desired
 
-    await settleMainDrawerSideDom(desired, gen)
+    await waitForSideSettle(desired, gen)
 
     // Stale apply — a newer one owns settle/rebind.
     if (gen !== _sideApplyGen) return
@@ -741,6 +811,56 @@ async function settleMainDrawerSideDom(
   }
 }
 
+function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (gen !== _sideApplyGen) { resolve(); return }
+
+    const wrapper = getMainWrapper()
+    if (!wrapper) { resolve(); return }
+
+    // Check immediately
+    if (readMainWrapperSideFromDom() === desired) {
+      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+        setMainDrawerSideOverride(null)
+      }
+      resolve()
+      return
+    }
+
+    const observer = new MutationObserver(() => {
+      if (gen !== _sideApplyGen) { observer.disconnect(); resolve(); return }
+      
+      // Rebind if wrapper was replaced
+      if (!wrapper.isConnected) {
+        observer.disconnect()
+        const newWrapper = getMainWrapper()
+        if (newWrapper) observer.observe(newWrapper, { attributes: true, attributeFilter: ['class'] })
+        return
+      }
+      
+      if (readMainWrapperSideFromDom() === desired) {
+        observer.disconnect()
+        if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+          setMainDrawerSideOverride(null)
+        }
+        resolve()
+      }
+    })
+    observer.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
+
+    // Hard timeout — resolve, don't reject. Keep override.
+    setTimeout(() => {
+      observer.disconnect()
+      if (gen !== _sideApplyGen) { resolve(); return }
+      _lastKnownSide = desired
+      dwarn(
+        `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`,
+      )
+      resolve()
+    }, _sideSettleHardMs)
+  })
+}
+
 /**
  * Re-attach the side watcher when the host replaces the main wrapper element
  * (React remount). No-op if already observing the live wrapper.
@@ -785,7 +905,7 @@ export function startSideChangeWatcher(): void {
     // Host class flip: clear override when DOM settled to override OR when
     // DOM shows a different side (Settings path won). Then remount.
     reconcileSideOverrideFromDom()
-    checkSideChanged()
+    _observerCoordinator?.signal('side')
   })
   _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
   _observedMainWrapper = wrapper
@@ -850,6 +970,26 @@ export function stopDrawerTabStyleObserver(): void {
   if (_mainDrawerTabStyleObserver) {
     _mainDrawerTabStyleObserver.disconnect()
     _mainDrawerTabStyleObserver = null
+  }
+}
+
+/**
+ * Initialize the observer coordinator. Call this once at module init or
+ * when the first observer is attached.
+ */
+function ensureObserverCoordinator(): ObserverCoordinator {
+  if (!_observerCoordinator) {
+    _observerCoordinator = new ObserverCoordinator()
+    registerCleanup(stopObserverCoordinator)
+  }
+  return _observerCoordinator
+}
+
+/** Stop the observer coordinator and prevent any pending flushes. */
+export function stopObserverCoordinator(): void {
+  if (_observerCoordinator) {
+    _observerCoordinator.stop()
+    _observerCoordinator = null
   }
 }
 

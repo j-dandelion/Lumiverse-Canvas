@@ -436,6 +436,99 @@ function startContentSettleWatch(
 }
 
 /**
+ * Wait for content to settle (mutations quiet or fallback timeout).
+ * Returns a Promise that resolves when content is ready.
+ */
+function waitForSettle(timeout: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (_stopped) { resolve(); return }
+
+    let settled = false
+    const settle = () => {
+      if (settled) return
+      settled = true
+      stopContentSettleWatch()
+      resolve()
+    }
+
+    startContentSettleWatch(() => settle())
+
+    // Hard timeout
+    setTimeout(() => settle(), timeout)
+  })
+}
+
+/**
+ * Click until the target tab is active.
+ * Returns an object with a stop() method to cancel the loop.
+ */
+function clickUntilActive(
+  targetTabId: string,
+  preferMirror: boolean,
+  interval: number,
+): { stop: () => void } {
+  let stopped = false
+  let polls = 0
+  const poll = () => {
+    if (stopped || _stopped) return
+    if (isHostPrimaryTabActive(targetTabId)) return
+
+    if (polls % 3 === 0) {
+      clickRestoredPrimaryTab(targetTabId, preferMirror)
+    }
+    polls++
+    setTimeout(poll, interval)
+  }
+  requestAnimationFrame(() => poll())
+  return { stop: () => { stopped = true } }
+}
+
+/**
+ * Unsuppress after two animation frames (to ensure paints happen).
+ */
+function unsuppressAfterTwoPaints(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        unsuppressMainDrawer()
+        resolve()
+      })
+    })
+  })
+}
+
+/**
+ * Restore a tab and unsuppress the drawer.
+ * Uses Promise.race to handle timeout and settle detection.
+ */
+async function restoreTab(
+  targetTabId: string | null,
+  preferMirror: boolean,
+  timeout: number,
+): Promise<void> {
+  if (_stopped) return
+
+  // If no target tab, just unsuppress
+  if (!targetTabId) {
+    await unsuppressAfterTwoPaints()
+    return
+  }
+
+  // Start clicking until active
+  const clickLoop = clickUntilActive(targetTabId, preferMirror, RESTORE_TAB_POLL_MS * 3)
+
+  // Wait for settle or timeout
+  const settle = waitForSettle(timeout)
+  await Promise.race([settle, new Promise<void>((resolve) => setTimeout(resolve, timeout))])
+
+  // Stop clicking
+  clickLoop.stop()
+
+  // Unsuppress after two paints
+  await unsuppressAfterTwoPaints()
+}
+
+/**
  * Find the host button for a persisted primary tabId and activate it.
  * Never dispatches through main-mirror onMirrorClick — that path
  * toggle-closes when the drawer is already open on the same tab.
@@ -525,7 +618,7 @@ function scheduleRestoreTabThenUnsuppress(
   preferMirror: boolean,
   fallbackClickFirstHostTab = false,
 ): void {
-  const run = () => {
+  const run = async () => {
     if (_stopped) {
       unsuppressMainDrawer()
       return
@@ -577,92 +670,13 @@ function scheduleRestoreTabThenUnsuppress(
       }
     }
 
-    let polls = 0
-    let stable = 0
-    let contentSettled = false
-    let watchingContent = false
-    let finished = false
-    const finish = (reason: string) => {
-      if (finished) return
-      finished = true
-      stopContentSettleWatch()
-      // Final stamp before reveal (host mode).
-      if (!isMirrorMode) {
-        stampPanelBodyHide()
-      }
-      dlog(`main-persist restore: unsuppress (${reason})`)
-      // Two paints under the guard after content is ready.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          unsuppressMainDrawer()
-        })
-      })
-    }
-    const tryFinish = () => {
-      if (finished) return
-      if (!targetTabId) {
-        finish('no-target-tab')
-        return
-      }
-      if (stable >= RESTORE_HOST_STABLE_POLLS && contentSettled) {
-        finish('host-active+content-settled')
-      }
-    }
-    const beginContentWatch = () => {
-      if (watchingContent || finished) return
-      watchingContent = true
-      reparkIfNeeded()
-      // Stamp once when entering settle phase (host mode).
-      if (!isMirrorMode) {
-        stampPanelBodyHide()
-      }
-      startContentSettleWatch((settleReason) => {
-        contentSettled = true
-        dlog(`main-persist restore: content settled (${settleReason})`)
-        tryFinish()
-      })
-    }
-    const poll = () => {
-      if (_stopped) {
-        unsuppressMainDrawer()
-        return
-      }
-      if (finished) return
-      if (!targetTabId) {
-        finish('no-target-tab')
-        return
-      }
-      if (isHostPrimaryTabActive(targetTabId)) {
-        // Phase: host correct → settle content.
-        stable++
-        if (stable === 1) {
-          beginContentWatch()
-        }
-        tryFinish()
-        if (finished) return
-      } else {
-        // Phase: host wrong → cheap re-click (no stamp needed in mirror mode).
-        stable = 0
-        contentSettled = false
-        watchingContent = false
-        stopContentSettleWatch()
-        // Re-click while wrong — host pendingActiveTabReset → profile.
-        if (polls % 3 === 0) {
-          clickRestoredPrimaryTab(targetTabId, preferMirror)
-          reparkIfNeeded()
-        }
-      }
-      polls++
-      if (polls >= RESTORE_TAB_POLL_MAX) {
-        clickRestoredPrimaryTab(targetTabId, preferMirror)
-        finish(contentSettled ? 'poll-max-content-ok' : 'poll-max')
-        return
-      }
-      setTimeout(poll, RESTORE_TAB_POLL_MS)
-    }
-    // One rAF so mirror buttons exist; no fixed 100ms blank.
-    requestAnimationFrame(() => poll())
+    // Use the new Promise-based restore
+    const timeout = RESTORE_TAB_POLL_MAX * RESTORE_TAB_POLL_MS
+    await restoreTab(targetTabId, preferMirror, timeout)
+
+    dlog('main-persist restore: unsuppress (Promise-based)')
   }
+
   if (RESTORE_TAB_CLICK_MS > 0) {
     setTimeout(run, RESTORE_TAB_CLICK_MS)
   } else {

@@ -92,26 +92,56 @@ function usesLongPressActivation(pointerType: string): boolean {
   return pointerType === 'touch' || pointerType === 'pen'
 }
 
-// ── Module-level drag state ──
+// ── Discriminated union for drag state ──
 
-let _isDragging = false
-let _dragTabId: string | null = null
-/** The source button element (dimmed during drag). */
-let _dragElement: HTMLElement | null = null
-/** Whether the source is from the secondary drawer. */
-let _dragFromSecondary = false
-/** Floating clone that follows the pointer (wrapper div, not the button clone). */
-let _dragOverlay: HTMLElement | null = null
-/** The button clone inside the overlay wrapper. */
-let _dragOverlayInner: HTMLElement | null = null
-let _dragOffsetX = 0
-let _dragOffsetY = 0
-let _lastDropTarget: { container: HTMLElement; index: number; secondary: boolean } | null = null
-/** Insert indicator element (insert-before-highlight). */
-let _insertIndicatorEl: HTMLElement | null = null
+type DragState =
+  | { phase: 'idle' }
+  | {
+      phase: 'arming'
+      tabId: string
+      element: HTMLElement
+      fromSecondary: boolean
+      pointerX: number
+      pointerY: number
+      armTimer: ReturnType<typeof setTimeout> | null
+    }
+  | {
+      phase: 'dragging'
+      tabId: string
+      element: HTMLElement
+      fromSecondary: boolean
+      overlay: HTMLElement
+      overlayInner: HTMLElement
+      offsetX: number
+      offsetY: number
+      overlayTx: number
+      overlayTy: number
+      overlayWidth: number
+      overlayHeight: number
+      originalParent: HTMLElement
+      originalNextSibling: HTMLElement | null
+      sourceIsInCanvasList: boolean
+      lastDropTarget: { container: HTMLElement; index: number; secondary: boolean } | null
+      moveHandler: (e: PointerEvent) => void
+      upHandler: (e: PointerEvent) => void
+    }
+  | {
+      phase: 'settling'
+      tabId: string
+      element: HTMLElement
+      fromSecondary: boolean
+      overlay: HTMLElement
+      settleTimer: ReturnType<typeof setTimeout> | null
+    }
+  | {
+      phase: 'dropping'
+      tabId: string
+      element: HTMLElement
+      fromSecondary: boolean
+      target: { container: HTMLElement; index: number; secondary: boolean }
+    }
 
-let _moveHandler: ((e: PointerEvent) => void) | null = null
-let _upHandler: ((e: PointerEvent) => void) | null = null
+let _drag: DragState = { phase: 'idle' }
 
 /**
  * Capture-phase click suppressors — kill the browser's synthetic click after
@@ -120,6 +150,8 @@ let _upHandler: ((e: PointerEvent) => void) | null = null
  * Important: removal is deferred until AFTER pointerup (setTimeout 0), not at
  * install time. An early setTimeout(0) at drag start removed the listener
  * before the user ever released — regression: every drop activated the tab.
+ *
+ * Kept as separate module-level variables — orthogonal to drag phase.
  */
 let _clickSuppressor: ((e: Event) => void) | null = null
 let _clickSuppressorEl: HTMLElement | null = null
@@ -131,16 +163,7 @@ let _clickSuppressorTimer: ReturnType<typeof setTimeout> | null = null
 let _rafId: number | null = null
 let _pendingPointerX = 0
 let _pendingPointerY = 0
-let _overlayTx = 0
-let _overlayTy = 0
-/** Floating clone size at lift (for tab-center hit-test without layout thrash). */
-let _overlayWidth = 0
-let _overlayHeight = 0
-/** Source button's original DOM position for cancel-restore. */
-let _originalParent: HTMLElement | null = null
-let _originalNextSibling: HTMLElement | null = null
-/** True when the source button is in a Canvas-owned list (mid-drag reorder eligible). */
-let _sourceIsInCanvasList = false
+
 /** In-flight drop-settle timeout (transitionend fallback). */
 let _settleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -157,6 +180,9 @@ interface ContainerCache {
 let _geometryCache: ContainerCache | null = null
 /** True after a DOM reorder — next rAF must rebuild cache. */
 let _geomDirty = false
+
+/** Insert indicator element (insert-before-highlight). */
+let _insertIndicatorEl: HTMLElement | null = null
 
 // ── Drag install state per button ──
 
@@ -572,6 +598,7 @@ export function insertIndexFromMidpoints(y: number, midpoints: number[]): number
  */
 function hitTestDropTarget(
   geom: ReturnType<typeof dragHitGeometry>,
+  dragTabId: string | null,
 ): { container: HTMLElement; index: number; secondary: boolean } | null {
   const containers = _geometryCache
     ? _geometryCache.containers
@@ -594,7 +621,7 @@ function hitTestDropTarget(
     const buttons = getButtonsInContainer(
       container,
       secondary,
-      _dragTabId,
+      dragTabId,
     )
 
     let index = 0
@@ -655,13 +682,14 @@ export function settleDestFromButtonRects(
  * source first, then pass target=null.
  */
 function resolveSettleDestination(
+  dragElement: HTMLElement | null,
   tabId: string | null,
   target: { container: HTMLElement; index: number; secondary: boolean } | null,
-  _crossList: boolean,
+  overlayWidth: number,
 ): { left: number; top: number } | null {
   // Placeholder already in the drop list (same- or cross-drawer mid-drag).
-  if (_dragElement && target && target.container.contains(_dragElement)) {
-    const r = _dragElement.getBoundingClientRect()
+  if (dragElement && target && target.container.contains(dragElement)) {
+    const r = dragElement.getBoundingClientRect()
     return { left: r.left, top: r.top }
   }
 
@@ -678,15 +706,15 @@ function resolveSettleDestination(
     })
     const cr = target.container.getBoundingClientRect()
     const emptyFallback = {
-      left: cr.left + Math.max(0, (cr.width - (_overlayWidth || 48)) / 2),
+      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
       top: cr.top,
     }
     return settleDestFromButtonRects(target.index, rects, emptyFallback)
   }
 
   // Cancel / no target after restore
-  if (_dragElement) {
-    const r = _dragElement.getBoundingClientRect()
+  if (dragElement) {
+    const r = dragElement.getBoundingClientRect()
     return { left: r.left, top: r.top }
   }
   return null
@@ -697,19 +725,17 @@ function resolveSettleDestination(
  * Resolves when the transition ends (or after a timeout fallback).
  */
 function animateOverlaySettle(
+  overlay: HTMLElement,
+  currentTx: number,
+  currentTy: number,
   destLeft: number,
   destTop: number,
-): Promise<void> {
-  const overlay = _dragOverlay
-  if (!overlay) return Promise.resolve()
-
-  const dx = destLeft - _overlayTx
-  const dy = destTop - _overlayTy
+): Promise<{ tx: number; ty: number }> {
+  const dx = destLeft - currentTx
+  const dy = destTop - currentTy
   if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
-    _overlayTx = destLeft
-    _overlayTy = destTop
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
-    return Promise.resolve()
+    return Promise.resolve({ tx: destLeft, ty: destTop })
   }
 
   return new Promise((resolve) => {
@@ -722,9 +748,7 @@ function animateOverlaySettle(
         clearTimeout(_settleTimer)
         _settleTimer = null
       }
-      _overlayTx = destLeft
-      _overlayTy = destTop
-      resolve()
+      resolve({ tx: destLeft, ty: destTop })
     }
     const onEnd = (e: TransitionEvent) => {
       if (e.target !== overlay) return
@@ -737,20 +761,18 @@ function animateOverlaySettle(
     overlay.classList.add('canvas-tab-list-dnd-overlay-settling')
     // Ensure the settling class applies before changing transform.
     void overlay.offsetWidth
-    _overlayTx = destLeft
-    _overlayTy = destTop
     overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
     _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40)
   })
 }
 
-function cancelOverlaySettle(): void {
+function cancelOverlaySettle(overlay?: HTMLElement | null): void {
   if (_settleTimer !== null) {
     clearTimeout(_settleTimer)
     _settleTimer = null
   }
-  if (_dragOverlay) {
-    _dragOverlay.classList.remove('canvas-tab-list-dnd-overlay-settling')
+  if (overlay) {
+    overlay.classList.remove('canvas-tab-list-dnd-overlay-settling')
   }
 }
 
@@ -936,6 +958,7 @@ function reorderCanvasListDOM(
   container: HTMLElement,
   target: { index: number; secondary: boolean },
   sourceTabId: string | null,
+  dragElement: HTMLElement | null,
 ): boolean {
   if (!sourceTabId) return false
   if (!isReorderableContainer(container)) return false
@@ -943,8 +966,8 @@ function reorderCanvasListDOM(
   // Prefer the live drag element so cross-list moves work even when the
   // source is not yet a child of the target container.
   const sourceBtn =
-    _dragElement && _dragElement.getAttribute('data-tab-id') === sourceTabId
-      ? _dragElement
+    dragElement && dragElement.getAttribute('data-tab-id') === sourceTabId
+      ? dragElement
       : getAllButtonsInContainer(container).find(
           (b) => b.getAttribute('data-tab-id') === sourceTabId,
         ) ?? null
@@ -980,28 +1003,32 @@ function reorderCanvasListDOM(
  * Restore the source button to its original DOM position.
  * Used on drag cancel to undo mid-drag reorders.
  */
-function restoreSourceButtonDOM(): void {
-  if (!_dragElement || !_originalParent) return
+function restoreSourceButtonDOM(
+  dragElement: HTMLElement | null,
+  originalParent: HTMLElement | null,
+  originalNextSibling: HTMLElement | null,
+): void {
+  if (!dragElement || !originalParent) return
 
   // If the source is already in its original parent at the right position, skip
-  const parent = _dragElement.parentNode
-  if (parent === _originalParent) {
-    if (_originalNextSibling) {
-      if (_dragElement.nextElementSibling === _originalNextSibling) return
-      _originalParent.insertBefore(_dragElement, _originalNextSibling)
+  const parent = dragElement.parentNode
+  if (parent === originalParent) {
+    if (originalNextSibling) {
+      if (dragElement.nextElementSibling === originalNextSibling) return
+      originalParent.insertBefore(dragElement, originalNextSibling)
     } else {
       // Was last child
-      if (_dragElement.nextElementSibling === null &&
-          _dragElement.parentNode === _originalParent) return
-      _originalParent.insertBefore(_dragElement, null)
+      if (dragElement.nextElementSibling === null &&
+          dragElement.parentNode === originalParent) return
+      originalParent.insertBefore(dragElement, null)
     }
   } else {
     // Moved to a different container — move back
-    if (_originalNextSibling && _originalNextSibling.parentNode === _originalParent) {
-      _originalParent.insertBefore(_dragElement, _originalNextSibling)
+    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+      originalParent.insertBefore(dragElement, originalNextSibling)
     } else {
       // Original next sibling may have been removed; append instead
-      _originalParent.appendChild(_dragElement)
+      originalParent.appendChild(dragElement)
     }
   }
 }
@@ -1031,7 +1058,6 @@ function createDragOverlay(sourceBtn: HTMLElement): HTMLElement {
   wrapper.appendChild(clone)
   document.body.appendChild(wrapper)
 
-  _dragOverlayInner = clone
   return wrapper
 }
 
@@ -1095,7 +1121,7 @@ function scheduleDragFrame(): void {
   _rafId = requestAnimationFrame(() => {
     _rafId = null
 
-    if (!_isDragging) return
+    if (_drag.phase !== 'dragging') return
 
     // Rebuild geometry cache if dirty (after reorder) or on first use
     if (_geomDirty || !_geometryCache) {
@@ -1104,24 +1130,24 @@ function scheduleDragFrame(): void {
     }
 
     // Hit-test from floating tab geometry (center + bounds), not raw pointer.
-    // Overlay may lag one pointermove if only rAF runs; use latest _overlayTx/Ty
+    // Overlay may lag one pointermove if only rAF runs; use latest overlayTx/Ty
     // which onMove updates synchronously before scheduleDragFrame.
     const geom = dragHitGeometry(
-      _overlayTx,
-      _overlayTy,
-      _overlayWidth || 48,
-      _overlayHeight || 48,
+      _drag.overlayTx,
+      _drag.overlayTy,
+      _drag.overlayWidth || 48,
+      _drag.overlayHeight || 48,
     )
-    const target = hitTestDropTarget(geom)
+    const target = hitTestDropTarget(geom, _drag.tabId)
 
-    const prev = _lastDropTarget
+    const prev = _drag.lastDropTarget
     const sameTarget = prev && target &&
       prev.container === target.container &&
       prev.index === target.index &&
       prev.secondary === target.secondary
 
     if (!target) {
-      // Sticky last drop: keep `_lastDropTarget` when the float briefly leaves
+      // Sticky last drop: keep `lastDropTarget` when the float briefly leaves
       // hit-pad (edge of padX/padY, or rAF miss on release). Mid-drag DOM is
       // already reordered to that slot — clearing the target made pointerup
       // take the cancel path and snap back "to where it was".
@@ -1139,12 +1165,12 @@ function scheduleDragFrame(): void {
         ? isReorderableContainer(prev.container)
         : false
 
-      if (isReorderable && _sourceIsInCanvasList) {
+      if (isReorderable && _drag.sourceIsInCanvasList) {
         // Snapshot source parent + target (and prev target) so siblings on
         // both lists animate when crossing secondary ↔ mirror / main ↔ bottom.
         const prevRects = new Map<string, DOMRect>()
         const flipContainers: HTMLElement[] = []
-        const sourceParent = _dragElement?.parentElement
+        const sourceParent = _drag.element?.parentElement
         if (sourceParent && isReorderableContainer(sourceParent)) {
           mergeRects(prevRects, snapshotButtonRects(sourceParent))
           flipContainers.push(sourceParent)
@@ -1163,21 +1189,22 @@ function scheduleDragFrame(): void {
         const didReorder = reorderCanvasListDOM(
           target.container,
           target,
-          _dragTabId,
+          _drag.tabId,
+          _drag.element,
         )
 
         if (didReorder) {
-          applyFLIP(prevRects, _dragTabId, flipContainers)
+          applyFLIP(prevRects, _drag.tabId, flipContainers)
           _geomDirty = true
         }
       } else if (prevReorderable && !isReorderable && prev) {
         // Leaving a reorderable surface — restore source DOM
-        restoreSourceButtonDOM()
+        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling)
         clearFLIPStyles()
         _geomDirty = true
       }
 
-      _lastDropTarget = target
+      _drag.lastDropTarget = target
     }
   })
 }
@@ -1189,31 +1216,24 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   if (!tabId) return
 
   // Determine source side
-  _dragFromSecondary = isSecondaryButton(btn)
-  _dragTabId = tabId
-  _dragElement = btn
-  _isDragging = true
+  const fromSecondary = isSecondaryButton(btn)
+  const element = btn
 
   // Save original DOM position for cancel-restore
-  _originalParent = btn.parentElement
-  _originalNextSibling = btn.nextElementSibling as HTMLElement | null
+  const originalParent = btn.parentElement!
+  const originalNextSibling = btn.nextElementSibling as HTMLElement | null
   // Mirror section or secondary list — gates mid-drag DOM reorder.
-  _sourceIsInCanvasList = getReorderParent(btn) != null
+  const sourceIsInCanvasList = getReorderParent(btn) != null
 
   // Calculate overlay offset from pointer
   const rect = btn.getBoundingClientRect()
-  _dragOffsetX = pointerEvent.clientX - rect.left
-  _dragOffsetY = pointerEvent.clientY - rect.top
-
-  // Initialize overlay transform (matches the initial translate3d in createDragOverlay)
-  _overlayTx = rect.left
-  _overlayTy = rect.top
-  _overlayWidth = rect.width
-  _overlayHeight = rect.height
+  const offsetX = pointerEvent.clientX - rect.left
+  const offsetY = pointerEvent.clientY - rect.top
 
   // Create overlay *before* hiding the source — cloneNode copies classes,
   // so adding the invisible placeholder first would blank the floating tab.
-  _dragOverlay = createDragOverlay(btn)
+  const overlay = createDragOverlay(btn)
+  const overlayInner = overlay.querySelector('.canvas-tab-list-dnd-overlay-clone-btn') as HTMLElement
 
   // Invisible slot holder (layout only); overlay is the visible tab.
   btn.classList.add('canvas-tab-list-dnd-placeholder')
@@ -1243,12 +1263,12 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Pointer move — updates overlay transform IMMEDIATELY (cheap compositor work)
   // and defers hit-test/reorder to rAF.
   const onMove = (ev: PointerEvent) => {
-    if (!_dragOverlay) return
+    if (_drag.phase !== 'dragging') return
 
     // Update overlay position via translate3d immediately (no layout thrash)
-    _overlayTx = ev.clientX - _dragOffsetX
-    _overlayTy = ev.clientY - _dragOffsetY
-    _dragOverlay.style.transform = `translate3d(${_overlayTx}px, ${_overlayTy}px, 0)`
+    _drag.overlayTx = ev.clientX - _drag.offsetX
+    _drag.overlayTy = ev.clientY - _drag.offsetY
+    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`
 
     // Store latest pointer coords for rAF-coalesced hit-test
     _pendingPointerX = ev.clientX
@@ -1262,9 +1282,9 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Capture all data into locals BEFORE any cleanup / await, so we
   // never rely on module fields that clearDragState zeroes.
   const onUp = async (_ev: PointerEvent) => {
-    const capturedTabId = _dragTabId
-    const capturedFromSecondary = _dragFromSecondary
-    const capturedTarget = _lastDropTarget
+    const capturedTabId = tabId
+    const capturedFromSecondary = fromSecondary
+    const capturedTarget = _drag.phase === 'dragging' ? _drag.lastDropTarget : null
 
     document.removeEventListener('contextmenu', suppressCtx, true)
 
@@ -1304,20 +1324,27 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         // Prefer live placeholder rect while it still sits in the drop list
         // (sibling predict after excluding placeholder is one slot low).
         const dest = resolveSettleDestination(
+          element,
           capturedTabId,
           capturedTarget,
-          crossList,
+          rect.width,
         )
 
         // Keep placeholder in the target through settle so siblings stay put.
         if (dest) {
-          await animateOverlaySettle(dest.left, dest.top)
+          const currentTx = overlay.style.transform
+            ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || '0')
+            : 0
+          const currentTy = overlay.style.transform
+            ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || '0')
+            : 0
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top)
         }
 
         if (crossList && capturedFromSecondary) {
           // secondary → primary only
-          slotSpacer = installDropSlotSpacer(_dragElement)
-          restoreSourceButtonDOM()
+          slotSpacer = installDropSlotSpacer(element)
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling)
         }
 
         if (crossList && !capturedFromSecondary) {
@@ -1351,27 +1378,51 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
           }
           // Same-list or primary→secondary left source mid-drag; put it back.
           // secondary→primary already restored above (no-op if still home).
-          restoreSourceButtonDOM()
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling)
         }
       } else {
         // Cancel: restore original DOM order, snap overlay home, no commit
-        restoreSourceButtonDOM()
-        const dest = resolveSettleDestination(capturedTabId, null, false)
+        restoreSourceButtonDOM(element, originalParent, originalNextSibling)
+        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width)
         if (dest) {
-          await animateOverlaySettle(dest.left, dest.top)
+          const currentTx = overlay.style.transform
+            ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || '0')
+            : 0
+          const currentTy = overlay.style.transform
+            ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || '0')
+            : 0
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top)
         }
       }
     } finally {
       // Drop spacer only after commit has (or has not) filled the slot —
       // never before, or siblings collapse for a frame under the overlay.
       removeDropSlotSpacer(slotSpacer)
-      cancelOverlaySettle()
+      cancelOverlaySettle(overlay)
       cleanupDragVisuals()
     }
   }
 
-  _moveHandler = onMove
-  _upHandler = onUp
+  _drag = {
+    phase: 'dragging',
+    tabId,
+    element,
+    fromSecondary,
+    overlay,
+    overlayInner,
+    offsetX,
+    offsetY,
+    overlayTx: rect.left,
+    overlayTy: rect.top,
+    overlayWidth: rect.width,
+    overlayHeight: rect.height,
+    originalParent,
+    originalNextSibling,
+    sourceIsInCanvasList,
+    lastDropTarget: null,
+    moveHandler: onMove,
+    upHandler: onUp,
+  }
 
   document.addEventListener('pointermove', onMove, { passive: true })
   document.addEventListener('pointerup', onUp)
@@ -1379,14 +1430,10 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
 }
 
 function clearDragState(): void {
-  if (_moveHandler) {
-    document.removeEventListener('pointermove', _moveHandler)
-    _moveHandler = null
-  }
-  if (_upHandler) {
-    document.removeEventListener('pointerup', _upHandler)
-    document.removeEventListener('pointercancel', _upHandler)
-    _upHandler = null
+  if (_drag.phase === 'dragging') {
+    document.removeEventListener('pointermove', _drag.moveHandler)
+    document.removeEventListener('pointerup', _drag.upHandler)
+    document.removeEventListener('pointercancel', _drag.upHandler)
   }
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
@@ -1400,6 +1447,9 @@ function clearDragState(): void {
   // Clear geometry cache
   _geometryCache = null
   _geomDirty = false
+
+  // Reset drag state to idle
+  _drag = { phase: 'idle' }
 }
 
 function cleanupDragVisuals(): void {
@@ -1410,8 +1460,8 @@ function cleanupDragVisuals(): void {
   // the overlay. Strip buttons use `transition: all 0.2s ease`, so dropping
   // opacity:0 placeholder without suppressing transition fades 0→1 (looks
   // like disappear-then-fade-in if the overlay is already gone).
-  if (_dragElement) {
-    const el = _dragElement
+  if (_drag.phase === 'dragging' || _drag.phase === 'settling' || _drag.phase === 'dropping') {
+    const el = _drag.element
     el.style.setProperty('transition', 'none', 'important')
     el.classList.remove('canvas-tab-list-dnd-placeholder')
     // Commit the un-hidden, non-transitioning style before overlay removal.
@@ -1425,16 +1475,11 @@ function cleanupDragVisuals(): void {
   // Remove overlay only after the real slot is fully painted (same-list) or
   // commit has already replaced a cross-list spacer. Force one layout so the
   // browser does not composite "overlay gone + still-empty gap" for a frame.
-  if (_dragOverlay) {
+  if (_drag.phase === 'dragging' || _drag.phase === 'settling') {
+    const overlay = _drag.overlay
     void document.body.offsetWidth
-    _dragOverlay.remove()
-    _dragOverlay = null
+    overlay.remove()
   }
-  _dragOverlayInner = null
-  _overlayWidth = 0
-  _overlayHeight = 0
-  _overlayTx = 0
-  _overlayTy = 0
 
   // Clear insert indicator
   clearInsertIndicator()
@@ -1444,14 +1489,8 @@ function cleanupDragVisuals(): void {
     document.body.classList.remove('canvas-tab-list-dnd-dragging')
   }
 
-  _isDragging = false
-  _dragTabId = null
-  _dragElement = null
-  _dragFromSecondary = false
-  _lastDropTarget = null
-  _originalParent = null
-  _originalNextSibling = null
-  _sourceIsInCanvasList = false
+  // Reset drag state to idle
+  _drag = { phase: 'idle' }
 }
 
 /**
@@ -1597,7 +1636,7 @@ function installDragOnButton(btn: HTMLElement): void {
     // Only respond to left button
     if (e.button !== 0) return
     // Do not activate if already dragging
-    if (_isDragging) return
+    if (_drag.phase !== 'idle') return
 
     dragActivated = false
     armingCancelled = false
@@ -1735,15 +1774,19 @@ export function tearDownTabListDnd(): void {
     _observer.disconnect()
     _observer = null
   }
-  if (_isDragging) {
+  if (_drag.phase !== 'idle') {
     removeClickSuppressorNow()
     // Cancel any pending rAF / settle
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId)
       _rafId = null
     }
-    cancelOverlaySettle()
-    restoreSourceButtonDOM()
+    if (_drag.phase === 'dragging' || _drag.phase === 'settling') {
+      cancelOverlaySettle(_drag.overlay)
+    }
+    if (_drag.phase === 'dragging') {
+      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling)
+    }
     cleanupDragVisuals()
     clearDragState()
   }
