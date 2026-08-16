@@ -439,6 +439,13 @@ function test_setDrawer() {
   const both = reduce(m, { t: 'setDrawer', side: 'primary', open: true, width: 600 })
   assertEqual(both.drawers.primary.open, true, 'setDrawer: both open and width')
   assertEqual(both.drawers.primary.width, 600, 'setDrawer: both open and width')
+
+  // Identity-preserving: a no-op setDrawer returns the original reference so
+  // dispatch's `next === _model` gate short-circuits (the secondary shell
+  // re-dispatches its own open state on every open/close, including echo
+  // restores from host.setDrawer — no-op rounds must not reconcile/persist).
+  const noop = reduce(m, { t: 'setDrawer', side: 'secondary', open: false, width: 420 })
+  assert(noop === m, 'setDrawer no-op returns same reference (identity-preserving)')
 }
 
 test_setDrawer()

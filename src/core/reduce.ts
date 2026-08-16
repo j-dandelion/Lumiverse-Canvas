@@ -118,15 +118,18 @@ function applySetDrawer(
   width?: number,
 ): LayoutModel {
   const current = model.drawers[side]
-  const newDrawer = {
-    open: open !== undefined ? open : current.open,
-    width: width !== undefined ? width : current.width,
-  }
+  const newOpen = open !== undefined ? open : current.open
+  const newWidth = width !== undefined ? width : current.width
+  // Identity-preserving: a no-op setDrawer (e.g. the secondary shell
+  // re-dispatching its own open state after reconcile's host.setDrawer
+  // restore) returns the ORIGINAL reference so dispatch's `next === _model`
+  // gate short-circuits — no redundant reconcile/persist round.
+  if (newOpen === current.open && newWidth === current.width) return model
   return {
     ...model,
     drawers: {
       ...model.drawers,
-      [side]: newDrawer,
+      [side]: { open: newOpen, width: newWidth },
     },
   }
 }

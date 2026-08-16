@@ -348,6 +348,27 @@ export function reassignSecondaryTabsFromModel(opts?: {
   )
 }
 
+/**
+ * Persist the secondary drawer's open state through the owned model.
+ *
+ * The secondary wrapper lives on document.body — OUTSIDE the host sidebar
+ * subtree — so its open/close never fires the world-changed observers
+ * (sidebar/mirror MutationObservers + DrawerObserver) that keep the model's
+ * drawer state in sync for the main drawer. Without this explicit
+ * setDrawer intent, model.drawers.secondary.open (and therefore
+ * layout.json) never learns the drawer opened, and a hard refresh mounts
+ * it closed again (2026-08-16). dispatch() no-ops when the dispatcher is
+ * not bootstrapped, and the reducer is identity-preserving for no-op
+ * setDrawers (host.setDrawer restore echo), so this is safe on every path.
+ */
+export function persistSecondaryDrawerOpen(open: boolean): void {
+  void import('../recon/dispatch').then((m) => {
+    m.dispatch({ t: 'setDrawer', side: 'secondary', open }).catch((err: unknown) => {
+      dwarn('[secondary] persist secondary open state failed:', err)
+    })
+  })
+}
+
 export function openSecondarySidebar() {
   dlog('[secondary] openSecondarySidebar:enter', {
     shellLive: isSecondaryShellLive(),
@@ -409,7 +430,8 @@ export function openSecondarySidebar() {
   // tab stays highlighted instead of being overwritten by the last
   // tab in the loop.
   reassignSecondaryTabsFromModel()
-  // Persist via the owned model; no-op persistOpenState was retired.
+  // Persist the open state via the owned model (see persistSecondaryDrawerOpen).
+  persistSecondaryDrawerOpen(true)
   setMobileOpenClass('secondary', true)
 }
 
@@ -454,7 +476,9 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   }
 
   if (!options?.silent) {
-    // Persist via the owned model; no-op persistOpenState was retired.
+    // Persist the closed state via the owned model (see persistSecondaryDrawerOpen).
+    // silent closes (teardown / exclusion) skip persistence.
+    persistSecondaryDrawerOpen(false)
   }
   setMobileOpenClass('secondary', false)
 }

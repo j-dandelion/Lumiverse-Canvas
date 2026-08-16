@@ -22,6 +22,7 @@ import {
   cancelSettingsSave,
   getSettings,
   setSettings,
+  persistSettings,
   getLastLoadedLayout,
   setLastLoadedLayout,
 } from './state'
@@ -517,6 +518,14 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
         dwarn('[second-drawer-mode] restoreSessionDualProfile fallback failed:', err)
       }
     }
+
+    // Re-arm the debounced settings save. setSettings above armed it, but the
+    // cancelSettingsSave() right after (to keep the mid-restore empty layout
+    // out of the snapshot) killed that timer — and layout saves never write
+    // settings. Without this re-arm, an enable would only live in memory and
+    // revert on the next hard refresh. The restore is awaited above, so the
+    // 100ms-debounced fire now snapshots the post-restore live state.
+    persistSettings()
 
     // If the Configure Tabs modal is still open, refresh its draft from
     // the now-enabled live state so it reflects the re-enabled layout.

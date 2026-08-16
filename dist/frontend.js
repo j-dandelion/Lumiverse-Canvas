@@ -1915,15 +1915,15 @@ function applyActivate(model, key, side) {
 }
 function applySetDrawer(model, side, open, width) {
   const current = model.drawers[side];
-  const newDrawer = {
-    open: open !== undefined ? open : current.open,
-    width: width !== undefined ? width : current.width
-  };
+  const newOpen = open !== undefined ? open : current.open;
+  const newWidth = width !== undefined ? width : current.width;
+  if (newOpen === current.open && newWidth === current.width)
+    return model;
   return {
     ...model,
     drawers: {
       ...model.drawers,
-      [side]: newDrawer
+      [side]: { open: newOpen, width: newWidth }
     }
   };
 }
@@ -4272,6 +4272,23 @@ var init_secondary_drawer = __esm(() => {
 });
 
 // src/recon/dispatch.ts
+var exports_dispatch = {};
+__export(exports_dispatch, {
+  shutdown: () => shutdown,
+  placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
+  getModel: () => getModel,
+  getHost: () => getHost,
+  flush: () => flush,
+  dispatchMoveByLiveId: () => dispatchMoveByLiveId,
+  dispatchBatch: () => dispatchBatch,
+  dispatch: () => dispatch,
+  captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
+  captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
+  bootstrapFromLayout: () => bootstrapFromLayout,
+  bootstrap: () => bootstrap,
+  applySecondaryNeighborHandoff: () => applySecondaryNeighborHandoff,
+  applyMainMirrorMoveChrome: () => applyMainMirrorMoveChrome
+});
 function pendingLayoutTabCount(layout) {
   if (!layout || typeof layout !== "object")
     return 0;
@@ -6630,6 +6647,7 @@ async function requestSecondDrawerMode(next) {
         dwarn("[second-drawer-mode] restoreSessionDualProfile fallback failed:", err);
       }
     }
+    persistSettings();
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
       if (m3.isConfigureTabsModalOpen()) {
@@ -11889,6 +11907,7 @@ __export(exports_secondary, {
   setSecondarySidebarOpen: () => setSecondarySidebarOpen,
   secondaryTabsAllPlaced: () => secondaryTabsAllPlaced,
   reassignSecondaryTabsFromModel: () => reassignSecondaryTabsFromModel,
+  persistSecondaryDrawerOpen: () => persistSecondaryDrawerOpen,
   openSecondarySidebar: () => openSecondarySidebar,
   mountSecondarySidebar: () => mountSecondarySidebar,
   liveIdForFacadeKey: () => liveIdForFacadeKey,
@@ -12059,6 +12078,13 @@ function reassignSecondaryTabsFromModel(opts) {
     }
   });
 }
+function persistSecondaryDrawerOpen(open) {
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
+    m3.dispatch({ t: "setDrawer", side: "secondary", open }).catch((err) => {
+      dwarn("[secondary] persist secondary open state failed:", err);
+    });
+  });
+}
 function openSecondarySidebar() {
   dlog("[secondary] openSecondarySidebar:enter", {
     shellLive: isSecondaryShellLive(),
@@ -12100,6 +12126,7 @@ function openSecondarySidebar() {
   syncPanelHeaderFromMain2();
   updateChatReflow();
   reassignSecondaryTabsFromModel();
+  persistSecondaryDrawerOpen(true);
   setMobileOpenClass("secondary", true);
 }
 function closeSecondarySidebar(options) {
@@ -12133,7 +12160,9 @@ function closeSecondarySidebar(options) {
       btn.classList.remove("sidebar-ux-tab-active");
     }
   }
-  if (!options?.silent) {}
+  if (!options?.silent) {
+    persistSecondaryDrawerOpen(false);
+  }
   setMobileOpenClass("secondary", false);
 }
 function getClosedTransformPx() {
