@@ -6,7 +6,13 @@
 //   - Session dual profile capture before teardown (OFF path)
 //   - Merging dual into lastLoaded (OFF path; tab-assignment persistence
 //     is always-on, so this always runs)
-//   - Restoring dual layout on re-enable (ON path)
+//   - **Mode layout profiles (2026-08-16):** each mode keeps its OWN saved
+//     layout. ON path saves the single-drawer layout (singleLayout slot)
+//     and restores the dual-drawer layout (dualLayout slot → lastLoaded →
+//     session profile). OFF path saves the dual-drawer layout (dualLayout
+//     slot) and restores the single-drawer layout (singleLayout slot →
+//     vanilla baseline → live host) into the owned model. Neither mode's
+//     layout is destroyed by switching to the other.
 //   - First-enable seed: on first transition to dual mode (no prior
 //     detached tabs anywhere), seeds lastLoaded from live single-drawer
 //     layout so the secondary starts closed/empty (ON path)
@@ -25,6 +31,10 @@ import {
   persistSettings,
   getLastLoadedLayout,
   setLastLoadedLayout,
+  getSingleLayoutSlot,
+  setSingleLayoutSlot,
+  getDualLayoutSlot,
+  setDualLayoutSlot,
 } from './state'
 import {
   flushPendingSaves,
@@ -32,7 +42,13 @@ import {
   cancelLayoutSave,
 } from '../persist/layout-load'
 import { hasDetachedTabs, seedDualLayoutFromLive } from '../layout/snapshot'
-import { bootstrapFromLayout, flush as flushOwnedModel, getHost } from '../recon/dispatch'
+import {
+  bootstrapFromLayout,
+  flush as flushOwnedModel,
+  getHost,
+  getModel,
+  snapshotOwnedModelLayout,
+} from '../recon/dispatch'
 import { CANVAS_VERSION } from '../persist/backend-ctx'
 import { commitDraftToOwnedModel } from '../tabs/owned-commit'
 import {
@@ -47,6 +63,7 @@ import {
   clearVanillaBaseline,
   restoreVanillaBaseline,
 } from '../layout/vanilla-baseline'
+import { buildSingleLayoutFromBaseline, buildSingleLayoutFromLiveHost } from '../layout/mode-profiles'
 import { resetSideRemountStateAfterDisable } from '../sidebar/drawer-sync'
 import { injectStyles } from '../debug/styles'
 import { dlog, dwarn } from '../debug/log'
@@ -328,6 +345,18 @@ async function finishDisable(): Promise<void> {
     active: profile.activeTabId,
   })
 
+  // 1a. Durable dual layout: snapshot the live owned model BEFORE it is
+  // swapped to the single layout below. This is what re-enable restores.
+  // It survives reloads because the owned-model persist path embeds the
+  // slot in the layout blob (dispatch.ts:buildPersistedBlob).
+  const dualSnapshot = snapshotOwnedModelLayout()
+  if (dualSnapshot) {
+    setDualLayoutSlot(dualSnapshot)
+    dlog('[second-drawer-mode] saved dual layout slot:', {
+      tabs: dualSnapshot.detachedTabs?.length ?? 0,
+    })
+  }
+
   // 2. Always merge dual into lastLoaded before setSettings(false) so the
   //    dual layout is preserved on disk (not clobbered with empty after
   //    teardown). Tab-assignment persistence is always-on (built-in).
@@ -360,11 +389,53 @@ async function finishDisable(): Promise<void> {
   // the freeze base is correct even without the sync.
   try { syncLastLoadedFromPersistedLayout() } catch { /* safe to skip */ }
 
-  // 3. Flip the setting — feature.apply OFF path tears down the sidebar.
+  // 3. Determine the single-drawer layout to restore: the persisted
+  //    singleLayout slot (freshest), else the session vanilla baseline
+  //    (the pre-dual host state), else the live host state (last resort).
+  let singleLayout = getSingleLayoutSlot()
+  if (!singleLayout) {
+    try {
+      const baselineForSingle = getVanillaBaseline()
+      if (baselineForSingle) {
+        singleLayout = buildSingleLayoutFromBaseline(baselineForSingle)
+        dlog('[second-drawer-mode] single layout built from vanilla baseline')
+      } else {
+        singleLayout = buildSingleLayoutFromLiveHost()
+        dlog('[second-drawer-mode] single layout built from live host (no baseline)')
+      }
+    } catch (err) {
+      // DOM hiccup during the fallback build (headless / host mid-init):
+      // degrade to today's behavior — leave the model as-is (still dual
+      // underneath) and let the vanilla baseline restore the host view.
+      dwarn('[second-drawer-mode] single layout fallback build failed:', err)
+      singleLayout = null
+    }
+  }
+
+  // 4. Flip the setting — feature.apply OFF path tears down the sidebar.
   //    buildPersistedLayout now freezes lastLoaded dual (not live empty).
   setSettings({ secondSidebarEnabled: false })
 
-  // 4. Restore the vanilla baseline (host settings + main open/active).
+  // 5. Swap the owned model to the single layout so the model always
+  //    matches the visible mode (no split brain between "model says tabs
+  //    are secondary" and "second drawer is off"). The bootstrap's
+  //    reconcile + persist writes the single layout — with the dual slot
+  //    embedded (dispatch.ts:buildPersistedBlob) — to disk, so neither
+  //    layout is lost.
+  const host = getHost()
+  if (singleLayout && host) {
+    try {
+      dlog('[second-drawer-mode] restoring single layout into owned model', {
+        tabOrder: Array.isArray(singleLayout.tabOrder) ? singleLayout.tabOrder.length : 0,
+      })
+      bootstrapFromLayout(singleLayout, host, CANVAS_VERSION)
+      await flushOwnedModel()
+    } catch (err) {
+      dwarn('[second-drawer-mode] single-layout restore failed:', err)
+    }
+  }
+
+  // 6. Restore the vanilla baseline (host settings + main open/active).
   //    Idempotent: no-op if no baseline was captured (single→dual never
   //    happened this session). On NO-GO or partial failure, retain the
   //    baseline so the next attempt (or next disable cycle) can retry.
@@ -383,14 +454,14 @@ async function finishDisable(): Promise<void> {
     }
   }
 
-  // 4a. Drop dual-era side override / remount gen so a host side flip while
-  //     second is off (or residual override after baseline) cannot remount an
-  //     empty secondary shell. Baseline owns side on disable — do not re-apply
-  //     dual-era side via applyMainDrawerSideChange; do not clear session dual.
+  // 7. Drop dual-era side override / remount gen so a host side flip while
+  //    second is off (or residual override after baseline) cannot remount an
+  //    empty secondary shell. Baseline owns side on disable — do not re-apply
+  //    dual-era side via applyMainDrawerSideChange; do not clear session dual.
   resetSideRemountStateAfterDisable()
 
-  // 4b. After baseline restore (and even if no baseline): main-mirror must
-  //     rebuild from host after teardown unhide + any host patch.
+  // 8. After baseline restore (and even if no baseline): main-mirror must
+  //    rebuild from host after teardown unhide + any host patch.
   try {
     const mp = await import('../sidebar/main-tab-pin')
     mp.reconcileMainTabListPin()
@@ -398,7 +469,7 @@ async function finishDisable(): Promise<void> {
     dwarn('[second-drawer-mode] reconcileMainTabListPin after disable failed:', err)
   }
 
-  // 5. Modal stays open. After teardown + restore, refresh its draft from
+  // 9. Modal stays open. After teardown + restore, refresh its draft from
   //    the now-restored live state so the user sees a clean (non-dirty)
   //    view of the disabled layout.
   try {
@@ -419,28 +490,34 @@ async function finishDisable(): Promise<void> {
  *   1. If already off → return
  *   2. If Configure modal open with dirty draft → 3-way dialog
  *      (Apply and switch / Discard and switch / Cancel)
- *   3. `finishDisable`: capture session profile, merge into lastLoaded +
- *      flush + sync, setSettings(false). Modal stays open and is
+ *   3. `finishDisable`: capture session profile, save the dualLayout slot,
+ *      merge into lastLoaded + flush + sync, restore the singleLayout slot
+ *      into the owned model, setSettings(false). Modal stays open and is
  *      refreshed from live (now-disabled) state.
  *
  * **Enable path** (`next === true`):
  *   1. If already on → return
- *   2. Capture vanilla baseline (idempotent)
+ *   2. Capture vanilla baseline (idempotent) + save the singleLayout slot
  *   3. **First-enable seed:** if neither lastLoaded nor session profile
- *      has any detached tabs, this is the first time dual mode is being
- *      enabled. Seed lastLoaded from the current live single-drawer
- *      layout so `feature.apply` sees a clean state (secondary closed
- *      and empty, primary preserved from live). The seed is written
- *      BEFORE setSettings so `secondSidebarFeature.apply` reads it on mount.
+ *      nor the dualLayout slot has any detached tabs, this is the first
+ *      time dual mode is being enabled. Seed lastLoaded from the current
+ *      live single-drawer layout so `feature.apply` sees a clean state
+ *      (secondary closed and empty, primary preserved from live). The seed
+ *      is written BEFORE setSettings so `secondSidebarFeature.apply` reads
+ *      it on mount.
  *   4. setSettings({ secondSidebarEnabled: true }) — feature mount runs
-  *   5. Cancel debounced saves, await owned-model restore from lastLoaded (which
- *      was synced with the session profile before disable). Fall back to
- *      session profile if lastLoaded has no tabs. After a first-enable
- *      seed, lastLoaded has detachedTabs: [], so neither restore path
+ *   5. Cancel debounced saves, await owned-model restore from the
+ *      dualLayout slot (else lastLoaded, else the session profile). After
+ *      a first-enable seed, none of these have tabs, so no restore path
  *      runs — the secondary stays closed/empty.
  *   6. If modal is still open, refresh its draft from live so it reflects
  *      the re-enabled layout. The refresh runs AFTER the restore attempt
  *      so dual tabs are visible in the modal.
+ *
+ * Neither mode's layout is destroyed by switching to the other: the
+ * singleLayout / dualLayout profile slots are persisted in the layout blob
+ * (dispatch.ts:buildPersistedBlob) and hydrated back at boot, so a mode's
+ * layout survives leaving that mode AND a full reload.
  *
  * Tab-assignment persistence is always-on (built-in), so the enable path
  * always uses the facet-ON path (no branch for facet OFF).
@@ -463,51 +540,75 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       mainOpen: capture.baseline.mainOpen,
     })
 
+    // Save the single-drawer layout BEFORE any dual UI mount. While the
+    // second drawer is off, the owned model IS the single-drawer layout
+    // (finishDisable restored it into the model), so serialize it into the
+    // singleLayout profile slot — that is what finishDisable restores on the
+    // way back. Guard: never overwrite the slot with a dual model (the
+    // fallback case where a disable had no single layout to restore left the
+    // model dual while the drawer is off).
+    const singleSnapshot = snapshotOwnedModelLayout()
+    const modelNow = getModel()
+    if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
+      setSingleLayoutSlot(singleSnapshot)
+      dlog('[second-drawer-mode] saved single layout slot:', {
+        primary: singleSnapshot.tabOrder?.length ?? 0,
+      })
+    }
+
     // First-enable seed: if no dual tabs exist anywhere (lastLoaded has no
-    // detachedTabs AND session dual profile is missing or empty), this is
-    // the first time dual mode has ever been enabled. Seed lastLoaded from
-    // the current live single-drawer layout so feature.apply's mount reads
-    // a clean state (secondary closed/empty, primary preserved from live).
+    // detachedTabs AND session dual profile is missing or empty AND no
+    // persisted dual layout slot), this is the first time dual mode has ever
+    // been enabled. Seed lastLoaded from the current live single-drawer
+    // layout so feature.apply's mount reads a clean state (secondary
+    // closed/empty, primary preserved from live).
     //
     // Must happen BEFORE setSettings so secondSidebarFeature.apply sees the
     // seeded state (not stale pre-dual layout with a ghost secondary).
     const layoutBefore = getLastLoadedLayout()
     const profileBefore = getSessionDualProfile()
-    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore)) {
+    const dualSlotBefore = getDualLayoutSlot()
+    if (
+      !hasDetachedTabs(layoutBefore) &&
+      !hasDetachedTabs(profileBefore) &&
+      !hasDetachedTabs(dualSlotBefore)
+    ) {
       dlog('[second-drawer-mode] first enable — seeding dual layout from live')
       seedDualLayoutFromLive()
     }
 
     setSettings({ secondSidebarEnabled: true })
 
-    // Restore dual assignments. Tab-assignment persistence is always-on,
-    // so we always use the facet-ON path: lastLoaded was merged with the
-    // session profile in finishDisable; the owned model restores from it.
-    // Fall back to the session profile if lastLoaded has no tabs.
+    // Restore dual assignments. The persisted dualLayout slot is the
+    // freshest saved dual layout (written by finishDisable + by the owned
+    // model's persist path while dual is active, and hydrated back at boot).
+    // Fall back to lastLoaded (merged with the session profile in
+    // finishDisable), then to the session dual profile itself.
     //
-    // After a first-enable seed, lastLoaded has detachedTabs: [], so
-    // neither the owned-model nor the profile-restore branch runs —
-    // the secondary stays empty/closed.
+    // After a first-enable seed, the dual slot is empty and lastLoaded has
+    // detachedTabs: [], so neither the owned-model nor the profile-restore
+    // branch runs — the secondary stays empty/closed.
     //
     // Cancel debounced saves first so the post-setSettings write does not
     // clobber disk with pre-restore live empty tabs.
     const profile = getSessionDualProfile()
     cancelSettingsSave()
     cancelLayoutSave()
+    const host = getHost()
+    const dualSlot = getDualLayoutSlot()
     const layout = getLastLoadedLayout()
-    if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
+    const restoreSource = [dualSlot, layout]
+      .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
+    if (restoreSource && host) {
       dlog('[second-drawer-mode] owned-model restore for re-enable:', {
-        tabs: layout.detachedTabs.length,
+        tabs: (restoreSource.detachedTabs as unknown[]).length,
+        source: restoreSource === dualSlot ? 'dual-slot' : 'lastLoaded',
       })
-      const host = getHost()
-      if (host) {
-        bootstrapFromLayout(layout, host, CANVAS_VERSION)
-        await flushOwnedModel()
-      } else {
-        dwarn('[second-drawer-mode] owned tab model is unavailable during re-enable')
-      }
+      bootstrapFromLayout(restoreSource, host, CANVAS_VERSION)
+      await flushOwnedModel()
     } else if (profile && profile.detachedTabs.length > 0) {
-      // Defensive fallback: lastLoaded has no tabs but session profile does.
+      // Defensive fallback: no persisted dual layout but the session profile
+      // has one.
       dlog('[second-drawer-mode] re-enable falling back to session dual profile:', {
         tabs: profile.detachedTabs.length,
         active: profile.activeTabId,

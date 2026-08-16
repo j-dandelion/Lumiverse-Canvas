@@ -18,7 +18,7 @@ import {
   CANVAS_MAIN_OPEN_CLASS,
   MAIN_MIRROR_WIDTH_VAR,
 } from '../sidebar/styles'
-import { getTabAssignments } from '../tabs/assignment'
+import { getLiveIdAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getCanvasHiddenTabIds } from '../tabs/canvas-hidden'
 import { getHostDrawerSettings } from '../dom/host-settings'
@@ -75,7 +75,14 @@ function readSecondaryWidth(): number {
 }
 
 export function snapshotLayout(): any {
-  const assignments = Array.from(getTabAssignments().entries())
+  // LIVE-ID KEYED (2026-08-16): the assignment facade is TabKey-keyed
+  // ('builtin:regex', 'ext:foo/Bar'). Writing those keys into detachedTabs
+  // poisoned every consumer that later resolves them via host.findKey
+  // (findKey turns a TabKey into a garbage ext: key through its
+  // assignment-map fallback), so re-enable after a disable lost the dual
+  // layout ("all tabs in the same drawer"). getLiveIdAssignments converts
+  // each model key to its live id so the persisted layout round-trips.
+  const assignments = Array.from(getLiveIdAssignments().entries())
   const secondaryAssignments = assignments.filter(([_, side]) => side === 'secondary')
   const drawerTabs = getDrawerTabs()
   return {

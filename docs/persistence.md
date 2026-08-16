@@ -175,6 +175,42 @@ When the user enables the second drawer for the **first time** (no prior dual ta
 - `hasDetachedTabs(layoutOrProfile)` — null-safe check for at least one entry in `detachedTabs`.
 - `seedDualLayoutFromLive()` — snapshots live layout, builds and writes the seed.
 
+## Mode Layout Profiles (single-drawer vs dual-drawer)
+
+Each drawer mode keeps its **own saved layout**, so switching modes never
+destroys the other mode's layout:
+
+| Profile | Contains | Written / refreshed by |
+|---------|----------|------------------------|
+| `singleLayout` (top-level `singleLayout` in layout.json) | All tabs in the main drawer, single order, single hidden set, host side, main open/active | `requestSecondDrawerMode(true)` (serialize the live single model), and by the owned-model persist path while single is active |
+| `dualLayout` (top-level `dualLayout` in layout.json) | Tabs split across main + secondary, dual order, drawer open/width | `finishDisable` (serialize the live dual model), and by the owned-model persist path while dual is active |
+
+**Blob embedding:** `dispatch.ts:buildPersistedBlob` writes the active model
+serialization **plus** both profile slots. The model shape is authoritative
+(`model.secondary.length > 0` ⟺ dual): when the model still holds secondary
+tabs the stored single profile is never clobbered by a dual serialization.
+
+**Hydration:** `settings/state.ts:hydrateModeLayoutSlots` reads the slots out
+of the loaded blob at boot (`setup.ts`), so a mode's layout survives leaving
+that mode **and** a full reload.
+
+**Mode switch flow** (`settings/second-drawer-mode.ts`):
+- **Enable** (single → dual): save `singleLayout` from the live single model,
+  then restore `dualLayout` into the owned model (`bootstrapFromLayout`),
+  falling back to `lastLoaded` → session dual profile.
+- **Disable** (dual → single): save `dualLayout` from the live dual model,
+  then restore `singleLayout` into the owned model (persisted slot → vanilla
+  baseline → live host state), then run the vanilla baseline restore for the
+  host view. The model is swapped to the single layout so it always matches
+  the visible mode (no split brain).
+
+The TabKey/liveId dual-keying trap applies here: `snapshotLayout` and
+`captureSessionDualProfileFromLive` store **live ids** (via
+`getLiveIdAssignments`) — storing TabKeys ('builtin:regex') poisons the
+restore because `host.findKey` turns a TabKey into a garbage `ext:…` key (see
+[pitfalls.md](pitfalls.md) §1). The owned-model serialize path
+(`serializeModelToLayout` → `host.resolve`) was always live-id correct.
+
 ## Layout Restore (`layout/apply.ts`)
 
 Restores the secondary sidebar state:

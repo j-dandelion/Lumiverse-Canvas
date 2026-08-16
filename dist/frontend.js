@@ -4274,6 +4274,7 @@ var init_secondary_drawer = __esm(() => {
 // src/recon/dispatch.ts
 var exports_dispatch = {};
 __export(exports_dispatch, {
+  snapshotOwnedModelLayout: () => snapshotOwnedModelLayout,
   shutdown: () => shutdown,
   placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
   getModel: () => getModel,
@@ -4437,11 +4438,27 @@ function getModel() {
 function getHost() {
   return _host;
 }
+function snapshotOwnedModelLayout() {
+  const host = _host;
+  const model = _model;
+  if (!host || !model)
+    return null;
+  return serializeModelToLayout(model, (key) => host.resolve(key), _version);
+}
+function buildPersistedBlob(model, resolve) {
+  const layout = serializeModelToLayout(model, resolve, _version);
+  const isDual = model.secondary.length > 0;
+  return {
+    ...layout,
+    dualLayout: isDual ? layout : getDualLayoutSlot(),
+    singleLayout: isDual ? getSingleLayoutSlot() : layout
+  };
+}
 function persistModel(model) {
   const host = _host;
   if (!host)
     return;
-  const layout = serializeModelToLayout(model, (key) => host.resolve(key), _version);
+  const layout = buildPersistedBlob(model, (key) => host.resolve(key));
   const json = JSON.stringify(layout);
   if (json === _lastPersistedLayout)
     return;
@@ -4741,6 +4758,7 @@ var init_dispatch = __esm(() => {
   init_reconcile();
   init_layout_model();
   init_layout_repo();
+  init_state();
   init_log();
   _queue = Promise.resolve();
 });
@@ -6115,7 +6133,7 @@ var init_layout_load = __esm(() => {
 
 // src/layout/dual-session-profile.ts
 function captureSessionDualProfileFromLive() {
-  const assignments = Array.from(getTabAssignments().entries());
+  const assignments = Array.from(getLiveIdAssignments().entries());
   const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
   const tabs = getDrawerTabs();
   const profile = {
@@ -6343,6 +6361,73 @@ var init_vanilla_baseline = __esm(() => {
   init_log();
 });
 
+// src/layout/mode-profiles.ts
+function buildSingleLayoutFromBaseline(baseline) {
+  return {
+    version: CANVAS_VERSION,
+    primary: {
+      open: baseline.mainOpen,
+      width: readPrimaryWidthFallback(),
+      tabId: baseline.mainActiveTabId ?? undefined
+    },
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: Array.isArray(baseline.host.tabOrder) ? baseline.host.tabOrder.slice() : [],
+    hiddenTabIds: Array.isArray(baseline.host.hiddenTabIds) ? baseline.host.hiddenTabIds.slice() : [],
+    drawerSide: baseline.host.side
+  };
+}
+function buildSingleLayoutFromLiveHost() {
+  try {
+    const settings = getHostDrawerSettings() ?? {};
+    const mainOpen = isMainDrawerOpen();
+    let mainActiveTabId = null;
+    if (mainOpen) {
+      const active = getActiveTabId();
+      if (active.state === "active")
+        mainActiveTabId = active.id;
+    }
+    return {
+      version: CANVAS_VERSION,
+      primary: {
+        open: mainOpen,
+        width: readPrimaryWidthFallback(),
+        tabId: mainActiveTabId ?? undefined
+      },
+      secondary: { open: false, width: 420, activeTabId: undefined },
+      detachedTabs: [],
+      tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.slice() : [],
+      hiddenTabIds: Array.isArray(settings.hiddenTabIds) ? settings.hiddenTabIds.slice() : [],
+      drawerSide: settings.side || getMainDrawerSide()
+    };
+  } catch {
+    return {
+      version: CANVAS_VERSION,
+      primary: { open: false, width: 420, tabId: undefined },
+      secondary: { open: false, width: 420, activeTabId: undefined },
+      detachedTabs: [],
+      tabOrder: [],
+      hiddenTabIds: [],
+      drawerSide: "left"
+    };
+  }
+}
+function readPrimaryWidthFallback() {
+  if (typeof document === "undefined")
+    return 420;
+  try {
+    const w3 = getMainDrawerWidth();
+    return w3 > 0 ? w3 : 420;
+  } catch {
+    return 420;
+  }
+}
+var init_mode_profiles = __esm(() => {
+  init_host_settings();
+  init_store();
+  init_active_tab();
+});
+
 // src/settings/second-drawer-mode.ts
 var exports_second_drawer_mode = {};
 __export(exports_second_drawer_mode, {
@@ -6558,6 +6643,13 @@ async function finishDisable() {
     tabs: profile.detachedTabs.length,
     active: profile.activeTabId
   });
+  const dualSnapshot = snapshotOwnedModelLayout();
+  if (dualSnapshot) {
+    setDualLayoutSlot(dualSnapshot);
+    dlog("[second-drawer-mode] saved dual layout slot:", {
+      tabs: dualSnapshot.detachedTabs?.length ?? 0
+    });
+  }
   const last = getLastLoadedLayout();
   if (last) {
     const merged = { ...last };
@@ -6579,7 +6671,35 @@ async function finishDisable() {
   try {
     syncLastLoadedFromPersistedLayout();
   } catch {}
+  let singleLayout = getSingleLayoutSlot();
+  if (!singleLayout) {
+    try {
+      const baselineForSingle = getVanillaBaseline();
+      if (baselineForSingle) {
+        singleLayout = buildSingleLayoutFromBaseline(baselineForSingle);
+        dlog("[second-drawer-mode] single layout built from vanilla baseline");
+      } else {
+        singleLayout = buildSingleLayoutFromLiveHost();
+        dlog("[second-drawer-mode] single layout built from live host (no baseline)");
+      }
+    } catch (err) {
+      dwarn("[second-drawer-mode] single layout fallback build failed:", err);
+      singleLayout = null;
+    }
+  }
   setSettings({ secondSidebarEnabled: false });
+  const host = getHost();
+  if (singleLayout && host) {
+    try {
+      dlog("[second-drawer-mode] restoring single layout into owned model", {
+        tabOrder: Array.isArray(singleLayout.tabOrder) ? singleLayout.tabOrder.length : 0
+      });
+      bootstrapFromLayout(singleLayout, host, CANVAS_VERSION);
+      await flush();
+    } catch (err) {
+      dwarn("[second-drawer-mode] single-layout restore failed:", err);
+    }
+  }
   const baseline = getVanillaBaseline();
   if (baseline) {
     const result = await restoreVanillaBaseline(baseline);
@@ -6614,9 +6734,18 @@ async function requestSecondDrawerMode(next) {
       side: capture.baseline.host.side,
       mainOpen: capture.baseline.mainOpen
     });
+    const singleSnapshot = snapshotOwnedModelLayout();
+    const modelNow = getModel();
+    if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
+      setSingleLayoutSlot(singleSnapshot);
+      dlog("[second-drawer-mode] saved single layout slot:", {
+        primary: singleSnapshot.tabOrder?.length ?? 0
+      });
+    }
     const layoutBefore = getLastLoadedLayout();
     const profileBefore = getSessionDualProfile();
-    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore)) {
+    const dualSlotBefore = getDualLayoutSlot();
+    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore) && !hasDetachedTabs(dualSlotBefore)) {
       dlog("[second-drawer-mode] first enable — seeding dual layout from live");
       seedDualLayoutFromLive();
     }
@@ -6624,18 +6753,17 @@ async function requestSecondDrawerMode(next) {
     const profile = getSessionDualProfile();
     cancelSettingsSave();
     cancelLayoutSave();
+    const host = getHost();
+    const dualSlot = getDualLayoutSlot();
     const layout = getLastLoadedLayout();
-    if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
+    const restoreSource = [dualSlot, layout].find((l3) => l3 && Array.isArray(l3.detachedTabs) && l3.detachedTabs.length > 0);
+    if (restoreSource && host) {
       dlog("[second-drawer-mode] owned-model restore for re-enable:", {
-        tabs: layout.detachedTabs.length
+        tabs: restoreSource.detachedTabs.length,
+        source: restoreSource === dualSlot ? "dual-slot" : "lastLoaded"
       });
-      const host = getHost();
-      if (host) {
-        bootstrapFromLayout(layout, host, CANVAS_VERSION);
-        await flush();
-      } else {
-        dwarn("[second-drawer-mode] owned tab model is unavailable during re-enable");
-      }
+      bootstrapFromLayout(restoreSource, host, CANVAS_VERSION);
+      await flush();
     } else if (profile && profile.detachedTabs.length > 0) {
       dlog("[second-drawer-mode] re-enable falling back to session dual profile:", {
         tabs: profile.detachedTabs.length,
@@ -6712,6 +6840,7 @@ var init_second_drawer_mode = __esm(() => {
   init_owned_commit();
   init_dual_session_profile();
   init_vanilla_baseline();
+  init_mode_profiles();
   init_drawer_sync();
   init_log();
 });
@@ -11707,7 +11836,7 @@ class DrawerObserver {
     if (this.tabs.has(tabId))
       return;
     const parts = tabId.split(":");
-    const extensionId = existingId ? parts[2] || "unknown" : isExtensionBtn ? parts[2] || "unknown" : "";
+    const extensionId = existingId ? parts[1] || "unknown" : isExtensionBtn ? parts[1] || "unknown" : "";
     const tab = {
       tabId,
       button,
@@ -12027,7 +12156,11 @@ function liveIdForFacadeKey(key, tabs) {
     return builtin;
   const ext = parseExtensionKey(key);
   if (ext) {
-    return tabs.find((t3) => t3.extensionId === ext.extensionId && t3.title === ext.tabName)?.tabId ?? null;
+    const match = tabs.find((t3) => (t3.extensionId === ext.extensionId || !t3.extensionId && ext.extensionId === "unknown") && t3.title === ext.tabName);
+    if (match)
+      return match.tabId;
+    const titleMatch = tabs.find((t3) => t3.title === ext.tabName);
+    return titleMatch ? titleMatch.tabId : null;
   }
   return null;
 }
@@ -12371,7 +12504,7 @@ function readSecondaryWidth() {
   return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420;
 }
 function snapshotLayout() {
-  const assignments = Array.from(getTabAssignments().entries());
+  const assignments = Array.from(getLiveIdAssignments().entries());
   const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
   const drawerTabs = getDrawerTabs();
   return {
@@ -12580,9 +12713,11 @@ var init_settings_repo = __esm(() => {
 // src/settings/state.ts
 var exports_state = {};
 __export(exports_state, {
+  setSingleLayoutSlot: () => setSingleLayoutSlot,
   setSettings: () => setSettings,
   setPanelRefresh: () => setPanelRefresh,
   setLastLoadedLayout: () => setLastLoadedLayout,
+  setDualLayoutSlot: () => setDualLayoutSlot,
   refreshSettingsPanel: () => refreshSettingsPanel,
   persistSettings: () => persistSettings,
   normalizeCanvasSettings: () => normalizeCanvasSettings,
@@ -12590,8 +12725,11 @@ __export(exports_state, {
   isHideDrawerOpenCloseButtonsEnabled: () => isHideDrawerOpenCloseButtonsEnabled,
   isDragAndDropDrawerTabsEnabled: () => isDragAndDropDrawerTabsEnabled,
   hydrateSettings: () => hydrateSettings,
+  hydrateModeLayoutSlots: () => hydrateModeLayoutSlots,
+  getSingleLayoutSlot: () => getSingleLayoutSlot,
   getSettings: () => getSettings,
   getLastLoadedLayout: () => getLastLoadedLayout,
+  getDualLayoutSlot: () => getDualLayoutSlot,
   cancelSettingsSave: () => cancelSettingsSave
 });
 function getSettings() {
@@ -12602,6 +12740,26 @@ function setLastLoadedLayout(layout) {
 }
 function getLastLoadedLayout() {
   return _lastLoadedLayout;
+}
+function getSingleLayoutSlot() {
+  return _singleLayout;
+}
+function setSingleLayoutSlot(layout) {
+  _singleLayout = layout;
+}
+function getDualLayoutSlot() {
+  return _dualLayout;
+}
+function setDualLayoutSlot(layout) {
+  _dualLayout = layout;
+}
+function hydrateModeLayoutSlots(layout) {
+  if (layout && typeof layout === "object") {
+    if (layout.dualLayout !== undefined)
+      _dualLayout = layout.dualLayout;
+    if (layout.singleLayout !== undefined)
+      _singleLayout = layout.singleLayout;
+  }
 }
 function setPanelRefresh(fn) {
   _panelRefresh = fn;
@@ -12685,7 +12843,7 @@ function cancelSettingsSave() {
     _saveSettingsTimer = null;
   }
 }
-var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _panelRefresh = null;
+var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _singleLayout = null, _dualLayout = null, _panelRefresh = null;
 var init_state = __esm(() => {
   init_types();
   init_log();
@@ -17696,13 +17854,19 @@ function resolveTabKey(key) {
       const tBase = t3.id.includes(":") ? t3.id.slice(0, t3.id.lastIndexOf(":")) : t3.id;
       return tBase === base;
     });
-    return match2 ? match2.id : null;
+    if (match2)
+      return match2.id;
+    const titleMatch2 = builtinId ? observedTabs.find((t3) => t3.title === builtinId) : undefined;
+    return titleMatch2 ? titleMatch2.id : null;
   }
   const parsed = parseExtensionKey(key);
   if (!parsed)
     return null;
-  const match = observedTabs.find((t3) => t3.extensionId === parsed.extensionId && t3.title === parsed.tabName);
-  return match ? match.id : null;
+  const match = observedTabs.find((t3) => (t3.extensionId === parsed.extensionId || !t3.extensionId && parsed.extensionId === "unknown") && t3.title === parsed.tabName);
+  if (match)
+    return match.id;
+  const titleMatch = observedTabs.find((t3) => t3.title === parsed.tabName);
+  return titleMatch ? titleMatch.id : null;
 }
 function entryLocationFor(tab, assignments) {
   return assignments.get(tabKeyFromDrawerTab(tab)) === "secondary" ? "secondary" : "primary";
@@ -17837,6 +18001,9 @@ class LumiverseHost {
         return extensionKey(aBase, aBase);
       }
     }
+    match = tabs.find((t3) => t3.title === id);
+    if (match)
+      return tabKeyFromDrawerTab(match);
     return null;
   }
   async placeTab(id, to) {
@@ -18154,6 +18321,10 @@ function setup(ctx) {
     hydrateSettings(settingsPayload?.settings ?? null);
     setDebug(getSettings().debugMode);
     setLastLoadedLayout(layout);
+    try {
+      const { hydrateModeLayoutSlots: hydrateModeLayoutSlots2 } = await Promise.resolve().then(() => (init_state(), exports_state));
+      hydrateModeLayoutSlots2(layout);
+    } catch {}
     logPersistLoad("hydrate", {
       layout: layout ?? null,
       generation,

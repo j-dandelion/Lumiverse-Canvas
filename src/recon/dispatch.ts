@@ -4,8 +4,9 @@ import { reduce, foldIntents } from '../core/reduce'
 import { sideOfKey, visibleKeys } from '../core/select'
 import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
-import { serializeModelToLayout, buildModelFromLayout } from '../persist/layout-model'
+import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
 import { saveLayoutToDisk } from '../persist/layout-repo'
+import { getSingleLayoutSlot, getDualLayoutSlot } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 let _host: HostPort | null = null
@@ -198,10 +199,50 @@ export function getHost(): HostPort | null {
 
 let _lastPersistedLayout: string | null = null
 
+/**
+ * The layout blob written to disk: the active model serialization plus the
+ * durable single/dual mode profiles (top-level `singleLayout` / `dualLayout`
+ * fields, hydrated back at boot by hydrateModeLayoutSlots).
+ */
+export type PersistedLayout = LegacyLayout & {
+  dualLayout?: LegacyLayout | null
+  singleLayout?: LegacyLayout | null
+}
+
+/**
+ * Serialize the current owned model into the legacy layout format (live ids).
+ * Null when no host or model is active (boot, teardown, tests).
+ */
+export function snapshotOwnedModelLayout(): LegacyLayout | null {
+  const host = _host
+  const model = _model
+  if (!host || !model) return null
+  return serializeModelToLayout(model, (key) => host.resolve(key), _version)
+}
+
+/**
+ * Build the layout blob that is written to disk: the active model
+ * serialization plus the durable mode profiles.
+ *
+ * Model shape is authoritative over the `secondSidebarEnabled` setting:
+ * when the model still holds secondary tabs (the disable fallback where no
+ * single layout existed to restore), we must NOT clobber the stored single
+ * profile with a dual serialization. `model.secondary.length > 0` ⟺ dual.
+ */
+function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string | null): PersistedLayout {
+  const layout = serializeModelToLayout(model, resolve, _version)
+  const isDual = model.secondary.length > 0
+  return {
+    ...layout,
+    dualLayout: isDual ? layout : getDualLayoutSlot(),
+    singleLayout: isDual ? getSingleLayoutSlot() : layout,
+  }
+}
+
 function persistModel(model: LayoutModel): void {
   const host = _host
   if (!host) return
-  const layout = serializeModelToLayout(model, (key) => host.resolve(key), _version)
+  const layout = buildPersistedBlob(model, (key) => host.resolve(key))
   // Cascade guard: a host-sync storm (extension enable/update re-renders)
   // can reach reconcileAndPersist with an UNCHANGED model. Without dedup
   // every round re-wrote the identical layout to disk + IPC forever (freeze

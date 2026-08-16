@@ -32,9 +32,41 @@ let _settings: FullCanvasSettings = mergeCanvasSettings(null)
 let _lastLoadedLayout: any = null
 let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
 
+// ── Mode layout profiles (2026-08-16) ──
+//
+// The user can switch between single-drawer mode and dual-drawer mode. Each
+// mode keeps its OWN saved layout so switching never destroys the other:
+//   - `_singleLayout` — the layout to show when the second drawer is off.
+//   - `_dualLayout`   — the layout to show when the second drawer is on.
+//
+// These slots are persisted inside the layout blob (top-level `singleLayout`
+// / `dualLayout` fields) by the owned-model persist path, and hydrated back
+// at boot from the loaded blob. The mode-switch path (second-drawer-mode.ts)
+// writes the slot of the mode being LEFT, then restores the slot of the mode
+// being ENTERED into the owned model.
+let _singleLayout: any = null
+let _dualLayout: any = null
+
 export function getSettings(): FullCanvasSettings { return _settings }
 export function setLastLoadedLayout(layout: any): void { _lastLoadedLayout = layout }
 export function getLastLoadedLayout(): any { return _lastLoadedLayout }
+
+export function getSingleLayoutSlot(): any { return _singleLayout }
+export function setSingleLayoutSlot(layout: any): void { _singleLayout = layout }
+export function getDualLayoutSlot(): any { return _dualLayout }
+export function setDualLayoutSlot(layout: any): void { _dualLayout = layout }
+
+/**
+ * Read the persisted `singleLayout` / `dualLayout` profile slots out of a
+ * loaded layout blob. Called at boot (setup.ts) after hydration so mode
+ * switches restore the layout of the other mode even across reloads.
+ */
+export function hydrateModeLayoutSlots(layout: any): void {
+  if (layout && typeof layout === 'object') {
+    if (layout.dualLayout !== undefined) _dualLayout = layout.dualLayout
+    if (layout.singleLayout !== undefined) _singleLayout = layout.singleLayout
+  }
+}
 
 let _panelRefresh: (() => void) | null = null
 export function setPanelRefresh(fn: (() => void) | null): void { _panelRefresh = fn }

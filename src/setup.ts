@@ -211,6 +211,12 @@ export function setup(ctx: SpindleFrontendContext) {
     hydrateSettings(settingsPayload?.settings ?? null)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
+    // Recover the persisted single/dual mode-layout profiles so a mode switch
+    // later restores the OTHER mode's layout (survives reloads).
+    try {
+      const { hydrateModeLayoutSlots } = await import('./settings/state')
+      hydrateModeLayoutSlots(layout)
+    } catch { /* non-fatal */ }
     logPersistLoad('hydrate', {
       layout: layout ?? null,
       generation,

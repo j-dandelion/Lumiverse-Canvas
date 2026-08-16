@@ -120,8 +120,13 @@ Canvas maintains three distinct state paths for the second drawer lifecycle:
 | Path | When | Source | Behaviour |
 |------|------|--------|-----------|
 | **First-enable seed** | First time user enables second drawer (no prior dual tabs anywhere) | Live `snapshotLayout()` | Seeds `lastLoaded` with live primary, secondary closed/empty. Runs **before** `setSettings`. |
-| **Re-enable dual restore** | User re-enables after a prior dual session | `lastLoaded` (synced during disable) or session profile | `applyLayout()` or `restoreSessionDualProfile()` to restore prior tab assignments. |
-| **Vanilla baseline (disable)** | On disable (off path) | Session-only `vanilla-baseline.ts` | Restores host `drawerSettings` + main open/active to pre-dual state. |
+| **Re-enable dual restore** | User re-enables after a prior dual session | `dualLayout` slot (persisted) → `lastLoaded` → session profile | `bootstrapFromLayout`/`restoreSessionDualProfile` restore prior tab assignments. |
+| **Single-layout restore** | On disable (off path) | `singleLayout` slot (persisted) → vanilla baseline → live host | Swaps the owned model to the single layout + restores host `drawerSettings` + main open/active. |
+
+**Mode layout profiles (2026-08-16):** each mode keeps its own saved layout
+so switching never destroys the other — see [persistence.md](persistence.md)
+"Mode Layout Profiles". `snapshotLayout` / `captureSessionDualProfileFromLive`
+emit **live ids** (not TabKeys) so re-enable restores the real secondary tabs.
 
 The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks both `lastLoaded` and the session dual profile. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
 

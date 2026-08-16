@@ -6,7 +6,7 @@
 // Capture runs while secondary tabs are still live (before teardown).
 // Restore runs after the secondary sidebar is re-mounted.
 
-import { getTabAssignments } from '../tabs/assignment'
+import { getLiveIdAssignments } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getDrawerTabs } from '../store'
 import { showSecondaryTab } from '../tabs/buttons'
@@ -25,7 +25,12 @@ let _sessionProfile: SessionDualProfile | null = null
  * triggers teardown). Idempotent — subsequent calls overwrite.
  */
 export function captureSessionDualProfileFromLive(): SessionDualProfile {
-  const assignments = Array.from(getTabAssignments().entries())
+  // LIVE-ID KEYED (2026-08-16): the assignment facade is TabKey-keyed, but
+  // the profile feeds assignToSecondary / buildModelFromLayout which resolve
+  // live ids. Storing TabKeys made every restore lookup miss ("not found in
+  // DrawerObserver or store") and silently dropped the dual layout on
+  // re-enable. getLiveIdAssignments converts model keys to live ids.
+  const assignments = Array.from(getLiveIdAssignments().entries())
   const secondaryAssignments = assignments.filter(([_, side]) => side === 'secondary')
   const tabs = getDrawerTabs()
 
