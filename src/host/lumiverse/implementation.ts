@@ -1,5 +1,5 @@
 import type { LayoutModel, TabKey, Side, DrawerSide, HostTabEntry, ObservedWorld } from '../../core/model'
-import { builtinKey, extensionKey, parseBuiltinKey, parseExtensionKey, isBuiltinKey } from '../../core/model'
+import { builtinKey, extensionKey, parseBuiltinKey, parseExtensionKey, isBuiltinKey, isExtensionKey } from '../../core/model'
 import type { HostPort, LiveTabId, PlaceResult, WriteResult, DrawerState } from '../port'
 import { findStoreData, getMainDrawerSide, isMainDrawerOpen } from '../../store'
 import { getMainSidebar } from '../../dom/lumiverse'
@@ -37,6 +37,7 @@ import {
   applyHiddenTabIdsToSecondary,
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
+import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
 import { getMainMirrorDrawer } from '../../sidebar/main-mirror-drawer'
 import { getSecondaryTabList } from '../../sidebar/secondary'
 import { readVisibleTabIdsFromList } from '../../tabs/live-tab-order'
@@ -88,8 +89,11 @@ function tabKeyFromDrawerTab(t: { id: string; extensionId: string; title: string
   return extensionKey(t.extensionId || 'unknown', t.title)
 }
 
+/** Live inventory tab: the observer's ObservedTab with a guaranteed frozen key. */
+type LiveDrawerTab = TabShape & { key: TabKey }
+
 /** The observer is the host's live tab inventory and preserves DOM order. */
-function liveDrawerTabs(): { id: string; extensionId: string; title: string; root: HTMLElement; key: TabKey }[] {
+function liveDrawerTabs(): LiveDrawerTab[] {
   // Observer-only on purpose: the DrawerObserver registers untagged
   // extension buttons (class-based scan) so this inventory is COMPLETE and
   // STABLE. Unioning the fiber store here instead caused a reconcile/
@@ -102,6 +106,7 @@ function liveDrawerTabs(): { id: string; extensionId: string; title: string; roo
       extensionId: tab.extensionId === 'unknown' ? '' : tab.extensionId,
       title: tab.title,
       root: tab.button,
+      titles: tab.titles,
       // Frozen identity from the registry. The derivation fallback covers
       // legacy-injected ObservedTab shapes (test doubles) that predate the
       // sticky-key field.
@@ -112,40 +117,11 @@ function liveDrawerTabs(): { id: string; extensionId: string; title: string; roo
 // ---------------------------------------------------------------------------
 // Helper: resolve a TabKey to a live tab id via the store
 // ---------------------------------------------------------------------------
+// The full resolution precedence lives in tabs/identity.ts (liveIdForKey) —
+// the ONLY fallback logic in the codebase. This wrapper feeds it the live
+// inventory.
 function resolveTabKey(key: TabKey): LiveTabId | null {
-  const observedTabs = liveDrawerTabs()
-  if (isBuiltinKey(key)) {
-    const builtinId = parseBuiltinKey(key)
-    const base = builtinId?.includes(':') ? builtinId.slice(0, builtinId.lastIndexOf(':')) : builtinId
-    const match = observedTabs.find(t => {
-      if (t.id === builtinId) return true
-      const tBase = t.id.includes(':') ? t.id.slice(0, t.id.lastIndexOf(':')) : t.id
-      return tBase === base
-    })
-    if (match) return match.id
-    // Title fallback (2026-08-16): extension tabs are keyed by their TITLE
-    // while untagged ('builtin:Hone'), but the observer re-keys to the real
-    // spindle id once the tagger tags the button. Without this, a saved
-    // layout containing the pre-tag id could never resolve the tab and its
-    // placement/order was silently dropped on restore.
-    const titleMatch = builtinId ? observedTabs.find(t => t.title === builtinId) : undefined
-    return titleMatch ? titleMatch.id : null
-  }
-  const parsed = parseExtensionKey(key)
-  if (!parsed) return null
-  const match = observedTabs.find(
-    t => (t.extensionId === parsed.extensionId ||
-      // liveDrawerTabs blanks 'unknown' → ''; keys built from the observer
-      // carry 'unknown'. Normalize so both directions resolve.
-      (!t.extensionId && parsed.extensionId === 'unknown'))
-      && t.title === parsed.tabName,
-  )
-  if (match) return match.id
-  // Title fallback: the key's extensionId may be stale (built while the tab
-  // was untagged/'unknown', or re-keyed by the tagger since). Never drop a
-  // tab the user placed — match by title alone.
-  const titleMatch = observedTabs.find(t => t.title === parsed.tabName)
-  return titleMatch ? titleMatch.id : null
+  return liveIdForKey(key, liveDrawerTabs())
 }
 
 // ---------------------------------------------------------------------------
@@ -376,61 +352,20 @@ export class LumiverseHost implements HostPort {
   findKey(id: LiveTabId): TabKey | null {
     const tabs = liveDrawerTabs()
 
-    // Exact match
-    let match = tabs.find(t => t.id === id)
-    if (match) return match.key
-
-    // Suffix-stripped match
-    const idBase = id.includes(':') ? id.slice(0, id.lastIndexOf(':')) : id
-    match = tabs.find(t => {
-      const tBase = t.id.includes(':') ? t.id.slice(0, t.id.lastIndexOf(':')) : t.id
-      return tBase === id || tBase === idBase
-    })
-    if (match) return match.key
-
-    // If not in drawer tabs, check the assignment map (secondary-assigned tabs)
-    const assignments = getTabAssignments()
-    if (assignments.has(id)) {
-      // Extension tab: construct key from id
-      if (id.includes(':')) {
-        return extensionKey(id.slice(0, id.lastIndexOf(':')), id)
+    // Key-shaped input (legacy layouts may carry TabKeys in live-id slots —
+    // the round-2 "TabKey poison"): resolve through the key→live direction
+    // first so a stored key round-trips to its canonical frozen key. The
+    // old assignment-map fallback here invented garbage 'ext:…' keys.
+    if (isBuiltinKey(id) || isExtensionKey(id)) {
+      const live = liveIdForKey(id as TabKey, tabs)
+      if (live !== null) {
+        const key = keyForLiveId(live, tabs)
+        if (key !== null) return key
       }
-      return extensionKey(id, id)
+      return null
     }
 
-    // Also try suffix-stripped in assignments
-    for (const [assignedId] of assignments) {
-      const aBase = assignedId.includes(':') ? assignedId.slice(0, assignedId.lastIndexOf(':')) : assignedId
-      if (aBase === id || aBase === idBase) {
-        if (aBase.includes(':')) {
-          return extensionKey(aBase.slice(0, aBase.lastIndexOf(':')), aBase)
-        }
-        return extensionKey(aBase, aBase)
-      }
-    }
-
-    // Title fallback (2026-08-16): a move/restore may carry the tab's TITLE
-    // as the live id (pre-tag buttons; saved layouts written while the tab
-    // was untagged) even though the observer now holds the tagged spindle
-    // id. Match by title so the tab still resolves after re-keying.
-    match = tabs.find(t => t.title === id)
-    if (match) return match.key
-
-    // Button-attribute bridge (2026-08-16): at boot the observer registers
-    // extension buttons by TITLE, then the tagger tags the button with the
-    // real data-tab-id — but the observer entry is only re-keyed on the next
-    // scan. A saved layout written while tagged carries the spindle id, and
-    // this stale entry is the only observer record of the tab. Match through
-    // the button's current data-tab-id so the restore still resolves.
-    // (Phase 1's attribute-aware observer closes the stale window in the
-    // live runtime; the bridge remains as the legacy-input path.)
-    match = tabs.find(t => {
-      const btn = (t as { root?: HTMLElement | null }).root
-      return !!btn && btn.getAttribute('data-tab-id') === id
-    })
-    if (match) return match.key
-
-    return null
+    return keyForLiveId(id, tabs)
   }
 
   // -----------------------------------------------------------------------

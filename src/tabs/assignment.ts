@@ -50,25 +50,23 @@ export { isTabActiveInMainDrawer, getActiveSecondaryTabId, setActiveSecondaryTab
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 
 /**
- * Candidate owned-model keys for a live tab id, in resolution order.
- *
- * The owned model is keyed by stable TabKey (e.g. "builtin:profile"), not
- * by live id. The live id may carry a suffix ("regex:0", "spindle:foo:tab:
- * bar:0") that the stable key strips. Bare builtin live ids ("regex") map
- * to keys WITH the "builtin:" prefix — the plain suffix-strip alone always
- * missed, which made getTabSidebar report secondary tabs as 'primary'
- * (wrong context-menu label/target). Extension live ids encode ext id +
- * title; only host.findKey resolves those (see getTabSidebar).
+ * Resolve a live id (or legacy title/key-shaped input) to a model TabKey.
+ * Host resolver first (tabs/identity.ts — frozen keys, legacy inputs), then
+ * a single builtin-prefix fallback for bare ids the host cannot resolve
+ * (DOM-placed builtins whose observer record is temporarily missing; pinned
+ * by assignment-facade R6/R7 suffix-drift). The old multi-candidate
+ * `_ownedKeyCandidates` heuristic is retired — keyForLiveId never invents
+ * keys, so only the builtin namespace needs the prefix.
  */
-function _ownedKeyCandidates(liveId: string): TabKey[] {
-  if (liveId.startsWith('builtin:') || liveId.startsWith('ext:')) {
-    return [liveId as TabKey]
+function _resolvedKey(liveId: string): TabKey | null {
+  const host = getHost()
+  if (host) {
+    const key = host.findKey(liveId)
+    if (key) return key
   }
   const stripped = stripTabIdSuffix(liveId)
-  const out: TabKey[] = []
-  if (!stripped.includes(':')) out.push(`builtin:${stripped}` as TabKey)
-  out.push(stripped as TabKey)
-  return out
+  if (!stripped.includes(':')) return `builtin:${stripped}` as TabKey
+  return null
 }
 
 function _readFromModel(): Map<string, 'primary' | 'secondary'> | null {
@@ -106,17 +104,11 @@ export function hasTabAssignment(tabId: string): boolean {
   if (fromModel) {
     // Try the live id directly, then resolve to a stable key: host adapter
     // first (classifies builtin/ext from the live inventory), then the
-    // heuristic candidates (builtin: prefix, suffix strip) for tabs the
-    // host cannot resolve (e.g. DOM-placed builtins).
+    // builtin-prefix fallback for tabs the host cannot resolve (e.g.
+    // DOM-placed builtins).
     if (fromModel.has(tabId)) return true
-    const host = getHost()
-    if (host) {
-      const key = host.findKey(tabId)
-      if (key && fromModel.has(key)) return true
-    }
-    for (const key of _ownedKeyCandidates(tabId)) {
-      if (fromModel.has(key)) return true
-    }
+    const key = _resolvedKey(tabId)
+    if (key && fromModel.has(key)) return true
     return false
   }
   return _tabAssignments.has(tabId)
@@ -167,18 +159,12 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
   if (fromModel) {
     if (fromModel.has(tabId)) return fromModel.get(tabId)!
     // LiveId → TabKey via the host adapter (classifies builtin/ext from
-    // the live inventory), then heuristic candidates. Without the host
-    // resolution, secondary tabs keyed 'builtin:regex' / 'ext:foo/Bar'
+    // the live inventory), then the builtin-prefix fallback. Without the
+    // host resolution, secondary tabs keyed 'builtin:regex' / 'ext:foo/Bar'
     // always came back 'primary' — both context menus then offered
     // "Move to second drawer" for tabs already in the second drawer.
-    const host = getHost()
-    if (host) {
-      const key = host.findKey(tabId)
-      if (key && fromModel.has(key)) return fromModel.get(key)!
-    }
-    for (const key of _ownedKeyCandidates(tabId)) {
-      if (fromModel.has(key)) return fromModel.get(key)!
-    }
+    const key = _resolvedKey(tabId)
+    if (key && fromModel.has(key)) return fromModel.get(key)!
   }
   return _tabAssignments.get(tabId) || 'primary'
 }
@@ -206,6 +192,25 @@ export function getLiveIdAssignments(
   for (const [key, side] of fromModel) {
     const liveId = liveIdForFacadeKey(key, tabs)
     out.set(liveId ?? key, side)
+  }
+  return out
+}
+
+/**
+ * Model-derived assignment entries with BOTH namespaces: the model TabKey
+ * and its current live id. Writers of `detachedTabs` use this so the field
+ * semantics stay unified — `tabId` = live id, `tabTitle` = TabKey
+ * (REFACTOR-PLAN v2 §4.4).
+ */
+export function getLiveIdAssignmentEntries(
+  tabs: { tabId: string; extensionId: string; title: string }[] = drawerObserver.getAllTabs(),
+): { key: TabKey; liveId: string; side: Side }[] {
+  const fromModel = _readFromModel()
+  if (!fromModel) return []
+  const out: { key: TabKey; liveId: string; side: Side }[] = []
+  for (const [key, side] of fromModel) {
+    const liveId = liveIdForFacadeKey(key, tabs)
+    out.push({ key, liveId: liveId ?? key, side })
   }
   return out
 }

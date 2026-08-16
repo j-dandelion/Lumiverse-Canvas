@@ -35,7 +35,8 @@ import {
 } from './tab-position'
 import { getSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
-import { parseBuiltinKey, parseExtensionKey } from '../core/model'
+import { liveIdForKey } from '../tabs/identity'
+import type { TabKey } from '../core/model'
 import { drawerObserver } from './drawer-observer'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
 import { setSuppressAutoActivation, markDrawerOpenState } from './secondary-drawer'
@@ -218,42 +219,18 @@ function sweepOrphanSecondaryWrappers(): void {
  * 'ext:foo/Bar'); assignToSecondary/unassignFromSecondary work on liveIds.
  * Passing a TabKey made every restored secondary tab fail with "not found
  * in DrawerObserver or store" (2026-07-31 — restore placement was broken).
+ *
+ * Body delegated to tabs/identity.liveIdForKey (the single resolver).
  */
 export function liveIdForFacadeKey(
   key: string,
   tabs: { tabId: string; extensionId: string; title: string }[],
 ): string | null {
-  const builtin = parseBuiltinKey(key)
-  if (builtin) {
-    // A 'builtin:' key is either a REAL builtin (bare id) or an extension
-    // tab keyed by TITLE while untagged ('builtin:Hone'). When the inventory
-    // currently holds a TAGGED extension with this title, the live id is its
-    // spindle id — return it so the draft/catalog/snapshot/profile all agree
-    // on one id namespace (a title id here makes Configure drags no-op: the
-    // modal rows carry the catalog id and moveTab can't find the title id).
-    const tagged = tabs.find(
-      (t) => t.title === builtin && !!t.extensionId && t.extensionId !== 'unknown',
-    )
-    if (tagged) return tagged.tabId
-    return builtin
-  }
-  const ext = parseExtensionKey(key)
-  if (ext) {
-    const match = tabs.find(
-      (t) => (t.extensionId === ext.extensionId ||
-        // 'unknown' keys match observer entries whose extensionId was
-        // blanked ('unknown' → '').
-        (!t.extensionId && ext.extensionId === 'unknown'))
-        && t.title === ext.tabName,
-    )
-    if (match) return match.tabId
-    // Title fallback (2026-08-16): the key's extensionId may be stale (built
-    // while the tab was untagged, or before the parts[1] parse fix). Match by
-    // title alone so the tab's live id is never lost from the profile/snapshot.
-    const titleMatch = tabs.find((t) => t.title === ext.tabName)
-    return titleMatch ? titleMatch.tabId : null
-  }
-  return null
+  return liveIdForKey(key as TabKey, tabs.map((t) => ({
+    id: t.tabId,
+    extensionId: t.extensionId,
+    title: t.title,
+  })))
 }
 
 /**

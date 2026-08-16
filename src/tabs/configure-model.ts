@@ -5,6 +5,8 @@
 // by host-settings.ts.
 
 import { type CatalogTab, BUILTIN_TAB_IDS, isHideLocked } from './configure-catalog'
+import { liveIdForTitle } from './identity'
+import { drawerObserver } from '../sidebar/drawer-observer'
 
 export type DrawerSide = 'left' | 'right'
 export type TabSide = 'primary' | 'secondary'
@@ -57,14 +59,22 @@ let _builtinIdSet: Set<string> | null = null
  * Map each incoming id through the catalog by TITLE: a title id becomes the
  * catalog's current id; ids the catalog already uses pass through untouched
  * (builtin ids like 'loom' are not titles — the humanized catalog title is
- * 'Loom' — so they never remap).
+ * 'Loom' — so they never remap). When the catalog has no entry for the
+ * title (catalog lag), fall back to the observer inventory via the shared
+ * resolver (identity.liveIdForTitle) so the one-namespace rule holds even
+ * when the store lags the observer.
  */
 function normalizeIdsToCatalog(ids: readonly string[], catalog: CatalogTab[]): string[] {
   const byTitle = new Map<string, string>()
   for (const tab of catalog) {
     if (tab.title && !byTitle.has(tab.title)) byTitle.set(tab.title, tab.id)
   }
-  return ids.map((id) => byTitle.get(id) ?? id)
+  const observed = drawerObserver.getAllTabs().map((t) => ({
+    id: t.tabId,
+    extensionId: t.extensionId,
+    title: t.title,
+  }))
+  return ids.map((id) => byTitle.get(id) ?? liveIdForTitle(id, observed) ?? id)
 }
 function builtinIdSet(): Set<string> {
   return (_builtinIdSet ??= new Set(BUILTIN_TAB_IDS))
