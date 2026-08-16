@@ -5,7 +5,7 @@
   "author": "Creature",
   "github": "https://github.com/j-dandelion/Lumiverse-Canvas",
   "homepage": "https://github.com/j-dandelion/Lumiverse-Canvas",
-  "description": "Adds a second sidebar for organizing extension tabs, with chat reflow and drag-to-resize.",
+  "description": "Adds convenient tweaks and features to enhance the UI. Aimed at deeper customization and quality-of-life improvements.",
   "permissions": ["ui_panels"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
