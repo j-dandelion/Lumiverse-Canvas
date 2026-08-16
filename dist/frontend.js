@@ -5196,11 +5196,20 @@ function getBuiltinCatalog() {
     hideLocked: CORE_HIDE_LOCKED.has(id)
   }));
 }
+function isExtensionDrawerTab(t3) {
+  if (t3.extensionId)
+    return true;
+  const root = t3.root;
+  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
+    return true;
+  }
+  return t3.id.includes(":");
+}
 function getExtensionCatalog() {
   const tabs = getDrawerTabs();
   if (!tabs || tabs.length === 0)
     return [];
-  return tabs.map((t3) => ({
+  return tabs.filter(isExtensionDrawerTab).map((t3) => ({
     id: t3.id,
     kind: "extension",
     title: t3.title || humanizeTabId(t3.id),

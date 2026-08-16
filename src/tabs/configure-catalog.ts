@@ -130,23 +130,47 @@ export function getBuiltinCatalog(): CatalogTab[] {
 }
 
 /**
+ * True when a DrawerTab from the live inventory represents an actual
+ * extension tab (not a host built-in). getDrawerTabs() is a general tab
+ * inventory: built-ins (bare data-tab-id buttons) and extensions
+ * (spindle-placement tabs) are mixed together.
+ *   - Tagged extensions always carry a real extensionId.
+ *   - Untagged host extension buttons carry the host extension class
+ *     (`tabBtnExtension`); host built-ins never do.
+ *   - Pre-observer fiber-store drawerTabs are spindle-placement slices
+ *     whose ids are store ids (`spindle:…`); bare ids are built-ins.
+ */
+function isExtensionDrawerTab(t: DrawerTab): boolean {
+  if (t.extensionId) return true
+  const root = t.root as HTMLElement | null
+  if (root && typeof root.className === 'string' && root.className.includes('tabBtnExtension')) {
+    return true
+  }
+  return t.id.includes(':')
+}
+
+/**
  * Extension tabs currently registered in the host store, as CatalogTab entries.
- * Returns an empty array when the store is unavailable.
+ * Host built-ins observed in the same inventory are excluded so the catalog
+ * never labels them as extensions. Returns an empty array when the store is
+ * unavailable.
  */
 export function getExtensionCatalog(): CatalogTab[] {
   const tabs = getDrawerTabs()
   if (!tabs || tabs.length === 0) return []
 
-  return tabs.map((t: DrawerTab) => ({
-    id: t.id,
-    kind: 'extension' as const,
-    title: t.title || humanizeTabId(t.id),
-    description: t.description || `Open ${t.title || t.id} extension tab`,
-    hideLocked: false,
-    extensionId: t.extensionId || undefined,
-    iconSvg: t.iconSvg || undefined,
-    iconUrl: t.iconUrl || undefined,
-  }))
+  return tabs
+    .filter(isExtensionDrawerTab)
+    .map((t: DrawerTab) => ({
+      id: t.id,
+      kind: 'extension' as const,
+      title: t.title || humanizeTabId(t.id),
+      description: t.description || `Open ${t.title || t.id} extension tab`,
+      hideLocked: false,
+      extensionId: t.extensionId || undefined,
+      iconSvg: t.iconSvg || undefined,
+      iconUrl: t.iconUrl || undefined,
+    }))
 }
 
 /**

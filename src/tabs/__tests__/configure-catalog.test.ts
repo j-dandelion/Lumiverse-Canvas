@@ -158,6 +158,56 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
 }
 
 // =====================================================================
+// getExtensionCatalog — live inventory mixes built-ins + extensions
+// (2026-08-16): the observer-based getDrawerTabs() returns host built-ins
+// (bare data-tab-id) alongside extension tabs. Built-ins must NOT be
+// labeled as extensions in the Configure Tabs UI.
+// =====================================================================
+{
+  setupStore()
+  __setDrawerTabsForTest([
+    // Host built-in observed via data-tab-id: bare id, no extension
+    // class, empty extensionId → excluded.
+    { id: 'profile', extensionId: '', title: 'Profile', root: { className: 'sidebar-ux-tab-btn' } as any },
+    { id: 'presets', extensionId: '', title: 'Reasoning', root: { className: '' } as any },
+    // Tagged spindle extension → included.
+    { id: 'spindle:foo:tab:Bar:0', extensionId: 'foo', title: 'Bar', root: { className: '' } as any },
+    // Untagged host extension button (title id + extension class) → included.
+    { id: 'LumiBooks', extensionId: '', title: 'LumiBooks', root: { className: '_tabBtn_1 _tabBtnExtension_2' } as any },
+  ])
+  const extCatalog = getExtensionCatalog()
+  assertEqual(extCatalog.length, 2, 'builtins excluded from extension catalog')
+  assertEqual(extCatalog[0].id, 'spindle:foo:tab:Bar:0', 'tagged ext id')
+  assertEqual(extCatalog[0].kind, 'extension', 'tagged ext kind')
+  assertEqual(extCatalog[1].id, 'LumiBooks', 'untagged ext id (class match)')
+  assertEqual(extCatalog[1].kind, 'extension', 'untagged ext kind')
+}
+
+// =====================================================================
+// getFullCatalog — no builtin duplication when the live inventory
+// contains the same builtin ids (regression: the modal previously showed
+// every tab as an Extension because the extension-kinded duplicate
+// overwrote the builtin entry in the display map).
+// =====================================================================
+{
+  setupStore()
+  __setDrawerTabsForTest([
+    { id: 'profile', extensionId: '', title: 'Profile', root: { className: 'sidebar-ux-tab-btn' } as any },
+    { id: 'spindle:foo:tab:Bar:0', extensionId: 'foo', title: 'Bar', root: { className: '' } as any },
+  ])
+  const full = getFullCatalog()
+  assertEqual(full.length, BUILTIN_TAB_IDS.length + 1, 'full catalog: builtins once + extensions once')
+  const ids = full.map(t => t.id)
+  assertEqual(ids.filter(id => id === 'profile').length, 1, 'profile appears exactly once')
+  assertEqual(ids.filter(id => id === 'spindle:foo:tab:Bar:0').length, 1, 'extension appears exactly once')
+
+  const profileTab = full.find(t => t.id === 'profile')!
+  assertEqual(profileTab.kind, 'builtin', 'observed builtin stays kind=builtin')
+  assert(profileTab.hideLocked, 'observed builtin keeps hideLocked (not overwritten)')
+  assertEqual(profileTab.title, 'Profile', 'observed builtin keeps builtin title')
+}
+
+// =====================================================================
 // getFullCatalog — builtins first, then extensions
 // =====================================================================
 {
