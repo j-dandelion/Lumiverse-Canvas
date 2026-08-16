@@ -21,6 +21,9 @@ let _pendingLayout: unknown = null
 let _restoringPending = false
 let _lastRestoredCount = -1
 let _restoreAttempts = 0
+/** Boot-only retry window for partial restores (late-registering tabs). */
+let _restoreDeadline = 0
+const RESTORE_RETRY_WINDOW_MS = 30_000
 
 function pendingLayoutTabCount(layout: any): number {
   if (!layout || typeof layout !== 'object') return 0
@@ -88,6 +91,17 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       _restoreAttempts++
       if (_restoreAttempts > 12) {
         dlog('[dispatch] pending-layout restore aborted after max retries', {
+          attempts: _restoreAttempts,
+        })
+        _pendingLayout = null
+        _lastRestoredCount = -1
+        _restoreAttempts = 0
+        return
+      }
+      // Boot-only window: past it, world changes are USER actions and must
+      // not replay the saved layout over them.
+      if (Date.now() > _restoreDeadline) {
+        dlog('[dispatch] pending-layout restore aborted (retry window expired)', {
           attempts: _restoreAttempts,
         })
         _pendingLayout = null
@@ -186,6 +200,7 @@ export function shutdown(): void {
   _restoringPending = false
   _lastRestoredCount = -1
   _restoreAttempts = 0
+  _restoreDeadline = 0
   _queue = Promise.resolve()
 }
 
@@ -734,12 +749,20 @@ export function bootstrapFromLayout(
     }
   }
   // Only retain a deferred restore when the first identity walk could not
-  // resolve any saved tabs. If the host is already ready, later world changes
-  // must not replay an old bootstrap payload over legitimate user actions.
+  // resolve EVERY saved tab. Extension buttons often register AFTER this
+  // point (React commit lag, late extension registration); a fully-empty
+  // model was the historical gate, which dropped stragglers whenever most
+  // tabs resolved on the first pass (the "extension tab doesn't persist
+  // across reload" bug). The retry loop in enqueueHostSync re-attempts
+  // buildModelFromLayout on later world changes and stops once the count
+  // reaches `expected` (or the stall/attempts guards fire).
   _restoringPending = false
   _lastRestoredCount = -1
   _restoreAttempts = 0
-  _pendingLayout = layout != null && model.primary.length + model.secondary.length === 0
+  const expected = pendingLayoutTabCount(layout)
+  const resolved = model.primary.length + model.secondary.length
+  _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS
+  _pendingLayout = layout != null && resolved < expected
     ? layout
     : null
   bootstrap(model, host, version)

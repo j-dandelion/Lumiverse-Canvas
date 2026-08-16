@@ -43,6 +43,29 @@ export type BaseSnapshot = {
 // still mid-init when this module's top-level code runs. Deferring the read
 // to call time keeps the cycle safe for any import order.
 let _builtinIdSet: Set<string> | null = null
+
+/**
+ * Normalize legacy/stale ids to the tab's CURRENT catalog id (2026-08-16).
+ *
+ * Extension tabs flip between their TITLE ('Hone') and their tagged spindle
+ * id ('spindle:hone:tab:hone_tab:1') as the tagger re-keys the observer
+ * entry. The draft, the modal rows (rendered from the catalog), and the
+ * commit resolution must all agree on ONE id per tab — otherwise the modal's
+ * drag handlers get a catalog id that is not in the draft and the drag
+ * silently no-ops ("drag Hone to the second drawer — nothing moves").
+ *
+ * Map each incoming id through the catalog by TITLE: a title id becomes the
+ * catalog's current id; ids the catalog already uses pass through untouched
+ * (builtin ids like 'loom' are not titles — the humanized catalog title is
+ * 'Loom' — so they never remap).
+ */
+function normalizeIdsToCatalog(ids: readonly string[], catalog: CatalogTab[]): string[] {
+  const byTitle = new Map<string, string>()
+  for (const tab of catalog) {
+    if (tab.title && !byTitle.has(tab.title)) byTitle.set(tab.title, tab.id)
+  }
+  return ids.map((id) => byTitle.get(id) ?? id)
+}
 function builtinIdSet(): Set<string> {
   return (_builtinIdSet ??= new Set(BUILTIN_TAB_IDS))
 }
@@ -124,8 +147,12 @@ export function createDraft(input: {
   assignments: ReadonlyMap<string, TabSide>
 }): ConfigureDraft {
   const { catalog, tabOrder, hiddenTabIds, drawerSide, assignments } = input
-  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrder, catalog)
-  const hiddenSet = new Set(hiddenTabIds)
+  // Normalize stale ids (title ids, old suffix-drifted ids) to the catalog's
+  // current ids so the draft agrees with the modal rows and the commit.
+  const tabOrderNormalized = normalizeIdsToCatalog(tabOrder, catalog)
+  const hiddenNormalized = normalizeIdsToCatalog(hiddenTabIds, catalog)
+  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrderNormalized, catalog)
+  const hiddenSet = new Set(hiddenNormalized)
   const allOrdered = [...builtinOrder, ...extensionOrder]
 
   const primaryIds: string[] = []

@@ -1291,6 +1291,71 @@ liveIdAssignmentsDraft()
 })()
 
 // =====================================================================
+// Draft id normalization (2026-08-16) — extension tabs flip between their
+// TITLE id ('Hone') and their tagged spindle id as the tagger re-keys the
+// observer. The draft must use the CATALOG's current id so the modal rows
+// (rendered from the catalog) and the commit resolution agree — otherwise
+// the Configure drag silently no-ops ("drag Hone to the second drawer,
+// nothing moves").
+// =====================================================================
+{
+  const catalog: CatalogTab[] = [
+    ...makeTestCatalog(),
+    // Tagged Hone: the observer currently holds the spindle id.
+    { id: 'spindle:hone:tab:hone_tab:1', kind: 'extension' as const, title: 'Hone', hideLocked: false, extensionId: 'hone' },
+  ]
+  // Host tabOrder still carries the STALE title id.
+  const draft = createDraft({
+    catalog,
+    tabOrder: ['profile', 'Hone', 'presets'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map([['spindle:hone:tab:hone_tab:1', 'primary']]),
+  })
+  assert(
+    draft.primaryIds.indexOf('spindle:hone:tab:hone_tab:1') >= 0,
+    'draft-norm: title id in tabOrder is normalized to the catalog spindle id',
+  )
+  assert(
+    !draft.primaryIds.includes('Hone'),
+    'draft-norm: stale title id is gone from the draft',
+  )
+  assertArraysEqual(
+    draft.extensionOrder,
+    ['spindle:hone:tab:hone_tab:1', 'ext-a', 'ext-b'],
+    'draft-norm: extension order carries the normalized id',
+  )
+
+  // Untagged catalog (title id) — ids pass through untouched.
+  const untaggedCatalog: CatalogTab[] = [
+    ...makeTestCatalog(),
+    { id: 'Hone', kind: 'extension' as const, title: 'Hone', hideLocked: false },
+  ]
+  const untagged = createDraft({
+    catalog: untaggedCatalog,
+    tabOrder: ['profile', 'Hone', 'presets'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+    assignments: new Map([['Hone', 'primary']]),
+  })
+  assert(
+    untagged.primaryIds.indexOf('Hone') >= 0,
+    `draft-norm: untagged title id stays as-is (got ${JSON.stringify(untagged.primaryIds)})`,
+  )
+
+  // Hidden ids are normalized too.
+  const withHidden = createDraft({
+    catalog,
+    tabOrder: ['profile', 'Hone', 'presets'],
+    hiddenTabIds: ['Hone'],
+    drawerSide: 'left',
+    assignments: new Map([['spindle:hone:tab:hone_tab:1', 'primary']]),
+  })
+  assert(withHidden.hiddenIds.has('spindle:hone:tab:hone_tab:1'), 'draft-norm: hidden title id normalized to catalog id')
+  assert(!withHidden.hiddenIds.has('Hone'), 'draft-norm: stale hidden title id removed')
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

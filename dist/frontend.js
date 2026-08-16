@@ -4358,6 +4358,15 @@ function enqueueHostSync(host, generation) {
         _restoreAttempts = 0;
         return;
       }
+      if (Date.now() > _restoreDeadline) {
+        dlog("[dispatch] pending-layout restore aborted (retry window expired)", {
+          attempts: _restoreAttempts
+        });
+        _pendingLayout = null;
+        _lastRestoredCount = -1;
+        _restoreAttempts = 0;
+        return;
+      }
       const restored = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
       const count = restored.primary.length + restored.secondary.length;
       const expected = pendingLayoutTabCount(_pendingLayout);
@@ -4430,6 +4439,7 @@ function shutdown() {
   _restoringPending = false;
   _lastRestoredCount = -1;
   _restoreAttempts = 0;
+  _restoreDeadline = 0;
   _queue = Promise.resolve();
 }
 function getModel() {
@@ -4737,7 +4747,10 @@ function bootstrapFromLayout(layout, host, version) {
   _restoringPending = false;
   _lastRestoredCount = -1;
   _restoreAttempts = 0;
-  _pendingLayout = layout != null && model.primary.length + model.secondary.length === 0 ? layout : null;
+  const expected = pendingLayoutTabCount(layout);
+  const resolved = model.primary.length + model.secondary.length;
+  _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
+  _pendingLayout = layout != null && resolved < expected ? layout : null;
   bootstrap(model, host, version);
   Promise.resolve().then(() => (init_secondary(), exports_secondary)).then((m) => {
     m.reassignSecondaryTabsFromModel({
@@ -4752,7 +4765,7 @@ function bootstrapFromLayout(layout, host, version) {
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _lastRestoredCount = -1, _restoreAttempts = 0, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _lastRestoredCount = -1, _restoreAttempts = 0, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -5384,6 +5397,14 @@ __export(exports_configure_model, {
   alignIdsToLiveVisibleOrder: () => alignIdsToLiveVisibleOrder,
   alignDraftToLiveVisibleOrder: () => alignDraftToLiveVisibleOrder
 });
+function normalizeIdsToCatalog(ids, catalog) {
+  const byTitle = new Map;
+  for (const tab of catalog) {
+    if (tab.title && !byTitle.has(tab.title))
+      byTitle.set(tab.title, tab.id);
+  }
+  return ids.map((id) => byTitle.get(id) ?? id);
+}
 function builtinIdSet() {
   return _builtinIdSet ??= new Set(BUILTIN_TAB_IDS);
 }
@@ -5435,8 +5456,10 @@ function syncKindOrders(draft) {
 }
 function createDraft(input) {
   const { catalog, tabOrder, hiddenTabIds, drawerSide, assignments } = input;
-  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrder, catalog);
-  const hiddenSet = new Set(hiddenTabIds);
+  const tabOrderNormalized = normalizeIdsToCatalog(tabOrder, catalog);
+  const hiddenNormalized = normalizeIdsToCatalog(hiddenTabIds, catalog);
+  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrderNormalized, catalog);
+  const hiddenSet = new Set(hiddenNormalized);
   const allOrdered = [...builtinOrder, ...extensionOrder];
   const primaryIds = [];
   const secondaryIds = [];
@@ -12152,8 +12175,12 @@ function sweepOrphanSecondaryWrappers() {
 }
 function liveIdForFacadeKey(key, tabs) {
   const builtin = parseBuiltinKey(key);
-  if (builtin)
+  if (builtin) {
+    const tagged = tabs.find((t3) => t3.title === builtin && !!t3.extensionId && t3.extensionId !== "unknown");
+    if (tagged)
+      return tagged.tabId;
     return builtin;
+  }
   const ext = parseExtensionKey(key);
   if (ext) {
     const match = tabs.find((t3) => (t3.extensionId === ext.extensionId || !t3.extensionId && ext.extensionId === "unknown") && t3.title === ext.tabName);
@@ -17869,7 +17896,18 @@ function resolveTabKey(key) {
   return titleMatch ? titleMatch.id : null;
 }
 function entryLocationFor(tab, assignments) {
-  return assignments.get(tabKeyFromDrawerTab(tab)) === "secondary" ? "secondary" : "primary";
+  const direct = assignments.get(tabKeyFromDrawerTab(tab));
+  if (direct)
+    return direct;
+  for (const [facadeKey, side] of assignments) {
+    const builtin = parseBuiltinKey(facadeKey);
+    if (builtin && builtin === tab.title)
+      return side;
+    const ext = parseExtensionKey(facadeKey);
+    if (ext && ext.tabName === tab.title)
+      return side;
+  }
+  return "primary";
 }
 function buildHostEntry(tab) {
   const assignments = getTabAssignments();
@@ -18002,6 +18040,12 @@ class LumiverseHost {
       }
     }
     match = tabs.find((t3) => t3.title === id);
+    if (match)
+      return tabKeyFromDrawerTab(match);
+    match = tabs.find((t3) => {
+      const btn = t3.root;
+      return !!btn && btn.getAttribute("data-tab-id") === id;
+    });
     if (match)
       return tabKeyFromDrawerTab(match);
     return null;

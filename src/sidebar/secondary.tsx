@@ -224,7 +224,19 @@ export function liveIdForFacadeKey(
   tabs: { tabId: string; extensionId: string; title: string }[],
 ): string | null {
   const builtin = parseBuiltinKey(key)
-  if (builtin) return builtin
+  if (builtin) {
+    // A 'builtin:' key is either a REAL builtin (bare id) or an extension
+    // tab keyed by TITLE while untagged ('builtin:Hone'). When the inventory
+    // currently holds a TAGGED extension with this title, the live id is its
+    // spindle id — return it so the draft/catalog/snapshot/profile all agree
+    // on one id namespace (a title id here makes Configure drags no-op: the
+    // modal rows carry the catalog id and moveTab can't find the title id).
+    const tagged = tabs.find(
+      (t) => t.title === builtin && !!t.extensionId && t.extensionId !== 'unknown',
+    )
+    if (tagged) return tagged.tabId
+    return builtin
+  }
   const ext = parseExtensionKey(key)
   if (ext) {
     const match = tabs.find(

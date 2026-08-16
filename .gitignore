@@ -19,3 +19,6 @@ WORKFLOW.md
 # Release-notes drafts (uncommitted release notes; release history lives in CHANGELOG.md + git tags)
 .release-notes-*.md
 CANVAS_REFERENCE.md
+
+# AI working notes (ephemeral planning docs)
+REFACTOR-PLAN.md

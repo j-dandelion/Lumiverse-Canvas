@@ -159,7 +159,22 @@ export function entryLocationFor(
   tab: { id: string; extensionId: string; title: string },
   assignments: Map<string, Side>,
 ): Side {
-  return assignments.get(tabKeyFromDrawerTab(tab)) === 'secondary' ? 'secondary' : 'primary'
+  const direct = assignments.get(tabKeyFromDrawerTab(tab))
+  if (direct) return direct
+  // Re-keyed tab (2026-08-16): the tagger re-keys the observer entry from the
+  // title id to the tagged spindle id, so the observed key ('ext:hone/Hone')
+  // differs from the model's pre-tag key ('builtin:Hone' or 'ext:old/Hone').
+  // The facade lookup above misses and the tab would observe as 'primary',
+  // making applySyncFromHost flip a user's secondary placement back to the
+  // main drawer on the next sync. Fall back to a TITLE match on the facade —
+  // the tab's title is stable across re-keys.
+  for (const [facadeKey, side] of assignments) {
+    const builtin = parseBuiltinKey(facadeKey)
+    if (builtin && builtin === tab.title) return side
+    const ext = parseExtensionKey(facadeKey)
+    if (ext && ext.tabName === tab.title) return side
+  }
+  return 'primary'
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +392,18 @@ export class LumiverseHost implements HostPort {
     // was untagged) even though the observer now holds the tagged spindle
     // id. Match by title so the tab still resolves after re-keying.
     match = tabs.find(t => t.title === id)
+    if (match) return tabKeyFromDrawerTab(match)
+
+    // Button-attribute bridge (2026-08-16): at boot the observer registers
+    // extension buttons by TITLE, then the tagger tags the button with the
+    // real data-tab-id — but the observer entry is only re-keyed on the next
+    // scan. A saved layout written while tagged carries the spindle id, and
+    // this stale entry is the only observer record of the tab. Match through
+    // the button's current data-tab-id so the restore still resolves.
+    match = tabs.find(t => {
+      const btn = (t as { root?: HTMLElement | null }).root
+      return !!btn && btn.getAttribute('data-tab-id') === id
+    })
     if (match) return tabKeyFromDrawerTab(match)
 
     return null

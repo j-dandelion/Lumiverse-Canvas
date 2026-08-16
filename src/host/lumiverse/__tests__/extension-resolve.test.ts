@@ -71,6 +71,8 @@ function fakeButton(opts: { tabId?: string; title?: string; ext?: boolean } = {}
 }
 function fakeSidebarWithButtons(buttons: any[]) {
   return {
+    closest: () => null,
+    querySelector: () => null,
     querySelectorAll: (sel: string) => {
       if (sel === '[data-tab-id]') return buttons
       if (sel.includes('tabBtnExtension')) return buttons
@@ -209,6 +211,60 @@ withInventory([
   assert(restored.primary[0] === LOOM && restored.primary[2] === WEAVER,
     `G2: restore keeps the neighbors at their slots (got ${JSON.stringify(restored.primary)})`)
   assert(restored.primary[1] !== undefined, 'G2: extension tab restored at index 1 (order preserved)')
+}
+
+// ══ H1: button-attribute bridge — the observer entry is STALE (registered
+// by title before the tagger tagged the button), but the button itself now
+// carries the real data-tab-id. A saved layout written while tagged carries
+// the spindle id; findKey must resolve it through the button. ══
+withInventory([fakeButton({ tabId: 'Hone', title: 'Hone', ext: true })])
+{
+  const host = new LumiverseHost()
+  // Simulate the tagger having tagged the button AFTER the observer
+  // registered it (the entry stays stale until the next scan).
+  const btn = _fakeSidebar.querySelectorAll('[data-tab-id]')[0]
+  btn.setAttribute('data-tab-id', 'spindle:hone:tab:hone_tab:1')
+  const key = host.findKey('spindle:hone:tab:hone_tab:1')
+  assert(key != null, 'H1: findKey bridges a tagged id through a stale untagged observer entry')
+  if (key) {
+    const live = host.resolve(key)
+    assertEqual(live, 'Hone', 'H1: the bridged key round-trips to the untagged live id')
+  }
+}
+
+// ══ H2: entryLocationFor title fallback — the tagger re-keyed the observer
+// entry ('ext:hone/Hone'), but the model still holds the pre-tag key
+// ('builtin:Hone' in secondary). The observed location must stay secondary or
+// applySyncFromHost flips the user's placement back to primary. ══
+{
+  const { entryLocationFor } = await import('../implementation')
+  const tab = { id: 'spindle:hone:tab:hone_tab:1', extensionId: 'hone', title: 'Hone' }
+  const facade = new Map<string, 'primary' | 'secondary'>([
+    ['builtin:Hone', 'secondary'],
+    ['builtin:loom', 'primary'],
+  ])
+  assertEqual(
+    entryLocationFor(tab, facade),
+    'secondary',
+    'H2: re-keyed tab keeps its side via the title fallback',
+  )
+  // A genuinely-unknown tab still falls back to primary.
+  const unknown = { id: 'x', extensionId: '', title: 'Nope' }
+  assertEqual(entryLocationFor(unknown, facade), 'primary', 'H2: unknown tab defaults to primary')
+}
+
+// ══ H3: liveIdForFacadeKey returns the CURRENT observer id for a
+// title-keyed extension ('builtin:Hone' → spindle id when tagged) so the
+// draft/catalog/profile all agree on one namespace. ══
+withInventory([fakeButton({ tabId: 'spindle:hone:tab:hone_tab:1', title: 'Hone' })])
+{
+  const { liveIdForFacadeKey } = await import('../../../sidebar/secondary')
+  const liveId = liveIdForFacadeKey('builtin:Hone', drawerObserver.getAllTabs())
+  assertEqual(liveId, 'spindle:hone:tab:hone_tab:1', 'H3: title-keyed extension maps to the tagged spindle id')
+  // Untagged observer → the bare title id (builtin branch unchanged).
+  withInventory([fakeButton({ tabId: 'Hone', title: 'Hone', ext: true })])
+  const liveId2 = liveIdForFacadeKey('builtin:Hone', drawerObserver.getAllTabs())
+  assertEqual(liveId2, 'Hone', 'H3: untagged observer keeps the bare title id')
 }
 
 console.log(`PASS: ${passed}`)
