@@ -29,7 +29,7 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
-import { getSettings, getLastLoadedLayout, isDragAndDropDrawerTabsEnabled } from '../settings/state'
+import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled } from '../settings/state'
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug } from '../debug/log'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
@@ -183,7 +183,10 @@ const secondSidebarFeature: CanvasFeature = {
       if (!getSecondaryWrapper()) {
         const s = getSettings()
         // Tab-assignment persistence is always-on, so anyFacet is always true.
-        const layout = getLastLoadedLayout()
+        // Runtime enable reads the persisted dualLayout slot (the freshest
+        // dual state; lastLoaded is the pre-enable single-era snapshot).
+        // The cold-load path receives the loaded layout as the mount arg.
+        const layout = getDualLayoutSlot() ?? getLastLoadedLayout()
         const initialWidth = s.persistDrawerWidth ? layout?.secondary?.width : undefined
         const hasTabsToRestore = (layout?.detachedTabs?.length ?? 0) > 0
         const initialOpen = !!(

@@ -75,30 +75,37 @@ const host = new FakeHost([
 
 // ── Mode-profile builders ──
 {
-  const { buildSingleLayoutFromBaseline, buildSingleLayoutFromLiveHost } = await import('../mode-profiles')
-
-  const baseline = {
-    host: { side: 'right' as const, tabOrder: ['profile', 'regex', 'loom'], hiddenTabIds: ['regex'], showTabLabels: false },
-    mainOpen: true,
-    mainActiveTabId: 'profile',
-    capturedAt: 0,
-  }
-  const fromBaseline = buildSingleLayoutFromBaseline(baseline)
-  assert((fromBaseline.detachedTabs?.length ?? 0) === 0, 'baseline single layout has no detached tabs')
-  assertEqual(fromBaseline.primary?.tabId, 'profile', 'baseline single layout active tab')
-  assertEqual(fromBaseline.primary?.open, true, 'baseline single layout main open')
-  assertEqual(fromBaseline.drawerSide, 'right', 'baseline single layout side')
-  assertEqual(fromBaseline.hiddenTabIds?.length, 1, 'baseline single layout hidden set carried over')
-  assertEqual(fromBaseline.tabOrder?.length, 3, 'baseline single layout tab order carried over')
-
-  const singleModel = buildModelFromLayout(fromBaseline, (id) => host.findKey(id))
-  assert(singleModel.secondary.length === 0, 'baseline single layout restores to all-primary model')
-  assert(singleModel.primary.includes(LOOM), 'baseline single layout includes the formerly-secondary tab in primary')
+  const { buildSingleLayoutFromLiveHost, restoreSingleModeLayout } = await import('../mode-profiles')
 
   const fromLive = buildSingleLayoutFromLiveHost()
   assert(fromLive != null, 'live-host single layout builder returns a layout')
   assert(Array.isArray(fromLive.tabOrder), 'live-host single layout has a tab order array')
   assert((fromLive.detachedTabs?.length ?? 0) === 0, 'live-host single layout has no detached tabs')
+
+  // restoreSingleModeLayout: the single slot (all-primary) boots the owned
+  // model into an all-primary state and converges the host (the disable
+  // path — REFACTOR-PLAN v2 §4.6).
+  const { bootstrap, shutdown, getModel, flush } = await import('../../recon/dispatch')
+  shutdown()
+  bootstrap(createEmptyModel(), host, 't')
+  const singleSlot: any = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'profile' },
+    secondary: { open: false, width: 420, activeTabId: null },
+    detachedTabs: [],
+    tabOrder: ['profile', 'regex', 'loom'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+  const result = await restoreSingleModeLayout(singleSlot, host)
+  await flush()
+  assert(result.ok === true, 'restoreSingleModeLayout completes ok')
+  const model = getModel()
+  assert(model != null, 'model present after restoreSingleModeLayout')
+  assert(model!.secondary.length === 0, 'single slot restores to an all-primary model')
+  assert(model!.primary.includes(LOOM), 'single slot includes the formerly-secondary tab in primary')
+  const world = host.observe()
+  assert(world.tabs.every((t) => t.location === 'primary'), 'host converges to all-primary after single restore')
 }
 
 console.log(`PASS: ${passed}`)

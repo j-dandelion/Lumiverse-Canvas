@@ -75,20 +75,6 @@ mock.module('../../layout/snapshot', () => ({
   }),
 }))
 
-mock.module('../../layout/vanilla-baseline', () => ({
-  captureVanillaBaseline: () => ({
-    captured: false,
-    baseline: {
-      host: { side: 'left', tabOrder: [], hiddenTabIds: [], showTabLabels: undefined },
-      mainOpen: false,
-      mainActiveTabId: null,
-    },
-  }),
-  getVanillaBaseline: () => null,
-  clearVanillaBaseline: () => {},
-  restoreVanillaBaseline: async () => ({ ok: true }),
-}))
-
 mock.module('../../debug/styles', () => ({
   injectStyles: () => {},
 }))

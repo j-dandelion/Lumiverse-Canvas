@@ -18,7 +18,7 @@ import {
   CANVAS_MAIN_OPEN_CLASS,
   MAIN_MIRROR_WIDTH_VAR,
 } from '../sidebar/styles'
-import { getLiveIdAssignments, getLiveIdAssignmentEntries } from '../tabs/assignment'
+import { getLiveIdAssignmentEntries } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getCanvasHiddenTabIds } from '../tabs/canvas-hidden'
 import { getHostDrawerSettings } from '../dom/host-settings'

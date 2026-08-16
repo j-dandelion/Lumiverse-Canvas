@@ -85,6 +85,18 @@ mock.module('../../recon/dispatch', () => ({
   bootstrapFromLayout: () => { calls.bootstrapFromLayout++ },
   flush: async () => {},
   getHost: () => ({ resolve: (k: string) => k }),
+  getModel: () => null,
+  snapshotOwnedModelLayout: () => null,
+  dispatch: async () => {},
+  dispatchBatch: async () => {},
+  dispatchMoveByLiveId: async () => {},
+  placementFirstMoveByLiveId: async () => {},
+  captureMainMirrorMoveChrome: async () => ({ neighborBtn: null, reassertId: null }),
+  applyMainMirrorMoveChrome: async () => {},
+  captureSecondaryNeighborForMove: async () => ({ neighborBtn: null }),
+  applySecondaryNeighborHandoff: async () => {},
+  shutdown: () => {},
+  bootstrap: () => {},
 }))
 
 mock.module('../../tabs/owned-commit', () => ({
@@ -93,6 +105,10 @@ mock.module('../../tabs/owned-commit', () => ({
 
 mock.module('../../sidebar/drawer-sync', () => ({
   resetSideRemountStateAfterDisable: () => {},
+  isShowTabLabels: () => false,
+  syncDrawerTabSettings: () => {},
+  applyMainDrawerSideChange: async () => {},
+  syncSecondaryTabLabels: () => {},
 }))
 
 mock.module('../../debug/styles', () => ({
@@ -112,7 +128,7 @@ mock.module('../../tabs/configure-modal', () => ({
 const [{ requestSecondDrawerMode }] = await Promise.all([
   import('../second-drawer-mode'),
 ])
-const [{ getSettings, setSettings, setLastLoadedLayout }] = await Promise.all([
+const [{ getSettings, setSettings, setDualLayoutSlot }] = await Promise.all([
   import('../state'),
 ])
 const [
@@ -160,7 +176,7 @@ armSettingsRepo()
 bindSettingsSaveResultBridge()
 
 // ── Scenario: re-enable from OFF with a persisted dual layout ──
-// (the state finishDisable leaves on disk: lastLoaded has detachedTabs)
+// (the state finishDisable leaves on disk: the dualLayout slot)
 
 // Start from OFF (default is ON). Drain the OFF save so it does not
 // pollute later assertions.
@@ -168,12 +184,13 @@ setSettings({ secondSidebarEnabled: false })
 await sleep(150)
 sent.length = 0
 
-// Seed the persisted dual layout (re-enable restore source).
-setLastLoadedLayout({
+// Seed the persisted dual layout (re-enable restore source — the slot, not
+// lastLoaded; REFACTOR-PLAN v2 §4.6 retired lastLoaded's mode-restore role).
+setDualLayoutSlot({
   version: 2,
   primary: { open: false, width: 420, tabId: null },
   secondary: { open: false, width: 420, activeTabId: 'builtin:loom' },
-  detachedTabs: [{ id: 'builtin:loom', title: 'Loom', location: 'secondary' }],
+  detachedTabs: [{ tabId: 'builtin:loom', tabTitle: 'builtin:loom', sidebar: 'secondary' }],
   hiddenTabIds: [],
 })
 
