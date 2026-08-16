@@ -5,6 +5,10 @@
 
 import { findStoreData, getDrawerTabs, getStoreSnapshot } from '../store'
 import { getMainSidebar } from '../dom/lumiverse'
+import {
+  getMainMirrorActiveTabId,
+  isMainTabPinEnabled,
+} from '../sidebar/main-tab-pin'
 
 /**
  * Discriminated union describing the active-tab state of the main drawer.
@@ -41,35 +45,58 @@ export function getActiveTabId(): ActiveTabState {
 }
 
 /**
- * Thin boolean wrapper over getActiveTabId() for callers that only need
- * a yes/no. Prefer getActiveTabId() for new code — the sentinel shape is
- * the authoritative contract.
+ * User-visible primary active tab id — **single source of truth** for
+ * rClick assignTab, live DnD, and Configure quiet commit handoff.
  *
- * DOM fallback (Q4 fix): the Zustand store can be stale relative to the
- * DOM — a user click on a tab updates the DOM's `tabBtnActive` class
- * synchronously, but the React commit that updates the store can lag by
- * microtask/macrotask. When the store says "not active" but the DOM
- * shows the tab as active, the DOM is the user-visible truth. Without
- * this fallback, runHandoff's preMoveActiveTab check returns false, the
- * source-replacement gate is skipped, and the host's
- * pendingActiveTabReset useEffect then resets the active tab to the
- * first non-moved tab (Profile) — the "always Profile" bug reported
- * after wiring into all 4 paths.
+ * Taskbar main-mirror (pin on): only the Canvas exclusive key counts.
+ * Host `tabBtnActive` often stays on a parked/top tab while the strip
+ * highlights a different tab. Key null = no selection (do not fall back
+ * to host) so closed-strip moves do not force-activate a park target.
+ *
+ * Pin off: prefer live host DOM `tabBtnActive` (user-visible, sync on
+ * click) over Zustand store (can lag a frame). Store is the fallback
+ * when DOM has no active button.
+ *
+ * STALENESS WARNING (2026-07-31): the host drawer's tabBtnActive can stay
+ * on a stale tab (often the persisted primary.tabId, e.g. "Databank")
+ * long after the user clicked elsewhere, and after a move the host's
+ * pendingActiveTabReset marks the FIRST remaining tab. Callers must treat
+ * a host-flagged active as suspect when its observed location is not the
+ * primary side — adoptActive in core/reduce.ts enforces exactly that.
  */
-export function isTabActiveInMainDrawer(tabId: string): boolean {
-  const active = getActiveTabId()
-  if (active.state === 'active' && active.id === tabId) return true
-  // DOM validation: when the store says "not active" (or the store is
-  // stale), double-check the DOM. If the DOM's active button has the
-  // same data-tab-id, the tab is active regardless of what the store
-  // says.
+export function resolvePrimaryActiveTabId(): string | null {
+  if (isMainTabPinEnabled()) {
+    return getMainMirrorActiveTabId()
+  }
+
   const sidebar = getMainSidebar()
   if (sidebar) {
-    const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]') as HTMLElement | null
-    const activeTabId = activeBtn?.getAttribute('data-tab-id') ?? null
-    if (activeTabId === tabId) return true
+    const activeBtn = sidebar.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null
+    const id =
+      activeBtn?.getAttribute('data-tab-id')
+      || activeBtn?.getAttribute('title')
+      || null
+    if (id) return id
   }
-  return false
+
+  const active = getActiveTabId()
+  if (active.state === 'active') return active.id
+  return null
+}
+
+/**
+ * Thin boolean wrapper over resolvePrimaryActiveTabId() for callers that
+ * only need a yes/no. Prefer getActiveTabId() / resolvePrimaryActiveTabId()
+ * when the full state or id is needed.
+ *
+ * Used by rClick assignTab, activation handoff, and Configure/live-DnD
+ * quiet commit so wasActive / inactive-preserve share one policy.
+ */
+export function isTabActiveInMainDrawer(tabId: string): boolean {
+  const id = resolvePrimaryActiveTabId()
+  return id != null && id === tabId
 }
 
 // --- Secondary tab tracking ---

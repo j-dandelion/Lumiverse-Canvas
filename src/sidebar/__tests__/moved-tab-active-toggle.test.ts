@@ -182,6 +182,44 @@ function findStyleById(id: string): StubStyleElement | null {
 }
 
 // ============================================================
+// Test 5 (regression): Label typography must cover main-mirror
+//         buttons WITHOUT data-tab-id. Extension tab buttons are
+//         not tagged by host React, so a mirror button whose host
+//         never received Canvas's data-tab-id tag would drop out of
+//         the `button[data-tab-id]` font-size rule and render its
+//         label at the inherited (larger) font size — "extension
+//         tab labels too big". The mirror selectors must carry the
+//         same 9px typography.
+// ============================================================
+{
+  const found = findStyleById('sidebar-ux-drawer-tab-styles')
+  assert(found !== null, 'T5: style#sidebar-ux-drawer-tab-styles exists in document.head')
+
+  const css = found?.textContent ?? ''
+
+  // The typography rule block must include the base selector AND the
+  // mirror selectors (which do not require data-tab-id).
+  const typographySelectors = [
+    '.sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label',
+    '.sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label',
+    '.sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label',
+  ]
+  for (const sel of typographySelectors) {
+    assert(css.includes(sel), `T5: typography rule includes "${sel}"`)
+  }
+
+  // The mirror selectors must be part of the same rule block that
+  // declares the 9px font-size (not a separate, weaker rule).
+  const mirrorSel = typographySelectors[1]!
+  const selIdx = css.indexOf(mirrorSel)
+  const openBraceIdx = css.indexOf('{', selIdx)
+  const closeBraceIdx = css.indexOf('}', openBraceIdx)
+  const ruleBody = css.substring(openBraceIdx + 1, closeBraceIdx)
+  assert(ruleBody.includes('font-size: calc(9px * var(--lumiverse-font-scale, 1))'),
+    'T5: mirror-button selector shares the 9px font-size declaration')
+}
+
+// ============================================================
 // Results
 // ============================================================
 console.log(`PASS: ${passed}`)

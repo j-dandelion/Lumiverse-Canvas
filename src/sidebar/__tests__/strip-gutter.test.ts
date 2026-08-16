@@ -41,6 +41,7 @@ class StubElement {
         self.className = self.className.split(/\s+/).filter((x) => x && x !== c).join(' ')
       },
       contains: (c: string) => self.className.split(/\s+/).includes(c),
+      toString: () => self.className,
     }
   }
   parentElement: StubElement | null = null
@@ -121,7 +122,7 @@ const stubWindow: any = {
 ;(globalThis as any).HTMLElement = StubElement
 ;(globalThis as any).Element = StubElement
 
-import { hydrateSettings, resetHydrationGuard } from '../../settings/state'
+import { hydrateSettings } from '../../settings/state'
 import {
   updateStripGutters,
   clearStripGutters,
@@ -201,7 +202,6 @@ function _resetAll() {
   __setSecondaryWrapperForTest(null)
   clearTabAssignments()
   clearStripGutters()
-  resetHydrationGuard()
   hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
 }
 
@@ -217,7 +217,6 @@ assert(!css.includes('_chatColumn_'), 'strip gutter CSS does not own chat column
 assert(!css.includes('transition:'), 'strip gutter CSS has no transition: property')
 
 function _hydrate(patch: { taskbarMode?: boolean; moveControlsToOuterEdge?: boolean }) {
-  resetHydrationGuard()
   hydrateSettings(patch)
 }
 

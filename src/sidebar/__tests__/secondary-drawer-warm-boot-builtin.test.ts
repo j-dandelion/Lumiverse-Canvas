@@ -33,13 +33,22 @@ if (builtinIdx !== -1) {
 ok(helperSrc.includes('branch=LAZY_MOUNT_OK'), 'T-WARM-WIRE-1: LAZY_MOUNT_OK breadcrumb')
 ok(helperSrc.includes('ensureBuiltInTabActiveInMain'), 'T-WARM-WIRE-1: ensureBuiltInTabActiveInMain present')
 ok(helperSrc.includes('getBuiltInTabRoot'), 'T-WARM-WIRE-1: getBuiltInTabRoot present')
-ok(helperSrc.includes('requestTabLocation'), 'T-WARM-WIRE-1: requestTabLocation present')
+ok(
+  helperSrc.includes('requestHostTabToSecondary') || helperSrc.includes('requestTabLocation'),
+  'T-WARM-WIRE-1: host tab location write present',
+)
 
 // Order in helper source: ensure appears before the post-mount getBuiltInTabRoot
-// assignment and before requestTabLocation.
+// assignment and before the host location write.
 const ensureIdx = helperSrc.indexOf('await ensureBuiltInTabActiveInMain(')
 const getRootAfterEnsure = helperSrc.indexOf('ui.getBuiltInTabRoot(tabId)', ensureIdx)
-const requestIdx = helperSrc.indexOf('ui.requestTabLocation(', ensureIdx)
+const requestIdx = (() => {
+  const a = helperSrc.indexOf('requestHostTabToSecondary(', ensureIdx)
+  const b = helperSrc.indexOf('ui.requestTabLocation(', ensureIdx)
+  if (a === -1) return b
+  if (b === -1) return a
+  return Math.min(a, b)
+})()
 ok(ensureIdx !== -1, 'T-WARM-WIRE-1: await ensureBuiltInTabActiveInMain call site')
 ok(
   getRootAfterEnsure !== -1 && ensureIdx < getRootAfterEnsure,
@@ -47,7 +56,7 @@ ok(
 )
 ok(
   requestIdx !== -1 && ensureIdx < requestIdx,
-  'T-WARM-WIRE-1: ensure before requestTabLocation',
+  'T-WARM-WIRE-1: ensure before host tab location write',
 )
 
 const rafMatches = helperSrc.match(/requestAnimationFrame\(\(\)\s*=>\s*r\(\)\)/g) ?? []

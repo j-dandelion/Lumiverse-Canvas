@@ -10,8 +10,10 @@
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { getFiberFromElement } from '../dom/fiber'
 import { dlog } from '../debug/log'
+import { drawerObserver } from '../sidebar/drawer-observer'
 
 let _drawerTabsCache: DrawerTab[] | null = null
+let _testDrawerTabsOverride = false
 let _storeSnapshotCache: Record<string, unknown> | null = null
 let _cacheTimestamp = 0
 const CACHE_TTL_MS = 3000 // Re-walk fiber tree every 3 seconds max
@@ -20,6 +22,7 @@ export interface DrawerTab {
   id: string
   extensionId: string
   title: string
+  description?: string
   shortName?: string
   iconSvg?: string
   iconUrl?: string
@@ -157,9 +160,26 @@ export function findStoreData(force = false): void {
 }
 
 export function getDrawerTabs(): DrawerTab[] {
+  if (_testDrawerTabsOverride && _drawerTabsCache) return _drawerTabsCache
+  // The DOM inventory is authoritative once DrawerObserver is running. Do
+  // not let a stale fiber snapshot reintroduce a second live tab universe.
+  // The observer registers untagged extension buttons by class, so this
+  // inventory is complete without fiber unions (which were UNSTABLE: the
+  // fiber walk can land on any extension's partial store, flip-flopping the
+  // tab universe and driving an infinite SAVE_LAYOUT cascade).
+  const observed = drawerObserver.getAllTabs()
+  if (observed.length > 0) {
+    return observed.map((tab) => ({
+      id: tab.tabId,
+      title: tab.title,
+      root: tab.button,
+      iconSvg: '',
+      extensionId: tab.extensionId === 'unknown' ? '' : tab.extensionId,
+    }))
+  }
   findStoreData()
   if (_drawerTabsCache) return _drawerTabsCache
-  dlog('getDrawerTabs: drawerTabs not found in fiber tree (returning empty)')
+  dlog('getDrawerTabs: no host inventory available')
   return []
 }
 
@@ -271,5 +291,6 @@ export function __setDrawerTabsForTest(
   tabs: DrawerTab[] | null,
 ): void {
   _drawerTabsCache = tabs
+  _testDrawerTabsOverride = tabs !== null
   _cacheTimestamp = Date.now()
 }

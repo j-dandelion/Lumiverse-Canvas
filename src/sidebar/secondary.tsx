@@ -22,7 +22,8 @@ import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
 import { isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } from '../tabs/buttons'
-import { persistOpenState } from '../layout/persist'
+import { requestHostTabToMain } from '../tabs/host-tab-location'
+import { restoreDomPlacedBuiltInToMain } from '../tabs/dom-placed-builtin'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
 import { SECONDARY_WIDTH_VAR } from './styles'
@@ -33,9 +34,12 @@ import {
   reconcileTabListPin,
 } from './tab-position'
 import { getSettings } from '../settings/state'
-import { dwarn } from '../debug/log'
+import { dlog, dwarn } from '../debug/log'
+import { parseBuiltinKey, parseExtensionKey } from '../core/model'
+import { drawerObserver } from './drawer-observer'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
-import { setSuppressAutoActivation } from './secondary-drawer'
+import { setSuppressAutoActivation, markDrawerOpenState } from './secondary-drawer'
+import { setActiveSecondaryTabId } from '../tabs/active-tab'
 import {
   closedTransformPx,
   createDrawerShell,
@@ -117,6 +121,10 @@ export function unmountSecondarySidebar(): void {
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }
+  // Clear drawer cache too — a stale detached drawer made
+  // openSecondarySidebar's `!_secondaryDrawer` check pass while the
+  // wrapper was null (or the reverse after a partial teardown).
+  _secondaryDrawer = null
   _secondarySidebarOpen = false
   // Drop the panel-header observers so a future remount rebuilds them
   // (the underlying main-drawer header may have been replaced too).
@@ -172,8 +180,9 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     } else {
       dwarn(
         `[tabmove] createSecondarySidebar: registerContainer SKIPPED — ` +
-        `window.spindle.containers.registerContainer not available. ` +
-        `Built-in tab moves will silently fail (ContainerTabContent Pass 3 resets to main-drawer).`
+        `host bridge containers.registerContainer not available ` +
+        `(setup ctx / window.spindle missing). Built-in tab moves will ` +
+        `silently fail (ContainerTabContent Pass 3 resets to main-drawer).`
       )
     }
   } catch (err) {
@@ -203,15 +212,185 @@ function sweepOrphanSecondaryWrappers(): void {
   }
 }
 
+/**
+ * Resolve a facade TabKey to the live drawer tab id that the placement
+ * functions expect. The assignment facade is TabKey-keyed ('builtin:loom',
+ * 'ext:foo/Bar'); assignToSecondary/unassignFromSecondary work on liveIds.
+ * Passing a TabKey made every restored secondary tab fail with "not found
+ * in DrawerObserver or store" (2026-07-31 — restore placement was broken).
+ */
+export function liveIdForFacadeKey(
+  key: string,
+  tabs: { tabId: string; extensionId: string; title: string }[],
+): string | null {
+  const builtin = parseBuiltinKey(key)
+  if (builtin) return builtin
+  const ext = parseExtensionKey(key)
+  if (ext) {
+    return (
+      tabs.find(
+        (t) => t.extensionId === ext.extensionId && t.title === ext.tabName,
+      )?.tabId ?? null
+    )
+  }
+  return null
+}
+
+/**
+ * Re-attach every model-assigned secondary tab to the secondary shell
+ * (button + root reparent). Idempotent — assignToSecondary early-returns
+ * for already-placed tabs.
+ *
+ * Runs when the drawer opens, and also when it is ALREADY open: with the
+ * drawer open at boot, openSecondarySidebar bails before the loop and
+ * restored tabs stay visible in the main drawer until the first move
+ * (2026-07-31). The bootstrap path calls this with openOnClosed:false so a
+ * closed drawer is never force-opened.
+ *
+ * The loop suppresses auto-activation (deferActivation), so no tab content
+ * is displayed during placement. When the drawer is open and nothing is
+ * active afterwards, the preferred tab (activateKey — the layout's
+ * persisted active.secondary) or the first placed tab is shown — otherwise
+ * the drawer stays empty until a click.
+ */
+/**
+ * Pure guard for reassignSecondaryTabsFromModel: are all model-secondary
+ * tabs already placed in the secondary list? A key whose live id cannot be
+ * resolved (extension keys with no matching live tab) counts as placed — it
+ * cannot be placed either. Builtin keys always parse to a bare id, so a
+ * missing builtin button fails the guard (the loop runs and no-ops per
+ * tab). Redundant reassign calls — bootstrapFromLayout plus
+ * openSecondarySidebar's BAIL and opening paths run back-to-back at boot —
+ * become cheap no-ops instead of re-running every placement. Buttons and
+ * roots live in the same wrapper, so a list holding every button implies
+ * nothing needs re-attaching; a re-created wrapper has neither and fails
+ * the guard (recovery preserved).
+ */
+export function secondaryTabsAllPlaced(
+  modelSecondaryKeys: readonly string[],
+  tabs: { tabId: string; extensionId: string; title: string }[],
+  listIds: readonly string[],
+): boolean {
+  const present = new Set(listIds)
+  return modelSecondaryKeys.every((key) => {
+    const liveId = liveIdForFacadeKey(key, tabs)
+    return liveId === null || present.has(liveId)
+  })
+}
+
+export function reassignSecondaryTabsFromModel(opts?: {
+  openOnClosed?: boolean
+  setActiveWhenReady?: boolean
+  /** Preferred tab to show after placement (model TabKey, e.g. the layout's active.secondary). */
+  activateKey?: string | null
+}): void {
+  import('../sidebar/secondary-drawer').then(
+    async ({ assignToSecondary, activateSecondaryTab, getActiveSecondaryTab }) => {
+      setSuppressAutoActivation(true)
+      const tabs = drawerObserver.getAllTabs()
+
+      // Idempotency guard (2026-07-31): several callers run this loop
+      // back-to-back at boot (bootstrapFromLayout + openSecondarySidebar
+      // BAIL/opening paths). Skip the placement loop when every
+      // model-secondary tab already has a live button in the list — but
+      // STILL run the activation tail when the drawer is open with no
+      // active tab (a skipped redundant call must not leave the v1.8.0.22
+      // empty-content state behind).
+      const modelSecondaryKeys = Array.from(getTabAssignments())
+        .filter(([, side]) => side === 'secondary')
+        .map(([key]) => key)
+      const listIds = getSecondaryTabList()
+        ? Array.from(getSecondaryTabList()!.querySelectorAll('button[data-tab-id]'))
+            .map((el) => el.getAttribute('data-tab-id'))
+            .filter((id): id is string => !!id)
+        : []
+      if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
+        dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`)
+        if (isSecondarySidebarOpen() && !getActiveSecondaryTab() && listIds.length > 0) {
+          const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
+          const target = preferred && listIds.includes(preferred) ? preferred : listIds[0]!
+          dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
+          setActiveSecondaryTabId(target)
+          activateSecondaryTab(target)
+        }
+        setSuppressAutoActivation(false)
+        return
+      }
+
+      const placed: string[] = []
+      const promises = Array.from(getTabAssignments())
+        .filter(([, side]) => side === 'secondary')
+        .map(async ([tabKey]) => {
+          // The facade is TabKey-keyed; placement functions need liveIds.
+          const liveId = liveIdForFacadeKey(tabKey, tabs)
+          if (!liveId) {
+            dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`)
+            return
+          }
+          const ok = await assignToSecondary(liveId, opts)
+            .then(() => true)
+            .catch(() => false)
+          if (ok) placed.push(liveId)
+        })
+      await Promise.all(promises)
+      setSuppressAutoActivation(false)
+
+      // Content restore (2026-07-31): nothing was displayed above — the
+      // finalize's showSecondaryTabDisplay is gated on !deferActivation.
+      if (isSecondarySidebarOpen() && !getActiveSecondaryTab() && placed.length > 0) {
+        const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
+        const target = preferred && placed.includes(preferred) ? preferred : placed[0]!
+        dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? ' (preferred missing)' : ''}`)
+        setActiveSecondaryTabId(target)
+        activateSecondaryTab(target)
+      }
+    },
+  )
+}
+
 export function openSecondarySidebar() {
-  if (!_secondaryWrapper || !_secondaryDrawer) return
-  if (_secondarySidebarOpen) return
+  dlog('[secondary] openSecondarySidebar:enter', {
+    shellLive: isSecondaryShellLive(),
+    drawerConnected: !!_secondaryDrawer?.isConnected,
+    alreadyOpen: _secondarySidebarOpen,
+    hasWrapper: !!_secondaryWrapper,
+    enabled: getSettings().secondSidebarEnabled,
+  })
+  // Heal detached shell before open so rClick/Configure moves cannot
+  // "succeed" against a ghost node (translateX on a removed element).
+  if (!isSecondaryShellLive() || !_secondaryDrawer?.isConnected) {
+    if (getSettings().secondSidebarEnabled) {
+      ensureSecondaryShellMounted({ initialOpen: false })
+    }
+  }
+  if (!isSecondaryShellLive() || !_secondaryDrawer?.isConnected) {
+    dlog('[secondary] openSecondarySidebar:BAIL shell-not-live', {
+      shellLive: isSecondaryShellLive(),
+      drawerConnected: !!_secondaryDrawer?.isConnected,
+    })
+    return
+  }
+  if (_secondarySidebarOpen) {
+    dlog('[secondary] openSecondarySidebar:BAIL already-open')
+    // Still re-attach restored tabs — with the drawer already open the open
+    // path below never ran (2026-07-31: all tabs stayed in the main drawer
+    // until the first move).
+    reassignSecondaryTabsFromModel()
+    return
+  }
+  const wrapper = _secondaryWrapper
+  if (!wrapper) {
+    dlog('[secondary] openSecondarySidebar:BAIL no-wrapper')
+    return
+  }
+  dlog('[secondary] openSecondarySidebar:opening', { mobile: isMobileViewport() })
   // On mobile, close the other sidebar first
   enforceExclusionOnOpen('secondary')
   // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
-  animateWrapper(_secondaryWrapper!, 0)
+  animateWrapper(wrapper, 0)
   _secondarySidebarOpen = true
-  _secondaryWrapper.dataset.drawerOpen = 'true'
+  wrapper.dataset.drawerOpen = 'true'
+  markDrawerOpenState(true)
   syncDrawerTabSettings()
   updateDrawerTabVisibility()
   // Re-sync the panel header in case the main header changed since the
@@ -229,18 +408,17 @@ export function openSecondarySidebar() {
   // the user clicked a tab button to open the drawer, their clicked
   // tab stays highlighted instead of being overwritten by the last
   // tab in the loop.
-  import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
-    setSuppressAutoActivation(true)
-    const promises = Array.from(getTabAssignments())
-      .filter(([, side]) => side === 'secondary')
-      .map(([tabId]) => assignToSecondary(tabId).catch(() => {}))
-    Promise.all(promises).finally(() => setSuppressAutoActivation(false))
-  })
-  persistOpenState()
+  reassignSecondaryTabsFromModel()
+  // Persist via the owned model; no-op persistOpenState was retired.
   setMobileOpenClass('secondary', true)
 }
 
 export function closeSecondarySidebar(options?: { silent?: boolean }): void {
+  dlog('[secondary] closeSecondarySidebar', {
+    silent: options?.silent,
+    alreadyClosed: !_secondarySidebarOpen,
+    caller: new Error('close callstack').stack?.split('\n').slice(1, 4).join(' | '),
+  })
   if (!_secondaryWrapper || !_secondaryDrawer) return
   // Animate wrapper back to its closed transform — direction-aware via
   // getClosedTransformPx: secondary on the right closes at +width, on the
@@ -248,6 +426,7 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   animateWrapper(_secondaryWrapper!, getClosedTransformPx())
   _secondarySidebarOpen = false
   _secondaryWrapper.dataset.drawerOpen = 'false'
+  markDrawerOpenState(false)
   syncDrawerTabSettings()
   updateDrawerTabVisibility()
   // Mirror the open-path sync: in case the main header changed while the
@@ -275,7 +454,7 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
   }
 
   if (!options?.silent) {
-    persistOpenState()
+    // Persist via the owned model; no-op persistOpenState was retired.
   }
   setMobileOpenClass('secondary', false)
 }
@@ -311,8 +490,50 @@ export function getClosedTransformPx(): number {
   return closedTransformPx(secondarySide, w)
 }
 
+/**
+ * True when the module-owned secondary shell is in the live document.
+ * A non-null but detached `_secondaryWrapper` (DOM purged without tearDown,
+ * or partial unmount) is treated as missing so callers remount instead of
+ * animating/querying a ghost node — which looks like "Move to second
+ * drawer does nothing".
+ */
+export function isSecondaryShellLive(): boolean {
+  return !!(_secondaryWrapper && _secondaryWrapper.isConnected)
+}
+
+/**
+ * Ensure the secondary shell exists when the second drawer is enabled.
+ * Heals a detached module ref and mounts if needed. Returns true when a
+ * live wrapper is available for place/open/button work.
+ */
+export function ensureSecondaryShellMounted(options?: {
+  initialWidth?: number
+  initialOpen?: boolean
+}): boolean {
+  if (!getSettings().secondSidebarEnabled) return false
+  if (isSecondaryShellLive()) return true
+  // Drop stale refs so mountSecondarySidebar does not early-return on a
+  // detached node (would leave getSecondaryWrapper non-null but invisible).
+  if (_secondaryWrapper && !_secondaryWrapper.isConnected) {
+    _secondaryWrapper = null
+    _secondaryDrawer = null
+    _secondarySidebarOpen = false
+  }
+  mountSecondarySidebar({
+    initialWidth: options?.initialWidth,
+    initialOpen: options?.initialOpen === true,
+  })
+  return isSecondaryShellLive()
+}
+
 export function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }) {
-  if (_secondaryWrapper) return
+  // Treat detached wrappers as absent — early-return only when live in DOM.
+  if (_secondaryWrapper?.isConnected) return
+  if (_secondaryWrapper && !_secondaryWrapper.isConnected) {
+    _secondaryWrapper = null
+    _secondaryDrawer = null
+    _secondarySidebarOpen = false
+  }
   _secondaryWrapper = createSecondarySidebar(options)
   document.body.appendChild(_secondaryWrapper)
   // Drop any orphan wrappers left by lost module state / failed unmount
@@ -333,6 +554,12 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   // openSecondarySidebar() on the first user click.
   if (options?.initialOpen === true) {
     _secondarySidebarOpen = true
+    // Keep the drawer state machine in sync — the mount-open path bypasses
+    // openSecondarySidebar, so without this `_state` stays 'closed' while
+    // the drawer is visibly open (seen in the 2026-07-31 finalize gate logs).
+    markDrawerOpenState(true)
+  } else {
+    markDrawerOpenState(false)
   }
   syncDrawerTabSettings()
   // Initial panel-header sync: covers first mount and the side-flip
@@ -400,42 +627,57 @@ export function tearDownSecondarySidebar(): void {
     // tracked in tabLocations (they use raw DOM reparenting), so they
     // don't need this call.
     const _wSpindleUi = getHostBridge()?.ui
-    const _mainPanelContent = getMainPanelContent()
+    // Prefer parked panelContent under main-mirror when host tree is empty.
+    let _mainPanelContent = getMainPanelContent()
+    if (!_mainPanelContent && typeof document !== 'undefined') {
+      _mainPanelContent = document.querySelector(
+        '[data-canvas-main-panel-content]',
+      ) as HTMLElement | null
+    }
     for (const [tabId] of Array.from(getTabAssignments())) {
       // Built-in detection: the host bridge can lazy-resolve a root for
       // built-in tab IDs. Extension tab IDs return undefined.
       const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null
-      if (_isBuiltIn && _wSpindleUi?.requestTabLocation) {
+      const _movedRoot = _secondaryWrapper?.querySelector(
+        `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
+      ) as HTMLElement | null
+      const _domPlaced = !!_movedRoot?.hasAttribute('data-canvas-dom-placed')
+
+      if (_isBuiltIn) {
+        // Prefer verified host reset (bridge + store.moveTabTo fallback).
         try {
-          _wSpindleUi.requestTabLocation(tabId, { kind: 'main-drawer' })
+          requestHostTabToMain(tabId)
         } catch (err) {
-          dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err)
+          if (_wSpindleUi?.requestTabLocation) {
+            try {
+              _wSpindleUi.requestTabLocation(tabId, { kind: 'main-drawer' })
+            } catch (err2) {
+              dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err2)
+            }
+          } else {
+            dwarn(`[tabmove] teardown: requestHostTabToMain failed for tabId=${tabId}:`, err)
+          }
         }
       }
-      // Move any moved root back to the main panel. Clear data-canvas-moved,
-      // data-canvas-active, and any inline position/inset/display styles
-      // left over from the tab's time in secondary.
-      //
-      // Skip this for built-in tabs: requestTabLocation (called above)
-      // handles moving built-in roots back to the main drawer via
-      // Lumiverse's React reconciliation. The DOM fallback below would
-      // run BEFORE that async reconciliation completes, moving the root
-      // to main prematurely. When React then fires, it moves the root
-      // again from secondary to main, creating a duplicate visible root
-      // (the "tabs stack instead of swapping" bug).
-      if (!_isBuiltIn) {
-        const _movedRoot = _secondaryWrapper?.querySelector(
-          `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
-        ) as HTMLElement | null
-        if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
-          _mainPanelContent.appendChild(_movedRoot)
-        }
-        if (_movedRoot) {
-          _movedRoot.removeAttribute('data-canvas-moved')
-          _movedRoot.removeAttribute('data-canvas-active')
-          _movedRoot.style.removeProperty('position')
-          _movedRoot.style.removeProperty('inset')
-          _movedRoot.style.removeProperty('display')
+
+      // Extension roots and DOM-placed non-CORE built-ins: Canvas owns the
+      // node — appendChild back to main panelContent. Host-owned CORE roots
+      // skip this so React reconciliation is not raced (duplicate stack bug).
+      if (!_isBuiltIn || _domPlaced) {
+        if (_domPlaced) {
+          restoreDomPlacedBuiltInToMain(tabId, _movedRoot)
+        } else {
+          if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
+            _mainPanelContent.appendChild(_movedRoot)
+          }
+          if (_movedRoot) {
+            _movedRoot.removeAttribute('data-canvas-moved')
+            _movedRoot.removeAttribute('data-canvas-active')
+            _movedRoot.removeAttribute('data-canvas-dom-placed')
+            _movedRoot.style.removeProperty('position')
+            _movedRoot.style.removeProperty('inset')
+            _movedRoot.style.removeProperty('display')
+          }
         }
       }
       showMainTabButton(tabId)
@@ -451,6 +693,7 @@ export function tearDownSecondarySidebar(): void {
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }
+  _secondaryDrawer = null
   // Always clear assignments after the restore loop (or when the wrapper was
   // already null). Leaving stale secondary entries with no wrapper poisons
   // re-enable / side remount restore paths.

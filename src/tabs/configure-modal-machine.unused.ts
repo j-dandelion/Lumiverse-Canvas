@@ -16,7 +16,7 @@
 
 import type { ConfigureDraft, BaseSnapshot, DrawerSide } from './configure-model'
 import type { CatalogTab } from './configure-catalog'
-import type { CommitResult } from './configure-commit'
+import type { OwnedCommitResult as CommitResult } from './owned-commit'
 
 // ── State types ──
 

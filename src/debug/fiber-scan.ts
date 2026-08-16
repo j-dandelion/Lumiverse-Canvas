@@ -21,6 +21,43 @@ declare global {
 
 export function installDebugEscapeHatch() {
   window.__canvasDebug = function() {
+    // Secondary-shell / move diagnostics first (fast, no fiber walk).
+    // Use when "Move to second drawer" appears to no-op under taskbar mode.
+    try {
+      void Promise.all([
+        import('../settings/state'),
+        import('../sidebar/secondary'),
+        import('../tabs/assignment'),
+        import('../dom/host-bridge'),
+      ]).then(([state, secondary, assignment, bridgeMod]) => {
+        const s = state.getSettings()
+        const wrap = secondary.getSecondaryWrapper()
+        const live = typeof secondary.isSecondaryShellLive === 'function'
+          ? secondary.isSecondaryShellLive()
+          : !!(wrap && wrap.isConnected)
+        const regs = bridgeMod.getHostBridge()?.containers?.registerContainer
+        const secondaryAssigned = [...assignment.getTabAssignments().entries()]
+          .filter(([, side]) => side === 'secondary')
+          .map(([id]) => id)
+        console.log('=== Canvas secondary / move diagnostics ===')
+        console.log({
+          secondSidebarEnabled: s.secondSidebarEnabled,
+          taskbarMode: s.taskbarMode,
+          shellLive: live,
+          wrapperConnected: !!wrap?.isConnected,
+          wrapperInDom: !!document.querySelector('.sidebar-ux-secondary-wrapper'),
+          drawerOpen: secondary.isSecondarySidebarOpen(),
+          tabList: !!secondary.getSecondaryTabList?.(),
+          registerContainer: typeof regs === 'function',
+          secondaryAssigned,
+        })
+      }).catch((err) => {
+        console.warn('[__canvasDebug] secondary diagnostics failed:', err)
+      })
+    } catch (err) {
+      console.warn('[__canvasDebug] secondary diagnostics setup failed:', err)
+    }
+
     console.log('=== Canvas Fiber Scan ===')
 
     const sidebar = document.querySelector('[data-spindle-mount="sidebar"]')

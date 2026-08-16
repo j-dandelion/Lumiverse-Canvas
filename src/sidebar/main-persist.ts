@@ -7,7 +7,7 @@
 // state is read-only from Canvas's side.
 //
 // Until this watcher existed, the `primary.{open,width}` fields in
-// layout.json were effectively write-once: snapshotLayout() captured
+// layout.json were effectively write-once: the live layout snapshot captured
 // the live state on every save, but no event ever fired a save when
 // the user opened/closed/resized the main drawer.
 //
@@ -45,7 +45,6 @@
 
 import { getMainDrawer } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
-import { persistOpenState, persistLayout, setMainDrawerState } from '../layout/persist'
 import { getSettings } from '../settings/state'
 import { dlog } from '../debug/log'
 import { isPointerResizeActive } from '../resize/handles'
@@ -87,7 +86,7 @@ const RESTORE_CONTENT_QUIET_MS = 40
 const RESTORE_CONTENT_FALLBACK_MS = 50
 
 // module-level cache, populated by the observers and read by
-// snapshotLayout() so every save path (settings-toggle, pagehide
+// the live layout snapshot so every save path (settings-toggle, pagehide
 // flush, manual save) sees the live main-drawer state.
 let _wrapper: HTMLElement | null = null
 let _sidebar: HTMLElement | null = null
@@ -735,7 +734,7 @@ export function findDrawerToggleButton(wrapper: HTMLElement): HTMLButtonElement 
 /**
  * Persist the current main-drawer state to disk. Called on every
  * observed change. We snapshot via the cache rather than re-reading
- * the DOM, so the persistence layer's snapshotLayout() is consistent
+ * the DOM, so the persistence layer's live layout snapshot is consistent
  * with what we just observed.
  */
 function pushCurrentState() {
@@ -752,12 +751,12 @@ function pushCurrentState() {
   if (open === _lastSeenOpen && tabId === _lastSeenTabId) return
   _lastSeenOpen = open
   _lastSeenTabId = tabId
-  setMainDrawerState(open, tabId)
+  // Owned model tracks drawer state; no-op setMainDrawerState retired.
   // Open transitions are persisted by open/closeCanvasMainDrawer in mirror
   // mode; host mode still needs the watcher write. Tab-only changes always
   // persist so primary.tabId stays fresh.
   if (!canvasMain || tabId !== null) {
-    persistOpenState()
+    // Persist via the owned model; no-op persistOpenState was retired.
   }
 }
 
@@ -802,10 +801,8 @@ function _initObservers(drawer: HTMLElement): void {
   // after the state is applied, or by the 3s safety-net timeout.
   suppressMainDrawer()
 
-  // Seed the module-level cache so snapshotLayout() reads the right
-  // values on the first save after mount.
-  setMainDrawerState(_lastSeenOpen, _lastSeenTabId)
-  
+  // Owned model tracks drawer state; no-op setMainDrawerState retired.
+
 
   // Observe the wrapper's class attribute. Open/close transitions
   // toggle `wrapperOpen`; the MutationObserver fires once per
@@ -864,8 +861,8 @@ function _initObservers(drawer: HTMLElement): void {
     if (_resizeDebounce) clearTimeout(_resizeDebounce)
     _resizeDebounce = setTimeout(() => {
       if (_stopped) return
-      
-      persistLayout()
+
+      // Persist via the owned model; no-op persistLayout was retired.
     }, RESIZE_DEBOUNCE_MS)
   })
   _resizeObserver.observe(wrapper)
@@ -909,8 +906,8 @@ export function ensureRestoredPrimaryTab(targetTabId: string): void {
 
 /**
  * Restore the main-drawer open/close state on load by simulating a
- * click on the host's first tab button. Called from layout/persist.ts
- * after loadSavedLayout resolves.
+ * click on the host's first tab button. Called from
+ * src/setup.ts after loadLayoutFromDisk resolves.
  *
  * Optionally restores the drawer width by setting `drawer.style.width`
  * and the `--drawer-panel-w` CSS variable on the wrapper (mirroring
@@ -1075,7 +1072,7 @@ export function stopMainDrawerPersistence(): void {
   if (_resizeDebounce) {
     clearTimeout(_resizeDebounce)
     _resizeDebounce = null
-    persistOpenState()
+    // Persist via the owned model; no-op persistOpenState was retired.
   }
   _stopped = true
   if (_classObserver) { _classObserver.disconnect(); _classObserver = null }

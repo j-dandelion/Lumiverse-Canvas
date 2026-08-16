@@ -1,5 +1,5 @@
 // Shared sidebar width clamp. The 200px minimum and 80%-of-viewport maximum
-// are used by resize handles, applyLayout, createSecondarySidebar, and
+// are used by resize handles, owned-model restore, createSecondarySidebar, and
 // restoreMainDrawerFromDom. Centralizing avoids sign-inversion bugs when
 // the bounds change.
 const MIN_SIDEBAR_WIDTH = 200

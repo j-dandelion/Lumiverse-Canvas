@@ -157,6 +157,27 @@ export function getFullCatalog(): CatalogTab[] {
   return [...getBuiltinCatalog(), ...getExtensionCatalog()]
 }
 
+/**
+ * Drop catalog entries that exist in NO namespace the commit can resolve:
+ * the live drawer inventory (host.findKey) or the owned model (liveId
+ * projection). The static builtin list can contain tabs absent from a given
+ * Lumiverse instance; a draft carrying such phantom ids fails
+ * commitDraftToOwnedModel's resolution guard ("A tab changed while Configure
+ * Tabs was open") and blocks EVERY Configure/DnD commit on that instance.
+ * The liveId projection covers DOM-placed builtins whose host button was
+ * removed (findKey misses them).
+ */
+export function filterCatalogToLive(
+  catalog: CatalogTab[],
+  host: { findKey(id: string): string | null } | null,
+  knownLiveIds: ReadonlySet<string>,
+): CatalogTab[] {
+  if (!host) return catalog
+  return catalog.filter(
+    (tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id),
+  )
+}
+
 /** True when the given tab id is in the CORE_HIDE_LOCKED set. */
 export function isHideLocked(tabId: string): boolean {
   return CORE_HIDE_LOCKED.has(tabId)

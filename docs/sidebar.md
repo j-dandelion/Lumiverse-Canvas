@@ -95,6 +95,8 @@ tab_active → (unassignFromSecondary last tab) → closed
 tab_active → (unassignFromSecondary non-last) → open
 ```
 
+**`_state` drift pitfall:** the shell module (`secondary.tsx`) owns the physical open state; `_state` lives here. Every physical open/close transition — including the mount-with-`initialOpen` path that bypasses `openSecondarySidebar` — must call `markDrawerOpenState(open)` (exported here) or `_state` stays `'closed'` while the drawer is visibly open and the `openOnClosed` gate can't be trusted. See [pitfalls.md](pitfalls.md) §9.
+
 **Guard flag**: `_restoringFromLayout` — when true, `onTabUnregistered` handlers skip all work. Prevents the restore flow from racing with the state machine.
 
 ## Lifecycle
@@ -122,14 +124,18 @@ tab_active → (unassignFromSecondary non-last) → open
 
 1. Mobile exclusion: close the other sidebar first (`enforceExclusionOnOpen('secondary')`)
 2. Animate wrapper to `translateX(0)` via `animateWrapper`
-3. Set `_secondarySidebarOpen = true`
+3. Set `_secondarySidebarOpen = true` + `markDrawerOpenState(true)`
 4. Sync drawer tab settings (dimensions, position)
 5. Update drawer tab visibility
 6. Sync panel header from main
 7. Update chat reflow
-8. Re-attach any moved tab roots (idempotent `assignToSecondary` calls)
+8. Re-attach model-assigned tabs via `reassignSecondaryTabsFromModel()` (idempotent `assignToSecondary` calls)
 9. Persist open state
 10. Set mobile body class
+
+**BAIL-already-open trap:** when the drawer is already open (e.g. open at boot), `openSecondarySidebar` bails before step 8 — restored tabs would stay unplaced in the main drawer. The BAIL path calls `reassignSecondaryTabsFromModel()` itself, and `bootstrapFromLayout` also triggers it with `{ openOnClosed: false, setActiveWhenReady: false }` so a closed drawer is never force-opened. See [pitfalls.md](pitfalls.md) §7.
+
+**Content-restore trap:** the re-assignment loop suppresses auto-activation, and `finalizeAssignToSecondary`'s `showSecondaryTabDisplay` is gated on `!deferActivation` — the loop places tabs but displays none. `reassignSecondaryTabsFromModel` therefore shows the preferred tab afterwards (`activateKey` — the persisted `active.secondary` — or the first placed) when the drawer is open and nothing is active. See [pitfalls.md](pitfalls.md) §8.
 
 ### Closing (`closeSecondarySidebar`)
 
@@ -144,6 +150,8 @@ tab_active → (unassignFromSecondary non-last) → open
 ## Tab Assignment Flow
 
 ### Moving a Tab to Secondary (`assignToSecondary`)
+
+Signature: `assignToSecondary(tabId, opts?)` — `tabId` is a **liveId**, never a facade TabKey (see [pitfalls.md](pitfalls.md) §1). `opts.openOnClosed` (default `true`) controls whether a closed drawer force-opens; `opts.setActiveWhenReady` (default `false` on the built-in path) controls tab_active promotion. The boot-restore call passes both `false`.
 
 Two paths depending on tab type:
 

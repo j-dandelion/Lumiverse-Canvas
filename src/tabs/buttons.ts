@@ -30,8 +30,7 @@ import { getSettings } from '../settings/state'
 import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
-import { persistLayout } from '../layout/persist'
-import { isTabIdHidden } from '../layout/tab-id-heal'
+import { isTabIdHidden } from '../persist/tab-id-heal'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
@@ -46,6 +45,11 @@ export function __setHideMainTabButtonForTest(fn: typeof _hideMainTabButtonOverr
 export function __setShowMainTabButtonForTest(fn: typeof _showMainTabButtonOverride): void {
   _showMainTabButtonOverride = fn
 }
+
+// Diagnostic noise guard: log each title-fallback id resolution once per
+// title (the fallback path runs every drag frame for extension mirror
+// buttons without data-tab-id).
+const _buttonTabIdLogged = new Set<string>()
 
 export function hideMainTabButton(tabId: string): void {
   if (_hideMainTabButtonOverride) { _hideMainTabButtonOverride(tabId); return }
@@ -152,6 +156,57 @@ export function isSettingsButton(btn: HTMLElement): boolean {
   if (aria.includes('settings') || aria.includes('preferences')) return true
   if (title.includes('settings') || title.includes('preferences')) return true
   return false
+}
+
+/**
+ * Resolve a tab button's live tab id from any surface (host button,
+ * main-mirror button, secondary button).
+ *
+ * Built-in buttons (host React + their mirror copies) carry `data-tab-id`
+ * (bare id). Extension-tab buttons may LACK it: the host React renderer sets
+ * `data-tab-id` only on built-ins (ViewportDrawer.tsx), Canvas's tagger
+ * (chat/tag-buttons.ts) can miss buttons (broken-store / LumiScript
+ * interference), and the main mirror only copies the attribute when the host
+ * twin has it — so extension mirror buttons often carry only `title`.
+ *
+ * Fallbacks (same identity the tagger and findMainTabButton use):
+ *   1. `data-tab-id`, when present.
+ *   2. Store title-match → the store's live id.
+ *   3. The title itself — the context-menu convention when the store is
+ *      unavailable (tabId = title).
+ *
+ * Every surface then agrees on one id, so live-order reads, DnD hit-test
+ * exclusion, and commit resolution treat extension tabs identically to
+ * built-ins.
+ */
+export function buttonTabId(btn: HTMLElement): string | null {
+  const existing = btn.getAttribute('data-tab-id')
+  if (existing) return existing
+  const title = btn.getAttribute('title') || btn.getAttribute('aria-label') || ''
+  if (!title) return null
+  const tabs = getDrawerTabs()
+  if (tabs && tabs.length > 0) {
+    const tab = tabs.find((t) => t.title === title)
+    if (tab) {
+      if (!_buttonTabIdLogged.has(title)) {
+        _buttonTabIdLogged.add(title)
+        dlog('[buttonTabId] title fallback → store id', {
+          title,
+          id: tab.id,
+          kind: tab.extensionId ? 'extension' : 'builtin',
+        })
+      }
+      return tab.id
+    }
+  }
+  if (!_buttonTabIdLogged.has(title)) {
+    _buttonTabIdLogged.add(title)
+    dlog('[buttonTabId] title fallback → title-as-id (no store match)', {
+      title,
+      storeTabs: (tabs || []).map((t) => t.title),
+    })
+  }
+  return title
 }
 
 /**
@@ -376,10 +431,62 @@ export function removeSecondaryTabButton(tabId: string): void {
  * addSecondaryTabButton; the alreadyHasButton guard in that function does
  * NOT block this reorder.
  */
+
+/**
+ * Nearest VISIBLE secondary tab button to the moved tab (above, else
+ * below) — the drawer-side analog of main-tab-pin's
+ * findNeighborHostButtonFor. Used for the secondary neighbor handoff when
+ * the second drawer's ACTIVE tab is moved out (right-click / DnD /
+ * Configure): the replacement must be activated in the drawer, not the
+ * stale model active. Skips display:none buttons and Settings chrome.
+ * Must be called while the moved tab's button is still in the list.
+ */
+export function findNeighborSecondaryButtonFor(tabId: string): HTMLElement | null {
+  const tabList = getSecondaryTabList()
+  if (!tabList) return null
+  const buttons = Array.from(
+    tabList.querySelectorAll('button[data-tab-id]'),
+  ) as HTMLElement[]
+  const idx = buttons.findIndex(b => b.getAttribute('data-tab-id') === tabId)
+  if (idx === -1) return null
+  for (let i = idx - 1; i >= 0; i--) {
+    if (isSettingsButton(buttons[i]!)) continue
+    if (buttons[i]!.style?.display === 'none') continue
+    return buttons[i]!
+  }
+  for (let i = idx + 1; i < buttons.length; i++) {
+    if (isSettingsButton(buttons[i]!)) continue
+    if (buttons[i]!.style?.display === 'none') continue
+    return buttons[i]!
+  }
+  return null
+}
+
+export function secondaryTabButtonsReady(ids: string[]): boolean {
+  const tabList = getSecondaryTabList()
+  if (!tabList) return false
+  for (const id of ids) {
+    if (!tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`)) {
+      return false
+    }
+  }
+  return true
+}
+
 export function reorderSecondaryTabButtons(ids: string[]): void {
   const tabList = getSecondaryTabList()
   if (!tabList) return
-  for (const id of ids) {
+  const desired = ids.filter(id => tabList.querySelector(
+    `[data-tab-id="${CSS.escape(id)}"]`,
+  ))
+  const current = Array.from(tabList.querySelectorAll('[data-tab-id]'))
+    .map(btn => btn.getAttribute('data-tab-id'))
+
+  // Avoid appendChild when already converged. Even appending a node to its
+  // current position emits a childList mutation and can re-enter reconcile.
+  if (desired.length === current.length && desired.every((id, i) => id === current[i])) return
+
+  for (const id of desired) {
     const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`) as HTMLElement | null
     if (btn) {
       // appendChild moves an existing node to the end of the parent's
@@ -393,8 +500,11 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
 /**
  * Reorder main-mirror primary strip buttons to match the given id order.
  * Targets `.sidebar-ux-tab-list-main` only (Settings stays in bottom dock).
- * Missing ids are skipped. Used by configure-commit so primary reorder
+ * Missing ids are skipped. Used by owned Configure commits so primary reorder
  * sticks even when host React has not yet re-rendered host button order.
+ * Buttons are matched via buttonTabId so untagged extension mirror buttons
+ * (no data-tab-id) also move to their model slot — otherwise setOrder can
+ * never converge and the reconcile fires it forever (SAVE_LAYOUT cascade).
  */
 export function reorderMainMirrorTabButtons(ids: string[]): void {
   const main = document.querySelector(
@@ -402,9 +512,11 @@ export function reorderMainMirrorTabButtons(ids: string[]): void {
   ) as HTMLElement | null
   if (!main) return
   for (const id of ids) {
-    const btn = main.querySelector(
-      `button[data-tab-id="${cssEscape(id)}"]`,
-    ) as HTMLElement | null
+    const btn = Array.from(
+      main.querySelectorAll(
+        ':scope > button.sidebar-ux-main-tab-mirror-btn, :scope > button[data-tab-id]',
+      ),
+    ).find((b) => buttonTabId(b as HTMLElement) === id) as HTMLElement | null
     if (btn && btn.parentElement === main) {
       main.appendChild(btn)
     }
@@ -416,6 +528,7 @@ export function reorderMainMirrorTabButtons(ids: string[]): void {
  * Targets the host `.tabList` under `.tabListWrap` (not Settings bottom).
  * React may re-render later from tabOrder; when tabOrder matches this
  * order the visual is stable. Used so primary DnD sticks immediately.
+ * Buttons are matched via buttonTabId (see reorderMainMirrorTabButtons).
  */
 export function reorderHostMainTabButtons(ids: string[]): void {
   const sidebar = getMainSidebar()
@@ -428,9 +541,9 @@ export function reorderHostMainTabButtons(ids: string[]): void {
     (sidebar.querySelector('[class*="tabList"]') as HTMLElement | null)
   if (!tabList) return
   for (const id of ids) {
-    const btn = tabList.querySelector(
-      `button[data-tab-id="${cssEscape(id)}"]`,
-    ) as HTMLElement | null
+    const btn = Array.from(
+      tabList.querySelectorAll(':scope > button'),
+    ).find((b) => buttonTabId(b as HTMLElement) === id) as HTMLElement | null
     if (btn && btn.parentElement === tabList) {
       tabList.appendChild(btn)
     }
@@ -549,9 +662,7 @@ export function clearSecondaryTabButtonActive(): void {
 export function showSecondaryTab(tabId: string): void {
   // Record which tab is now active.
   setActiveSecondaryTabId(tabId)
-  // Persist the new active tab so layout restore brings back the same tab.
-  // persistLayout is 500ms debounced; multiple clicks coalesce to one write.
-  persistLayout()
+  // Persist via the owned model — the next dispatch will persist automatically.
 
   const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 

@@ -56,6 +56,7 @@ const _documentElement = {
       tagName: tag.toUpperCase(),
       _attrs: {} as Record<string, string>,
       style: {} as any,
+      dataset: {} as Record<string, string>,
       className: '',
       innerHTML: '',
       textContent: '',
@@ -83,6 +84,11 @@ const _documentElement = {
 ;(globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) => {
   setTimeout(() => cb(performance.now()), 0)
   return 0
+}
+// Default window with matchMedia so async restoreTest() cleanup doesn't
+// leave undefined matchMedia for late async callbacks (reconcileMainTabListPin).
+;(globalThis as any).window = {
+  matchMedia(_q: string) { return { matches: false, addEventListener() {}, removeEventListener() {} } },
 }
 
 // =====================================================================
@@ -176,6 +182,7 @@ function setupTest(opts: {
   const _wrapperChildren: any[] = []
   const fakeWrapper: any = {
     tagName: 'DIV',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     style: {} as any,
     innerHTML: '',
@@ -333,6 +340,14 @@ function setupExtTest(opts: {
       if (sel === 'button[data-tab-id]' || sel.includes('button[data-tab-id]')) {
         return _secondaryTabButtons
       }
+      // addSecondaryTabButton queries with just the attribute selector (CSS-escaped).
+      if (sel.startsWith('[data-tab-id=')) {
+        const idMatch = sel.match(/\[data-tab-id="(.+?)"\]/)
+        if (idMatch) {
+          const unescaped = idMatch[1].replace(/\\(.)/g, '$1')
+          return _secondaryTabButtons.filter((b: any) => b.getAttribute?.('data-tab-id') === unescaped)
+        }
+      }
       return []
     },
     getAttribute(name: string) { return fakeTabList._attrs[name] ?? null },
@@ -393,6 +408,7 @@ function setupExtTest(opts: {
   const _wrapperChildren: any[] = []
   const fakeWrapper: any = {
     tagName: 'DIV',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     style: {} as any,
     innerHTML: '',
@@ -572,7 +588,11 @@ async function testBuiltinT4() {
 }
 
 // =====================================================================
-// T5: requestTabLocation throws — assignment map stays clean
+// T5: requestTabLocation failure — graceful fallback, assignment still created
+//
+// The code at host-tab-location.ts:183 catches requestTabLocation throws
+// and falls through to DOM reparent. With a live shell (isConnected: true),
+// tryDomPlaceRoot succeeds and the assignment is created via finalize.
 // =====================================================================
 async function testBuiltinT5() {
   setupTest({
@@ -581,12 +601,11 @@ async function testBuiltinT5() {
   })
   try {
     const { assignToSecondary } = await import('../secondary-drawer')
-    try {
-      await assignToSecondary('databank-t5')
-    } catch {
-      // Expected: requestTabLocation throws without try/catch in the code
-    }
-    assert(!getTabAssignments().has('databank-t5'), 'T5: assignment NOT set when requestTabLocation throws')
+    await assignToSecondary('databank-t5')
+    // Assignment should be created — the code catches the error and falls
+    // back to DOM reparent, which succeeds in the test harness.
+    assert(getTabAssignments().has('databank-t5'),
+      'T5: assignment created despite requestTabLocation throwing (graceful fallback)')
   } finally { restoreTest() }
 }
 
@@ -925,6 +944,55 @@ async function testUnassignCompositeActiveClear() {
 }
 
 // =====================================================================
+// T-LAST-CLEAR: unassignFromSecondary clears active when last tab removed
+//
+// Regression for B1: when the last assigned tab was removed (getTabAssignments().size === 0),
+// the old code set _activeTabId = null but failed to call setActiveSecondaryTabId(null),
+// causing a divergence between secondary-drawer.ts's local state and active-tab.ts's
+// module variable. Callers of getActiveSecondaryTabId() would see a stale non-null value.
+// =====================================================================
+async function testUnassignLastTabClearsActive() {
+  const env = setupExtTest({ tabId: 'spindle:x:tab:last-clear:1', tabTitle: 'Last Clear' })
+  try {
+    const { assignToSecondary, unassignFromSecondary } = await import('../secondary-drawer')
+    // Assign the tab and set it as active.
+    await assignToSecondary(env.tabId)
+    setActiveSecondaryTabId(env.tabId)
+    assertEqual(getActiveSecondaryTabId(), env.tabId,
+      'T-LAST-CLEAR setup: tab is active')
+
+    // Remove the only assigned tab — hits the last-tab path (size === 0).
+    await unassignFromSecondary(env.tabId)
+
+    assertEqual(getActiveSecondaryTabId(), null,
+      'T-LAST-CLEAR: active tab cleared after last tab removed')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
+// T-TEARDOWN-CLEAR: teardownSecondaryDrawer clears active tab ID in both
+// secondary-drawer.ts's _activeTabId and active-tab.ts's _activeSecondaryTabId.
+//
+// Regression: teardownSecondaryDrawer only set _activeTabId = null without
+// calling setActiveSecondaryTabId(null), leaving the exported getter stale.
+// =====================================================================
+async function testTeardownClearsActive() {
+  const env = setupExtTest({ tabId: 'spindle:x:tab:teardown:1', tabTitle: 'Teardown Test' })
+  try {
+    const { assignToSecondary, teardownSecondaryDrawer } = await import('../secondary-drawer')
+    await assignToSecondary(env.tabId)
+    setActiveSecondaryTabId(env.tabId)
+    assertEqual(getActiveSecondaryTabId(), env.tabId,
+      'T-TEARDOWN-CLEAR setup: tab is active')
+
+    teardownSecondaryDrawer()
+
+    assertEqual(getActiveSecondaryTabId(), null,
+      'T-TEARDOWN-CLEAR: active tab cleared by teardown')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -952,6 +1020,12 @@ async function main() {
 
   // Composite ID active-clear regression test
   await testUnassignCompositeActiveClear()
+
+  // Last-tab-removed active-clear regression test
+  await testUnassignLastTabClearsActive()
+
+  // Teardown active-clear regression test
+  await testTeardownClearsActive()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

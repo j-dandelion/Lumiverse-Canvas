@@ -12,25 +12,32 @@ The `counter` is a session-variant suffix (`:1`, `:2`, `:3`) that changes across
 
 ## Assignment System (`tabs/assignment.ts`)
 
-The `_tabAssignments` Map tracks `tabId → 'primary' | 'secondary'`.
+Since Task 10.6, `assignment.ts` is a **thin facade over the owned model** (`LayoutModel` in `core/model.ts`), not a private map:
+
+- `getTabAssignments()` returns a fresh `Map` **derived from the model, keyed by TabKey** (`builtin:regex`, `ext:foo/Bar`) — **not** by liveId (`regex`, `spindle:foo:tab:bar:0`).
+- Writes (`setTabAssignment`, `deleteTabAssignment`, mutating the returned Map) are **no-ops whenever the model is active** — placement state changes go through `dispatch({ t: 'move' | 'activate' | ... })`. The legacy in-memory map exists only pre-bootstrap and in tests.
+- Reading the facade by liveId **always misses** — this caused three separate regressions (observed world reverting moves, restore placement failing, `placeTab` early-returns always wrong). See [pitfalls.md](pitfalls.md) §1 for the conversion rules (`host.findKey` / `liveIdForFacadeKey`).
 
 ### Key Functions
 
-- `getTabAssignments()` — read the full map
+- `getTabAssignments()` — read the facade (model-derived, TabKey-keyed)
 - `hasTabAssignment(tabId)` — check if assigned
-- `setTabAssignment(tabId, panel)` — set assignment
-- `deleteTabAssignment(tabId)` — remove assignment
+- `setTabAssignment(tabId, panel)` — legacy write; no-op with an active model
+- `deleteTabAssignment(tabId)` — legacy write; no-op with an active model
 - `clearTabAssignments()` — reset all (called on teardown)
 - `getTabSidebar(tabId)` — returns 'primary' or 'secondary'
 
-### `assignTab(tabId, sidebar)` — The Policy Layer
+### Moving tabs today: `placementFirstMoveByLiveId` (`recon/dispatch.ts`)
 
-This is the public API for "move this tab to that sidebar". It delegates to:
+Right-click "Move to second drawer" no longer dispatches a model intent first. The flow is **placement-first**:
 
-- **To secondary**: `SecondaryDrawer.assignToSecondary()` for extensions; host bridge `requestTabLocation()` for built-ins
-- **To primary**: `SecondaryDrawer.unassignFromSecondary()` + host bridge `requestTabLocation({ kind: 'main-drawer' })` for built-ins
+1. Capture the taskbar chrome decision **before** placement (moved tab's button still visible): if the moved tab is the mirror's active, capture the nearest visible neighbor (`findNeighborHostButtonFor`); else capture the active id for content re-assert.
+2. `assignToSecondary(liveId)` — DOM placement now (button + root reparent + hide main button).
+3. Chrome: explicit drawer open; neighbor handoff (`adoptMainMirrorNeighbor`) or active-content re-assert (host panel drift — see [pitfalls.md](pitfalls.md) §6).
+4. Model: `dispatch({ t: 'move', ... })` **only when the model doesn't already have the tab in the target** ("model already in target" is the common case for restored tabs — the chrome steps above must not be skipped by an early return, see [pitfalls.md](pitfalls.md) §5).
+5. Neighbor convergence: `dispatch({ t: 'activate', ... })` for the handoff target so the model's active doesn't lag the mirror key.
 
-Built-in tab pre-activation: `ensureBuiltInTabActiveInMain(tabId)` clicks the main sidebar button to trigger Lumiverse to mount the panel before the move.
+Built-in placement: `requestTabLocation` to the container is an allowlist silent no-op for most built-ins in this runtime, and `store.moveTabTo` is missing — the `via=dom` fallback (registry root reparent) is the real path; `via=bridge` works for allowlisted tabs.
 
 ## Button Management (`tabs/buttons.ts`)
 
@@ -64,33 +71,38 @@ Built-in tab pre-activation: `ensureBuiltInTabActiveInMain(tabId)` clicks the ma
 - `{ state: 'other', id: string }` — some other tab is active
 - `{ state: 'unknown' }` — can't determine
 
-`isTabActiveInMainDrawer(tabId)` — boolean wrapper with DOM fallback (the store can lag behind DOM class changes).
+`resolvePrimaryActiveTabId()` — single user-visible primary active id (mirror exclusive key when pin on; else host DOM, then store).
+
+`isTabActiveInMainDrawer(tabId)` — boolean over `resolvePrimaryActiveTabId` (shared by rClick, DnD, Configure).
 
 ### Secondary Drawer
 
 `getActiveSecondaryTabId()` / `setActiveSecondaryTabId(tabId)` — in-memory tracking.
 
-## Activation Handoff (`tabs/activation-handoff.ts`)
+## Activation Handoff
 
-When a tab moves between drawers, the handoff orchestrator decides what happens in both the source and destination.
+The legacy `tabs/activation-handoff.ts` orchestration was **deleted** (Task 10.5; the file is now a stub kept only for `assignment.ts` compile parity). Neighbor handling lives in two layers:
 
-### Rules
+### Model layer (`core/reduce.ts` — `applyMove`)
 
-- **Part A**: Source activates a neighbor iff the moved tab was active in the source
-- **Part B**: The neighbor is the tab immediately above the moved tab's slot; if none, the tab below
-- **Part C**: Destination activates the moved tab on every move (except on mobile)
+When the moved key was the source side's active, `applyMove` adopts `activeAfterRemoval(model, from, key)` — the nearest **visible** neighbor: the tab immediately above the moved slot, else the first selectable below (skipping hidden), else `null`. This is the durable truth of "Part A + Part B".
 
-### `runHandoff(args)`
+### Chrome layer (taskbar mode, `sidebar/main-tab-pin.ts` + `recon/dispatch.ts`)
 
-1. Capture source tab list before the move
-2. Check if moved tab was active (`isMovedTabActiveInSource`)
-3. Pick replacement (`pickSourceReplacement`)
-4. If active + replacement exists: activate replacement in source
-5. If not mobile: activate moved tab in destination
+The mirror key, header title, and host content must follow the model's replacement — `placementFirstMoveByLiveId` applies `adoptMainMirrorNeighbor(btn, title)` after a move of the mirror's active tab:
 
-### `captureSourceList(side)`
+- Sets the mirror key to the neighbor (`id__<id>`), clicks the neighbor's host button (content settle), updates the header.
+- May override a user-picked key (the user's own move drove it) but keeps `userPicked: true` so a later restore activation still can't clobber it.
+- `findNeighborHostButtonFor(tabId)` resolves the neighbor from the **host drawer's visible button order** (above, else below, skipping Settings) — captured **before** placement because the moved button is hidden afterward.
+- The model converges via a follow-up `activate` intent when its active lags the mirror key (mirror clicks don't reliably produce host-syncs).
 
-Captures ordered tab IDs before the move. For primary: merges DOM buttons (built-in) + store (extension), filters out tabs already in secondary. For secondary: reads `.sidebar-ux-tab-list` buttons.
+### Mirror active-key rules (taskbar mode)
+
+- The Canvas exclusive key (`_state.activeKey`) drives highlight, header, and toggle-close — host `tabBtnActive` is **not** authoritative (stale after restore, first-tab reset after moves).
+- `userPicked` (set on mirror clicks and neighbor adoption; cleared by heal/adopt/restore) blocks `activateMainMirrorFromRestore` from clobbering a user selection mid-session — this was the "moving a tab activates Databank" regression.
+- The heal (`reconcileMainMirror`) keeps the exclusive key while its host button is merely `display:none` (mid-move), and only heals from the host when the key's button is truly gone.
+
+See [pitfalls.md](pitfalls.md) §3–§5 for the full failure modes.
 
 ## Dual Mode × Configure Tabs (`tabs/configure-*.ts` + `layout/vanilla-baseline.ts`)
 

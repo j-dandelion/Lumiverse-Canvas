@@ -170,8 +170,17 @@ export function injectDrawerTabStyles(): void {
       flex-shrink: 0;
     }
     /* Label typography — matches main drawer .tabLabel
-       (ViewportDrawer.module.css:241-252). */
-    .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label {
+       (ViewportDrawer.module.css:241-252). The base selector covers every
+       button carrying data-tab-id (secondary + mirror after the host tagger
+       runs); the two mirror selectors cover mirror buttons WITHOUT
+       data-tab-id — extension tabs are not tagged by host React, so a mirror
+       button whose host never received Canvas's data-tab-id tag would
+       otherwise drop out of this rule and render its label at the inherited
+       (larger) font size. Same selector pattern as the label-color rule
+       below. */
+    .sidebar-ux-tab-list button[data-tab-id] .sidebar-ux-tab-label,
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label,
+    .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn .sidebar-ux-tab-label {
       font-size: calc(9px * var(--lumiverse-font-scale, 1));
       font-weight: 500;
       line-height: 1;

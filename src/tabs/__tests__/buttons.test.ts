@@ -304,7 +304,7 @@ import { __setPinHostForTest, __resetPinStateForTest } from '../../sidebar/tab-p
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../active-tab'
 __setSecondaryWrapperForTest(secondaryWrapper as unknown as HTMLElement)
 
-import { showSecondaryTab } from '../buttons'
+import { showSecondaryTab, findNeighborSecondaryButtonFor } from '../buttons'
 
 // ============================================================
 // T10: showSecondaryTab('tab1') makes btn1 active and btn2 inactive.
@@ -977,6 +977,170 @@ function makeListStub(initialButtons: Array<{
 
   __setSecondaryWrapperForTest(null)
 }
+
+// ============================================================
+// T29: findNeighborSecondaryButtonFor — nearest VISIBLE secondary button
+// above/below the moved tab (secondary neighbor handoff for moves OUT of
+// the second drawer). Skips display:none buttons and Settings chrome.
+// ============================================================
+{
+  __setSecondaryWrapperForTest(secondaryWrapper as unknown as HTMLElement)
+  const btn3 = makeButton('tab3', 'Tab Three')
+  stubButtons.push(btn3)
+
+  // tab3 hidden — never a candidate.
+  btn3.style.display = 'none'
+
+  assertEqual(
+    (findNeighborSecondaryButtonFor('tab2') as unknown as StubButton | null)?.getAttribute('data-tab-id') ?? null,
+    'tab1',
+    'T29.a: neighbor is the visible button above',
+  )
+  assertEqual(
+    (findNeighborSecondaryButtonFor('tab1') as unknown as StubButton | null)?.getAttribute('data-tab-id') ?? null,
+    'tab2',
+    'T29.b: no visible above → nearest visible below (hidden tab3 skipped)',
+  )
+
+  // Hide the below neighbor too → no candidate left.
+  btn2.style.display = 'none'
+  assertEqual(findNeighborSecondaryButtonFor('tab1'), null, 'T29.c: all neighbors hidden → null')
+  btn2.style.display = ''
+
+  assertEqual(findNeighborSecondaryButtonFor('ghost'), null, 'T29.d: unknown tab → null')
+
+  // Settings button (no data-tab-id, title=Settings) never becomes the
+  // replacement.
+  const settingsBtn = makeButton('settings', 'Settings')
+  settingsBtn.style.display = ''
+  stubButtons.push(settingsBtn)
+  // Settings sits below tab3; hide tab1 (above) and tab3 (below) so the
+  // below-scan reaches Settings — it must be skipped, not returned.
+  btn1.style.display = 'none'
+  assertEqual(findNeighborSecondaryButtonFor('tab2'), null, 'T29.e: Settings skipped when scanning below')
+  btn1.style.display = ''
+}
+
+// ============================================================
+// buttonTabId — extension-tab button id resolution (no data-tab-id)
+// ============================================================
+import { buttonTabId } from '../buttons'
+import { __setDrawerTabsForTest } from '../../store'
+;(() => {
+  // Store-backed extension tabs (healthy store: mirror btn has no data-tab-id
+  // but a title that matches the store).
+  __setDrawerTabsForTest([
+    {
+      id: 'spindle:foo:tab:Bar:0',
+      extensionId: 'spindle:foo',
+      title: 'Bar',
+      root: {} as HTMLElement,
+    },
+  ])
+  const mirrorBtn = {
+    getAttribute: (name: string) =>
+      name === 'title' ? 'Bar' : null,
+  } as unknown as HTMLElement
+  assertEqual(
+    buttonTabId(mirrorBtn),
+    'spindle:foo:tab:Bar:0',
+    'T30.a: no data-tab-id → store title-match resolves live id',
+  )
+
+  // data-tab-id wins when present.
+  const builtinBtn = {
+    getAttribute: (name: string) =>
+      name === 'data-tab-id' ? 'regex' : name === 'title' ? 'Regex Scripts' : null,
+  } as unknown as HTMLElement
+  assertEqual(buttonTabId(builtinBtn), 'regex', 'T30.b: data-tab-id returned as-is')
+
+  // Broken store (no matching tab): title itself is the id — the same
+  // convention the context-menu uses when the store is unavailable.
+  const brokenBtn = {
+    getAttribute: (name: string) =>
+      name === 'title' ? 'Broken Ext' : null,
+  } as unknown as HTMLElement
+  assertEqual(buttonTabId(brokenBtn), 'Broken Ext', 'T30.c: no store match → title-as-id fallback')
+
+  // No id and no title → null (host chrome / unknown node).
+  const bareBtn = { getAttribute: () => null } as unknown as HTMLElement
+  assertEqual(buttonTabId(bareBtn), null, 'T30.d: no id/title → null')
+  __setDrawerTabsForTest(null)
+})()
+
+// ============================================================
+// T31: reorderMainMirrorTabButtons moves UNTAGGED extension buttons
+// ============================================================
+// setOrder's DOM reorder must move untagged extension mirror buttons to
+// their model slot (matched via buttonTabId). Without this, the observed
+// order can never equal the model order → reconcile fires setOrder forever
+// → infinite SAVE_LAYOUT cascade.
+;(() => {
+  const { reorderMainMirrorTabButtons } = require('../buttons') as typeof import('../buttons')
+
+  // Mirror main-section stub with appendChild-moves-to-end semantics.
+  const items: any[] = []
+  const mkBtn = (opts: { id?: string; title?: string; ext?: boolean }) => {
+    const el: any = {
+      getAttribute(name: string) {
+        if (name === 'data-tab-id') return opts.id ?? null
+        if (name === 'title') return opts.title ?? null
+        return null
+      },
+      get className() {
+        return opts.ext
+          ? 'sidebar-ux-main-tab-mirror-btn'
+          : 'sidebar-ux-main-tab-mirror-btn'
+      },
+      parentElement: null as any,
+    }
+    el.parentElement = section
+    items.push(el)
+    return el
+  }
+  const section: any = {
+    querySelectorAll(_sel: string) { return [...items] },
+    appendChild(child: any) {
+      const idx = items.indexOf(child)
+      if (idx >= 0) items.splice(idx, 1)
+      items.push(child)
+    },
+  }
+  // A, B tagged; EXT untagged (title only, mirror class).
+  mkBtn({ id: 'a' })
+  mkBtn({ id: 'b' })
+  const extBtn = mkBtn({ title: 'Ext Tab' })
+
+  const prevQS = (globalThis as any).document.querySelector
+  ;(globalThis as any).document.querySelector = (sel: string) =>
+    sel === '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main' ? section : null
+
+  // Model order: [a, EXT, b] — EXT must slot between a and b.
+  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
+  assertEqual(
+    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
+    'a,Ext Tab,b',
+    'T31: untagged extension button moved to its model slot (no setOrder cascade)',
+  )
+
+  // Idempotent — a second call leaves the order unchanged (converges).
+  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
+  assertEqual(
+    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
+    'a,Ext Tab,b',
+    'T31.b: reorder idempotent once converged',
+  )
+
+  // EXT last: appends to the end (past the tagged b).
+  reorderMainMirrorTabButtons(['a', 'b', 'Ext Tab'])
+  assertEqual(
+    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
+    'a,b,Ext Tab',
+    'T31.c: untagged extension append works',
+  )
+
+  ;(globalThis as any).document.querySelector = prevQS
+})()
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

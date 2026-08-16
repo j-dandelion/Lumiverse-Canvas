@@ -1,62 +1,213 @@
 // Tab assignment system: which tabId is on which sidebar, and the
 // assignTab policy layer that wires the move through the host.
 //
-// assignTab delegates to SecondaryDrawer for the secondary path and to
-// unassignFromSecondary for the primary path. The display-toggle path
-// (showSecondaryTab in buttons.ts) is preserved for backward
-// compatibility — it toggles display:none on roots that are already in
-// the secondary content area.
-import { getMainSidebar } from '../dom/lumiverse'
+// The owned model (LayoutModel in src/core/model.ts) is the source of
+// truth for tab placement. This module is now a thin facade: reads
+// derive from the owned model, and writes are no-ops when the model is
+// active (the model handles placement via dispatch). The legacy move
+// path (`assignTab`) is retained for callers that haven't been cut
+// over to the dispatcher yet and is slated for deletion in Task 10.7.
 import { dwarn } from '../debug/log'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { isSecondarySidebarOpen, openSecondarySidebar } from '../sidebar/secondary'
+import { getSettings } from '../settings/state'
+import {
+  ensureSecondaryShellMounted,
+  isSecondarySidebarOpen,
+  openSecondarySidebar,
+} from '../sidebar/secondary'
 import {
   hideMainTabButton, findMainTabButton,
   addSecondaryTabButton, updateDrawerTabVisibility,
   readMainButtonShortName,
 } from '../tabs/buttons'
-import { persistLayout } from '../layout/persist'
-import { runHandoff, captureSourceList } from './activation-handoff'
+import {
+  runHandoff,
+  buildCrossDrawerHandoff,
+  captureSourceList,
+  reassertPrimaryNeighborAfterHandoff,
+  armPreservePrimaryActiveOnToSecondary,
+} from './activation-handoff'
 import {
   isTabActiveInMainDrawer,
   getActiveSecondaryTabId,
   setActiveSecondaryTabId,
 } from './active-tab'
 import { getHostBridge } from '../dom/host-bridge'
+import { getModel, getHost } from '../recon/dispatch'
+import { sideOfKey } from '../core/select'
+import type { TabKey, Side } from '../core/model'
+import { stripTabIdSuffix } from '../persist/tab-id-heal'
+import { drawerObserver } from '../sidebar/drawer-observer'
+import { liveIdForFacadeKey } from '../sidebar/secondary'
 
 // Re-export for backward compatibility — callers that import from
 // tabs/assignment still get the same symbols.
 export { isTabActiveInMainDrawer, getActiveSecondaryTabId, setActiveSecondaryTabId }
 
-// Maps tab ID → which sidebar it belongs to
+// Legacy in-memory map. Only used when the owned model is not active
+// (tests, setup before bootstrap). The owned model replaces this as
+// the source of truth.
 const _tabAssignments: Map<string, 'primary' | 'secondary'> = new Map()
 
-// Accessors used by other modules (sidebar/secondary, sidebar/drawer-sync,
-// context-menu, layout/persist).
-export function getTabAssignments(): Map<string, 'primary' | 'secondary'> { return _tabAssignments }
-export function hasTabAssignment(tabId: string): boolean { return _tabAssignments.has(tabId) }
-export function clearTabAssignments(): void { _tabAssignments.clear() }
+/**
+ * Candidate owned-model keys for a live tab id, in resolution order.
+ *
+ * The owned model is keyed by stable TabKey (e.g. "builtin:profile"), not
+ * by live id. The live id may carry a suffix ("regex:0", "spindle:foo:tab:
+ * bar:0") that the stable key strips. Bare builtin live ids ("regex") map
+ * to keys WITH the "builtin:" prefix — the plain suffix-strip alone always
+ * missed, which made getTabSidebar report secondary tabs as 'primary'
+ * (wrong context-menu label/target). Extension live ids encode ext id +
+ * title; only host.findKey resolves those (see getTabSidebar).
+ */
+function _ownedKeyCandidates(liveId: string): TabKey[] {
+  if (liveId.startsWith('builtin:') || liveId.startsWith('ext:')) {
+    return [liveId as TabKey]
+  }
+  const stripped = stripTabIdSuffix(liveId)
+  const out: TabKey[] = []
+  if (!stripped.includes(':')) out.push(`builtin:${stripped}` as TabKey)
+  out.push(stripped as TabKey)
+  return out
+}
+
+function _readFromModel(): Map<string, 'primary' | 'secondary'> | null {
+  const model = getModel()
+  if (!model) return null
+  const out = new Map<string, 'primary' | 'secondary'>()
+  for (const key of model.primary) out.set(key, 'primary')
+  for (const key of model.secondary) out.set(key, 'secondary')
+  return out
+}
+
+/**
+ * Read the tab-assignment map. When the owned model is active, returns
+ * a fresh Map derived from the model. Otherwise returns the legacy
+ * in-memory map. The returned Map is a snapshot — mutations do not
+ * affect the owned model.
+ *
+ * KEYING (2026-07-31, three regressions): the model-derived map is keyed
+ * by TabKey ('builtin:regex', 'ext:foo/Bar') — NEVER by liveId ('regex',
+ * 'spindle:foo:tab:bar:0'). Looking the facade up by a liveId always
+ * misses and forces the tab back to 'primary' in the observed world
+ * (moves reverted), breaks the restore loop ("not found in DrawerObserver
+ * or store"), and defeats placeTab's early-return. Convert liveId → TabKey
+ * via the host's findKey / tabKeyFromDrawerTab; TabKey → liveId via
+ * liveIdForFacadeKey (sidebar/secondary.tsx). See docs/pitfalls.md §1.
+ */
+export function getTabAssignments(): Map<string, 'primary' | 'secondary'> {
+  const fromModel = _readFromModel()
+  if (fromModel) return fromModel
+  return _tabAssignments
+}
+
+export function hasTabAssignment(tabId: string): boolean {
+  const fromModel = _readFromModel()
+  if (fromModel) {
+    // Try the live id directly, then resolve to a stable key: host adapter
+    // first (classifies builtin/ext from the live inventory), then the
+    // heuristic candidates (builtin: prefix, suffix strip) for tabs the
+    // host cannot resolve (e.g. DOM-placed builtins).
+    if (fromModel.has(tabId)) return true
+    const host = getHost()
+    if (host) {
+      const key = host.findKey(tabId)
+      if (key && fromModel.has(key)) return true
+    }
+    for (const key of _ownedKeyCandidates(tabId)) {
+      if (fromModel.has(key)) return true
+    }
+    return false
+  }
+  return _tabAssignments.has(tabId)
+}
+
+export function clearTabAssignments(): void {
+  // No-op when the owned model is active — the model owns the state.
+  // Legacy map is still cleared for callers that may inspect it
+  // before bootstrap.
+  _tabAssignments.clear()
+}
 
 /** True when at least one tab is assigned to the secondary drawer. */
 export function hasSecondaryAssignedTabs(): boolean {
+  const fromModel = _readFromModel()
+  if (fromModel) {
+    for (const side of fromModel.values()) {
+      if (side === 'secondary') return true
+    }
+    return false
+  }
   for (const side of _tabAssignments.values()) {
     if (side === 'secondary') return true
   }
   return false
 }
 
-/** Encapsulated mutation: set a tab assignment without exposing the mutable Map. */
+/**
+ * Set a tab assignment. No-op when the owned model is active — the
+ * model handles placement via dispatch. Retained for test setup and
+ * callers that haven't been cut over to the dispatcher yet.
+ */
 export function setTabAssignment(tabId: string, panelId: 'primary' | 'secondary'): void {
+  if (getModel()) return
   _tabAssignments.set(tabId, panelId)
 }
 
-/** Encapsulated mutation: delete a tab assignment without exposing the mutable Map. */
+/**
+ * Delete a tab assignment. No-op when the owned model is active.
+ */
 export function deleteTabAssignment(tabId: string): void {
+  if (getModel()) return
   _tabAssignments.delete(tabId)
 }
 
 export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
+  const fromModel = _readFromModel()
+  if (fromModel) {
+    if (fromModel.has(tabId)) return fromModel.get(tabId)!
+    // LiveId → TabKey via the host adapter (classifies builtin/ext from
+    // the live inventory), then heuristic candidates. Without the host
+    // resolution, secondary tabs keyed 'builtin:regex' / 'ext:foo/Bar'
+    // always came back 'primary' — both context menus then offered
+    // "Move to second drawer" for tabs already in the second drawer.
+    const host = getHost()
+    if (host) {
+      const key = host.findKey(tabId)
+      if (key && fromModel.has(key)) return fromModel.get(key)!
+    }
+    for (const key of _ownedKeyCandidates(tabId)) {
+      if (fromModel.has(key)) return fromModel.get(key)!
+    }
+  }
   return _tabAssignments.get(tabId) || 'primary'
+}
+
+/**
+ * Model-derived assignment map keyed by LIVE ID — the namespace the
+ * catalog, the DnD draft (buildDraftAndBase), and the Configure modal use.
+ *
+ * The base facade (getTabAssignments) is TabKey-keyed ('builtin:regex',
+ * 'ext:foo/Bar'); the draft layer looks ids up with catalog ids (bare
+ * builtin ids, spindle-prefixed extension live ids). Against the TabKey
+ * facade every lookup misses and defaults to 'primary' — draft.secondaryIds
+ * came back empty, so secondary DnD reorders aborted ("tab not found in
+ * draft for reorder" → snap-back) and the Configure modal showed an empty
+ * secondary column (2026-07-31). Resolve each model key to its live id
+ * (liveIdForFacadeKey: builtin → bare id, ext → extensionId + title lookup)
+ * so the draft sees the same ids as the live strips.
+ */
+export function getLiveIdAssignments(
+  tabs: { tabId: string; extensionId: string; title: string }[] = drawerObserver.getAllTabs(),
+): Map<string, 'primary' | 'secondary'> {
+  const fromModel = _readFromModel()
+  if (!fromModel) return _tabAssignments
+  const out = new Map<string, 'primary' | 'secondary'>()
+  for (const [key, side] of fromModel) {
+    const liveId = liveIdForFacadeKey(key, tabs)
+    out.set(liveId ?? key, side)
+  }
+  return out
 }
 
 /**
@@ -64,39 +215,10 @@ export function getTabSidebar(tabId: string): 'primary' | 'secondary' {
  * to that sidebar". Delegates to SecondaryDrawer for the secondary path
  * and to unassignFromSecondary for the primary path.
  *
- * window.spindle IS defined at runtime (Lumiverse loader.ts:1032-1087).
- * The built-in branch CAN execute when getBuiltInTabRoot returns a root.
+ * Host bridge comes from setup(ctx) via setHostBridgeContext (not
+ * window.spindle — the loader never assigns that global). Built-in moves
+ * need ui_panels so getBuiltInTabRoot / requestTabLocation succeed.
  */
-/**
- * BUG 3 FIX: preserve the originally active main-drawer tab when a
- * non-activated built-in tab is moved. Lumiverse's spindle-placement.ts
- * sets `pendingActiveTabReset = tabId` unconditionally, and
- * ViewportDrawer.tsx's useEffect resets drawerTab to the first non-moved
- * tab. We watch for the resulting tabBtnActive class swap on main-sidebar
- * buttons and re-click the original to restore it. React 18 batches the
- * useEffect's setDrawerTab with our click's setDrawerTab; the last one
- * (ours) wins. The 200ms safety timeout disconnects the observer if the
- * useEffect didn't fire, so we don't fight a legitimate user tab swap.
- * Skipped on mobile (the main sidebar is hidden offscreen there) and
- * when the moved tab IS the active tab (the reset is expected then).
- */
-function armMainDrawerActiveRestore(tabId: string): void {
-  if (isMobileViewport()) return
-  const sidebar = getMainSidebar()
-  if (!sidebar) return
-  // Match both unhashed `tabBtnActive` and CSS-module hashed variants
-  // (e.g. `_tabBtnActive_xyz123`). See main-persist.ts:101.
-  const restoreBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]') as HTMLElement | null
-  const restoreActiveId = restoreBtn?.getAttribute('data-tab-id') ?? null
-  if (!restoreBtn || !restoreActiveId || restoreActiveId === tabId) return
-  let observer: MutationObserver | null = new MutationObserver(() => {
-    if (observer) { observer.disconnect(); observer = null }
-    restoreBtn.click()
-  })
-  observer.observe(sidebar, { attributes: true, attributeFilter: ['class'], subtree: true })
-  setTimeout(() => { if (observer) { observer.disconnect(); observer = null } }, 200)
-}
-
 export interface EnsureActiveHooks {
   isTabActiveInMainDrawer?: (tabId: string) => boolean
   findMainTabButton?: (tabId: string) => Element | null
@@ -191,79 +313,113 @@ function addBuiltInSecondaryButton(
   addSecondaryTabButton({ id: tabId, title, root: builtInRoot, iconSvg, shortName })
 }
 
+/**
+ * After primary→secondary: force main-mirror pin rebuild.
+ * hideMainTabButton only sets host `display:none`; the mirror observer does
+ * not watch `style`, so without this the taskbar strip keeps the moved tab
+ * and (if the secondary shell failed to open) the move looks like a no-op.
+ */
+async function reconcileMainMirrorAfterSecondaryAssign(): Promise<void> {
+  try {
+    const pin = await import('../sidebar/main-tab-pin')
+    pin.reconcileMainTabListPin()
+  } catch { /* pin optional during teardown */ }
+  try {
+    const m = await import('../sidebar/main-mirror-drawer')
+    if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
+  } catch { /* ignore */ }
+}
+
 export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary'): Promise<void> {
   if (sidebar === 'secondary') {
-    // Capture the original active tab BEFORE any ensureBuiltInTabActiveInMain
-    // click. After that click the target IS active, which would defeat
-    // armMainDrawerActiveRestore and handoff preMoveActiveTab.
-    const _preClickSidebar = getMainSidebar()
-    const _preClickActiveBtn = _preClickSidebar?.querySelector(
-      'button.tabBtnActive, button[class*="tabBtnActive"]'
-    ) as HTMLElement | null
-    const _origActiveTabId = _preClickActiveBtn?.getAttribute('data-tab-id')
-      || _preClickActiveBtn?.getAttribute('title')
-      || null
+    // Shell must be live before host requestTabLocation (container register)
+    // and before addSecondaryTabButton / openSecondarySidebar. Setting can be
+    // true while the wrapper was never mounted or was detached from the DOM.
+    if (!ensureSecondaryShellMounted({ initialOpen: false })) {
+      dwarn(
+        `[tabmove] assignTab: secondary shell unavailable (secondSidebarEnabled=${!!getSettings().secondSidebarEnabled}); abort move of "${tabId}"`,
+      )
+      return
+    }
+
+    // Capture source list + wasActive BEFORE place (same policy as quiet
+    // Configure/live-DnD via buildCrossDrawerHandoff). Part C stays on for
+    // rClick so the moved tab becomes active in the destination.
     const preMoveSourceList = await captureSourceList('primary')
-    const preMoveActiveTab = isTabActiveInMainDrawer(tabId)
+    const handoff = buildCrossDrawerHandoff({
+      tabId,
+      source: 'primary',
+      destination: 'secondary',
+      sourceList: preMoveSourceList,
+      activateDestination: true,
+    })
+    const preMoveActiveTab = !!handoff.preMoveSourceActiveTab
+
+    // Inactive: shared preserve fights host pendingActiveTabReset (same as
+    // quiet DnD/Configure). Active: handoff owns neighbor — preserve no-ops.
+    const preservePrimary = armPreservePrimaryActiveOnToSecondary([tabId])
 
     const bridge = getHostBridge()
-    // Built-in tabs: host requestTabLocation only (never raw DOM reparent).
+    // Built-in tabs: host tabLocations only (never raw DOM reparent).
     // Shared with assignToSecondary via moveBuiltInTabToSecondaryContainer.
-    if (bridge?.ui.getBuiltInTabRoot && bridge.ui.requestTabLocation) {
-      if (preMoveActiveTab) armMainDrawerActiveRestore(tabId)
-
-      // Arm a MutationObserver to catch Lumiverse's pendingActiveTabReset
-      // for non-selected moves (resets drawerTab to first non-moved tab).
-      let _restoreObserver: MutationObserver | null = null
-      if (!preMoveActiveTab && _origActiveTabId && _preClickActiveBtn && _preClickSidebar) {
-        _restoreObserver = new MutationObserver(() => {
-          const active = _preClickSidebar.querySelector(
-            'button.tabBtnActive, button[class*="tabBtnActive"]'
-          ) as HTMLElement | null
-          const activeId = active?.getAttribute('data-tab-id')
-            || active?.getAttribute('title')
-            || null
-          if (activeId && activeId !== _origActiveTabId) {
-            _preClickActiveBtn.click()
-          }
-        })
-        _restoreObserver.observe(_preClickSidebar, {
-          attributes: true,
-          attributeFilter: ['class'],
-          subtree: true,
-        })
-      }
-
+    // getBuiltInTabRoot alone is enough to enter this path — requestTabLocation
+    // may silent-no-op for non-CORE tabs; the helper falls back to store.moveTabTo.
+    if (bridge?.ui.getBuiltInTabRoot) {
       const { moveBuiltInTabToSecondaryContainer } = await import('./builtin-move')
       const builtInRoot = await moveBuiltInTabToSecondaryContainer({ tabId })
-
-      if (_restoreObserver) {
-        await new Promise<void>(r => requestAnimationFrame(() => r()))
-        _restoreObserver.disconnect()
-        _restoreObserver = null
-      }
 
       if (builtInRoot) {
         setTabAssignment(tabId, 'secondary')
         hideMainTabButton(tabId)
         addBuiltInSecondaryButton(bridge, tabId, builtInRoot)
         updateDrawerTabVisibility()
+        // rClick-only: open secondary so the moved tab is visible (DnD/Configure
+        // leave drawer open state alone).
         if (!isSecondarySidebarOpen() && !isMobileViewport()) openSecondarySidebar()
-        await runHandoff({
-          tabId,
-          source: 'primary',
-          destination: 'secondary',
-          sourceList: preMoveSourceList,
-          preMoveSourceActiveTab: preMoveActiveTab,
-        })
-        try {
-          const m = await import('../sidebar/main-mirror-drawer')
-          if (m.isMainMirrorActive()) m.ensureHostContentParkedPublic()
-        } catch { /* ignore */ }
-        persistLayout()
+        await runHandoff(handoff)
+        await reconcileMainMirrorAfterSecondaryAssign()
+        // Pin reconcile + late host pendingActiveTabReset can reseat main to
+        // the first remaining primary after handoff. Reassert neighbor once
+        // more after strip rebuild (same as quiet final-reassert).
+        if (preMoveActiveTab) {
+          await reassertPrimaryNeighborAfterHandoff(tabId, preMoveSourceList)
+        } else {
+          try {
+            preservePrimary?.reassert()
+          } catch { /* ignore */ }
+        }
+        // Stick a bit longer so late host reset cannot reseat first-tab
+        // after we return (matches quiet commit safety window).
+        if (preservePrimary) {
+          void new Promise<void>((r) => setTimeout(() => r(), 120)).then(() => {
+            try { preservePrimary.reassert() } catch { /* ignore */ }
+            try { preservePrimary.disconnect() } catch { /* ignore */ }
+          })
+        }
         return
       }
-      // Bridge present but root unavailable — fall through as extension path.
+      // Built-in place failed (bridge+store+DOM). Do not fall through to
+      // extension path or handoff — that left empty secondary "active" for
+      // connections/imagegen/wallpaper when host allowlist denied.
+      try {
+        preservePrimary?.disconnect()
+      } catch { /* ignore */ }
+      let knownBuiltIn = false
+      try {
+        knownBuiltIn =
+          !!bridge.ui.getBuiltInTabRoot?.(tabId) ||
+          !!bridge.ui.getBuiltInTabTitle?.(tabId)
+      } catch {
+        knownBuiltIn = false
+      }
+      if (knownBuiltIn) {
+        dwarn(
+          `[tabmove] assignTab: built-in "${tabId}" place failed; aborting ` +
+          `(no empty secondary handoff).`,
+        )
+        return
+      }
+      // Bridge present but this tabId is not a host built-in — extension path.
     }
 
     if (!bridge) {
@@ -271,21 +427,36 @@ export async function assignTab(tabId: string, sidebar: 'primary' | 'secondary')
     }
     const { assignToSecondary } = await import('../sidebar/secondary-drawer')
     await assignToSecondary(tabId)
-    await runHandoff({tabId, source: 'primary', destination: 'secondary', sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab})
-  } else {
-    // Primary restore. For built-ins, also tell the host to reset
-    // tabLocations back to main-drawer, otherwise ContainerTabContent
-    // will re-move the root back to the container on the next React
-    // commit. The local UI side is handled by unassignFromSecondary.
-    const bridge = getHostBridge()
-    if (bridge?.ui.getBuiltInTabRoot?.(tabId) && bridge.ui.requestTabLocation) {
-      bridge.ui.requestTabLocation(tabId, { kind: 'main-drawer' })
+    await runHandoff(handoff)
+    await reconcileMainMirrorAfterSecondaryAssign()
+    if (preMoveActiveTab) {
+      await reassertPrimaryNeighborAfterHandoff(tabId, preMoveSourceList)
+    } else {
+      try {
+        preservePrimary?.reassert()
+      } catch { /* ignore */ }
     }
+    if (preservePrimary) {
+      void new Promise<void>((r) => setTimeout(() => r(), 120)).then(() => {
+        try { preservePrimary.reassert() } catch { /* ignore */ }
+        try { preservePrimary.disconnect() } catch { /* ignore */ }
+      })
+    }
+  } else {
+    // Primary restore. unassignFromSecondary owns host tabLocations reset +
+    // DOM restore for dom-placed non-CORE roots. Avoid a double
+    // requestHostTabToMain here (would race with unassign's path).
     const { unassignFromSecondary } = await import('../sidebar/secondary-drawer')
     const preMoveSourceList = await captureSourceList('secondary')
-    const preMoveActiveTab = getActiveSecondaryTabId() === tabId
+    const handoff = buildCrossDrawerHandoff({
+      tabId,
+      source: 'secondary',
+      destination: 'primary',
+      sourceList: preMoveSourceList,
+      activateDestination: true,
+    })
     await unassignFromSecondary(tabId)
-    await runHandoff({tabId, source: 'secondary', destination: 'primary', sourceList: preMoveSourceList, preMoveSourceActiveTab: preMoveActiveTab})
+    await runHandoff(handoff)
   }
 }
 

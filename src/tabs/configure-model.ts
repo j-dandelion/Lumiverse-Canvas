@@ -34,7 +34,18 @@ export type BaseSnapshot = {
 
 // ── Helpers ──
 
-const _builtinIdSet = new Set(BUILTIN_TAB_IDS)
+// Lazily built: configure-catalog sits at the far end of an import cycle
+// (configure-catalog → store → drawer-observer → cleanup → assignment →
+// settings/state → panel → features/registry → tab-list-dnd → this module).
+// Evaluating `new Set(BUILTIN_TAB_IDS)` at module init crashes with
+// "Cannot access 'BUILTIN_TAB_IDS' before initialization" whenever the
+// cycle's entry point loads configure-catalog first — the catalog module is
+// still mid-init when this module's top-level code runs. Deferring the read
+// to call time keeps the cycle safe for any import order.
+let _builtinIdSet: Set<string> | null = null
+function builtinIdSet(): Set<string> {
+  return (_builtinIdSet ??= new Set(BUILTIN_TAB_IDS))
+}
 
 function partitionOrderByCatalog(
   tabOrder: string[],
@@ -48,7 +59,7 @@ function partitionOrderByCatalog(
   for (const id of tabOrder) {
     if (seen.has(id)) continue
     seen.add(id)
-    if (_builtinIdSet.has(id)) {
+    if (builtinIdSet().has(id)) {
       builtinOrder.push(id)
     } else {
       extensionOrder.push(id)
@@ -93,7 +104,7 @@ function syncKindOrders(draft: ConfigureDraft): {
   for (const id of all) {
     if (seen.has(id)) continue
     seen.add(id)
-    if (_builtinIdSet.has(id)) {
+    if (builtinIdSet().has(id)) {
       builtinOrder.push(id)
     } else {
       extensionOrder.push(id)

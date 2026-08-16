@@ -40,8 +40,7 @@ import { injectStyles } from '../debug/styles'
 import { mountSecondarySidebar, tearDownSecondarySidebar, getSecondaryWrapper } from '../sidebar/secondary'
 import { mountResizeHandles, refreshResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
-import { cancelLayoutSave } from '../layout/persist'
-import { cancelApplyLayoutInterval } from '../layout/apply'
+import { cancelLayoutSave } from '../persist/layout-load'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
@@ -151,7 +150,7 @@ const chatReflowFeature: CanvasFeature = {
  *  Initial mount reads the layout's saved width/open so the wrapper renders
  *  at the right size on the first paint (gated per layout facet).
  *  Runtime re-apply mounts the shell when missing; tab restore is owned by
- *  requestSecondDrawerMode (awaited applyLayout) or setup cold-load.
+ *  requestSecondDrawerMode (awaited owned-model restore) or setup cold-load.
  *
  *  The Configure Tabs intercept lifecycle is now owned by setup.ts (always-on
  *  while Canvas is loaded), not tied to second-drawer state.
@@ -192,9 +191,9 @@ const secondSidebarFeature: CanvasFeature = {
           layout?.secondary?.open === true &&
           hasTabsToRestore
         )
-        // Mount only — requestSecondDrawerMode awaits applyLayout after
-        // setSettings; cold-load restore is owned by setup.ts applyLayout.
-        // Calling applyLayout here races the awaited path and can drop layout.
+        // Mount only — requestSecondDrawerMode awaits owned-model restore after
+        // setSettings; cold-load restore is owned by setup.ts dispatcher bootstrap.
+        // Calling restore here races the awaited path and can drop layout.
         mountSecondarySidebar({ initialWidth, initialOpen })
       }
     } else {
@@ -508,7 +507,6 @@ export const FEATURES: readonly CanvasFeature[] = [
 export function alwaysCleanups(): Teardown[] {
   return [
     unmountToastSurface,
-    cancelApplyLayoutInterval,
     slashAlwaysCleanup,
   ]
 }

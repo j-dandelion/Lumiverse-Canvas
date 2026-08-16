@@ -22,8 +22,13 @@ import {
   getTabAssignments, setTabAssignment, deleteTabAssignment,
 } from '../tabs/assignment'
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
-import { persistLayout } from '../layout/persist'
-import { getSecondaryWrapper, openSecondarySidebar, isSecondarySidebarOpen, closeSecondarySidebar } from './secondary'
+import {
+  ensureSecondaryShellMounted,
+  getSecondaryWrapper,
+  openSecondarySidebar,
+  isSecondarySidebarOpen,
+  closeSecondarySidebar,
+} from './secondary'
 import { findStoreData, getDrawerTabs, type DrawerTab } from '../store'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { dlog, dwarn } from '../debug/log'
@@ -47,7 +52,7 @@ let _activeTabId: string | null = null
 //      block (which is the authoritative state-setter).
 //   3. The auto-close would race with the restore's end-of-restore
 //      block.
-// The restore's end-of-restore block in src/layout/apply.ts is the
+// The owned model's restore boundary is the
 // authoritative state-setter during restore. setRestoringFromLayout(true)
 // is called before the observer attaches; setRestoringFromLayout(false)
 // is called when finishRestore() runs. After the flag is cleared, the
@@ -106,13 +111,13 @@ export function initSecondaryDrawer(_ctx: SpindleFrontendContext): void {
   drawerObserver.onTabUnregistered((tabId) => {
     if (getTabAssignments().has(tabId)) {
       // Skip ALL work during layout restore. The restore's end-of-interval
-      // logic in src/layout/apply.ts is the authoritative state-setter; any
+      // logic in the owned dispatcher is the authoritative state-setter; any
       // mutation here would race with it. See _restoringFromLayout comment
       // above for the full failure mode this prevents.
       if (_restoringFromLayout) return
       deleteTabAssignment(tabId)
       removeSecondaryTabButton(tabId)
-      persistLayout()
+      // Persist via the owned model; no-op persistLayout was retired.
       if (_activeTabId === tabId) {
         _activeTabId = null
         _state = getTabAssignments().size > 0 ? 'open' : 'closed'
@@ -190,6 +195,16 @@ async function finalizeAssignToSecondary(opts: {
     hideMainTabButton(resolvedId)
   }
 
+  dlog('[SecondaryDrawer] finalize open-gate', {
+    resolvedId,
+    openOnClosed,
+    state: _state,
+    sidebarOpen: isSecondarySidebarOpen(),
+    mobile: isMobileViewport(),
+    restoring: isRestoringFromLayout(),
+    deferActivation,
+    setActiveWhenReady,
+  })
   if (
     openOnClosed
     && _state === 'closed'
@@ -198,6 +213,7 @@ async function finalizeAssignToSecondary(opts: {
     && !isRestoringFromLayout()
   ) {
     await openSecondarySidebar()
+    dlog('[SecondaryDrawer] finalize open-gate:BRANCH open+tab_active', { resolvedId })
     // Built-in: only promote to tab_active when not deferring.
     // Extension open path sets `_state = 'open'` earlier (openOnClosed false).
     if (!deferActivation) {
@@ -206,9 +222,12 @@ async function finalizeAssignToSecondary(opts: {
       setActiveSecondaryTabId(resolvedId)
     }
   } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
+    dlog('[SecondaryDrawer] finalize open-gate:BRANCH tab_active-only', { resolvedId })
     _activeTabId = resolvedId
     _state = 'tab_active'
     setActiveSecondaryTabId(resolvedId)
+  } else {
+    dlog('[SecondaryDrawer] finalize open-gate:BRANCH none', { resolvedId })
   }
 
   const headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
@@ -219,10 +238,27 @@ async function finalizeAssignToSecondary(opts: {
   if (showAndPersist) {
     // showSecondaryTab applies sidebar-ux-tab-active; suppressed during restore
     // so finishRestore remains authoritative for the active tab.
+    //
+    // EMPTY-CONTENT TRAP (2026-07-31): this display call is gated on
+    // !deferActivation, and deferActivation is forced true whenever
+    // setSuppressAutoActivation is on — i.e. during the whole
+    // reassignSecondaryTabsFromModel loop. The loop therefore creates
+    // buttons + reparents roots but displays nothing. Callers that run the
+    // loop must show a tab themselves afterwards (reassignSecondaryTabsFromModel
+    // activates the persisted active.secondary or the first placed tab).
     if (!isMobileViewport() && !deferActivation) {
       showSecondaryTabDisplay(resolvedId)
     }
-    persistLayout()
+    // Persist via the owned model; no-op persistLayout was retired.
+  }
+
+  // Mirror of unassignFromSecondary: host hide does not trigger the pin
+  // MutationObserver (style not watched). Force strip rebuild under taskbar mode.
+  if (wireAssignment) {
+    try {
+      const m = await import('./main-tab-pin')
+      m.reconcileMainTabListPin()
+    } catch { /* pin optional during teardown */ }
   }
 }
 
@@ -233,6 +269,10 @@ type AssignCtx = {
   iconSvg?: string
   shortName?: string
   deferActivation: boolean
+  /** Boot placement (drawer closed) must not force-open — defaults to true. */
+  openOnClosed?: boolean
+  /** Boot placement must not activate a tab in a closed drawer. */
+  setActiveWhenReady?: boolean
 }
 
 /**
@@ -241,7 +281,6 @@ type AssignCtx = {
  */
 async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
   const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx
-
   setTabAssignment(resolvedId, 'secondary')
   hideMainTabButton(resolvedId)
   // On mobile, do not auto-open during assign (would enforceExclusionOnOpen).
@@ -276,7 +315,9 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
-      setActiveWhenReady: true,
+      // DnD cross-drawer placement passes setActiveWhenReady:false so the
+      // dropped tab is NOT activated in the destination (quiet DnD contract).
+      setActiveWhenReady: ctx.setActiveWhenReady ?? true,
     })
     return
   }
@@ -313,7 +354,8 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
-      setActiveWhenReady: true,
+      // Quiet DnD: see existingRoot branch above.
+      setActiveWhenReady: ctx.setActiveWhenReady ?? true,
     })
     return
   }
@@ -331,7 +373,7 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
   if (!isMobileViewport() && !deferActivation) {
     showSecondaryTabDisplay(resolvedId)
   }
-  persistLayout()
+  // Persist via the owned model; no-op persistLayout was retired.
 }
 
 /**
@@ -373,9 +415,9 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
       shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
       deferActivation,
       wireAssignment: true,
-      openOnClosed: true,
+      openOnClosed: ctx.openOnClosed ?? true,
       // Built-in: only set tab_active when we open; otherwise show path only.
-      setActiveWhenReady: false,
+      setActiveWhenReady: ctx.setActiveWhenReady ?? false,
     })
     return
   }
@@ -388,7 +430,13 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     return
   }
 
-  const bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
+  let bridgeRoot: HTMLElement | undefined
+  try {
+    bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
+  } catch (err) {
+    dwarn(`[SecondaryDrawer] getBuiltInTabRoot threw for "${tabId}":`, err)
+    bridgeRoot = undefined
+  }
   dlog(
     `[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` +
     `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute('data-tab-id') ?? 'null'} via=getBuiltInTabRoot`,
@@ -397,7 +445,10 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
   let root: HTMLElement | undefined
   let placedViaHost = false
 
-  if (wSpindleUi?.getBuiltInTabRoot && wSpindleUi?.requestTabLocation) {
+  // Prefer host tabLocations (bridge + store.moveTabTo), then DOM reparent
+  // inside moveBuiltInTabToSecondaryContainer. Do not treat "got a registry
+  // root" alone as success — that produced empty secondary panels.
+  if (wSpindleUi?.getBuiltInTabRoot) {
     const { moveBuiltInTabToSecondaryContainer } = await import('../tabs/builtin-move')
     root = await moveBuiltInTabToSecondaryContainer({
       tabId,
@@ -407,7 +458,9 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     placedViaHost = !!root
   }
 
-  if (!root && storeTab?.root) {
+  // Extension-style store roots only (not DRAWER_TABS registry roots).
+  // Built-in registry roots go through moveBuiltIn (host or DOM fallback).
+  if (!root && storeTab?.root && storeTab.extensionId) {
     root = storeTab.root
     if (root.parentElement !== secondaryContent) {
       secondaryContent.appendChild(root)
@@ -417,12 +470,11 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
   }
 
   if (!root) {
-    if (!wSpindleUi?.getBuiltInTabRoot || !wSpindleUi?.requestTabLocation) {
-      dwarn('[SecondaryDrawer] assignToSecondary: built-in tab cannot be auto-restored (host bridge missing, no store root).', {
-        tabId,
-        resolvedId,
-      })
-    }
+    dwarn(
+      '[SecondaryDrawer] assignToSecondary: built-in tab not placed ' +
+      '(host location write failed, DOM reparent failed, or root missing).',
+      { tabId, resolvedId, hasBridgeRoot: !!bridgeRoot, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot },
+    )
     return
   }
 
@@ -443,7 +495,7 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
   const iconSvg = tab.button?.querySelector('svg')?.outerHTML || root.querySelector('svg')?.outerHTML
   const shortName = readMainButtonShortName(tab.button as Element) || storeTab?.shortName
 
-  // Host may remount panelContent under the hidden wrapper after host move.
+  // Host may remount panelContent under the hidden wrapper after host/DOM move.
   if (placedViaHost) {
     try {
       const m = await import('./main-mirror-drawer')
@@ -459,8 +511,8 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     shortName,
     deferActivation,
     wireAssignment: true,
-    openOnClosed: true,
-    setActiveWhenReady: false,
+    openOnClosed: ctx.openOnClosed ?? true,
+    setActiveWhenReady: ctx.setActiveWhenReady ?? false,
   })
 }
 
@@ -478,13 +530,23 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
  * assignExtensionTabToSecondary / assignBuiltInTabToSecondary with shared
  * finalizeAssignToSecondary for the post-placement tail.
  */
-export async function assignToSecondary(tabId: string): Promise<void> {
+export async function assignToSecondary(
+  tabId: string,
+  opts?: { openOnClosed?: boolean; setActiveWhenReady?: boolean },
+): Promise<void> {
   // Snapshot at entry so fire-and-forget async tails still defer activation
   // after finishRestore / openSecondarySidebar clear the live flags.
   // Only "become the active secondary tab" side effects are gated — assignment,
   // button create, reparent, and hideMainTabButton always proceed.
   const deferActivation =
     isRestoringFromLayout() || isSuppressAutoActivation()
+
+  // Without a live shell, built-in place and extension reparent no-op (content
+  // missing / tab list missing). Heal detached or never-mounted wrappers first.
+  if (!ensureSecondaryShellMounted({ initialOpen: false })) {
+    dwarn(`[SecondaryDrawer] assignToSecondary: secondary shell unavailable; skip "${tabId}"`)
+    return
+  }
 
   let tab = drawerObserver.getTab(tabId)
   let iconSvg: string | undefined
@@ -518,7 +580,16 @@ export async function assignToSecondary(tabId: string): Promise<void> {
   const resolvedId = tab.tabId
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
 
-  const ctx: AssignCtx = { tabId, tab, resolvedId, iconSvg, shortName, deferActivation }
+  const ctx: AssignCtx = {
+    tabId,
+    tab,
+    resolvedId,
+    iconSvg,
+    shortName,
+    deferActivation,
+    openOnClosed: opts?.openOnClosed,
+    setActiveWhenReady: opts?.setActiveWhenReady,
+  }
   const isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
   if (isExtensionTab) {
     await assignExtensionTabToSecondary(ctx)
@@ -566,28 +637,28 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
   //     raw-removeChild/appendChild React roots (orphans → empty/wrong content).
   //   - Extension: Canvas reparented the store root into secondary; put it
   //     back into main panel content via appendChild so instance state survives.
-  // applyLayout → unassignUnwantedSecondary calls this directly (skips
+  // Owned-model restore → unassignUnwantedSecondary calls this directly (skips
   // assignment.ts), so the host reset must live here, not only in assignTab.
   const bridge = getHostBridge()
   const bridgeUi = bridge?.ui
-  const bridgeRoot =
-    (bridgeUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined) ||
-    (resolvedShowId !== tabId
-      ? (bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) as HTMLElement | undefined)
-      : undefined)
-  const isBuiltIn = bridgeRoot != null
-
-  if (isBuiltIn && bridgeUi?.requestTabLocation) {
-    // Prefer the bare id the host registered (tabId / bridge root tag).
-    const hostTabId =
-      bridgeRoot?.getAttribute?.('data-tab-id') ||
-      tabId
-    try {
-      bridgeUi.requestTabLocation(hostTabId, { kind: 'main-drawer' })
-    } catch (err) {
-      dwarn(`[SecondaryDrawer] unassign: requestTabLocation(main-drawer) failed for ${hostTabId}:`, err)
-    }
+  let bridgeRoot: HTMLElement | undefined
+  try {
+    bridgeRoot =
+      (bridgeUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined) ||
+      (resolvedShowId !== tabId
+        ? (bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) as HTMLElement | undefined)
+        : undefined)
+  } catch {
+    bridgeRoot = undefined
   }
+  // Built-in if registry root present, or host title resolves (getBuiltInTabTitle
+  // is free / no ui_panels). Avoid treating unknown extension ids as built-in.
+  const isBuiltIn =
+    bridgeRoot != null ||
+    !!(
+      bridgeUi?.getBuiltInTabTitle?.(tabId) ||
+      (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabTitle?.(resolvedShowId) : undefined)
+    )
 
   // Dual-id lookup: built-ins often tag with bare tabId (builtin-move) while
   // resolvedShowId may be a composite store id.
@@ -606,26 +677,66 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
   }
 
   if (isBuiltIn) {
-    // Host requestTabLocation moves the React root. Only clear Canvas attrs
-    // on the bridge root and any residual match — never steal the node.
-    const clearAttrs = (el: HTMLElement | null | undefined) => {
-      if (!el) return
-      el.removeAttribute('data-canvas-moved')
-      el.removeAttribute('data-canvas-active')
+    // Prefer the bare id the host registered (tabId / bridge root tag).
+    // Non-CORE: requestTabLocation allowlist may no-op; store.moveTabTo may be
+    // missing. DOM-placed tabs need appendChild back to main panelContent.
+    const hostTabId =
+      bridgeRoot?.getAttribute?.('data-tab-id') ||
+      tabId
+    let hostResetOk = false
+    try {
+      const { requestHostTabToMain } = await import('../tabs/host-tab-location')
+      const result = requestHostTabToMain(hostTabId)
+      hostResetOk = result.ok
+      if (!result.ok) {
+        dwarn(
+          `[SecondaryDrawer] unassign: could not reset tabLocations for ${hostTabId} (via=${result.via})`,
+        )
+      }
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassign: requestHostTabToMain failed for ${hostTabId}:`, err)
     }
-    clearAttrs(_movedRoot)
-    clearAttrs(bridgeRoot)
-    if (!_movedRoot && typeof document !== 'undefined') {
-      const idsToTry = resolvedShowId !== tabId
-        ? [resolvedShowId, tabId]
-        : [resolvedShowId]
-      for (const id of idsToTry) {
-        const residual = document.querySelector(
-          `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
-        ) as HTMLElement | null
-        if (residual) {
-          clearAttrs(residual)
-          break
+
+    const {
+      isDomPlacedBuiltIn,
+      restoreDomPlacedBuiltInToMain,
+      CANVAS_DOM_PLACED_ATTR,
+    } = await import('../tabs/builtin-move')
+    const domPlaced =
+      isDomPlacedBuiltIn(hostTabId) ||
+      isDomPlacedBuiltIn(tabId) ||
+      !!_movedRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR) ||
+      !!bridgeRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR)
+
+    if (domPlaced || (!hostResetOk && _movedRoot)) {
+      // DOM fallback path (or host reset failed with residual secondary root).
+      restoreDomPlacedBuiltInToMain(hostTabId, _movedRoot || bridgeRoot)
+      if (tabId !== hostTabId) {
+        const { clearDomPlacedBuiltIn } = await import('../tabs/builtin-move')
+        clearDomPlacedBuiltIn(tabId)
+      }
+    } else {
+      // Host-owned move: only clear Canvas attrs — never steal the React root.
+      const clearAttrs = (el: HTMLElement | null | undefined) => {
+        if (!el) return
+        el.removeAttribute('data-canvas-moved')
+        el.removeAttribute('data-canvas-active')
+        el.removeAttribute(CANVAS_DOM_PLACED_ATTR)
+      }
+      clearAttrs(_movedRoot)
+      clearAttrs(bridgeRoot)
+      if (!_movedRoot && typeof document !== 'undefined') {
+        const idsToTry = resolvedShowId !== tabId
+          ? [resolvedShowId, tabId]
+          : [resolvedShowId]
+        for (const id of idsToTry) {
+          const residual = document.querySelector(
+            `[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`,
+          ) as HTMLElement | null
+          if (residual) {
+            clearAttrs(residual)
+            break
+          }
         }
       }
     }
@@ -683,6 +794,7 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
   if (getTabAssignments().size === 0) {
     _state = 'closed'
     _activeTabId = null
+    setActiveSecondaryTabId(null)
     // Auto-close the secondary drawer when the last tab is moved out.
     // Default behavior (no silent flag) persists the closed state via
     // persistOpenState() so the next reload starts with the drawer
@@ -692,7 +804,7 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
     closeSecondarySidebar()
     updateDrawerTabVisibility()
   }
-  persistLayout()
+  // Persist via the owned model; no-op persistLayout was retired.
 }
 
 /**
@@ -720,9 +832,26 @@ export function getSecondaryDrawerState(): SecondaryDrawerState {
 }
 
 /**
+ * Keep the drawer state machine in sync with the shell's physical open
+ * state. `openSecondarySidebar`/`closeSecondarySidebar` live in the shell
+ * module and don't own `_state`, so the finalize gate (which checks
+ * `_state === 'closed'`) can read a stale 'closed' while the drawer is
+ * visibly open — the observed drift in the 2026-07-31 rClick session.
+ * Called by the shell when the drawer actually opens/closes.
+ */
+export function markDrawerOpenState(open: boolean): void {
+  if (open) {
+    _state = _activeTabId ? 'tab_active' : 'open'
+  } else {
+    _state = 'closed'
+  }
+}
+
+/**
  * Tear down the secondary drawer state machine. Called on Canvas disable.
  */
 export function teardownSecondaryDrawer(): void {
   _state = 'closed'
   _activeTabId = null
+  setActiveSecondaryTabId(null)
 }

@@ -33,7 +33,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Parse an unknown layout blob into a shape safe for applyLayout / applyMainDrawer.
+ * Parse an unknown layout blob into a shape safe for persistence consumers and
+ * main-drawer geometry restore.
  * Returns null if the top-level value is not an object (caller should no-op).
  */
 export function parseLayoutBlob(input: unknown): ParsedLayout | null {

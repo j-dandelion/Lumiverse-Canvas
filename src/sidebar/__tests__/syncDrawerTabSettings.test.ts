@@ -145,8 +145,10 @@ import { __setSecondaryWrapperForTest } from '../secondary'
 // Set the secondary wrapper for the test
 __setSecondaryWrapperForTest(secondaryWrapper as any)
 
-import { syncDrawerTabSettings } from '../drawer-sync'
+import { syncDrawerTabSettings, __resetDrawerTabSyncStateForTest, __getLastKnownSideForTest, __resetSideApplyStateForTest } from '../drawer-sync'
 import { applyDrawerTabPosition } from '../../drawerTabPosition/apply'
+import { getMainDrawerSide, getMainDrawerSideOverride, setMainDrawerSideOverride } from '../../store'
+import { LumiverseHost } from '../../host/lumiverse/implementation'
 import type { FullCanvasSettings } from '../../settings/state'
 
 // We need to control getSettings().mirrorCompactPosition
@@ -288,7 +290,7 @@ import { getSettings } from '../../settings/state'
   // Find the style observer wired up by syncDrawerTabSettings. The
   // class observer was attached first; the style observer has
   // attributeFilter: ['style'].
-  const styleObs = _capturedMutationObservers.find(
+  const styleObs = [..._capturedMutationObservers].reverse().find(
     (o) => o.options?.attributeFilter?.includes('style'),
   )
   assert(styleObs !== undefined, 'C4.b: a style observer was attached to the main tab')
@@ -336,7 +338,7 @@ import { getSettings } from '../../settings/state'
     'C5.a: secondary = 20vh after initial sync (mirror wins, override 40 ignored)')
 
   // Style observer fires on a main change.
-  const styleObs = _capturedMutationObservers.find(
+  const styleObs = [..._capturedMutationObservers].reverse().find(
     (o) => o.options?.attributeFilter?.includes('style'),
   )
   assert(styleObs !== undefined, 'C5.b: style observer exists')
@@ -387,7 +389,7 @@ import { getSettings } from '../../settings/state'
 
   // Style observer fires on a main change. With mirror OFF and override
   // set, the drawer-sync path still must NOT touch the secondary.
-  const styleObs = _capturedMutationObservers.find(
+  const styleObs = [..._capturedMutationObservers].reverse().find(
     (o) => o.options?.attributeFilter?.includes('style'),
   )
   assert(styleObs !== undefined, 'C6.b: style observer exists')
@@ -525,12 +527,37 @@ import { getSettings } from '../../settings/state'
 // Helper: reset the module-level _lastKnownVerticalPos in drawer-sync.ts
 // ============================================================
 function _resetLastKnownVerticalPos() {
-  // Reset the module-level _lastKnownVerticalPos cache. We can't access
-  // the variable directly, but calling syncDrawerTabSettings with a
-  // DIFFERENT value forces the cache to update. Since the rAF stub is a
-  // no-op, syncDrawerTabSettings won't recurse. Each test case sets a
-  // fresh distinct marginTop so the if-check at drawer-sync.ts:145 passes.
-  // We just need to clear the cache; the test body sets the real value.
+  __resetDrawerTabSyncStateForTest()
+}
+
+// ============================================================
+// SWAP: LumiverseHost.setSide — Configure "Swap drawer locations"
+// The host settings write is NO-GO in this runtime (setSetting bridge
+// unavailable), so setSide must apply the Canvas-side flip
+// (applyMainDrawerSideChange): the side override is what getMainDrawerSide
+// prefers, which makes the observed world converge (diffSide settles) and
+// drives the secondary-shell remount + mirror reposition live. The remount
+// itself throws in this stub env (no document.createElement) — the state
+// assertions below are the convergence-critical part.
+// ============================================================
+{
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+
+  const host = new LumiverseHost()
+  await host.setSide('right')
+
+  assertEqual(getMainDrawerSideOverride(), 'right', 'SW1: swap right sets the side override')
+  assertEqual(getMainDrawerSide(), 'right', 'SW2: getMainDrawerSide prefers the override (observed world converges)')
+
+  // Second swap: lastKnown now matches desired → remount skipped, stamped.
+  await host.setSide('left')
+  assertEqual(getMainDrawerSideOverride(), 'left', 'SW3: swap back flips the override')
+  assertEqual(getMainDrawerSide(), 'left', 'SW4: observed side follows the override')
+  assertEqual(__getLastKnownSideForTest(), 'left', 'SW5: drawer-sync lastKnown stamped on the aligned call')
+
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
 }
 
 // Cleanup

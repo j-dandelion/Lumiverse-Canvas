@@ -464,12 +464,17 @@ import {
   getActiveMainMirrorKey,
   activateMainMirrorFromRestore,
   adoptMainMirrorHostActivation,
+  adoptMainMirrorNeighbor,
+  findNeighborHostButtonFor,
   MAIN_MIRROR_LIST_CLASS,
   MAIN_MIRROR_BTN_CLASS,
   MAIN_MIRROR_LIST_MAIN_CLASS,
   MAIN_MIRROR_LIST_BOTTOM_CLASS,
   __resetMainTabPinForTest,
+  __setActiveMainMirrorKeyForTest,
+  __setMainTabPinEnabledForTest,
 } from '../main-tab-pin'
+import { captureMainMirrorMoveChrome, captureSecondaryNeighborForMove } from '../../recon/dispatch'
 import { isCanvasMainOpen, getMainMirrorTitleEl } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 import {
@@ -499,7 +504,7 @@ import {
   __getMainPinHostForTest,
 } from '../tab-position'
 import { __setSecondaryWrapperForTest } from '../secondary'
-import { setTabAssignment, deleteTabAssignment } from '../../tabs/assignment'
+import { setTabAssignment, deleteTabAssignment, setActiveSecondaryTabId } from '../../tabs/assignment'
 
 // Secondary tree stubs (minimal for dual-host test)
 const secDrawer = new StubElement()
@@ -1011,6 +1016,50 @@ function resetAll() {
   )
 }
 
+// M12b: mid primary→secondary hide (display:none, host still in DOM) must
+// KEEP exclusive key even when host pendingActiveTabReset marks first tab
+// tabBtnActive. Healing to profile here made main-mirror "always first tab"
+// after active Move before handoff reassert could run.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  const notes = makeHostBtn('notes', 'Notes', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  mainSidebar.appendChild(notes)
+  applyMainTabListPin(true, { force: true })
+
+  __setActiveMainMirrorKeyForTest('id__memory')
+  // Host reset to first primary while moved host btn is only hidden.
+  memory.style.display = 'none'
+  profile.classList.add('tabBtnActive')
+  profile.className = 'tabBtn tabBtnActive'
+  applyMainTabListPin(true, { force: true })
+
+  assertEqual(
+    getActiveMainMirrorKey(),
+    'id__memory',
+    'M12b: mid-move display:none keeps exclusive key (not first-tab host)',
+  )
+  const list = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const mirrors = collectMirrorButtons(list)
+  assert(
+    !mirrors.some((m) => m.getAttribute('data-tab-id') === 'memory'),
+    'M12b: memory mirror dropped while host hidden',
+  )
+  assert(
+    !mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')
+      ?.classList.contains('sidebar-ux-tab-active'),
+    'M12b: profile not strip-active (key still memory mid-move)',
+  )
+}
+
 // M13: exclusive key while both host buttons still present — heal must NOT
 // steal highlight to host tabBtnActive Profile when canvas key is Memory.
 {
@@ -1360,6 +1409,231 @@ function resetAll() {
     'Drawer',
     'M19b: title stays Drawer when only Settings is host-active',
   )
+}
+
+// M20: restore activation must not clobber a user-picked mirror key
+// (2026-07-31 regression: after moving a tab to the second drawer,
+// diffActive → host.activate → activateMainMirrorFromRestore re-activated
+// the persisted primary.tabId "Databank" and stole the highlight from the
+// user's tab).
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  const databank = makeHostBtn('databank', 'Databank', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  mainSidebar.appendChild(databank)
+  applyMainTabListPin(true, { force: true })
+
+  // User clicks Memory → user-established key.
+  const list0 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  collectMirrorButtons(list0).find((m) => m.getAttribute('data-tab-id') === 'memory')!.click()
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M20: key = memory after user click')
+
+  // Late restore/host-driven activation targets the persisted tab (databank).
+  const dbClicksBefore = databank.clickCount
+  activateMainMirrorFromRestore(databank as unknown as HTMLElement, 'Databank')
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M20: user key survives restore activation')
+  assertEqual(databank.clickCount, dbClicksBefore, 'M20: no host click forced on user tab')
+
+  // Without a user pick (fresh pin, key null), restore still seeds the key.
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile2 = makeHostBtn('profile', 'Profile', false)
+  const databank2 = makeHostBtn('databank', 'Databank', false)
+  mainSidebar.appendChild(profile2)
+  mainSidebar.appendChild(databank2)
+  applyMainTabListPin(true, { force: true })
+  activateMainMirrorFromRestore(databank2 as unknown as HTMLElement, 'Databank')
+  assertEqual(getActiveMainMirrorKey(), 'id__databank', 'M20: restore seeds key when no user pick')
+}
+
+// M21: adoptMainMirrorNeighbor hands the mirror to a neighbor after the user
+// moved their ACTIVE tab (07-19 neighbor-handoff design). It MAY override a
+// user-picked key (the user's own move drove it) but keeps userPicked=true
+// so a later restore activation cannot clobber the neighbor either.
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  applyMainTabListPin(true, { force: true })
+
+  // User clicks Memory → active.
+  const list0 = (getMainPinHost() as unknown as StubElement)!
+    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  collectMirrorButtons(list0).find((m) => m.getAttribute('data-tab-id') === 'memory')!.click()
+  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M21: memory active after click')
+
+  // User moves Memory away: hand the chrome to the neighbor (Profile).
+  const profileClicksBefore = profile.clickCount
+  adoptMainMirrorNeighbor(profile as unknown as HTMLElement, 'Profile')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M21: key handed to neighbor')
+  assertEqual(profile.clickCount, profileClicksBefore + 1, 'M21: neighbor host button clicked (content settle)')
+
+  // A later restore activation of the persisted tab must not clobber it.
+  const databank = makeHostBtn('databank', 'Databank', false)
+  mainSidebar.appendChild(databank)
+  applyMainTabListPin(true, { force: true })
+  activateMainMirrorFromRestore(databank as unknown as HTMLElement, 'Databank')
+  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M21: neighbor survives restore activation')
+}
+
+// M22: findNeighborHostButtonFor picks the nearest visible neighbor (above
+// else below), skipping Settings chrome and hidden buttons (07-19 handoff).
+{
+  resetAll()
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  const profile = makeHostBtn('profile', 'Profile', false)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  const settings = makeHostBtn('settings', 'Settings', false)
+  settings.removeAttribute('data-tab-id')
+  settings.setAttribute('title', 'Settings')
+  settings.setAttribute('aria-label', 'Settings')
+  const notes = makeHostBtn('notes', 'Notes', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  mainSidebar.appendChild(settings)
+  mainSidebar.appendChild(notes)
+
+  assertEqual(
+    (findNeighborHostButtonFor('memory') as unknown as StubElement)?.getAttribute('data-tab-id'),
+    'profile',
+    'M22: neighbor is the visible button above',
+  )
+  // Hidden buttons are excluded (the moved tab's own button is hidden by the
+  // time placement finishes — the handoff must capture the neighbor before).
+  profile.style.display = 'none'
+  assertEqual(
+    (findNeighborHostButtonFor('memory') as unknown as StubElement)?.getAttribute('title'),
+    'Notes',
+    'M22: falls through hidden + Settings to the button below',
+  )
+  profile.style.display = ''
+  assertEqual(findNeighborHostButtonFor('ghost'), null, 'M22: unknown tab → null')
+}
+
+// M23: captureMainMirrorMoveChrome — the shared pre-move chrome decision
+// used by both placementFirstMoveByLiveId (right-click) and the live DnD
+// cross-drawer path. Capture must happen BEFORE the moved tab's host button
+// is hidden (findNeighborHostButtonFor skips hidden buttons).
+{
+  resetAll()
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const memory = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(profile)
+  mainSidebar.appendChild(memory)
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) {
+      return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    }
+    return []
+  }
+
+  // Non-secondary targets never capture chrome.
+  let chrome = await captureMainMirrorMoveChrome('memory', 'primary')
+  assert(chrome.neighborBtn === null, 'M23: primary target → no neighbor')
+  assert(chrome.reassertId === null, 'M23: primary target → no reassert id')
+
+  // Pin disabled → no-op even for secondary targets.
+  __setMainTabPinEnabledForTest(false)
+  __setActiveMainMirrorKeyForTest('id__memory')
+  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
+  assert(chrome.neighborBtn === null, 'M23: pin disabled → no neighbor')
+  assert(chrome.reassertId === null, 'M23: pin disabled → no reassert id')
+
+  // Pin on, no mirror key → no-op.
+  __setMainTabPinEnabledForTest(true)
+  __setActiveMainMirrorKeyForTest(null)
+  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
+  assert(chrome.neighborBtn === null, 'M23: no mirror key → no neighbor')
+  assert(chrome.reassertId === null, 'M23: no mirror key → no reassert id')
+
+  // Moved tab IS the mirror's active → neighbor branch: nearest visible
+  // button above (Profile), captured while the moved button is still
+  // visible.
+  __setActiveMainMirrorKeyForTest('id__memory')
+  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
+  const neighbor = chrome.neighborBtn as unknown as StubElement | null
+  assertEqual(neighbor?.getAttribute('data-tab-id') ?? null, 'profile', 'M23: active-tab move captures neighbor above')
+  assert(chrome.reassertId === null, 'M23: active-tab move has no reassert id')
+
+  // Moved tab is NOT the mirror's active → re-assert branch: remember the
+  // mirror's active id for content re-assert after placement.
+  __setActiveMainMirrorKeyForTest('id__profile')
+  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
+  assert(chrome.neighborBtn === null, 'M23: inactive move → no neighbor')
+  assertEqual(chrome.reassertId, 'profile', 'M23: inactive move → reassert the mirror active id')
+}
+
+// M24: captureSecondaryNeighborForMove — the drawer-side chrome capture for
+// moves OUT of the second drawer (right-click "Move to main drawer", DnD
+// secondary→primary, Configure cross-column drags). Gated on the drawer's
+// TRACKED active (the model lags — secondary clicks don't produce
+// host-syncs); neighbor = nearest visible button above, else below.
+{
+  resetAll()
+  const secA = new StubElement()
+  secA.tagName = 'BUTTON'
+  secA.setAttribute('data-tab-id', 'tab-a')
+  secA.setAttribute('title', 'Tab A')
+  const secB = new StubElement()
+  secB.tagName = 'BUTTON'
+  secB.setAttribute('data-tab-id', 'tab-b')
+  secB.setAttribute('title', 'Tab B')
+  const secC = new StubElement()
+  secC.tagName = 'BUTTON'
+  secC.setAttribute('data-tab-id', 'tab-c')
+  secC.setAttribute('title', 'Tab C')
+  const secButtons = [secA, secB, secC]
+  for (const b of secButtons) secTabList.appendChild(b)
+  secTabList.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel === 'button[data-tab-id]') return secButtons
+    return []
+  }
+
+  // Moved tab is NOT the drawer's tracked active → no capture (the active
+  // tab keeps its replacement; quiet move).
+  setActiveSecondaryTabId('tab-a')
+  let secChrome = await captureSecondaryNeighborForMove('tab-b')
+  assert(secChrome.neighborBtn === null, 'M24: not the tracked active → no neighbor')
+
+  // Moved tab IS the tracked active → nearest visible button above.
+  setActiveSecondaryTabId('tab-b')
+  secChrome = await captureSecondaryNeighborForMove('tab-b')
+  assertEqual(
+    (secChrome.neighborBtn as unknown as StubElement | null)?.getAttribute('data-tab-id') ?? null,
+    'tab-a',
+    'M24: active-tab move captures neighbor above',
+  )
+
+  // Hidden above → nearest visible below.
+  secA.style.display = 'none'
+  secChrome = await captureSecondaryNeighborForMove('tab-b')
+  assertEqual(
+    (secChrome.neighborBtn as unknown as StubElement | null)?.getAttribute('data-tab-id') ?? null,
+    'tab-c',
+    'M24: hidden above → neighbor below',
+  )
+
+  setActiveSecondaryTabId(null)
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

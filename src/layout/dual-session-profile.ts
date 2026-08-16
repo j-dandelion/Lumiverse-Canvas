@@ -60,7 +60,7 @@ export function clearSessionDualProfile(): void {
  *
  * Safe to call even when some tabs are already in secondary (idempotent).
  * When tabs facet is ON + profile exists, typically you should skip this
- * call and let applyLayout restore from lastLoaded (which was synced
+ * call and let the owned model restore from lastLoaded (which was synced
  * before disable). This path is meant for the tabs-facet-off case.
  */
 export async function restoreSessionDualProfile(profile: SessionDualProfile): Promise<void> {

@@ -79,6 +79,7 @@ function fakeButton(opts: {
   title?: string
   canvasEdge?: string
   text?: string
+  extensionClass?: boolean
 } = {}) {
   const attrs: Record<string, string> = {}
   if (opts.tabId !== undefined) attrs['data-tab-id'] = opts.tabId
@@ -92,6 +93,7 @@ function fakeButton(opts: {
   btn.removeAttribute = (name: string) => { delete attrs[name] }
   btn.textContent = opts.text ?? null
   btn.querySelector = (_sel: string) => null
+  btn.className = opts.extensionClass ? '_tabBtn_1 _tabBtnExtension_2' : ''
   return btn
 }
 
@@ -99,6 +101,9 @@ function fakeSidebarWithButtons(buttons: any[]) {
   return {
     querySelectorAll: (sel: string) => {
       if (sel === '[data-tab-id]') return buttons
+      // The observer's scan selector combines data-tab-id + the extension
+      // class; the stub returns the full button set for either form.
+      if (sel.includes('tabBtnExtension')) return buttons
       return []
     },
   }
@@ -207,12 +212,54 @@ async function testT3() {
 }
 
 // =====================================================================
+// T4: Untagged extension buttons — host extension buttons WITHOUT
+//     data-tab-id (class tabBtnExtension) register by title; when the
+//     Canvas tagger later adds data-tab-id, the entry re-keys to the
+//     store id (never two entries for one button).
+// =====================================================================
+async function testT4() {
+  const observer = new DrawerObserver()
+  const untagged = fakeButton({ title: 'Hone', extensionClass: true })
+
+  _fakeSidebar = fakeSidebarWithButtons([untagged])
+  observer.start()
+
+  let tabs = observer.getAllTabs()
+  assertEqual(tabs.length, 1, 'T4: untagged extension button registered by title')
+  assertEqual(tabs[0].tabId, 'Hone', 'T4: title is the stable id while untagged')
+  assertEqual(tabs[0].extensionId, 'unknown', 'T4: extensionId unknown until tagged')
+
+  // Tagger adds data-tab-id → re-key to the store id, single entry.
+  untagged.setAttribute('data-tab-id', 'spindle:ext1:myTab:1')
+  triggerMutation([untagged])
+
+  tabs = observer.getAllTabs()
+  assertEqual(tabs.length, 1, 'T4: re-key keeps a single entry')
+  assertEqual(tabs[0].tabId, 'spindle:ext1:myTab:1', 'T4: re-keyed to store id')
+  assertEqual(tabs[0].extensionId, 'myTab', 'T4: extensionId parsed after tagging')
+
+  // Non-extension chrome without data-tab-id stays unregistered.
+  const chrome = fakeButton({ title: 'Settings' })
+  _fakeSidebar = fakeSidebarWithButtons([untagged, chrome])
+  observer.start() // already started — scan only via mutation in this harness
+  triggerMutation([chrome])
+  assertEqual(
+    observer.getAllTabs().length,
+    1,
+    'T4: chrome button without id/extension class never registered',
+  )
+
+  observer.stop()
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
   await testT1()
   await testT2()
   await testT3()
+  await testT4()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

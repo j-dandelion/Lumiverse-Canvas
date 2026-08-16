@@ -40,6 +40,7 @@ let _fakeSidebar: any = null
       tagName: tag.toUpperCase(),
       _attrs: {} as Record<string, string>,
       style: {} as any,
+      dataset: {} as Record<string, string>,
       className: '',
       innerHTML: '',
       textContent: '',
@@ -172,6 +173,14 @@ function setupLumiScriptTest(opts: {
       if (sel === 'button[data-tab-id]' || sel.includes('button[data-tab-id]')) {
         return _secondaryTabButtons
       }
+      // addSecondaryTabButton queries with just the attribute selector (CSS-escaped).
+      if (sel.startsWith('[data-tab-id=')) {
+        const idMatch = sel.match(/\[data-tab-id="(.+?)"\]/)
+        if (idMatch) {
+          const unescaped = idMatch[1].replace(/\\(.)/g, '$1')
+          return _secondaryTabButtons.filter((b: any) => b.getAttribute?.('data-tab-id') === unescaped)
+        }
+      }
       return []
     },
     getAttribute(name: string) { return fakeTabList._attrs[name] ?? null },
@@ -229,6 +238,7 @@ function setupLumiScriptTest(opts: {
   const _wrapperChildren: any[] = []
   const fakeWrapper: any = {
     tagName: 'DIV',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     style: {} as any,
     innerHTML: '',
@@ -279,6 +289,7 @@ function setupLumiScriptTest(opts: {
       id: tabId,
       title: tabTitle,
       root: fakeRoot,
+      extensionId,
       edge: 'right',
     }] as any)
   } else if (opts.injectDockPanel) {
@@ -536,7 +547,7 @@ async function testLumiScriptT3() {
 // T4: Existing-wrapper guard creates the missing tab button
 //
 // Regression test for the 2026-06-19 LumiBooks bug. Scenario:
-//   1. A previous assignToSecondary call (e.g. applyLayout's polling
+//   1. A previous assignToSecondary call (e.g. an earlier restore polling
 //      loop on initial mount) reparented the extension's primary DOM
 //      root into the secondary panel content, setting data-canvas-moved
 //      to the resolved composite id.

@@ -28,7 +28,7 @@ import {
   type BaseSnapshot,
   type DrawerSide,
 } from './configure-model'
-import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
@@ -36,12 +36,10 @@ import {
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { getMainDrawerSide } from '../store'
-import { getTabAssignments } from './assignment'
-import {
-  commitConfigureDraft,
-  waitForConfigureCommitIdle,
-  type CommitResult,
-} from './configure-commit'
+import { getLiveIdAssignments } from './assignment'
+import type { OwnedCommitResult as CommitResult } from './owned-commit'
+import { commitDraftToOwnedModel } from './owned-commit'
+import { getHost } from '../recon/dispatch'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -924,7 +922,7 @@ function cancelDrag(opts?: { revertDraft?: boolean }): void {
  * for any in-flight auto-commit before proceeding. After the previous
  * commit finishes, the draft is re-checked and committed again if still
  * dirty (e.g. user made another edit during the previous commit).
- * Global commit queue in configure-commit also serializes with live DnD.
+ * The owned dispatcher serializes with live DnD.
  */
 async function autoCommit(): Promise<void> {
   // Chain behind any in-flight auto-commit.
@@ -945,7 +943,7 @@ async function autoCommit(): Promise<void> {
     const draftToCommit = _draftRef
     const baseToCommit = _baseSnapshotRef
     const epochAtStart = _baseEpoch
-    const result = await commitConfigureDraft(draftToCommit, baseToCommit)
+    const result = await commitDraftToOwnedModel(draftToCommit)
 
     if (result.ok) {
       // Always advance base to what was committed when epoch is unchanged,
@@ -989,7 +987,6 @@ async function autoCommit(): Promise<void> {
  */
 export async function flushConfigureCommits(): Promise<void> {
   await autoCommit()
-  await waitForConfigureCommitIdle()
   // One more autoCommit pass: if a live-DnD commit changed host state while
   // we waited, re-check dirty. Usually a no-op.
   await autoCommit()
@@ -1391,9 +1388,16 @@ function buildLiveDraftAndBase(): {
   base: BaseSnapshot
   catalog: CatalogTab[]
 } {
-  const catalog = getFullCatalog()
+  const catalog = filterCatalogToLive(
+    getFullCatalog(),
+    getHost(),
+    new Set(getLiveIdAssignments().keys()),
+  )
   const hostSettings = getHostDrawerSettings()
-  const currentAssignments = new Map(getTabAssignments())
+  // LiveId-keyed projection of the model — the base facade is TabKey-keyed
+  // but catalog/draft ids are liveIds; against the TabKey facade every
+  // lookup missed and the secondary column rendered empty.
+  const currentAssignments = new Map(getLiveIdAssignments())
   const drawerSide = (hostSettings?.side as DrawerSide) || getMainDrawerSide()
 
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
@@ -1577,10 +1581,7 @@ function renderModal(
 
         // Residual dirty after flush (failed prior commit, external race).
         if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
-          const result: CommitResult = await commitConfigureDraft(
-            _draftRef,
-            _baseSnapshotRef,
-          )
+          const result: CommitResult = await commitDraftToOwnedModel(_draftRef)
           if (!result.ok) {
             renderModal(_draftRef, catalog, result.error, false)
             return

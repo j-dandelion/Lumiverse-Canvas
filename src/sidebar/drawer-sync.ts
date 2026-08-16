@@ -48,7 +48,6 @@ import {
   reconcileMainMirrorDrawer,
 } from './main-mirror-drawer'
 import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
-import { persistLayout } from '../layout/persist'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
@@ -116,7 +115,10 @@ class ObserverCoordinator {
 
     // Light signals (resize, class, style) are coalesced into one sync
     if (hasLightSignals) {
-      syncDrawerTabSettings()
+      // The coordinator already owns the frame boundary. Calling the public
+      // coalescing wrapper here would add a second RAF and make drag-position
+      // mirroring visibly lag by an extra frame.
+      _runSyncDrawerTabSettings()
     }
   }
 }
@@ -540,7 +542,7 @@ export function checkSideChanged(): void {
       // the clickable edge handle stays hidden after the wrapper is recreated.
       updateDrawerTabVisibility()
       // The new wrapper has a hardcoded title "Second drawer" (secondary.tsx:225).
-      // On initial mount, applyLayout (apply.ts:226) calls showSecondaryTab()
+      // On initial mount, the owned-model restore calls showSecondaryTab()
       // to set the title to the active tab's name — but that path is not reached
       // on a side-change remount. Calling showSecondaryTab here restores the
       // header text and the active state on tab buttons (sidebar-ux-tab-active
@@ -827,7 +829,7 @@ function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void
       }
 
       // Rebind if wrapper was replaced (keep `observed` in sync for connectivity).
-      if (!observed.isConnected) {
+      if (!observed || !observed.isConnected) {
         observer.disconnect()
         const next = getMainWrapper()
         if (!next) return
@@ -947,6 +949,14 @@ export function __resetSideApplyStateForTest(): void {
   _applySideChain = Promise.resolve()
   _sideRemountGen = 0
   _sideSettleHardMs = SIDE_SETTLE_HARD_MS
+}
+
+/** Test-only: clear cached tab-sync values between isolated DOM setups. */
+export function __resetDrawerTabSyncStateForTest(): void {
+  _lastKnownVerticalPos = null
+  _lastWrittenDrawerTabVars = null
+  _lastWrittenLabelsKey = null
+  _syncPending = false
 }
 
 /** Test-only: shorten/lengthen hard settle timeout (default 2500). */

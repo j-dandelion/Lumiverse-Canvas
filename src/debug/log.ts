@@ -15,7 +15,7 @@ export function setDebug(value: boolean): void {
   DEBUG = value
   // Sync to the backend so server-side logs (spindle.log.*) are also gated.
   // Uses dynamic import to avoid circular deps (log.ts is imported early).
-  import('../layout/persist').then(({ getBackendCtx }) => {
+  import('../persist/backend-ctx').then(({ getBackendCtx }) => {
     const ctx = getBackendCtx()
     if (ctx?.sendToBackend) {
       ctx.sendToBackend({ type: 'SET_DEBUG', debug: value })

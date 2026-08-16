@@ -19,7 +19,7 @@ import { getDrawerTabs } from '../store'
 import {
   healHiddenTabIds,
   isTabIdHidden,
-} from '../layout/tab-id-heal'
+} from '../persist/tab-id-heal'
 import { BUILTIN_TAB_IDS } from './configure-catalog'
 import {
   applyHiddenTabIdsToMirror,
@@ -36,7 +36,7 @@ import {
   __resetCanvasHiddenTabIdsForTest,
 } from './canvas-hidden'
 
-export { healHiddenTabIds, isTabIdHidden } from '../layout/tab-id-heal'
+export { healHiddenTabIds, isTabIdHidden } from '../persist/tab-id-heal'
 export {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,

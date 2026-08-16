@@ -13,8 +13,11 @@ import {
   leftColumnIsSecondary,
   alignIdsToLiveVisibleOrder,
   alignDraftToLiveVisibleOrder,
+  reorderWithinVisible,
+  moveTabVisible,
   type ConfigureDraft,
   type BaseSnapshot,
+  type TabSide,
 } from '../configure-model'
 import {
   BUILTIN_TAB_IDS,
@@ -1157,6 +1160,135 @@ assert(!leftColumnIsSecondary('left'), 'leftColumnIsSecondary is false when draw
     'open-align: aligned draft IS dirty vs stale host base (why we rebase)',
   )
 }
+
+// =====================================================================
+// LiveId assignments projection (2026-07-31)
+// =====================================================================
+// The draft layer's catalog ids are LIVE ids (bare builtins, spindle-
+// prefixed extensions), but the assignment facade is TabKey-keyed
+// ('builtin:regex', 'ext:foo/Bar'). Looking live ids up against the TabKey
+// facade misses every time and defaults to 'primary': draft.secondaryIds
+// came back EMPTY, so live secondary DnD reorders aborted ("tab not found
+// in draft for reorder" → snap-back) and the Configure modal showed an
+// empty secondary column. The fix projects the facade to live ids
+// (getLiveIdAssignments). This test pins both shapes.
+
+function liveIdAssignmentsDraft(): void {
+  const catalog: CatalogTab[] = [
+    { id: 'regex', kind: 'builtin', title: 'Regex', description: '', hideLocked: false },
+    { id: 'loom', kind: 'builtin', title: 'Loom', description: '', hideLocked: false },
+    { id: 'spindle:foo:tab:Bar:0', kind: 'extension', title: 'Bar', description: '', hideLocked: false },
+  ]
+  const tabOrder = ['regex', 'loom', 'spindle:foo:tab:Bar:0']
+  const livePrimary = ['loom']
+  const liveSecondary = ['regex', 'spindle:foo:tab:Bar:0']
+
+  // REGRESSION SHAPE: TabKey-keyed facade (what getTabAssignments returns).
+  // Every lookup misses → secondaryIds empty → reorder of a secondary tab
+  // cannot find it in the draft (the snap-back root cause).
+  const tabKeyFacade = new Map<string, TabSide>([
+    ['builtin:regex', 'secondary'],
+    ['builtin:loom', 'primary'],
+    ['ext:foo/Bar', 'secondary'],
+  ])
+  const regDraft = alignDraftToLiveVisibleOrder(
+    createDraft({ catalog, tabOrder, hiddenTabIds: [], drawerSide: 'left', assignments: tabKeyFacade }),
+    livePrimary,
+    liveSecondary,
+  )
+  assertArraysEqual(regDraft.secondaryIds, [], 'liveid-reg: TabKey facade → secondaryIds empty (documented bug)')
+  assertEqual(regDraft.secondaryIds.includes('regex'), false, 'liveid-reg: dragged secondary tab missing from draft')
+
+  // FIXED SHAPE: liveId-keyed projection (getLiveIdAssignments).
+  const liveIdFacade = new Map<string, TabSide>([
+    ['regex', 'secondary'],
+    ['loom', 'primary'],
+    ['spindle:foo:tab:Bar:0', 'secondary'],
+  ])
+  const draft = alignDraftToLiveVisibleOrder(
+    createDraft({ catalog, tabOrder, hiddenTabIds: [], drawerSide: 'left', assignments: liveIdFacade }),
+    livePrimary,
+    liveSecondary,
+  )
+  assertArraysEqual(draft.secondaryIds, ['regex', 'spindle:foo:tab:Bar:0'], 'liveid-fix: secondaryIds populated')
+  assertArraysEqual(draft.primaryIds, ['loom'], 'liveid-fix: primaryIds exclude secondary tabs')
+
+  // Same-list secondary reorder now commits: drag 'regex' after 'Bar'.
+  const reordered = reorderWithinVisible(draft, 'secondaryIds', 'regex', 1)
+  assertArraysEqual(reordered.secondaryIds, ['spindle:foo:tab:Bar:0', 'regex'], 'liveid-fix: secondary reorder works')
+  assert(reordered !== draft, 'liveid-fix: reorder produced a new draft')
+
+  // Cross-drawer move into the secondary lands at the custom drop index.
+  const moved = moveTabVisible(draft, 'loom', 'secondary', 1)
+  assertArraysEqual(moved.secondaryIds, ['regex', 'loom', 'spindle:foo:tab:Bar:0'], 'liveid-fix: cross-drawer insert at index')
+  assertArraysEqual(moved.primaryIds, [], 'liveid-fix: source side emptied')
+}
+
+liveIdAssignmentsDraft()
+
+// =====================================================================
+// Extension-tab mirror buttons in the live order — DnD drop index parity
+// =====================================================================
+//
+// Regression (2026-08): a main-mirror extension-tab button carries no
+// data-tab-id, so readVisibleTabIdsFromList skipped it and the draft
+// aligned to a SHORTENED live order. A built-in dropped next to the
+// extension tab then landed one slot LOW: the commit index was correct
+// against the DOM hit-test but wrong against the misaligned draft.
+//
+// livePrimaryIds here are what readVisibleTabIdsFromList returns — the fix
+// makes it include the extension-tab mirror button (via buttonTabId).
+;(() => {
+  const base = (): ConfigureDraft => ({
+    drawerSide: 'left',
+    primaryIds: ['a', 'ext-tab', 'b', 'c'],
+    secondaryIds: [],
+    builtinOrder: ['a', 'b', 'c'],
+    extensionOrder: ['ext-tab'],
+    hiddenIds: new Set<string>(),
+  })
+
+  // DOM: [a, Ext, b, c]. Drag `a`, drop it right after Ext (between Ext and
+  // b). Post-removal insert index among [Ext, b, c] = 1.
+  const aligned = alignDraftToLiveVisibleOrder(
+    base(),
+    ['a', 'ext-tab', 'b', 'c'], // live order INCLUDING the extension tab
+    [],
+  )
+  const committed = reorderWithinVisible(aligned, 'primaryIds', 'a', 1)
+  assertArraysEqual(
+    committed.primaryIds,
+    ['ext-tab', 'a', 'b', 'c'],
+    'ext-live: drop after extension tab lands right after it (one-slot-low fix)',
+  )
+
+  // Contrast — the pre-fix live order (extension tab skipped): the same drop
+  // produces a, one slot LOWER (b,a,c,Ext instead of Ext,a,b,c).
+  const staleAligned = alignDraftToLiveVisibleOrder(
+    base(),
+    ['a', 'b', 'c'], // extension tab missing from live read
+    [],
+  )
+  const staleCommitted = reorderWithinVisible(staleAligned, 'primaryIds', 'a', 1)
+  assertArraysEqual(
+    staleCommitted.primaryIds,
+    ['b', 'a', 'c', 'ext-tab'],
+    'ext-live: WITHOUT the extension tab in live order the same drop lands one slot low (documents root cause)',
+  )
+
+  // The dragged tab itself is an extension tab (no data-tab-id): same math.
+  const extAligned = alignDraftToLiveVisibleOrder(
+    base(),
+    ['ext-tab', 'a', 'b', 'c'],
+    [],
+  )
+  const extCommitted = reorderWithinVisible(extAligned, 'primaryIds', 'ext-tab', 2)
+  assertArraysEqual(
+    extCommitted.primaryIds,
+    ['a', 'b', 'ext-tab', 'c'],
+    'ext-live: dragging the extension tab itself uses the same post-removal index',
+  )
+})()
 
 // =====================================================================
 // Summary

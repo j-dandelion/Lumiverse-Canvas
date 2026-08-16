@@ -1,4 +1,5 @@
-// Regression wiring: built-ins never raw-reparent host roots.
+// Regression wiring: built-ins prefer host tabLocations; DOM reparent is
+// last-resort only (via=dom) when bridge+store fail.
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
@@ -28,16 +29,21 @@ assert(
   'T-WIRE: store-root fallback still present for non-host roots',
 )
 assert(
-  helperSrc.includes('requestTabLocation'),
-  'T-WIRE: builtin-move calls requestTabLocation',
+  helperSrc.includes('requestHostTabToSecondary') || helperSrc.includes('requestTabLocation'),
+  'T-WIRE: builtin-move calls host location API',
 )
 assert(
-  !/\.appendChild\s*\(/.test(helperSrc),
-  'T-WIRE: builtin-move has no .appendChild( calls',
+  helperSrc.includes('tryDomPlaceRoot') || helperSrc.includes('via=dom'),
+  'T-WIRE: builtin-move has DOM last-resort path',
 )
 assert(
   assignSrc.includes('moveBuiltInTabToSecondaryContainer'),
   'T-WIRE: assignTab uses shared helper',
+)
+assert(
+  assignSrc.includes('no empty secondary handoff') ||
+    assignSrc.includes('place failed; aborting'),
+  'T-WIRE: assignTab fail-closes built-in place without handoff',
 )
 assert(
   !secSrc.includes("textContent?.includes(tab.title"),
@@ -47,21 +53,26 @@ assert(
 // Behavioral (no document): host move API contract
 async function behavioral() {
   const calls: string[] = []
-  ;(globalThis as any).window = {
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent() { return true },
-    matchMedia() { return { matches: false, addEventListener() {}, removeEventListener() {} } },
-    spindle: {
-      ui: {
-        getBuiltInTabRoot: () => undefined,
-        requestTabLocation: (tabId: string, loc: unknown) => {
-          calls.push(`request:${tabId}:${JSON.stringify(loc)}`)
-        },
-        getTabLocation: () => ({ kind: 'container', containerId: 'canvas-secondary-drawer' }),
+  const locations: Record<string, { kind: string; containerId?: string }> = {}
+  const { setHostBridgeContext } = await import('../../dom/host-bridge')
+  const { __setHostMoveTabToForTest } = await import('../../tabs/host-tab-location')
+  const { __clearDomPlacedForTest } = await import('../../tabs/dom-placed-builtin')
+
+  setHostBridgeContext({
+    ui: {
+      getBuiltInTabRoot: () => undefined,
+      requestTabLocation: (tabId: string, loc: any) => {
+        calls.push(`request:${tabId}:${JSON.stringify(loc)}`)
+        locations[tabId] = loc
       },
+      getTabLocation: (tabId: string) =>
+        locations[tabId] ?? { kind: 'main-drawer' },
     },
-  }
+    containers: {},
+  } as any)
+  __setHostMoveTabToForTest(null)
+  __clearDomPlacedForTest()
+
   const origRaf = globalThis.requestAnimationFrame
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
     queueMicrotask(() => cb(0))
@@ -70,7 +81,13 @@ async function behavioral() {
 
   try {
     const { moveBuiltInTabToSecondaryContainer } = await import('../../tabs/builtin-move')
-    const root = { setAttribute() {}, querySelector() { return null } } as any
+    const root = {
+      setAttribute() {},
+      removeAttribute() {},
+      querySelector() { return null },
+      hasAttribute() { return false },
+      parentElement: null as any,
+    } as any
     const moved = await moveBuiltInTabToSecondaryContainer({ tabId: 'profile', root })
     assert(!!moved, 'T-BEH: returns root when provided')
     assert(
@@ -82,12 +99,59 @@ async function behavioral() {
       'T-BEH: secondary container id',
     )
 
-    ;(globalThis as any).window = { spindle: undefined }
+    // Non-CORE silent no-op without store and without secondary shell → fail closed
+    calls.length = 0
+    setHostBridgeContext({
+      ui: {
+        getBuiltInTabRoot: () => root,
+        requestTabLocation: () => {
+          calls.push('noop')
+        },
+        getTabLocation: () => ({ kind: 'main-drawer' }),
+      },
+      containers: {},
+    } as any)
+    __setHostMoveTabToForTest(null)
+    __clearDomPlacedForTest()
+    const empty = await moveBuiltInTabToSecondaryContainer({ tabId: 'imagegen', root })
+    assert(empty === undefined, 'T-BEH: non-CORE no-op without store/shell → undefined (no empty panel)')
+
+    // Non-CORE silent no-op with store fallback → success
+    const storeLocs: Record<string, any> = {}
+    setHostBridgeContext({
+      ui: {
+        getBuiltInTabRoot: () => root,
+        requestTabLocation: () => {},
+        getTabLocation: (id: string) => storeLocs[id] ?? { kind: 'main-drawer' },
+      },
+      containers: {},
+    } as any)
+    __setHostMoveTabToForTest((id, loc) => {
+      storeLocs[id] = loc
+    })
+    const viaStore = await moveBuiltInTabToSecondaryContainer({ tabId: 'wallpaper', root })
+    assert(!!viaStore, 'T-BEH: non-CORE with store.moveTabTo → root')
+    assertEqualish(
+      storeLocs.wallpaper?.containerId,
+      'canvas-secondary-drawer',
+      'T-BEH: store wrote secondary container',
+    )
+
+    setHostBridgeContext(null)
+    __setHostMoveTabToForTest(null)
+    __clearDomPlacedForTest()
     const none = await moveBuiltInTabToSecondaryContainer({ tabId: 'profile' })
     assert(none === undefined, 'T-BEH: no bridge → undefined')
   } finally {
     globalThis.requestAnimationFrame = origRaf
+    setHostBridgeContext(null)
+    __setHostMoveTabToForTest(null)
+    __clearDomPlacedForTest()
   }
+}
+
+function assertEqualish(actual: unknown, expected: unknown, msg: string) {
+  assert(actual === expected, `${msg} (got ${String(actual)})`)
 }
 
 behavioral().then(() => {

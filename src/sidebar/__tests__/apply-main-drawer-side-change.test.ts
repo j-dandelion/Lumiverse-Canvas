@@ -51,7 +51,7 @@ import {
   getMainDrawerSideOverride,
   __setStoreSnapshotForTest,
 } from '../../store'
-import { getSettings, hydrateSettings, resetHydrationGuard } from '../../settings/state'
+import { getSettings, hydrateSettings } from '../../settings/state'
 
 let passed = 0
 let failed = 0
@@ -141,7 +141,6 @@ function reset() {
   __resetSideApplyStateForTest()
   // Default second drawer ON so A1–A8 remount paths stay active.
   // Prefer hydrate over setSettings so we do not run feature apply.
-  resetHydrationGuard()
   hydrateSettings({ secondSidebarEnabled: true })
 }
 
@@ -294,7 +293,6 @@ function reset() {
   installMainWrapper('right')
   __setLastKnownSideForTest('left')
   setMainDrawerSideOverride('right')
-  resetHydrationGuard()
   hydrateSettings({ secondSidebarEnabled: false })
   assertEqual(getSettings().secondSidebarEnabled, false, 'A9: second drawer off')
 

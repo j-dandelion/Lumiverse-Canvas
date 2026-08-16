@@ -8,7 +8,7 @@
 //
 // Drop / restore policy (pointerup → performDrop):
 //   - Same-list reorder: keep mid-drag DOM through successful commit
-//     (primary stick; host+mirror reordered in configure-commit).
+//     (primary stick; host+mirror reordered in the owned commit).
 //   - Cross secondary→primary: settle with placeholder in mirror, then
 //     spacer + restore before commit (clean secondary list; hold mirror slot).
 //   - Cross primary→secondary: settle with mirror btn still in secondary;
@@ -36,7 +36,7 @@
 //   - Cross-drawer and within-drawer success paths dynamic-import
 //     configure-modal and call refreshConfigureDraftFromLive() (no-op if
 //     modal closed). Failed commits do NOT refresh. Clean no-op drops
-//     (no commit) also skip refresh. Refresh is not inside configure-commit.
+//     (no commit) also skip refresh. Refresh is not inside the owned commit.
 //
 // Click after release: capture suppressors stay installed for the whole drag;
 // removal is scheduled only on pointerup (setTimeout 0). Scheduling removal
@@ -547,6 +547,47 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     0,
     'readVisibleTabIdsFromList: null list → []',
   )
+})();
+
+// ── live-tab-order: extension-tab mirror buttons (no data-tab-id) count ──
+// Main-mirror extension buttons only carry `title`; without the reader
+// including them, the draft aligns short and DnD drops land one slot low.
+;(() => {
+  const { __setDrawerTabsForTest } = require('../../store') as typeof import('../../store')
+  __setDrawerTabsForTest([
+    {
+      id: 'spindle:foo:tab:Bar:0',
+      extensionId: 'spindle:foo',
+      title: 'Bar',
+      root: {} as HTMLElement,
+    },
+  ])
+  const mkMirror = (title: string, settings = false) => ({
+    className: settings ? 'tabBtnSettings' : 'sidebar-ux-main-tab-mirror-btn',
+    style: { display: '' },
+    getAttribute: (k: string) =>
+      k === 'title' ? title : k === 'data-tab-id' ? null : null,
+  })
+  const builtin = {
+    className: 'sidebar-ux-main-tab-mirror-btn',
+    style: { display: '' },
+    getAttribute: (k: string) => (k === 'data-tab-id' ? 'regex' : null),
+  }
+  const list = {
+    querySelectorAll: () => [
+      builtin,
+      mkMirror('Bar'), // extension mirror btn: no data-tab-id, store title match
+      mkMirror('Settings', true), // chrome — skipped
+      mkMirror('Ghost'), // no store match → title-as-id fallback still counted
+    ],
+  } as unknown as HTMLElement
+  const ids = readVisibleTabIdsFromList(list)
+  assertEqual(
+    ids.join(','),
+    'regex,spindle:foo:tab:Bar:0,Ghost',
+    'readVisibleTabIdsFromList: extension mirror buttons resolve via title (store match + fallback)',
+  )
+  __setDrawerTabsForTest(null)
 })()
 
 // Report

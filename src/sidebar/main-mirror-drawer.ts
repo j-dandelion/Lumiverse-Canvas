@@ -39,7 +39,6 @@ import {
   CANVAS_MAIN_ACTIVE_CLASS,
   CANVAS_MAIN_OPEN_CLASS,
 } from './styles'
-import { persistOpenState } from '../layout/persist'
 import { updateChatReflow } from '../chat/reflow'
 import { mountResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings } from './drawer-sync'
@@ -175,9 +174,8 @@ function bumpResizeHandles(): void {
 }
 
 function persistCanvasMainOpenState(): void {
-  // Same write path as secondary open/close — snapshot reads open class +
-  // MAIN_MIRROR_WIDTH_VAR while canvas-main mode is active.
-  persistOpenState()
+  // Same write path as secondary open/close — owned model persists
+  // drawer state automatically; no-op persistOpenState was retired.
 }
 
 /**
@@ -462,6 +460,16 @@ function unpinShellTabList(): void {
 /**
  * Resolve host panelContent even after it has been moved into the shell
  * (getMainPanelContent only walks the host panel tree).
+ *
+ * CONTENT-DRIFT WARNING (2026-07-31): this is the host's single panel
+ * content node — its inner content is whatever Lumiverse renders. After a
+ * container move (`requestTabLocation ok via=bridge`) the host remounts
+ * the drawer content area and can re-resolve the panel to the FIRST
+ * remaining tab while `tabBtnActive` stays on the real active — the mirror
+ * then shows another tab's content with the wrong header. The observed
+ * world has no panel-content signal, so reconcile cannot detect it. The
+ * remedy is the re-assert in placementFirstMoveByLiveId (re-click the
+ * active key's host button). See docs/pitfalls.md §6.
  */
 function resolveHostPanelContent(): HTMLElement | null {
   if (_contentEl?.isConnected) return _contentEl

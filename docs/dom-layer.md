@@ -58,7 +58,9 @@ Canvas cannot import Lumiverse's Zustand store directly. Instead, it walks the f
 
 ## Host Bridge (`dom/host-bridge.ts`)
 
-Typed wrapper for `window.spindle` (the Spindle loader's API):
+Typed wrapper for the Spindle frontend context. **Primary source is the
+`setup(ctx)` argument** (stored via `setHostBridgeContext`); `window.spindle`
+is only a test/fallback — the host loader never assigns that global.
 
 ```typescript
 interface HostBridge {
@@ -75,7 +77,9 @@ interface HostBridge {
 }
 ```
 
-Returns null when `window.spindle` is undefined (pre-init or LumiScript not installed).
+Returns null when no setup ctx and `window.spindle` is undefined.
+Built-in moves also require the `ui_panels` permission (declared in
+`spindle.json`; `ensureUiPanelsPermission()` requests it at setup).
 
 ## Stable Selectors (`dom/selectors.ts`)
 

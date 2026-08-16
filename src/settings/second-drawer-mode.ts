@@ -26,13 +26,14 @@ import {
   setLastLoadedLayout,
 } from './state'
 import {
-  applyLayout,
   flushPendingSaves,
   syncLastLoadedFromPersistedLayout,
   cancelLayoutSave,
-  hasDetachedTabs,
-  seedDualLayoutFromLive,
-} from '../layout/persist'
+} from '../persist/layout-load'
+import { hasDetachedTabs, seedDualLayoutFromLive } from '../layout/snapshot'
+import { bootstrapFromLayout, flush as flushOwnedModel, getHost } from '../recon/dispatch'
+import { CANVAS_VERSION } from '../persist/backend-ctx'
+import { commitDraftToOwnedModel } from '../tabs/owned-commit'
 import {
   captureSessionDualProfileFromLive,
   getSessionDualProfile,
@@ -431,7 +432,7 @@ async function finishDisable(): Promise<void> {
  *      and empty, primary preserved from live). The seed is written
  *      BEFORE setSettings so `secondSidebarFeature.apply` reads it on mount.
  *   4. setSettings({ secondSidebarEnabled: true }) — feature mount runs
- *   5. Cancel debounced saves, await applyLayout from lastLoaded (which
+  *   5. Cancel debounced saves, await owned-model restore from lastLoaded (which
  *      was synced with the session profile before disable). Fall back to
  *      session profile if lastLoaded has no tabs. After a first-enable
  *      seed, lastLoaded has detachedTabs: [], so neither restore path
@@ -480,11 +481,11 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
 
     // Restore dual assignments. Tab-assignment persistence is always-on,
     // so we always use the facet-ON path: lastLoaded was merged with the
-    // session profile in finishDisable; applyLayout restores from it.
+    // session profile in finishDisable; the owned model restores from it.
     // Fall back to the session profile if lastLoaded has no tabs.
     //
     // After a first-enable seed, lastLoaded has detachedTabs: [], so
-    // neither the applyLayout nor the profile-restore branch runs —
+    // neither the owned-model nor the profile-restore branch runs —
     // the secondary stays empty/closed.
     //
     // Cancel debounced saves first so the post-setSettings write does not
@@ -494,13 +495,15 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     cancelLayoutSave()
     const layout = getLastLoadedLayout()
     if (layout && Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0) {
-      dlog('[second-drawer-mode] applyLayout(lastLoaded) for re-enable:', {
+      dlog('[second-drawer-mode] owned-model restore for re-enable:', {
         tabs: layout.detachedTabs.length,
       })
-      try {
-        await applyLayout(layout)
-      } catch (err) {
-        dwarn('[second-drawer-mode] applyLayout on re-enable failed:', err)
+      const host = getHost()
+      if (host) {
+        bootstrapFromLayout(layout, host, CANVAS_VERSION)
+        await flushOwnedModel()
+      } else {
+        dwarn('[second-drawer-mode] owned tab model is unavailable during re-enable')
       }
     } else if (profile && profile.detachedTabs.length > 0) {
       // Defensive fallback: lastLoaded has no tabs but session profile does.
@@ -568,8 +571,7 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
         const draft = m.getConfigureDraftRef()
         const base = m.getConfigureBaseRef()
         if (draft && base) {
-          const { commitConfigureDraft } = await import('../tabs/configure-commit')
-          const result = await commitConfigureDraft(draft, base)
+          const result = await commitDraftToOwnedModel(draft)
           if (!result.ok) {
             dwarn('[second-drawer-mode] commit failed on mode switch:', result.error)
             return

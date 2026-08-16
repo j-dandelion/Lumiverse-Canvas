@@ -25,7 +25,6 @@ import {
   isMainMirrorActive,
   MAIN_MIRROR_WIDTH_VAR,
 } from '../sidebar/main-mirror-drawer'
-import { persistLayout } from '../layout/persist'
 import { getSettings } from '../settings/state'
 import { applyTabListPosition } from '../sidebar/tab-position'
 
@@ -138,7 +137,7 @@ export function mountResizeHandles(): void {
           scheduleReflow()
         },
         () => {
-          persistLayout()
+          // Persist via the owned model; no-op persistLayout was retired.
         },
         () => isCanvasMainOpen(),
       )
@@ -186,7 +185,7 @@ export function mountResizeHandles(): void {
         () => {
           const width = getMainDrawerWidth()
           void width
-          persistLayout()
+          // Persist via the owned model; no-op persistLayout was retired.
         },
         () => isMainDrawerOpen()
       )
@@ -238,7 +237,7 @@ export function mountResizeHandles(): void {
         },
         () => {
           const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-          persistLayout()
+          // Persist via the owned model; no-op persistLayout was retired.
         },
         () => isSecondarySidebarOpen()
       )

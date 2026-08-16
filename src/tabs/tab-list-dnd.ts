@@ -48,24 +48,34 @@ import {
   type BaseSnapshot,
   type DrawerSide,
 } from './configure-model'
-import { commitConfigureDraft } from './configure-commit'
-import { getFullCatalog, type CatalogTab } from './configure-catalog'
+import { commitDraftToOwnedModel, type ActiveSelection } from './owned-commit'
+import {
+  getHost,
+  captureMainMirrorMoveChrome,
+  applyMainMirrorMoveChrome,
+  captureSecondaryNeighborForMove,
+  applySecondaryNeighborHandoff,
+  type MainMirrorMoveChrome,
+  type SecondaryMoveChrome,
+} from '../recon/dispatch'
+import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
 } from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
-import { getTabAssignments } from './assignment'
+import { getLiveIdAssignments } from './assignment'
 import { getMainDrawerSide } from '../store'
 import { getSecondaryWrapper, getSecondaryTabList } from '../sidebar/secondary'
 import {
   isSettingsButton,
   hideMainTabButton,
   showMainTabButton,
+  buttonTabId,
 } from './buttons'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { dwarn } from '../debug/log'
+import { dlog, dwarn } from '../debug/log'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -114,7 +124,8 @@ type DragState =
       phase: 'dragging'
       tabId: string
       element: HTMLElement
-      fromSecondary: boolean
+       fromSecondary: boolean
+       activeAtGestureStart: ActiveSelection
       overlay: HTMLElement
       overlayInner: HTMLElement
       offsetX: number
@@ -134,7 +145,8 @@ type DragState =
       phase: 'settling'
       tabId: string
       element: HTMLElement
-      fromSecondary: boolean
+       fromSecondary: boolean
+       activeAtGestureStart: ActiveSelection
       overlay: HTMLElement
     }
 
@@ -180,6 +192,17 @@ let _geomDirty = false
 
 /** Insert indicator element (insert-before-highlight). */
 let _insertIndicatorEl: HTMLElement | null = null
+
+function dndOrderSnapshot(): { primary: string[]; secondary: string[] } {
+  return {
+    primary: readLivePrimaryTabIds(),
+    secondary: readLiveSecondaryTabIds(),
+  }
+}
+
+function logDndOrder(label: string, extra: Record<string, unknown> = {}): void {
+  dlog('[tab-list-dnd]', label, { ...extra, live: dndOrderSnapshot() })
+}
 
 // ── Drag install state per button ──
 
@@ -355,9 +378,9 @@ function isSecondaryButton(btn: HTMLElement): boolean {
   return !!btn.closest(`.${TAB_LIST_CLASS}`)
 }
 
-/** Get the tab id from any surface button (data-tab-id on all surfaces). */
+/** Get the tab id from any surface button (data-tab-id, or title fallback for extension tabs). */
 function getButtonTabId(btn: HTMLElement): string | null {
-  return btn.getAttribute('data-tab-id')
+  return buttonTabId(btn)
 }
 
 /**
@@ -399,7 +422,7 @@ function getReorderParent(btn: HTMLElement): HTMLElement | null {
  * Mirror uses main/bottom *sections* (where buttons actually live) so
  * hit-test and insertBefore stay within the correct flex column.
  * Host React `.tabList` is not a mid-drag surface (taskbar mode required;
- * commit still reorders host buttons via configure-commit).
+ * commit still reorders host buttons through the owned model).
  */
 function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
   const containers: { el: HTMLElement; secondary: boolean }[] = []
@@ -531,7 +554,7 @@ function getButtonsInContainer(
 ): HTMLElement[] {
   return getAllButtonsInContainer(container).filter((el) => {
     if (!isDisplayedTabButton(el)) return false
-    if (excludeTabId && el.getAttribute('data-tab-id') === excludeTabId) {
+    if (excludeTabId && getButtonTabId(el) === excludeTabId) {
       return false
     }
     return true
@@ -545,9 +568,18 @@ function buildDraftAndBase(): {
   base: BaseSnapshot
   catalog: CatalogTab[]
 } {
-  const catalog = getFullCatalog()
+  const catalog = filterCatalogToLive(
+    getFullCatalog(),
+    getHost(),
+    new Set(getLiveIdAssignments().keys()),
+  )
   const hostSettings = getHostDrawerSettings()
-  const currentAssignments = new Map(getTabAssignments())
+  // LiveId-keyed projection of the model: the base facade is TabKey-keyed
+  // ('builtin:regex') but the catalog/draft are liveId-keyed ('regex') —
+  // against the TabKey facade every lookup misses and defaults to 'primary',
+  // so draft.secondaryIds came back empty and secondary reorders aborted
+  // ("tab not found in draft for reorder" → snap-back).
+  const currentAssignments = new Map(getLiveIdAssignments())
   const drawerSide =
     (hostSettings?.side as DrawerSide) || getMainDrawerSide()
 
@@ -565,11 +597,21 @@ function buildDraftAndBase(): {
     drawerSide,
     assignments: currentAssignments,
   })
+  const livePrimary = readLivePrimaryTabIds()
+  const liveSecondary = readLiveSecondaryTabIds()
   const draft = alignDraftToLiveVisibleOrder(
     draftFromHost,
-    readLivePrimaryTabIds(),
-    readLiveSecondaryTabIds(),
+    livePrimary,
+    liveSecondary,
   )
+
+  dlog('[tab-list-dnd] draft-built (live order)', {
+    livePrimary,
+    liveSecondary,
+    draftPrimary: draft.primaryIds,
+    draftSecondary: draft.secondaryIds,
+    hidden: [...draft.hiddenIds],
+  })
 
   const base: BaseSnapshot = {
     tabOrder: hostSettings?.tabOrder || [],
@@ -689,6 +731,15 @@ function hitTestDropTarget(
       })
       // Insert index from floating *tab center* Y (not pointer Y).
       index = insertIndexFromMidpoints(geom.centerY, midpoints)
+      dlog('[tab-list-dnd] hit-test', {
+        containerCls: String(container.className || ''),
+        secondary,
+        dragTabId,
+        buttons: buttons.length,
+        midpoints: midpoints.length,
+        centerY: Math.round(geom.centerY),
+        index,
+      })
     }
 
     const containerMidX = rect.left + rect.width / 2
@@ -906,7 +957,7 @@ function clearInsertIndicator(): void {
 function snapshotButtonRects(container: HTMLElement): Map<string, DOMRect> {
   const rects = new Map<string, DOMRect>()
   for (const btn of getAllButtonsInContainer(container)) {
-    const id = btn.getAttribute('data-tab-id')
+    const id = getButtonTabId(btn)
     if (id) rects.set(id, btn.getBoundingClientRect())
   }
   return rects
@@ -946,7 +997,7 @@ function applyFLIP(
     for (const btn of getAllButtonsInContainer(container)) {
       if (seen.has(btn)) continue
       seen.add(btn)
-      const id = btn.getAttribute('data-tab-id')
+      const id = getButtonTabId(btn)
       if (!id || id === excludeTabId || !prevRects.has(id)) continue
       const prev = prevRects.get(id)!
       const curr = btn.getBoundingClientRect()
@@ -1023,10 +1074,10 @@ function reorderCanvasListDOM(
   // Prefer the live drag element so cross-list moves work even when the
   // source is not yet a child of the target container.
   const sourceBtn =
-    dragElement && dragElement.getAttribute('data-tab-id') === sourceTabId
+    dragElement && getButtonTabId(dragElement) === sourceTabId
       ? dragElement
       : getAllButtonsInContainer(container).find(
-          (b) => b.getAttribute('data-tab-id') === sourceTabId,
+          (b) => getButtonTabId(b) === sourceTabId,
         ) ?? null
   if (!sourceBtn) return false
 
@@ -1233,6 +1284,16 @@ function scheduleDragFrame(): void {
         ? isReorderableContainer(prev.container)
         : false
 
+      dlog('[tab-list-dnd] target change', {
+        tabId: _drag.tabId,
+        index: target.index,
+        secondary: target.secondary,
+        containerCls: String(target.container.className || ''),
+        isReorderable,
+        sourceIsInCanvasList: _drag.sourceIsInCanvasList,
+        fromSecondary: _drag.fromSecondary,
+      })
+
       if (isReorderable && _drag.sourceIsInCanvasList) {
         // Snapshot source parent + target (and prev target) so siblings on
         // both lists animate when crossing secondary ↔ mirror / main ↔ bottom.
@@ -1281,10 +1342,18 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Belt-and-suspenders: never lift on mobile (Configure Tabs only).
   if (!isLiveTabListDndAllowed()) return
   const tabId = getButtonTabId(btn)
-  if (!tabId) return
+  if (!tabId) {
+    dlog('[tab-list-dnd] startDrag bail: no tab id', {
+      title: btn.getAttribute('title') || null,
+      cls: String(btn.className || ''),
+      mirrorKey: btn.getAttribute('data-mirror-key') || null,
+    })
+    return
+  }
 
   // Determine source side
   const fromSecondary = isSecondaryButton(btn)
+  const activeAtGestureStart = captureActiveSelection()
   const element = btn
 
   // Save original DOM position for cancel-restore
@@ -1292,6 +1361,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   const originalNextSibling = btn.nextElementSibling as HTMLElement | null
   // Mirror section or secondary list — gates mid-drag DOM reorder.
   const sourceIsInCanvasList = getReorderParent(btn) != null
+  logDndOrder('start', {
+    tabId,
+    fromSecondary,
+    sourceIsInCanvasList,
+    hasDataTabId: btn.hasAttribute('data-tab-id'),
+    mirrorKey: btn.getAttribute('data-mirror-key') || null,
+    reorderParent: sourceIsInCanvasList ? getReorderParent(btn)?.className : null,
+  })
 
   // Calculate overlay offset from pointer
   const rect = btn.getBoundingClientRect()
@@ -1349,14 +1426,31 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   // Pointer up / cancel
   // Capture all data into locals BEFORE any cleanup / await, so we
   // never rely on module fields that clearDragState zeroes.
-  const onUp = async (_ev: PointerEvent) => {
+  const onUp = async (ev: PointerEvent) => {
+    // A completed drag is a gesture, not a click. Prevent the browser from
+    // synthesizing activation before the moved button is painted in its new
+    // drawer.
+    ev.preventDefault()
     // Only the active drag's up handler may settle. If phase already left
     // dragging (duplicate event or tearDown), ignore.
     if (_drag.phase !== 'dragging') return
 
     const capturedTabId = tabId
-    const capturedFromSecondary = fromSecondary
+      const capturedFromSecondary = fromSecondary
+      const capturedActiveSelection = activeAtGestureStart
     const capturedTarget = _drag.lastDropTarget
+
+    logDndOrder('pointerup', {
+      tabId: capturedTabId,
+      fromSecondary: capturedFromSecondary,
+      target: capturedTarget
+        ? {
+            index: capturedTarget.index,
+            secondary: capturedTarget.secondary,
+            container: capturedTarget.container.className,
+          }
+        : null,
+    })
 
     document.removeEventListener('contextmenu', suppressCtx, true)
 
@@ -1373,6 +1467,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
       tabId: capturedTabId,
       element,
       fromSecondary: capturedFromSecondary,
+      activeAtGestureStart: capturedActiveSelection,
       overlay,
     }
     clearInsertIndicator()
@@ -1421,7 +1516,16 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
           restoreSourceButtonDOM(element, originalParent, originalNextSibling)
         }
 
+        // Taskbar chrome capture (2026-07-31): the DnD cross-drawer commit is
+        // model-only — unlike placementFirstMoveByLiveId it never does the DOM
+        // placement or the mirror handoff. Capture the mirror decision BEFORE
+        // hideMainTabButton: findNeighborHostButtonFor skips hidden buttons,
+        // and the moved tab's host button is hidden next.
+        let moveChrome: MainMirrorMoveChrome = { neighborBtn: null, reassertId: null }
+        let secondaryChrome: SecondaryMoveChrome = { neighborBtn: null }
         if (crossList && !capturedFromSecondary) {
+          moveChrome = await captureMainMirrorMoveChrome(capturedTabId, 'secondary')
+
           // primary → secondary: only the mirror node moved mid-drag; the host
           // button stayed visible. Hide it before commit so a later pin
           // reconcile does not re-materialize a main-mirror button (dual-list
@@ -1431,14 +1535,45 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
           // then sees wasActive=false and leaves main panel empty with no
           // mirror strip switch.
           hideMainTabButton(capturedTabId)
+        } else if (crossList && capturedFromSecondary) {
+          // secondary → primary: the moved button was restored to the
+          // secondary list above; capture the drawer neighbor for the
+          // active-tab handoff BEFORE the commit removes it.
+          secondaryChrome = await captureSecondaryNeighborForMove(capturedTabId)
         }
 
         const ok = await performDrop(
           capturedTabId,
           capturedFromSecondary,
+          capturedActiveSelection,
           capturedTarget,
         )
-        if (!ok) {
+        logDndOrder('post-commit-before-cleanup', {
+          tabId: capturedTabId,
+          ok,
+        })
+        if (ok && crossList) {
+          // Chrome handoffs after the commit. The DOM placement itself now
+          // lives inside commitDraftToOwnedModel (the reconciler never
+          // places — observed location is facade/model-derived — so the
+          // commit completes the move: root reparent, real secondary button
+          // replacing the parked mirror node, mirror strip rebuild).
+          try {
+            if (!capturedFromSecondary) {
+              // Mirror handoff: neighbor adoption (moved ACTIVE tab) or
+              // active-content re-assert, plus model active convergence.
+              await applyMainMirrorMoveChrome(moveChrome, capturedTabId)
+            } else {
+              // Secondary neighbor handoff: the moved tab was the second
+              // drawer's active — activate its replacement in the drawer and
+              // converge the model (secondary clicks don't host-sync, so the
+              // model's secondary active can lag the drawer).
+              await applySecondaryNeighborHandoff(secondaryChrome, capturedTabId)
+            }
+          } catch (err) {
+            dwarn('[tab-list-dnd] post-commit cross-drawer chrome failed:', err)
+          }
+        } else if (!ok) {
           if (crossList && !capturedFromSecondary) {
             showMainTabButton(capturedTabId)
             // Early hide + pin reconcile may have dropped the mirror button;
@@ -1474,6 +1609,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
       removeDropSlotSpacer(slotSpacer)
       cancelOverlaySettle(overlay)
       cleanupDragVisuals()
+      logDndOrder('cleanup-complete', { tabId: capturedTabId })
     }
   }
 
@@ -1482,6 +1618,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
     tabId,
     element,
     fromSecondary,
+    activeAtGestureStart,
     overlay,
     overlayInner,
     offsetX,
@@ -1501,6 +1638,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   document.addEventListener('pointermove', onMove, { passive: true })
   document.addEventListener('pointerup', onUp)
   document.addEventListener('pointercancel', onUp)
+}
+
+function captureActiveSelection(): ActiveSelection {
+  const world = getHost()?.observe()
+  return {
+    primary: world?.tabs.find(tab => tab.location === 'primary' && tab.isActiveInPrimary)?.key ?? null,
+    secondary: world?.tabs.find(tab => tab.location === 'secondary' && tab.isActiveInSecondary)?.key ?? null,
+  }
 }
 
 /**
@@ -1587,6 +1732,7 @@ function cleanupDragVisuals(): void {
 async function performDrop(
   tabId: string,
   fromSecondary: boolean,
+  activeAtGestureStart: ActiveSelection,
   target: {
     container: HTMLElement
     index: number
@@ -1595,6 +1741,17 @@ async function performDrop(
 ): Promise<boolean> {
   try {
     const { draft, base } = buildDraftAndBase()
+    dlog('[tab-list-dnd]', 'draft-built', {
+      tabId,
+      fromSecondary,
+      target: { index: target.index, secondary: target.secondary },
+      draft: {
+        primary: draft.primaryIds,
+        secondary: draft.secondaryIds,
+      },
+      base: { tabOrder: base.tabOrder },
+      live: dndOrderSnapshot(),
+    })
 
     if (fromSecondary !== target.secondary) {
       // ── Cross-drawer move ──
@@ -1605,7 +1762,16 @@ async function performDrop(
         targetSide,
         target.index,
       )
-      const result = await commitConfigureDraft(updated, base)
+       const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true })
+      dlog('[tab-list-dnd]', 'cross-commit-result', {
+        tabId,
+        ok: result.ok,
+        updated: {
+          primary: updated.primaryIds,
+          secondary: updated.secondaryIds,
+        },
+        live: dndOrderSnapshot(),
+      })
       if (!result.ok) {
         dwarn(
           '[tab-list-dnd] cross-drawer commit failed:',
@@ -1643,7 +1809,16 @@ async function performDrop(
     if (updated === draft && !isDraftDirty(draft, base)) {
       return true
     }
-    const result = await commitConfigureDraft(updated, base)
+     const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true })
+    dlog('[tab-list-dnd]', 'reorder-commit-result', {
+      tabId,
+      ok: result.ok,
+      updated: {
+        primary: updated.primaryIds,
+        secondary: updated.secondaryIds,
+      },
+      live: dndOrderSnapshot(),
+    })
     if (!result.ok) {
       dwarn(
         '[tab-list-dnd] reorder commit failed:',
@@ -1668,11 +1843,28 @@ function installDragOnButton(btn: HTMLElement): void {
 
   // Skip buttons without a tab id
   const tabId = getButtonTabId(btn)
-  if (!tabId) return
+  if (!tabId) {
+    dlog('[tab-list-dnd] install skip: no tab id', {
+      tag: btn.tagName,
+      cls: String(btn.className || ''),
+      title: btn.getAttribute('title') || null,
+      aria: btn.getAttribute('aria-label') || null,
+      hasDataTabId: btn.hasAttribute('data-tab-id'),
+      mirrorKey: btn.getAttribute('data-mirror-key') || null,
+      parentCls: btn.parentElement ? String(btn.parentElement.className || '') : null,
+    })
+    return
+  }
 
   // Settings is host chrome (gear only) — never live-reorder or move.
   // Matches main-mirror click/contextmenu policy (isSettingsButton).
-  if (isSettingsButton(btn)) return
+  if (isSettingsButton(btn)) {
+    dlog('[tab-list-dnd] install skip: settings', {
+      title: btn.getAttribute('title') || null,
+      cls: String(btn.className || ''),
+    })
+    return
+  }
 
   _installed.add(btn)
 
@@ -1718,6 +1910,14 @@ function installDragOnButton(btn: HTMLElement): void {
     if (e.button !== 0) return
     // Do not activate if already dragging
     if (_drag.phase !== 'idle') return
+
+    dlog('[tab-list-dnd] pointerdown arm', {
+      tabId: getButtonTabId(btn),
+      title: btn.getAttribute('title') || btn.getAttribute('aria-label') || null,
+      hasDataTabId: btn.hasAttribute('data-tab-id'),
+      cls: String(btn.className || ''),
+      pointerType: e.pointerType,
+    })
 
     dragActivated = false
     armingCancelled = false
@@ -1801,6 +2001,8 @@ export function installTabListDnd(): (() => void) | null {
   if (_active) return null
   _active = true
 
+  dlog('[tab-list-dnd] install: diagnostic build active')
+
   injectDndStyles()
 
   // Install on existing buttons
@@ -1810,6 +2012,7 @@ export function installTabListDnd(): (() => void) | null {
   for (const btn of existing) {
     installDragOnButton(btn)
   }
+  dlog('[tab-list-dnd] install: existing buttons visited', { count: existing.length })
 
   // Watch for new buttons
   _observer = new MutationObserver((mutations) => {

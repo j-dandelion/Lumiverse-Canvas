@@ -192,6 +192,22 @@ Restores the secondary sidebar state:
 
 **Guard**: `setRestoringFromLayout(true/false)` prevents the `onTabUnregistered` handler from interfering during restore.
 
+## Secondary Restore Placement at Boot (`recon/dispatch.ts` → `sidebar/secondary.tsx`)
+
+Persisted `detachedTabs` are written correctly (durability was never the write side), but the **DOM placement** of restored secondary tabs depends on the re-assignment loop, which historically only ran inside `openSecondarySidebar`'s open path. Two traps (2026-07-31):
+
+1. **Drawer already open at boot** (`secondary.open: true`): `openSecondarySidebar` bails (`BAIL already-open`) before the loop → restored tabs stayed visible in the main drawer and the secondary stayed empty (`setOrder:secondary-not-ready`) until the first move.
+2. **Loop keying**: the loop iterates the assignment facade (TabKey-keyed) but placement needs liveIds — passing TabKeys made every restored tab fail with "not found in DrawerObserver or store".
+
+**Current flow:** `bootstrapFromLayout` calls `reassignSecondaryTabsFromModel({ openOnClosed: false, setActiveWhenReady: false, activateKey: model.active.secondary })` right after boot:
+
+- Places every model-secondary tab regardless of the drawer's open state; `openOnClosed: false` means a closed drawer is never force-opened, `setActiveWhenReady: false` means no activation while closed.
+- Resolves facade keys via `liveIdForFacadeKey` (builtins → bare id; extensions → drawerObserver extensionId+title).
+- After the loop, shows the persisted active (`activateKey`) or the first placed tab when the drawer is open and nothing is active — the loop suppresses auto-activation, so without this the drawer would populate but stay content-empty until a click.
+- `openSecondarySidebar`'s BAIL path calls the same function (defaults) as a safety net.
+
+See [pitfalls.md](pitfalls.md) §1, §7, §8.
+
 ## Settings Persistence
 
 Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with `buildPersistedLayout()` geometry plus `getSettings()`.

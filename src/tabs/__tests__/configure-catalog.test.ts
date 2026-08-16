@@ -6,6 +6,7 @@ import {
   getBuiltinCatalog,
   getExtensionCatalog,
   getFullCatalog,
+  filterCatalogToLive,
   isHideLocked,
   humanizeTabId,
   type CatalogTab,
@@ -139,7 +140,7 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
 {
   setupStore()
   __setDrawerTabsForTest([
-    { id: 'my-ext', extensionId: 'ext1', title: 'My Extension', root: STUB_ROOT },
+     { id: 'my-ext', extensionId: 'ext1', title: 'My Extension', description: 'My extension description', root: STUB_ROOT },
     { id: 'ext2', extensionId: 'ext2', title: 'Second Ext', root: STUB_ROOT },
   ])
   const extCatalog = getExtensionCatalog()
@@ -148,6 +149,7 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   assertEqual(extCatalog[0].id, 'my-ext', 'first ext id')
   assertEqual(extCatalog[0].kind, 'extension', 'first ext kind')
   assertEqual(extCatalog[0].title, 'My Extension', 'first ext title')
+  assertEqual(extCatalog[0].description, 'My extension description', 'first ext description')
   assertEqual(extCatalog[0].extensionId, 'ext1', 'first ext extensionId')
   assert(!extCatalog[0].hideLocked, 'extension tabs are never hideLocked')
 
@@ -179,6 +181,35 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   __setDrawerTabsForTest(null)
   const full = getFullCatalog()
   assertEqual(full.length, BUILTIN_TAB_IDS.length, 'full catalog has only builtins when no extensions')
+}
+
+// =====================================================================
+// filterCatalogToLive (2026-07-31)
+// =====================================================================
+// The static builtin catalog can contain tabs absent from a given Lumiverse
+// instance. A draft carrying such phantom ids fails the commit resolution
+// guard and blocks ALL Configure/DnD commits. The filter keeps entries the
+// host can resolve (live inventory) or the owned model knows (liveId
+// projection — covers DOM-placed builtins whose host button was removed).
+{
+  const catalog: CatalogTab[] = [
+    { id: 'loom', kind: 'builtin', title: 'Loom', description: '', hideLocked: false },
+    { id: 'create', kind: 'builtin', title: 'Create', description: '', hideLocked: false },
+    { id: 'spindle:foo:tab:Bar:0', kind: 'extension', title: 'Bar', description: '', hideLocked: false },
+  ]
+  const host = { findKey: (id: string) => (id === 'loom' || id === 'spindle:foo:tab:Bar:0' ? id : null) }
+
+  // Phantom 'create' kept only via the model's liveId projection (order
+  // preserved); live-resolvable ids kept.
+  const filtered = filterCatalogToLive(catalog, host, new Set(['create']))
+  assertEqual(filtered.map(t => t.id).join(','), 'loom,create,spindle:foo:tab:Bar:0', 'FL1: phantom dropped, live + model-known kept')
+
+  // No host → unchanged (pre-bootstrap legacy behavior).
+  assertEqual(filterCatalogToLive(catalog, null, new Set()).length, 3, 'FL2: no host → catalog unchanged')
+
+  // Empty projection → only live-resolvable ids remain.
+  const onlyLive = filterCatalogToLive(catalog, host, new Set())
+  assertEqual(onlyLive.map(t => t.id).join(','), 'loom,spindle:foo:tab:Bar:0', 'FL3: no model projection → live only')
 }
 
 // =====================================================================

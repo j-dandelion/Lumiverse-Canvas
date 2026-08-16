@@ -15,11 +15,19 @@
 // management logic.
 
 import { getTabSidebar } from '../tabs/assignment'
+import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
 import { getSettings } from '../settings/state'
 import { injectStyles } from '../debug/styles'
+import { dlog } from '../debug/log'
 import { isShowTabLabels, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
 import { patchHostDrawerSettings } from '../dom/host-settings'
-import { openConfigureTabsModal } from './configure-modal'
+// Lazy (not static): configure-modal → configure-model → configure-catalog
+// forms an import cycle with the store chain (store → drawer-observer →
+// cleanup → assignment → buttons → here). With a static import, any entry
+// that loads configure-catalog first hits configure-model's
+// `new Set(BUILTIN_TAB_IDS)` while the catalog module is still
+// uninitialized (ReferenceError). The menu item loads the modal lazily
+// anyway — no behavior change.
 
 // Test seam for showAssignmentMenu — allows tests to override the real implementation
 let _showAssignmentMenuOverride: ((x: number, y: number, tabId: string, tabTitle: string, originatingTarget?: HTMLElement | null) => void) | null = null
@@ -57,11 +65,11 @@ export function showAssignmentMenu(
 
   // Build label state for "Move to ..." item.
   const moveLabel = onSecondary ? 'Move to main drawer' : 'Move to second drawer'
-  const moveSidebar: 'primary' | 'secondary' = onSecondary ? 'primary' : 'secondary'
+  const moveTarget: 'primary' | 'secondary' = onSecondary ? 'primary' : 'secondary'
 
   // Gate: omit "Move to second drawer" when second drawer is disabled,
   // but always allow "Move to main drawer" for secondary-assigned tabs.
-  const canShowMove = moveSidebar === 'primary' || secondEnabled
+  const canShowMove = moveTarget === 'primary' || secondEnabled
 
   if (!_contextMenu) {
     _contextMenu = createAssignmentContextMenu()
@@ -95,7 +103,9 @@ export function showAssignmentMenu(
 
   // 2. Configure tabs
   const configureItem = createAssignmentContextMenuItem('Configure tabs', () => {
-    openConfigureTabsModal()
+    void import('./configure-modal')
+      .then((m) => m.openConfigureTabsModal())
+      .catch((err) => console.warn('[tab-context-menu] configure modal load failed:', err))
   })
   _contextMenu.appendChild(configureItem)
 
@@ -106,8 +116,16 @@ export function showAssignmentMenu(
 
     // 4. Move to …
     const moveItem = createAssignmentContextMenuItem(moveLabel, () => {
-      // Lazy-import assignTab to avoid circular dependency at module load time.
-      import('../tabs/assignment').then(m => m.assignTab(tabId, moveSidebar))
+        dlog(`[tabmove] secondary context-menu CLICK: tabId="${tabId}" target=${moveTarget} label="${moveLabel}"`)
+        // Placement-first: DOM work happens immediately, model catches up after.
+        // See recon/dispatch.ts:placementFirstMoveByLiveId for the full rationale.
+        void placementFirstMoveByLiveId(tabId, moveTarget).catch((err) => {
+        console.warn('[tabmove] secondary context-menu placement-first move failed:', err)
+        // Fallback: model-first path.
+        void dispatchMoveByLiveId(tabId, false).catch((err2) => {
+          console.warn('[tabmove] secondary context-menu dispatchMoveByLiveId fallback also failed:', err2)
+        })
+      })
     })
     _contextMenu.appendChild(moveItem)
   }

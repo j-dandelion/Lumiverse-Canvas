@@ -23,7 +23,8 @@
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
-import { getTabSidebar, assignTab } from '../tabs/assignment'
+import { getTabSidebar } from '../tabs/assignment'
+import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
 import { getSettings } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 import { isSettingsButton } from '../tabs/buttons'
@@ -244,12 +245,19 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   })
   btn.addEventListener('click', (e) => {
     e.stopPropagation()
-    // [Canvas:tabmove] Click handler — confirms the user actually clicked
-    // the injected item. The async assignTab returns a Promise; we don't
-    // await it here because the click handler is sync, but assignTab
-    // itself logs ENTRY on first line so we'll see the chain.
+    // [Canvas:tabmove] Click handler — confirms the user actually clicked.
+    // Placement-first: the DOM work happens immediately (the user sees the
+    // move), then the owned model catches up via a `move` intent. See
+    // recon/dispatch.ts:placementFirstMoveByLiveId for the full rationale.
     dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`)
-    assignTab(info.tabId, targetSidebar)
+    void placementFirstMoveByLiveId(info.tabId, targetSidebar).catch((err) => {
+      dwarn('[tabmove] context-menu placement-first move failed:', err)
+      // Fallback: try the model-first path so the user can still see the move
+      // even if the direct placement failed (e.g. host bridge not yet ready).
+      void dispatchMoveByLiveId(info.tabId, false).catch((err2) => {
+        dwarn('[tabmove] context-menu dispatchMoveByLiveId fallback also failed:', err2)
+      })
+    })
     // Close Lumiverse's context menu — click its backdrop or trigger Escape.
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   })

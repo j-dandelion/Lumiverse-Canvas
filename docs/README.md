@@ -16,6 +16,8 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 10. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
 11. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
 
+**[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, host NO-GOs. **Read this before touching tab moves, the main-mirror, or restore.**
+
 ## Quick Reference
 
 ### Entry Points
@@ -33,10 +35,14 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 
 ### Key Files
 - `src/setup.ts` — orchestrator, lifecycle management
+- `src/core/model.ts` + `src/core/reduce.ts` — owned layout model: single source of truth for tab placement, order, active, drawers
+- `src/recon/dispatch.ts` — dispatch queue, `placementFirstMoveByLiveId` (the move path), `bootstrapFromLayout` (restore + boot placement)
+- `src/host/lumiverse/implementation.ts` — `LumiverseHost` (HostPort): observe/place/setOrder/activate against live Lumiverse
 - `src/features/registry.ts` — feature registry (add new features here)
-- `src/sidebar/secondary.tsx` — secondary sidebar DOM construction
+- `src/sidebar/secondary.tsx` — secondary sidebar DOM construction + `reassignSecondaryTabsFromModel`
 - `src/sidebar/secondary-drawer.ts` — secondary drawer state machine
-- `src/tabs/assignment.ts` — tab assignment policy layer
+- `src/sidebar/main-tab-pin.ts` — main-mirror pin: exclusive active key, `userPicked` guard, neighbor handoff
+- `src/tabs/assignment.ts` — owned-model facade (TabKey-keyed)
 - `src/slash/runtime.ts` — slash command runtime wiring
 - `src/layout/persist.ts` — layout persistence + IPC
 

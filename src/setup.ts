@@ -17,10 +17,11 @@
 //   4. feature init() — runs after hydrateSettings, before mount. Injects
 //      disable-CSS for inverted features (e.g. shadows when off) so the
 //      visual state is correct on first paint.
-//   5. loadSavedLayout — single IPC roundtrip. Hydrates settings, installs
+//   5. loadLayoutFromDisk + loadSettingsFromDisk — separate IPC roundtrips
+//      for the split layout/settings repos. Hydrates settings, installs
 //      the debug escape hatch, and conditionally mounts every gated
 //      feature via feature.mount().
-//   6. applyMainDrawer + applyLayout — restore the persisted drawer state.
+//   6. applyMainDrawer + owned model bootstrap — restore the persisted state.
 //
 // The Phase 3 (finding #13) ordering — load the layout BEFORE mounting the
 // secondary sidebar — is what makes the drawer render at the right width on
@@ -32,14 +33,18 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { mountSettingsPanel } from './settings/panel'
-import { getBackendCtx, setBackendCtx, applyMainDrawer, loadSavedLayout, CANVAS_VERSION, flushPendingSaves, persistLayout, cancelLayoutSave, cancelLoadSavedLayout } from './layout/persist'
-import { getTabAssignments, deleteTabAssignment } from './tabs/assignment'
-import { removeSecondaryTabButton } from './tabs/buttons'
+import { getBackendCtx, setBackendCtx, CANVAS_VERSION } from './persist/backend-ctx'
+import { applyMainDrawer } from './layout/main-restore'
+import { flushPendingSaves, cancelLayoutSave, cancelLoadSavedLayout } from './persist/layout-load'
+import { loadLayoutFromDisk, armLayoutRepo, setLayoutRepoBackendCtx, disarmLayoutRepo, bindLayoutSaveResultBridge } from './persist/layout-repo'
+import { loadSettingsFromDisk, armSettingsRepo, setSettingsRepoBackendCtx, disarmSettingsRepo, bindSettingsSaveResultBridge } from './persist/settings-repo'
+import {
+  setHostBridgeContext,
+  ensureUiPanelsPermission,
+} from './dom/host-bridge'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
-import { applyLayout } from './layout/apply'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
-  resetHydrationGuard,
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
@@ -47,24 +52,43 @@ import { startMainDrawerPersistence, stopMainDrawerPersistence, beginMainDrawerR
 import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
-import { initSecondaryDrawer, teardownSecondaryDrawer, isRestoringFromLayout } from './sidebar/secondary-drawer'
+import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
-import { setDebug, dwarn } from './debug/log'
+import { setDebug, dlog, dwarn } from './debug/log'
+import { logPersistLoad, plog, syncPersistDebugToBackend } from './debug/persist-debug'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
 import { startWeaverLane } from './modals/weaver-lane'
+import { LumiverseHost } from './host/lumiverse/implementation'
+import { bootstrapFromLayout, shutdown as shutdownCore } from './recon/dispatch'
 
 let _setupGeneration = 0
 
 export function setup(ctx: SpindleFrontendContext) {
   const generation = ++_setupGeneration
+  dlog(`start gen=${generation}`)
   // Cancel the previous instance's IPC listener before its global cancel
   // handle can be overwritten by this instance's load.
+  // The legacy loader is no longer used by setup, but cancel any in-flight
+  // compatibility call before replacing the shared backend context.
   cancelLoadSavedLayout({ preserveGuard: true })
   // A host update normally tears down the old bundle first, but do not depend
   // on that ordering. This also clears a partially mounted prior instance.
   cleanupAll()
   setBackendCtx(ctx)
+  // Wire both persistence repos to the same backend context.
+  setLayoutRepoBackendCtx(ctx)
+  setSettingsRepoBackendCtx(ctx)
+  // Bridge SAVE_*_RESULT messages so each save promise correlates with
+  // its matching backend ack (or error). Tear down on cleanup.
+  const unsubLayoutSaveResults = bindLayoutSaveResultBridge()
+  const unsubSettingsSaveResults = bindSettingsSaveResultBridge()
+  registerCleanup(() => { unsubLayoutSaveResults(); unsubSettingsSaveResults() })
+  // Host never assigns window.spindle — wire the setup context so
+  // getHostBridge() can reach ui / containers (built-in tab moves).
+  setHostBridgeContext(ctx)
+  syncPersistDebugToBackend((msg) => ctx.sendToBackend(msg))
+  plog(`setup start gen=${generation}`)
   let active = true
   const isCurrent = () => active && generation === _setupGeneration
 
@@ -75,14 +99,23 @@ export function setup(ctx: SpindleFrontendContext) {
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
+  registerCleanup(() => {
+    // Only clear if we still own this generation's ctx (replacement setup
+    // already installed a newer context).
+    if (generation === _setupGeneration) setHostBridgeContext(null)
+  })
 
   // Force-flush any pending debounced save before the page unloads.
   // Without these, a settings change made <100ms before close is lost.
-  // Listeners are registered immediately (before the async loadSavedLayout
-  // window) so a close-during-hydration still forces a flush of whatever
+  // Listeners are registered immediately (before the async
+  // loadLayoutFromDisk window) so a close-during-hydration still forces
+  // a flush of whatever
   // debounced timer is armed at that moment.
+  // Force-flush any pending debounced save before the page unloads.
   const flushOnUnload = () => {
-    try { flushPendingSaves() } catch (err) { dwarn('flushPendingSaves on unload failed:', err) }
+    try {
+      flushPendingSaves()
+    } catch (err) { dwarn('flushPendingSaves on unload failed:', err) }
   }
   window.addEventListener('pagehide', flushOnUnload)
   window.addEventListener('beforeunload', flushOnUnload)
@@ -121,7 +154,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // a MutationObserver that reparents the host as soon as it appears.
   mountSettingsPanel(ctx)
 
-  // Always-on teardowns: toast surface, applyLayout polling interval, and
+  // Always-on teardowns: toast surface and the
   // the slash runtime. These fire on extension disable regardless of the
   // user's current toggle state (e.g. even if slash was never mounted,
   // its alwaysCleanup is a no-op, but the toast + interval are real).
@@ -129,13 +162,40 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(teardown)
   }
 
-  // Phase 3 (finding #13): load the persisted layout BEFORE mounting the
-  // secondary sidebar so its initial position matches the saved state on the
-  // first paint — no 68px sliver, no 500ms flicker. We also hydrate the
-  // settings from the same blob so every feature mount downstream sees the
-  // correct gate.
-  loadSavedLayout().then(async (layout) => {
-    if (!isCurrent()) return
+  // Load the split repositories before mounting the secondary sidebar so its
+  // initial position matches the saved state on first paint. Each repository
+  // owns its load status and write fence; an error in one file must not make
+  // the other file look empty or arm its save path.
+  Promise.all([
+    loadLayoutFromDisk().catch((err) => {
+      dwarn('Canvas: loadLayoutFromDisk failed:', err)
+      return { status: 'error' as const, reason: String(err) }
+    }),
+    loadSettingsFromDisk().catch((err) => {
+      dwarn('Canvas: loadSettingsFromDisk failed:', err)
+      return { status: 'error' as const, reason: String(err) }
+    }),
+  ]).then(async ([layoutResult, settingsResult]) => {
+    dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`)
+    if (!isCurrent()) {
+      plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`)
+      return
+    }
+
+    // Arm the write fence: layout repo on ok or empty, settings repo similarly.
+    // An error load means the file is corrupt — never arm, never write.
+    if (settingsResult.status === 'ok' || settingsResult.status === 'empty') {
+      armSettingsRepo()
+    } else {
+      dwarn(`Canvas: settings load ${settingsResult.status}: ${(settingsResult as any).reason ?? 'unknown'}`)
+    }
+    if (layoutResult.status === 'ok' || layoutResult.status === 'empty') {
+      armLayoutRepo()
+    } else {
+      dwarn(`Canvas: layout load ${layoutResult.status}: ${(layoutResult as any).reason ?? 'unknown'}`)
+    }
+    const layout = layoutResult.status === 'ok' ? layoutResult.data : null
+
     // Version check: if the layout was saved by a different Canvas version,
     // the user is running a stale frontend bundle. Log a warning so they
     // know to hard-refresh. This is a visibility mechanism, not auto-reload.
@@ -145,17 +205,26 @@ export function setup(ctx: SpindleFrontendContext) {
         `Hard-refresh (Ctrl+F5) to load the updated extension.`
       )
     }
-    // Hydrate settings from the loaded layout (defaults filled by
-    // mergeCanvasSettings inside hydrateSettings). Reset the guard first
-    // so a module re-evaluation (page reload) does not leave the old
-    // "user has touched" flag stuck at true, which would skip hydration.
-    resetHydrationGuard()
-    hydrateSettings(layout?.settings)
+    // Hydrate settings from the settings payload. Defaults filled by
+    // mergeCanvasSettings.
+    const settingsPayload = settingsResult.status === 'ok' ? settingsResult.data : null
+    hydrateSettings(settingsPayload?.settings ?? null)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
+    logPersistLoad('hydrate', {
+      layout: layout ?? null,
+      generation,
+      reason: layout == null ? 'null-layout→defaults' : 'from-disk',
+    })
+    if (layout == null) {
+      plog(`hydrate applied in-memory defaults (disk layout was null)`)
+    }
+
+    // Layout hydration is authoritative. The layout repo was loaded above,
+    // so there is no second legacy LOAD_LAYOUT request here.
     // Canvas-owned Configure hide (layout.hiddenTabIds) — host DB often never
     // persisted drawerSettings.hiddenTabIds for builtins. Hydrate before
-    // applyLayout / sync so secondary/mirror re-apply after hard refresh.
+    // owned-model sync so secondary/mirror re-apply after hard refresh.
     try {
       const { hydrateCanvasHiddenFromLayout } = await import('./tabs/hidden-tabs')
       hydrateCanvasHiddenFromLayout(layout)
@@ -170,6 +239,22 @@ export function setup(ctx: SpindleFrontendContext) {
     refreshSettingsPanel()
 
     if (getSettings().debugMode) installDebugEscapeHatch()
+
+    // ui_panels is required for built-in tab mobility (getBuiltInTabRoot +
+    // requestTabLocation). Declared in spindle.json; request if not yet
+    // granted (e.g. upgrade from a empty-permissions install).
+    try {
+      const ok = await ensureUiPanelsPermission()
+      if (!ok) {
+        dwarn(
+          'Canvas: ui_panels permission not granted — built-in tab moves to ' +
+          'the second drawer will fail until the user grants panel access.',
+        )
+      }
+    } catch (err) {
+      dwarn('Canvas: ensureUiPanelsPermission failed:', err)
+    }
+    if (!isCurrent()) return
 
     // Hide host main + main-mirror before feature mounts (taskbar mode can
     // open the mirror with the host default "profile" tab). Lifted after
@@ -195,24 +280,34 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!isCurrent()) return
       if (!feature.mount) continue
       if (!getSettings()[feature.id]) continue
+      dlog(`mounting feature ${String(feature.id)}`)
       const teardown = feature.mount(ctx, layout)
       if (typeof teardown === 'function') registerCleanup(teardown)
+      dlog(`mounted feature ${String(feature.id)}`)
     }
+    dlog(`all features mounted`)
 
     // Side-change watcher runs unconditionally (no longer gated behind
     // the autoMirrorOnSideSwap setting). drawer-sync.ts:200 already registers
     // stopSideChangeWatcher with the cleanup chain.
+    dlog(`startSideChangeWatcher`)
     startSideChangeWatcher()
+    dlog(`startSideChangeWatcher done`)
 
     // Main-drawer persistence runs whenever the master toggle is on,
     // independent of resizeSidebars — the open/close watcher (via
     // spindle.ui.onDrawerChange) captures state even when Canvas isn't
     // mounting its own resize handle. Stops on teardown.
+    dlog(`startMainDrawerPersistence`)
     startMainDrawerPersistence()
+    dlog(`startMainDrawerPersistence done`)
     registerCleanup(stopMainDrawerPersistence)
     // Mobile exclusion: mutual exclusion + viewport-cross detection
+    dlog(`startMobileExclusion`)
     registerCleanup(startMobileExclusion())
+    dlog(`startMobileExclusion done`)
     // Wire DrawerObserver to handle tab registration/unregistration
+    dlog(`drawerObserver.onTabRegistered`)
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons()
       // Late extension tabs re-register with a new :N suffix. Heal host
@@ -222,36 +317,36 @@ export function setup(ctx: SpindleFrontendContext) {
       void import('./tabs/hidden-tabs').then((m) => {
         m.scheduleSyncHiddenTabsFromHost({ writeBack: true })
       }).catch(() => { /* ignore */ })
+      // When a new tab button appears (late extension registration), refresh
+      // the open Configure Tabs modal so the user sees the new tab immediately
+      // rather than needing to close + reopen. No-op when modal is closed.
+      void import('./tabs/configure-modal').then((m) => {
+        m.refreshConfigureDraftFromLive()
+      }).catch(() => { /* ignore */ })
     })
-    drawerObserver.onTabUnregistered((tabId) => {
-      if (getTabAssignments().has(tabId)) {
-        // Skip during layout restore. The restore's end-of-interval logic
-        // in src/layout/apply.ts is the authoritative state-setter; any
-        // mutation here (especially the assignment delete) would race with
-        // the restore and cause a cascade that hides the user's tabs.
-        // See _restoringFromLayout in src/sidebar/secondary-drawer.ts
-        // for the full failure mode.
-        if (isRestoringFromLayout()) return
-        deleteTabAssignment(tabId)
-        removeSecondaryTabButton(tabId)
-        persistLayout()
-      }
-    })
+    dlog(`drawerObserver.start`)
     drawerObserver.start()
+    dlog(`drawerObserver.start done`)
     // Initialize the SecondaryDrawer state machine after DrawerObserver is
     // running. This wires up tab unregistration cleanup and prepares the
     // state machine for assignToSecondary / unassignFromSecondary calls.
+    dlog(`initSecondaryDrawer`)
     initSecondaryDrawer(ctx)
+    dlog(`initSecondaryDrawer done`)
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
+    dlog(`startContextMenuListener`)
     startContextMenuListener()
+    dlog(`startContextMenuListener done`)
     registerCleanup(stopContextMenuListener)
 
     // Configure Tabs intercept is always on while Canvas is loaded, so
     // right-click → "Configure tabs" routes to Canvas's modal regardless
     // of second-drawer state. This lets users enable the second drawer
     // from the footer toggle inside the modal.
+    dlog(`startConfigureTabsIntercept`)
     startConfigureTabsIntercept()
+    dlog(`startConfigureTabsIntercept done`)
     registerCleanup(stopConfigureTabsIntercept)
 
     // Tab-list drag-and-drop is settings-gated (dragAndDropDrawerTabs feature;
@@ -260,7 +355,9 @@ export function setup(ctx: SpindleFrontendContext) {
     // Weaver Studio content-lane containment is always on while Canvas is
     // loaded, independent of chatReflow setting. It constrains the weaver
     // dialog to the visible content lane between drawer/strip insets.
+    dlog(`startWeaverLane`)
     registerCleanup(startWeaverLane())
+    dlog(`startWeaverLane done`)
 
     // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
     // on extension disable.
@@ -268,58 +365,70 @@ export function setup(ctx: SpindleFrontendContext) {
       teardownSecondaryDrawer()
     })
 
-    // Layout geometry restore is gated per facet (open/width/tabs).
-    // Tab-assignment persistence is always-on (built-in), so tabs always
-    // contribute to the restore-any check.
-    // loadSavedLayout + hydrateSettings still run so settings toggles are
-    // correct. Main-drawer restore (open and/or width) is independent of
-    // secondSidebarEnabled (host-owned drawer). applyLayout is also gated
-    // on secondSidebarEnabled because it touches the secondary wrapper.
-    //
-    // applyLayout moves tabs to the secondary sidebar, which can reset the
-    // host active tab to "profile". Fire it first; panel bodies stay hidden
-    // until primary.tabId is active. finishRestore re-asserts primary after
-    // late assigns — no fixed wait needed here.
+    // The owned model is the sole tab placement/ordering state owner.
+    dlog(`new LumiverseHost`)
+    const coreHost = new LumiverseHost()
+    // Wrap in try/catch: a synchronous throw from bootstrapFromLayout
+    // (e.g. a malformed layout) would otherwise leave all the
+    // registerCleanup handlers above registered but unrun, leaking
+    // observers and state on extension disable.
+    try {
+      dlog(`bootstrapFromLayout:start`)
+      bootstrapFromLayout(layout, coreHost, CANVAS_VERSION)
+      dlog(`bootstrapFromLayout:returned (async reconcile still in flight)`)
+    } catch (bootstrapErr) {
+      dlog(`bootstrapFromLayout:threw`, bootstrapErr)
+      dwarn('Canvas: bootstrapFromLayout threw synchronously:', bootstrapErr)
+      throw bootstrapErr
+    }
+    // dispatch.shutdown() must run first so _unsubscribeWorldChanged fires
+    // before the host's observers are torn down — otherwise a late
+    // onWorldChanged callback could enqueue a syncFromHost against a
+    // torn-down host.
+    registerCleanup(() => {
+      shutdownCore()
+      coreHost.shutdown()
+    })
+
+    // Restore drawer geometry separately. Tab placement, order, hidden state,
+    // active tabs, and drawer metadata are restored by the owned model above.
+    dlog(`applyMainDrawer:pre`)
     const s = getSettings()
     const restoreOpen = !!s.persistDrawerOpenState
     const restoreWidth = !!s.persistDrawerWidth
-    // Tab-assignment persistence is always-on (built-in).
-    const restoreAny = restoreOpen || restoreWidth || true
-
-    if (layout && restoreAny && s.secondSidebarEnabled) {
-      void applyLayout(layout).catch((err) => {
-        dwarn('Canvas: applyLayout failed:', err)
-      })
-    } else {
-      // Second drawer off (or no layout): still heal + re-apply host hide so
-      // primary/mirror honor Configure hiddenTabIds after hard refresh.
-      void import('./tabs/hidden-tabs').then((m) => {
-        m.syncHiddenTabsFromHost({ writeBack: true })
-      }).catch((err) => {
-        dwarn('Canvas: syncHiddenTabsFromHost failed:', err)
-      })
-    }
 
     if (restoreOpen || restoreWidth) {
+      dlog(`applyMainDrawer:call`)
       applyMainDrawer(layout)
+      dlog(`applyMainDrawer:returned (async restore in flight)`)
     } else {
+      dlog(`applyMainDrawer:skipped (no restore flags)`)
       // beginMainDrawerRestoreGuard already ran; do not leave drawer suppressed.
       unsuppressMainDrawer()
     }
+    dlog(`setup():.then end gen=${generation}`)
   }).catch((err) => {
+    dlog(`setup():.then caught error gen=${generation}`, err)
     if (!isCurrent()) return
-    dwarn('Canvas: loadSavedLayout failed, mounting with defaults:', err)
+    dwarn('Canvas: split persistence load failed, mounting with defaults:', err)
+    logPersistLoad('null-response', {
+      reason: 'load-promise-reject',
+      generation,
+      layout: null,
+    })
+    // If the load succeeded but bootstrap failed, the repos may already
+    // be armed. Disarm them so a broken setup doesn't keep writing
+    // layout/settings to disk from a torn-down state.
+    disarmLayoutRepo()
+    disarmSettingsRepo()
     // If the restore guard was never lifted (or load failed before
     // beginMainDrawerRestoreGuard), ensure the drawer is visible.
     try { unsuppressMainDrawer() } catch { /* ignore */ }
   })
 
-  // v1.3.0: removed the permanent ctx.onBackendMessage no-op. The previous
-  // comment noted it was a "safety belt" for late LAYOUT_DATA, but the
-  // one-shot handler in loadSavedLayout resolves on the first LAYOUT_DATA
-  // and that is the only one the backend ever sends. Carrying a permanent
-  // listener that never fires adds no value and would only mask a real bug
-  // (a duplicate LAYOUT_DATA send) if the backend ever started sending one.
+  // The split repositories own their temporary backend listeners. There is no
+  // permanent listener here, so duplicate or late responses cannot hydrate a
+  // newer setup generation.
 
   // Return teardown — called when extension is disabled
   let disposed = false
@@ -329,6 +438,7 @@ export function setup(ctx: SpindleFrontendContext) {
     active = false
     // A newer setup owns the shared cleanup registry and backend context.
     if (generation !== _setupGeneration) return
+    plog(`setup teardown gen=${generation}`)
     cleanupAll()
     // Keep the load guard active while cleanup tears down observers. This
     // prevents stopMainDrawerPersistence from saving host defaults during

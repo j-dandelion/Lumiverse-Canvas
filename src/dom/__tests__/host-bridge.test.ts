@@ -1,5 +1,6 @@
 // Tests for getHostBridge() edge cases.
-// Verifies null-safety paths and partial/malformed spindle objects.
+// Verifies null-safety paths, partial/malformed spindle objects, and
+// setup-injected context taking priority over window.spindle.
 
 let passed = 0
 let failed = 0
@@ -11,20 +12,24 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   else { failed++; console.error(`FAIL: ${msg} — expected ${String(expected)}, got ${String(actual)}`) }
 }
 
-import { getHostBridge } from '../host-bridge'
+import { getHostBridge, setHostBridgeContext } from '../host-bridge'
 
 // Save original window
 const _origWindow = (globalThis as any).window
 
 function setSpindle(spindle: any) {
+  // Clear setup-injected ctx so tests exercise the window.spindle fallback.
+  setHostBridgeContext(null)
   ;(globalThis as any).window = { spindle }
 }
 
 function clearWindow() {
+  setHostBridgeContext(null)
   ;(globalThis as any).window = undefined
 }
 
 function restore() {
+  setHostBridgeContext(null)
   ;(globalThis as any).window = _origWindow
 }
 
@@ -126,6 +131,42 @@ function restore() {
   assertEqual(bridge!.ui.getBuiltInTabRoot, undefined, 'T8: missing getBuiltInTabRoot is undefined')
   assertEqual(bridge!.ui.requestTabLocation, undefined, 'T8: missing requestTabLocation is undefined')
   assertEqual(bridge!.ui.getTabLocation, undefined, 'T8: missing getTabLocation is undefined')
+  restore()
+}
+
+// =====================================================================
+// T9: setup-injected ctx wins over window.spindle
+// =====================================================================
+{
+  const setupRoot = () => document.createElement('div') as any
+  setSpindle({
+    ui: { getBuiltInTabRoot: () => undefined },
+    containers: {},
+  })
+  setHostBridgeContext({
+    ui: { getBuiltInTabRoot: setupRoot },
+    containers: { registerContainer: () => {} },
+  } as any)
+  const bridge = getHostBridge()
+  assert(bridge !== null, 'T9: returns non-null with setup ctx')
+  assertEqual(bridge!.ui.getBuiltInTabRoot, setupRoot, 'T9: prefers setup ctx over window.spindle')
+  restore()
+}
+
+// =====================================================================
+// T10: setup ctx alone (no window.spindle) works
+// =====================================================================
+{
+  clearWindow()
+  const reg = () => {}
+  setHostBridgeContext({
+    ui: { requestTabLocation: () => {} },
+    containers: { registerContainer: reg },
+  } as any)
+  const bridge = getHostBridge()
+  assert(bridge !== null, 'T10: setup ctx alone is enough')
+  assertEqual(typeof bridge!.ui.requestTabLocation, 'function', 'T10: ui.requestTabLocation present')
+  assertEqual(bridge!.containers.registerContainer, reg, 'T10: containers from setup ctx')
   restore()
 }
 
