@@ -31,7 +31,6 @@ import { mock } from 'bun:test'
 
 const calls = {
   bootstrapFromLayout: 0,
-  restoreFromProfile: 0,
 }
 
 // features/registry: mock to empty so setSettings → applySettings iterates
@@ -58,27 +57,6 @@ mock.module('../../layout/snapshot', () => ({
     detachedTabs: [],
     hiddenTabIds: [],
   }),
-}))
-
-mock.module('../../layout/vanilla-baseline', () => ({
-  captureVanillaBaseline: () => ({
-    captured: false,
-    baseline: {
-      host: { side: 'left', tabOrder: [], hiddenTabIds: [], showTabLabels: undefined },
-      mainOpen: false,
-      mainActiveTabId: null,
-    },
-  }),
-  getVanillaBaseline: () => null,
-  clearVanillaBaseline: () => {},
-  restoreVanillaBaseline: async () => ({ ok: true }),
-}))
-
-mock.module('../../layout/dual-session-profile', () => ({
-  captureSessionDualProfileFromLive: () => ({ detachedTabs: [], activeTabId: null }),
-  getSessionDualProfile: () => null,
-  clearSessionDualProfile: () => {},
-  restoreSessionDualProfile: async () => { calls.restoreFromProfile++ },
 }))
 
 mock.module('../../recon/dispatch', () => ({

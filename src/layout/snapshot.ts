@@ -3,7 +3,7 @@
 // This is a façade over the owned model + DOM. It is consumed by:
 //   - settings/second-drawer-mode.ts (build the boot seed)
 //   - sidebar/styles.ts (live width sampling during paint)
-//   - layout/vanilla-baseline.ts (legacy baseline fixtures)
+//   - layout/mode-profiles.ts (mode-slot fixtures)
 //   - persist/layout-model.ts (round-trip test fixtures)
 //
 // All read functions here are pure: they read DOM/CSS variables and

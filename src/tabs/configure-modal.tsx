@@ -48,7 +48,7 @@ import { getSettings, setSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 // ── Module state (SoT: legacy refs — machine extraction is parked / unused) ──
-// See configure-modal-machine.unused.ts; dual-write migration not live.
+// (A machine-based configure-modal draft was explored and retired — see git history.)
 
 let _modalContainer: HTMLElement | null = null
 let _draftRef: ConfigureDraft | null = null

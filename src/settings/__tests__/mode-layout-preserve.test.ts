@@ -51,7 +51,7 @@ import { mock } from 'bun:test'
 
 // ── Mock heavy DOM deps (real: settings/state, second-drawer-mode,
 //    recon/dispatch, core, host/fake, persist/layout-model, persist/layout-repo,
-//    layout/dual-session-profile, sidebar/drawer-sync) ──
+//    layout/mode-profiles, sidebar/drawer-sync) ──
 
 mock.module('../../features/registry', () => ({
   FEATURES: [],

@@ -1754,12 +1754,6 @@ function patchHostDrawerSettings(partial) {
   findStoreData(true);
   return true;
 }
-function isHostDrawerSettingsWritable() {
-  if (_testSetSetting)
-    return true;
-  findHostSettings();
-  return _cachedSetSetting !== null;
-}
 var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null;
 var init_host_settings = __esm(() => {
   init_fiber();
@@ -2443,10 +2437,10 @@ function buildModelFromLayout(layout, findKey, side) {
     appendOnce(isSecondaryStoredId(storedId) ? secondary : primary, key);
   }
   for (const d of detached) {
-    if (!tabOrder.includes(d.tabId)) {
-      const key = resolveStoredId(d.tabId, findKey);
-      if (key)
-        appendOnce(secondary, key);
+    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null;
+    const key = fromTitle ?? resolveStoredId(d.tabId, findKey);
+    if (key && !primary.includes(key) && !secondary.includes(key)) {
+      appendOnce(secondary, key);
     }
   }
   const hidden = [];
@@ -4083,7 +4077,9 @@ async function assignToSecondary(tabId, opts) {
       tabId: storeTab.id,
       button,
       extensionId: storeTab.extensionId,
-      title: storeTab.title
+      title: storeTab.title,
+      key: keyForTabShape(storeTab.id, storeTab.extensionId, storeTab.title),
+      titles: new Set([storeTab.title])
     };
     iconSvg = storeTab.iconSvg;
     shortName = storeTab.shortName;
@@ -4308,6 +4304,50 @@ function inventoryIsReady(observed) {
   const status = observed.inventory?.status;
   return status === undefined || status === "ready" || status === "degraded";
 }
+function mergeResolvedInto(current, rebuilt) {
+  const inModel = new Set([...current.primary, ...current.secondary]);
+  const mergeSide = (side) => {
+    const cur = listForSide(current, side);
+    const reb = listForSide(rebuilt, side);
+    const fresh = reb.filter((k) => !inModel.has(k));
+    if (fresh.length === 0)
+      return cur;
+    const next2 = cur.slice();
+    for (const k of fresh) {
+      inModel.add(k);
+      next2.splice(Math.min(reb.indexOf(k), next2.length), 0, k);
+    }
+    return next2;
+  };
+  const primary = mergeSide("primary");
+  const secondary = mergeSide("secondary");
+  const hidden = rebuilt.hidden.filter((k) => inModel.has(k));
+  const next = {
+    ...current,
+    primary,
+    secondary,
+    hidden,
+    active: {
+      primary: current.active.primary ?? rebuilt.active.primary,
+      secondary: current.active.secondary ?? rebuilt.active.secondary
+    },
+    drawers: rebuilt.drawers,
+    side: rebuilt.side
+  };
+  if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
+    return current;
+  }
+  return next;
+}
+function sameKeys2(a, b) {
+  if (a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++) {
+    if (a[i] !== b[i])
+      return false;
+  }
+  return true;
+}
 function bootstrap(model, host, version) {
   _unsubscribeWorldChanged?.();
   const gen = ++_generation;
@@ -4348,55 +4388,28 @@ function enqueueHostSync(host, generation) {
     if (_pendingLayout !== null && inventoryIsReady(observed) && observed.tabs.length > 0) {
       if (_restoringPending)
         return;
-      _restoreAttempts++;
-      if (_restoreAttempts > 12) {
-        dlog("[dispatch] pending-layout restore aborted after max retries", {
-          attempts: _restoreAttempts
-        });
-        _pendingLayout = null;
-        _lastRestoredCount = -1;
-        _restoreAttempts = 0;
-        return;
-      }
       if (Date.now() > _restoreDeadline) {
-        dlog("[dispatch] pending-layout restore aborted (retry window expired)", {
-          attempts: _restoreAttempts
-        });
+        dlog("[dispatch] pending-layout restore aborted (retry window expired)");
         _pendingLayout = null;
-        _lastRestoredCount = -1;
-        _restoreAttempts = 0;
         return;
       }
-      const restored = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
-      const count = restored.primary.length + restored.secondary.length;
+      const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
       const expected = pendingLayoutTabCount(_pendingLayout);
-      if (count > 0) {
-        if (count === _lastRestoredCount && count < expected) {
-          _pendingLayout = null;
-          _lastRestoredCount = -1;
-          _restoreAttempts = 0;
-          if (generation === _generation) {
-            _model = await reconcileAndPersist(restored, generation);
-          }
-          return;
-        }
-        _lastRestoredCount = count;
-        if (count >= expected) {
-          _pendingLayout = null;
-          _lastRestoredCount = -1;
-          _restoreAttempts = 0;
-        }
+      const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected;
+      const merged = mergeResolvedInto(_model, rebuilt);
+      if (resolvedAll) {
+        _pendingLayout = null;
+      }
+      if (merged !== _model) {
         _restoringPending = true;
         try {
           if (generation === _generation) {
-            _model = await reconcileAndPersist(restored, generation);
+            _model = await reconcileAndPersist(merged, generation);
           }
         } finally {
           _restoringPending = false;
         }
-        return;
       }
-      _lastRestoredCount = count;
       return;
     }
     const next = reduce(_model, { t: "syncFromHost", observed });
@@ -4437,8 +4450,6 @@ function shutdown() {
   _version = "unknown";
   _pendingLayout = null;
   _restoringPending = false;
-  _lastRestoredCount = -1;
-  _restoreAttempts = 0;
   _restoreDeadline = 0;
   _queue = Promise.resolve();
 }
@@ -4745,8 +4756,6 @@ function bootstrapFromLayout(layout, host, version) {
     }
   }
   _restoringPending = false;
-  _lastRestoredCount = -1;
-  _restoreAttempts = 0;
   const expected = pendingLayoutTabCount(layout);
   const resolved = model.primary.length + model.secondary.length;
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
@@ -4765,7 +4774,7 @@ function bootstrapFromLayout(layout, host, version) {
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _lastRestoredCount = -1, _restoreAttempts = 0, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -5376,6 +5385,64 @@ var init_configure_catalog = __esm(() => {
   };
 });
 
+// src/tabs/identity.ts
+function liveIdForKey(key, tabs) {
+  const frozen = tabs.find((t3) => t3.key === key);
+  if (frozen)
+    return frozen.id;
+  if (isBuiltinKey(key)) {
+    const builtinId = parseBuiltinKey(key) ?? "";
+    const base = builtinId.includes(":") ? builtinId.slice(0, builtinId.lastIndexOf(":")) : builtinId;
+    const idMatch = tabs.find((t3) => {
+      if (t3.id === builtinId)
+        return true;
+      const tBase = t3.id.includes(":") ? t3.id.slice(0, t3.id.lastIndexOf(":")) : t3.id;
+      return tBase === base;
+    });
+    if (idMatch)
+      return idMatch.id;
+    const titleMatch2 = builtinId ? tabs.find((t3) => t3.title === builtinId) : undefined;
+    if (titleMatch2)
+      return titleMatch2.id;
+    return builtinId;
+  }
+  const parsed = parseExtensionKey(key);
+  if (!parsed)
+    return null;
+  const extMatch = tabs.find((t3) => (t3.extensionId === parsed.extensionId || !t3.extensionId && parsed.extensionId === "unknown") && t3.title === parsed.tabName);
+  if (extMatch)
+    return extMatch.id;
+  const titleMatch = tabs.find((t3) => t3.title === parsed.tabName);
+  return titleMatch ? titleMatch.id : null;
+}
+function keyForLiveId(id, tabs) {
+  let match = tabs.find((t3) => t3.id === id);
+  if (match)
+    return match.key ?? null;
+  const idBase = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
+  match = tabs.find((t3) => {
+    const tBase = t3.id.includes(":") ? t3.id.slice(0, t3.id.lastIndexOf(":")) : t3.id;
+    return tBase === id || tBase === idBase;
+  });
+  if (match)
+    return match.key ?? null;
+  match = tabs.find((t3) => t3.title === id || t3.titles?.has(id));
+  if (match)
+    return match.key ?? null;
+  match = tabs.find((t3) => {
+    const btn = t3.root;
+    return !!btn && btn.getAttribute("data-tab-id") === id;
+  });
+  if (match)
+    return match.key ?? null;
+  return null;
+}
+function liveIdForTitle(title, tabs) {
+  const t3 = tabs.find((x2) => x2.title === title || x2.titles?.has(title));
+  return t3 ? t3.id : null;
+}
+var init_identity = () => {};
+
 // src/tabs/configure-model.ts
 var exports_configure_model = {};
 __export(exports_configure_model, {
@@ -5403,7 +5470,12 @@ function normalizeIdsToCatalog(ids, catalog) {
     if (tab.title && !byTitle.has(tab.title))
       byTitle.set(tab.title, tab.id);
   }
-  return ids.map((id) => byTitle.get(id) ?? id);
+  const observed = drawerObserver.getAllTabs().map((t3) => ({
+    id: t3.tabId,
+    extensionId: t3.extensionId,
+    title: t3.title
+  }));
+  return ids.map((id) => byTitle.get(id) ?? liveIdForTitle(id, observed) ?? id);
 }
 function builtinIdSet() {
   return _builtinIdSet ??= new Set(BUILTIN_TAB_IDS);
@@ -5677,6 +5749,8 @@ function leftColumnIsSecondary(drawerSide) {
 var _builtinIdSet = null;
 var init_configure_model = __esm(() => {
   init_configure_catalog();
+  init_identity();
+  init_drawer_observer();
 });
 
 // src/tabs/canvas-hidden.ts
@@ -6124,9 +6198,6 @@ function cancelLayoutSave() {
     _saveLayoutTimer = null;
   }
 }
-function syncLastLoadedFromPersistedLayout() {
-  setLastLoadedLayout({ ...buildPersistedLayout(), settings: getSettings() });
-}
 function flushPendingSaves() {
   if (!isLayoutRepoArmed()) {
     logPersistSave("flush", null, { skipped: "not-armed", loadInProgress: _loadInProgress });
@@ -6154,157 +6225,74 @@ var init_layout_load = __esm(() => {
   init_snapshot();
 });
 
-// src/layout/dual-session-profile.ts
-function captureSessionDualProfileFromLive() {
-  const assignments = Array.from(getLiveIdAssignments().entries());
-  const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
-  const tabs = getDrawerTabs();
-  const profile = {
-    detachedTabs: secondaryAssignments.map(([tabId]) => {
-      const tab = tabs.find((t3) => t3.id === tabId);
-      return { tabId, tabTitle: tab?.title || tabId, sidebar: "secondary" };
-    }),
-    activeTabId: getActiveSecondaryTabId()
-  };
-  _sessionProfile = profile;
-  return profile;
-}
-function getSessionDualProfile() {
-  return _sessionProfile;
-}
-async function restoreSessionDualProfile(profile) {
-  if (!profile || profile.detachedTabs.length === 0)
-    return;
-  const sd = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
-  sd.setSuppressAutoActivation(true);
+// src/layout/mode-profiles.ts
+function buildSingleLayoutFromLiveHost() {
   try {
-    for (const dt of profile.detachedTabs) {
-      try {
-        await sd.assignToSecondary(dt.tabId);
-      } catch (err) {
-        dwarn(`restoreSessionDualProfile: assignToSecondary("${dt.tabId}") failed:`, err);
-      }
+    const settings = getHostDrawerSettings() ?? {};
+    const mainOpen = isMainDrawerOpen();
+    let mainActiveTabId = null;
+    if (mainOpen) {
+      const active = getActiveTabId();
+      if (active.state === "active")
+        mainActiveTabId = active.id;
     }
-    if (profile.activeTabId) {
-      showSecondaryTab(profile.activeTabId);
-    }
-  } finally {
-    sd.setSuppressAutoActivation(false);
+    return {
+      version: CANVAS_VERSION,
+      primary: {
+        open: mainOpen,
+        width: readPrimaryWidthFallback(),
+        tabId: mainActiveTabId ?? undefined
+      },
+      secondary: { open: false, width: 420, activeTabId: undefined },
+      detachedTabs: [],
+      tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.slice() : [],
+      hiddenTabIds: Array.isArray(settings.hiddenTabIds) ? settings.hiddenTabIds.slice() : [],
+      drawerSide: settings.side || getMainDrawerSide()
+    };
+  } catch {
+    return {
+      version: CANVAS_VERSION,
+      primary: { open: false, width: 420, tabId: undefined },
+      secondary: { open: false, width: 420, activeTabId: undefined },
+      detachedTabs: [],
+      tabOrder: [],
+      hiddenTabIds: [],
+      drawerSide: "left"
+    };
   }
 }
-var _sessionProfile = null;
-var init_dual_session_profile = __esm(() => {
-  init_assignment();
-  init_active_tab();
-  init_store();
-  init_buttons();
-  init_log();
-});
-
-// src/layout/vanilla-baseline.ts
-function getVanillaBaseline() {
-  return _baseline;
-}
-function clearVanillaBaseline() {
-  _baseline = null;
-}
-function readVanillaHostState() {
-  const settings = getHostDrawerSettings() ?? {};
-  const host = {
-    side: settings.side || getMainDrawerSide(),
-    tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.slice() : [],
-    hiddenTabIds: Array.isArray(settings.hiddenTabIds) ? settings.hiddenTabIds.slice() : [],
-    showTabLabels: typeof settings.showTabLabels === "boolean" ? settings.showTabLabels : undefined
-  };
-  const mainOpen = isMainDrawerOpen();
-  let mainActiveTabId = null;
-  if (mainOpen) {
-    const active = getActiveTabId();
-    if (active.state === "active") {
-      mainActiveTabId = active.id;
-    } else {
-      mainActiveTabId = readHostActiveTabIdFromDom();
-    }
-  }
-  return { host, mainOpen, mainActiveTabId };
-}
-function captureVanillaBaseline() {
-  if (_baseline) {
-    return { baseline: _baseline, captured: false };
-  }
-  const state = readVanillaHostState();
-  _baseline = {
-    ...state,
-    capturedAt: Date.now()
-  };
-  dlog("[vanilla-baseline] captured:", {
-    side: _baseline.host.side,
-    tabOrderLen: _baseline.host.tabOrder.length,
-    hiddenLen: _baseline.host.hiddenTabIds.length,
-    showTabLabels: _baseline.host.showTabLabels,
-    mainOpen: _baseline.mainOpen,
-    mainActiveTabId: _baseline.mainActiveTabId
-  });
-  return { baseline: _baseline, captured: true };
-}
-async function restoreVanillaBaseline(baseline) {
-  if (!isHostDrawerSettingsWritable()) {
-    dwarn("[vanilla-baseline] restore skipped: host bridge NO-GO");
-    return { ok: false, reason: "no-go" };
-  }
-  const partial = {
-    side: baseline.host.side,
-    tabOrder: baseline.host.tabOrder.slice(),
-    hiddenTabIds: baseline.host.hiddenTabIds.slice()
-  };
-  if (typeof baseline.host.showTabLabels === "boolean") {
-    partial.showTabLabels = baseline.host.showTabLabels;
-  }
-  const hostOk = patchHostDrawerSettings(partial);
-  if (!hostOk) {
-    dwarn("[vanilla-baseline] patchHostDrawerSettings returned false");
-    return { ok: false, reason: "no-go" };
-  }
-  const mainRestored = await restoreMainDrawerState(baseline.mainOpen, baseline.mainActiveTabId);
-  if (!mainRestored.ok) {
-    dwarn("[vanilla-baseline] main drawer restore partial:", mainRestored.reason);
-    return { ok: false, reason: "partial", details: mainRestored.reason };
-  }
-  dlog("[vanilla-baseline] restored host + main drawer state", {
-    side: baseline.host.side,
-    mainOpen: baseline.mainOpen,
-    mainActiveTabId: baseline.mainActiveTabId
-  });
-  return { ok: true };
-}
-function readHostActiveTabIdFromDom() {
-  if (typeof document === "undefined")
-    return null;
-  const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
-  if (!sidebar)
-    return null;
-  const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  if (!active)
-    return null;
-  return active.getAttribute("data-tab-id") || active.getAttribute("title") || null;
-}
-async function restoreMainDrawerState(targetOpen, targetActiveTabId) {
-  let targetTabId = targetActiveTabId;
-  if (targetTabId) {
-    const valid = isTabKnownAndVisible(targetTabId);
-    if (!valid)
-      targetTabId = pickSafeFallbackTabId();
-  }
-  if (targetOpen && !targetTabId) {
-    targetTabId = pickSafeFallbackTabId();
-  }
+async function restoreSingleModeLayout(slot, host) {
   try {
-    const mainPersist = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
-    mainPersist.restoreMainDrawerFromDom(targetOpen, targetTabId, undefined, { restoreOpen: true, restoreWidth: true });
+    bootstrapFromLayout(slot, host, CANVAS_VERSION);
+    await flush();
   } catch (err) {
-    return { ok: false, reason: `restoreMainDrawerFromDom threw: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: `bootstrap: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  try {
+    const open = !!slot.primary?.open;
+    let tabId = slot.primary?.tabId ?? null;
+    if (tabId && !isTabKnownAndVisible(tabId))
+      tabId = pickSafeFallbackTabId();
+    if (open && !tabId)
+      tabId = pickSafeFallbackTabId();
+    restoreMainDrawerFromDom(open, tabId, undefined, {
+      restoreOpen: true,
+      restoreWidth: true
+    });
+  } catch (err) {
+    return { ok: false, reason: `main drawer: ${err instanceof Error ? err.message : String(err)}` };
   }
   return { ok: true };
+}
+function readPrimaryWidthFallback() {
+  if (typeof document === "undefined")
+    return 420;
+  try {
+    const w3 = getMainDrawerWidth();
+    return w3 > 0 ? w3 : 420;
+  } catch {
+    return 420;
+  }
 }
 function isTabKnownAndVisible(tabId) {
   const tabs = getDrawerTabs();
@@ -6375,80 +6363,12 @@ function cssEscape(s3) {
   }
   return s3.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
-var _baseline = null;
-var init_vanilla_baseline = __esm(() => {
-  init_host_settings();
-  init_store();
-  init_active_tab();
-  init_store();
-  init_log();
-});
-
-// src/layout/mode-profiles.ts
-function buildSingleLayoutFromBaseline(baseline) {
-  return {
-    version: CANVAS_VERSION,
-    primary: {
-      open: baseline.mainOpen,
-      width: readPrimaryWidthFallback(),
-      tabId: baseline.mainActiveTabId ?? undefined
-    },
-    secondary: { open: false, width: 420, activeTabId: undefined },
-    detachedTabs: [],
-    tabOrder: Array.isArray(baseline.host.tabOrder) ? baseline.host.tabOrder.slice() : [],
-    hiddenTabIds: Array.isArray(baseline.host.hiddenTabIds) ? baseline.host.hiddenTabIds.slice() : [],
-    drawerSide: baseline.host.side
-  };
-}
-function buildSingleLayoutFromLiveHost() {
-  try {
-    const settings = getHostDrawerSettings() ?? {};
-    const mainOpen = isMainDrawerOpen();
-    let mainActiveTabId = null;
-    if (mainOpen) {
-      const active = getActiveTabId();
-      if (active.state === "active")
-        mainActiveTabId = active.id;
-    }
-    return {
-      version: CANVAS_VERSION,
-      primary: {
-        open: mainOpen,
-        width: readPrimaryWidthFallback(),
-        tabId: mainActiveTabId ?? undefined
-      },
-      secondary: { open: false, width: 420, activeTabId: undefined },
-      detachedTabs: [],
-      tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.slice() : [],
-      hiddenTabIds: Array.isArray(settings.hiddenTabIds) ? settings.hiddenTabIds.slice() : [],
-      drawerSide: settings.side || getMainDrawerSide()
-    };
-  } catch {
-    return {
-      version: CANVAS_VERSION,
-      primary: { open: false, width: 420, tabId: undefined },
-      secondary: { open: false, width: 420, activeTabId: undefined },
-      detachedTabs: [],
-      tabOrder: [],
-      hiddenTabIds: [],
-      drawerSide: "left"
-    };
-  }
-}
-function readPrimaryWidthFallback() {
-  if (typeof document === "undefined")
-    return 420;
-  try {
-    const w3 = getMainDrawerWidth();
-    return w3 > 0 ? w3 : 420;
-  } catch {
-    return 420;
-  }
-}
 var init_mode_profiles = __esm(() => {
   init_host_settings();
   init_store();
   init_active_tab();
+  init_dispatch();
+  init_main_persist();
 });
 
 // src/settings/second-drawer-mode.ts
@@ -6661,11 +6581,6 @@ function showModeSwitchDialog() {
   });
 }
 async function finishDisable() {
-  const profile = captureSessionDualProfileFromLive();
-  dlog("[second-drawer-mode] captured session dual profile:", {
-    tabs: profile.detachedTabs.length,
-    active: profile.activeTabId
-  });
   const dualSnapshot = snapshotOwnedModelLayout();
   if (dualSnapshot) {
     setDualLayoutSlot(dualSnapshot);
@@ -6673,38 +6588,11 @@ async function finishDisable() {
       tabs: dualSnapshot.detachedTabs?.length ?? 0
     });
   }
-  const last = getLastLoadedLayout();
-  if (last) {
-    const merged = { ...last };
-    merged.detachedTabs = profile.detachedTabs;
-    if (merged.secondary) {
-      merged.secondary = { ...merged.secondary, activeTabId: profile.activeTabId };
-    } else {
-      merged.secondary = { activeTabId: profile.activeTabId, open: false, width: 420 };
-    }
-    setLastLoadedLayout(merged);
-  } else {
-    setLastLoadedLayout({
-      detachedTabs: profile.detachedTabs,
-      secondary: { activeTabId: profile.activeTabId, open: false, width: 420 },
-      primary: { open: false, width: 420, tabId: null }
-    });
-  }
-  flushPendingSaves();
-  try {
-    syncLastLoadedFromPersistedLayout();
-  } catch {}
   let singleLayout = getSingleLayoutSlot();
   if (!singleLayout) {
     try {
-      const baselineForSingle = getVanillaBaseline();
-      if (baselineForSingle) {
-        singleLayout = buildSingleLayoutFromBaseline(baselineForSingle);
-        dlog("[second-drawer-mode] single layout built from vanilla baseline");
-      } else {
-        singleLayout = buildSingleLayoutFromLiveHost();
-        dlog("[second-drawer-mode] single layout built from live host (no baseline)");
-      }
+      singleLayout = buildSingleLayoutFromLiveHost();
+      dlog("[second-drawer-mode] single layout built from live host (no slot)");
     } catch (err) {
       dwarn("[second-drawer-mode] single layout fallback build failed:", err);
       singleLayout = null;
@@ -6717,20 +6605,12 @@ async function finishDisable() {
       dlog("[second-drawer-mode] restoring single layout into owned model", {
         tabOrder: Array.isArray(singleLayout.tabOrder) ? singleLayout.tabOrder.length : 0
       });
-      bootstrapFromLayout(singleLayout, host, CANVAS_VERSION);
-      await flush();
+      const result = await restoreSingleModeLayout(singleLayout, host);
+      if (!result.ok) {
+        dwarn(`[second-drawer-mode] single-layout restore partial: ${result.reason ?? "unknown"}`);
+      }
     } catch (err) {
       dwarn("[second-drawer-mode] single-layout restore failed:", err);
-    }
-  }
-  const baseline = getVanillaBaseline();
-  if (baseline) {
-    const result = await restoreVanillaBaseline(baseline);
-    if (result.ok) {
-      dlog("[second-drawer-mode] vanilla baseline restored; clearing");
-      clearVanillaBaseline();
-    } else {
-      dwarn("[second-drawer-mode] vanilla baseline restore did not complete cleanly; " + "baseline retained for retry. reason=" + result.reason + (result.reason === "partial" ? ` details=${result.details}` : ""));
     }
   }
   resetSideRemountStateAfterDisable();
@@ -6751,12 +6631,6 @@ async function requestSecondDrawerMode(next) {
   if (next) {
     if (getSettings().secondSidebarEnabled)
       return;
-    const capture = captureVanillaBaseline();
-    dlog("[second-drawer-mode] vanilla baseline capture:", {
-      captured: capture.captured,
-      side: capture.baseline.host.side,
-      mainOpen: capture.baseline.mainOpen
-    });
     const singleSnapshot = snapshotOwnedModelLayout();
     const modelNow = getModel();
     if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
@@ -6766,36 +6640,25 @@ async function requestSecondDrawerMode(next) {
       });
     }
     const layoutBefore = getLastLoadedLayout();
-    const profileBefore = getSessionDualProfile();
     const dualSlotBefore = getDualLayoutSlot();
-    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(profileBefore) && !hasDetachedTabs(dualSlotBefore)) {
+    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(dualSlotBefore)) {
       dlog("[second-drawer-mode] first enable — seeding dual layout from live");
       seedDualLayoutFromLive();
     }
     setSettings({ secondSidebarEnabled: true });
-    const profile = getSessionDualProfile();
     cancelSettingsSave();
     cancelLayoutSave();
     const host = getHost();
     const dualSlot = getDualLayoutSlot();
-    const layout = getLastLoadedLayout();
-    const restoreSource = [dualSlot, layout].find((l3) => l3 && Array.isArray(l3.detachedTabs) && l3.detachedTabs.length > 0);
+    const restoreSource = [dualSlot].find((l3) => l3 && Array.isArray(l3.detachedTabs) && l3.detachedTabs.length > 0);
     if (restoreSource && host) {
       dlog("[second-drawer-mode] owned-model restore for re-enable:", {
         tabs: restoreSource.detachedTabs.length,
-        source: restoreSource === dualSlot ? "dual-slot" : "lastLoaded"
+        source: "dual-slot"
       });
-      bootstrapFromLayout(restoreSource, host, CANVAS_VERSION);
-      await flush();
-    } else if (profile && profile.detachedTabs.length > 0) {
-      dlog("[second-drawer-mode] re-enable falling back to session dual profile:", {
-        tabs: profile.detachedTabs.length,
-        active: profile.activeTabId
-      });
-      try {
-        await restoreSessionDualProfile(profile);
-      } catch (err) {
-        dwarn("[second-drawer-mode] restoreSessionDualProfile fallback failed:", err);
+      const result = await restoreSingleModeLayout(restoreSource, host);
+      if (!result.ok) {
+        dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? "unknown"}`);
       }
     }
     persistSettings();
@@ -6861,8 +6724,6 @@ var init_second_drawer_mode = __esm(() => {
   init_snapshot();
   init_dispatch();
   init_owned_commit();
-  init_dual_session_profile();
-  init_vanilla_baseline();
   init_mode_profiles();
   init_drawer_sync();
   init_log();
@@ -11401,22 +11262,24 @@ __export(exports_assignment, {
   getTabSidebar: () => getTabSidebar,
   getTabAssignments: () => getTabAssignments,
   getLiveIdAssignments: () => getLiveIdAssignments,
+  getLiveIdAssignmentEntries: () => getLiveIdAssignmentEntries,
   getActiveSecondaryTabId: () => getActiveSecondaryTabId,
   ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
   deleteTabAssignment: () => deleteTabAssignment,
   clearTabAssignments: () => clearTabAssignments,
   assignTab: () => assignTab
 });
-function _ownedKeyCandidates(liveId) {
-  if (liveId.startsWith("builtin:") || liveId.startsWith("ext:")) {
-    return [liveId];
+function _resolvedKey(liveId) {
+  const host = getHost();
+  if (host) {
+    const key = host.findKey(liveId);
+    if (key)
+      return key;
   }
   const stripped = stripTabIdSuffix(liveId);
-  const out = [];
   if (!stripped.includes(":"))
-    out.push(`builtin:${stripped}`);
-  out.push(stripped);
-  return out;
+    return `builtin:${stripped}`;
+  return null;
 }
 function _readFromModel() {
   const model = getModel();
@@ -11440,16 +11303,9 @@ function hasTabAssignment(tabId) {
   if (fromModel) {
     if (fromModel.has(tabId))
       return true;
-    const host = getHost();
-    if (host) {
-      const key = host.findKey(tabId);
-      if (key && fromModel.has(key))
-        return true;
-    }
-    for (const key of _ownedKeyCandidates(tabId)) {
-      if (fromModel.has(key))
-        return true;
-    }
+    const key = _resolvedKey(tabId);
+    if (key && fromModel.has(key))
+      return true;
     return false;
   }
   return _tabAssignments.has(tabId);
@@ -11487,16 +11343,9 @@ function getTabSidebar(tabId) {
   if (fromModel) {
     if (fromModel.has(tabId))
       return fromModel.get(tabId);
-    const host = getHost();
-    if (host) {
-      const key = host.findKey(tabId);
-      if (key && fromModel.has(key))
-        return fromModel.get(key);
-    }
-    for (const key of _ownedKeyCandidates(tabId)) {
-      if (fromModel.has(key))
-        return fromModel.get(key);
-    }
+    const key = _resolvedKey(tabId);
+    if (key && fromModel.has(key))
+      return fromModel.get(key);
   }
   return _tabAssignments.get(tabId) || "primary";
 }
@@ -11508,6 +11357,17 @@ function getLiveIdAssignments(tabs = drawerObserver.getAllTabs()) {
   for (const [key, side] of fromModel) {
     const liveId = liveIdForFacadeKey(key, tabs);
     out.set(liveId ?? key, side);
+  }
+  return out;
+}
+function getLiveIdAssignmentEntries(tabs = drawerObserver.getAllTabs()) {
+  const fromModel = _readFromModel();
+  if (!fromModel)
+    return [];
+  const out = [];
+  for (const [key, side] of fromModel) {
+    const liveId = liveIdForFacadeKey(key, tabs);
+    out.push({ key, liveId: liveId ?? key, side });
   }
   return out;
 }
@@ -11702,6 +11562,17 @@ var init_cleanup = __esm(() => {
 });
 
 // src/sidebar/drawer-observer.ts
+function parseExtensionId(tabId, existingId, isExtensionBtn) {
+  const parts = tabId.split(":");
+  return existingId ? parts[1] || "unknown" : isExtensionBtn ? parts[1] || "unknown" : "";
+}
+function keyForTabShape(tabId, extensionId, title) {
+  const extId = extensionId && extensionId !== "unknown" ? extensionId : "";
+  if (!extId && !tabId.includes(":"))
+    return builtinKey(tabId);
+  return extensionKey(extId || "unknown", title);
+}
+
 class DrawerObserver {
   observer = null;
   tabs = new Map;
@@ -11721,6 +11592,12 @@ class DrawerObserver {
     this.scanExistingTabs(sidebar);
     this.observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        if (mutation.type === "attributes") {
+          const target = mutation.target;
+          if (target instanceof HTMLElement)
+            this.registerTab(target);
+          continue;
+        }
         for (const node of mutation.addedNodes ?? []) {
           if (node instanceof HTMLElement)
             this.handleAddedNode(node);
@@ -11730,7 +11607,12 @@ class DrawerObserver {
       this.removeDetachedTabs();
       this.revision++;
     });
-    this.observer.observe(sidebar, { childList: true, subtree: true });
+    this.observer.observe(sidebar, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-tab-id", "title", "class"]
+    });
     registerCleanup(() => this.stop());
   }
   stop() {
@@ -11840,6 +11722,13 @@ class DrawerObserver {
       }
     }
   }
+  entryForButton(button) {
+    for (const tab of this.tabs.values()) {
+      if (tab.button === button)
+        return tab;
+    }
+    return null;
+  }
   registerTab(button) {
     const existingId = button.getAttribute("data-tab-id") || "";
     const isExtensionBtn = String(button.className || "").includes("tabBtnExtension");
@@ -11848,27 +11737,66 @@ class DrawerObserver {
     const tabId = existingId || button.getAttribute("title") || button.getAttribute("aria-label") || "";
     if (!tabId)
       return;
-    for (const [key, tab2] of this.tabs) {
-      if (tab2.button === button) {
-        if (key === tabId)
-          return;
-        this.tabs.delete(key);
-        break;
-      }
+    const existing = this.entryForButton(button);
+    if (existing) {
+      this.updateEntry(existing, button, tabId, existingId, isExtensionBtn);
+      return;
     }
     if (this.tabs.has(tabId))
       return;
-    const parts = tabId.split(":");
-    const extensionId = existingId ? parts[1] || "unknown" : isExtensionBtn ? parts[1] || "unknown" : "";
+    const title = button.getAttribute("title") || button.textContent?.trim() || tabId;
     const tab = {
       tabId,
       button,
-      extensionId,
-      title: button.getAttribute("title") || button.textContent?.trim() || tabId
+      extensionId: parseExtensionId(tabId, existingId, isExtensionBtn),
+      title,
+      key: this.freezeKey(tabId, isExtensionBtn, title),
+      titles: new Set([title])
     };
     this.tabs.set(tabId, tab);
     for (const h4 of this.tabHandlers)
       h4(tab);
+  }
+  updateEntry(entry, button, tabId, existingId, isExtensionBtn) {
+    const title = button.getAttribute("title") || button.textContent?.trim() || tabId;
+    const nextExtensionId = parseExtensionId(tabId, existingId, isExtensionBtn);
+    if (entry.tabId === tabId && entry.title === title && entry.extensionId === nextExtensionId) {
+      return;
+    }
+    entry.tabId = tabId;
+    entry.title = title;
+    entry.extensionId = nextExtensionId;
+    if (!entry.titles.has(title)) {
+      entry.titles = new Set(entry.titles).add(title);
+    }
+    for (const [key, tab] of this.tabs) {
+      if (tab === entry) {
+        if (key !== tabId) {
+          this.tabs.delete(key);
+          this.tabs.set(tabId, entry);
+        }
+        break;
+      }
+    }
+  }
+  freezeKey(tabId, isExtensionBtn, title) {
+    if (!isExtensionBtn && !tabId.includes(":"))
+      return builtinKey(tabId);
+    const extensionId = tabId.split(":")[1] || "unknown";
+    const base = extensionKey(extensionId || "unknown", title);
+    if (!this.hasKey(base))
+      return base;
+    let n2 = 2;
+    while (this.hasKey(`${base}@${n2}`))
+      n2++;
+    return `${base}@${n2}`;
+  }
+  hasKey(key) {
+    for (const tab of this.tabs.values()) {
+      if (tab.key === key)
+        return true;
+    }
+    return false;
   }
 }
 var drawerObserver;
@@ -12174,22 +12102,11 @@ function sweepOrphanSecondaryWrappers() {
   }
 }
 function liveIdForFacadeKey(key, tabs) {
-  const builtin = parseBuiltinKey(key);
-  if (builtin) {
-    const tagged = tabs.find((t3) => t3.title === builtin && !!t3.extensionId && t3.extensionId !== "unknown");
-    if (tagged)
-      return tagged.tabId;
-    return builtin;
-  }
-  const ext = parseExtensionKey(key);
-  if (ext) {
-    const match = tabs.find((t3) => (t3.extensionId === ext.extensionId || !t3.extensionId && ext.extensionId === "unknown") && t3.title === ext.tabName);
-    if (match)
-      return match.tabId;
-    const titleMatch = tabs.find((t3) => t3.title === ext.tabName);
-    return titleMatch ? titleMatch.tabId : null;
-  }
-  return null;
+  return liveIdForKey(key, tabs.map((t3) => ({
+    id: t3.tabId,
+    extensionId: t3.extensionId,
+    title: t3.title
+  })));
 }
 function secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds) {
   const present = new Set(listIds);
@@ -12480,6 +12397,7 @@ var init_secondary = __esm(() => {
   init_tab_position();
   init_state();
   init_log();
+  init_identity();
   init_drawer_observer();
   init_panel_header_sync();
   init_secondary_drawer();
@@ -12531,8 +12449,8 @@ function readSecondaryWidth() {
   return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420;
 }
 function snapshotLayout() {
-  const assignments = Array.from(getLiveIdAssignments().entries());
-  const secondaryAssignments = assignments.filter(([_2, side]) => side === "secondary");
+  const assignments = getLiveIdAssignmentEntries();
+  const secondaryAssignments = assignments.filter((a3) => a3.side === "secondary");
   const drawerTabs = getDrawerTabs();
   return {
     version: CANVAS_VERSION,
@@ -12546,9 +12464,9 @@ function snapshotLayout() {
       width: readSecondaryWidth(),
       activeTabId: getActiveSecondaryTabId()
     },
-    detachedTabs: secondaryAssignments.map(([tabId, side]) => {
-      const tab = drawerTabs.find((t3) => t3.id === tabId);
-      return { tabId, tabTitle: tab?.title || tabId, sidebar: side };
+    detachedTabs: secondaryAssignments.map(({ key, liveId }) => {
+      const tab = drawerTabs.find((t3) => t3.id === liveId);
+      return { tabId: liveId, tabTitle: key, sidebar: "secondary" };
     }),
     tabOrder: getHostDrawerSettings()?.tabOrder ?? [],
     hiddenTabIds: getCanvasHiddenTabIds()
@@ -16437,7 +16355,7 @@ var init_registry = __esm(() => {
       if (next.secondSidebarEnabled) {
         if (!getSecondaryWrapper()) {
           const s3 = getSettings();
-          const layout = getLastLoadedLayout();
+          const layout = getDualLayoutSlot() ?? getLastLoadedLayout();
           const initialWidth = s3.persistDrawerWidth ? layout?.secondary?.width : undefined;
           const hasTabsToRestore = (layout?.detachedTabs?.length ?? 0) > 0;
           const initialOpen = !!(s3.persistDrawerOpenState && layout?.secondary?.open === true && hasTabsToRestore);
@@ -17836,6 +17754,7 @@ init_secondary();
 init_secondary_drawer();
 init_buttons();
 init_drawer_observer();
+init_identity();
 init_main_mirror_drawer();
 init_secondary();
 init_live_tab_order();
@@ -17867,36 +17786,16 @@ function liveDrawerTabs() {
     id: tab.tabId,
     extensionId: tab.extensionId === "unknown" ? "" : tab.extensionId,
     title: tab.title,
-    root: tab.button
+    root: tab.button,
+    titles: tab.titles,
+    key: tab.key ?? tabKeyFromDrawerTab({ id: tab.tabId, extensionId: tab.extensionId, title: tab.title })
   }));
 }
 function resolveTabKey(key) {
-  const observedTabs = liveDrawerTabs();
-  if (isBuiltinKey(key)) {
-    const builtinId = parseBuiltinKey(key);
-    const base = builtinId?.includes(":") ? builtinId.slice(0, builtinId.lastIndexOf(":")) : builtinId;
-    const match2 = observedTabs.find((t3) => {
-      if (t3.id === builtinId)
-        return true;
-      const tBase = t3.id.includes(":") ? t3.id.slice(0, t3.id.lastIndexOf(":")) : t3.id;
-      return tBase === base;
-    });
-    if (match2)
-      return match2.id;
-    const titleMatch2 = builtinId ? observedTabs.find((t3) => t3.title === builtinId) : undefined;
-    return titleMatch2 ? titleMatch2.id : null;
-  }
-  const parsed = parseExtensionKey(key);
-  if (!parsed)
-    return null;
-  const match = observedTabs.find((t3) => (t3.extensionId === parsed.extensionId || !t3.extensionId && parsed.extensionId === "unknown") && t3.title === parsed.tabName);
-  if (match)
-    return match.id;
-  const titleMatch = observedTabs.find((t3) => t3.title === parsed.tabName);
-  return titleMatch ? titleMatch.id : null;
+  return liveIdForKey(key, liveDrawerTabs());
 }
 function entryLocationFor(tab, assignments) {
-  const direct = assignments.get(tabKeyFromDrawerTab(tab));
+  const direct = assignments.get(tab.key ?? tabKeyFromDrawerTab(tab));
   if (direct)
     return direct;
   for (const [facadeKey, side] of assignments) {
@@ -17912,7 +17811,7 @@ function entryLocationFor(tab, assignments) {
 function buildHostEntry(tab) {
   const assignments = getTabAssignments();
   const location = entryLocationFor(tab, assignments);
-  const key = tabKeyFromDrawerTab(tab);
+  const key = tab.key;
   const canvasHidden = new Set(getCanvasHiddenTabIds());
   const hostSettings = getHostDrawerSettings();
   const hostHidden = hostSettings?.hiddenTabIds ? new Set(hostSettings.hiddenTabIds) : new Set;
@@ -17961,13 +17860,21 @@ class LumiverseHost {
     const seen = new Set;
     const entries = [];
     for (const t3 of liveTabs) {
-      const key = tabKeyFromDrawerTab(t3);
+      const key = t3.key;
       seen.add(key);
       entries.push(buildHostEntry(t3));
+    }
+    const liveByTitle = new Map;
+    for (const t3 of liveTabs) {
+      if (!liveByTitle.has(t3.title))
+        liveByTitle.set(t3.title, t3.key);
     }
     const assignments = getTabAssignments();
     for (const [tabKey] of assignments) {
       if (seen.has(tabKey))
+        continue;
+      const title = parseBuiltinKey(tabKey) ?? parseExtensionKey(tabKey)?.tabName;
+      if (title && liveByTitle.has(title))
         continue;
       entries.push(buildEntryFromAssignment(tabKey));
       seen.add(tabKey);
@@ -18013,42 +17920,16 @@ class LumiverseHost {
   }
   findKey(id) {
     const tabs = liveDrawerTabs();
-    let match = tabs.find((t3) => t3.id === id);
-    if (match)
-      return tabKeyFromDrawerTab(match);
-    const idBase = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
-    match = tabs.find((t3) => {
-      const tBase = t3.id.includes(":") ? t3.id.slice(0, t3.id.lastIndexOf(":")) : t3.id;
-      return tBase === id || tBase === idBase;
-    });
-    if (match)
-      return tabKeyFromDrawerTab(match);
-    const assignments = getTabAssignments();
-    if (assignments.has(id)) {
-      if (id.includes(":")) {
-        return extensionKey(id.slice(0, id.lastIndexOf(":")), id);
+    if (isBuiltinKey(id) || isExtensionKey(id)) {
+      const live = liveIdForKey(id, tabs);
+      if (live !== null) {
+        const key = keyForLiveId(live, tabs);
+        if (key !== null)
+          return key;
       }
-      return extensionKey(id, id);
+      return null;
     }
-    for (const [assignedId] of assignments) {
-      const aBase = assignedId.includes(":") ? assignedId.slice(0, assignedId.lastIndexOf(":")) : assignedId;
-      if (aBase === id || aBase === idBase) {
-        if (aBase.includes(":")) {
-          return extensionKey(aBase.slice(0, aBase.lastIndexOf(":")), aBase);
-        }
-        return extensionKey(aBase, aBase);
-      }
-    }
-    match = tabs.find((t3) => t3.title === id);
-    if (match)
-      return tabKeyFromDrawerTab(match);
-    match = tabs.find((t3) => {
-      const btn = t3.root;
-      return !!btn && btn.getAttribute("data-tab-id") === id;
-    });
-    if (match)
-      return tabKeyFromDrawerTab(match);
-    return null;
+    return keyForLiveId(id, tabs);
   }
   async placeTab(id, to) {
     try {

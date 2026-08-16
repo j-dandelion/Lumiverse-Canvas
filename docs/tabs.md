@@ -104,7 +104,7 @@ The mirror key, header title, and host content must follow the model's replaceme
 
 See [pitfalls.md](pitfalls.md) §3–§5 for the full failure modes.
 
-## Dual Mode × Configure Tabs (`tabs/configure-*.ts` + `layout/vanilla-baseline.ts`)
+## Dual Mode × Configure Tabs (`tabs/configure-*.ts` + `layout/mode-profiles.ts`)
 
 Canvas intercepts "Configure tabs" from Lumiverse's context menu regardless of whether the second drawer is enabled (always-on intercept, started in `setup.ts`). The modal presentation depends on the second-drawer state:
 
@@ -120,41 +120,42 @@ Canvas maintains three distinct state paths for the second drawer lifecycle:
 | Path | When | Source | Behaviour |
 |------|------|--------|-----------|
 | **First-enable seed** | First time user enables second drawer (no prior dual tabs anywhere) | Live `snapshotLayout()` | Seeds `lastLoaded` with live primary, secondary closed/empty. Runs **before** `setSettings`. |
-| **Re-enable dual restore** | User re-enables after a prior dual session | `dualLayout` slot (persisted) → `lastLoaded` → session profile | `bootstrapFromLayout`/`restoreSessionDualProfile` restore prior tab assignments. |
-| **Single-layout restore** | On disable (off path) | `singleLayout` slot (persisted) → vanilla baseline → live host | Swaps the owned model to the single layout + restores host `drawerSettings` + main open/active. |
+| **Re-enable dual restore** | User re-enables after a prior dual session | `dualLayout` slot (persisted, hydrated at boot) | `restoreSingleModeLayout` bootstraps the owned model from the slot. |
+| **Single-layout restore** | On disable (off path) | `singleLayout` slot (persisted) → live host | `restoreSingleModeLayout` swaps the owned model to the single layout (reconcile writes host settings) + restores main open/active. |
 
-**Mode layout profiles (2026-08-16):** each mode keeps its own saved layout
-so switching never destroys the other — see [persistence.md](persistence.md)
-"Mode Layout Profiles". `snapshotLayout` / `captureSessionDualProfileFromLive`
-emit **live ids** (not TabKeys) so re-enable restores the real secondary tabs.
+**Mode layout profiles (2026-08-16, consolidated v2):** each mode keeps its
+own saved layout so switching never destroys the other — see
+[persistence.md](persistence.md) "Mode Layout Profiles". The session-only
+vanilla baseline and dual session profile are **retired**: the slots are the
+only mode state. `detachedTabs` writers (`getLiveIdAssignmentEntries`) emit
+`tabId` = current live id and `tabTitle` = the model TabKey (authoritative
+for restore).
 
-The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks both `lastLoaded` and the session dual profile. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
+The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks `lastLoaded` and the dual slot. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
 
-### Conflict rule: baseline wins on disable
+### Conflict rule: slot wins on disable
 
-A **session-only vanilla baseline** is captured the first time the user enables the second drawer. It contains the pre-dual host `drawerSettings` + main open/active state. On disable:
+The **singleLayout slot** (the durable baseline — captured at enable from the same pre-dual state the retired vanilla baseline used to capture) is restored on disable:
 
-| Configure Tabs choice during dual session | Effect on baseline | Effect on disable |
-|------------------------------------------|-------------------|-------------------|
-| **Apply** | Baseline unchanged | Restore overwrites the Apply with vanilla state |
-| **Discard** | Baseline unchanged | Restore applies vanilla (the Discard never wrote anyway) |
-| **Cancel** | Baseline unchanged | No effect (the user stays in dual) |
-| (no dirty draft) | Baseline unchanged | Restore applies vanilla (no dual changes to overwrite) |
+| Configure Tabs choice during dual session | Effect on slot | Effect on disable |
+|------------------------------------------|----------------|-------------------|
+| **Apply** | Slot unchanged | Restore overwrites the Apply with the saved single state |
+| **Discard** | Slot unchanged | Restore applies the saved single state (the Discard never wrote anyway) |
+| **Cancel** | Slot unchanged | No effect (the user stays in dual) |
+| (no dirty draft) | Slot unchanged | Restore applies the saved single state (no dual changes to overwrite) |
 
-**Repeated Apply** in the dual session: each Apply patches the host `drawerSettings` (active dual session only) but does not modify the baseline. The baseline represents the **first** pre-enable state, not the state at the time of the last Apply. On disable, that first state is restored.
-
-**Repeated enable** (no disable in between): the baseline is not recaptured — `captureVanillaBaseline()` is idempotent and returns `captured: false` when a baseline already exists. This preserves the original pre-dual state across repeated toggles within the same dual session.
+**Repeated Apply** in the dual session: each Apply patches the host `drawerSettings` (active dual session only) but does not modify the single slot — the owned-model persist path only writes the slot while the model is single. On disable, the saved single state is restored.
 
 ### Teardown + restore ordering
 
 `finishDisable()` (in `settings/second-drawer-mode.ts`) runs the following sequence:
 
 1. Resolve any dirty Configure Apply/Discard/Cancel dialog.
-2. Capture session dual profile (existing — Canvas-owned state to re-enable).
-3. Merge dual into `lastLoaded` + flush + sync freeze base (tab-assignment persistence is always-on, so this is unconditional).
+2. Save the `dualLayout` slot from the live owned model (what re-enable restores).
+3. Determine the single layout: `singleLayout` slot (freshest) → live host.
 4. `setSettings({ secondSidebarEnabled: false })` — feature.apply tears down the secondary sidebar.
-5. **Vanilla baseline restore** (new) — `restoreVanillaBaseline()` patches host `drawerSettings` + restores main open/active. Done AFTER teardown so the host tabs are back in main-drawer before the restored primary tab is clicked.
-6. Modal refresh from live (existing) — now shows the restored vanilla layout.
+5. **`restoreSingleModeLayout(slot)`** — bootstrap the owned model from the slot (reconcile writes host side/tabOrder/hiddenTabIds) + restore main open/active via `restoreMainDrawerFromDom`. Done AFTER teardown so the host tabs are back in main-drawer before the restored primary tab is clicked.
+6. Modal refresh from live (existing) — now shows the restored single layout.
 7. **Clear baseline on success** — `clearVanillaBaseline()`. On failure (NO-GO / partial), retain the baseline for retry.
 
 ### Why baseline wins

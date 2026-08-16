@@ -63,10 +63,6 @@ export function cancelLayoutSave(): void {
   }
 }
 
-export function syncLastLoadedFromPersistedLayout(): void {
-  setLastLoadedLayout({ ...buildPersistedLayout(), settings: getSettings() })
-}
-
 export function flushPendingSaves(): void {
   if (!isLayoutRepoArmed()) {
     logPersistSave('flush', null, { skipped: 'not-armed', loadInProgress: _loadInProgress })
