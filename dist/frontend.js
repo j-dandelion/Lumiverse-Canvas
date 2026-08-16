@@ -7624,7 +7624,7 @@ function ConfigureTabsModalInner(props) {
     const isHidden3 = draft.hiddenIds.has(tab.id);
     const isLocked = tab.hideLocked;
     const isCore = tab.kind === "builtin" && tab.hideLocked;
-    const description = isLocked ? "Always visible so you can still reach core app sections." : tab.description || "";
+    const description = tab.description || "";
     return /* @__PURE__ */ u3("div", {
       class: `canvas-configure-tabs-row${isHidden3 ? " row-hidden" : ""}${isLocked ? " row-locked" : ""}`,
       "data-tab-id": tab.id,

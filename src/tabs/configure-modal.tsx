@@ -1170,7 +1170,9 @@ function ConfigureTabsModalInner(props: ModalProps) {
     const isHidden = draft.hiddenIds.has(tab.id)
     const isLocked = tab.hideLocked
     const isCore = tab.kind === 'builtin' && tab.hideLocked
-    const description = isLocked ? 'Always visible so you can still reach core app sections.' : (tab.description || '')
+    // Core tabs show their real descriptions too; the locked state is
+    // conveyed by the Core badge, the disabled toggle, and its tooltip.
+    const description = tab.description || ''
 
     return (
       <div
