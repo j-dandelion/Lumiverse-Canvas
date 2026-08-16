@@ -57,9 +57,9 @@ function readSecondaryWidth(): number {
 // Helper: classify a drawer tab as 'builtin' or 'extension'
 // ---------------------------------------------------------------------------
 // The drawer's `extensionId` is parsed from the tabId format
-// `spindle:{extId}:tab:{id}:{counter}`. For Lumiverse built-in tabs
-// (Personas, Lorebook, Wallpaper, …) the data-tab-id is just the bare
-// id with no spindle prefix, so the parser yields `parts[2] = undefined
+// `spindle:{extId}:tab:{id}:{counter}` (parts[1]). For Lumiverse built-in
+// tabs (Personas, Lorebook, Wallpaper, …) the data-tab-id is just the bare
+// id with no spindle prefix, so the parser yields `parts[1] = undefined
 // → 'unknown'`. The host's `getBuiltInTabRoot` is the source of truth:
 // it returns a registry root iff the host knows the tab as built-in.
 //
@@ -118,14 +118,30 @@ function resolveTabKey(key: TabKey): LiveTabId | null {
       const tBase = t.id.includes(':') ? t.id.slice(0, t.id.lastIndexOf(':')) : t.id
       return tBase === base
     })
-    return match ? match.id : null
+    if (match) return match.id
+    // Title fallback (2026-08-16): extension tabs are keyed by their TITLE
+    // while untagged ('builtin:Hone'), but the observer re-keys to the real
+    // spindle id once the tagger tags the button. Without this, a saved
+    // layout containing the pre-tag id could never resolve the tab and its
+    // placement/order was silently dropped on restore.
+    const titleMatch = builtinId ? observedTabs.find(t => t.title === builtinId) : undefined
+    return titleMatch ? titleMatch.id : null
   }
   const parsed = parseExtensionKey(key)
   if (!parsed) return null
   const match = observedTabs.find(
-    t => t.extensionId === parsed.extensionId && t.title === parsed.tabName,
+    t => (t.extensionId === parsed.extensionId ||
+      // liveDrawerTabs blanks 'unknown' → ''; keys built from the observer
+      // carry 'unknown'. Normalize so both directions resolve.
+      (!t.extensionId && parsed.extensionId === 'unknown'))
+      && t.title === parsed.tabName,
   )
-  return match ? match.id : null
+  if (match) return match.id
+  // Title fallback: the key's extensionId may be stale (built while the tab
+  // was untagged/'unknown', or re-keyed by the tagger since). Never drop a
+  // tab the user placed — match by title alone.
+  const titleMatch = observedTabs.find(t => t.title === parsed.tabName)
+  return titleMatch ? titleMatch.id : null
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +371,13 @@ export class LumiverseHost implements HostPort {
         return extensionKey(aBase, aBase)
       }
     }
+
+    // Title fallback (2026-08-16): a move/restore may carry the tab's TITLE
+    // as the live id (pre-tag buttons; saved layouts written while the tab
+    // was untagged) even though the observer now holds the tagged spindle
+    // id. Match by title so the tab still resolves after re-keying.
+    match = tabs.find(t => t.title === id)
+    if (match) return tabKeyFromDrawerTab(match)
 
     return null
   }

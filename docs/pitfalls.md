@@ -14,6 +14,8 @@ Cross-cutting traps and hard-won facts from live debugging (2026-07-31 round: se
 
 **Rule:** the facade is read by **TabKey only**. Convert liveId → TabKey via `host.findKey(liveId)` (or `tabKeyFromDrawerTab`); convert TabKey → liveId via `liveIdForFacadeKey` (builtins map structurally: `builtin:X` → `X`; extensions via drawerObserver extensionId+title).
 
+**Extension tabs (2026-08-16):** extension tabs are keyed by their **title** while untagged (`builtin:Hone`), and by `ext:{extId}/{Title}` once tagged — and the tagger re-keys the observer entry mid-session. Resolution is therefore **fallback-layered**: `host.findKey` and `resolveTabKey` (host/lumiverse/implementation.ts) and `liveIdForFacadeKey` (sidebar/secondary.tsx) all end with a **title-only match** (plus 'unknown'/'' extensionId normalization) so a saved layout containing a pre-tag id still restores the tab. Never "fix" this by dropping the fallbacks — a title-keyed saved layout (`detachedTabs: [{tabId: 'Hone'}]` — see user layout.json) silently loses the tab's placement/order otherwise. The observer parses extensionId from `parts[1]` of `spindle:{extId}:tab:{id}:{counter}` (verified against Lumiverse `placement-helper.ts:388`); parts[2] is the literal `tab`.
+
 ## 2. The assignment facade is a read-only snapshot of the model
 
 `getTabAssignments()` returns a fresh Map derived from the owned model whenever the model is active. **Writes to the returned Map are no-ops in production** (the legacy in-memory map only exists pre-bootstrap and in tests). Mutating it looks like it works in a unit test and silently does nothing in the app.

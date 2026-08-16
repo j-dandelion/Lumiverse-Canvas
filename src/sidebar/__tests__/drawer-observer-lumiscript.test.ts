@@ -230,13 +230,14 @@ async function testT4() {
   assertEqual(tabs[0].extensionId, 'unknown', 'T4: extensionId unknown until tagged')
 
   // Tagger adds data-tab-id → re-key to the store id, single entry.
-  untagged.setAttribute('data-tab-id', 'spindle:ext1:myTab:1')
+  // Real Lumiverse format: spindle:{extensionId}:tab:{tabName}:{counter}.
+  untagged.setAttribute('data-tab-id', 'spindle:ext1:tab:myTab:1')
   triggerMutation([untagged])
 
   tabs = observer.getAllTabs()
   assertEqual(tabs.length, 1, 'T4: re-key keeps a single entry')
-  assertEqual(tabs[0].tabId, 'spindle:ext1:myTab:1', 'T4: re-keyed to store id')
-  assertEqual(tabs[0].extensionId, 'myTab', 'T4: extensionId parsed after tagging')
+  assertEqual(tabs[0].tabId, 'spindle:ext1:tab:myTab:1', 'T4: re-keyed to store id')
+  assertEqual(tabs[0].extensionId, 'ext1', 'T4: extensionId parsed from parts[1] (spindle:{extId}:tab:...)')
 
   // Non-extension chrome without data-tab-id stays unregistered.
   const chrome = fakeButton({ title: 'Settings' })

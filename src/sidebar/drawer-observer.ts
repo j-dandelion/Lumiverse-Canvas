@@ -221,13 +221,13 @@ export class DrawerObserver {
     if (this.tabs.has(tabId)) return
 
     // extensionId: preserve the original parse for tagged buttons
-    // ("spindle:{extId}:tab:{id}:{counter}" → parts[2]; persisted TabKeys
+    // ("spindle:{extId}:tab:{id}:{counter}" → parts[1]; persisted TabKeys
     // depend on it). Untagged extension buttons are known extensions but
     // their id is unknown until tagged.
     const parts = tabId.split(':')
     const extensionId = existingId
-      ? (parts[2] || 'unknown')
-      : (isExtensionBtn ? (parts[2] || 'unknown') : '')
+      ? (parts[1] || 'unknown')
+      : (isExtensionBtn ? (parts[1] || 'unknown') : '')
 
     const tab: ObservedTab = {
       tabId,

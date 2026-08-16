@@ -227,11 +227,19 @@ export function liveIdForFacadeKey(
   if (builtin) return builtin
   const ext = parseExtensionKey(key)
   if (ext) {
-    return (
-      tabs.find(
-        (t) => t.extensionId === ext.extensionId && t.title === ext.tabName,
-      )?.tabId ?? null
+    const match = tabs.find(
+      (t) => (t.extensionId === ext.extensionId ||
+        // 'unknown' keys match observer entries whose extensionId was
+        // blanked ('unknown' → '').
+        (!t.extensionId && ext.extensionId === 'unknown'))
+        && t.title === ext.tabName,
     )
+    if (match) return match.tabId
+    // Title fallback (2026-08-16): the key's extensionId may be stale (built
+    // while the tab was untagged, or before the parts[1] parse fix). Match by
+    // title alone so the tab's live id is never lost from the profile/snapshot.
+    const titleMatch = tabs.find((t) => t.title === ext.tabName)
+    return titleMatch ? titleMatch.tabId : null
   }
   return null
 }
