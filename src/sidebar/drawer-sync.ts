@@ -40,18 +40,24 @@ import { dlog, dwarn } from '../debug/log'
 // NOTE: secondary.tsx imports from this module (bidirectional). Both modules
 // only call each other from inside function bodies — never at module init time.
 // Keep it that way to avoid initialization races.
-import { getSecondaryWrapper, isSecondarySidebarOpen, mountSecondarySidebar, unmountSecondarySidebar } from '../sidebar/secondary'
+import {
+  getSecondaryWrapper,
+  isSecondarySidebarOpen,
+  mountSecondarySidebar,
+  unmountSecondarySidebar,
+  liveIdForFacadeKey,
+} from '../sidebar/secondary'
 import {
   getMainMirrorWrapper,
   isCanvasMainOpen,
   isMainMirrorActive,
   reconcileMainMirrorDrawer,
 } from './main-mirror-drawer'
-import { getTabAssignments, deleteTabAssignment } from '../tabs/assignment'
+import { getTabAssignments, getTabSidebar, deleteTabAssignment } from '../tabs/assignment'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility, findMainTabButton } from '../tabs/buttons'
+import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton, readMainButtonShortName } from '../tabs/buttons'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { drawerObserver } from './drawer-observer'
 
@@ -531,10 +537,21 @@ export function checkSideChanged(): void {
       // Fire-and-forget — DOM work is synchronous inside the async function.
       // Generation guard: rapid side flips can resolve this promise after a
       // newer remount already replaced the wrapper — skip stale assigns.
+      // The facade is TabKey-keyed; assignToSecondary works on live ids —
+      // convert (same as restoreSecondaryTabButtons) or every placement
+      // misses with "not found in DrawerObserver or store" (2026-08-16).
       import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
         if (remountGen !== _sideRemountGen) return
-        for (const [tabId, side] of getTabAssignments()) {
-          if (side === 'secondary') assignToSecondary(tabId).catch(() => {})
+        const liveTabs = getDrawerTabs().map((t) => ({
+          tabId: t.id,
+          extensionId: t.extensionId,
+          title: t.title,
+        }))
+        for (const [key, side] of getTabAssignments()) {
+          if (side === 'secondary') {
+            const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
+            assignToSecondary(liveId).catch(() => {})
+          }
         }
       })
       // The drawerTab handle is created with display:none (secondary.tsx:112)
@@ -555,8 +572,11 @@ export function checkSideChanged(): void {
       // to mark a non-existent button as active.
       const activeTabId = getActiveSecondaryTabId()
       if (activeTabId !== null) {
-        const assignments = getTabAssignments()
-        if (assignments.get(activeTabId) === 'secondary') {
+        // The tracked active is a live id; the facade is TabKey-keyed, so a
+        // direct map lookup misses. getTabSidebar resolves liveId → TabKey
+        // (host.findKey + heuristic candidates) — without it the header/active
+        // restore was skipped after every side-change remount (2026-08-16).
+        if (getTabSidebar(activeTabId) === 'secondary') {
           showSecondaryTab(activeTabId)
         }
       }
@@ -588,8 +608,21 @@ export function resetSideRemountStateAfterDisable(): void {
  */
 export function restoreSecondaryTabButtons(): void {
   const tabs = getDrawerTabs()
-  for (const [tabId, sidebar] of getTabAssignments()) {
+  // The assignment facade is TabKey-keyed ('builtin:regex', 'ext:foo/Bar');
+  // every lookup below works on LIVE ids ('regex', 'spindle:foo:tab:Bar:0').
+  // Convert each key first (same conversion as reassignSecondaryTabsFromModel
+  // / getLiveIdAssignments); keys that are already live ids (legacy map /
+  // pre-bootstrap) fall through untouched. Without this every match missed
+  // and the remounted wrapper came back EMPTY after a Configure swap
+  // (2026-08-16).
+  const liveTabs = tabs.map((t) => ({
+    tabId: t.id,
+    extensionId: t.extensionId,
+    title: t.title,
+  }))
+  for (const [assignedKey, sidebar] of getTabAssignments()) {
     if (sidebar !== 'secondary') continue
+    const tabId = liveIdForFacadeKey(assignedKey, liveTabs) ?? assignedKey
     // Exact-match first (canonical path).
     let tab = tabs && tabs.find(t => t.id === tabId)
     if (!tab && tabs) {
@@ -614,7 +647,24 @@ export function restoreSecondaryTabButtons(): void {
       }
     }
     if (tab) {
-      addSecondaryTabButton(tab)
+      // Observer-backed drawer tabs carry iconSvg:'' (button inventory has no
+      // icon); capture the real icon from the main sidebar button so restored
+      // buttons don't fall back to the puzzle placeholder.
+      const mainBtnForIcon = findMainTabButton(tabId)
+      const iconSvg = tab.iconSvg || mainBtnForIcon?.querySelector('svg')?.outerHTML
+      // Label parity: prefer the HOST's rendered short name (read from the
+      // main button's label span — the "shorthand" the main drawer/mirror
+      // shows). Without it the restore labels came from Canvas's
+      // deriveShortName(title), a different truncation (2026-08-16).
+      const shortName = tab.shortName || readMainButtonShortName(mainBtnForIcon as Element)
+      addSecondaryTabButton({ ...tab, iconSvg, shortName })
+      // Re-assert the host button hide: a host React re-render during the
+      // side flip re-creates buttons without Canvas's inline display:none,
+      // which puts every secondary tab back into the main drawer/mirror.
+      // assignToSecondary's finalize would also hide, but the async loop
+      // below may be skipped (gen guard) — hide here so the sync restore
+      // is self-sufficient.
+      hideMainTabButton(tabId)
       continue
     }
     // Bug fix (2026-06-19, follow-up): DOM fallback. When the store
@@ -638,9 +688,11 @@ export function restoreSecondaryTabButtons(): void {
       addSecondaryTabButton({
         id,
         title,
+        shortName: readMainButtonShortName(mainBtn),
         root: undefined as any, // not used by addSecondaryTabButton body
         iconSvg: svg,
       } as any)
+      hideMainTabButton(id)
       dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`)
     } else {
       dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`)

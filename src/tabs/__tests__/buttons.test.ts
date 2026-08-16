@@ -1142,5 +1142,121 @@ import { __setDrawerTabsForTest } from '../../store'
   ;(globalThis as any).document.querySelector = prevQS
 })()
 
+// ============================================================
+// B32: restoreSecondaryTabButtons resolves the TabKey facade → live ids
+//
+// Regression (2026-08-16): after a Configure "Swap drawer locations"
+// remount, the secondary shell came back EMPTY and the moved tabs showed
+// back up in the main drawer/mirror. The assignment facade is TabKey-keyed
+// ('builtin:regex', 'ext:foo/Bar') but the restore looked tabs up by live
+// id ('regex', 'spindle:ext:foo:tab:Bar:0') — every lookup missed. The
+// TabKey → liveId conversion must restore both kinds, re-hide the host
+// buttons, and capture the real icon (not the puzzle fallback).
+// ============================================================
+;(async () => {
+  const { restoreSecondaryTabButtons } = require('../../sidebar/drawer-sync') as typeof import('../../sidebar/drawer-sync')
+  const { setTabAssignment, deleteTabAssignment, clearTabAssignments } = require('../../tabs/assignment') as typeof import('../../tabs/assignment')
+
+  const { __resetPinStateForTest } = require('../../sidebar/tab-position') as typeof import('../../sidebar/tab-position')
+  __resetPinStateForTest()
+  clearTabAssignments()
+
+  const listStub = makeListStub([])
+  const wrapper = {
+    querySelector(sel: string) {
+      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
+
+  // Live-id store inventory (what getDrawerTabs returns once the observer
+  // is running).
+  __setDrawerTabsForTest([
+    { id: 'regex', extensionId: '', title: 'Regex Scripts', root: {} as HTMLElement },
+    { id: 'spindle:ext:foo:tab:Bar:0', extensionId: 'ext:foo', title: 'Bar', root: {} as HTMLElement },
+  ])
+
+  // Assignment facade in TabKey namespace — what the owned model emits
+  // after the swap intent.
+  setTabAssignment('builtin:regex', 'secondary')
+  setTabAssignment('ext:ext:foo/Bar', 'secondary')
+
+  // Main sidebar stub so findMainTabButton / hideMainTabButton resolve.
+  const hostButtons: Record<string, any> = {
+    regex: {
+      style: { display: '' },
+      attrs: { 'data-tab-id': 'regex', title: 'Regex Scripts' },
+      getAttribute(name: string) { return this.attrs[name] ?? null },
+      querySelector(sel: string) {
+        if (sel === 'svg') return { outerHTML: '<svg id="regex-icon"/>' }
+        // Host-rendered label span — the "shorthand" shown in the main drawer.
+        if (sel === 'span[class*="tabLabel"]') return { textContent: 'Regex Scr…' }
+        return null
+      },
+    },
+    'spindle:ext:foo:tab:Bar:0': {
+      style: { display: '' },
+      attrs: { 'data-tab-id': 'spindle:ext:foo:tab:Bar:0', title: 'Bar' },
+      getAttribute(name: string) { return this.attrs[name] ?? null },
+      querySelector(sel: string) {
+        if (sel === 'svg') return { outerHTML: '<svg id="ext-icon"/>' }
+        // Host label span is absent when showTabLabels is off — short name
+        // falls back to deriveShortName(title) inside addSecondaryTabButton.
+        return null
+      },
+    },
+  }
+  const sidebarStub = {
+    querySelector(sel: string): unknown {
+      const m = sel.match(/\[data-tab-id="([^"]+)"\]/)
+      if (m) return hostButtons[m[1]] ?? null
+      return null
+    },
+    querySelectorAll(_sel: string): unknown[] { return [] },
+    closest(): unknown { return null },
+  }
+  const prevQS = (globalThis as any).document.querySelector
+  ;(globalThis as any).document.querySelector = (sel: string) =>
+    sel === '[data-spindle-mount="sidebar"]' ? sidebarStub : null
+
+  try {
+    restoreSecondaryTabButtons()
+
+    const items = listStub.children as any[]
+    assertEqual(items.length, 2, 'B32.a: both secondary tabs restored as buttons')
+    const ids = items.map((i: any) => i.getAttribute?.('data-tab-id') ?? i._id)
+    assertEqual(ids[0], 'regex', 'B32.b: builtin TabKey resolved to live-id button')
+    assertEqual(ids[1], 'spindle:ext:foo:tab:Bar:0', 'B32.c: extension TabKey resolved to live-id button')
+    // Icon captured from the main sidebar button (not the puzzle fallback).
+    assertEqual(items[0].children[0].innerHTML, '<svg id="regex-icon"/>', 'B32.d: builtin icon captured from main button')
+    assertEqual(items[1].children[0].innerHTML, '<svg id="ext-icon"/>', 'B32.e: extension icon captured from main button')
+    // Label parity: the restored button uses the HOST's rendered short name
+    // (the main drawer's "shorthand"), not a different Canvas truncation.
+    assertEqual(items[0].children[1].textContent, 'Regex Scr…', 'B32.f: builtin label = host short name')
+    // No host label span (labels off) → deriveShortName(title) fallback
+    // ('Bar' is ≤ 8 chars so the title itself is the shorthand).
+    assertEqual(items[1].children[1].textContent, 'Bar', 'B32.g: extension label falls back to short title')
+    // Host buttons re-hidden so the tabs do not reappear in main drawer/mirror.
+    assertEqual(hostButtons['regex'].style.display, 'none', 'B32.h: builtin host button re-hidden')
+    assertEqual(hostButtons['spindle:ext:foo:tab:Bar:0'].style.display, 'none', 'B32.i: extension host button re-hidden')
+
+    // A second restore is idempotent (buttons already present → no dupes).
+    restoreSecondaryTabButtons()
+    assertEqual((listStub.children as any[]).length, 2, 'B32.j: second restore idempotent')
+  } finally {
+    ;(globalThis as any).document.querySelector = prevQS
+    __setSecondaryWrapperForTest(null)
+    __setDrawerTabsForTest(null)
+    deleteTabAssignment('builtin:regex')
+    deleteTabAssignment('ext:ext:foo/Bar')
+    clearTabAssignments()
+  }
+  // Settle the async tab-position tail (reconcileTabListPin) from
+  // addSecondaryTabButton before the runner exits.
+  await new Promise((r) => setTimeout(r, 0))
+})()
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

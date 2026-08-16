@@ -8937,16 +8937,22 @@ function checkSideChanged() {
       Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
         if (remountGen !== _sideRemountGen)
           return;
-        for (const [tabId, side] of getTabAssignments()) {
-          if (side === "secondary")
-            assignToSecondary2(tabId).catch(() => {});
+        const liveTabs = getDrawerTabs().map((t3) => ({
+          tabId: t3.id,
+          extensionId: t3.extensionId,
+          title: t3.title
+        }));
+        for (const [key, side] of getTabAssignments()) {
+          if (side === "secondary") {
+            const liveId = liveIdForFacadeKey(key, liveTabs) ?? key;
+            assignToSecondary2(liveId).catch(() => {});
+          }
         }
       });
       updateDrawerTabVisibility();
       const activeTabId = getActiveSecondaryTabId();
       if (activeTabId !== null) {
-        const assignments = getTabAssignments();
-        if (assignments.get(activeTabId) === "secondary") {
+        if (getTabSidebar(activeTabId) === "secondary") {
           showSecondaryTab(activeTabId);
         }
       }
@@ -8962,9 +8968,15 @@ function resetSideRemountStateAfterDisable() {
 }
 function restoreSecondaryTabButtons() {
   const tabs = getDrawerTabs();
-  for (const [tabId, sidebar] of getTabAssignments()) {
+  const liveTabs = tabs.map((t3) => ({
+    tabId: t3.id,
+    extensionId: t3.extensionId,
+    title: t3.title
+  }));
+  for (const [assignedKey, sidebar] of getTabAssignments()) {
     if (sidebar !== "secondary")
       continue;
+    const tabId = liveIdForFacadeKey(assignedKey, liveTabs) ?? assignedKey;
     let tab = tabs && tabs.find((t3) => t3.id === tabId);
     if (!tab && tabs) {
       const stripSuffix = (id) => {
@@ -8982,7 +8994,11 @@ function restoreSecondaryTabButtons() {
       }
     }
     if (tab) {
-      addSecondaryTabButton(tab);
+      const mainBtnForIcon = findMainTabButton(tabId);
+      const iconSvg = tab.iconSvg || mainBtnForIcon?.querySelector("svg")?.outerHTML;
+      const shortName = tab.shortName || readMainButtonShortName(mainBtnForIcon);
+      addSecondaryTabButton({ ...tab, iconSvg, shortName });
+      hideMainTabButton(tabId);
       continue;
     }
     const mainBtn = findMainTabButton(tabId);
@@ -8993,9 +9009,11 @@ function restoreSecondaryTabButtons() {
       addSecondaryTabButton({
         id,
         title,
+        shortName: readMainButtonShortName(mainBtn),
         root: undefined,
         iconSvg: svg
       });
+      hideMainTabButton(id);
       dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`);
     } else {
       dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`);
