@@ -6,7 +6,7 @@
 // Capture runs while secondary tabs are still live (before teardown).
 // Restore runs after the secondary sidebar is re-mounted.
 
-import { getLiveIdAssignments } from '../tabs/assignment'
+import { getLiveIdAssignmentEntries } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getDrawerTabs } from '../store'
 import { showSecondaryTab } from '../tabs/buttons'
@@ -25,19 +25,18 @@ let _sessionProfile: SessionDualProfile | null = null
  * triggers teardown). Idempotent — subsequent calls overwrite.
  */
 export function captureSessionDualProfileFromLive(): SessionDualProfile {
-  // LIVE-ID KEYED (2026-08-16): the assignment facade is TabKey-keyed, but
-  // the profile feeds assignToSecondary / buildModelFromLayout which resolve
-  // live ids. Storing TabKeys made every restore lookup miss ("not found in
-  // DrawerObserver or store") and silently dropped the dual layout on
-  // re-enable. getLiveIdAssignments converts model keys to live ids.
-  const assignments = Array.from(getLiveIdAssignments().entries())
-  const secondaryAssignments = assignments.filter(([_, side]) => side === 'secondary')
+  // KEYED-ENTRY WRITE (REFACTOR-PLAN v2 §4.4): detachedTabs carries the
+  // model TabKey in `tabTitle` (authoritative for restore) and the current
+  // live id in `tabId`. Older writers put the human title in tabTitle,
+  // which broke restore after the tagger re-keyed.
+  const assignments = getLiveIdAssignmentEntries()
+  const secondaryAssignments = assignments.filter((a) => a.side === 'secondary')
   const tabs = getDrawerTabs()
 
   const profile: SessionDualProfile = {
-    detachedTabs: secondaryAssignments.map(([tabId]) => {
-      const tab = tabs.find(t => t.id === tabId)
-      return { tabId, tabTitle: tab?.title || tabId, sidebar: 'secondary' }
+    detachedTabs: secondaryAssignments.map(({ key, liveId }) => {
+      const tab = tabs.find(t => t.id === liveId)
+      return { tabId: liveId, tabTitle: key, sidebar: 'secondary' }
     }),
     activeTabId: getActiveSecondaryTabId(),
   }

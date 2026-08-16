@@ -18,7 +18,7 @@ import {
   CANVAS_MAIN_OPEN_CLASS,
   MAIN_MIRROR_WIDTH_VAR,
 } from '../sidebar/styles'
-import { getLiveIdAssignments } from '../tabs/assignment'
+import { getLiveIdAssignments, getLiveIdAssignmentEntries } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getCanvasHiddenTabIds } from '../tabs/canvas-hidden'
 import { getHostDrawerSettings } from '../dom/host-settings'
@@ -75,15 +75,14 @@ function readSecondaryWidth(): number {
 }
 
 export function snapshotLayout(): any {
-  // LIVE-ID KEYED (2026-08-16): the assignment facade is TabKey-keyed
-  // ('builtin:regex', 'ext:foo/Bar'). Writing those keys into detachedTabs
-  // poisoned every consumer that later resolves them via host.findKey
-  // (findKey turns a TabKey into a garbage ext: key through its
-  // assignment-map fallback), so re-enable after a disable lost the dual
-  // layout ("all tabs in the same drawer"). getLiveIdAssignments converts
-  // each model key to its live id so the persisted layout round-trips.
-  const assignments = Array.from(getLiveIdAssignments().entries())
-  const secondaryAssignments = assignments.filter(([_, side]) => side === 'secondary')
+  // KEYED ENTRY WRITE (REFACTOR-PLAN v2 §4.4): detachedTabs carries BOTH
+  // namespaces — `tabId` = current live id (placement/address), `tabTitle`
+  // = the model TabKey (authoritative for restore, tagging-state-
+  // independent). Older writers put the human title in tabTitle, which
+  // silently broke restore after the tagger re-keyed; the resolver accepts
+  // all forms, so writers must now emit the canonical key.
+  const assignments = getLiveIdAssignmentEntries()
+  const secondaryAssignments = assignments.filter((a) => a.side === 'secondary')
   const drawerTabs = getDrawerTabs()
   return {
     version: CANVAS_VERSION,
@@ -98,9 +97,9 @@ export function snapshotLayout(): any {
       activeTabId: getActiveSecondaryTabId(),
     },
     detachedTabs: secondaryAssignments
-      .map(([tabId, side]) => {
-        const tab = drawerTabs.find(t => t.id === tabId)
-        return { tabId, tabTitle: tab?.title || tabId, sidebar: side }
+      .map(({ key, liveId }) => {
+        const tab = drawerTabs.find(t => t.id === liveId)
+        return { tabId: liveId, tabTitle: key, sidebar: 'secondary' }
       }),
     tabOrder: getHostDrawerSettings()?.tabOrder ?? [],
     hiddenTabIds: getCanvasHiddenTabIds(),

@@ -214,6 +214,61 @@ withInventory([
   assert(restored.primary[1] !== undefined, 'G2: extension tab restored at index 1 (order preserved)')
 }
 
+// ══ J1–J4: LEGACY-FORMAT LAYOUT ROUND TRIPS (REFACTOR-PLAN v2 §4.4/§6).
+// buildModelFromLayout now prefers detachedTabs.tabTitle (the authoritative
+// TabKey) and the resolver accepts every legacy id form — these fixtures pin
+// the self-migrating restore for each writer era. ══
+withInventory([
+  fakeButton({ tabId: 'loom', title: 'loom' }),
+  fakeButton({ tabId: 'spindle:hone:tab:hone_tab:1', title: 'Hone' }),
+])
+{
+  const host = new LumiverseHost()
+
+  // J1: round-trip of a canonical layout (live ids in tabOrder, TabKey in
+  // tabTitle) — the Phase-3 writer shape.
+  const canonical: any = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'loom' },
+    secondary: { open: false, width: 420, activeTabId: null },
+    detachedTabs: [{ tabId: 'spindle:hone:tab:hone_tab:1', tabTitle: 'ext:hone/Hone', sidebar: 'secondary' }],
+    tabOrder: ['loom', 'spindle:hone:tab:hone_tab:1'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+  const m1 = buildModelFromLayout(canonical, (id) => host.findKey(id))
+  assert(m1.secondary.includes('ext:hone/Hone'), 'J1: canonical tabTitle key restores the tab to secondary')
+  assert(m1.primary.includes('builtin:loom'), 'J1: tabOrder live ids resolve to canonical keys')
+
+  // J2: pre-tag-era writer — tabTitle carries the LEGACY 'builtin:Hone' key
+  // (the masquerade). Must still restore (tagging-state-independent).
+  const legacyKey: any = {
+    ...canonical,
+    detachedTabs: [{ tabId: 'spindle:hone:tab:hone_tab:1', tabTitle: 'builtin:Hone', sidebar: 'secondary' }],
+  }
+  const m2 = buildModelFromLayout(legacyKey, (id) => host.findKey(id))
+  assert(m2.secondary.includes('ext:hone/Hone'), 'J2: legacy builtin: tabTitle restores (canonicalized)')
+
+  // J3: old snapshot writer — tabTitle carries the HUMAN TITLE. The
+  // resolver's title path handles it.
+  const titleValued: any = {
+    ...canonical,
+    detachedTabs: [{ tabId: 'spindle:hone:tab:hone_tab:1', tabTitle: 'Hone', sidebar: 'secondary' }],
+  }
+  const m3 = buildModelFromLayout(titleValued, (id) => host.findKey(id))
+  assert(m3.secondary.includes('ext:hone/Hone'), 'J3: title-valued tabTitle restores (title path)')
+
+  // J4: suffix drift — a stored live id with a stale ':N' counter.
+  const drifted: any = {
+    ...canonical,
+    tabOrder: ['loom', 'spindle:hone:tab:hone_tab:9'],
+    detachedTabs: [{ tabId: 'spindle:hone:tab:hone_tab:9', tabTitle: 'ext:hone/Hone', sidebar: 'secondary' }],
+  }
+  const m4 = buildModelFromLayout(drifted, (id) => host.findKey(id))
+  assert(m4.primary.includes('ext:hone/Hone') || m4.secondary.includes('ext:hone/Hone'),
+    'J4: suffix-drifted stored id resolves (canonical key present)')
+}
+
 // ══ H1: button-attribute bridge — the observer entry is STALE (registered
 // by title before the tagger tagged the button), but the button itself now
 // carries the real data-tab-id. A saved layout written while tagged carries
@@ -266,6 +321,18 @@ withInventory([fakeButton({ tabId: 'spindle:hone:tab:hone_tab:1', title: 'Hone' 
   withInventory([fakeButton({ tabId: 'Hone', title: 'Hone', ext: true })])
   const liveId2 = liveIdForFacadeKey('builtin:Hone', drawerObserver.getAllTabs())
   assertEqual(liveId2, 'Hone', 'H3: untagged observer keeps the bare title id')
+}
+
+// ══ I1: KEY-SHAPED INPUT to findKey resolves canonically (Phase 2). The old
+// assignment-map fallback turned a stored TabKey into a garbage 'ext:…' key
+// (the round-2 "TabKey poison"); the resolver routes key-shaped inputs
+// through the key→live direction so 'builtin:loom' round-trips to its own
+// canonical key. ══
+withInventory([fakeButton({ tabId: 'loom', title: 'loom' })])
+{
+  const host = new LumiverseHost()
+  assertEqual(host.findKey('builtin:loom'), 'builtin:loom',
+    'I1: key-shaped live id resolves to the canonical key (no garbage ext: key)')
 }
 
 // ══ F1: LEGACY-KEYED MODEL + FROZEN-KEY OBSERVED WORLD (REFACTOR-PLAN v2

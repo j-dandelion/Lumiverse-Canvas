@@ -56,7 +56,7 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   }
 }
 
-const [{ bootstrapFromLayout, shutdown, getModel, flush }] = await Promise.all([
+const [{ bootstrapFromLayout, shutdown, getModel, flush, dispatch }] = await Promise.all([
   import('../../recon/dispatch'),
 ])
 const [{ FakeHost }] = await Promise.all([import('../../host/fake/implementation')])
@@ -116,14 +116,21 @@ assert(model != null, 'model present after partial bootstrap')
 assert(model!.secondary.length === 0, 'first pass drops the unresolvable Hone tab (partial restore)')
 assert(model!.primary.includes(LOOM) && model!.primary.includes(WEAVER), 'first pass keeps the resolvable tabs')
 
-// Hone registers late (extension button appears) → world change → retry.
+// User action INSIDE the boot window: move weaver to the secondary drawer
+// before Hone registers. The convergence merge must never undo it.
+await dispatch({ t: 'move', key: WEAVER, to: 'secondary', index: 0 })
+await flush()
+model = getModel()
+assert(model!.secondary.includes(WEAVER), 'user move inside the window is applied to the model')
+
+// Hone registers late (extension button appears) → world change → converge.
 host.addTab(HONE, 'Hone', 'secondary')
 await flush()
 
 model = getModel()
 assert(model != null, 'model present after retry')
-assertEqual(model!.secondary.length, 1, 'retry restores the late-registered tab into secondary')
 assert(model!.secondary.includes(HONE), 'Hone back in secondary after the retry')
+assert(model!.secondary.includes(WEAVER), 'user move survives the convergence merge (add-only)')
 assert(!model!.primary.includes(HONE), 'Hone not in primary after the retry')
 
 // The completed restore persists the full layout (with Hone detached).

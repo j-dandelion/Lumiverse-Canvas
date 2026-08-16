@@ -2,6 +2,7 @@ import type { LayoutModel, TabKey, Side } from '../core/model'
 import type { Intent } from '../core/intents'
 import { reduce, foldIntents } from '../core/reduce'
 import { sideOfKey, visibleKeys } from '../core/select'
+import { listForSide } from '../core/select'
 import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
 import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
@@ -19,8 +20,6 @@ let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
 let _restoringPending = false
-let _lastRestoredCount = -1
-let _restoreAttempts = 0
 /** Boot-only retry window for partial restores (late-registering tabs). */
 let _restoreDeadline = 0
 const RESTORE_RETRY_WINDOW_MS = 30_000
@@ -47,6 +46,79 @@ function inventoryIsReady(observed: { inventory?: { status: string } }): boolean
   // `onWorldChanged` fires when tabs are added, so the transition from
   // 'partial' to 'ready' is observed and the gate activates on the live host.
   return status === undefined || status === 'ready' || status === 'degraded'
+}
+
+/**
+ * Merge a rebuild of the pending layout into the CURRENT model
+ * (REFACTOR-PLAN v2 §4.5). Placement/order are ADD-ONLY: keys the current
+ * model already holds — whether from the earlier partial restore or from
+ * USER ACTIONS inside the boot window — keep their current position; only
+ * keys absent from the model are inserted, at their saved index from the
+ * rebuild (clamped), so late-registering tabs land where the layout put
+ * them. Hidden set, drawer geometry, and side adopt the rebuild (the
+ * layout's saved state — the current model's copies were built from the
+ * same layout and never diverge during the pending window). Active adopts
+ * the rebuild ONLY when the current active is null (boot default) — a user
+ * click inside the window keeps its tab. Returns the original model when
+ * nothing changed (callers short-circuit on identity, like the reducer).
+ */
+function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutModel {
+  const inModel = new Set<string>([...current.primary, ...current.secondary])
+  const mergeSide = (side: Side): readonly TabKey[] => {
+    const cur = listForSide(current, side)
+    const reb = listForSide(rebuilt, side)
+    const fresh = reb.filter((k) => !inModel.has(k))
+    if (fresh.length === 0) return cur
+    // Insert in rebuilt order (ascending saved index) — each insert lands at
+    // its saved position without disturbing previously-merged or existing
+    // keys' relative order.
+    const next = cur.slice()
+    for (const k of fresh) {
+      inModel.add(k)
+      next.splice(Math.min(reb.indexOf(k), next.length), 0, k)
+    }
+    return next
+  }
+  const primary = mergeSide('primary')
+  const secondary = mergeSide('secondary')
+  const hidden = rebuilt.hidden.filter((k) => inModel.has(k))
+  const next: LayoutModel = {
+    ...current,
+    primary,
+    secondary,
+    hidden,
+    active: {
+      primary: current.active.primary ?? rebuilt.active.primary,
+      secondary: current.active.secondary ?? rebuilt.active.secondary,
+    },
+    drawers: rebuilt.drawers,
+    side: rebuilt.side,
+  }
+  // Identity-preserving when nothing changed.
+  if (
+    sameKeys(next.primary, current.primary) &&
+    sameKeys(next.secondary, current.secondary) &&
+    sameKeys(next.hidden, current.hidden) &&
+    next.active.primary === current.active.primary &&
+    next.active.secondary === current.active.secondary &&
+    next.drawers.primary.open === current.drawers.primary.open &&
+    next.drawers.primary.width === current.drawers.primary.width &&
+    next.drawers.secondary.open === current.drawers.secondary.open &&
+    next.drawers.secondary.width === current.drawers.secondary.width &&
+    next.side === current.side
+  ) {
+    return current
+  }
+  return next
+}
+
+/** Order-sensitive array equality for TabKey lists. */
+function sameKeys(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 export function bootstrap(model: LayoutModel, host: HostPort, version?: string): void {
@@ -83,72 +155,55 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
   const task = _queue.then(async () => {
     if (generation !== _generation || _host !== host || !_model) return
     const observed = host.observe()
-    // React can publish the drawer after setup's first fiber walk. Retry the
-    // persisted layout at that readiness boundary instead of adopting host
-    // defaults as the user's saved order.
+    // React can publish the drawer after setup's first fiber walk. Converge
+    // the persisted layout at that readiness boundary instead of adopting
+    // host defaults as the user's saved order (REFACTOR-PLAN v2 §4.5):
+    //   - Rebuild the layout through the resolver (idempotent — derived
+    //     from the same immutable layout, so it is add-only by
+    //     construction).
+    //   - MERGE newly-resolved keys into the CURRENT model at their saved
+    //     index — user actions inside the window are never undone, and late
+    //     tabs keep their positional fidelity.
+    //   - Commit the partial set on the first ready pass (early UX) and
+    //     keep converging until every stored id resolves or the boot
+    //     deadline expires.
+    // The old attempts/stall counters are gone: rebuilding is cheap, no
+    // write fires while nothing new resolves (persistModel byte-dedup), and
+    // the deadline subsumes both guards.
     if (_pendingLayout !== null && inventoryIsReady(observed) && observed.tabs.length > 0) {
       if (_restoringPending) return
-      _restoreAttempts++
-      if (_restoreAttempts > 12) {
-        dlog('[dispatch] pending-layout restore aborted after max retries', {
-          attempts: _restoreAttempts,
-        })
-        _pendingLayout = null
-        _lastRestoredCount = -1
-        _restoreAttempts = 0
-        return
-      }
-      // Boot-only window: past it, world changes are USER actions and must
-      // not replay the saved layout over them.
       if (Date.now() > _restoreDeadline) {
-        dlog('[dispatch] pending-layout restore aborted (retry window expired)', {
-          attempts: _restoreAttempts,
-        })
+        dlog('[dispatch] pending-layout restore aborted (retry window expired)')
         _pendingLayout = null
-        _lastRestoredCount = -1
-        _restoreAttempts = 0
         return
       }
-      const restored = buildModelFromLayout(
+      const rebuilt = buildModelFromLayout(
         _pendingLayout as any,
         (id) => host.findKey(id),
         observed.drawerSide,
       )
-      const count = restored.primary.length + restored.secondary.length
       const expected = pendingLayoutTabCount(_pendingLayout)
-      if (count > 0) {
-        // Stalled: same count across retries with no progress toward expected
-        // means the remaining tabs will never resolve. Commit the partial set
-        // and stop retrying so reconcile writes cannot cascade.
-        if (count === _lastRestoredCount && count < expected) {
-          _pendingLayout = null
-          _lastRestoredCount = -1
-          _restoreAttempts = 0
-          if (generation === _generation) {
-            _model = await reconcileAndPersist(restored, generation)
-          }
-          return
-        }
-        _lastRestoredCount = count
-        if (count >= expected) {
-          _pendingLayout = null
-          _lastRestoredCount = -1
-          _restoreAttempts = 0
-        }
+      const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected
+      const merged = mergeResolvedInto(_model, rebuilt)
+      // Un-gate persistence BEFORE the write: reconcileAndPersist only
+      // persists when _pendingLayout is null, so a completing restore must
+      // clear it first or the final blob never lands on disk.
+      if (resolvedAll) {
+        _pendingLayout = null
+      }
+      if (merged !== _model) {
         _restoringPending = true
         try {
           // Only mutate _model if our generation is still current. A
           // shutdown or re-bootstrap that happened while the restore was
           // awaiting must not overwrite the new generation's model.
           if (generation === _generation) {
-            _model = await reconcileAndPersist(restored, generation)
+            _model = await reconcileAndPersist(merged, generation)
           }
         } finally {
           _restoringPending = false
         }
-        return
       }
-      _lastRestoredCount = count
       return
     }
     const next = reduce(_model, { t: 'syncFromHost', observed })
@@ -198,8 +253,6 @@ export function shutdown(): void {
   _version = 'unknown'
   _pendingLayout = null
   _restoringPending = false
-  _lastRestoredCount = -1
-  _restoreAttempts = 0
   _restoreDeadline = 0
   _queue = Promise.resolve()
 }
@@ -753,12 +806,10 @@ export function bootstrapFromLayout(
   // point (React commit lag, late extension registration); a fully-empty
   // model was the historical gate, which dropped stragglers whenever most
   // tabs resolved on the first pass (the "extension tab doesn't persist
-  // across reload" bug). The retry loop in enqueueHostSync re-attempts
-  // buildModelFromLayout on later world changes and stops once the count
-  // reaches `expected` (or the stall/attempts guards fire).
+  // across reload" bug). enqueueHostSync converges the unresolved set on
+  // later world changes — merging at saved indices — until everything
+  // resolves or the boot deadline expires.
   _restoringPending = false
-  _lastRestoredCount = -1
-  _restoreAttempts = 0
   const expected = pendingLayoutTabCount(layout)
   const resolved = model.primary.length + model.secondary.length
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS

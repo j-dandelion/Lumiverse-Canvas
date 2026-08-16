@@ -69,11 +69,20 @@ export function buildModelFromLayout(
     appendOnce(isSecondaryStoredId(storedId) ? secondary : primary, key)
   }
 
-  // Also include detachedTabs that might not be in tabOrder
+  // Also include detachedTabs (whether or not their id appeared in tabOrder
+  // — a stale tabOrder entry may not have resolved, and the authoritative
+  // tabTitle still must place the tab). Resolution prefers `tabTitle` — the
+  // authoritative TabKey (REFACTOR-PLAN v2 §4.4) — making restore
+  // tagging-state-independent: a saved TabKey resolves to the tab's
+  // canonical frozen key regardless of whether the observer entry was
+  // tagged since. Old bundles wrote the HUMAN TITLE here; both forms
+  // resolve through the same resolver (key-shaped inputs included). The
+  // live-id tabId is the fallback for bundles that never wrote tabTitle.
   for (const d of detached) {
-    if (!tabOrder.includes(d.tabId)) {
-      const key = resolveStoredId(d.tabId, findKey)
-      if (key) appendOnce(secondary, key)
+    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null
+    const key = fromTitle ?? resolveStoredId(d.tabId, findKey)
+    if (key && !primary.includes(key) && !secondary.includes(key)) {
+      appendOnce(secondary, key)
     }
   }
 
