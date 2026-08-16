@@ -4,15 +4,32 @@
 // with a proper MutationObserver on the main sidebar's tab container.
 // Maintains a Map of observed tabs and emits events when tabs are
 // registered or unregistered.
+//
+// ── Canvas's LIVE TAB IDENTITY STORE (REFACTOR-PLAN v2 §4.1) ──
+// Each entry carries a FROZEN TabKey assigned ONCE at first registration:
+//   - builtin buttons (bare data-tab-id, no extension class)  → 'builtin:{id}'
+//   - extension buttons (tabBtnExtension class or spindle-prefixed id)
+//     → 'ext:{extId}/{title}' with whatever extId is known at birth ('unknown'
+//     while untagged), disambiguated with an '@N' suffix when two tabs would
+//     share a key.
+// The tagger's `data-tab-id` attribute writes are OBSERVED (attributes: true)
+// and update the entry's ADDRESS (tabId/extensionId/title) in place — the key
+// never changes, so the re-key flip class of bugs is structurally impossible.
 
 import { registerCleanup } from './cleanup'
 import { getMainSidebar } from '../dom/lumiverse'
+import { builtinKey, extensionKey, type TabKey } from '../core/model'
 
 export interface ObservedTab {
   tabId: string
   button: HTMLElement   // the tab button in the main sidebar
-  extensionId: string   // parsed from tabId
+  extensionId: string   // parsed from tabId; may upgrade 'unknown' → real on tagging
   title: string
+  /** FROZEN at first registration — the tab's identity ('builtin:{id}' | 'ext:{extId}/{title}').
+   *  Never re-derived; tagging updates the address fields, not this. */
+  key: TabKey
+  /** Every title this button has ever carried (first-seen + current). */
+  titles: ReadonlySet<string>
 }
 
 export type InventoryStatus = 'empty' | 'partial' | 'ready' | 'degraded'
@@ -25,6 +42,31 @@ export interface InventorySnapshot {
 
 type TabHandler = (tab: ObservedTab) => void
 type UnregHandler = (tabId: string) => void
+
+// extensionId: preserve the original parse for tagged buttons
+// ("spindle:{extId}:tab:{id}:{counter}" → parts[1]; persisted TabKeys
+// depend on it). Untagged extension buttons are known extensions but
+// their id is unknown until tagged.
+function parseExtensionId(tabId: string, existingId: string, isExtensionBtn: boolean): string {
+  const parts = tabId.split(':')
+  return existingId
+    ? (parts[1] || 'unknown')
+    : (isExtensionBtn ? (parts[1] || 'unknown') : '')
+}
+
+/**
+ * Pure key derivation for a tab SHAPE that has no observer entry yet (e.g.
+ * the store-fallback construction in secondary-drawer). Mirrors
+ * freezeKey's classification: spindle-prefixed id or known extensionId →
+ * 'ext:{extId}/{title}' (extId 'unknown' while untagged), else
+ * 'builtin:{id}'. Once the observer scans the button, the entry updates in
+ * place to the canonical frozen key.
+ */
+export function keyForTabShape(tabId: string, extensionId: string, title: string): TabKey {
+  const extId = extensionId && extensionId !== 'unknown' ? extensionId : ''
+  if (!extId && !tabId.includes(':')) return builtinKey(tabId)
+  return extensionKey(extId || 'unknown', title)
+}
 
 export class DrawerObserver {
   private observer: MutationObserver | null = null
@@ -42,13 +84,21 @@ export class DrawerObserver {
       return
     }
     this.started = true
-    
+
     // Initial scan
     this.scanExistingTabs(sidebar)
-    
-    // Start observing
+
+    // Start observing. attributes: true + attributeFilter makes the Canvas
+    // tagger's data-tab-id / title / class writes visible so entries update
+    // IN PLACE instead of going stale until the next childList mutation
+    // (the stale-entry bug class — see REFACTOR-PLAN v2 §4.1).
     this.observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        if (mutation.type === 'attributes') {
+          const target = mutation.target
+          if (target instanceof HTMLElement) this.registerTab(target)
+          continue
+        }
         for (const node of mutation.addedNodes ?? []) {
           if (node instanceof HTMLElement) this.handleAddedNode(node)
         }
@@ -60,8 +110,13 @@ export class DrawerObserver {
       this.removeDetachedTabs()
       this.revision++
     })
-    
-    this.observer.observe(sidebar, { childList: true, subtree: true })
+
+    this.observer.observe(sidebar, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-tab-id', 'title', 'class'],
+    })
     registerCleanup(() => this.stop())
   }
 
@@ -196,6 +251,14 @@ export class DrawerObserver {
     }
   }
 
+  /** Find the registered entry for a button (identity lookup — the map is keyed by address). */
+  private entryForButton(button: HTMLElement): ObservedTab | null {
+    for (const tab of this.tabs.values()) {
+      if (tab.button === button) return tab
+    }
+    return null
+  }
+
   private registerTab(button: HTMLElement): void {
     const existingId = button.getAttribute('data-tab-id') || ''
     const isExtensionBtn = String(button.className || '').includes('tabBtnExtension')
@@ -208,36 +271,93 @@ export class DrawerObserver {
       ''
     if (!tabId) return
 
-    // Re-key: a button registered by title (untagged extension) may gain a
-    // real data-tab-id later (Canvas tagger). Never hold two entries for the
-    // same button — drop the old key so the store id becomes authoritative.
-    for (const [key, tab] of this.tabs) {
-      if (tab.button === button) {
-        if (key === tabId) return
-        this.tabs.delete(key)
-        break
-      }
+    // Same button re-scanned (tagger wrote data-tab-id, attribute mutation,
+    // React re-render): update the ADDRESS in place — identity is frozen.
+    const existing = this.entryForButton(button)
+    if (existing) {
+      this.updateEntry(existing, button, tabId, existingId, isExtensionBtn)
+      return
     }
     if (this.tabs.has(tabId)) return
 
-    // extensionId: preserve the original parse for tagged buttons
-    // ("spindle:{extId}:tab:{id}:{counter}" → parts[1]; persisted TabKeys
-    // depend on it). Untagged extension buttons are known extensions but
-    // their id is unknown until tagged.
-    const parts = tabId.split(':')
-    const extensionId = existingId
-      ? (parts[1] || 'unknown')
-      : (isExtensionBtn ? (parts[1] || 'unknown') : '')
-
+    const title = button.getAttribute('title') || button.textContent?.trim() || tabId
     const tab: ObservedTab = {
       tabId,
       button,
-      extensionId,
-      title: button.getAttribute('title') || button.textContent?.trim() || tabId,
+      extensionId: parseExtensionId(tabId, existingId, isExtensionBtn),
+      title,
+      key: this.freezeKey(tabId, isExtensionBtn, title),
+      titles: new Set([title]),
     }
 
     this.tabs.set(tabId, tab)
     for (const h of this.tabHandlers) h(tab)
+  }
+
+  /**
+   * Update an existing entry's ADDRESS fields (tabId/extensionId/title) from
+   * the current button attributes. The frozen `key` is never touched — the
+   * tab's identity is stable across tagging, suffix drift, and title changes
+   * (renames are recorded in `titles` so legacy title-based resolution still
+   * finds the tab).
+   */
+  private updateEntry(
+    entry: ObservedTab,
+    button: HTMLElement,
+    tabId: string,
+    existingId: string,
+    isExtensionBtn: boolean,
+  ): void {
+    const title = button.getAttribute('title') || button.textContent?.trim() || tabId
+    const nextExtensionId = parseExtensionId(tabId, existingId, isExtensionBtn)
+    if (entry.tabId === tabId && entry.title === title && entry.extensionId === nextExtensionId) {
+      return
+    }
+    entry.tabId = tabId
+    entry.title = title
+    entry.extensionId = nextExtensionId
+    if (!entry.titles.has(title)) {
+      entry.titles = new Set(entry.titles).add(title)
+    }
+    // The map is keyed by ADDRESS (getTab(tabId)); move the slot when the
+    // address changed so address lookups stay correct. Never re-key the
+    // identity.
+    for (const [key, tab] of this.tabs) {
+      if (tab === entry) {
+        if (key !== tabId) {
+          this.tabs.delete(key)
+          this.tabs.set(tabId, entry)
+        }
+        break
+      }
+    }
+  }
+
+  /**
+   * Assign the FROZEN TabKey for a fresh registration. Classification is
+   * decided ONCE here and never revisited: extension buttons (host class or
+   * spindle-prefixed id) key as 'ext:{extId}/{title}' — extId is whatever is
+   * known at birth ('unknown' while untagged) and tagging later upgrades the
+   * metadata, never the key. Builtin buttons key as 'builtin:{id}'.
+   * Same-key collisions (two tabs from one extension with the same title)
+   * get an '@N' suffix on the KEY only (addresses and titles stay
+   * un-suffixed).
+   */
+  private freezeKey(tabId: string, isExtensionBtn: boolean, title: string): TabKey {
+    if (!isExtensionBtn && !tabId.includes(':')) return builtinKey(tabId)
+    const extensionId = tabId.split(':')[1] || 'unknown'
+    const base = extensionKey(extensionId || 'unknown', title)
+    if (!this.hasKey(base)) return base
+    let n = 2
+    while (this.hasKey(`${base}@${n}`)) n++
+    return `${base}@${n}` as TabKey
+  }
+
+  private hasKey(key: TabKey): boolean {
+    for (const tab of this.tabs.values()) {
+      if (tab.key === key) return true
+    }
+    return false
   }
 }
 

@@ -121,6 +121,12 @@ function triggerRemoval(removedNodes: any[]) {
   }
 }
 
+function triggerAttribute(target: any, attributeName: string) {
+  if (_observerCallback) {
+    _observerCallback([{ type: 'attributes', target, attributeName, oldValue: null }])
+  }
+}
+
 // =====================================================================
 // T1: Document current contract — button WITHOUT data-tab-id is NOT
 //     registered by DrawerObserver.
@@ -213,9 +219,11 @@ async function testT3() {
 
 // =====================================================================
 // T4: Untagged extension buttons — host extension buttons WITHOUT
-//     data-tab-id (class tabBtnExtension) register by title; when the
-//     Canvas tagger later adds data-tab-id, the entry re-keys to the
-//     store id (never two entries for one button).
+//     data-tab-id (class tabBtnExtension) register by title with the
+//     FROZEN key 'ext:unknown/{title}' (never the 'builtin:{title}' wart).
+//     When the Canvas tagger later adds data-tab-id, the entry updates its
+//     ADDRESS in place — the key never changes (never two entries for one
+//     button, never a re-key).
 // =====================================================================
 async function testT4() {
   const observer = new DrawerObserver()
@@ -228,16 +236,18 @@ async function testT4() {
   assertEqual(tabs.length, 1, 'T4: untagged extension button registered by title')
   assertEqual(tabs[0].tabId, 'Hone', 'T4: title is the stable id while untagged')
   assertEqual(tabs[0].extensionId, 'unknown', 'T4: extensionId unknown until tagged')
+  assertEqual(tabs[0].key, 'ext:unknown/Hone', 'T4: frozen key is ext:unknown/{title} (never builtin:{title})')
 
-  // Tagger adds data-tab-id → re-key to the store id, single entry.
+  // Tagger adds data-tab-id → address update in place, single entry, key FROZEN.
   // Real Lumiverse format: spindle:{extensionId}:tab:{tabName}:{counter}.
   untagged.setAttribute('data-tab-id', 'spindle:ext1:tab:myTab:1')
   triggerMutation([untagged])
 
   tabs = observer.getAllTabs()
-  assertEqual(tabs.length, 1, 'T4: re-key keeps a single entry')
-  assertEqual(tabs[0].tabId, 'spindle:ext1:tab:myTab:1', 'T4: re-keyed to store id')
+  assertEqual(tabs.length, 1, 'T4: tagging keeps a single entry')
+  assertEqual(tabs[0].tabId, 'spindle:ext1:tab:myTab:1', 'T4: address re-keyed to store id')
   assertEqual(tabs[0].extensionId, 'ext1', 'T4: extensionId parsed from parts[1] (spindle:{extId}:tab:...)')
+  assertEqual(tabs[0].key, 'ext:unknown/Hone', 'T4: KEY IS FROZEN across tagging (never re-keyed)')
 
   // Non-extension chrome without data-tab-id stays unregistered.
   const chrome = fakeButton({ title: 'Settings' })
@@ -254,6 +264,82 @@ async function testT4() {
 }
 
 // =====================================================================
+// T5: Attribute-aware updates — the tagger writes data-tab-id via
+//     setAttribute; the observer watches attributes and updates the entry
+//     IN PLACE (no childList mutation needed, no stale window).
+// =====================================================================
+async function testT5() {
+  const observer = new DrawerObserver()
+  const btn = fakeButton({ title: 'Hone', extensionClass: true })
+
+  _fakeSidebar = fakeSidebarWithButtons([btn])
+  observer.start()
+  assertEqual(observer.getAllTabs()[0].key, 'ext:unknown/Hone', 'T5: untagged extension frozen key')
+
+  // Tagger writes the real id — an ATTRIBUTE mutation (not childList).
+  btn.setAttribute('data-tab-id', 'spindle:hone:tab:hone_tab:1')
+  triggerAttribute(btn, 'data-tab-id')
+
+  const tabs = observer.getAllTabs()
+  assertEqual(tabs.length, 1, 'T5: attribute mutation keeps a single entry')
+  assertEqual(tabs[0].tabId, 'spindle:hone:tab:hone_tab:1', 'T5: address updated in place via attribute watch')
+  assertEqual(tabs[0].extensionId, 'hone', 'T5: extensionId upgraded in place')
+  assertEqual(tabs[0].key, 'ext:unknown/Hone', 'T5: key FROZEN across attribute updates')
+  assertEqual(tabs[0].titles.has('Hone'), true, 'T5: titles records the display title')
+
+  // Title rename: the entry keeps its key and records the old title.
+  btn.setAttribute('title', 'Hone Renamed')
+  triggerAttribute(btn, 'title')
+  const renamed = observer.getAllTabs()[0]
+  assertEqual(renamed.title, 'Hone Renamed', 'T5: title updated in place')
+  assertEqual(renamed.key, 'ext:unknown/Hone', 'T5: key FROZEN across title rename')
+  assertEqual(renamed.titles.has('Hone') && renamed.titles.has('Hone Renamed'), true,
+    'T5: titles tracks first-seen + current titles')
+
+  observer.stop()
+}
+
+// =====================================================================
+// T6: Same-key collision — two tabs from the same extension with the same
+//     title get an '@N' suffix on the KEY only (addresses stay unique).
+// =====================================================================
+async function testT6() {
+  const observer = new DrawerObserver()
+  const a = fakeButton({ tabId: 'spindle:hone:tab:hone_a:1', title: 'Hone' })
+  const b = fakeButton({ tabId: 'spindle:hone:tab:hone_b:1', title: 'Hone' })
+
+  _fakeSidebar = fakeSidebarWithButtons([a, b])
+  observer.start()
+
+  const keys = observer.getAllTabs().map(t => t.key).sort()
+  assertEqual(keys.length, 2, 'T6: both same-title tabs registered')
+  assertEqual(keys[0], 'ext:hone/Hone', 'T6: first tab keeps the base key')
+  assertEqual(keys[1], 'ext:hone/Hone@2', 'T6: second tab disambiguated with @2 on the key only')
+
+  observer.stop()
+}
+
+// =====================================================================
+// T7: Builtin classification — bare data-tab-id buttons (no extension
+//     class, no spindle prefix) get 'builtin:{id}' keys.
+// =====================================================================
+async function testT7() {
+  const observer = new DrawerObserver()
+  const loom = fakeButton({ tabId: 'loom', title: 'Loom' })
+  const ext = fakeButton({ tabId: 'spindle:lumi:tab:lumi_books_tab:1', title: 'LumiBooks' })
+
+  _fakeSidebar = fakeSidebarWithButtons([loom, ext])
+  observer.start()
+
+  const byId = new Map(observer.getAllTabs().map(t => [t.tabId, t]))
+  assertEqual(byId.get('loom')?.key, 'builtin:loom', 'T7: builtin key from bare id')
+  assertEqual(byId.get('spindle:lumi:tab:lumi_books_tab:1')?.key, 'ext:lumi/LumiBooks',
+    'T7: tagged extension key from spindle parts[1] + title')
+
+  observer.stop()
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -261,6 +347,9 @@ async function main() {
   await testT2()
   await testT3()
   await testT4()
+  await testT5()
+  await testT6()
+  await testT7()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

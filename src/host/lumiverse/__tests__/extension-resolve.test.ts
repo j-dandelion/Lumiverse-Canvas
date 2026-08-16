@@ -96,6 +96,7 @@ withInventory([fakeButton({ title: 'LumiBooks', ext: true })])
   const host = new LumiverseHost()
   const key = host.findKey('LumiBooks')
   assert(key != null, 'A: findKey resolves an untagged extension tab (title id)')
+  assertEqual(key, 'ext:unknown/LumiBooks', 'A: untagged extension gets the FROZEN ext:unknown key (never builtin:)')
   if (key) {
     const live = host.resolve(key)
     assertEqual(live, 'LumiBooks', 'A: resolve round-trips the untagged extension id')
@@ -265,6 +266,72 @@ withInventory([fakeButton({ tabId: 'spindle:hone:tab:hone_tab:1', title: 'Hone' 
   withInventory([fakeButton({ tabId: 'Hone', title: 'Hone', ext: true })])
   const liveId2 = liveIdForFacadeKey('builtin:Hone', drawerObserver.getAllTabs())
   assertEqual(liveId2, 'Hone', 'H3: untagged observer keeps the bare title id')
+}
+
+// ══ F1: LEGACY-KEYED MODEL + FROZEN-KEY OBSERVED WORLD (REFACTOR-PLAN v2
+// F1/F5 joint regression). The assignment facade holds the pre-sticky-key
+// model key ('builtin:Hone' — how an untagged extension was keyed before
+// Phase 1); the live world carries the frozen 'ext:hone/Hone'. observe()
+// must (a) DEDUP the facade entry by TITLE — emitting 'builtin:Hone' would
+// make applySyncFromHost grow a permanent duplicate (the facade re-derives
+// from the model) — and (b) report the live entry's location via
+// entryLocationFor's title fallback so the sync canonicalizes the key
+// WITHOUT flipping the user's secondary placement to primary. ══
+{
+  const { reduce } = await import('../../../core/reduce')
+  const { setTabAssignment, clearTabAssignments } = await import('../../../tabs/assignment')
+  withInventory([
+    fakeButton({ tabId: 'loom', title: 'loom' }),
+    fakeButton({ tabId: 'spindle:hone:tab:hone_tab:1', title: 'Hone' }),
+  ])
+  setTabAssignment(builtinKey('loom'), 'primary')
+  setTabAssignment(builtinKey('Hone'), 'secondary')
+  const host = new LumiverseHost()
+  const observed = host.observe()
+  const keys = observed.tabs.map((t) => t.key)
+  assert(!keys.includes(builtinKey('Hone')),
+    `F1: legacy facade key deduped against the live title (got ${JSON.stringify(keys)})`)
+  assert(keys.includes('ext:hone/Hone'), 'F1: live frozen key present in observed world')
+  assertEqual(
+    observed.tabs.find((t) => t.key === 'ext:hone/Hone')?.location,
+    'secondary',
+    'F1: placement preserved through canonicalization (entryLocationFor title fallback)',
+  )
+
+  const model = {
+    ...createEmptyModel(),
+    primary: [builtinKey('loom')],
+    secondary: [builtinKey('Hone')],
+    active: { primary: builtinKey('loom'), secondary: null },
+  }
+  const next = reduce(model, { t: 'syncFromHost', observed })
+  assert(next.secondary.includes('ext:hone/Hone'),
+    `F1: canonicalized key stays in secondary (got ${JSON.stringify(next.secondary)})`)
+  assert(!next.primary.includes(builtinKey('Hone')) && !next.secondary.includes(builtinKey('Hone')),
+    'F1: no duplicate/ghost legacy key after sync')
+  assert(next.primary.includes(builtinKey('loom')), 'F1: builtin keys unaffected')
+  clearTabAssignments()
+}
+
+// ══ F2: title-dedup must NOT swallow a real facade-only tab — a
+// secondary-assigned builtin whose host button is NOT in the live inventory
+// (DOM-placed / hidden) has no same-title live entry, so its facade entry
+// must survive the dedup (applySyncFromHost would otherwise drop it). ══
+{
+  const { setTabAssignment, clearTabAssignments } = await import('../../../tabs/assignment')
+  withInventory([fakeButton({ tabId: 'loom', title: 'loom' })])
+  setTabAssignment(builtinKey('loom'), 'primary')
+  setTabAssignment(builtinKey('wallpaper'), 'secondary')
+  const host = new LumiverseHost()
+  const observed = host.observe()
+  assert(observed.tabs.some((t) => t.key === builtinKey('wallpaper')),
+    'F2: facade-only tab survives the title dedup (no live twin)')
+  assertEqual(
+    observed.tabs.find((t) => t.key === builtinKey('wallpaper'))?.location,
+    'secondary',
+    'F2: facade-only tab keeps its side',
+  )
+  clearTabAssignments()
 }
 
 console.log(`PASS: ${passed}`)

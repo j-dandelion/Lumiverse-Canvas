@@ -6,7 +6,7 @@
 // preserve state; built-in tabs (Characters, History) use the display-toggle
 // path directly.
 
-import { drawerObserver, type ObservedTab } from './drawer-observer'
+import { drawerObserver, keyForTabShape, type ObservedTab } from './drawer-observer'
 import {
   showSecondaryTab as showSecondaryTabDisplay,
   addSecondaryTabButton,
@@ -570,6 +570,8 @@ export async function assignToSecondary(
       button: button as HTMLElement,
       extensionId: storeTab.extensionId,
       title: storeTab.title,
+      key: keyForTabShape(storeTab.id, storeTab.extensionId, storeTab.title),
+      titles: new Set([storeTab.title]),
     }
     iconSvg = storeTab.iconSvg
     shortName = storeTab.shortName

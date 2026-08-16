@@ -89,7 +89,7 @@ function tabKeyFromDrawerTab(t: { id: string; extensionId: string; title: string
 }
 
 /** The observer is the host's live tab inventory and preserves DOM order. */
-function liveDrawerTabs(): { id: string; extensionId: string; title: string; root: HTMLElement }[] {
+function liveDrawerTabs(): { id: string; extensionId: string; title: string; root: HTMLElement; key: TabKey }[] {
   // Observer-only on purpose: the DrawerObserver registers untagged
   // extension buttons (class-based scan) so this inventory is COMPLETE and
   // STABLE. Unioning the fiber store here instead caused a reconcile/
@@ -102,6 +102,10 @@ function liveDrawerTabs(): { id: string; extensionId: string; title: string; roo
       extensionId: tab.extensionId === 'unknown' ? '' : tab.extensionId,
       title: tab.title,
       root: tab.button,
+      // Frozen identity from the registry. The derivation fallback covers
+      // legacy-injected ObservedTab shapes (test doubles) that predate the
+      // sticky-key field.
+      key: tab.key ?? tabKeyFromDrawerTab({ id: tab.tabId, extensionId: tab.extensionId, title: tab.title }),
     }))
 }
 
@@ -156,10 +160,10 @@ function resolveTabKey(key: TabKey): LiveTabId | null {
 // TabKey first, then read the facade.
 // ---------------------------------------------------------------------------
 export function entryLocationFor(
-  tab: { id: string; extensionId: string; title: string },
+  tab: { id: string; extensionId: string; title: string; key?: TabKey },
   assignments: Map<string, Side>,
 ): Side {
-  const direct = assignments.get(tabKeyFromDrawerTab(tab))
+  const direct = assignments.get(tab.key ?? tabKeyFromDrawerTab(tab))
   if (direct) return direct
   // Re-keyed tab (2026-08-16): the tagger re-keys the observer entry from the
   // title id to the tagged spindle id, so the observed key ('ext:hone/Hone')
@@ -180,10 +184,10 @@ export function entryLocationFor(
 // ---------------------------------------------------------------------------
 // Helper: build the HostTabEntry for a given live tab
 // ---------------------------------------------------------------------------
-function buildHostEntry(tab: { id: string; extensionId: string; title: string; root?: unknown }): HostTabEntry {
+function buildHostEntry(tab: { id: string; extensionId: string; title: string; root?: unknown; key: TabKey }): HostTabEntry {
   const assignments = getTabAssignments()
   const location: Side = entryLocationFor(tab, assignments)
-  const key = tabKeyFromDrawerTab(tab)
+  const key = tab.key
   const canvasHidden = new Set(getCanvasHiddenTabIds())
   const hostSettings = getHostDrawerSettings()
   const hostHidden = hostSettings?.hiddenTabIds ? new Set(hostSettings.hiddenTabIds as string[]) : new Set<string>()
@@ -277,9 +281,10 @@ export class LumiverseHost implements HostPort {
     const seen = new Set<string>()
     const entries: HostTabEntry[] = []
 
-    // Tabs from the live host inventory
+    // Tabs from the live host inventory (frozen keys from the registry —
+    // never re-derived from tagging state).
     for (const t of liveTabs) {
-      const key = tabKeyFromDrawerTab(t)
+      const key = t.key
       seen.add(key)
       entries.push(buildHostEntry(t))
     }
@@ -288,9 +293,26 @@ export class LumiverseHost implements HostPort {
     // (e.g. secondary-assigned tabs whose host button was hidden or DOM-placed).
     // The key here is a model TabKey, so the seen check must compare against
     // the live-tab TabKey space, not the liveId.
+    //
+    // TITLE-BASED DEDUP (REFACTOR-PLAN v2 §4.3): a facade key whose TITLE
+    // matches a live entry is the SAME tab under a legacy pre-canonicalization
+    // key (e.g. the model holds 'builtin:Hone' from before sticky keys while
+    // the live world carries the frozen 'ext:unknown/Hone'). Key-only dedup
+    // would emit both and applySyncFromHost would grow a permanent duplicate
+    // (the facade re-derives from the model, so the ghost self-sustains).
+    // Skipping same-title facade entries makes legacy→canonical key
+    // migration atomic within one sync round. Safe against false positives:
+    // builtin keys parse to bare ids ('loom'), never to display titles
+    // ('Loom'), and disambiguated extension keys carry the '@N' suffix.
+    const liveByTitle = new Map<string, TabKey>()
+    for (const t of liveTabs) {
+      if (!liveByTitle.has(t.title)) liveByTitle.set(t.title, t.key)
+    }
     const assignments = getTabAssignments()
     for (const [tabKey] of assignments) {
       if (seen.has(tabKey)) continue
+      const title = parseBuiltinKey(tabKey) ?? parseExtensionKey(tabKey)?.tabName
+      if (title && liveByTitle.has(title)) continue
       entries.push(buildEntryFromAssignment(tabKey))
       seen.add(tabKey)
     }
@@ -356,7 +378,7 @@ export class LumiverseHost implements HostPort {
 
     // Exact match
     let match = tabs.find(t => t.id === id)
-    if (match) return tabKeyFromDrawerTab(match)
+    if (match) return match.key
 
     // Suffix-stripped match
     const idBase = id.includes(':') ? id.slice(0, id.lastIndexOf(':')) : id
@@ -364,7 +386,7 @@ export class LumiverseHost implements HostPort {
       const tBase = t.id.includes(':') ? t.id.slice(0, t.id.lastIndexOf(':')) : t.id
       return tBase === id || tBase === idBase
     })
-    if (match) return tabKeyFromDrawerTab(match)
+    if (match) return match.key
 
     // If not in drawer tabs, check the assignment map (secondary-assigned tabs)
     const assignments = getTabAssignments()
@@ -392,7 +414,7 @@ export class LumiverseHost implements HostPort {
     // was untagged) even though the observer now holds the tagged spindle
     // id. Match by title so the tab still resolves after re-keying.
     match = tabs.find(t => t.title === id)
-    if (match) return tabKeyFromDrawerTab(match)
+    if (match) return match.key
 
     // Button-attribute bridge (2026-08-16): at boot the observer registers
     // extension buttons by TITLE, then the tagger tags the button with the
@@ -400,11 +422,13 @@ export class LumiverseHost implements HostPort {
     // scan. A saved layout written while tagged carries the spindle id, and
     // this stale entry is the only observer record of the tab. Match through
     // the button's current data-tab-id so the restore still resolves.
+    // (Phase 1's attribute-aware observer closes the stale window in the
+    // live runtime; the bridge remains as the legacy-input path.)
     match = tabs.find(t => {
       const btn = (t as { root?: HTMLElement | null }).root
       return !!btn && btn.getAttribute('data-tab-id') === id
     })
-    if (match) return tabKeyFromDrawerTab(match)
+    if (match) return match.key
 
     return null
   }
