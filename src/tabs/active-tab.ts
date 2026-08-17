@@ -103,4 +103,30 @@ export function isTabActiveInMainDrawer(tabId: string): boolean {
 
 let _activeSecondaryTabId: string | null = null
 export function getActiveSecondaryTabId(): string | null { return _activeSecondaryTabId }
-export function setActiveSecondaryTabId(tabId: string | null): void { _activeSecondaryTabId = tabId }
+
+/**
+ * Record the secondary drawer's active tab.
+ *
+ * UNIFIED PERSISTENCE CHOKE POINT (2026-08-16): every secondary activation
+ * path funnels through this setter (tab clicks via showSecondaryTab, reopen,
+ * placement-with-activation, neighbor handoff, restore). The secondary
+ * wrapper lives on document.body — OUTSIDE the host sidebar subtree the
+ * world-changed observers watch — so none of those activations produce a
+ * host-sync on their own, and without an explicit producer the owned model's
+ * active.secondary lags the drawer: layout.json gets the STALE key and a
+ * hard refresh restores the OLD tab as active. On a non-null CHANGE, sync
+ * the tracked actives into the model (dispatchTrackedActiveSync also syncs
+ * the primary side — one round converges both drawers). Null clears (unassign
+ * paths) are handled by the move flows themselves, so they skip the sync.
+ * The reducer's guards make already-converged rounds true no-ops, so
+ * restore/placement echoes cost one queued no-op.
+ */
+export function setActiveSecondaryTabId(tabId: string | null): void {
+  const changed = tabId !== null && tabId !== _activeSecondaryTabId
+  _activeSecondaryTabId = tabId
+  if (changed) {
+    void import('../recon/dispatch')
+      .then((m) => m.dispatchTrackedActiveSync())
+      .catch(() => { /* model not bootstrapped yet — no-op */ })
+  }
+}

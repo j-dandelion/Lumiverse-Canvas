@@ -18,6 +18,7 @@ import { getSettings } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from './mobile-exclusion'
 import { isShowTabLabels } from './drawer-sync'
+import { getTabSidebar } from '../tabs/assignment'
 import {
   applyMainMirrorDrawer,
   closeCanvasMainDrawer,
@@ -91,14 +92,33 @@ const initialState: MirrorState = {
 let _state: MirrorState = { ...initialState }
 
 /**
- * Apply a partial state patch via Object.assign (not transactional CoW).
+ * Commit a mirror-state patch. All state writes go through here.
  *
- * The updater receives the current state and returns fields to write.
- * Only those fields are assigned onto `_state`.
+ * UNIFIED PERSISTENCE CHOKE POINT for the primary side in taskbar mode
+ * (2026-08-16): a `activeKey` write IS "the user's active main tab changed".
+ * Mirror activations don't reliably produce host-syncs (the host sidebar
+ * observer is childList-only; React re-renders are attribute changes), so
+ * without an explicit producer the owned model's active.primary lags the
+ * mirror key and layout.json gets the STALE key — a hard refresh restores
+ * the old tab as active. On a non-null activeKey CHANGE, sync the tracked
+ * actives into the model (one round converges BOTH drawers; the secondary
+ * setter uses the same producer). Restore-time writes (same key as the
+ * freshly booted model) short-circuit as no-ops, so echoes cost nothing.
  */
 function commitState(updater: (prev: MirrorState) => Partial<MirrorState>): void {
   const patch = updater(_state)
+  const activeChanged =
+    patch.activeKey !== undefined &&
+    patch.activeKey !== null &&
+    patch.activeKey !== _state.activeKey
   Object.assign(_state, patch)
+  if (activeChanged) {
+    void import('../recon/dispatch')
+      .then((m) => m.dispatchTrackedActiveSync())
+      .catch((err) => {
+        dwarn('[main-mirror] active persist dispatch failed:', err)
+      })
+  }
 }
 
 /** Mirror button → host button. WeakMap so host GC is free. */
@@ -324,6 +344,15 @@ export function adoptMainMirrorHostActivation(
   // park chrome until the mirror shell is live.
   if (!_state.enabled) return
 
+  // Never adopt a host-active button that belongs to the SECONDARY drawer
+  // (boot/restore transient — see isSecondaryAssignedHostButton).
+  if (hostBtn && isSecondaryAssignedHostButton(hostBtn)) {
+    dlog('[main-mirror] adopt host activation skipped (secondary-assigned button)', {
+      key: hostButtonKey(hostBtn),
+    })
+    return
+  }
+
   const resolvedTitle =
     title ||
     hostBtn?.getAttribute('title') ||
@@ -445,7 +474,13 @@ function reconcileMainMirror(): void {
     } else {
       const hostActiveBtn =
         hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
-      if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
+      const hostActiveIsSecondary =
+        hostActiveBtn != null && isSecondaryAssignedHostButton(hostActiveBtn)
+      if (
+        hostActiveBtn &&
+        !hostActiveIsSecondary &&
+        !isSettingsButton(hostActiveBtn)
+      ) {
         const newKey = hostButtonKey(hostActiveBtn)
         commitState(() => ({ activeKey: newKey, userPicked: false }))
         const t =
@@ -453,7 +488,11 @@ function reconcileMainMirror(): void {
           hostActiveBtn.getAttribute('aria-label') ||
           ''
         if (t) setCanvasMainTitle(t)
-      } else if (prevKey != null) {
+      } else if (prevKey != null && !hostActiveIsSecondary) {
+        // No usable host active (or it is Settings chrome) — clear. A
+        // host-active tab that is assigned to the SECONDARY drawer is a
+        // transient boot/restore state (re-shown hidden button), NOT a
+        // primary selection: keep the current key instead of clearing it.
         commitState(() => ({ activeKey: null, userPicked: false }))
       }
       if (prevKey !== _state.activeKey) {
@@ -788,6 +827,32 @@ function hostHasTabBtnActive(host: HTMLElement | undefined | null): boolean {
     host.classList.contains('tabBtnActive') ||
     String(host.className || '').includes('tabBtnActive')
   )
+}
+
+/**
+ * True when a host button belongs to a tab assigned to the SECONDARY drawer.
+ *
+ * The host's `tabBtnActive` can sit on a moved tab (the STALENESS WARNING in
+ * tabs/active-tab.ts:60): during boot/restore that tab's host button can be
+ * momentarily re-shown by a React re-render (the inline display:none from
+ * hideMainTabButton is not React-owned), so the heal/seed writers must never
+ * adopt it as the main-mirror key. Seeding it flip-flops the key between the
+ * persisted primary active and the moved tab — and the unified tracked-active
+ * sync (commitState hook) turns every flip into a SAVE_LAYOUT write
+ * (constant-bytes boot cascade, 2026-08-17).
+ */
+function isSecondaryAssignedHostButton(btn: HTMLElement): boolean {
+  const id =
+    btn.getAttribute('data-tab-id') ||
+    btn.getAttribute('title') ||
+    btn.getAttribute('aria-label') ||
+    ''
+  if (!id) return false
+  try {
+    return getTabSidebar(id) === 'secondary'
+  } catch {
+    return false
+  }
 }
 
 function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {

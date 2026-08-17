@@ -1993,6 +1993,22 @@ function applyActivate(model, key, side) {
     return model;
   return { ...model, active: { ...model.active, [side]: key } };
 }
+function applySyncActive(model, primary, secondary) {
+  let next = model;
+  if (primary !== null && next.active.primary !== primary) {
+    const list = listForSide(next, "primary");
+    if (list.includes(primary) && !isHidden(next, primary)) {
+      next = { ...next, active: { ...next.active, primary } };
+    }
+  }
+  if (secondary !== null && next.active.secondary !== secondary) {
+    const list = listForSide(next, "secondary");
+    if (list.includes(secondary) && !isHidden(next, secondary)) {
+      next = { ...next, active: { ...next.active, secondary } };
+    }
+  }
+  return next;
+}
 function applySetDrawer(model, side, open, width) {
   const current = model.drawers[side];
   const newOpen = open !== undefined ? open : current.open;
@@ -2109,6 +2125,8 @@ function reduce(model, intent) {
       return applySetHidden(model, intent.key, intent.hidden);
     case "activate":
       return applyActivate(model, intent.key, intent.side);
+    case "syncActive":
+      return applySyncActive(model, intent.primary, intent.secondary);
     case "setDrawer":
       return applySetDrawer(model, intent.side, intent.open, intent.width);
     case "swapSides":
@@ -2753,7 +2771,13 @@ __export(exports_main_tab_pin, {
 });
 function commitState(updater) {
   const patch = updater(_state);
+  const activeChanged = patch.activeKey !== undefined && patch.activeKey !== null && patch.activeKey !== _state.activeKey;
   Object.assign(_state, patch);
+  if (activeChanged) {
+    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => m.dispatchTrackedActiveSync()).catch((err) => {
+      dwarn("[main-mirror] active persist dispatch failed:", err);
+    });
+  }
 }
 function applyMainTabListPin(enabled, opts) {
   if (isMobileViewport()) {
@@ -2864,6 +2888,12 @@ function adoptMainMirrorNeighbor(hostBtn, title) {
 function adoptMainMirrorHostActivation(hostBtn, title, opts) {
   if (!_state.enabled)
     return;
+  if (hostBtn && isSecondaryAssignedHostButton(hostBtn)) {
+    dlog("[main-mirror] adopt host activation skipped (secondary-assigned button)", {
+      key: hostButtonKey(hostBtn)
+    });
+    return;
+  }
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
     commitState(() => ({ activeKey: hostButtonKey(hostBtn), userPicked: false }));
@@ -2947,13 +2977,14 @@ function reconcileMainMirror() {
       dlog("[main-mirror] active key kept (mid-move host hidden)", { prevKey });
     } else {
       const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
-      if (hostActiveBtn && !isSettingsButton(hostActiveBtn)) {
+      const hostActiveIsSecondary = hostActiveBtn != null && isSecondaryAssignedHostButton(hostActiveBtn);
+      if (hostActiveBtn && !hostActiveIsSecondary && !isSettingsButton(hostActiveBtn)) {
         const newKey = hostButtonKey(hostActiveBtn);
         commitState(() => ({ activeKey: newKey, userPicked: false }));
         const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
         if (t)
           setCanvasMainTitle(t);
-      } else if (prevKey != null) {
+      } else if (prevKey != null && !hostActiveIsSecondary) {
         commitState(() => ({ activeKey: null, userPicked: false }));
       }
       if (prevKey !== _state.activeKey) {
@@ -3200,6 +3231,16 @@ function hostHasTabBtnActive(host) {
     return false;
   return host.classList.contains("tabBtnActive") || String(host.className || "").includes("tabBtnActive");
 }
+function isSecondaryAssignedHostButton(btn) {
+  const id = btn.getAttribute("data-tab-id") || btn.getAttribute("title") || btn.getAttribute("aria-label") || "";
+  if (!id)
+    return false;
+  try {
+    return getTabSidebar(id) === "secondary";
+  } catch {
+    return false;
+  }
+}
 function syncMirrorFromHost(mirror, hostBtn) {
   const tabId = hostBtn.getAttribute("data-tab-id");
   if (tabId)
@@ -3411,6 +3452,7 @@ var init_main_tab_pin = __esm(() => {
   init_log();
   init_mobile_exclusion();
   init_drawer_sync();
+  init_assignment();
   init_main_mirror_drawer();
   init_tab_position();
   init_buttons();
@@ -3485,7 +3527,11 @@ function getActiveSecondaryTabId() {
   return _activeSecondaryTabId;
 }
 function setActiveSecondaryTabId(tabId) {
+  const changed = tabId !== null && tabId !== _activeSecondaryTabId;
   _activeSecondaryTabId = tabId;
+  if (changed) {
+    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => m.dispatchTrackedActiveSync()).catch(() => {});
+  }
 }
 var _activeSecondaryTabId = null;
 var init_active_tab = __esm(() => {
@@ -4377,6 +4423,7 @@ __export(exports_dispatch, {
   getModel: () => getModel,
   getHost: () => getHost,
   flush: () => flush,
+  dispatchTrackedActiveSync: () => dispatchTrackedActiveSync,
   dispatchMoveByLiveId: () => dispatchMoveByLiveId,
   dispatchBatch: () => dispatchBatch,
   dispatchActivateByLiveId: () => dispatchActivateByLiveId,
@@ -4700,6 +4747,25 @@ function dispatchActivateByLiveId(liveId, side) {
     return Promise.resolve();
   }
   return dispatch({ t: "activate", key, side });
+}
+async function dispatchTrackedActiveSync() {
+  const host = _host;
+  if (!host)
+    return;
+  if (_bootstrapping || _restoringPending) {
+    dlog("[dispatch] dispatchTrackedActiveSync skipped (model mid-boot/restore)");
+    return;
+  }
+  const active = await Promise.resolve().then(() => (init_active_tab(), exports_active_tab));
+  const primaryId = active.resolvePrimaryActiveTabId();
+  const secondaryId = active.getActiveSecondaryTabId();
+  const primary = primaryId ? host.findKey(primaryId) : null;
+  const secondary = secondaryId ? host.findKey(secondaryId) : null;
+  if (!primary && !secondary) {
+    dlog("[dispatch] dispatchTrackedActiveSync: nothing resolvable", { primaryId, secondaryId });
+    return;
+  }
+  await dispatch({ t: "syncActive", primary, secondary });
 }
 async function captureMainMirrorMoveChrome(liveId, target) {
   if (target !== "secondary")
@@ -8587,12 +8653,10 @@ function addSecondaryTabButton(tab) {
         closeSecondarySidebar();
       } else {
         showSecondaryTab(tab.id);
-        persistSecondaryTabActivation(tab.id);
       }
     } else {
       openSecondarySidebar();
       showSecondaryTab(tab.id);
-      persistSecondaryTabActivation(tab.id);
     }
   });
   btn.addEventListener("contextmenu", (e3) => {
@@ -8759,11 +8823,6 @@ function clearSecondaryTabButtonActive() {
   for (const btn of tabList.querySelectorAll("button.sidebar-ux-tab-active")) {
     btn.classList.remove("sidebar-ux-tab-active");
   }
-}
-function persistSecondaryTabActivation(liveId) {
-  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => m3.dispatchActivateByLiveId(liveId, "secondary")).catch((err) => {
-    dwarn("[secondary] activate persist dispatch failed:", err);
-  });
 }
 function showSecondaryTab(tabId) {
   setActiveSecondaryTabId(tabId);

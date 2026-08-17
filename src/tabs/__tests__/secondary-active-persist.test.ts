@@ -3,13 +3,13 @@
 // click, not the stale pre-click key.
 //
 // The secondary wrapper lives on document.body — OUTSIDE the host sidebar
-// subtree the world-changed observers watch — so secondary clicks never fire
-// a host-sync (the mechanism that keeps the primary side converged via
-// applySyncFromHost's adoptActive). The drawer-tracked active updates, but
-// the model lags, and serializeModelToLayout writes the STALE key to
-// layout.json: after a hard refresh the OLD tab comes back active. The click
-// handler dispatches an explicit activate intent (dispatchActivateByLiveId)
-// so the model — and the persisted value — follows the clicked tab.
+// subtree the world-changed observers watch — so secondary activations never
+// fire a host-sync on their own. The unified choke point is the tracked-
+// active writer: setActiveSecondaryTabId (tabs/active-tab.ts) dispatches
+// dispatchTrackedActiveSync() (one round converges BOTH drawers), so every
+// activation surface — clicks, reopen, placement-with-activation, handoff —
+// persists without per-surface wiring. This test drives the REAL click
+// handler with a recording dispatch module and asserts the sync fires.
 
 ;(globalThis as any).document = {
   querySelector: () => null,
@@ -78,13 +78,13 @@ function makeEl(tag: string) {
 
 import { mock } from 'bun:test'
 
-// Mock recon/dispatch with a recording dispatchActivateByLiveId. Must include
+// Mock recon/dispatch with a recording dispatchTrackedActiveSync. Must include
 // the exports the STATIC import chain needs (tabs/assignment imports
 // getModel/getHost; tab-context-menu imports dispatchMoveByLiveId /
 // placementFirstMoveByLiveId) or the module load fails.
-const activated: Array<{ liveId: string; side: string }> = []
+let syncCount = 0
 mock.module('../../recon/dispatch', () => ({
-  dispatchActivateByLiveId: async (liveId: string, side: string) => { activated.push({ liveId, side }) },
+  dispatchTrackedActiveSync: async () => { syncCount++ },
   dispatch: async () => {},
   dispatchBatch: async () => {},
   getModel: () => null,
@@ -101,14 +101,10 @@ mock.module('../../recon/dispatch', () => ({
   placementFirstMoveByLiveId: async () => {},
 }))
 
-// tab-position's reconcileTabListPin runs at the end of addSecondaryTabButton;
-// its DOM calls are null-tolerant in this stub env (same as buttons.test.ts),
-// so the real module is used — only recon/dispatch is mocked.
-
 // ── Dynamic imports (must be AFTER mock.module calls) ──
 const { addSecondaryTabButton } = await import('../buttons')
 const { __setSecondaryWrapperForTest, setSecondarySidebarOpen } = await import('../../sidebar/secondary')
-const { getActiveSecondaryTabId } = await import('../active-tab')
+const { getActiveSecondaryTabId, setActiveSecondaryTabId } = await import('../active-tab')
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -145,21 +141,29 @@ const btn = list.children[0]
 assert(btn != null, 'click test: secondary tab button was created')
 assertEqual(btn.getAttribute('data-tab-id'), 'loom', 'click test: button carries the live id')
 
-// Click the tab → showSecondaryTab + persistSecondaryTabActivation.
+// Click the tab → showSecondaryTab → setActiveSecondaryTabId → the unified
+// tracked-active sync fires.
 btn.listeners.click?.[0]?.()
 await sleep(10)
 
 assertEqual(getActiveSecondaryTabId(), 'loom', 'click updates the drawer-tracked active')
-assertEqual(activated.length, 1, 'click dispatches exactly one activate intent')
-assertEqual(activated[0]?.liveId, 'loom', 'activate intent carries the clicked tab live id')
-assertEqual(activated[0]?.side, 'secondary', 'activate intent targets the secondary side')
+assertEqual(syncCount, 1, 'click fires exactly one tracked-active sync')
 
-// Clicking the SAME tab again closes the drawer and must NOT dispatch
-// another activate (the model already has the key — no redundant round).
+// Clicking the SAME tab again closes the drawer and must NOT fire another
+// sync (no tracked-active change → the model already has the key).
 setSecondarySidebarOpen(true) // (close path animation is stubbed away; re-open for the second click)
 btn.listeners.click?.[0]?.()
 await sleep(10)
-assertEqual(activated.length, 1, 're-click of the active tab does not re-dispatch activate')
+assertEqual(syncCount, 1, 're-click of the active tab does not re-sync')
+
+// Same-id re-assert and null clears are handled by the move flows — the
+// setter hook must not fire for them (no redundant rounds).
+setActiveSecondaryTabId('loom')
+await sleep(10)
+assertEqual(syncCount, 1, 'same-id re-assert does not re-sync')
+setActiveSecondaryTabId(null)
+await sleep(10)
+assertEqual(syncCount, 1, 'null clear (unassign path) does not fire the sync')
 
 // ── Summary ──
 console.log(`PASS: ${passed}`)

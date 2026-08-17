@@ -117,6 +117,43 @@ function applyActivate(model: LayoutModel, key: TabKey, side: Side): LayoutModel
   return { ...model, active: { ...model.active, [side]: key } }
 }
 
+/**
+ * Adopt BOTH drawers' tracked actives into the model in one round. Unified
+ * producer for user activations that don't fire host-syncs: the secondary
+ * wrapper lives on document.body (outside the observed subtree) and the
+ * taskbar main mirror's clicks don't reliably mutate the observed world, so
+ * the model's active would lag the drawer-tracked actives and the STALE key
+ * is what layout.json gets persisted. The tracked-active writers
+ * (setActiveSecondaryTabId / the mirror's commitState) dispatch this intent.
+ *
+ * Guards mirror adoptActive (core/reduce.ts): a key is adopted only when it
+ * is currently on that side and not hidden. A null key (drawer has no
+ * tracked active — e.g. transient teardown) is a no-op for that side, never
+ * a clear. Identity-preserving: when neither side changes, the ORIGINAL
+ * reference is returned so dispatch's `next === _model` gate short-circuits
+ * (restore/placement echoes and redundant rounds cost nothing).
+ */
+function applySyncActive(
+  model: LayoutModel,
+  primary: TabKey | null,
+  secondary: TabKey | null,
+): LayoutModel {
+  let next = model
+  if (primary !== null && next.active.primary !== primary) {
+    const list = listForSide(next, 'primary')
+    if (list.includes(primary) && !isHidden(next, primary)) {
+      next = { ...next, active: { ...next.active, primary } }
+    }
+  }
+  if (secondary !== null && next.active.secondary !== secondary) {
+    const list = listForSide(next, 'secondary')
+    if (list.includes(secondary) && !isHidden(next, secondary)) {
+      next = { ...next, active: { ...next.active, secondary } }
+    }
+  }
+  return next
+}
+
 function applySetDrawer(
   model: LayoutModel,
   side: Side,
@@ -307,6 +344,8 @@ export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
       return applySetHidden(model, intent.key, intent.hidden)
     case 'activate':
       return applyActivate(model, intent.key, intent.side)
+    case 'syncActive':
+      return applySyncActive(model, intent.primary, intent.secondary)
     case 'setDrawer':
       return applySetDrawer(model, intent.side, intent.open, intent.width)
     case 'swapSides':

@@ -471,6 +471,62 @@ export function dispatchActivateByLiveId(liveId: LiveTabId, side: Side): Promise
 }
 
 /**
+ * UNIFIED producer: sync BOTH drawers' tracked actives into the owned model
+ * in one round (2026-08-16).
+ *
+ * Each drawer's tracked active is the single source of truth for "which tab
+ * is active there": `resolvePrimaryActiveTabId()` (taskbar → the main-mirror
+ * key; host mode → the host drawer's tabBtnActive) and
+ * `getActiveSecondaryTabId()`. Every user-activation path in BOTH drawers
+ * writes one of these two, so instead of wiring a producer at every click
+ * surface (secondary buttons, main-mirror buttons, DnD, handoffs, …), the
+ * WRITERS themselves dispatch this intent:
+ *
+ * - `setActiveSecondaryTabId` (tabs/active-tab.ts) — the choke point every
+ *   secondary activation flows through (clicks, reopen, placement-with-
+ *   activation, neighbor handoff). The secondary wrapper lives on
+ *   document.body, outside the host sidebar subtree, so those activations
+ *   never produce host-syncs on their own.
+ * - the main-mirror `commitState` activeKey write (sidebar/main-tab-pin.ts) —
+ *   taskbar parity: mirror activations don't reliably mutate the observed
+ *   world (the host sidebar observer is childList-only and React re-renders
+ *   are attribute changes), so the model's primary active lags the mirror
+ *   key and the stale key is what layout.json persists.
+ *
+ * The reducer (`applySyncActive`) only ADOPTS keys already on the right side
+ * and visible, and is identity-preserving — restore/placement echoes and
+ * already-converged rounds short-circuit at dispatch's `next === _model`
+ * gate, so the cost of hooking the writers is one queued no-op.
+ *
+ * No-op (resolves without dispatching) pre-bootstrap or when neither tracked
+ * active resolves to a model key. Also skipped while the owned model is mid-
+ * boot / mid-restore (`_bootstrapping || _restoringPending`): tracked-active
+ * writes in that window are restore-driven echoes (the model is being
+ * converged FROM the layout) and syncing them back reconciles against a
+ * half-ready world — each round can rewrite layout.json during the boot
+ * mutation storm (constant-bytes SAVE_LAYOUT cascade, 2026-08-17). User
+ * activations after readiness are unaffected.
+ */
+export async function dispatchTrackedActiveSync(): Promise<void> {
+  const host = _host
+  if (!host) return
+  if (_bootstrapping || _restoringPending) {
+    dlog('[dispatch] dispatchTrackedActiveSync skipped (model mid-boot/restore)')
+    return
+  }
+  const active = await import('../tabs/active-tab')
+  const primaryId = active.resolvePrimaryActiveTabId()
+  const secondaryId = active.getActiveSecondaryTabId()
+  const primary = primaryId ? host.findKey(primaryId) : null
+  const secondary = secondaryId ? host.findKey(secondaryId) : null
+  if (!primary && !secondary) {
+    dlog('[dispatch] dispatchTrackedActiveSync: nothing resolvable', { primaryId, secondaryId })
+    return
+  }
+  await dispatch({ t: 'syncActive', primary, secondary })
+}
+
+/**
  * Placement-first move for user-initiated moves (right-click "Move to
  * second drawer" and the secondary drawer's "Move to main drawer").
  *

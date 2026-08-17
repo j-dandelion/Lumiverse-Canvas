@@ -422,6 +422,46 @@ function test_activate() {
 test_activate()
 
 // ═══════════════════════════════════════════════════════════════════
+// syncActive intent (2026-08-16): the unified both-drawer tracked-active
+// producer. Adopts valid keys on each side; ignores keys not on that side
+// or hidden; null is a no-op (never a clear); identity when already
+// converged (dispatch's next === _model gate short-circuits echoes).
+// ═══════════════════════════════════════════════════════════════════
+
+function test_syncActive() {
+  const m = modelWith({
+    primary: [PROFILE, PRESETS],
+    secondary: [LOOM],
+    activePrimary: PROFILE,
+    activeSecondary: null,
+  })
+
+  const r = reduce(m, { t: 'syncActive', primary: PRESETS, secondary: LOOM })
+  assertEqual(r.active.primary, PRESETS, 'syncActive adopts valid primary tracked active')
+  assertEqual(r.active.secondary, LOOM, 'syncActive adopts valid secondary tracked active')
+
+  const r2 = reduce(m, { t: 'syncActive', primary: LOOM, secondary: null })
+  assertEqual(r2.active.primary, PROFILE, 'syncActive ignores a key not on that side')
+  assertEqual(r2.active.secondary, null, 'syncActive untouched side keeps its active')
+
+  const mh = modelWith({ primary: [PROFILE, PRESETS], hidden: [PRESETS], activePrimary: PROFILE, activeSecondary: null })
+  const r3 = reduce(mh, { t: 'syncActive', primary: PRESETS, secondary: null })
+  assertEqual(r3.active.primary, PROFILE, 'syncActive ignores a hidden key')
+
+  const converged = modelWith({ primary: [PROFILE], secondary: [LOOM], activePrimary: PROFILE, activeSecondary: LOOM })
+  assert(
+    reduce(converged, { t: 'syncActive', primary: PROFILE, secondary: LOOM }) === converged,
+    'syncActive is identity-preserving when already converged',
+  )
+
+  const r4 = reduce(m, { t: 'syncActive', primary: null, secondary: null })
+  assertEqual(r4.active.primary, PROFILE, 'syncActive null primary is a no-op, not a clear')
+  assertEqual(r4.active.secondary, null, 'syncActive null secondary is a no-op, not a clear')
+}
+
+test_syncActive()
+
+// ═══════════════════════════════════════════════════════════════════
 // setDrawer intent
 // ═══════════════════════════════════════════════════════════════════
 
