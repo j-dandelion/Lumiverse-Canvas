@@ -1989,6 +1989,8 @@ function applyActivate(model, key, side) {
     return model;
   if (isHidden(model, key))
     return model;
+  if (model.active[side] === key)
+    return model;
   return { ...model, active: { ...model.active, [side]: key } };
 }
 function applySetDrawer(model, side, open, width) {
@@ -4377,6 +4379,7 @@ __export(exports_dispatch, {
   flush: () => flush,
   dispatchMoveByLiveId: () => dispatchMoveByLiveId,
   dispatchBatch: () => dispatchBatch,
+  dispatchActivateByLiveId: () => dispatchActivateByLiveId,
   dispatch: () => dispatch,
   captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
   captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
@@ -4686,6 +4689,17 @@ function dispatchMoveByLiveId(liveId, activateDest = true) {
     index: destVisible,
     activateDest
   });
+}
+function dispatchActivateByLiveId(liveId, side) {
+  const host = _host;
+  if (!host)
+    return Promise.resolve();
+  const key = host.findKey(liveId);
+  if (!key) {
+    dlog("[dispatch] dispatchActivateByLiveId: findKey returned null", { liveId, side });
+    return Promise.resolve();
+  }
+  return dispatch({ t: "activate", key, side });
 }
 async function captureMainMirrorMoveChrome(liveId, target) {
   if (target !== "secondary")
@@ -8573,10 +8587,12 @@ function addSecondaryTabButton(tab) {
         closeSecondarySidebar();
       } else {
         showSecondaryTab(tab.id);
+        persistSecondaryTabActivation(tab.id);
       }
     } else {
       openSecondarySidebar();
       showSecondaryTab(tab.id);
+      persistSecondaryTabActivation(tab.id);
     }
   });
   btn.addEventListener("contextmenu", (e3) => {
@@ -8743,6 +8759,11 @@ function clearSecondaryTabButtonActive() {
   for (const btn of tabList.querySelectorAll("button.sidebar-ux-tab-active")) {
     btn.classList.remove("sidebar-ux-tab-active");
   }
+}
+function persistSecondaryTabActivation(liveId) {
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => m3.dispatchActivateByLiveId(liveId, "secondary")).catch((err) => {
+    dwarn("[secondary] activate persist dispatch failed:", err);
+  });
 }
 function showSecondaryTab(tabId) {
   setActiveSecondaryTabId(tabId);

@@ -443,6 +443,34 @@ export function dispatchMoveByLiveId(
 }
 
 /**
+ * Activate a tab on a side, resolving the TabKey from a LIVE id via the host.
+ *
+ * This is the producer for the SECONDARY drawer's click path. The secondary
+ * wrapper lives on document.body — outside the main-sidebar subtree the host
+ * observes — so clicking a secondary tab never fires a world-changed
+ * observer (the mechanism that keeps the primary side converged via
+ * applySyncFromHost's adoptActive). The drawer-tracked active
+ * (getActiveSecondaryTabId) updates, but the owned model's active.secondary
+ * lags, and the STALE key is what serializeModelToLayout writes to
+ * layout.json — after a hard refresh the OLD tab comes back active instead
+ * of the one the user clicked. The click handler dispatches this so the
+ * model — and the persisted secondary.activeTabId — follows the click.
+ *
+ * No-op (resolves without dispatching) when the owned model is not
+ * bootstrapped or the live id cannot resolve to a model key.
+ */
+export function dispatchActivateByLiveId(liveId: LiveTabId, side: Side): Promise<void> {
+  const host = _host
+  if (!host) return Promise.resolve()
+  const key = host.findKey(liveId)
+  if (!key) {
+    dlog('[dispatch] dispatchActivateByLiveId: findKey returned null', { liveId, side })
+    return Promise.resolve()
+  }
+  return dispatch({ t: 'activate', key, side })
+}
+
+/**
  * Placement-first move for user-initiated moves (right-click "Move to
  * second drawer" and the secondary drawer's "Move to main drawer").
  *

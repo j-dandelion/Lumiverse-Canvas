@@ -371,10 +371,12 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
         closeSecondarySidebar()
       } else {
         showSecondaryTab(tab.id)
+        persistSecondaryTabActivation(tab.id)
       }
     } else {
       openSecondarySidebar()
       showSecondaryTab(tab.id)
+      persistSecondaryTabActivation(tab.id)
     }
   })
   btn.addEventListener('contextmenu', (e) => {
@@ -659,10 +661,32 @@ export function clearSecondaryTabButtonActive(): void {
   }
 }
 
+// The secondary drawer's tab clicks never reach the host observers (the
+// wrapper lives on document.body — outside the main-sidebar subtree the host
+// observes — so no world-changed observer fires and no host-sync converges
+// the owned model). Without an explicit intent, model.active.secondary lags
+// the drawer-tracked active (getActiveSecondaryTabId) and the STALE key is
+// what serializeModelToLayout writes to layout.json — after a hard refresh
+// the old tab comes back active instead of the one the user clicked
+// (2026-08-16). Dispatch an explicit activate intent (resolved via the
+// host, so no-op until the owned model is bootstrapped) so the model — and
+// the persisted secondary.activeTabId — follows the click. The applyActivate
+// identity guard makes a redundant round a true no-op.
+function persistSecondaryTabActivation(liveId: string): void {
+  void import('../recon/dispatch')
+    .then((m) => m.dispatchActivateByLiveId(liveId, 'secondary'))
+    .catch((err) => {
+      dwarn('[secondary] activate persist dispatch failed:', err)
+    })
+}
+
 export function showSecondaryTab(tabId: string): void {
   // Record which tab is now active.
   setActiveSecondaryTabId(tabId)
-  // Persist via the owned model — the next dispatch will persist automatically.
+  // NOTE: persisting the active tab is the CLICK HANDLER's job
+  // (persistSecondaryTabActivation). This function is also reached from
+  // restore/placement/host-activate paths that already converge the model
+  // through their own flows, so it must not dispatch on its own.
 
   const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 

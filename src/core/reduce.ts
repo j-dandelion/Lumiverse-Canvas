@@ -108,6 +108,12 @@ function applyActivate(model: LayoutModel, key: TabKey, side: Side): LayoutModel
   const list = listForSide(model, side)
   if (!list.includes(key)) return model
   if (isHidden(model, key)) return model
+  // Identity-preserving for no-op rounds (same convention as applySetDrawer):
+  // a redundant activate for the already-active key returns the ORIGINAL
+  // reference so dispatch's `next === _model` gate short-circuits — no
+  // reconcile/persist for e.g. the secondary click path when a host-sync
+  // already converged the model.
+  if (model.active[side] === key) return model
   return { ...model, active: { ...model.active, [side]: key } }
 }
 

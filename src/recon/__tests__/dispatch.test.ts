@@ -3,7 +3,7 @@ import { createEmptyModel, builtinKey, extensionKey } from '../../core/model'
 import { type Intent } from '../../core/intents'
 import { visibleKeys } from '../../core/select'
 import { FakeHost, type LiveTab } from '../../host/fake/implementation'
-import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId } from '../../recon/dispatch'
+import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId, dispatchActivateByLiveId } from '../../recon/dispatch'
 import { serializeModelToLayout, buildModelFromLayout } from '../../persist/layout-model'
 import {
   armLayoutRepo,
@@ -815,6 +815,62 @@ async function testDeferredBootstrapFromLayout() {
 }
 
 // ============================================================================
+// D18 — dispatchActivateByLiveId (secondary click path)
+//
+// Secondary clicks never fire host-syncs (the wrapper is outside the
+// observed subtree), so the click handler dispatches an explicit activate
+// intent. This test proves the intent resolves the live id, converges the
+// model's secondary active, and — critically — that the value written to
+// the persisted layout follows the click (that is the disk value a hard
+// refresh restores; the bug: it carried the stale pre-click key).
+// ============================================================================
+async function testDispatchActivateByLiveId() {
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'secondary', { activeInSecondary: true }),
+    makeLiveTab(B, 'h:b', 'secondary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [A, B],
+    hidden: [],
+    active: { primary: PROFILE, secondary: A },
+  }
+  shutdown()
+  bootstrap(model, host)
+  await flush()
+
+  // User clicks tab B in the secondary drawer (its live id is 'h:b').
+  await dispatchActivateByLiveId('h:b', 'secondary')
+  await flush()
+
+  const after = getModel()
+  assert(after != null, 'D18a: model present')
+  if (after) {
+    assertEqual(after.active.secondary, B, 'D18b: secondary active converges to the clicked tab')
+
+    // The persisted layout must carry the CLICKED tab.
+    const blob = serializeModelToLayout(after, (k) => host.resolve(k), 'test-v1.0')
+    assertEqual(blob.secondary.activeTabId, 'h:b', 'D18c: persisted secondary active follows the click')
+  }
+
+  // Unresolvable live id: resolves without dispatch, model unchanged.
+  const before = JSON.stringify(getModel())
+  await dispatchActivateByLiveId('h:nope', 'secondary')
+  await flush()
+  assertEqual(JSON.stringify(getModel()), before, 'D18d: unresolvable live id is a no-op')
+
+  // Already-active key: identity-preserving no-op (no reconcile/persist).
+  const refBefore = getModel()
+  await dispatchActivateByLiveId('h:b', 'secondary')
+  await flush()
+  assert(getModel() === refBefore, 'D18e: re-activating the active tab keeps the model reference')
+
+  shutdown()
+}
+
+// ============================================================================
 // Run all tests
 // ============================================================================
 await testRightClickMovePrimaryToSecondary()
@@ -836,6 +892,7 @@ await testMoveWhenTabNotInModel()
 await testMoveWhenTabIsInModel()
 await testDispatchPersistsModel()
 await testUnknownLiveIdIsNoOp()
+await testDispatchActivateByLiveId()
 
 // Round-trip serialization
 await testRoundTripSerialization()
