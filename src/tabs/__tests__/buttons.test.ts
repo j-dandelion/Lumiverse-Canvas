@@ -628,6 +628,7 @@ import {
   reorderSecondaryTabButtons,
   applyHiddenTabIdsToSecondary,
   addSecondaryTabButton,
+  findMainTabButton,
 } from '../buttons'
 
 // Factory for tab list stubs used by reorder/hide tests.
@@ -1256,6 +1257,74 @@ import { __setDrawerTabsForTest } from '../../store'
   // Settle the async tab-position tail (reconcileTabListPin) from
   // addSecondaryTabButton before the runner exits.
   await new Promise((r) => setTimeout(r, 0))
+})()
+
+// =====================================================================
+// B33: findMainTabButton title-fallback must NOT clobber an existing
+//      data-tab-id (2026-08-17). The tagger writes the composite spindle
+//      id on extension host buttons; a title-as-id lookup ('Bar') would
+//      previously OVERWRITE it with the title, re-classifying the tab as
+//      built-in/unknown → boot restore fails for the extension tab ("drag
+//      an extension tab to another drawer → doesn't move / activation
+//      lands on the drawer it was moved from").
+// =====================================================================
+;(async () => {
+  const attrs: Record<string, string> = {
+    'data-tab-id': 'spindle:ext:foo:tab:Bar:0',
+    title: 'Bar',
+  }
+  const taggedBtn = {
+    attrs,
+    getAttribute(name: string) { return attrs[name] ?? null },
+    setAttribute(name: string, value: string) { attrs[name] = value },
+  }
+  const untaggedBtn = {
+    attrs: { title: 'Untagged Ext' },
+    getAttribute(name: string) { return this.attrs[name] ?? null },
+    setAttribute(name: string, value: string) { this.attrs[name] = value },
+  }
+  const sidebarStub = {
+    querySelector(sel: string): unknown {
+      // Match ONLY the attribute the selector names (real DOM semantics):
+      // button[data-tab-id="X"] must not match a button whose TITLE is X.
+      const idMatch = sel.match(/data-tab-id="([^"]+)"\]/)
+      if (idMatch) {
+        const needle = idMatch[1]
+        for (const b of [taggedBtn, untaggedBtn]) {
+          if (b.getAttribute('data-tab-id') === needle) return b
+        }
+        return null
+      }
+      const titleMatch = sel.match(/title="([^"]+)"\]/)
+      if (titleMatch) {
+        const needle = titleMatch[1]
+        for (const b of [taggedBtn, untaggedBtn]) {
+          if (b.getAttribute('title') === needle) return b
+        }
+      }
+      return null
+    },
+    querySelectorAll(_sel: string): unknown[] { return [] },
+  }
+  const prevQS = (globalThis as any).document.querySelector
+  ;(globalThis as any).document.querySelector = (sel: string) =>
+    sel === '[data-spindle-mount="sidebar"]' ? sidebarStub : null
+
+  try {
+    // Title-as-id lookup on a TAGGED button: found via title, but the
+    // composite id must survive.
+    const found = findMainTabButton('Bar')
+    assert(found === taggedBtn, 'B33.a: title fallback resolves the tagged button')
+    assertEqual(attrs['data-tab-id'], 'spindle:ext:foo:tab:Bar:0', 'B33.b: composite data-tab-id NOT clobbered by title')
+
+    // Genuinely untagged button: the backfill still applies (fast-path
+    // seeding for the LumiScript-broken-store case).
+    const untagged = findMainTabButton('Untagged Ext')
+    assert(untagged === untaggedBtn, 'B33.c: title fallback resolves the untagged button')
+    assertEqual((untaggedBtn as any).attrs['data-tab-id'], 'Untagged Ext', 'B33.d: untagged button still gets the backfilled id')
+  } finally {
+    ;(globalThis as any).document.querySelector = prevQS
+  }
 })()
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

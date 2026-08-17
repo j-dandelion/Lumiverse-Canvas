@@ -993,6 +993,74 @@ async function testTeardownClearsActive() {
 }
 
 // =====================================================================
+// T-STALE-UPGRADE: assignToSecondary upgrades a STALE observer entry
+// (title-keyed, extensionId 'unknown' — the tagger's write was missed
+// during the observer's initial scan) from the store's real extensionId.
+// Without the upgrade the tab takes the BUILT-IN path, its placement
+// fails, and the model ends up ahead of the DOM ("drag an extension tab
+// to another drawer → doesn't move in the main UI").
+// =====================================================================
+async function testStaleEntryUpgrade() {
+  const env = setupExtTest({ tabId: 'ext-tab-abc-123', tabTitle: 'My Extension', extensionId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  try {
+    // Inject the STALE observer entry exactly as the missed-write leaves it.
+    ;(drawerObserver as any).tabs.set(env.tabTitle, {
+      tabId: env.tabTitle,
+      button: env.fakeMainButton,
+      extensionId: 'unknown',
+      title: env.tabTitle,
+      key: `ext:unknown/${env.tabTitle}`,
+      titles: new Set([env.tabTitle]),
+    })
+
+    const { assignToSecondary } = await import('../secondary-drawer')
+    // Called with the TITLE-as-id — what the boot restore resolves.
+    await assignToSecondary(env.tabTitle)
+
+    // The extension path must have run: secondary button carries the
+    // STORE's composite id, the main button is hidden, the root is
+    // reparented into the secondary panel content.
+    const tabButtons = (env.fakeTabList as any).children
+    assert(tabButtons.length > 0, 'T-STALE-UPGRADE: secondary button created')
+    const btn = tabButtons[tabButtons.length - 1]
+    assertEqual(btn.getAttribute('data-tab-id'), env.tabId, 'T-STALE-UPGRADE: button uses the store composite id')
+    assertEqual(env.fakeMainButton.style.display, 'none', 'T-STALE-UPGRADE: main host button hidden')
+    assertEqual(
+      env.fakePanelContent.children[0]?.getAttribute?.('data-canvas-moved'),
+      env.tabId,
+      'T-STALE-UPGRADE: root reparented into secondary content',
+    )
+  } finally { restoreTest() }
+}
+
+// =====================================================================
+// T-NO-ROOT: extension tab with NO content root (lazily-mounted extension)
+// must still get its secondary button + hidden main button — and the HOST
+// BUTTON must NOT be reparented into the secondary panel content (the
+// observer facade's getDrawerTabs() returns `root: tab.button`; reparenting
+// it rips the button out of the sidebar — "findMainTabButton: no button",
+// mirror loses the tab, move-back cannot restore it).
+// =====================================================================
+async function testNoRootWiresButton() {
+  const env = setupExtTest({ tabId: 'ext-tab-noroot', tabTitle: 'No Root Ext', extensionId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
+  try {
+    // Fiber store has the tab but NO content root.
+    __setDrawerTabsForTest([{ id: env.tabId, extensionId: env.extensionId, title: env.tabTitle, root: null }])
+
+    const { assignToSecondary } = await import('../secondary-drawer')
+    await assignToSecondary(env.tabId)
+
+    const tabButtons = (env.fakeTabList as any).children
+    assert(tabButtons.length > 0, 'T-NO-ROOT: secondary button created without a content root')
+    const btn = tabButtons[tabButtons.length - 1]
+    assertEqual(btn.getAttribute('data-tab-id'), env.tabId, 'T-NO-ROOT: button id is the composite')
+    assertEqual(env.fakeMainButton.style.display, 'none', 'T-NO-ROOT: main host button hidden (not moved)')
+    const moved = env.fakePanelContent.children.filter((c: any) => c.getAttribute?.('data-canvas-moved'))
+    assertEqual(moved.length, 0, 'T-NO-ROOT: NO root reparented into the secondary content')
+  } finally { restoreTest() }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -1013,6 +1081,12 @@ async function main() {
   await testExtT5()
   await testExtT6()
   await testExtT7()
+
+  // Stale observer entry → store upgrade (boot restore misclassification)
+  await testStaleEntryUpgrade()
+
+  // No content root → wire button, never reparent the host button
+  await testNoRootWiresButton()
 
   // Mobile auto-open guard tests
   await testExtMobileNoAutoOpen()

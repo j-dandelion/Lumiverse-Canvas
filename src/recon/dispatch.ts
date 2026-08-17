@@ -693,12 +693,22 @@ export async function applyMainMirrorMoveChrome(
   } else if (reassertId) {
     // Re-assert the user's active tab content (host panel drift — the
     // "content changed to Loom" regression).
-    const btn = document.querySelector<HTMLElement>(
-      `button[data-tab-id="${CSS.escape(reassertId)}"]`,
-    )
+    //
+    // Scope the lookup to the MAIN sidebar via findMainTabButton. A global
+    // document.querySelector('button[data-tab-id]') can match a Canvas
+    // secondary button (which also carries data-tab-id) when the host's
+    // main button is hidden or untagged — for extension tabs the host button
+    // has no data-tab-id until the tagger runs, so the global query would
+    // find the secondary button and activate the tab in the WRONG drawer
+    // ("activates on the drawer it was moved from"). Dynamic import to
+    // avoid the dispatch → buttons → secondary → dispatch circular dep.
+    const { findMainTabButton } = await import('../tabs/buttons')
+    const btn = findMainTabButton(reassertId) as HTMLElement | null
     if (btn && btn.isConnected) {
       dlog(`[tabmove] apply chrome: re-asserting active tab content (${reassertId})`)
       try { btn.click() } catch { /* host may throw during teardown */ }
+    } else {
+      dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { reassertId })
     }
   }
 
@@ -851,11 +861,20 @@ export async function placementFirstMoveByLiveId(
 
   // 1.5 Drawer open + taskbar chrome handoff (idempotent). The capture/apply
   // split is shared with the live DnD cross-drawer path (tab-list-dnd.ts).
+  // On mobile, moving a tab must NOT auto-open the destination drawer (only
+  // one drawer open at a time; the user opens it explicitly) — same policy
+  // as assignTab (tabs/assignment.ts) and assignToSecondary. Desktop keeps
+  // the rClick open-so-the-move-is-visible behavior.
   if (target === 'secondary') {
     const secondary = await import('../sidebar/secondary')
     if (!secondary.isSecondarySidebarOpen()) {
-      dlog('[tabmove] placementFirstMove: secondary drawer not open; opening explicitly')
-      secondary.openSecondarySidebar()
+      const { isMobileViewport } = await import('../sidebar/mobile-exclusion')
+      if (!isMobileViewport()) {
+        dlog('[tabmove] placementFirstMove: secondary drawer not open; opening explicitly')
+        secondary.openSecondarySidebar()
+      } else {
+        dlog('[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)')
+      }
     }
 
     await applyMainMirrorMoveChrome(chrome, liveId)

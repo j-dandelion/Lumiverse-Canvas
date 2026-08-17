@@ -504,10 +504,18 @@ function tagMainSidebarButtons() {
   if (!sidebar)
     return 0;
   findStoreData(true);
-  const tabs = getDrawerTabs();
-  if (tabs.length === 0)
+  const tabs = getHostStoreTabs();
+  if (tabs.length === 0) {
+    const fallback = getDrawerTabs();
+    if (fallback.length > 0)
+      return tagFromTabs(sidebar, fallback);
     return 0;
+  }
+  return tagFromTabs(sidebar, tabs);
+}
+function tagFromTabs(sidebar, tabs) {
   let tagged = 0;
+  const taggedDetail = [];
   const buttons = sidebar.querySelectorAll("button[title]");
   for (const btn of buttons) {
     const existing = btn.getAttribute("data-tab-id");
@@ -520,10 +528,11 @@ function tagMainSidebarButtons() {
     if (tab) {
       btn.setAttribute("data-tab-id", tab.id);
       tagged++;
+      taggedDetail.push({ title: btnTitle, id: tab.id, btnId: existing || "(none)" });
     }
   }
   if (tagged > 0)
-    dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`);
+    dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`, { tagged: taggedDetail });
   return tagged;
 }
 function startTagObserver() {
@@ -3591,70 +3600,6 @@ var init_active_tab = __esm(() => {
   init_main_tab_pin();
 });
 
-// src/tabs/dom-placed-builtin.ts
-function isDomPlacedBuiltIn(tabId) {
-  if (_domPlacedIds.has(tabId))
-    return true;
-  if (typeof document === "undefined")
-    return false;
-  try {
-    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-  } catch {
-    return false;
-  }
-}
-function markDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.add(tabId);
-}
-function clearDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.delete(tabId);
-}
-function __clearDomPlacedForTest() {
-  _domPlacedIds.clear();
-}
-function resolveMainPanelContentForRestore() {
-  const fromHost = getMainPanelContent();
-  if (fromHost)
-    return fromHost;
-  if (typeof document === "undefined")
-    return null;
-  return document.querySelector("[data-canvas-main-panel-content]");
-}
-function restoreDomPlacedBuiltInToMain(tabId, root) {
-  let el = root ?? null;
-  if (!el && typeof document !== "undefined") {
-    try {
-      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-      if (!el) {
-        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
-      }
-    } catch {
-      el = null;
-    }
-  }
-  if (el) {
-    if (el.parentElement) {
-      try {
-        el.parentElement.removeChild(el);
-      } catch {}
-    }
-    el.removeAttribute("data-canvas-moved");
-    el.removeAttribute("data-canvas-active");
-    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-    el.style.removeProperty("position");
-    el.style.removeProperty("inset");
-    el.style.removeProperty("display");
-  }
-  _domPlacedIds.delete(tabId);
-  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
-  return !!el;
-}
-var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
-var init_dom_placed_builtin = __esm(() => {
-  init_log();
-  _domPlacedIds = new Set;
-});
-
 // src/tabs/host-tab-location.ts
 var exports_host_tab_location = {};
 __export(exports_host_tab_location, {
@@ -3818,6 +3763,70 @@ var init_host_tab_location = __esm(() => {
   init_fiber();
   init_store();
   init_log();
+});
+
+// src/tabs/dom-placed-builtin.ts
+function isDomPlacedBuiltIn(tabId) {
+  if (_domPlacedIds.has(tabId))
+    return true;
+  if (typeof document === "undefined")
+    return false;
+  try {
+    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+  } catch {
+    return false;
+  }
+}
+function markDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.add(tabId);
+}
+function clearDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.delete(tabId);
+}
+function __clearDomPlacedForTest() {
+  _domPlacedIds.clear();
+}
+function resolveMainPanelContentForRestore() {
+  const fromHost = getMainPanelContent();
+  if (fromHost)
+    return fromHost;
+  if (typeof document === "undefined")
+    return null;
+  return document.querySelector("[data-canvas-main-panel-content]");
+}
+function restoreDomPlacedBuiltInToMain(tabId, root) {
+  let el = root ?? null;
+  if (!el && typeof document !== "undefined") {
+    try {
+      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+      if (!el) {
+        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
+      }
+    } catch {
+      el = null;
+    }
+  }
+  if (el) {
+    if (el.parentElement) {
+      try {
+        el.parentElement.removeChild(el);
+      } catch {}
+    }
+    el.removeAttribute("data-canvas-moved");
+    el.removeAttribute("data-canvas-active");
+    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+    el.style.removeProperty("position");
+    el.style.removeProperty("inset");
+    el.style.removeProperty("display");
+  }
+  _domPlacedIds.delete(tabId);
+  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
+  return !!el;
+}
+var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
+var init_dom_placed_builtin = __esm(() => {
+  init_log();
+  _domPlacedIds = new Set;
 });
 
 // src/tabs/builtin-move.ts
@@ -4105,12 +4114,31 @@ async function assignExtensionTabToSecondary(ctx) {
   const secondaryWrapper = getSecondaryWrapper();
   const secondaryContentMain = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-  if (storeTab?.root && secondaryContentMain) {
-    const root = storeTab.root;
-    if (root.parentElement !== secondaryContentMain) {
-      secondaryContentMain.appendChild(root);
-    }
+  const { getHostStoreTabs: getHostStoreTabs2 } = await Promise.resolve().then(() => (init_store(), exports_store));
+  const hostStoreTabs = getHostStoreTabs2();
+  const fiberTab = hostStoreTabs.find((t) => t.id === resolvedId) || hostStoreTabs.find((t) => t.title === tab.title);
+  const realRoot = fiberTab?.root && fiberTab.root !== tab.button ? fiberTab.root : null;
+  if (realRoot && secondaryContentMain) {
+    const root = realRoot;
     root.setAttribute("data-canvas-moved", resolvedId);
+    let placedViaHost = false;
+    try {
+      const { requestHostTabToSecondary: requestHostTabToSecondary2 } = await Promise.resolve().then(() => (init_host_tab_location(), exports_host_tab_location));
+      const placed = requestHostTabToSecondary2(resolvedId);
+      dlog("[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary", {
+        tabId: resolvedId,
+        ok: placed.ok,
+        via: placed.via
+      });
+      placedViaHost = placed.ok;
+    } catch (err) {
+      dwarn("[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary threw:", err);
+    }
+    if (!placedViaHost) {
+      if (root.parentElement !== secondaryContentMain) {
+        secondaryContentMain.appendChild(root);
+      }
+    }
     if (!deferActivation) {
       for (const child of Array.from(secondaryContentMain.children)) {
         if (child instanceof HTMLElement) {
@@ -4124,10 +4152,10 @@ async function assignExtensionTabToSecondary(ctx) {
     }
     await finalizeAssignToSecondary({
       resolvedId,
-      title: tab.title || storeTab.title || resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
       root,
-      iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab.iconSvg,
-      shortName: readMainButtonShortName(tab.button) || storeTab.shortName,
+      iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
+      shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
@@ -4135,18 +4163,18 @@ async function assignExtensionTabToSecondary(ctx) {
     });
     return;
   }
-  if (!isMobileViewport() && !deferActivation) {
-    _activeTabId = resolvedId;
-    _state2 = "tab_active";
-    setActiveSecondaryTabId(resolvedId);
-  }
-  const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-  if (headerTitle && !deferActivation) {
-    headerTitle.textContent = tab.title || resolvedId;
-  }
-  if (!isMobileViewport() && !deferActivation) {
-    showSecondaryTab(resolvedId);
-  }
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title: tab.title || storeTab?.title || resolvedId,
+    root: tab.button,
+    iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
+    shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
+    deferActivation,
+    wireAssignment: false,
+    openOnClosed: false,
+    setActiveWhenReady: ctx.setActiveWhenReady ?? true
+  });
+  return;
 }
 async function assignBuiltInTabToSecondary(ctx) {
   const { tabId, tab, resolvedId, deferActivation } = ctx;
@@ -4287,17 +4315,43 @@ async function assignToSecondary(tabId, opts) {
   }
   const resolvedId = tab.tabId;
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
+  let isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
+  if (!isExtensionTab) {
+    if (!tab)
+      return;
+    const t = tab;
+    const { getHostStoreTabs: getHostStoreTabs2 } = await Promise.resolve().then(() => (init_store(), exports_store));
+    const hostStoreTabs = getHostStoreTabs2();
+    const storeTab = hostStoreTabs.find((x) => x.id === tabId) || hostStoreTabs.find((x) => x.id === t.tabId) || hostStoreTabs.find((x) => x.title === t.title);
+    if (storeTab?.extensionId && storeTab.extensionId !== "unknown") {
+      dlog("[SecondaryDrawer] assignToSecondary: observer entry stale — upgraded from store", {
+        fromId: t.tabId,
+        toId: storeTab.id,
+        extFrom: t.extensionId,
+        extTo: storeTab.extensionId
+      });
+      tab = {
+        ...tab,
+        tabId: storeTab.id,
+        extensionId: storeTab.extensionId,
+        title: storeTab.title,
+        titles: new Set([storeTab.title])
+      };
+      iconSvg = iconSvg ?? storeTab.iconSvg;
+      shortName = shortName ?? storeTab.shortName;
+      isExtensionTab = true;
+    }
+  }
   const ctx = {
     tabId,
     tab,
-    resolvedId,
+    resolvedId: tab.tabId,
     iconSvg,
     shortName,
     deferActivation,
     openOnClosed: opts?.openOnClosed,
     setActiveWhenReady: opts?.setActiveWhenReady
   };
-  const isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
   if (isExtensionTab) {
     await assignExtensionTabToSecondary(ctx);
   } else {
@@ -4389,10 +4443,25 @@ async function unassignFromSecondary(tabId) {
       }
     }
   } else if (_movedRoot) {
-    if (_movedRoot.parentElement) {
-      try {
-        _movedRoot.parentElement.removeChild(_movedRoot);
-      } catch {}
+    let hostResetOk = false;
+    try {
+      const { requestHostTabToMain: requestHostTabToMain2 } = await Promise.resolve().then(() => (init_host_tab_location(), exports_host_tab_location));
+      const result = requestHostTabToMain2(resolvedShowId);
+      hostResetOk = result.ok;
+      dlog("[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain", {
+        tabId: resolvedShowId,
+        ok: result.ok,
+        via: result.via
+      });
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain failed for ${resolvedShowId}:`, err);
+    }
+    if (!hostResetOk) {
+      if (_movedRoot.parentElement) {
+        try {
+          _movedRoot.parentElement.removeChild(_movedRoot);
+        } catch {}
+      }
     }
     _movedRoot.removeAttribute("data-canvas-moved");
     _movedRoot.removeAttribute("data-canvas-active");
@@ -4882,12 +4951,15 @@ async function applyMainMirrorMoveChrome(chrome, liveId) {
     dlog(`[tabmove] apply chrome: handing main-mirror to neighbor (${title ?? neighborBtn.getAttribute("data-tab-id")})`);
     pin.adoptMainMirrorNeighbor(neighborBtn, title);
   } else if (reassertId) {
-    const btn = document.querySelector(`button[data-tab-id="${CSS.escape(reassertId)}"]`);
+    const { findMainTabButton: findMainTabButton2 } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
+    const btn = findMainTabButton2(reassertId);
     if (btn && btn.isConnected) {
       dlog(`[tabmove] apply chrome: re-asserting active tab content (${reassertId})`);
       try {
         btn.click();
       } catch {}
+    } else {
+      dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { reassertId });
     }
   }
   if (neighborBtn) {
@@ -4967,8 +5039,13 @@ async function placementFirstMoveByLiveId(liveId, target) {
   if (target === "secondary") {
     const secondary = await Promise.resolve().then(() => (init_secondary(), exports_secondary));
     if (!secondary.isSecondarySidebarOpen()) {
-      dlog("[tabmove] placementFirstMove: secondary drawer not open; opening explicitly");
-      secondary.openSecondarySidebar();
+      const { isMobileViewport: isMobileViewport2 } = await Promise.resolve().then(() => (init_mobile_exclusion(), exports_mobile_exclusion));
+      if (!isMobileViewport2()) {
+        dlog("[tabmove] placementFirstMove: secondary drawer not open; opening explicitly");
+        secondary.openSecondarySidebar();
+      } else {
+        dlog("[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)");
+      }
     }
     await applyMainMirrorMoveChrome(chrome, liveId);
   }
@@ -6188,6 +6265,19 @@ function plannedMovesForCommit(model, desiredSide) {
   }
   return moves;
 }
+function missingSecondaryButtonKeys(model, desiredSide, resolve, hasButton) {
+  const missing = [];
+  for (const [key, side] of desiredSide) {
+    if (side !== "secondary")
+      continue;
+    if (sideOfKey(model, key) !== "secondary")
+      continue;
+    const liveId = resolve(key);
+    if (liveId && !hasButton(liveId))
+      missing.push({ key, to: "secondary" });
+  }
+  return missing;
+}
 async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
   const host = getHost();
   if (!host)
@@ -6288,6 +6378,24 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
       secondary
     });
     const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide);
+    if (typeof document !== "undefined") {
+      try {
+        const { cssEscape } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
+        const { getSecondaryWrapper: getSecondaryWrapper2 } = await Promise.resolve().then(() => (init_secondary(), exports_secondary));
+        const missing = missingSecondaryButtonKeys(model, desiredSide, (key) => host.resolve(key), (liveId) => {
+          const content = getSecondaryWrapper2()?.querySelector(".sidebar-ux-panel-content");
+          return !!content?.querySelector(`[data-canvas-moved="${cssEscape(liveId)}"]`);
+        });
+        if (missing.length > 0) {
+          dlog("[owned-commit] placement pass: model-vs-DOM divergence healed", {
+            missing: missing.map((m3) => m3.key)
+          });
+          plannedMoves.push(...missing);
+        }
+      } catch (err) {
+        dwarn("[owned-commit] divergence heal failed:", err);
+      }
+    }
     const mirrorChrome = new Map;
     const secondaryChrome = new Map;
     if (!opts?.skipChrome) {
@@ -6317,8 +6425,13 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
         try {
           for (const move of plannedMoves) {
             const liveId = host.resolve(move.key);
-            if (!liveId)
+            if (!liveId) {
+              dlog("[owned-commit] placement pass: host.resolve returned null", {
+                key: move.key,
+                to: move.to
+              });
               continue;
+            }
             try {
               if (move.to === "secondary") {
                 await drawer.assignToSecondary(liveId, {
@@ -8651,7 +8764,9 @@ function findMainTabButton(tabId) {
     return byId;
   const byTitle = sidebar.querySelector(`button[title="${cssEscape2(tabId)}"]`);
   if (byTitle) {
-    byTitle.setAttribute("data-tab-id", tabId);
+    if (!byTitle.getAttribute("data-tab-id")) {
+      byTitle.setAttribute("data-tab-id", tabId);
+    }
     return byTitle;
   }
   const tabs = getDrawerTabs();
@@ -11427,6 +11542,15 @@ var init_main_persist = __esm(() => {
 });
 
 // src/sidebar/mobile-exclusion.ts
+var exports_mobile_exclusion = {};
+__export(exports_mobile_exclusion, {
+  syncHostMainDrawerToMobileWidth: () => syncHostMainDrawerToMobileWidth,
+  startMobileExclusion: () => startMobileExclusion,
+  setMobileOpenClass: () => setMobileOpenClass,
+  isMobileViewport: () => isMobileViewport,
+  isHostMobileDrawerViewport: () => isHostMobileDrawerViewport,
+  enforceExclusionOnOpen: () => enforceExclusionOnOpen
+});
 function syncCssVarToDrawerWidth() {
   const el = document.documentElement;
   if (isMobileViewport()) {
@@ -11996,7 +12120,14 @@ class DrawerObserver {
       attributes: true,
       attributeFilter: ["data-tab-id", "title", "class"]
     });
+    this.scanExistingTabs(sidebar);
     registerCleanup(() => this.stop());
+    const stale = Array.from(this.tabs.entries()).filter(([, t3]) => t3.extensionId === "unknown" && !t3.key.startsWith("builtin:"));
+    if (stale.length > 0) {
+      dlog("[DrawerObserver] post-start scan: extension entries still title-keyed", {
+        stale: stale.map(([id, t3]) => ({ id, key: t3.key, title: t3.title }))
+      });
+    }
   }
   stop() {
     if (this.observer) {
@@ -12146,6 +12277,14 @@ class DrawerObserver {
     if (entry.tabId === tabId && entry.title === title && entry.extensionId === nextExtensionId) {
       return;
     }
+    if (entry.tabId !== tabId) {
+      dlog("[DrawerObserver] entry address upgraded", {
+        from: entry.tabId,
+        to: tabId,
+        extFrom: entry.extensionId,
+        extTo: nextExtensionId
+      });
+    }
     entry.tabId = tabId;
     entry.title = title;
     entry.extensionId = nextExtensionId;
@@ -12185,6 +12324,7 @@ class DrawerObserver {
 var drawerObserver;
 var init_drawer_observer = __esm(() => {
   init_cleanup();
+  init_log();
   drawerObserver = new DrawerObserver;
 });
 
@@ -12196,6 +12336,7 @@ __export(exports_store, {
   getStoreSnapshot: () => getStoreSnapshot,
   getMainDrawerSideOverride: () => getMainDrawerSideOverride,
   getMainDrawerSide: () => getMainDrawerSide,
+  getHostStoreTabs: () => getHostStoreTabs,
   getDrawerTabs: () => getDrawerTabs,
   getActiveModal: () => getActiveModal,
   findStoreData: () => findStoreData,
@@ -12302,6 +12443,10 @@ function getDrawerTabs() {
     return _drawerTabsCache;
   dlog("getDrawerTabs: no host inventory available");
   return [];
+}
+function getHostStoreTabs() {
+  findStoreData(true);
+  return _drawerTabsCache ? [..._drawerTabsCache] : [];
 }
 function getStoreSnapshot() {
   findStoreData();
@@ -12519,6 +12664,7 @@ function reassignSecondaryTabsFromModel(opts) {
     const placed = [];
     const promises = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(async ([tabKey]) => {
       const liveId = liveIdForFacadeKey(tabKey, tabs);
+      dlog(`[secondary] open loop: resolving ${tabKey} → liveId ${liveId}`);
       if (!liveId) {
         dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`);
         return;
@@ -18437,9 +18583,11 @@ class LumiverseHost {
       const tab = tabs.find((t3) => t3.id === id);
       if (!tab)
         return "degraded";
-      const hostBtn = document.querySelector(`button[data-tab-id="${CSS.escape(id)}"]`);
-      if (!hostBtn)
+      const hostBtn = findMainTabButton(id);
+      if (!hostBtn) {
+        dlog("[host] activate: findMainTabButton returned null", { side, id });
         return "degraded";
+      }
       const { activateMainMirrorFromRestore: activateMainMirrorFromRestore2 } = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
       activateMainMirrorFromRestore2(hostBtn, tab.title);
       return "ok";

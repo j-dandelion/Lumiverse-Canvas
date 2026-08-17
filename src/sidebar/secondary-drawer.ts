@@ -322,16 +322,71 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
     return
   }
 
-  // PRIMARY PATH: reparent the extension's primary DOM root into secondary.
+  // PRIMARY PATH: ask the host to move the extension tab into the Canvas
+  // secondary container. This updates `tabLocations[tabId]` so the host's
+  // own `ContainerTabContent` effect places the root in the registered
+  // container — and the host's `TabPanelContent` for the MAIN drawer sees
+  // `isMatch = false` and does NOT move the root back. Without this, the
+  // DOM-only reparent leaves `tabLocations` at `main-drawer`, and any
+  // subsequent `TabPanelContent` effect re-run (active tab switch, store
+  // re-render) moves the root back to the main container — the "Configure
+  // drag doesn't actually move the extension tab in the main UI" bug.
+  //
+  // If the host can't move it (allowlist deny + store.moveTabTo missing),
+  // fall back to the DOM reparent that worked before.
   const secondaryWrapper = getSecondaryWrapper()
   const secondaryContentMain = secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
-  if (storeTab?.root && secondaryContentMain) {
-    const root = storeTab.root
-    if (root.parentElement !== secondaryContentMain) {
-      secondaryContentMain.appendChild(root)
-    }
+
+  // Root sourcing (2026-08-17): the observer-derived facade
+  // (findStoreTab → getDrawerTabs) returns `root: tab.button` — the HOST
+  // BUTTON, NOT the content root. Reparenting it rips the button out of
+  // the sidebar (the mirror loses the tab, findMainTabButton misses, and
+  // moving the tab back to primary cannot restore it). Only a REAL content
+  // root from the fiber store may be reparented; a lazily-mounted
+  // extension (root null) falls through to the no-root wiring below.
+  const { getHostStoreTabs } = await import('../store')
+  const hostStoreTabs = getHostStoreTabs()
+  const fiberTab = hostStoreTabs.find((t) => t.id === resolvedId)
+    || hostStoreTabs.find((t) => t.title === tab.title)
+  const realRoot = fiberTab?.root && fiberTab.root !== tab.button
+    ? (fiberTab.root as HTMLElement)
+    : null
+
+  if (realRoot && secondaryContentMain) {
+    const root = realRoot
+
+    // Tag before host move so `data-canvas-moved` travels with the root
+    // (ContainerTabContent appends the same node; showSecondaryTab looks
+    // for [data-canvas-moved] to toggle `data-canvas-active`).
     root.setAttribute('data-canvas-moved', resolvedId)
+
+    // Try host-managed placement first (updates tabLocations → host's
+    // ContainerTabContent moves the root into the canvas-secondary-drawer
+    // container). Dynamic import to avoid the secondary-drawer →
+    // host-tab-location → ... circular dep.
+    let placedViaHost = false
+    try {
+      const { requestHostTabToSecondary } = await import('../tabs/host-tab-location')
+      const placed = requestHostTabToSecondary(resolvedId)
+      dlog('[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary', {
+        tabId: resolvedId, ok: placed.ok, via: placed.via,
+      })
+      placedViaHost = placed.ok
+    } catch (err) {
+      dwarn('[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary threw:', err)
+    }
+
+    if (!placedViaHost) {
+      // Fallback: DOM reparent (the previous behavior). The host's
+      // tabLocations still says main-drawer, so this is race-prone if the
+      // host's TabPanelContent effect re-runs, but it's the best we can do
+      // when the host can't manage the placement.
+      if (root.parentElement !== secondaryContentMain) {
+        secondaryContentMain.appendChild(root)
+      }
+    }
+
     // During restore / suppress, leave data-canvas-active alone so
     // finishRestore → showSecondaryTab is the sole content switcher.
     if (!deferActivation) {
@@ -347,10 +402,10 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
     }
     await finalizeAssignToSecondary({
       resolvedId,
-      title: tab.title || storeTab.title || resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
       root,
-      iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab.iconSvg,
-      shortName: readMainButtonShortName(tab.button as Element) || storeTab.shortName,
+      iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab?.iconSvg,
+      shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
@@ -360,20 +415,23 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
     return
   }
 
-  // Placement failed (no root) — still paint active/header/persist for assignment.
-  if (!isMobileViewport() && !deferActivation) {
-    _activeTabId = resolvedId
-    _state = 'tab_active'
-    setActiveSecondaryTabId(resolvedId)
-  }
-  const headerTitle = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-title')
-  if (headerTitle && !deferActivation) {
-    headerTitle.textContent = tab.title || resolvedId
-  }
-  if (!isMobileViewport() && !deferActivation) {
-    showSecondaryTabDisplay(resolvedId)
-  }
-  // Persist via the owned model; no-op persistLayout was retired.
+  // No real content root (lazily-mounted extension) — wire the assignment
+  // and the secondary button anyway; the content root attaches when the
+  // host mounts the tab. The `root` passed to finalize is only used for the
+  // button descriptor (never reparented), so the host button is safe.
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title: tab.title || storeTab?.title || resolvedId,
+    root: tab.button,
+    iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab?.iconSvg,
+    shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
+    deferActivation,
+    wireAssignment: false,
+    openOnClosed: false,
+    // Quiet DnD: see existingRoot branch above.
+    setActiveWhenReady: ctx.setActiveWhenReady ?? true,
+  })
+  return
 }
 
 /**
@@ -582,17 +640,58 @@ export async function assignToSecondary(
   const resolvedId = tab.tabId
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
 
+  let isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
+  if (!isExtensionTab) {
+    // Stale-entry upgrade (2026-08-17): the observer entry may still be
+    // title-keyed with extensionId 'unknown' — the tagger's data-tab-id
+    // write happened during the observer's initial scan, before it was
+    // observing, so the entry never upgraded to the composite spindle id.
+    // The REAL host store (fiber walk) has the composite id + extensionId;
+    // re-classify from it so the extension placement path runs. (NOT
+    // findStoreTab/getDrawerTabs — that facade prefers the observer
+    // inventory and would serve the same stale entry.) Otherwise the boot
+    // restore treats the extension tab as a built-in, its placement fails,
+    // and the model ends up ahead of the DOM ("drag an extension tab to
+    // another drawer → it doesn't move in the main UI / activation lands on
+    // the old drawer").
+    // unreachable (resolved above) — TS cannot narrow `tab` past the await
+    if (!tab) return
+    const t = tab
+    const { getHostStoreTabs } = await import('../store')
+    const hostStoreTabs = getHostStoreTabs()
+    const storeTab = hostStoreTabs.find((x) => x.id === tabId)
+      || hostStoreTabs.find((x) => x.id === t.tabId)
+      || hostStoreTabs.find((x) => x.title === t.title)
+    if (storeTab?.extensionId && storeTab.extensionId !== 'unknown') {
+      dlog('[SecondaryDrawer] assignToSecondary: observer entry stale — upgraded from store', {
+        fromId: t.tabId,
+        toId: storeTab.id,
+        extFrom: t.extensionId,
+        extTo: storeTab.extensionId,
+      })
+      tab = {
+        ...tab,
+        tabId: storeTab.id,
+        extensionId: storeTab.extensionId,
+        title: storeTab.title,
+        titles: new Set([storeTab.title]),
+      }
+      iconSvg = iconSvg ?? storeTab.iconSvg
+      shortName = shortName ?? storeTab.shortName
+      isExtensionTab = true
+    }
+  }
+
   const ctx: AssignCtx = {
     tabId,
     tab,
-    resolvedId,
+    resolvedId: tab.tabId,
     iconSvg,
     shortName,
     deferActivation,
     openOnClosed: opts?.openOnClosed,
     setActiveWhenReady: opts?.setActiveWhenReady,
   }
-  const isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
   if (isExtensionTab) {
     await assignExtensionTabToSecondary(ctx)
   } else {
@@ -743,18 +842,37 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
       }
     }
   } else if (_movedRoot) {
-    // Extension reparent path: DETACH the store root — the host owns
-    // placement (TabPanelContent moves the root into its containerRef when
-    // the tab activates). 2026-08-17: this used to append the root into
-    // getMainPanelContent() — the node the main-mirror parks in its shell —
-    // leaving orphan roots as visible children of the parked content area
-    // (stacked panels; "content stays on a previous tab" after moves /
-    // mode switches).
-    if (_movedRoot.parentElement) {
-      try {
-        _movedRoot.parentElement.removeChild(_movedRoot)
-      } catch {
-        /* host may have removed it already */
+    // Extension reparent path: ask the host to move the tab back to the
+    // main drawer first (updates tabLocations → ContainerTabContent Pass 2
+    // removes the root from the canvas-secondary-drawer container, and the
+    // main drawer's TabPanelContent will mount it on activation). If the
+    // host can't move it (allowlist deny + store.moveTabTo missing), DETACH
+    // the store root — the host owns placement (TabPanelContent moves the
+    // root into its containerRef when the tab activates).
+    // 2026-08-17: this used to append the root into getMainPanelContent() —
+    // the node the main-mirror parks in its shell — leaving orphan roots as
+    // visible children of the parked content area (stacked panels; "content
+    // stays on a previous tab" after moves / mode switches).
+    let hostResetOk = false
+    try {
+      const { requestHostTabToMain } = await import('../tabs/host-tab-location')
+      const result = requestHostTabToMain(resolvedShowId)
+      hostResetOk = result.ok
+      dlog('[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain', {
+        tabId: resolvedShowId, ok: result.ok, via: result.via,
+      })
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain failed for ${resolvedShowId}:`, err)
+    }
+
+    if (!hostResetOk) {
+      // Fallback: detach the root so the host re-attaches it on activation.
+      if (_movedRoot.parentElement) {
+        try {
+          _movedRoot.parentElement.removeChild(_movedRoot)
+        } catch {
+          /* host may have removed it already */
+        }
       }
     }
     _movedRoot.removeAttribute('data-canvas-moved')

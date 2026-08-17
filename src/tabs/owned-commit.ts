@@ -38,6 +38,32 @@ export function plannedMovesForCommit(
 }
 
 /**
+ * Model-vs-DOM divergence supplement to plannedMovesForCommit: a tab the
+ * model ALREADY claims is secondary but that has NO secondary button in the
+ * live list (failed boot restore / mid-session placement failure) still
+ * needs its DOM placement — otherwise the commit plans no move and the
+ * placement pass is skipped, silently leaving the tab in the main drawer
+ * ("drag an extension tab to another drawer → it doesn't move in the main
+ * UI"). Pure given the resolve/hasButton callbacks, so it is unit-testable
+ * without a DOM.
+ */
+export function missingSecondaryButtonKeys(
+  model: LayoutModel,
+  desiredSide: ReadonlyMap<TabKey, Side>,
+  resolve: (key: TabKey) => LiveTabId | null,
+  hasButton: (liveId: LiveTabId) => boolean,
+): { key: TabKey; to: Side }[] {
+  const missing: { key: TabKey; to: Side }[] = []
+  for (const [key, side] of desiredSide) {
+    if (side !== 'secondary') continue
+    if (sideOfKey(model, key) !== 'secondary') continue
+    const liveId = resolve(key)
+    if (liveId && !hasButton(liveId)) missing.push({ key, to: 'secondary' })
+  }
+  return missing
+}
+
+/**
  * Commit options.
  *
  * `skipChrome`: the live DnD path captures the taskbar/drawer chrome BEFORE
@@ -200,6 +226,47 @@ export async function commitDraftToOwnedModel(
     // not change.
     const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide)
 
+    // Model-vs-DOM divergence heal (2026-08-17): plannedMovesForCommit only
+    // compares the MODEL side to the desired side. When the model already
+    // claims a tab is in the target side but the DOM never followed (failed
+    // boot restore / mid-session placement failure — e.g. an extension tab
+    // that was untagged at registration time and got misclassified, leaving
+    // its host button visible in the MAIN strip while the model says
+    // secondary), the placement pass would be skipped and the move would
+    // silently no-op in the main Lumiverse UI ("dragging an extension tab to
+    // another drawer doesn't actually move it"; "activating it activates on
+    // the drawer it was moved from"). Heal: a tab the model says is
+    // secondary but that has NO secondary button in the live list still
+    // needs its DOM placement.
+    if (typeof document !== 'undefined') {
+      try {
+        // Heal signal: the tab's ROOT must be in the secondary panel
+        // content ([data-canvas-moved]). NOT a button in the secondary
+        // list — live DnD parks a main-mirror button in that list mid-drag
+        // (same data-tab-id), which would defeat a button-existence check
+        // and skip the heal exactly when it is needed.
+        const { cssEscape } = await import('../tabs/buttons')
+        const { getSecondaryWrapper } = await import('../sidebar/secondary')
+        const missing = missingSecondaryButtonKeys(
+          model,
+          desiredSide,
+          (key) => host.resolve(key),
+          (liveId) => {
+            const content = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+            return !!content?.querySelector(`[data-canvas-moved="${cssEscape(liveId)}"]`)
+          },
+        )
+        if (missing.length > 0) {
+          dlog('[owned-commit] placement pass: model-vs-DOM divergence healed', {
+            missing: missing.map((m) => m.key),
+          })
+          plannedMoves.push(...missing)
+        }
+      } catch (err) {
+        dwarn('[owned-commit] divergence heal failed:', err)
+      }
+    }
+
     // Chrome capture BEFORE placement: the moved tab's host button must
     // still be visible (mirror neighbor lookup skips hidden buttons) and
     // the moved button must still be in the secondary list. Skipped when
@@ -248,7 +315,12 @@ export async function commitDraftToOwnedModel(
         try {
           for (const move of plannedMoves) {
             const liveId = host.resolve(move.key)
-            if (!liveId) continue
+            if (!liveId) {
+              dlog('[owned-commit] placement pass: host.resolve returned null', {
+                key: move.key, to: move.to,
+              })
+              continue
+            }
             try {
               if (move.to === 'secondary') {
                 await drawer.assignToSecondary(liveId, {

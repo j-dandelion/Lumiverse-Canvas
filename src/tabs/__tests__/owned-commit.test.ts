@@ -11,9 +11,10 @@
 
 import type { LayoutModel, TabKey, Side } from '../../core/model'
 import { createEmptyModel, builtinKey, extensionKey } from '../../core/model'
+import type { LiveTabId } from '../../host/port'
 import { FakeHost, type LiveTab } from '../../host/fake/implementation'
 import { bootstrap, shutdown, getModel, flush } from '../../recon/dispatch'
-import { commitDraftToOwnedModel, plannedMovesForCommit } from '../owned-commit'
+import { commitDraftToOwnedModel, plannedMovesForCommit, missingSecondaryButtonKeys } from '../owned-commit'
 import type { ConfigureDraft } from '../configure-model'
 
 let passed = 0
@@ -390,7 +391,57 @@ function test_plannedMoves(): void {
   assertEqual(withUnknown.length, 0, 'OC7: unknown key → no planned move')
 }
 
+// ── missingSecondaryButtonKeys (2026-08-17) ────────────────────────────
+// Model-vs-DOM divergence supplement: a tab the model ALREADY claims is
+// secondary but that has no secondary button in the live list still needs
+// its DOM placement (failed boot restore / mid-session placement failure —
+// e.g. an extension tab misclassified while untagged). Without this heal
+// the commit plans no move, the placement pass is skipped, and the tab
+// silently stays in the main drawer ("drag an extension tab to another
+// drawer → doesn't move in the main UI / activation lands on the old
+// drawer").
+
+function test_missingSecondaryButtonKeys(): void {
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [A],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  const desiredSide = new Map<TabKey, Side>([
+    [PROFILE, 'primary'],
+    [A, 'secondary'], // desired AGREES with the model — plannedMovesForCommit plans nothing
+  ])
+  const resolve = (key: TabKey) =>
+    (key === A ? 'h:a' : key === PROFILE ? 'h:profile' : null) as unknown as LiveTabId
+
+  // Divergence: A's secondary button is missing → heal plans the placement.
+  const missing = missingSecondaryButtonKeys(
+    model, desiredSide, resolve, (id) => id !== 'h:a',
+  )
+  assertEqual(missing.length, 1, 'OC9a: divergence detected for model-secondary tab without a button')
+  assertEqual(missing[0]?.key, A, 'OC9b: missing key is A')
+  assertEqual(missing[0]?.to, 'secondary', 'OC9c: heal targets secondary')
+
+  // No divergence when the button exists.
+  const none = missingSecondaryButtonKeys(model, desiredSide, resolve, () => true)
+  assertEqual(none.length, 0, 'OC9d: no heal when the secondary button exists')
+
+  // A REAL move (model says primary, desired secondary) is NOT a divergence —
+  // plannedMovesForCommit already covers it; the heal must not double-plan.
+  const model2: LayoutModel = { ...model, primary: [PROFILE, A], secondary: [] }
+  const desired2 = new Map<TabKey, Side>([[A, 'secondary']])
+  const missing2 = missingSecondaryButtonKeys(model2, desired2, resolve, () => false)
+  assertEqual(missing2.length, 0, 'OC9e: real moves are not classified as divergence')
+
+  // Unresolvable key → no heal.
+  const missing3 = missingSecondaryButtonKeys(model, desiredSide, () => null, () => false)
+  assertEqual(missing3.length, 0, 'OC9f: unresolvable key skipped')
+}
+
 test_plannedMoves()
+test_missingSecondaryButtonKeys()
 
 await test_OC1_happyPath()
 await test_OC2_crossDrawerMove()

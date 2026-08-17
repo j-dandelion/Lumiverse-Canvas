@@ -35,6 +35,7 @@ import {
   showMainTabButton,
   showSecondaryTab,
   applyHiddenTabIdsToSecondary,
+  findMainTabButton,
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
 import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
@@ -487,10 +488,20 @@ export class LumiverseHost implements HostPort {
       const tab = tabs.find(t => t.id === id)
       if (!tab) return 'degraded'
 
-      const hostBtn = document.querySelector<HTMLElement>(
-        `button[data-tab-id="${CSS.escape(id)}"]`,
-      )
-      if (!hostBtn) return 'degraded'
+      // Scope the host-button lookup to the MAIN sidebar. A global
+      // document.querySelector('button[data-tab-id]') can match a Canvas
+      // secondary button (which also carries data-tab-id) when the host's
+      // main button is hidden or untagged — for extension tabs the host
+      // button has no data-tab-id until the tagger runs, so the global query
+      // would find the secondary button and activate the tab in the WRONG
+      // drawer ("activates on the drawer it was moved from"). findMainTabButton
+      // is sidebar-scoped and falls back to a title match for untagged
+      // extension buttons.
+      const hostBtn = findMainTabButton(id) as HTMLElement | null
+      if (!hostBtn) {
+        dlog('[host] activate: findMainTabButton returned null', { side, id })
+        return 'degraded'
+      }
 
       const { activateMainMirrorFromRestore } = await import(
         '../../sidebar/main-tab-pin'

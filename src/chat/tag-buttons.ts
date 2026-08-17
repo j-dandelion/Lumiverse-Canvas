@@ -11,7 +11,7 @@
 // chat/reflow.startReflowObserver (which calls startTagObserver here);
 // the two become independently gateable when setup() is decomposed.
 import { getMainSidebar } from '../dom/lumiverse'
-import { findStoreData, getDrawerTabs } from '../store'
+import { findStoreData, getDrawerTabs, getHostStoreTabs } from '../store'
 import { waitForElement } from '../dom/wait-for'
 import { dlog } from '../debug/log'
 
@@ -41,10 +41,27 @@ export function tagMainSidebarButtons(): number {
   // cache TTL is 3s, but sidebar mutations can fire well inside that window
   // with an incomplete view of the store.
   findStoreData(true)
-  const tabs = getDrawerTabs()
-  if (tabs.length === 0) return 0
+  // Source ids from the REAL host store (fiber walk), NOT the
+  // observer-derived facade: getDrawerTabs() prefers the observer
+  // inventory, which at boot can hold STALE title-keyed extension entries
+  // (pre-tag). Tagging from it writes the title-as-id on the host button,
+  // and the observer's updateEntry then sees existingId === entry.tabId and
+  // early-returns — the stale entry is locked in forever, the boot restore
+  // misclassifies the extension as a built-in, and its secondary placement
+  // fails. The fiber store has the composite spindle id.
+  const tabs = getHostStoreTabs()
+  if (tabs.length === 0) {
+    // Fallback: observer-derived facade (only when the fiber walk failed).
+    const fallback = getDrawerTabs()
+    if (fallback.length > 0) return tagFromTabs(sidebar, fallback)
+    return 0
+  }
+  return tagFromTabs(sidebar, tabs)
+}
 
+function tagFromTabs(sidebar: HTMLElement, tabs: ReturnType<typeof getHostStoreTabs>): number {
   let tagged = 0
+  const taggedDetail: { title: string; id: string; btnId: string }[] = []
   // Iterate buttons, not tabs, because the title-match is the *initial*
   // identity. A button's title is set by Lumiverse and is what the user sees.
   const buttons = sidebar.querySelectorAll('button[title]')
@@ -57,9 +74,10 @@ export function tagMainSidebarButtons(): number {
     if (tab) {
       btn.setAttribute('data-tab-id', tab.id)
       tagged++
+      taggedDetail.push({ title: btnTitle, id: tab.id, btnId: existing || '(none)' })
     }
   }
-  if (tagged > 0) dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`)
+  if (tagged > 0) dlog(`tagMainSidebarButtons: tagged ${tagged} button(s)`, { tagged: taggedDetail })
   return tagged
 }
 

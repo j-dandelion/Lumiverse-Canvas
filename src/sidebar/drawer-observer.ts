@@ -19,6 +19,7 @@
 import { registerCleanup } from './cleanup'
 import { getMainSidebar } from '../dom/lumiverse'
 import { builtinKey, extensionKey, type TabKey } from '../core/model'
+import { dlog } from '../debug/log'
 
 export interface ObservedTab {
   tabId: string
@@ -117,7 +118,36 @@ export class DrawerObserver {
       attributes: true,
       attributeFilter: ['data-tab-id', 'title', 'class'],
     })
+
+    // RE-SCAN after observe(): registering a NEW tab fires the
+    // onTabRegistered handlers, and setup.ts's handler calls
+    // tagMainSidebarButtons() SYNCHRONOUSLY — writing data-tab-id on
+    // untagged extension buttons BEFORE this observer was observing.
+    // Those attribute writes are never delivered as mutations, so without
+    // this second scan the entry stays keyed by its title with
+    // extensionId 'unknown' → the boot restore misclassifies the extension
+    // tab as a built-in, its secondary placement fails, and the model ends
+    // up ahead of the DOM ("dragging an extension tab to another drawer
+    // doesn't move it in the main UI" / "activating it activates on the
+    // drawer it was moved from"). The second scan re-registers each button
+    // with its CURRENT attributes — entryForButton finds the existing entry
+    // and updateEntry moves the address slot (title → spindle id) in place.
+    this.scanExistingTabs(sidebar)
     registerCleanup(() => this.stop())
+
+    // Diagnostic: after the re-scan, any extension entry that is STILL
+    // title-keyed with extensionId 'unknown' would misclassify the tab as a
+    // built-in at boot restore (the "drag an extension tab to another
+    // drawer" bug family). Dump the survivors so the next capture pinpoints
+    // why the tagger's write did not upgrade the entry.
+    const stale = Array.from(this.tabs.entries()).filter(
+      ([, t]) => t.extensionId === 'unknown' && !t.key.startsWith('builtin:'),
+    )
+    if (stale.length > 0) {
+      dlog('[DrawerObserver] post-start scan: extension entries still title-keyed', {
+        stale: stale.map(([id, t]) => ({ id, key: t.key, title: t.title })),
+      })
+    }
   }
 
   stop(): void {
@@ -312,6 +342,14 @@ export class DrawerObserver {
     const nextExtensionId = parseExtensionId(tabId, existingId, isExtensionBtn)
     if (entry.tabId === tabId && entry.title === title && entry.extensionId === nextExtensionId) {
       return
+    }
+    if (entry.tabId !== tabId) {
+      dlog('[DrawerObserver] entry address upgraded', {
+        from: entry.tabId,
+        to: tabId,
+        extFrom: entry.extensionId,
+        extTo: nextExtensionId,
+      })
     }
     entry.tabId = tabId
     entry.title = title

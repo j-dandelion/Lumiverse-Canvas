@@ -320,6 +320,7 @@ export function reassignSecondaryTabsFromModel(opts?: {
         .map(async ([tabKey]) => {
           // The facade is TabKey-keyed; placement functions need liveIds.
           const liveId = liveIdForFacadeKey(tabKey, tabs)
+          dlog(`[secondary] open loop: resolving ${tabKey} → liveId ${liveId}`)
           if (!liveId) {
             dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`)
             return

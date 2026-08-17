@@ -183,6 +183,28 @@ export function getDrawerTabs(): DrawerTab[] {
   return []
 }
 
+/**
+ * Force-walk the fiber tree and return the REAL host-store drawerTabs,
+ * bypassing the observer-derived facade that getDrawerTabs() prefers once
+ * the observer is running.
+ *
+ * Why this exists (2026-08-17): at boot the observer can hold STALE
+ * title-keyed entries (an extension registered untagged; the tagger's
+ * composite-id write was missed). getDrawerTabs() then serves the stale
+ * entry, and anyone sourcing ids from it — the tagger, the
+ * assignToSecondary stale-entry upgrade — would see the title-as-id /
+ * extensionId '' instead of the real spindle id. The tagger must write the
+ * REAL composite id on the host button; the observer's updateEntry can then
+ * upgrade the entry in place (the title-keyed state is otherwise
+ * self-perpetuating: a re-scan sees existingId === entry.tabId and
+ * early-returns). The DnD-install path already proved the fiber store is
+ * authoritative pre-start (it resolved the composite id + extension kind).
+ */
+export function getHostStoreTabs(): DrawerTab[] {
+  findStoreData(true)
+  return _drawerTabsCache ? [..._drawerTabsCache] : []
+}
+
 export function getStoreSnapshot(): Record<string, unknown> | null {
   findStoreData()
   return _storeSnapshotCache

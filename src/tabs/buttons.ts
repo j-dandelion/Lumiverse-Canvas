@@ -87,7 +87,16 @@ export function findMainTabButton(tabId: string): Element | null {
     // Backfill data-tab-id so future lookups hit the fast path. Use the
     // tabId-as-title as a stable id for this session (we don't know the
     // real id since the store is broken).
-    byTitle.setAttribute('data-tab-id', tabId)
+    //
+    // BUT never OVERWRITE an existing id: the tagger's composite spindle
+    // id is canonical, and clobbering it with a title-as-id re-classifies
+    // the tab as built-in/unknown — the misclassification that makes the
+    // boot restore fail for extension tabs ("drag an extension tab to
+    // another drawer → it doesn't move in the main UI / activation lands
+    // on the drawer it was moved from").
+    if (!byTitle.getAttribute('data-tab-id')) {
+      byTitle.setAttribute('data-tab-id', tabId)
+    }
     return byTitle
   }
 

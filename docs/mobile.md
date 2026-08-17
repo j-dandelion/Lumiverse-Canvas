@@ -122,6 +122,7 @@ CSS in `styles.ts` restructures the secondary tab list on mobile:
 
 - `assignToSecondary`: does not auto-open secondary drawer on mobile
 - `assignTab` (built-in path): does not auto-open secondary on mobile
+- `placementFirstMoveByLiveId` (right-click "Move to …", both context menus): does not auto-open the destination drawer on mobile — desktop keeps the open-so-the-move-is-visible behavior
 - `activation-handoff`: Part C (destination activation) is skipped on mobile
 - `applyTabListPosition`: no-op on mobile (CSS forces layout)
 - `resize/handles`: no handles on mobile

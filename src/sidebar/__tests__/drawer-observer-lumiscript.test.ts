@@ -340,6 +340,44 @@ async function testT7() {
 }
 
 // =====================================================================
+// T8: Tag-during-initial-scan (the boot sequence) — setup.ts's
+//     onTabRegistered handler calls tagMainSidebarButtons() SYNCHRONOUSLY
+//     while the first scan is running, writing data-tab-id BEFORE the
+//     observer is active. start() must RE-SCAN so the entry's ADDRESS
+//     upgrades (title → spindle id) and extensionId becomes real —
+//     otherwise the boot restore misclassifies the extension tab as a
+//     built-in, its secondary placement fails, and the model ends up ahead
+//     of the DOM ("drag an extension tab to another drawer → doesn't move
+//     in the main UI / activation lands on the drawer it was moved from").
+// =====================================================================
+async function testT8() {
+  const observer = new DrawerObserver()
+  const btn = fakeButton({ title: 'Hone', extensionClass: true })
+  _fakeSidebar = fakeSidebarWithButtons([btn])
+  let taggerCalls = 0
+  observer.onTabRegistered(() => {
+    // Simulates setup.ts:333-334 → tagMainSidebarButtons(): writes the
+    // store's composite id on the button during the initial scan.
+    taggerCalls++
+    btn.setAttribute('data-tab-id', 'spindle:ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d:tab:hone:1')
+  })
+  observer.start()
+
+  const composite = 'spindle:ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d:tab:hone:1'
+  const entry = observer.getTab(composite)
+  assert(entry != null, 'T8: entry re-keyed to the composite id after tag-during-scan')
+  if (entry) {
+    assertEqual(entry.extensionId, 'ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d', 'T8: real extensionId parsed from the tagged id')
+    assertEqual(entry.key, 'ext:unknown/Hone', 'T8: frozen key is NOT re-keyed (identity stable)')
+    assertEqual(entry.title, 'Hone', 'T8: title preserved')
+  }
+  assertEqual(observer.getTab('Hone'), null, 'T8: stale title-keyed slot removed')
+  assertEqual(taggerCalls, 1, 'T8: onTabRegistered fired exactly once (the re-scan updates in place)')
+
+  observer.stop()
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 async function main() {
@@ -350,6 +388,7 @@ async function main() {
   await testT5()
   await testT6()
   await testT7()
+  await testT8()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

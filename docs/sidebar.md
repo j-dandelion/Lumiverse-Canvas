@@ -165,6 +165,8 @@ Two paths depending on tab type:
 7. Create secondary tab button via `addSecondaryTabButton`
 8. Persist layout
 
+> **Root-sourcing trap (2026-08-17):** the root for step 5 must come from the **fiber store** (`getHostStoreTabs()` in `store/index.ts`), NOT from the DrawerObserver facade. `getDrawerTabs()`'s observer-derived entries return `root: tab.button` — the HOST BUTTON, not the content root — because the observer only ever sees buttons. Reparenting that button rips it out of the sidebar: the mirror loses the tab, `findMainTabButton` misses ("no button for id=… found among N buttons"), and moving the tab back to primary cannot restore it. `assignExtensionTabToSecondary` rejects button-as-root (`fiberTab.root !== tab.button`) and, for lazily-mounted extensions whose fiber root is `null`, wires the assignment + secondary button **without reparenting anything** — the content root attaches when the host mounts the tab.
+
 **Built-in tabs (Characters, History, Lorebook, Profile):**
 1. Prefer shared helper `moveBuiltInTabToSecondaryContainer` (`tabs/builtin-move.ts`) — also used by `assignTab`
 2. Resolve via host bridge: `bridge.ui.getBuiltInTabRoot(tabId)`; if missing, `ensureBuiltInTabActiveInMain` + rAF, then re-read root
