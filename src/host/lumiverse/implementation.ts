@@ -35,6 +35,7 @@ import {
   showMainTabButton,
   showSecondaryTab,
   applyHiddenTabIdsToSecondary,
+  applyHiddenTabIdsToMirror,
   findMainTabButton,
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
@@ -438,20 +439,31 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setHidden(_side: Side, ids: LiveTabId[]): Promise<WriteResult> {
     try {
-      const idSet = new Set(ids)
-
-      if (_side === 'secondary') applyHiddenTabIdsToSecondary(idSet)
-
       const current = getHostDrawerSettings()
       const side = _side
+      // Which live tabs belong to THIS side. The assignment facade
+      // (getTabAssignments) is keyed by TabKey — looking it up by live id
+      // always misses, which made the old per-side filter add EVERY live tab
+      // for the primary side and NONE for the secondary side. Consequences
+      // (2026-08-17 Configure hide no-op report): a primary hide wiped the
+      // other side's hidden ids from the persisted lists, and an unhidden
+      // secondary id was never removed — so it stayed in host/canvas
+      // hiddenTabIds and re-hid on the next host-sync. Resolve the facade by
+      // the frozen key (tab.key) so the filter matches the real side.
+      const assignments = getTabAssignments()
       const sideIds = new Set<string>()
       for (const tab of liveDrawerTabs()) {
-        if ((getTabAssignments().get(tab.id) === 'secondary') === (side === 'secondary')) {
+        const assignedSide = assignments.get(tab.key)
+        if ((assignedSide === 'secondary') === (side === 'secondary')) {
           sideIds.add(tab.id)
         }
       }
-      for (const [id, assignedSide] of getTabAssignments()) {
-        if ((assignedSide === 'secondary') === (side === 'secondary')) sideIds.add(id)
+      // Facade keys (TabKey) for tabs with no live inventory entry (e.g.
+      // DOM-placed secondary tabs whose host button was removed). The hidden
+      // lists are live-id-keyed so these rarely match, but keep them so the
+      // merge never drops a tab that is only known by key.
+      for (const [key, assignedSide] of assignments) {
+        if ((assignedSide === 'secondary') === (side === 'secondary')) sideIds.add(key)
       }
       const currentHidden = Array.isArray(current?.hiddenTabIds)
         ? current.hiddenTabIds as string[]
@@ -462,10 +474,22 @@ export class LumiverseHost implements HostPort {
       }
       const canvasHidden = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
       setCanvasHiddenTabIds([...canvasHidden, ...ids])
+      const effective = mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds())
       const merged = {
         ...(current ?? {}),
-        hiddenTabIds: mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds()),
+        hiddenTabIds: effective,
       }
+
+      // Apply to the Canvas-owned strips DIRECTLY, regardless of the host
+      // write result. The host React filter only reacts when setSetting is
+      // reachable (GO); under NO-GO the main-mirror buttons never get
+      // display:none and the Configure hide toggle is a no-op (2026-08-17).
+      // The pre-owned-model Configure commit did exactly this
+      // (applyHiddenTabIdsToMirror + applyHiddenTabIdsToSecondary at commit
+      // time) — it was lost in the owned-commit refactor. Idempotent, safe on
+      // every reconcile-driven hide change (boot restore, DnD, Configure).
+      applyHiddenTabIdsToMirror(new Set(effective))
+      applyHiddenTabIdsToSecondary(new Set(effective))
 
       const ok = patchHostDrawerSettings(merged)
       return ok ? 'ok' : 'degraded'

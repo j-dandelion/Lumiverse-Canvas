@@ -18540,20 +18540,19 @@ class LumiverseHost {
   }
   async setHidden(_side, ids) {
     try {
-      const idSet = new Set(ids);
-      if (_side === "secondary")
-        applyHiddenTabIdsToSecondary(idSet);
       const current = getHostDrawerSettings();
       const side = _side;
+      const assignments = getTabAssignments();
       const sideIds = new Set;
       for (const tab of liveDrawerTabs()) {
-        if (getTabAssignments().get(tab.id) === "secondary" === (side === "secondary")) {
+        const assignedSide = assignments.get(tab.key);
+        if (assignedSide === "secondary" === (side === "secondary")) {
           sideIds.add(tab.id);
         }
       }
-      for (const [id, assignedSide] of getTabAssignments()) {
+      for (const [key, assignedSide] of assignments) {
         if (assignedSide === "secondary" === (side === "secondary"))
-          sideIds.add(id);
+          sideIds.add(key);
       }
       const currentHidden = Array.isArray(current?.hiddenTabIds) ? current.hiddenTabIds : [];
       const nextHidden = currentHidden.filter((id) => !sideIds.has(id));
@@ -18563,10 +18562,13 @@ class LumiverseHost {
       }
       const canvasHidden = getCanvasHiddenTabIds().filter((id) => !sideIds.has(id));
       setCanvasHiddenTabIds([...canvasHidden, ...ids]);
+      const effective = mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds());
       const merged = {
         ...current ?? {},
-        hiddenTabIds: mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds())
+        hiddenTabIds: effective
       };
+      applyHiddenTabIdsToMirror(new Set(effective));
+      applyHiddenTabIdsToSecondary(new Set(effective));
       const ok = patchHostDrawerSettings(merged);
       return ok ? "ok" : "degraded";
     } catch {
