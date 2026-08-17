@@ -119,6 +119,36 @@ export function createResizeHandle(
   return handle
 }
 
+/** Position a Canvas-owned drawer handle on the drawer's inner edge.
+ *  Drawer on the left → inner edge is its right side; and vice versa.
+ *  Re-positioning is idempotent — safe to call on an existing handle after a
+ *  drawer-side flip (the drawer keeps its element; only the anchor edge flips).
+ *  The 4px overhang is intentional — a portion of the handle sits inside the
+ *  drawer so the cursor lands on it reliably, and the rest bleeds onto the
+ *  content edge for a visual grab affordance. */
+function positionCanvasHandle(handle: HTMLElement, drawerSide: 'left' | 'right'): void {
+  handle.style.left = ''
+  handle.style.right = ''
+  if (drawerSide === 'left') {
+    handle.style.right = '-4px'
+  } else {
+    handle.style.left = '-4px'
+  }
+}
+
+/** Position the HOST main drawer handle on its inner edge. Uses the width CSS
+ *  variable so the handle tracks the correct edge if the drawer width changes.
+ *  Re-positioning swaps left/right when the drawer side flips. */
+function positionHostMainHandle(handle: HTMLElement, mainSide: 'left' | 'right'): void {
+  handle.style.left = ''
+  handle.style.right = ''
+  if (mainSide === 'left') {
+    handle.style.left = 'calc(var(--drawer-panel-w, 420px) - 4px)'
+  } else {
+    handle.style.right = 'calc(var(--drawer-panel-w, 420px) - 4px)'
+  }
+}
+
 export function mountResizeHandles(): void {
   if (isPointerResizeActive()) return // Skip resize handles on mobile
 
@@ -126,88 +156,100 @@ export function mountResizeHandles(): void {
   // put the handle on the Canvas shell and skip the host handle.
   if (isMainMirrorActive()) {
     const mirrorDrawer = getMainMirrorDrawer()
-    if (mirrorDrawer && !mirrorDrawer.querySelector('.sidebar-ux-resize-handle')) {
+    if (mirrorDrawer) {
+      const existing = mirrorDrawer.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null
       const mainSide = getMainDrawerSide()
-      const mainDirection = mainSide === 'left' ? 'right' : 'left'
-      const handle = createResizeHandle(
-        mainDirection,
-        (startWidth, delta) => {
-          const newWidth = clampSidebarWidth(startWidth + delta)
-          document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`)
-          scheduleReflow()
-        },
-        () => {
-          // Persist via the owned model; no-op persistLayout was retired.
-        },
-        () => isCanvasMainOpen(),
-      )
-      handle.style.cssText += `
-        ${mainSide === 'left' ? 'right' : 'left'}: -4px;
-      `
-      mirrorDrawer.appendChild(handle)
-      // Main-mirror shell is the main drawer — use main* opts so flex
-      // follows getMainDrawerSide(), not the opposite secondary side.
-      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-        mainDrawer: mirrorDrawer,
-        mainTabList:
-          (mirrorDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement | null) ??
-          (document.querySelector(
-            '.sidebar-ux-tab-list-pin-host[data-pin-owner="main"] .sidebar-ux-tab-list',
-          ) as HTMLElement | null),
-        mainPanel: mirrorDrawer.querySelector('.sidebar-ux-panel') as HTMLElement | null,
-      })
+      if (existing) {
+        // Side flip: the shell may not have been remounted yet (or the side
+        // changed with the second drawer off) — re-anchor the handle to the
+        // NEW inner edge instead of leaving it on the pre-flip edge.
+        positionCanvasHandle(existing, mainSide)
+      } else {
+        const mainDirection = mainSide === 'left' ? 'right' : 'left'
+        const handle = createResizeHandle(
+          mainDirection,
+          (startWidth, delta) => {
+            const newWidth = clampSidebarWidth(startWidth + delta)
+            document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`)
+            scheduleReflow()
+          },
+          () => {
+            // Persist via the owned model; no-op persistLayout was retired.
+          },
+          () => isCanvasMainOpen(),
+        )
+        positionCanvasHandle(handle, mainSide)
+        mirrorDrawer.appendChild(handle)
+        // Main-mirror shell is the main drawer — use main* opts so flex
+        // follows getMainDrawerSide(), not the opposite secondary side.
+        applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+          mainDrawer: mirrorDrawer,
+          mainTabList:
+            (mirrorDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement | null) ??
+            (document.querySelector(
+              '.sidebar-ux-tab-list-pin-host[data-pin-owner="main"] .sidebar-ux-tab-list',
+            ) as HTMLElement | null),
+          mainPanel: mirrorDrawer.querySelector('.sidebar-ux-panel') as HTMLElement | null,
+        })
+      }
     }
     // Do not mount a host main handle while host is headless.
   } else {
     // Host main sidebar resize handle — insert into the drawer (not panel)
     const mainDrawer = getMainDrawer()
-    if (mainDrawer && !mainDrawer.querySelector('.sidebar-ux-resize-handle')) {
+    if (mainDrawer) {
+      const existing = mainDrawer.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null
       const mainSide = getMainDrawerSide()
-      // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
-      //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
-      const mainDirection = mainSide === 'left' ? 'right' : 'left'
+      if (existing) {
+        // The host drawer element SURVIVES a React side flip (the wrapper
+        // class flips, not the node), so an existing handle keeps the old
+        // side's position and lands on the drawer's OUTER edge — the
+        // "main resize handle doesn't appear after Swap drawer locations"
+        // report. Re-anchor it to the new inner edge.
+        positionHostMainHandle(existing, mainSide)
+      } else {
+        // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
+        //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
+        const mainDirection = mainSide === 'left' ? 'right' : 'left'
 
-      const handle = createResizeHandle(
-        mainDirection,
-        (startWidth, delta) => {
-          const newWidth = clampSidebarWidth(startWidth + delta)
-          const drawer = getMainDrawer()
-          const wrapper = getMainWrapper()
-          if (drawer) {
-            drawer.style.width = `${newWidth}px`
-          }
-          // Set --drawer-panel-w on the WRAPPER (React sets it there for the close transform)
-          if (wrapper) {
-            wrapper.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
-          }
-          scheduleReflow()
-        },
-        () => {
-          const width = getMainDrawerWidth()
-          void width
-          // Persist via the owned model; no-op persistLayout was retired.
-        },
-        () => isMainDrawerOpen()
-      )
+        const handle = createResizeHandle(
+          mainDirection,
+          (startWidth, delta) => {
+            const newWidth = clampSidebarWidth(startWidth + delta)
+            const drawer = getMainDrawer()
+            const wrapper = getMainWrapper()
+            if (drawer) {
+              drawer.style.width = `${newWidth}px`
+            }
+            // Set --drawer-panel-w on the WRAPPER (React sets it there for the close transform)
+            if (wrapper) {
+              wrapper.style.setProperty('--drawer-panel-w', `${newWidth}px`, 'important')
+            }
+            scheduleReflow()
+          },
+          () => {
+            const width = getMainDrawerWidth()
+            void width
+            // Persist via the owned model; no-op persistLayout was retired.
+          },
+          () => isMainDrawerOpen()
+        )
 
-      // Position at the drawer's inner edge (facing content area)
-      // Uses CSS variable so handle tracks the correct edge if tab strip position changes
-      handle.style.cssText += `
-        ${mainSide === 'left'
-          ? `left: calc(var(--drawer-panel-w, 420px) - 4px);`
-          : `right: calc(var(--drawer-panel-w, 420px) - 4px);`}
-      `
+        // Position at the drawer's inner edge (facing content area)
+        // Uses CSS variable so handle tracks the correct edge if tab strip position changes
+        positionHostMainHandle(handle, mainSide)
 
-      // Insert handle as sibling of panel inside the drawer
-      mainDrawer.appendChild(handle)
+        // Insert handle as sibling of panel inside the drawer
+        mainDrawer.appendChild(handle)
 
-      // Apply tab list position to the main sidebar (flex-direction + border).
-      // The main handle's own position is invariant (set above) and is NOT
-      // touched here — it lives in handles.ts by design.
-      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-        mainDrawer,
-        mainTabList: getMainSidebar(),
-      })
+        // Apply tab list position to the main sidebar (flex-direction + border).
+        // The main handle's own position is invariant (set above) and is NOT
+        // touched here — it lives in handles.ts by design.
+        applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+          mainDrawer,
+          mainTabList: getMainSidebar(),
+        })
+      }
     }
   }
 
@@ -219,46 +261,49 @@ export function mountResizeHandles(): void {
   const secondaryWrapper = getSecondaryWrapper()
   if (secondaryWrapper) {
     const secondaryDrawer = secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement
-    if (secondaryDrawer && !secondaryDrawer.querySelector('.sidebar-ux-resize-handle')) {
+    if (secondaryDrawer) {
       // The secondary lives on the opposite side of the main.
       const mainSide = getMainDrawerSide()
       const secondarySide = mainSide === 'left' ? 'right' : 'left'
-      // Direction follows from the secondary's position: a drawer on the
-      // right has its handle on the left edge (drag left to expand toward
-      // content), and vice versa.
-      const secondaryDirection = secondarySide === 'right' ? 'left' : 'right'
+      const existing = secondaryDrawer.querySelector('.sidebar-ux-resize-handle') as HTMLElement | null
+      if (existing) {
+        // Same re-anchor as the main handles (the secondary wrapper is
+        // remounted on a side flip, so this is usually a fresh handle — this
+        // covers any path where the wrapper survived the flip).
+        positionCanvasHandle(existing, secondarySide)
+      } else {
+        // Direction follows from the secondary's position: a drawer on the
+        // right has its handle on the left edge (drag left to expand toward
+        // content), and vice versa.
+        const secondaryDirection = secondarySide === 'right' ? 'left' : 'right'
 
-      const handle = createResizeHandle(
-        secondaryDirection,
-        (startWidth, delta) => {
-          const newWidth = clampSidebarWidth(startWidth + delta)
-          document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)
-          scheduleReflow()
-        },
-        () => {
-          const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-          // Persist via the owned model; no-op persistLayout was retired.
-        },
-        () => isSecondarySidebarOpen()
-      )
+        const handle = createResizeHandle(
+          secondaryDirection,
+          (startWidth, delta) => {
+            const newWidth = clampSidebarWidth(startWidth + delta)
+            document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)
+            scheduleReflow()
+          },
+          () => {
+            const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
+            // Persist via the owned model; no-op persistLayout was retired.
+          },
+          () => isSecondarySidebarOpen()
+        )
 
-      // Position the handle on the secondary drawer's inner edge.
-      // The drawer is the offset parent (see createSecondarySidebar's
-      // `position: relative` on the drawer), so a fixed offset from the
-      // inner edge is stable regardless of width or sibling presence.
-      // The 4px overhang is intentional — a portion of the handle sits
-      // inside the drawer so the cursor lands on it reliably, and the rest
-      // bleeds onto the content edge for a visual grab affordance.
-      handle.style.cssText += `
-        ${secondarySide === 'left' ? 'right' : 'left'}: -4px;
-      `
+        // Position the handle on the secondary drawer's inner edge.
+        // The drawer is the offset parent (see createSecondarySidebar's
+        // `position: relative` on the drawer), so a fixed offset from the
+        // inner edge is stable regardless of width or sibling presence.
+        positionCanvasHandle(handle, secondarySide)
 
-      secondaryDrawer.appendChild(handle)
-      applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-        drawer: secondaryDrawer,
-        tabList: secondaryDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement,
-        handle,
-      })
+        secondaryDrawer.appendChild(handle)
+        applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+          drawer: secondaryDrawer,
+          tabList: secondaryDrawer.querySelector('.sidebar-ux-tab-list') as HTMLElement,
+          handle,
+        })
+      }
     }
   }
 }
@@ -285,6 +330,10 @@ export function refreshResizeHandles(): void {
     }
   } else {
     if (existingMain) existingMain.remove()
+    // Taskbar mode: the main handle lives on the main-mirror drawer, not the
+    // host drawer — remove it here too or it survives the toggle.
+    const mirrorDrawer = getMainMirrorDrawer()
+    mirrorDrawer?.querySelector('.sidebar-ux-resize-handle')?.remove()
   }
 
   // Secondary handle

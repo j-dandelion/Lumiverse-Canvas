@@ -645,6 +645,22 @@ export function checkSideChanged(): void {
       }
     }
   }
+  // The main drawer flipped sides. Re-anchor any existing resize handle to
+  // the NEW inner edge. In taskbar mode the mirror remount above mounted a
+  // fresh handle (this then just re-positions it idempotently); in
+  // non-taskbar mode the HOST drawer element survives the React flip and its
+  // handle keeps the old side's position without this call — the "main
+  // resize handle doesn't appear after Swap drawer locations" report. Also
+  // covers the second-drawer-OFF path, which skips the remount above
+  // entirely. Dynamic import avoids a static cycle (handles → secondary →
+  // drawer-sync). Honors the resizeSidebars setting via refreshResizeHandles.
+  void import('../resize/handles').then((m) => {
+    try {
+      m.refreshResizeHandles()
+    } catch {
+      /* ignore teardown races */
+    }
+  })
   _lastKnownSide = currentSide
   syncDrawerTabSettings()
 }
