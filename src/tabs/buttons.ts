@@ -28,7 +28,7 @@ import {
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
 import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
-import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId } from '../tabs/assignment'
+import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
 import {
@@ -603,6 +603,67 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
       .filter(Boolean)
     for (const btn of buttons) {
       const tid = btn.getAttribute('data-tab-id') || ''
+      if (isTabIdHidden(tid, hiddenIds, liveIds)) {
+        btn.style.display = 'none'
+      } else {
+        btn.style.display = ''
+      }
+    }
+  })
+}
+
+/**
+ * Apply the hidden set to the HOST MAIN drawer's tab buttons directly.
+ *
+ * The main-mirror strip only exists in taskbar mode. When taskbar mode and
+ * "move tab controls to outer edge" are OFF, the visible MAIN drawer is the
+ * host's own React drawer — its tab buttons only react to host
+ * `drawerSettings.hiddenTabIds`, and the fiber setSetting bridge is
+ * frequently NO-GO in the live runtime (documented since 2026-06). Without
+ * a direct DOM apply here, Configure Tabs hide/unhide is a visual no-op for
+ * the MAIN drawer (same bug class as the 2026-08-17 mirror fix, but for the
+ * host drawer surface). Restores the pre-owned-model commit's direct DOM
+ * apply, idempotent, works under GO and NO-GO.
+ *
+ * Skipped while the main-mirror is mounted (taskbar mode): the mirror is
+ * the visible surface there and applyHiddenTabIdsToMirror already covers
+ * it. Mirrors the mirror/secondary applicators' suffix-pairing semantics.
+ */
+export function applyHiddenTabIdsToHostMain(hiddenIds: ReadonlySet<string>): void {
+  // Lazy-import to avoid circular dependency at module level.
+  void import('../sidebar/main-mirror-drawer').then((m) => {
+    // Taskbar mode: the mirror strip is the visible main surface; the
+    // mirror applicator covers it. Only the host drawer (non-taskbar) needs
+    // this direct apply.
+    if (m.getMainMirrorTabList()) return
+    const sidebar = getMainSidebar()
+    if (!sidebar) return
+    // Prefer the scrollable tab list (same resolution as
+    // reorderHostMainTabButtons) so hidden host buttons match the visible
+    // MAIN drawer strip, not the wrap or chrome.
+    const tabList =
+      (sidebar.querySelector(
+        '[class*="tabListWrap"] > [class*="tabList"]',
+      ) as HTMLElement | null) ||
+      (sidebar.querySelector('[class*="tabList"]') as HTMLElement | null)
+    if (!tabList) return
+    const buttons = Array.from(
+      tabList.querySelectorAll('button[data-tab-id]'),
+    ) as HTMLElement[]
+    const liveIds = buttons
+      .map((b) => b.getAttribute('data-tab-id') || '')
+      .filter(Boolean)
+    for (const btn of buttons) {
+      const tid = btn.getAttribute('data-tab-id') || ''
+      // Never re-show a secondary-assigned tab's host button: it is hidden
+      // (display:none) because the tab lives in the SECONDARY drawer, not
+      // because it is hidden. The effective union carries BOTH sides' hides,
+      // so without this guard a dual-mode unhide would make a moved-away tab
+      // pop back into the MAIN drawer.
+      let assignedSide: 'primary' | 'secondary' | null = null
+      try { assignedSide = getTabSidebar(tid) } catch { assignedSide = null }
+      if (assignedSide === 'secondary') continue
+      // Pair against the full strip so multi-instance siblings are not all hidden.
       if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = 'none'
       } else {

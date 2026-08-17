@@ -6235,6 +6235,7 @@ function syncHiddenTabsFromHost(opts) {
   const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
   applyHiddenTabIdsToSecondary(applySet);
   applyHiddenTabIdsToMirror(applySet);
+  applyHiddenTabIdsToHostMain(applySet);
   return { hiddenIds: forHost, wroteBack };
 }
 function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
@@ -8725,6 +8726,7 @@ __export(exports_buttons, {
   buttonTabId: () => buttonTabId,
   applyHiddenTabIdsToSecondary: () => applyHiddenTabIdsToSecondary,
   applyHiddenTabIdsToMirror: () => applyHiddenTabIdsToMirror,
+  applyHiddenTabIdsToHostMain: () => applyHiddenTabIdsToHostMain,
   addSecondaryTabButton: () => addSecondaryTabButton,
   __setShowMainTabButtonForTest: () => __setShowMainTabButtonForTest,
   __setHideMainTabButtonForTest: () => __setHideMainTabButtonForTest
@@ -9069,6 +9071,36 @@ function applyHiddenTabIdsToMirror(hiddenIds) {
     const liveIds = buttons.map((b2) => b2.getAttribute("data-tab-id") || "").filter(Boolean);
     for (const btn of buttons) {
       const tid = btn.getAttribute("data-tab-id") || "";
+      if (isTabIdHidden(tid, hiddenIds, liveIds)) {
+        btn.style.display = "none";
+      } else {
+        btn.style.display = "";
+      }
+    }
+  });
+}
+function applyHiddenTabIdsToHostMain(hiddenIds) {
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
+    if (m3.getMainMirrorTabList())
+      return;
+    const sidebar = getMainSidebar();
+    if (!sidebar)
+      return;
+    const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
+    if (!tabList)
+      return;
+    const buttons = Array.from(tabList.querySelectorAll("button[data-tab-id]"));
+    const liveIds = buttons.map((b2) => b2.getAttribute("data-tab-id") || "").filter(Boolean);
+    for (const btn of buttons) {
+      const tid = btn.getAttribute("data-tab-id") || "";
+      let assignedSide = null;
+      try {
+        assignedSide = getTabSidebar(tid);
+      } catch {
+        assignedSide = null;
+      }
+      if (assignedSide === "secondary")
+        continue;
       if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = "none";
       } else {
@@ -18584,6 +18616,7 @@ class LumiverseHost {
       };
       applyHiddenTabIdsToMirror(new Set(effective));
       applyHiddenTabIdsToSecondary(new Set(effective));
+      applyHiddenTabIdsToHostMain(new Set(effective));
       const ok = patchHostDrawerSettings(merged);
       return ok ? "ok" : "degraded";
     } catch {

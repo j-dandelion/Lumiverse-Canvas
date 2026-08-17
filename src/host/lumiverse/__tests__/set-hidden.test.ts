@@ -52,6 +52,7 @@ const state = {
   }>,
   mirrorCalls: [] as string[],
   secondaryCalls: [] as string[],
+  hostMainCalls: [] as string[],
   setSettingCalls: [] as unknown[],
 }
 
@@ -91,6 +92,9 @@ mock.module('../../../tabs/buttons', () => ({
   },
   applyHiddenTabIdsToMirror: (ids: ReadonlySet<string>) => {
     state.mirrorCalls = [...ids]
+  },
+  applyHiddenTabIdsToHostMain: (ids: ReadonlySet<string>) => {
+    state.hostMainCalls = [...ids]
   },
 }))
 
@@ -218,17 +222,21 @@ function host() {
   setCanvasHiddenTabIds([])
   state.mirrorCalls = []
   state.secondaryCalls = []
+  state.hostMainCalls = []
 
   const h = host()
   await h.setHidden('primary', ['connections'])
   assertIncludes(state.mirrorCalls, 'connections', 'C1: main-mirror strip applied for the primary hide')
+  assertIncludes(state.hostMainCalls, 'connections', 'C1b: host MAIN drawer applicator applied for the primary hide (non-taskbar surface)')
   // Old NO-GO path: patchHostDrawerSettings returns false — strips still apply.
   state.patchResult = false
   state.mirrorCalls = []
   state.secondaryCalls = []
+  state.hostMainCalls = []
   await h.setHidden('secondary', [HONE_LIVE])
   assertIncludes(state.secondaryCalls, HONE_LIVE, 'C2: secondary strip applied for the secondary hide (NO-GO)')
   assertIncludes(state.secondaryCalls, 'connections', 'C3: secondary applicator receives the effective union (primary hide preserved)')
+  assertIncludes(state.hostMainCalls, 'connections', 'C3b: host MAIN applicator receives the effective union (NO-GO)')
   assertEqual(state.hostSettings.hiddenTabIds.includes(HONE_LIVE), true, 'C4: host list still persisted even when patch NO-GO (cache stamped)')
   state.patchResult = true
 }

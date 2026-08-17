@@ -24,6 +24,7 @@ import { BUILTIN_TAB_IDS } from './configure-catalog'
 import {
   applyHiddenTabIdsToMirror,
   applyHiddenTabIdsToSecondary,
+  applyHiddenTabIdsToHostMain,
 } from './buttons'
 import { getSecondaryTabList } from '../sidebar/secondary'
 import { dlog } from '../debug/log'
@@ -161,6 +162,7 @@ export function syncHiddenTabsFromHost(opts?: {
   const applySet = new Set<string>([...forDom, ...stored.filter((id) => liveIds.includes(id))])
   applyHiddenTabIdsToSecondary(applySet)
   applyHiddenTabIdsToMirror(applySet)
+  applyHiddenTabIdsToHostMain(applySet)
 
   return { hiddenIds: forHost, wroteBack }
 }

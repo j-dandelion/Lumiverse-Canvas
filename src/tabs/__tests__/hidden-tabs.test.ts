@@ -54,6 +54,7 @@ mock.module('../buttons', () => ({
   applyHiddenTabIdsToMirror: (ids: ReadonlySet<string>) => {
     _appliedMirror = [...ids]
   },
+  applyHiddenTabIdsToHostMain: () => {},
   hideMainTabButton: () => {},
   showMainTabButton: () => {},
   updateDrawerTabVisibility: () => {},

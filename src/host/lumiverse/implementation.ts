@@ -36,6 +36,7 @@ import {
   showSecondaryTab,
   applyHiddenTabIdsToSecondary,
   applyHiddenTabIdsToMirror,
+  applyHiddenTabIdsToHostMain,
   findMainTabButton,
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
@@ -488,8 +489,12 @@ export class LumiverseHost implements HostPort {
       // (applyHiddenTabIdsToMirror + applyHiddenTabIdsToSecondary at commit
       // time) — it was lost in the owned-commit refactor. Idempotent, safe on
       // every reconcile-driven hide change (boot restore, DnD, Configure).
+      // applyHiddenTabIdsToHostMain covers the NON-taskbar MAIN drawer (the
+      // host React drawer — the visible surface when the mirror is absent);
+      // it is a no-op in taskbar mode (mirror handles it).
       applyHiddenTabIdsToMirror(new Set(effective))
       applyHiddenTabIdsToSecondary(new Set(effective))
+      applyHiddenTabIdsToHostMain(new Set(effective))
 
       const ok = patchHostDrawerSettings(merged)
       return ok ? 'ok' : 'degraded'
