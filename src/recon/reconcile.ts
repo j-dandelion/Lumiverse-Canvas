@@ -263,6 +263,7 @@ export async function reconcile(
   let visDegraded = 0
   let totalOpsLocal = 0
   let scheduled: boolean
+  let modelSideCorrection: DrawerSide | null = null
   try {
     for (const [key, id] of resolved) {
       const modelSide = sideOfKey(model, key)
@@ -351,7 +352,16 @@ export async function reconcile(
     const newSide = diffSide(model, world)
     if (newSide) {
       drawerOps++
-      await host.setSide(newSide)
+      const result = await host.setSide(newSide)
+      if (result !== 'ok') {
+        // The host could not apply the side (NO-GO settings bridge — the
+        // DOM will never flip). Adopt the observed side so the model stops
+        // fighting the world; the persisted blob must not carry a drawer
+        // side the drawer does not actually have (enable-toggle poison:
+        // same-side drawers + stuck override + SAVE_LAYOUT cascade,
+        // 2026-08-17). The caller applies the correction via the report.
+        modelSideCorrection = world.drawerSide
+      }
     }
     steps.push(mkStep('drawers', 'ok', drawerOps))
     totalOps += drawerOps
@@ -381,5 +391,14 @@ export async function reconcile(
   void actOps; void actIssues; void drawerOps; void visOps; void visDegraded
   void totalOpsLocal
 
-  return { ops: totalOps, steps, unresolved, echo: echoInfo }
+  const report: ReconcileReport = {
+    ops: totalOps,
+    steps,
+    unresolved,
+    echo: echoInfo,
+  }
+  if (modelSideCorrection !== null) {
+    report.modelSideCorrection = modelSideCorrection
+  }
+  return report
 }

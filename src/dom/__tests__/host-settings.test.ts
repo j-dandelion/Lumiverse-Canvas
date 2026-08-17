@@ -8,6 +8,8 @@ import {
   isHostDrawerSettingsWritable,
   clearHostSettingsCache,
   __setHostSetSettingForTest,
+  __setSettingsApiFetchForTest,
+  writeHostDrawerSettingsViaApi,
 } from '../host-settings'
 
 let passed = 0
@@ -89,6 +91,21 @@ function reset() {
 }
 
 // =====================================================================
+// NO-GO side patch must NOT stamp the cache — a phantom side makes every
+// side read (Configure draft, single-layout fallback) disagree with
+// reality, so Configure re-attempts the swap on every Apply (2026-08-17).
+// Non-side patches keep their optimistic stamp for Canvas chrome.
+// =====================================================================
+{
+  reset()
+  assert(!patchHostDrawerSettings({ side: 'right' }), 'NO-GO side patch returns false')
+  assertEqual((getHostDrawerSettings() as any)?.side, undefined, 'NO-GO side patch does not stamp the cache (no phantom side)')
+
+  assert(!patchHostDrawerSettings({ tabOrder: ['a', 'b'] }), 'NO-GO tabOrder patch returns false')
+  assertArraysEqual((getHostDrawerSettings() as any)?.tabOrder ?? [], ['a', 'b'], 'NO-GO non-side patch still stamps the cache for Canvas chrome')
+}
+
+// =====================================================================
 // Patch with no current settings → starts from empty object
 // =====================================================================
 {
@@ -143,12 +160,16 @@ function reset() {
 
   // Without a setter, write should fail — but cache still merges so
   // isShowTabLabels / secondary menu wording follow the intentional click.
+  // The SIDE is the exception: it can never be optimistic (the drawer
+  // cannot move without the host store), so it is dropped — a phantom
+  // cache side makes Configure re-attempt the swap on every Apply
+  // (2026-08-17).
   const result = patchHostDrawerSettings({ side: 'right', showTabLabels: false })
   assert(!result, 'patch returns false without setter')
   assertEqual(written.length, 1, 'no setSetting call after mock cleared')
 
   const settings = getHostDrawerSettings()
-  assertEqual(settings?.side, 'right', 'cache merges side on NO-GO')
+  assertEqual(settings?.side, undefined, 'NO-GO side patch does not merge (no phantom side)')
   assertEqual(settings?.showTabLabels, false, 'cache merges showTabLabels on NO-GO')
   assertArraysEqual(settings?.tabOrder ?? [], ['a', 'b'], 'tabOrder preserved after NO-GO merge')
 }
@@ -181,6 +202,66 @@ function reset() {
   assertArraysEqual(readBack?.hiddenTabIds ?? [], ['b'], 'getHostDrawerSettings hiddenTabIds after multi-patch')
   assertEqual(readBack?.side, 'left', 'getHostDrawerSettings side after multi-patch')
   assertArraysEqual(readBack?.tabOrder ?? [], ['a', 'b'], 'getHostDrawerSettings tabOrder after multi-patch')
+}
+
+// =====================================================================
+// writeHostDrawerSettingsViaApi — Lumiverse's own settings API fallback
+// (the PUT the Settings modal's setSetting flush performs). GETs the
+// current row, merges the patch, PUTs it back — never clobbers fields the
+// page owns. Success → true; unreachable/rejected → false.
+// =====================================================================
+{
+  reset()
+  const calls: Array<{ method: string; url: string; body?: unknown }> = []
+  const fakeFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    calls.push({ method: init?.method ?? 'GET', url, body: init?.body })
+    if ((init?.method ?? 'GET') === 'GET') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          key: 'drawerSettings',
+          value: { side: 'left', showTabLabels: true, panelWidthMode: 'custom', customPanelWidth: 32, tabOrder: ['a', 'b'] },
+          updated_at: 123,
+        }),
+      } as unknown as Response
+    }
+    return { ok: true, status: 200, json: async () => ({}) } as unknown as Response
+  }
+  __setSettingsApiFetchForTest(fakeFetch as typeof fetch)
+
+  const ok = await writeHostDrawerSettingsViaApi({ side: 'right' })
+  assert(ok, 'API fallback returns true on success')
+
+  assertEqual(calls.length, 2, 'GET then PUT')
+  assertEqual(calls[0].method, 'GET', 'first call is GET (read current row)')
+  assertEqual(calls[1].method, 'PUT', 'second call is PUT')
+  assertEqual(calls[0].url, '/api/v1/settings/drawerSettings', 'GET url is the drawerSettings row')
+
+  const putBody = JSON.parse(calls[1].body as string) as { value: Record<string, unknown> }
+  assertEqual(putBody.value.side, 'right', 'PUT carries the patched side')
+  assertEqual(putBody.value.showTabLabels, true, 'PUT preserves page-owned fields (showTabLabels)')
+  assertEqual(putBody.value.customPanelWidth, 32, 'PUT preserves page-owned fields (customPanelWidth)')
+  assertArraysEqual(putBody.value.tabOrder as string[], ['a', 'b'], 'PUT preserves tabOrder')
+
+  // Failure: PUT rejected → false (caller converges on the real side).
+  const rejectingFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    if ((init?.method ?? 'GET') === 'GET') {
+      return { ok: true, status: 200, json: async () => ({ value: { side: 'left' } }) } as unknown as Response
+    }
+    return { ok: false, status: 500, json: async () => ({}) } as unknown as Response
+  }
+  __setSettingsApiFetchForTest(rejectingFetch)
+  const bad = await writeHostDrawerSettingsViaApi({ side: 'right' })
+  assert(!bad, 'API fallback returns false when the PUT is rejected')
+
+  // Failure: fetch throws (offline) → false.
+  const offlineFetch = async () => { throw new Error('offline') }
+  __setSettingsApiFetchForTest(offlineFetch)
+  const offline = await writeHostDrawerSettingsViaApi({ side: 'right' })
+  assert(!offline, 'API fallback returns false when fetch throws')
+
+  __setSettingsApiFetchForTest(null)
 }
 
 // =====================================================================

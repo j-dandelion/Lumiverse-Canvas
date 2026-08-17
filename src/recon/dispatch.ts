@@ -139,8 +139,12 @@ export function bootstrap(model: LayoutModel, host: HostPort, version?: string):
   })
   const task = reconcileAndPersist(model, gen)
   _queue = task.catch(() => {}).then(() => {})
-  void task.then(() => {
+  void task.then((next) => {
     if (gen !== _generation || _host !== host) return
+    // reconcileAndPersist may have corrected the model (e.g. adopted the
+    // observed drawer side when the host could not apply the model's side —
+    // NO-GO bridge). Keep that correction.
+    if (next !== model) _model = next
     _bootstrapping = false
     if (_worldSyncPending) {
       _worldSyncPending = false
@@ -336,7 +340,15 @@ function persistModel(model: LayoutModel): void {
 async function reconcileAndPersist(model: LayoutModel, generation = _generation): Promise<LayoutModel> {
   const host = _host
   if (!host || generation !== _generation) return model
-  await reconcile(model, host)
+  const report = await reconcile(model, host)
+  // The host could not apply the model's drawer side (NO-GO settings
+  // bridge — the DOM will never flip). Adopt the observed side so the model
+  // stops fighting the world and the persisted blob never carries a drawer
+  // side the drawer does not actually have (enable-toggle poison:
+  // same-side drawers + stuck override + SAVE_LAYOUT cascade, 2026-08-17).
+  if (report.modelSideCorrection !== undefined && model.side !== report.modelSideCorrection) {
+    model = { ...model, side: report.modelSideCorrection }
+  }
   // A teardown or replacement may have happened while host reconciliation was
   // awaiting React/DOM work. Never write the old generation after that point.
   // Do not overwrite a non-empty persisted layout while the host is still at

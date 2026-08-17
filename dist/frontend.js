@@ -1831,6 +1831,10 @@ function patchHostDrawerSettings(partial) {
   _cachedDrawerSettings = merged;
   _cacheTimestamp = Date.now();
   if (!_cachedSetSetting) {
+    if ("side" in partial) {
+      delete merged.side;
+      _cachedDrawerSettings = merged;
+    }
     dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
     return false;
   }
@@ -1838,7 +1842,42 @@ function patchHostDrawerSettings(partial) {
   findStoreData(true);
   return true;
 }
-var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null;
+async function writeHostDrawerSettingsViaApi(patch) {
+  try {
+    const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
+    let current = {};
+    try {
+      const res2 = await doFetch("/api/v1/settings/drawerSettings", {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      if (res2.ok) {
+        const row = await res2.json();
+        if (row && typeof row.value === "object" && row.value !== null) {
+          current = row.value;
+        }
+      }
+    } catch {}
+    const merged = { ...current, ...patch };
+    const res = await doFetch("/api/v1/settings/drawerSettings", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: merged })
+    });
+    if (res.ok) {
+      dlog("writeHostDrawerSettingsViaApi: ok", { patch });
+      return true;
+    }
+    dlog("writeHostDrawerSettingsViaApi: rejected", { status: res.status });
+    return false;
+  } catch (err) {
+    dlog("writeHostDrawerSettingsViaApi: failed", String(err));
+    return false;
+  }
+}
+var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
 var init_host_settings = __esm(() => {
   init_fiber();
   init_log();
@@ -2313,6 +2352,7 @@ async function reconcile(model, host) {
   let visDegraded = 0;
   let totalOpsLocal = 0;
   let scheduled;
+  let modelSideCorrection = null;
   try {
     for (const [key, id] of resolved) {
       const modelSide = sideOfKey(model, key);
@@ -2379,7 +2419,10 @@ async function reconcile(model, host) {
     const newSide = diffSide(model, world);
     if (newSide) {
       drawerOps++;
-      await host.setSide(newSide);
+      const result = await host.setSide(newSide);
+      if (result !== "ok") {
+        modelSideCorrection = world.drawerSide;
+      }
     }
     steps.push(mkStep("drawers", "ok", drawerOps));
     totalOps += drawerOps;
@@ -2396,7 +2439,16 @@ async function reconcile(model, host) {
   };
   _echoDropped = 0;
   _nonEchoDetected = 0;
-  return { ops: totalOps, steps, unresolved, echo: echoInfo };
+  const report = {
+    ops: totalOps,
+    steps,
+    unresolved,
+    echo: echoInfo
+  };
+  if (modelSideCorrection !== null) {
+    report.modelSideCorrection = modelSideCorrection;
+  }
+  return report;
 }
 var _epochId = 0, _activeEpoch = false, _echoDropped = 0, _nonEchoDetected = 0, _queuedPostEpoch = false;
 var init_reconcile = __esm(() => {
@@ -4516,9 +4568,11 @@ function bootstrap(model, host, version) {
   });
   const task = reconcileAndPersist(model, gen);
   _queue = task.catch(() => {}).then(() => {});
-  task.then(() => {
+  task.then((next) => {
     if (gen !== _generation || _host !== host)
       return;
+    if (next !== model)
+      _model = next;
     _bootstrapping = false;
     if (_worldSyncPending) {
       _worldSyncPending = false;
@@ -4645,7 +4699,10 @@ async function reconcileAndPersist(model, generation = _generation) {
   const host = _host;
   if (!host || generation !== _generation)
     return model;
-  await reconcile(model, host);
+  const report = await reconcile(model, host);
+  if (report.modelSideCorrection !== undefined && model.side !== report.modelSideCorrection) {
+    model = { ...model, side: report.modelSideCorrection };
+  }
   const hasTabs = model.primary.length > 0 || model.secondary.length > 0;
   if (generation === _generation && _host === host && _pendingLayout === null && hasTabs) {
     persistModel(model);
@@ -12499,7 +12556,13 @@ function tearDownSecondarySidebar() {
     if (!_mainPanelContent && typeof document !== "undefined") {
       _mainPanelContent = document.querySelector("[data-canvas-main-panel-content]");
     }
-    for (const [tabId] of Array.from(getTabAssignments())) {
+    const _liveTabs = getDrawerTabs().map((t3) => ({
+      tabId: t3.id,
+      extensionId: t3.extensionId,
+      title: t3.title
+    }));
+    for (const [assignedKey] of Array.from(getTabAssignments())) {
+      const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey;
       const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null;
       const _movedRoot = _secondaryWrapper?.querySelector(`.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
       const _domPlaced = !!_movedRoot?.hasAttribute("data-canvas-dom-placed");
@@ -18267,12 +18330,19 @@ class LumiverseHost {
     try {
       const current = getHostDrawerSettings();
       const merged = { ...current ?? {}, side };
-      const ok = patchHostDrawerSettings(merged);
-      try {
-        const ds = await Promise.resolve().then(() => (init_drawer_sync(), exports_drawer_sync));
-        await ds.applyMainDrawerSideChange(side);
-      } catch (err) {
-        dlog("[host] setSide: drawer-sync flip failed", String(err));
+      let ok = patchHostDrawerSettings(merged);
+      if (!ok) {
+        ok = await writeHostDrawerSettingsViaApi({ side });
+      }
+      if (ok) {
+        try {
+          const ds = await Promise.resolve().then(() => (init_drawer_sync(), exports_drawer_sync));
+          await ds.applyMainDrawerSideChange(side);
+        } catch (err) {
+          dlog("[host] setSide: drawer-sync flip failed", String(err));
+        }
+      } else {
+        dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`);
       }
       return ok ? "ok" : "degraded";
     } catch {

@@ -4,7 +4,7 @@ import type { HostPort, LiveTabId, PlaceResult, WriteResult, DrawerState } from 
 import { findStoreData, getMainDrawerSide, isMainDrawerOpen } from '../../store'
 import { getMainSidebar } from '../../dom/lumiverse'
 import { getMainDrawerWidth } from '../../dom/lumiverse'
-import { getHostDrawerSettings, patchHostDrawerSettings } from '../../dom/host-settings'
+import { getHostDrawerSettings, patchHostDrawerSettings, writeHostDrawerSettingsViaApi } from '../../dom/host-settings'
 import { getTabAssignments } from '../../tabs/assignment'
 import { getHostBridge } from '../../dom/host-bridge'
 import { resolvePrimaryActiveTabId, getActiveSecondaryTabId } from '../../tabs/active-tab'
@@ -557,21 +557,37 @@ export class LumiverseHost implements HostPort {
     try {
       const current = getHostDrawerSettings()
       const merged = { ...(current ?? {}), side }
-      const ok = patchHostDrawerSettings(merged)
 
       // The host settings write is NO-GO in this runtime (setSetting bridge
-      // unavailable), so the swap must ALSO go through the Canvas-side flip
-      // (drawer-sync's applyMainDrawerSideChange): it sets the side override
-      // (which getMainDrawerSide prefers, so the observed world converges
-      // and diffSide settles), remounts the secondary shell on the new edge,
-      // and repositions the main mirror. Without it, "Swap drawer locations"
-      // in Configure only changed the model — nothing moved on screen
-      // (2026-07-31).
-      try {
-        const ds = await import('../../sidebar/drawer-sync')
-        await ds.applyMainDrawerSideChange(side)
-      } catch (err) {
-        dlog('[host] setSide: drawer-sync flip failed', String(err))
+      // unavailable — the full store only lands in fiber while a bare
+      // useStore() component is mounted), so the swap must ALSO go through
+      // the Canvas-side flip (drawer-sync's applyMainDrawerSideChange): it
+      // sets the side override (which getMainDrawerSide prefers, so the
+      // observed world converges and diffSide settles), remounts the
+      // secondary shell on the new edge, and repositions the main mirror.
+      // Without it, "Swap drawer locations" in Configure only changed the
+      // model — nothing moved on screen (2026-07-31).
+      //
+      // The Canvas-side flip is only driven when the host write actually
+      // landed — otherwise the override can never settle and sticks
+      // forever (same-side drawers + SAVE_LAYOUT cascade, 2026-08-17). On
+      // NO-GO, fall back to Lumiverse's OWN settings API (the same PUT the
+      // Settings modal's setSetting flush performs): the server broadcasts
+      // SETTINGS_UPDATED, the client's ws handler reloads settings into the
+      // store, and React re-renders the drawer wrapper — the REAL move.
+      let ok = patchHostDrawerSettings(merged)
+      if (!ok) {
+        ok = await writeHostDrawerSettingsViaApi({ side })
+      }
+      if (ok) {
+        try {
+          const ds = await import('../../sidebar/drawer-sync')
+          await ds.applyMainDrawerSideChange(side)
+        } catch (err) {
+          dlog('[host] setSide: drawer-sync flip failed', String(err))
+        }
+      } else {
+        dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`)
       }
 
       return ok ? 'ok' : 'degraded'

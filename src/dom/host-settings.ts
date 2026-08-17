@@ -234,7 +234,18 @@ export function patchHostDrawerSettings(
 
   if (!_cachedSetSetting) {
     // NO-GO: no setSetting found in fiber tree / store snapshot.
-    // Cache already holds the intended merge for Canvas chrome.
+    // Cache already holds the intended merge for Canvas chrome. But the
+    // SIDE must never be optimistic: without a host write the drawer
+    // physically cannot move, so a stamped side is a phantom that makes
+    // every side read (Configure draft, single-layout fallback) disagree
+    // with reality — Configure then re-attempts the swap on every Apply
+    // and the model fights the world (2026-08-17). Drop `side` from the
+    // cache entirely; readers fall back to getMainDrawerSide() (the real
+    // DOM side). This also heals a phantom side stamped before this guard.
+    if ('side' in partial) {
+      delete (merged as Record<string, unknown>).side
+      _cachedDrawerSettings = merged as HostDrawerSettings
+    }
     dlog('patchHostDrawerSettings: setSetting not available (NO-GO)')
     return false
   }
@@ -243,6 +254,79 @@ export function patchHostDrawerSettings(
   // Bust the 3s store cache so downstream readers see the new state.
   findStoreData(true)
   return true
+}
+
+// ── Host settings API fallback (NO-GO bridge) ──
+
+/**
+ * Test seam: inject a fake fetch for the host settings API. Pass null to
+ * clear (the real global fetch is used in the browser).
+ */
+type SettingsApiFetch = (url: string, init?: RequestInit) => Promise<Response>
+let _settingsApiFetch: SettingsApiFetch | null = null
+export function __setSettingsApiFetchForTest(fn: SettingsApiFetch | null): void {
+  _settingsApiFetch = fn
+}
+
+/**
+ * Write drawer settings through Lumiverse's OWN settings API — the same PUT
+ * the Settings modal's setSetting → persistKey flush performs
+ * (PUT /api/v1/settings/:key, requireAuth via the session cookie, server
+ * broadcasts SETTINGS_UPDATED → the client's ws handler reloads settings →
+ * the store applies → React re-renders the drawer wrapper).
+ *
+ * Why: the fiber bridge is NO-GO in this runtime (the full store with
+ * `setSetting` only lands in memoizedState while a bare `useStore()`
+ * component is mounted — UserManagement/DatabankPanel, usually not), so
+ * patchHostDrawerSettings can only stamp a local cache. The SIDE is the one
+ * drawer setting Canvas cannot fake via DOM (the wrapper class is
+ * React-owned), so a real host write needs this path.
+ *
+ * Safety: GETs the current row first and merges the patch into it, so a
+ * partial patch can never clobber fields the page owns (showTabLabels,
+ * panelWidthMode, customPanelWidth, ...). Returns false when the API is
+ * unreachable (offline / non-hosted dev) — callers keep the converge-on-
+ * real-side behavior.
+ */
+export async function writeHostDrawerSettingsViaApi(
+  patch: Partial<HostDrawerSettings>,
+): Promise<boolean> {
+  try {
+    const doFetch = _settingsApiFetch ?? ((url: string, init?: RequestInit) => fetch(url, init))
+    // GET the current row first (404 when never written — fine).
+    let current: HostDrawerSettings = {}
+    try {
+      const res = await doFetch('/api/v1/settings/drawerSettings', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      })
+      if (res.ok) {
+        const row = (await res.json()) as { value?: unknown } | null
+        if (row && typeof row.value === 'object' && row.value !== null) {
+          current = row.value as HostDrawerSettings
+        }
+      }
+    } catch {
+      /* row may not exist yet — start from {} */
+    }
+    const merged = { ...current, ...patch }
+    const res = await doFetch('/api/v1/settings/drawerSettings', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: merged }),
+    })
+    if (res.ok) {
+      dlog('writeHostDrawerSettingsViaApi: ok', { patch })
+      return true
+    }
+    dlog('writeHostDrawerSettingsViaApi: rejected', { status: res.status })
+    return false
+  } catch (err) {
+    dlog('writeHostDrawerSettingsViaApi: failed', String(err))
+    return false
+  }
 }
 
 /**

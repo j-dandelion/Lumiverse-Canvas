@@ -655,7 +655,21 @@ export function tearDownSecondarySidebar(): void {
         '[data-canvas-main-panel-content]',
       ) as HTMLElement | null
     }
-    for (const [tabId] of Array.from(getTabAssignments())) {
+    // The assignment facade is TabKey-keyed ('builtin:weaver'); every
+    // DOM/bridge call below (getBuiltInTabRoot, data-canvas-moved lookup,
+    // requestHostTabToMain, showMainTabButton) works on LIVE ids
+    // ('weaver'). Convert each key once at the loop head — without this
+    // every tab was classified non-built-in (the duplicate-root race the
+    // host-owned skip guards against), the moved-root lookup missed, and
+    // showMainTabButton flooded "no tab in store for id=builtin:..." while
+    // leaving the button hidden (2026-08-17).
+    const _liveTabs = getDrawerTabs().map((t) => ({
+      tabId: t.id,
+      extensionId: t.extensionId,
+      title: t.title,
+    }))
+    for (const [assignedKey] of Array.from(getTabAssignments())) {
+      const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey
       // Built-in detection: the host bridge can lazy-resolve a root for
       // built-in tab IDs. Extension tab IDs return undefined.
       const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null

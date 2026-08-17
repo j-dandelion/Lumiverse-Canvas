@@ -32,6 +32,13 @@ export interface ReconcileReport {
   steps: StepReport[]
   unresolved: TabKey[]
   echo?: EchoInfo
+  /**
+   * Set when the reconcile's diffSide write could not be applied by the host
+   * (NO-GO settings bridge). The caller should adopt this observed side into
+   * the model so the persisted blob never carries a drawer side the drawer
+   * does not actually have (enable-toggle poison, 2026-08-17).
+   */
+  modelSideCorrection?: DrawerSide
 }
 
 export interface HostPort {

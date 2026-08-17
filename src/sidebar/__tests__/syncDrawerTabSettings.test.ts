@@ -532,13 +532,13 @@ function _resetLastKnownVerticalPos() {
 
 // ============================================================
 // SWAP: LumiverseHost.setSide — Configure "Swap drawer locations"
-// The host settings write is NO-GO in this runtime (setSetting bridge
-// unavailable), so setSide must apply the Canvas-side flip
-// (applyMainDrawerSideChange): the side override is what getMainDrawerSide
-// prefers, which makes the observed world converge (diffSide settles) and
-// drives the secondary-shell remount + mirror reposition live. The remount
-// itself throws in this stub env (no document.createElement) — the state
-// assertions below are the convergence-critical part.
+// The host settings write is NO-GO in this test env (no setSetting bridge),
+// so the DOM can never flip to the desired side. setSide must NOT install
+// the Canvas-side override in that case: an override that can never settle
+// is the enable-toggle poison (same-side drawers + stuck override + endless
+// SAVE_LAYOUT cascade, 2026-08-17). On NO-GO the swap is physically
+// impossible — the model converges to the real side on the next host-sync.
+// The GO path (bridge writable) is covered by the SW-GO block below.
 // ============================================================
 {
   __resetSideApplyStateForTest()
@@ -547,15 +547,103 @@ function _resetLastKnownVerticalPos() {
   const host = new LumiverseHost()
   await host.setSide('right')
 
-  assertEqual(getMainDrawerSideOverride(), 'right', 'SW1: swap right sets the side override')
-  assertEqual(getMainDrawerSide(), 'right', 'SW2: getMainDrawerSide prefers the override (observed world converges)')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW1: NO-GO swap does NOT set a side override (DOM can never flip)')
+  assertEqual(getMainDrawerSide(), 'right', 'SW2: getMainDrawerSide stays on the REAL side (store default right)')
 
-  // Second swap: lastKnown now matches desired → remount skipped, stamped.
   await host.setSide('left')
-  assertEqual(getMainDrawerSideOverride(), 'left', 'SW3: swap back flips the override')
-  assertEqual(getMainDrawerSide(), 'left', 'SW4: observed side follows the override')
-  assertEqual(__getLastKnownSideForTest(), 'left', 'SW5: drawer-sync lastKnown stamped on the aligned call')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW3: NO-GO swap back does NOT set a side override')
+  assertEqual(getMainDrawerSide(), 'right', 'SW4: real side unchanged (swap cannot move the DOM)')
+  assertEqual(__getLastKnownSideForTest(), null, 'SW5: no remount machinery touched on NO-GO (no stuck state)')
 
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+}
+
+// ============================================================
+// SW-GO: with a writable host bridge (test seam), setSide installs the
+// override so the Canvas shells remount/reposition while the host React
+// flip is in flight, then the settle clears it once the DOM matches.
+// ============================================================
+{
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+  const { __setHostSetSettingForTest, clearHostSettingsCache } = await import('../../dom/host-settings')
+  __setHostSetSettingForTest(
+    () => {},
+    { side: 'right', tabOrder: [], hiddenTabIds: [] },
+  )
+
+  const host = new LumiverseHost()
+  await host.setSide('left')
+
+  assertEqual(getMainDrawerSideOverride(), 'left', 'SW-GO1: writable bridge swap sets the side override (Canvas flip in flight)')
+  assertEqual(getMainDrawerSide(), 'left', 'SW-GO2: override drives the observed side toward desired')
+
+  // The host React commit flips the wrapper to the desired side → settle
+  // clears the override.
+  setMainDrawerSideOverride(null)
+  assertEqual(getMainDrawerSideOverride(), null, 'SW-GO3: override cleared after DOM settle')
+
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(null)
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+}
+
+// ============================================================
+// SW-API: NO-GO bridge + writable host settings API (the same PUT the
+// Settings modal's setSetting flush performs). setSide falls back to the
+// API, and once the write lands it drives the Canvas-side flip exactly
+// like the GO path — the override + remount while the DOM flip is in
+// flight (2026-08-17: the host CAN move the drawer — via its own API).
+// ============================================================
+{
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+  const { __setSettingsApiFetchForTest, clearHostSettingsCache } = await import('../../dom/host-settings')
+  const seen: string[] = []
+  const apiFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    seen.push(init?.method ?? 'GET')
+    if ((init?.method ?? 'GET') === 'GET') {
+      return { ok: true, status: 200, json: async () => ({ value: { side: 'left', showTabLabels: true } }) } as unknown as Response
+    }
+    return { ok: true, status: 200, json: async () => ({}) } as unknown as Response
+  }
+  __setSettingsApiFetchForTest(apiFetch)
+
+  const host = new LumiverseHost()
+  const result = await host.setSide('right')
+
+  assertEqual(result, 'ok', 'SW-API1: NO-GO bridge + API write returns ok')
+  assert(seen.includes('GET') && seen.includes('PUT'), 'SW-API2: API fallback did GET (merge) then PUT')
+  assertEqual(getMainDrawerSideOverride(), 'right', 'SW-API3: API write drives the Canvas-side flip (override set)')
+  assertEqual(getMainDrawerSide(), 'right', 'SW-API4: observed side follows the override toward desired')
+
+  __setSettingsApiFetchForTest(null)
+  clearHostSettingsCache()
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+}
+
+// ============================================================
+// SW-NO-API: NO-GO bridge AND unreachable settings API → no override
+// (the model converges on the real side instead; no stuck state).
+// ============================================================
+{
+  __resetSideApplyStateForTest()
+  setMainDrawerSideOverride(null)
+  const { __setSettingsApiFetchForTest, clearHostSettingsCache } = await import('../../dom/host-settings')
+  const offlineFetch = async () => { throw new Error('offline') }
+  __setSettingsApiFetchForTest(offlineFetch)
+
+  const host = new LumiverseHost()
+  const result = await host.setSide('right')
+
+  assertEqual(result, 'degraded', 'SW-NO-API1: both write paths failed → degraded')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW-NO-API2: no stuck override when the host cannot move the drawer')
+
+  __setSettingsApiFetchForTest(null)
+  clearHostSettingsCache()
   __resetSideApplyStateForTest()
   setMainDrawerSideOverride(null)
 }
