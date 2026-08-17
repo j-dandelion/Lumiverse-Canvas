@@ -125,6 +125,42 @@ export function refreshSettingsPanel() {
   if (_panelRefresh) _panelRefresh()
 }
 
+/**
+ * Perform the settings save. Guards the armed state at fire time, exactly
+ * like the original debounce body. Used by persistSettings (debounced) and
+ * flushSettingsSave (immediate, on unload/teardown).
+ */
+function fireSettingsSave(): void {
+  _saveSettingsTimer = null
+  if (!isSettingsRepoArmed()) {
+    dlog('persistSettings: not armed at debounce fire, skipping')
+    logPersistSave('persistSettings:debounce', null, { skipped: 'not-armed' })
+    return
+  }
+  const layoutSnapshot = buildPersistedLayout()
+  dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, snapshot.primary.open=${layoutSnapshot.primary.open}, snapshot.secondary.open=${layoutSnapshot.secondary.open})`)
+  const backendCtx = getBackendCtx()
+  if (backendCtx) {
+    syncPersistDebugToBackend((msg) => backendCtx.sendToBackend(msg))
+  }
+  logPersistSave('persistSettings:debounce', { settings: _settings }, {
+    loadInProgress: isLoadInProgress(),
+  })
+  // saveSettingsToDisk now returns Promise<LoadResult<void>> (Task 11.2).
+  // The debounced path is fire-and-forget; surface errors via console.warn
+  // so a failed save is not silently swallowed.
+  saveSettingsToDisk(_settings).then((r) => {
+    if (r.status === 'error') {
+      // eslint-disable-next-line no-console
+      console.warn('[canvas] saveSettingsToDisk failed:', r.reason)
+    }
+  }).catch((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn('[canvas] saveSettingsToDisk rejected:', err)
+  })
+  setLastLoadedLayout({ ...layoutSnapshot, settings: _settings })
+}
+
 export function persistSettings(): void {
   if (!isSettingsRepoArmed()) {
     dlog('persistSettings: not armed, skipping')
@@ -139,36 +175,21 @@ export function persistSettings(): void {
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }
-  _saveSettingsTimer = setTimeout(() => {
-    _saveSettingsTimer = null
-    if (!isSettingsRepoArmed()) {
-      dlog('persistSettings: not armed at debounce fire, skipping')
-      logPersistSave('persistSettings:debounce', null, { skipped: 'not-armed' })
-      return
-    }
-    const layoutSnapshot = buildPersistedLayout()
-    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, snapshot.primary.open=${layoutSnapshot.primary.open}, snapshot.secondary.open=${layoutSnapshot.secondary.open})`)
-    const backendCtx = getBackendCtx()
-    if (backendCtx) {
-      syncPersistDebugToBackend((msg) => backendCtx.sendToBackend(msg))
-    }
-    logPersistSave('persistSettings:debounce', { settings: _settings }, {
-      loadInProgress: isLoadInProgress(),
-    })
-    // saveSettingsToDisk now returns Promise<LoadResult<void>> (Task 11.2).
-    // The debounced path is fire-and-forget; surface errors via console.warn
-    // so a failed save is not silently swallowed.
-    saveSettingsToDisk(_settings).then((r) => {
-      if (r.status === 'error') {
-        // eslint-disable-next-line no-console
-        console.warn('[canvas] saveSettingsToDisk failed:', r.reason)
-      }
-    }).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.warn('[canvas] saveSettingsToDisk rejected:', err)
-    })
-    setLastLoadedLayout({ ...layoutSnapshot, settings: _settings })
-  }, 100)
+  _saveSettingsTimer = setTimeout(fireSettingsSave, 100)
+}
+
+/**
+ * Flush a pending (debounced) settings save immediately. Called on
+ * pagehide/beforeunload/visibilitychange/teardown so a settings toggle made
+ * less than 100ms before the page closes is not silently dropped
+ * (previously flushPendingSaves cancelled the debounce without saving).
+ * No-op when no save is pending.
+ */
+export function flushSettingsSave(): void {
+  if (_saveSettingsTimer !== null) {
+    clearTimeout(_saveSettingsTimer)
+    fireSettingsSave()
+  }
 }
 
 export function cancelSettingsSave(): void {

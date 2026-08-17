@@ -14,7 +14,7 @@
 // file has been split per concern; this module is one of the three
 // resulting files.
 
-import { cancelSettingsSave, setLastLoadedLayout, getSettings } from '../settings/state'
+import { flushSettingsSave, setLastLoadedLayout, getSettings } from '../settings/state'
 import { isLayoutRepoArmed } from './layout-repo'
 import { logPersistSave, syncPersistDebugToBackend } from '../debug/persist-debug'
 import { getBackendCtx } from './backend-ctx'
@@ -76,7 +76,10 @@ export function flushPendingSaves(): void {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
   }
-  cancelSettingsSave()
+  // Flush a pending settings save instead of cancelling it: a toggle made
+  // <100ms before unload would otherwise be silently dropped. No-op when
+  // nothing is pending.
+  flushSettingsSave()
   syncPersistDebugToBackend((msg) => getBackendCtx()?.sendToBackend(msg))
   logPersistSave('flush', null, { loadInProgress: _loadInProgress })
   // No actual write — the owned model handles all persistence.

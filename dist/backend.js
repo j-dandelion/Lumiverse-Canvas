@@ -53,7 +53,12 @@ function pblog(...args) {
 }
 var saveQueue = Promise.resolve();
 async function readJsonFile(key) {
-  const data = await spindle.storage.read(key);
+  let data;
+  try {
+    data = await spindle.storage.read(key);
+  } catch {
+    return null;
+  }
   if (data && typeof data === "string")
     return { data, bytes: data.length };
   return null;

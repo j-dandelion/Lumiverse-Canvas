@@ -179,7 +179,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "1.9.0";
+var _backendCtx = null, CANVAS_VERSION = "1.9.1";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -6614,7 +6614,7 @@ function flushPendingSaves() {
     clearTimeout(_saveLayoutTimer);
     _saveLayoutTimer = null;
   }
-  cancelSettingsSave();
+  flushSettingsSave();
   syncPersistDebugToBackend((msg) => getBackendCtx()?.sendToBackend(msg));
   logPersistSave("flush", null, { loadInProgress: _loadInProgress });
   const layout = buildPersistedLayout();
@@ -13305,6 +13305,7 @@ __export(exports_state, {
   getSettings: () => getSettings,
   getLastLoadedLayout: () => getLastLoadedLayout,
   getDualLayoutSlot: () => getDualLayoutSlot,
+  flushSettingsSave: () => flushSettingsSave,
   cancelSettingsSave: () => cancelSettingsSave
 });
 function getSettings() {
@@ -13379,6 +13380,31 @@ function refreshSettingsPanel() {
   if (_panelRefresh)
     _panelRefresh();
 }
+function fireSettingsSave() {
+  _saveSettingsTimer = null;
+  if (!isSettingsRepoArmed()) {
+    dlog("persistSettings: not armed at debounce fire, skipping");
+    logPersistSave("persistSettings:debounce", null, { skipped: "not-armed" });
+    return;
+  }
+  const layoutSnapshot = buildPersistedLayout();
+  dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, snapshot.primary.open=${layoutSnapshot.primary.open}, snapshot.secondary.open=${layoutSnapshot.secondary.open})`);
+  const backendCtx = getBackendCtx();
+  if (backendCtx) {
+    syncPersistDebugToBackend((msg) => backendCtx.sendToBackend(msg));
+  }
+  logPersistSave("persistSettings:debounce", { settings: _settings }, {
+    loadInProgress: isLoadInProgress()
+  });
+  saveSettingsToDisk(_settings).then((r3) => {
+    if (r3.status === "error") {
+      console.warn("[canvas] saveSettingsToDisk failed:", r3.reason);
+    }
+  }).catch((err) => {
+    console.warn("[canvas] saveSettingsToDisk rejected:", err);
+  });
+  setLastLoadedLayout({ ...layoutSnapshot, settings: _settings });
+}
 function persistSettings() {
   if (!isSettingsRepoArmed()) {
     dlog("persistSettings: not armed, skipping");
@@ -13393,31 +13419,13 @@ function persistSettings() {
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer);
   }
-  _saveSettingsTimer = setTimeout(() => {
-    _saveSettingsTimer = null;
-    if (!isSettingsRepoArmed()) {
-      dlog("persistSettings: not armed at debounce fire, skipping");
-      logPersistSave("persistSettings:debounce", null, { skipped: "not-armed" });
-      return;
-    }
-    const layoutSnapshot = buildPersistedLayout();
-    dlog(`persistSettings: debounced firing (open=${_settings.persistDrawerOpenState}, width=${_settings.persistDrawerWidth}, snapshot.primary.open=${layoutSnapshot.primary.open}, snapshot.secondary.open=${layoutSnapshot.secondary.open})`);
-    const backendCtx = getBackendCtx();
-    if (backendCtx) {
-      syncPersistDebugToBackend((msg) => backendCtx.sendToBackend(msg));
-    }
-    logPersistSave("persistSettings:debounce", { settings: _settings }, {
-      loadInProgress: isLoadInProgress()
-    });
-    saveSettingsToDisk(_settings).then((r3) => {
-      if (r3.status === "error") {
-        console.warn("[canvas] saveSettingsToDisk failed:", r3.reason);
-      }
-    }).catch((err) => {
-      console.warn("[canvas] saveSettingsToDisk rejected:", err);
-    });
-    setLastLoadedLayout({ ...layoutSnapshot, settings: _settings });
-  }, 100);
+  _saveSettingsTimer = setTimeout(fireSettingsSave, 100);
+}
+function flushSettingsSave() {
+  if (_saveSettingsTimer !== null) {
+    clearTimeout(_saveSettingsTimer);
+    fireSettingsSave();
+  }
 }
 function cancelSettingsSave() {
   if (_saveSettingsTimer !== null) {

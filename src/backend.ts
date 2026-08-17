@@ -43,7 +43,18 @@ function pblog(...args: unknown[]): void {
 let saveQueue: Promise<void> = Promise.resolve()
 
 async function readJsonFile(key: string): Promise<{ data: unknown; bytes: number } | null> {
-  const data = await spindle.storage.read(key)
+  let data: unknown
+  try {
+    data = await spindle.storage.read(key)
+  } catch {
+    // The host REJECTS with `Error: File not found` when the file does not
+    // exist (worker-host-storage-api handleStorageRead → fail) — it does not
+    // return null. A missing file is NOT corruption: callers must fall through
+    // to `emptyResult()` so the frontend still arms the persistence repos and
+    // can write the first save. (Regression from the 08-16 persistence rewrite,
+    // which dropped the pre-rewrite try/catch that mapped missing → null.)
+    return null
+  }
   if (data && typeof data === 'string') return { data, bytes: data.length }
   return null
 }
