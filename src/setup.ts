@@ -55,6 +55,7 @@ import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dlog, dwarn } from './debug/log'
+import { bootStep, bootError, bootWarn, armBootWatchdog } from './debug/boot-diag'
 import { logPersistLoad, plog, syncPersistDebugToBackend } from './debug/persist-debug'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
@@ -66,6 +67,16 @@ let _setupGeneration = 0
 
 export function setup(ctx: SpindleFrontendContext) {
   const generation = ++_setupGeneration
+  bootStep(`setup-start gen=${generation}`)
+  // Stall watchdog: if the load chain never settles (e.g. backend IPC
+  // requests dropped while the transport was not ready), dump the boot
+  // timeline loudly so the failure is diagnosable from the console.
+  armBootWatchdog(() => {
+    if (generation === _setupGeneration) {
+      // only the current generation reports a stall
+      bootError(`setup-stall gen=${generation}`, new Error('boot did not finish in time'))
+    }
+  })
   dlog(`start gen=${generation}`)
   // Cancel the previous instance's IPC listener before its global cancel
   // handle can be overwritten by this instance's load.
@@ -177,6 +188,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }),
   ]).then(async ([layoutResult, settingsResult]) => {
     dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`)
+    bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`)
     if (!isCurrent()) {
       plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`)
       return
@@ -225,6 +237,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (layout == null) {
       plog(`hydrate applied in-memory defaults (disk layout was null)`)
     }
+    bootStep(`hydrate gen=${generation}`, layout == null ? 'in-memory defaults (layout was null)' : 'from-disk')
 
     // Layout hydration is authoritative. The layout repo was loaded above,
     // so there is no second legacy LOAD_LAYOUT request here.
@@ -292,6 +305,7 @@ export function setup(ctx: SpindleFrontendContext) {
       dlog(`mounted feature ${String(feature.id)}`)
     }
     dlog(`all features mounted`)
+    bootStep(`features-mounted gen=${generation}`)
 
     // Side-change watcher runs unconditionally (no longer gated behind
     // the autoMirrorOnSideSwap setting). drawer-sync.ts:200 already registers
@@ -382,8 +396,10 @@ export function setup(ctx: SpindleFrontendContext) {
       dlog(`bootstrapFromLayout:start`)
       bootstrapFromLayout(layout, coreHost, CANVAS_VERSION)
       dlog(`bootstrapFromLayout:returned (async reconcile still in flight)`)
+      bootStep(`bootstrap gen=${generation}`)
     } catch (bootstrapErr) {
       dlog(`bootstrapFromLayout:threw`, bootstrapErr)
+      bootError(`bootstrapFromLayout gen=${generation}`, bootstrapErr)
       dwarn('Canvas: bootstrapFromLayout threw synchronously:', bootstrapErr)
       throw bootstrapErr
     }
@@ -413,8 +429,10 @@ export function setup(ctx: SpindleFrontendContext) {
       unsuppressMainDrawer()
     }
     dlog(`setup():.then end gen=${generation}`)
+    bootStep(`setup-done gen=${generation}`, `elapsed since start`)
   }).catch((err) => {
     dlog(`setup():.then caught error gen=${generation}`, err)
+    bootError(`setup gen=${generation}`, err)
     if (!isCurrent()) return
     dwarn('Canvas: split persistence load failed, mounting with defaults:', err)
     logPersistLoad('null-response', {

@@ -57,6 +57,8 @@ import {
   saveLayoutToDisk,
   isLayoutRepoArmed,
   __resetLayoutRepoForTest,
+  __setBootLoadParamsForTest,
+  __resetBootLoadParamsForTest,
 } from '../layout-repo'
 import {
   setSettingsRepoBackendCtx,
@@ -215,6 +217,41 @@ function sleep(ms: number): Promise<void> {
   setLayoutRepoBackendCtx(ctx)
   const result = await loadLayoutFromDisk()
   assertEqual(result.status, 'error', '17e: malformed response returns error')
+}
+
+// --- 18a: late transport (drop-then-recover) still resolves — boot resilience ---
+// The load retries until the transport answers (or the window expires). A
+// response arriving AFTER the first attempt must land, not be abandoned.
+{
+  reset()
+  __setBootLoadParamsForTest({ windowMs: 400, intervalMs: 100 })
+  const ctx = makeBackendCtx()
+  setLayoutRepoBackendCtx(ctx)
+
+  const loadPromise = loadLayoutFromDisk()
+  await sleep(250) // attempts at 0/100/200 all dropped (no responder yet)
+  const attemptsBefore = ctx._sent().filter((m: BackendMsg) => m.type === 'LOAD_LAYOUT').length
+  assert(attemptsBefore >= 3, `18a: transport not ready → repeated attempts (got ${attemptsBefore})`)
+  ctx._respond('LAYOUT_DATA', { status: 'ok', data: { version: 2 } })
+  const result = await loadPromise
+  assertEqual(result.status, 'ok', '18a: late response resolves the load')
+  __resetBootLoadParamsForTest()
+}
+
+// --- 18b: window expiry resolves as an explicit error (never hangs forever) ---
+{
+  reset()
+  __setBootLoadParamsForTest({ windowMs: 250, intervalMs: 100 })
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+
+  const start = Date.now()
+  const result = await loadSettingsFromDisk() // no responder at all
+  const elapsed = Date.now() - start
+  assertEqual(result.status, 'error', '18b: window expiry → error status')
+  assert(elapsed >= 200, `18b: waits out the window (took ${elapsed}ms)`)
+  assert(String(result.reason).includes('timed out'), '18b: reason mentions timeout')
+  __resetBootLoadParamsForTest()
 }
 
 console.log(`persist/write-fence: ${passed} passed, ${failed} failed`)

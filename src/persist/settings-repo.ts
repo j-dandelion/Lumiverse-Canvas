@@ -1,4 +1,6 @@
 import type { LoadResult } from './result'
+import { bootStep, bootWarn } from '../debug/boot-diag'
+import { getBootLoadWindowMs, getBootLoadIntervalMs } from './layout-repo'
 
 interface BackendCtx {
   sendToBackend(msg: { type: string; [key: string]: unknown }): void
@@ -52,9 +54,8 @@ export function loadSettingsFromDisk(): Promise<LoadResult<any>> {
   return new Promise((resolve) => {
     let settled = false
     let unsub: (() => void) | null = null
-    let retries = 0
-    const maxRetries = 3
-    const retryDelays = [500, 1000, 2000]
+    let attempts = 0
+    const startedAt = Date.now()
 
     function attempt() {
       if (settled) return
@@ -69,26 +70,33 @@ export function loadSettingsFromDisk(): Promise<LoadResult<any>> {
           : null
         if (result && typeof result === 'object' &&
             (result.status === 'ok' || result.status === 'empty' || result.status === 'error')) {
+          bootStep(`settings-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt}ms (${result.status})`)
           resolve(result as LoadResult<any>)
         } else {
           resolve({ status: 'error', reason: 'malformed response' })
         }
       }
       unsub = ctx!.onBackendMessage(handler)
+      attempts++
       ctx!.sendToBackend({ type: 'LOAD_SETTINGS' })
 
       setTimeout(() => {
         if (settled) return
-        if (retries < maxRetries) {
-          retries++
+        const elapsed = Date.now() - startedAt
+        if (elapsed < getBootLoadWindowMs()) {
           if (typeof unsub === 'function') unsub()
+          if (attempts > 1 && attempts % 5 === 1) {
+            bootWarn(`settings-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`)
+          }
           attempt()
         } else {
           settled = true
           if (typeof unsub === 'function') unsub()
-          resolve({ status: 'error', reason: 'load timed out after 3 retries' })
+          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`
+          bootWarn(`settings-load-timeout`, reason)
+          resolve({ status: 'error', reason })
         }
-      }, retryDelays[Math.min(retries, retryDelays.length - 1)])
+      }, getBootLoadIntervalMs())
     }
     attempt()
   })

@@ -14,6 +14,83 @@ var __export = (target, all) => {
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
+// src/debug/boot-diag.ts
+function safeStorage() {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+function push(entry) {
+  timeline.push(entry);
+  if (timeline.length > MAX_ENTRIES)
+    timeline.splice(0, timeline.length - MAX_ENTRIES);
+  try {
+    safeStorage()?.setItem(KEY, JSON.stringify(timeline.slice(-MAX_ENTRIES)));
+  } catch {}
+}
+function bootStep(tag, msg) {
+  const entry = { t: performance.now() - startedAt, tag, msg, kind: "step" };
+  push(entry);
+  console.info(`[Canvas-boot] +${entry.t.toFixed(0)}ms ${tag}${msg ? ` — ${msg}` : ""}`);
+}
+function bootError(tag, err) {
+  const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  push({ t: performance.now() - startedAt, tag, msg: detail, kind: "error" });
+  console.error(`[Canvas-boot] FAIL ${tag}`, err);
+}
+function bootWarn(tag, msg) {
+  push({ t: performance.now() - startedAt, tag, msg, kind: "warn" });
+  console.warn(`[Canvas-boot] WARN ${tag}${msg ? ` — ${msg}` : ""}`);
+}
+function armBootWatchdog(onStall) {
+  const timer = setTimeout(() => {
+    onStall();
+    push({ t: performance.now() - startedAt, tag: "watchdog", msg: "boot did not reach a terminal step in time", kind: "stall" });
+    console.error(`[Canvas-boot] STALL — setup did not finish within ${WATCHDOG_MS}ms. Timeline:
+` + dump());
+  }, WATCHDOG_MS);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+}
+function dump() {
+  return JSON.stringify({
+    at: new Date().toISOString(),
+    ua: typeof navigator !== "undefined" ? navigator.userAgent : null,
+    entries: timeline
+  }, null, 2);
+}
+function installBootDiag() {
+  try {
+    console.info("[Canvas-boot] diagnostics armed", { at: new Date().toISOString() });
+    window.addEventListener("error", (event) => {
+      push({
+        t: performance.now() - startedAt,
+        tag: "window.error",
+        msg: event.message + (event.filename ? ` @ ${event.filename}:${event.lineno}` : ""),
+        kind: "error"
+      });
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      const detail = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+      push({ t: performance.now() - startedAt, tag: "unhandledrejection", msg: detail, kind: "error" });
+    });
+    window.__canvasDiag = {
+      dump,
+      timeline,
+      storageKey: KEY
+    };
+  } catch {}
+}
+var KEY = "canvas.bootDiag.v1", MAX_ENTRIES = 60, WATCHDOG_MS = 20000, timeline, startedAt;
+var init_boot_diag = __esm(() => {
+  timeline = [];
+  startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+});
+
 // src/types.ts
 function normalizeCanvasSettingsFields(s) {
   let out = s;
@@ -2518,6 +2595,12 @@ function resolveList(keys, resolve) {
 var init_layout_model = () => {};
 
 // src/persist/layout-repo.ts
+function getBootLoadWindowMs() {
+  return _windowMs;
+}
+function getBootLoadIntervalMs() {
+  return _intervalMs;
+}
 function setLayoutRepoBackendCtx(ctx) {
   _ctx = ctx;
 }
@@ -2542,9 +2625,8 @@ function loadLayoutFromDisk() {
   return new Promise((resolve) => {
     let settled = false;
     let unsub = null;
-    let retries = 0;
-    const maxRetries = 3;
-    const retryDelays = [500, 1000, 2000];
+    let attempts = 0;
+    const startedAt2 = Date.now();
     function attempt() {
       if (settled)
         return;
@@ -2558,28 +2640,35 @@ function loadLayoutFromDisk() {
           unsub();
         const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
         if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
+          bootStep(`layout-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt2}ms (${result.status})`);
           resolve(result);
         } else {
           resolve({ status: "error", reason: "malformed response" });
         }
       };
       unsub = ctx.onBackendMessage(handler);
+      attempts++;
       ctx.sendToBackend({ type: "LOAD_LAYOUT" });
       setTimeout(() => {
         if (settled)
           return;
-        if (retries < maxRetries) {
-          retries++;
+        const elapsed = Date.now() - startedAt2;
+        if (elapsed < getBootLoadWindowMs()) {
           if (typeof unsub === "function")
             unsub();
+          if (attempts > 1 && attempts % 5 === 1) {
+            bootWarn(`layout-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
+          }
           attempt();
         } else {
           settled = true;
           if (typeof unsub === "function")
             unsub();
-          resolve({ status: "error", reason: "load timed out after 3 retries" });
+          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
+          bootWarn(`layout-load-timeout`, reason);
+          resolve({ status: "error", reason });
         }
-      }, retryDelays[Math.min(retries, retryDelays.length - 1)]);
+      }, getBootLoadIntervalMs());
     }
     attempt();
   });
@@ -2624,8 +2713,11 @@ function bindLayoutSaveResultBridge() {
     }
   });
 }
-var _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
+var BOOT_LOAD_WINDOW_MS = 15000, BOOT_LOAD_INTERVAL_MS = 1000, _windowMs, _intervalMs, _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
 var init_layout_repo = __esm(() => {
+  init_boot_diag();
+  _windowMs = BOOT_LOAD_WINDOW_MS;
+  _intervalMs = BOOT_LOAD_INTERVAL_MS;
   _pendingSaves = new Map;
 });
 
@@ -12568,9 +12660,8 @@ function loadSettingsFromDisk() {
   return new Promise((resolve) => {
     let settled = false;
     let unsub = null;
-    let retries = 0;
-    const maxRetries = 3;
-    const retryDelays = [500, 1000, 2000];
+    let attempts = 0;
+    const startedAt2 = Date.now();
     function attempt() {
       if (settled)
         return;
@@ -12584,28 +12675,35 @@ function loadSettingsFromDisk() {
           unsub();
         const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
         if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
+          bootStep(`settings-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt2}ms (${result.status})`);
           resolve(result);
         } else {
           resolve({ status: "error", reason: "malformed response" });
         }
       };
       unsub = ctx.onBackendMessage(handler);
+      attempts++;
       ctx.sendToBackend({ type: "LOAD_SETTINGS" });
       setTimeout(() => {
         if (settled)
           return;
-        if (retries < maxRetries) {
-          retries++;
+        const elapsed = Date.now() - startedAt2;
+        if (elapsed < getBootLoadWindowMs()) {
           if (typeof unsub === "function")
             unsub();
+          if (attempts > 1 && attempts % 5 === 1) {
+            bootWarn(`settings-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
+          }
           attempt();
         } else {
           settled = true;
           if (typeof unsub === "function")
             unsub();
-          resolve({ status: "error", reason: "load timed out after 3 retries" });
+          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
+          bootWarn(`settings-load-timeout`, reason);
+          resolve({ status: "error", reason });
         }
-      }, retryDelays[Math.min(retries, retryDelays.length - 1)]);
+      }, getBootLoadIntervalMs());
     }
     attempt();
   });
@@ -12652,6 +12750,8 @@ function bindSettingsSaveResultBridge() {
 }
 var _ctx2 = null, _armed2 = false, _saveCounter2 = 0, _pendingSaves2;
 var init_settings_repo = __esm(() => {
+  init_boot_diag();
+  init_layout_repo();
   _pendingSaves2 = new Map;
 });
 
@@ -16905,6 +17005,9 @@ var init_panel = __esm(() => {
   init_registry();
 });
 
+// src/frontend.ts
+init_boot_diag();
+
 // src/setup.ts
 init_panel();
 
@@ -17301,6 +17404,7 @@ function stopContextMenuListener() {
 
 // src/setup.ts
 init_log();
+init_boot_diag();
 init_persist_debug();
 init_fiber_scan();
 
@@ -18152,6 +18256,12 @@ init_dispatch();
 var _setupGeneration = 0;
 function setup(ctx) {
   const generation = ++_setupGeneration;
+  bootStep(`setup-start gen=${generation}`);
+  armBootWatchdog(() => {
+    if (generation === _setupGeneration) {
+      bootError(`setup-stall gen=${generation}`, new Error("boot did not finish in time"));
+    }
+  });
   dlog(`start gen=${generation}`);
   cancelLoadSavedLayout({ preserveGuard: true });
   cleanupAll();
@@ -18224,6 +18334,7 @@ function setup(ctx) {
     })
   ]).then(async ([layoutResult, settingsResult]) => {
     dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`);
+    bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`);
     if (!isCurrent()) {
       plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`);
       return;
@@ -18258,6 +18369,7 @@ function setup(ctx) {
     if (layout == null) {
       plog(`hydrate applied in-memory defaults (disk layout was null)`);
     }
+    bootStep(`hydrate gen=${generation}`, layout == null ? "in-memory defaults (layout was null)" : "from-disk");
     try {
       const { hydrateCanvasHiddenFromLayout: hydrateCanvasHiddenFromLayout3 } = await Promise.resolve().then(() => (init_hidden_tabs(), exports_hidden_tabs));
       hydrateCanvasHiddenFromLayout3(layout);
@@ -18295,6 +18407,7 @@ function setup(ctx) {
       dlog(`mounted feature ${String(feature.id)}`);
     }
     dlog(`all features mounted`);
+    bootStep(`features-mounted gen=${generation}`);
     dlog(`startSideChangeWatcher`);
     startSideChangeWatcher();
     dlog(`startSideChangeWatcher done`);
@@ -18341,8 +18454,10 @@ function setup(ctx) {
       dlog(`bootstrapFromLayout:start`);
       bootstrapFromLayout(layout, coreHost, CANVAS_VERSION);
       dlog(`bootstrapFromLayout:returned (async reconcile still in flight)`);
+      bootStep(`bootstrap gen=${generation}`);
     } catch (bootstrapErr) {
       dlog(`bootstrapFromLayout:threw`, bootstrapErr);
+      bootError(`bootstrapFromLayout gen=${generation}`, bootstrapErr);
       dwarn("Canvas: bootstrapFromLayout threw synchronously:", bootstrapErr);
       throw bootstrapErr;
     }
@@ -18363,8 +18478,10 @@ function setup(ctx) {
       unsuppressMainDrawer();
     }
     dlog(`setup():.then end gen=${generation}`);
+    bootStep(`setup-done gen=${generation}`, `elapsed since start`);
   }).catch((err) => {
     dlog(`setup():.then caught error gen=${generation}`, err);
+    bootError(`setup gen=${generation}`, err);
     if (!isCurrent())
       return;
     dwarn("Canvas: split persistence load failed, mounting with defaults:", err);
@@ -18394,6 +18511,9 @@ function setup(ctx) {
       setBackendCtx(null);
   };
 }
+
+// src/frontend.ts
+installBootDiag();
 export {
   setup
 };
