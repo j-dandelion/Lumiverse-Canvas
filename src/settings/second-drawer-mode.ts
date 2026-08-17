@@ -390,7 +390,22 @@ async function finishDisable(): Promise<void> {
     dwarn('[second-drawer-mode] reconcileMainTabListPin after disable failed:', err)
   }
 
-  // 7. Modal stays open. After teardown + restore, refresh its draft from
+  // 7. Re-assert drag-to-resize handles against the current drawer DOM.
+  //    The teardown above only ever removes the SECONDARY handle (scoped —
+  //    it must not strip the main-mirror handle), but the single-layout
+  //    restore can still churn the host drawer (side flip / React re-render),
+  //    which can drop the main handle appended by mountResizeHandles.
+  //    refreshResizeHandles is idempotent and respects the resizeSidebars
+  //    setting, so it re-adds the main handle only when missing AND when the
+  //    feature is enabled — never resurrects it after the user turned it off.
+  try {
+    const r = await import('../resize/handles')
+    r.refreshResizeHandles()
+  } catch (err) {
+    dwarn('[second-drawer-mode] refreshResizeHandles after disable failed:', err)
+  }
+
+  // 8. Modal stays open. After teardown + restore, refresh its draft from
   // the now-restored live state so the user sees a clean (non-dirty)
   // view of the disabled layout.
   try {

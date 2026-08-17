@@ -730,6 +730,15 @@ export function tearDownSecondarySidebar(): void {
     } catch (err) {
       dwarn('[tabmove] teardown: unregisterContainer failed:', err)
     }
+    // Drop the secondary drawer's resize handle explicitly so a re-mount
+    // creates a fresh one (the wrapper.remove() below also drops it — this
+    // is belt-and-suspenders for the "wrapper already detached" edge).
+    // Must be SCOPED to this wrapper: the main-mirror drawer shares the
+    // .sidebar-ux-drawer class and carries the MAIN drawer's handle. A
+    // document-wide sweep here strips the main drawer's drag-to-resize
+    // whenever the second drawer is toggled off in taskbar mode (and nothing
+    // re-adds it until re-enable).
+    _secondaryWrapper.querySelector('.sidebar-ux-resize-handle')?.remove()
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }
@@ -750,14 +759,6 @@ export function tearDownSecondarySidebar(): void {
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => {
     dwarn('[tabmove] teardown: reconcileMainTabListPin failed:', err)
   })
-  // Drop any in-flight resize handle bound to the wrapper, so a re-mount
-  // creates a fresh one.
-  const handles = document.querySelectorAll('.sidebar-ux-resize-handle')
-  for (const h of Array.from(handles)) {
-    if (h.parentElement && h.parentElement.classList.contains('sidebar-ux-drawer')) {
-      h.remove()
-    }
-  }
   // Disconnect the panel-header observers (tearDownSecondarySidebar is
   // used by the master "second drawer" toggle's off path; the observers
   // would otherwise leak across the on→off→on cycle).

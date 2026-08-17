@@ -7024,6 +7024,12 @@ async function finishDisable() {
     dwarn("[second-drawer-mode] reconcileMainTabListPin after disable failed:", err);
   }
   try {
+    const r3 = await Promise.resolve().then(() => (init_handles(), exports_handles));
+    r3.refreshResizeHandles();
+  } catch (err) {
+    dwarn("[second-drawer-mode] refreshResizeHandles after disable failed:", err);
+  }
+  try {
     const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
     if (m3.isConfigureTabsModalOpen()) {
       m3.refreshConfigureDraftFromLive();
@@ -10686,6 +10692,13 @@ var init_reflow = __esm(() => {
 });
 
 // src/resize/handles.ts
+var exports_handles = {};
+__export(exports_handles, {
+  refreshResizeHandles: () => refreshResizeHandles,
+  mountResizeHandles: () => mountResizeHandles,
+  isPointerResizeActive: () => isPointerResizeActive,
+  createResizeHandle: () => createResizeHandle
+});
 function isPointerResizeActive() {
   return window.matchMedia("(pointer: coarse)").matches;
 }
@@ -12940,6 +12953,7 @@ function tearDownSecondarySidebar() {
     } catch (err) {
       dwarn("[tabmove] teardown: unregisterContainer failed:", err);
     }
+    _secondaryWrapper.querySelector(".sidebar-ux-resize-handle")?.remove();
     _secondaryWrapper.remove();
     _secondaryWrapper = null;
   }
@@ -12952,12 +12966,6 @@ function tearDownSecondarySidebar() {
   Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => m3.reconcileMainTabListPin()).catch((err) => {
     dwarn("[tabmove] teardown: reconcileMainTabListPin failed:", err);
   });
-  const handles = document.querySelectorAll(".sidebar-ux-resize-handle");
-  for (const h4 of Array.from(handles)) {
-    if (h4.parentElement && h4.parentElement.classList.contains("sidebar-ux-drawer")) {
-      h4.remove();
-    }
-  }
   stopPanelHeaderObservers();
   resetPanelHeaderSyncCache();
 }
