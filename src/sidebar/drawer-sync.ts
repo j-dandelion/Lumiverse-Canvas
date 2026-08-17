@@ -571,18 +571,50 @@ export function checkSideChanged(): void {
       // The facade is TabKey-keyed; assignToSecondary works on live ids —
       // convert (same as restoreSecondaryTabButtons) or every placement
       // misses with "not found in DrawerObserver or store" (2026-08-16).
-      import('../sidebar/secondary-drawer').then(({ assignToSecondary }) => {
+      import('../sidebar/secondary-drawer').then(async ({ assignToSecondary, setSuppressAutoActivation }) => {
         if (remountGen !== _sideRemountGen) return
-        const liveTabs = getDrawerTabs().map((t) => ({
-          tabId: t.id,
-          extensionId: t.extensionId,
-          title: t.title,
-        }))
-        for (const [key, side] of getTabAssignments()) {
-          if (side === 'secondary') {
-            const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
-            assignToSecondary(liveId).catch(() => {})
+        try {
+          const liveTabs = getDrawerTabs().map((t) => ({
+            tabId: t.id,
+            extensionId: t.extensionId,
+            title: t.title,
+          }))
+          // A drawer-side flip is GEOMETRY-ONLY — tabs stay in their drawers,
+          // and which tab is active does not change. Without suppression, each
+          // assignToSecondary re-promoted ITS tab to the tracked active (last
+          // completion won), so the remount overwrote the user's active
+          // secondary tab with an arbitrary one; the follow-up showSecondaryTab
+          // re-assert (below) then fought it back — each side flip flip-flopped
+          // the tracked active, dispatchTrackedActiveSync wrote
+          // model.active.secondary per flip, and the alternation (side 1 byte +
+          // active 1 byte) defeated the byte-dedup → SAVE_LAYOUT cascade
+          // (2026-08-17 swap-freeze report). Suppress activation for the whole
+          // re-attach loop (same pattern as reassignSecondaryTabsFromModel),
+          // then re-stamp the active — showSecondaryTab(activeTabId) below.
+          const activeId = getActiveSecondaryTabId()
+          setSuppressAutoActivation(true)
+          try {
+            await Promise.all(
+              Array.from(getTabAssignments())
+                .filter(([, side]) => side === 'secondary')
+                .map(async ([key]) => {
+                  const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
+                  await assignToSecondary(liveId, { setActiveWhenReady: false }).catch(() => {})
+                }),
+            )
+          } finally {
+            setSuppressAutoActivation(false)
           }
+          if (remountGen !== _sideRemountGen) return
+          // The re-assert inside checkSideChanged ran synchronously BEFORE the
+          // async assigns (whose activation is now suppressed) — the tracked
+          // active still holds it, so no extra write. Keep the guard honest for
+          // callers that changed the active mid-remount.
+          if (activeId !== null && getTabSidebar(activeId) === 'secondary') {
+            showSecondaryTab(activeId)
+          }
+        } catch (err) {
+          dwarn('[drawer-sync] side-remount reassign failed:', err)
         }
       })
       // The drawerTab handle is created with display:none (secondary.tsx:112)
@@ -1049,6 +1081,13 @@ export function __resetDrawerTabSyncStateForTest(): void {
   _lastWrittenDrawerTabVars = null
   _lastWrittenLabelsKey = null
   _syncPending = false
+  // The missing-drawer-tab retry budget is per-session in production (once
+  // the budget is spent, only an explicit syncDrawerTabSettings() call
+  // re-arms it). Sibling test files that run in the same process each set
+  // up their own DOM — a retry budget spent by one file must not starve
+  // another file's retry-path assertions.
+  _drawerTabRetryCount = 0
+  _drawerTabRetryLogged = false
 }
 
 /** Test-only: shorten/lengthen hard settle timeout (default 2500). */

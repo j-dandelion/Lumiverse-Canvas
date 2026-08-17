@@ -9440,19 +9440,32 @@ function checkSideChanged() {
         } catch {}
       });
       restoreSecondaryTabButtons();
-      Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(({ assignToSecondary: assignToSecondary2 }) => {
+      Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, setSuppressAutoActivation: setSuppressAutoActivation2 }) => {
         if (remountGen !== _sideRemountGen)
           return;
-        const liveTabs = getDrawerTabs().map((t3) => ({
-          tabId: t3.id,
-          extensionId: t3.extensionId,
-          title: t3.title
-        }));
-        for (const [key, side] of getTabAssignments()) {
-          if (side === "secondary") {
-            const liveId = liveIdForFacadeKey(key, liveTabs) ?? key;
-            assignToSecondary2(liveId).catch(() => {});
+        try {
+          const liveTabs = getDrawerTabs().map((t3) => ({
+            tabId: t3.id,
+            extensionId: t3.extensionId,
+            title: t3.title
+          }));
+          const activeId = getActiveSecondaryTabId();
+          setSuppressAutoActivation2(true);
+          try {
+            await Promise.all(Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(async ([key]) => {
+              const liveId = liveIdForFacadeKey(key, liveTabs) ?? key;
+              await assignToSecondary2(liveId, { setActiveWhenReady: false }).catch(() => {});
+            }));
+          } finally {
+            setSuppressAutoActivation2(false);
           }
+          if (remountGen !== _sideRemountGen)
+            return;
+          if (activeId !== null && getTabSidebar(activeId) === "secondary") {
+            showSecondaryTab(activeId);
+          }
+        } catch (err) {
+          dwarn("[drawer-sync] side-remount reassign failed:", err);
         }
       });
       updateDrawerTabVisibility();
@@ -9718,6 +9731,8 @@ function __resetDrawerTabSyncStateForTest() {
   _lastWrittenDrawerTabVars = null;
   _lastWrittenLabelsKey = null;
   _syncPending = false;
+  _drawerTabRetryCount = 0;
+  _drawerTabRetryLogged = false;
 }
 function __setSideSettleHardMsForTest(ms) {
   _sideSettleHardMs = ms;
