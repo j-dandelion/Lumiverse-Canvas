@@ -391,14 +391,24 @@ async function finishDisable(): Promise<void> {
   }
 
   // 7. Modal stays open. After teardown + restore, refresh its draft from
-  //    the now-restored live state so the user sees a clean (non-dirty)
-  //    view of the disabled layout.
+  // the now-restored live state so the user sees a clean (non-dirty)
+  // view of the disabled layout.
   try {
     const m = await import('../tabs/configure-modal')
     if (m.isConfigureTabsModalOpen()) {
       m.refreshConfigureDraftFromLive()
     }
   } catch { /* module may not be loaded */ }
+
+  // Diagnostic: post-switch model state — single mode active, model matches
+  // the visible mode (no split brain), both slots preserved in the blob.
+  const afterModel = getModel()
+  dlog('[second-drawer-mode] single mode active', {
+    secondSidebarEnabled: false,
+    modelPrimary: afterModel?.primary.length ?? 0,
+    modelSecondary: afterModel?.secondary.length ?? 0,
+    modelSide: afterModel?.side ?? null,
+  })
 }
 
 // ── Public API ──
@@ -447,6 +457,22 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
   if (next) {
     // ── ENABLE ──
     if (getSettings().secondSidebarEnabled) return
+
+    // Diagnostic: the mode switch decision — which persisted layout slot
+    // each mode uses. Verifies "Enable second drawer loads the dual layout
+    // (and disable loads the single layout)". Single-slot tabs live in
+    // tabOrder (all-primary); dual-slot tabs in detachedTabs.
+    const switchDualSlot = getDualLayoutSlot()
+    const switchSingleSlot = getSingleLayoutSlot()
+    dlog('[second-drawer-mode] switching to dual', {
+      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
+        ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length
+        : 0,
+      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs)
+        ? (switchDualSlot as { detachedTabs: unknown[] }).detachedTabs.length
+        : 0,
+      modelSecondary: getModel()?.secondary.length ?? 0,
+    })
 
     // Save the single-drawer layout BEFORE any dual UI mount. While the
     // second drawer is off, the owned model IS the single-drawer layout
@@ -537,9 +563,33 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
         m.refreshConfigureDraftFromLive()
       }
     } catch { /* module may not be loaded */ }
+
+    // Diagnostic: post-switch model state — the mode's layout is now the
+    // live model, and the next owned-model persist embeds both slots.
+    const afterModel = getModel()
+    dlog('[second-drawer-mode] dual mode active', {
+      secondSidebarEnabled: true,
+      modelPrimary: afterModel?.primary.length ?? 0,
+      modelSecondary: afterModel?.secondary.length ?? 0,
+      modelSide: afterModel?.side ?? null,
+    })
   } else {
     // ── DISABLE ──
     if (!getSettings().secondSidebarEnabled) return
+
+    // Diagnostic: switching to single-drawer mode — the dual layout is
+    // saved to its slot below, then the single layout slot is restored.
+    const switchSingleSlot = getSingleLayoutSlot()
+    const switchDualSlot = getDualLayoutSlot()
+    dlog('[second-drawer-mode] switching to single', {
+      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
+        ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length
+        : 0,
+      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs)
+        ? (switchDualSlot as { detachedTabs: unknown[] }).detachedTabs.length
+        : 0,
+      modelSecondary: getModel()?.secondary.length ?? 0,
+    })
 
     // Drain in-flight Configure auto-commits + global commit queue before
     // dirty check so we do not treat a still-rebasing base as residual dirty,

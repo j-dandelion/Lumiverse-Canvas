@@ -743,17 +743,25 @@ export async function unassignFromSecondary(tabId: string): Promise<void> {
       }
     }
   } else if (_movedRoot) {
-    // Extension reparent path: put the store root back under main panel
-    // content so the instance survives. Main-mirror parks this container;
-    // it is still the correct home for extension roots (not React-fiber
-    // built-ins).
-    const { getMainPanelContent } = await import('../dom/lumiverse')
-    const _mainContent = getMainPanelContent()
-    if (_mainContent && _movedRoot.parentElement !== _mainContent) {
-      _mainContent.appendChild(_movedRoot)
+    // Extension reparent path: DETACH the store root — the host owns
+    // placement (TabPanelContent moves the root into its containerRef when
+    // the tab activates). 2026-08-17: this used to append the root into
+    // getMainPanelContent() — the node the main-mirror parks in its shell —
+    // leaving orphan roots as visible children of the parked content area
+    // (stacked panels; "content stays on a previous tab" after moves /
+    // mode switches).
+    if (_movedRoot.parentElement) {
+      try {
+        _movedRoot.parentElement.removeChild(_movedRoot)
+      } catch {
+        /* host may have removed it already */
+      }
     }
     _movedRoot.removeAttribute('data-canvas-moved')
     _movedRoot.removeAttribute('data-canvas-active')
+    _movedRoot.style?.removeProperty?.('position')
+    _movedRoot.style?.removeProperty?.('inset')
+    _movedRoot.style?.removeProperty?.('display')
   } else if (typeof document !== 'undefined') {
     // Fallback: root already outside secondary — clear residual attrs only.
     const idsToTry = resolvedShowId !== tabId

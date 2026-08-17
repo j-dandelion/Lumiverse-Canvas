@@ -102,7 +102,16 @@ export async function commitDraftToOwnedModel(
     }
 
     const intents: Intent[] = []
-    if (draft.drawerSide !== model.side) intents.push({ t: 'swapSides' })
+    if (draft.drawerSide !== model.side) {
+      // Diagnostic: this is the Configure "Swap drawer locations" → host
+      // drawer-side write (the same field Lumiverse's own "Drawer side"
+      // setting controls). reconcile's diffSide then calls host.setSide.
+      dlog('[owned-commit] drawer side swap requested', {
+        draftSide: draft.drawerSide,
+        modelSide: model.side,
+      })
+      intents.push({ t: 'swapSides' })
+    }
 
     const desiredSide = new Map<TabKey, Side>()
     for (const key of primary) desiredSide.set(key, 'primary')
@@ -234,6 +243,8 @@ export async function commitDraftToOwnedModel(
       try {
         const drawer = await import('../sidebar/secondary-drawer')
         drawer.setSuppressAutoActivation(true)
+        let placed = 0
+        const failed: string[] = []
         try {
           for (const move of plannedMoves) {
             const liveId = host.resolve(move.key)
@@ -247,13 +258,25 @@ export async function commitDraftToOwnedModel(
               } else {
                 await drawer.unassignFromSecondary(liveId)
               }
+              placed++
             } catch (err) {
+              failed.push(move.key)
               dwarn('[owned-commit] placement failed for', move.key, String(err))
             }
           }
         } finally {
           drawer.setSuppressAutoActivation(false)
         }
+        // Diagnostic: the main-UI DOM follow-up for a Configure commit —
+        // placed/failed split proves "the change shows instantly in the main
+        // Lumiverse UI" for every committed cross-drawer move.
+        dlog('[owned-commit] placement pass', {
+          moves: plannedMoves.length,
+          placed,
+          failed,
+          toSecondary: plannedMoves.filter((m) => m.to === 'secondary').map((m) => m.key),
+          toPrimary: plannedMoves.filter((m) => m.to === 'primary').map((m) => m.key),
+        })
         // assignToSecondary appends; snap the secondary list to the
         // committed model order so placed tabs land at the draft index
         // immediately (otherwise the order only converges on a later sync).

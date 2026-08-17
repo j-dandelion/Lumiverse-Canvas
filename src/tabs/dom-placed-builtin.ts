@@ -2,7 +2,7 @@
 // reparent when host tabLocations (bridge + store.moveTabTo) are unavailable.
 // Kept free of sidebar/secondary imports so teardown can call sync restore.
 
-import { dlog, dwarn } from '../debug/log'
+import { dlog } from '../debug/log'
 import { getMainPanelContent } from '../dom/lumiverse'
 
 export const CANVAS_DOM_PLACED_ATTR = 'data-canvas-dom-placed'
@@ -46,8 +46,19 @@ export function resolveMainPanelContentForRestore(): HTMLElement | null {
 }
 
 /**
- * Put a DOM-placed built-in root back under main panel content and clear
- * Canvas placement attrs + tracking.
+ * Restore a DOM-placed built-in root to host ownership and clear Canvas
+ * placement attrs + tracking.
+ *
+ * 2026-08-17: this used to `mainContent.appendChild(el)` — putting the root
+ * DIRECTLY into the main panelContent node. That node is the node the
+ * main-mirror PARKS in its shell, so every restored root became a visible
+ * child of the parked content area: stacked/orphan panels (e.g. a fixed
+ * "Summary" panel) stayed on screen no matter which tab was activated —
+ * the "content remains on the old tab" bug after Configure → Enable second
+ * drawer OFF. The HOST owns root placement: TabPanelContent's effect moves
+ * the root into its containerRef when the tab activates (and
+ * ContainerTabContent Pass 3 heals stale tabLocations), so the correct
+ * restore is to DETACH the root and let the host re-attach it on demand.
  */
 export function restoreDomPlacedBuiltInToMain(
   tabId: string,
@@ -69,21 +80,25 @@ export function restoreDomPlacedBuiltInToMain(
     }
   }
 
-  const mainContent = resolveMainPanelContentForRestore()
-  if (el && mainContent && el.parentElement !== mainContent) {
-    try {
-      mainContent.appendChild(el)
-    } catch (err) {
-      dwarn(`[tabmove] restoreDomPlaced appendChild failed for "${tabId}":`, err)
-    }
-  }
-
   if (el) {
+    // Detach from wherever Canvas parked it (secondary content / any
+    // parent). The host re-attaches via TabPanelContent/ContainerTabContent.
+    if (el.parentElement) {
+      try {
+        el.parentElement.removeChild(el)
+      } catch {
+        /* host may have removed it already */
+      }
+    }
     el.removeAttribute('data-canvas-moved')
     el.removeAttribute('data-canvas-active')
     el.removeAttribute(CANVAS_DOM_PLACED_ATTR)
+    // Clear placement styles so a later host attach renders cleanly.
+    el.style.removeProperty('position')
+    el.style.removeProperty('inset')
+    el.style.removeProperty('display')
   }
   _domPlacedIds.delete(tabId)
-  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el}`)
+  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`)
   return !!el
 }

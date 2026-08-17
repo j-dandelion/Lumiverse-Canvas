@@ -160,6 +160,11 @@ let _sideApplyGen = 0
 // 12+ redundant calls per tick, each logging 'enter' and re-stamping 8 CSS
 // vars on the secondary wrapper.
 let _syncPending = false
+/** Bounded retry counter for the missing main-drawer-tab path (2026-08-17). */
+let _drawerTabRetryCount = 0
+const DRAWER_TAB_RETRY_MAX = 30
+// Diagnostic noise guard: log the missing drawer-tab retry once per session.
+let _drawerTabRetryLogged = false
 // Cache the serialized 8-dim value of the secondary wrapper's CSS vars.
 // Skip the 8 setProperty calls when nothing changed (the hot path during
 // a drag — only the actual drag ticks change the values).
@@ -250,11 +255,27 @@ function _runSyncDrawerTabSettings(): void {
     ) as HTMLElement | null
   }
   if (!mainDrawerTab) {
-    // Retry on the next frame. Bypass the coalesce gate — the retry must
-    // actually fire even if the wrapper is still mid-coalesce.
-    requestAnimationFrame(() => _runSyncDrawerTabSettings())
+    // BUGFIX (2026-08-17): the previous code re-armed itself on EVERY
+    // frame while the main drawer-tab element was missing — an unbounded
+    // rAF loop that starves the event loop (timers never fire) whenever
+    // the element is absent (early boot, stripped host chrome, stub
+    // environments). Retry is now bounded; after the budget is spent the
+    // next explicit syncDrawerTabSettings() call re-arms it.
+    _drawerTabRetryCount++
+    if (!_drawerTabRetryLogged) {
+      _drawerTabRetryLogged = true
+      dlog('[drawer-sync] main drawer tab not found — bounded retry engaged', {
+        retryMax: DRAWER_TAB_RETRY_MAX,
+      })
+    }
+    if (_drawerTabRetryCount < DRAWER_TAB_RETRY_MAX) {
+      // Retry on the next frame. Bypass the coalesce gate — the retry must
+      // actually fire even if the wrapper is still mid-coalesce.
+      requestAnimationFrame(() => _runSyncDrawerTabSettings())
+    }
     return
   }
+  _drawerTabRetryCount = 0
 
   // Bug fix (2026-06-19, follow-up): validate the read dimensions. The
   // main drawer's `.drawerTab` is 48px wide (or 32px in compact mode).
@@ -464,6 +485,16 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
 export function checkSideChanged(): void {
   const currentSide = getMainDrawerSide()
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
+    // Diagnostic: the drawer physically moved — from Canvas's own swap
+    // (applyMainDrawerSideChange → watcher) or from Lumiverse's "Drawer
+    // side" setting (host Settings modal → store → React wrapper flip →
+    // this watcher/mutation path). Either way the secondary shell remounts
+    // on the new edge and the model converges on the observed side.
+    dlog('[drawer-sync] side changed detected', {
+      from: _lastKnownSide,
+      to: currentSide,
+      secondDrawerEnabled: getSettings().secondSidebarEnabled,
+    })
     // When the second drawer is off there is no secondary shell to rebuild.
     // Still fall through to stamp _lastKnownSide + syncDrawerTabSettings so
     // a later enable does not see a stale "side changed" remount against an
@@ -745,6 +776,15 @@ export async function applyMainDrawerSideChange(
   const run = async (): Promise<void> => {
     // A newer apply may have started while we waited on the chain.
     if (gen !== _sideApplyGen) return
+
+    // Diagnostic: intentional Canvas-side drawer flip (Configure "Swap
+    // drawer locations" / mode-restore side). The side override + remount
+    // below move the secondary shell + mirror; the host write was already
+    // confirmed by the caller (host.setSide).
+    dlog('[drawer-sync] apply drawer side change', {
+      desired,
+      remounting: _lastKnownSide === null || _lastKnownSide !== desired,
+    })
 
     setMainDrawerSideOverride(desired)
 

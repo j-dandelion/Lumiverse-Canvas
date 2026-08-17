@@ -1781,7 +1781,15 @@ async function performDrop(
       }
       // Keep an open Configure modal in sync with the live strip order.
       const m = await import('./configure-modal')
+      const modalWasOpen = m.isConfigureTabsModalOpen()
       m.refreshConfigureDraftFromLive()
+      // Diagnostic: the main-UI drop → Configure modal direction — the
+      // modal (when open) rebuilds its draft from live so the next
+      // Configure view matches the main Lumiverse UI.
+      dlog('[tab-list-dnd] configure modal sync (cross-drawer)', {
+        modalWasOpen,
+        refreshed: modalWasOpen,
+      })
       return true
     }
 
@@ -1828,7 +1836,13 @@ async function performDrop(
     }
     // Keep an open Configure modal in sync with the live strip order.
     const m = await import('./configure-modal')
+    const modalWasOpen = m.isConfigureTabsModalOpen()
     m.refreshConfigureDraftFromLive()
+    // Diagnostic: the main-UI drop → Configure modal direction (reorder).
+    dlog('[tab-list-dnd] configure modal sync (reorder)', {
+      modalWasOpen,
+      refreshed: modalWasOpen,
+    })
     return true
   } catch (err) {
     dwarn('[tab-list-dnd] drop failed:', err)

@@ -246,6 +246,29 @@ export function setCanvasMainTitle(text: string): void {
 export function onMainMirrorTabActivated(title?: string): void {
   if (!_active) return
   if (title) setCanvasMainTitle(title)
+
+  // Diagnostic: the parked content state at every activation. Children of
+  // the parked panelContent should be ONLY the host's TabPanelContent
+  // container(s) — orphan roots (e.g. restored DOM-placed roots with
+  // data-canvas-moved) render as stacked panels and freeze the content
+  // area on the wrong tab (2026-08-17 disable flow).
+  try {
+    dlog('[main-mirror] content state', {
+      parked: _contentEl?.parentElement === _shell?.content,
+      children: _contentEl
+        ? Array.from(_contentEl.children).map((c) => {
+            const cls = (c as HTMLElement).className
+            return `${c.tagName}.${String(cls ?? '').slice(0, 60)}`
+          })
+        : null,
+      movedAttrs: _contentEl
+        ? Array.from(_contentEl.children).filter((c) => c.hasAttribute?.('data-canvas-moved')).length
+        : null,
+    })
+  } catch {
+    /* diagnostic only */
+  }
+
   // Host React may swap panel children a frame later — re-park if needed.
   ensureHostContentParked()
   openCanvasMainDrawer()
@@ -470,11 +493,21 @@ function unpinShellTabList(): void {
  * world has no panel-content signal, so reconcile cannot detect it. The
  * remedy is the re-assert in placementFirstMoveByLiveId (re-click the
  * active key's host button). See docs/pitfalls.md §6.
+ *
+ * STALE-NODE GUARD (2026-08-17): the cached parked node (`_contentEl`) is
+ * only a FALLBACK now. If the host's React tree re-creates panelContent
+ * (drawer content-area remount) while the old node is still parked and
+ * connected in the shell, returning the cached node would freeze the
+ * mirror on the old content forever — every tab click updates the mirror
+ * chrome but the content never follows (Configure → "Enable second drawer"
+ * OFF → activation stops switching content). The host's own panel node is
+ * authoritative whenever it exists; the parked copy is only used while the
+ * host tree is empty (mid-park, early boot).
  */
 function resolveHostPanelContent(): HTMLElement | null {
-  if (_contentEl?.isConnected) return _contentEl
   const fromHost = getMainPanelContent()
   if (fromHost) return fromHost
+  if (_contentEl?.isConnected) return _contentEl
   if (typeof document === 'undefined') return null
   return document.querySelector(`[${CONTENT_MARK_ATTR}]`) as HTMLElement | null
 }
@@ -493,6 +526,22 @@ function ensureHostContentParked(): void {
       `[main-mirror] park skip hostContent=${!!hostContent} slot=${!!slot?.isConnected}`,
     )
     return
+  }
+
+  // Diagnostic + eviction: if the host's React tree replaced panelContent
+  // (drawer content-area remount after container moves / mode switches),
+  // the old parked node is STALE — the host renders into the new node and
+  // the mirror would show frozen content. Evict the stale node from the
+  // shell slot and log the identity change so a "content stuck" report can
+  // be traced to a host-side remount.
+  if (_contentEl && _contentEl !== hostContent) {
+    dlog('[main-mirror] parked content node replaced by host (re-parking)', {
+      hadMark: _contentEl.hasAttribute?.(CONTENT_MARK_ATTR) ?? false,
+    })
+    if (_contentEl.parentElement === slot) {
+      slot.removeChild(_contentEl)
+    }
+    _contentEl.removeAttribute?.(CONTENT_MARK_ATTR)
   }
 
   _contentEl = hostContent

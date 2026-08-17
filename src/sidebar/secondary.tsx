@@ -648,13 +648,6 @@ export function tearDownSecondarySidebar(): void {
     // tracked in tabLocations (they use raw DOM reparenting), so they
     // don't need this call.
     const _wSpindleUi = getHostBridge()?.ui
-    // Prefer parked panelContent under main-mirror when host tree is empty.
-    let _mainPanelContent = getMainPanelContent()
-    if (!_mainPanelContent && typeof document !== 'undefined') {
-      _mainPanelContent = document.querySelector(
-        '[data-canvas-main-panel-content]',
-      ) as HTMLElement | null
-    }
     // The assignment facade is TabKey-keyed ('builtin:weaver'); every
     // DOM/bridge call below (getBuiltInTabRoot, data-canvas-moved lookup,
     // requestHostTabToMain, showMainTabButton) works on LIVE ids
@@ -696,14 +689,25 @@ export function tearDownSecondarySidebar(): void {
       }
 
       // Extension roots and DOM-placed non-CORE built-ins: Canvas owns the
-      // node — appendChild back to main panelContent. Host-owned CORE roots
-      // skip this so React reconciliation is not raced (duplicate stack bug).
+      // node — DETACH it back to host ownership. The host re-attaches the
+      // root into TabPanelContent's containerRef when the tab activates
+      // (and ContainerTabContent Pass 3 heals stale tabLocations). Do NOT
+      // append into main panelContent: that node is the node the main-mirror
+      // parks in its shell, so orphan roots there render as stacked panels
+      // inside the mirror — the "content stays on a previous tab" bug after
+      // Configure → Enable second drawer OFF (2026-08-17). Host-owned CORE
+      // roots skip this so React reconciliation is not raced (duplicate
+      // stack bug).
       if (!_isBuiltIn || _domPlaced) {
         if (_domPlaced) {
           restoreDomPlacedBuiltInToMain(tabId, _movedRoot)
         } else {
-          if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
-            _mainPanelContent.appendChild(_movedRoot)
+          if (_movedRoot && _movedRoot.parentElement) {
+            try {
+              _movedRoot.parentElement.removeChild(_movedRoot)
+            } catch {
+              /* host may have removed it already */
+            }
           }
           if (_movedRoot) {
             _movedRoot.removeAttribute('data-canvas-moved')

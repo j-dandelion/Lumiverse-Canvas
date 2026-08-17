@@ -65,6 +65,16 @@ export function hydrateModeLayoutSlots(layout: any): void {
   if (layout && typeof layout === 'object') {
     if (layout.dualLayout !== undefined) _dualLayout = layout.dualLayout
     if (layout.singleLayout !== undefined) _singleLayout = layout.singleLayout
+    // Diagnostic: which mode profiles survived the load — the durable
+    // single/dual layouts that mode toggles restore across hard refresh
+    // and server restart.
+    dlog('[settings] mode layout slots hydrated', {
+      singleSlot: _singleLayout != null,
+      singleTabs: Array.isArray(_singleLayout?.tabOrder) ? _singleLayout.tabOrder.length : 0,
+      dualSlot: _dualLayout != null,
+      dualTabs: Array.isArray(_dualLayout?.detachedTabs) ? _dualLayout.detachedTabs.length : 0,
+      drawerSide: layout.drawerSide ?? null,
+    })
   }
 }
 

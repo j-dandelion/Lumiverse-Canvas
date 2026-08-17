@@ -576,8 +576,10 @@ export class LumiverseHost implements HostPort {
       // SETTINGS_UPDATED, the client's ws handler reloads settings into the
       // store, and React re-renders the drawer wrapper — the REAL move.
       let ok = patchHostDrawerSettings(merged)
+      let bridge: 'fiber' | 'api' | 'none' = 'fiber'
       if (!ok) {
         ok = await writeHostDrawerSettingsViaApi({ side })
+        bridge = 'api'
       }
       if (ok) {
         try {
@@ -587,8 +589,15 @@ export class LumiverseHost implements HostPort {
           dlog('[host] setSide: drawer-sync flip failed', String(err))
         }
       } else {
+        bridge = 'none'
         dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`)
       }
+
+      // Diagnostic: the swap outcome + which write path moved the drawer.
+      // 'fiber' = direct setSetting (GO), 'api' = Lumiverse settings API
+      // (the same PUT the Settings modal's "Drawer side" toggle performs),
+      // 'none' = no host write — the model converges on the real DOM side.
+      dlog('[host] setSide', { side, bridge, result: ok ? 'ok' : 'degraded' })
 
       return ok ? 'ok' : 'degraded'
     } catch {

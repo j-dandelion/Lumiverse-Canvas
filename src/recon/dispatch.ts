@@ -229,9 +229,21 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
     }
     dlog('[dispatch] host-sync', {
       observed: observed.tabs.map(t => `${t.liveId}:${t.location}`),
-      before: { primary: _model.primary, secondary: _model.secondary },
-      after: { primary: next.primary, secondary: next.secondary },
+      observedDrawerSide: observed.drawerSide,
+      before: { primary: _model.primary, secondary: _model.secondary, side: _model.side },
+      after: { primary: next.primary, secondary: next.secondary, side: next.side },
     })
+    if (next.side !== _model.side) {
+      // Diagnostic: the host's drawer physically moved — e.g. Lumiverse's
+      // own "Drawer side" setting was toggled (the same field Canvas "Swap
+      // drawer locations" writes). The model + Configure Tabs converge on
+      // the observed side.
+      dlog('[dispatch] host drawer side adopted (Lumiverse "Drawer side" setting toggled)', {
+        observed: observed.drawerSide,
+        modelBefore: _model.side,
+        modelAfter: next.side,
+      })
+    }
     if (next === _model) return
     // Capture the reconciliation result, but only mutate _model if our
     // generation is still current. A shutdown or re-bootstrap that happened
@@ -321,8 +333,29 @@ function persistModel(model: LayoutModel): void {
   // log: constant bytes=2135 SAVE_LAYOUT loop). Identical serialized content
   // → skip the write entirely.
   const json = JSON.stringify(layout)
-  if (json === _lastPersistedLayout) return
+  if (json === _lastPersistedLayout) {
+    dlog('[dispatch] persist layout skipped (byte-identical)')
+    return
+  }
   _lastPersistedLayout = json
+  // Diagnostic: one summary per actual disk write — what the persisted blob
+  // carries (drawer side, per-drawer counts, hidden, actives, mode slots).
+  // Verifies every reorder/move/mode change landed in the durable layout
+  // that a hard refresh + server restart restores. tabOrder is the COMBINED
+  // host order (primary + secondary); primary = combined − detached.
+  const persistedTabs = Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0
+  const persistedSecondary = Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0
+  dlog('[dispatch] persist layout', {
+    drawerSide: layout.drawerSide,
+    primary: persistedTabs - persistedSecondary,
+    secondary: persistedSecondary,
+    hidden: Array.isArray(layout.hiddenTabIds) ? layout.hiddenTabIds.length : 0,
+    activePrimary: layout.primary?.tabId ?? null,
+    activeSecondary: layout.secondary?.activeTabId ?? null,
+    singleSlot: layout.singleLayout != null,
+    dualSlot: layout.dualLayout != null,
+    bytes: json.length,
+  })
   // Fire-and-await: errors are logged but do not block the dispatch queue.
   // The owned model remains the source of truth; a failed save is
   // surfaced via the debug log and will be retried on the next dispatch.
@@ -913,6 +946,21 @@ export function bootstrapFromLayout(
     ? layout
     : null
   bootstrap(model, host, version)
+
+  // Diagnostic: boot restore summary — what the saved layout asked for vs
+  // what resolved. Verifies the persisted layout (drawer side, split, order)
+  // survives hard refresh + server restart.
+  const savedLayout = (layout ?? {}) as { drawerSide?: unknown; detachedTabs?: unknown[] }
+  dlog('[dispatch] boot restore', {
+    expectedTabs: expected,
+    resolvedTabs: resolved,
+    pendingRetry: _pendingLayout !== null,
+    savedDrawerSide: savedLayout.drawerSide ?? null,
+    savedSecondary: Array.isArray(savedLayout.detachedTabs) ? savedLayout.detachedTabs.length : 0,
+    modelSide: model.side,
+    modelPrimary: model.primary.length,
+    modelSecondary: model.secondary.length,
+  })
 
   // Place model-secondary tabs into the secondary shell right after boot,
   // before any user interaction: with the drawer already open at boot, the

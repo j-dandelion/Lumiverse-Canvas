@@ -3632,21 +3632,21 @@ function restoreDomPlacedBuiltInToMain(tabId, root) {
       el = null;
     }
   }
-  const mainContent = resolveMainPanelContentForRestore();
-  if (el && mainContent && el.parentElement !== mainContent) {
-    try {
-      mainContent.appendChild(el);
-    } catch (err) {
-      dwarn(`[tabmove] restoreDomPlaced appendChild failed for "${tabId}":`, err);
-    }
-  }
   if (el) {
+    if (el.parentElement) {
+      try {
+        el.parentElement.removeChild(el);
+      } catch {}
+    }
     el.removeAttribute("data-canvas-moved");
     el.removeAttribute("data-canvas-active");
     el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+    el.style.removeProperty("position");
+    el.style.removeProperty("inset");
+    el.style.removeProperty("display");
   }
   _domPlacedIds.delete(tabId);
-  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el}`);
+  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
   return !!el;
 }
 var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
@@ -4389,13 +4389,16 @@ async function unassignFromSecondary(tabId) {
       }
     }
   } else if (_movedRoot) {
-    const { getMainPanelContent: getMainPanelContent2 } = await Promise.resolve().then(() => exports_lumiverse);
-    const _mainContent = getMainPanelContent2();
-    if (_mainContent && _movedRoot.parentElement !== _mainContent) {
-      _mainContent.appendChild(_movedRoot);
+    if (_movedRoot.parentElement) {
+      try {
+        _movedRoot.parentElement.removeChild(_movedRoot);
+      } catch {}
     }
     _movedRoot.removeAttribute("data-canvas-moved");
     _movedRoot.removeAttribute("data-canvas-active");
+    _movedRoot.style?.removeProperty?.("position");
+    _movedRoot.style?.removeProperty?.("inset");
+    _movedRoot.style?.removeProperty?.("display");
   } else if (typeof document !== "undefined") {
     const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
     for (const id of idsToTry) {
@@ -4630,9 +4633,17 @@ function enqueueHostSync(host, generation) {
     }
     dlog("[dispatch] host-sync", {
       observed: observed.tabs.map((t) => `${t.liveId}:${t.location}`),
-      before: { primary: _model.primary, secondary: _model.secondary },
-      after: { primary: next.primary, secondary: next.secondary }
+      observedDrawerSide: observed.drawerSide,
+      before: { primary: _model.primary, secondary: _model.secondary, side: _model.side },
+      after: { primary: next.primary, secondary: next.secondary, side: next.side }
     });
+    if (next.side !== _model.side) {
+      dlog('[dispatch] host drawer side adopted (Lumiverse "Drawer side" setting toggled)', {
+        observed: observed.drawerSide,
+        modelBefore: _model.side,
+        modelAfter: next.side
+      });
+    }
     if (next === _model)
       return;
     const result = await reconcileAndPersist(next, generation);
@@ -4684,9 +4695,24 @@ function persistModel(model) {
     return;
   const layout = buildPersistedBlob(model, (key) => host.resolve(key));
   const json = JSON.stringify(layout);
-  if (json === _lastPersistedLayout)
+  if (json === _lastPersistedLayout) {
+    dlog("[dispatch] persist layout skipped (byte-identical)");
     return;
+  }
   _lastPersistedLayout = json;
+  const persistedTabs = Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0;
+  const persistedSecondary = Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0;
+  dlog("[dispatch] persist layout", {
+    drawerSide: layout.drawerSide,
+    primary: persistedTabs - persistedSecondary,
+    secondary: persistedSecondary,
+    hidden: Array.isArray(layout.hiddenTabIds) ? layout.hiddenTabIds.length : 0,
+    activePrimary: layout.primary?.tabId ?? null,
+    activeSecondary: layout.secondary?.activeTabId ?? null,
+    singleSlot: layout.singleLayout != null,
+    dualSlot: layout.dualLayout != null,
+    bytes: json.length
+  });
   saveLayoutToDisk(layout).then((r) => {
     if (r.status === "error") {
       console.warn("[canvas] saveLayoutToDisk failed:", r.reason);
@@ -4997,6 +5023,17 @@ function bootstrapFromLayout(layout, host, version) {
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
   _pendingLayout = layout != null && resolved < expected ? layout : null;
   bootstrap(model, host, version);
+  const savedLayout = layout ?? {};
+  dlog("[dispatch] boot restore", {
+    expectedTabs: expected,
+    resolvedTabs: resolved,
+    pendingRetry: _pendingLayout !== null,
+    savedDrawerSide: savedLayout.drawerSide ?? null,
+    savedSecondary: Array.isArray(savedLayout.detachedTabs) ? savedLayout.detachedTabs.length : 0,
+    modelSide: model.side,
+    modelPrimary: model.primary.length,
+    modelSecondary: model.secondary.length
+  });
   Promise.resolve().then(() => (init_secondary(), exports_secondary)).then((m) => {
     m.reassignSecondaryTabsFromModel({
       openOnClosed: false,
@@ -6181,8 +6218,13 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
       return { ok: false, error: "A tab changed while Configure Tabs was open. Please retry." };
     }
     const intents = [];
-    if (draft.drawerSide !== model.side)
+    if (draft.drawerSide !== model.side) {
+      dlog("[owned-commit] drawer side swap requested", {
+        draftSide: draft.drawerSide,
+        modelSide: model.side
+      });
       intents.push({ t: "swapSides" });
+    }
     const desiredSide = new Map;
     for (const key of primary)
       desiredSide.set(key, "primary");
@@ -6270,6 +6312,8 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
       try {
         const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
         drawer.setSuppressAutoActivation(true);
+        let placed = 0;
+        const failed = [];
         try {
           for (const move of plannedMoves) {
             const liveId = host.resolve(move.key);
@@ -6284,13 +6328,22 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
               } else {
                 await drawer.unassignFromSecondary(liveId);
               }
+              placed++;
             } catch (err) {
+              failed.push(move.key);
               dwarn("[owned-commit] placement failed for", move.key, String(err));
             }
           }
         } finally {
           drawer.setSuppressAutoActivation(false);
         }
+        dlog("[owned-commit] placement pass", {
+          moves: plannedMoves.length,
+          placed,
+          failed,
+          toSecondary: plannedMoves.filter((m3) => m3.to === "secondary").map((m3) => m3.key),
+          toPrimary: plannedMoves.filter((m3) => m3.to === "primary").map((m3) => m3.key)
+        });
         const modelAfter = getModel();
         if (modelAfter && modelAfter.secondary.length > 0) {
           const { reorderSecondaryTabButtons, secondaryTabButtonsReady } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
@@ -6862,11 +6915,25 @@ async function finishDisable() {
       m3.refreshConfigureDraftFromLive();
     }
   } catch {}
+  const afterModel = getModel();
+  dlog("[second-drawer-mode] single mode active", {
+    secondSidebarEnabled: false,
+    modelPrimary: afterModel?.primary.length ?? 0,
+    modelSecondary: afterModel?.secondary.length ?? 0,
+    modelSide: afterModel?.side ?? null
+  });
 }
 async function requestSecondDrawerMode(next) {
   if (next) {
     if (getSettings().secondSidebarEnabled)
       return;
+    const switchDualSlot = getDualLayoutSlot();
+    const switchSingleSlot = getSingleLayoutSlot();
+    dlog("[second-drawer-mode] switching to dual", {
+      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder) ? switchSingleSlot.tabOrder.length : 0,
+      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs) ? switchDualSlot.detachedTabs.length : 0,
+      modelSecondary: getModel()?.secondary.length ?? 0
+    });
     const singleSnapshot = snapshotOwnedModelLayout();
     const modelNow = getModel();
     if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
@@ -6907,9 +6974,23 @@ async function requestSecondDrawerMode(next) {
         m3.refreshConfigureDraftFromLive();
       }
     } catch {}
+    const afterModel = getModel();
+    dlog("[second-drawer-mode] dual mode active", {
+      secondSidebarEnabled: true,
+      modelPrimary: afterModel?.primary.length ?? 0,
+      modelSecondary: afterModel?.secondary.length ?? 0,
+      modelSide: afterModel?.side ?? null
+    });
   } else {
     if (!getSettings().secondSidebarEnabled)
       return;
+    const switchSingleSlot = getSingleLayoutSlot();
+    const switchDualSlot = getDualLayoutSlot();
+    dlog("[second-drawer-mode] switching to single", {
+      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder) ? switchSingleSlot.tabOrder.length : 0,
+      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs) ? switchDualSlot.detachedTabs.length : 0,
+      modelSecondary: getModel()?.secondary.length ?? 0
+    });
     let userChoice = "clean";
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
@@ -8153,7 +8234,9 @@ function buildLiveDraftAndBase() {
   const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getLiveIdAssignments());
-  const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const hostSide = hostSettings?.side;
+  const drawerSide = hostSide || getMainDrawerSide();
+  const sideSource = hostSide ? "host-settings" : "dom";
   const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
@@ -8164,6 +8247,14 @@ function buildLiveDraftAndBase() {
   });
   const draft = alignDraftToLiveVisibleOrder(draftFromHost, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
   const base = baseSnapshotFromDraft(draft);
+  dlog("[configure-modal] draft from live", {
+    side: draft.drawerSide,
+    sideSource,
+    primary: draft.primaryIds.length,
+    secondary: draft.secondaryIds.length,
+    hidden: draft.hiddenIds.size,
+    secondDrawerEnabled: getSettings().secondSidebarEnabled
+  });
   return { draft, base, catalog };
 }
 function openConfigureTabsModal() {
@@ -8179,6 +8270,7 @@ function openConfigureTabsModal() {
   _draftRef = draft;
   _baseSnapshotRef = base;
   _baseEpoch++;
+  dlog("[configure-modal] open (draft built from live)");
   _modalContainer = document.createElement("div");
   _modalContainer.id = "canvas-configure-tabs-modal";
   document.body.appendChild(_modalContainer);
@@ -8191,6 +8283,7 @@ function refreshConfigureDraftFromLive() {
   _draftRef = draft;
   _baseSnapshotRef = base;
   _baseEpoch++;
+  dlog("[configure-modal] refresh from live (draft rebuilt)");
   renderModal(draft, catalog, null, false);
 }
 function closeConfigureTabsModal(_opts) {
@@ -8227,8 +8320,15 @@ function renderModal(draft, catalog, commitError, committing) {
     onSwapSide: () => {
       if (!_draftRef)
         return;
+      const before = _draftRef.drawerSide;
       const next = swapDrawerSide(_draftRef);
       _draftRef = next;
+      dlog("[configure-modal] swap drawer locations", {
+        draftSideBefore: before,
+        draftSideAfter: next.drawerSide,
+        modelSide: getModel()?.side ?? null,
+        visibleSide: getMainDrawerSide()
+      });
       renderModal(next, catalog, null, false);
       autoCommit();
     },
@@ -8241,8 +8341,13 @@ function renderModal(draft, catalog, commitError, committing) {
       autoCommit();
     },
     onToggleSecondDrawer: () => {
+      const target = !getSettings().secondSidebarEnabled;
+      dlog("[configure-modal] enable second drawer toggle", {
+        target,
+        current: getSettings().secondSidebarEnabled
+      });
       Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
-        m3.requestSecondDrawerMode(!getSettings().secondSidebarEnabled);
+        m3.requestSecondDrawerMode(target);
       }).catch((err) => {
         dwarn("[configure-modal] second-drawer-mode import failed:", err);
       });
@@ -9039,9 +9144,19 @@ function _runSyncDrawerTabSettings() {
     mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
   }
   if (!mainDrawerTab) {
-    requestAnimationFrame(() => _runSyncDrawerTabSettings());
+    _drawerTabRetryCount++;
+    if (!_drawerTabRetryLogged) {
+      _drawerTabRetryLogged = true;
+      dlog("[drawer-sync] main drawer tab not found — bounded retry engaged", {
+        retryMax: DRAWER_TAB_RETRY_MAX
+      });
+    }
+    if (_drawerTabRetryCount < DRAWER_TAB_RETRY_MAX) {
+      requestAnimationFrame(() => _runSyncDrawerTabSettings());
+    }
     return;
   }
+  _drawerTabRetryCount = 0;
   const w3 = mainDrawerTab.offsetWidth;
   const h4 = mainDrawerTab.offsetHeight;
   if (w3 < 16 || w3 > 120 || h4 < 16 || h4 > 400) {
@@ -9184,6 +9299,11 @@ function syncSecondaryTabLabels(forceShow) {
 function checkSideChanged() {
   const currentSide = getMainDrawerSide();
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
+    dlog("[drawer-sync] side changed detected", {
+      from: _lastKnownSide,
+      to: currentSide,
+      secondDrawerEnabled: getSettings().secondSidebarEnabled
+    });
     if (getSettings().secondSidebarEnabled) {
       const wasOpen = isSecondarySidebarOpen();
       const remountGen = ++_sideRemountGen;
@@ -9296,6 +9416,10 @@ async function applyMainDrawerSideChange(desired) {
   const run = async () => {
     if (gen !== _sideApplyGen)
       return;
+    dlog("[drawer-sync] apply drawer side change", {
+      desired,
+      remounting: _lastKnownSide === null || _lastKnownSide !== desired
+    });
     setMainDrawerSideOverride(desired);
     if (_lastKnownSide === null || _lastKnownSide !== desired) {
       if (_lastKnownSide === null) {
@@ -9514,7 +9638,7 @@ function stopObserverCoordinator() {
     _observerCoordinator = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
 var init_drawer_sync = __esm(() => {
   init_host_settings();
   init_store();
@@ -9812,6 +9936,16 @@ function onMainMirrorTabActivated(title) {
     return;
   if (title)
     setCanvasMainTitle(title);
+  try {
+    dlog("[main-mirror] content state", {
+      parked: _contentEl?.parentElement === _shell?.content,
+      children: _contentEl ? Array.from(_contentEl.children).map((c3) => {
+        const cls = c3.className;
+        return `${c3.tagName}.${String(cls ?? "").slice(0, 60)}`;
+      }) : null,
+      movedAttrs: _contentEl ? Array.from(_contentEl.children).filter((c3) => c3.hasAttribute?.("data-canvas-moved")).length : null
+    });
+  } catch {}
   ensureHostContentParked();
   openCanvasMainDrawer();
   requestAnimationFrame(() => ensureHostContentParked());
@@ -9996,11 +10130,11 @@ function unpinShellTabList() {
   destroyMainPinHost();
 }
 function resolveHostPanelContent() {
-  if (_contentEl?.isConnected)
-    return _contentEl;
   const fromHost = getMainPanelContent();
   if (fromHost)
     return fromHost;
+  if (_contentEl?.isConnected)
+    return _contentEl;
   if (typeof document === "undefined")
     return null;
   return document.querySelector(`[${CONTENT_MARK_ATTR}]`);
@@ -10013,6 +10147,15 @@ function ensureHostContentParked() {
   if (!hostContent || !slot.isConnected) {
     dlog(`[main-mirror] park skip hostContent=${!!hostContent} slot=${!!slot?.isConnected}`);
     return;
+  }
+  if (_contentEl && _contentEl !== hostContent) {
+    dlog("[main-mirror] parked content node replaced by host (re-parking)", {
+      hadMark: _contentEl.hasAttribute?.(CONTENT_MARK_ATTR) ?? false
+    });
+    if (_contentEl.parentElement === slot) {
+      slot.removeChild(_contentEl);
+    }
+    _contentEl.removeAttribute?.(CONTENT_MARK_ATTR);
   }
   _contentEl = hostContent;
   hostContent.setAttribute(CONTENT_MARK_ATTR, "1");
@@ -12552,10 +12695,6 @@ function tearDownSecondarySidebar() {
       }
     }
     const _wSpindleUi = getHostBridge()?.ui;
-    let _mainPanelContent = getMainPanelContent();
-    if (!_mainPanelContent && typeof document !== "undefined") {
-      _mainPanelContent = document.querySelector("[data-canvas-main-panel-content]");
-    }
     const _liveTabs = getDrawerTabs().map((t3) => ({
       tabId: t3.id,
       extensionId: t3.extensionId,
@@ -12585,8 +12724,10 @@ function tearDownSecondarySidebar() {
         if (_domPlaced) {
           restoreDomPlacedBuiltInToMain(tabId, _movedRoot);
         } else {
-          if (_movedRoot && _mainPanelContent && _movedRoot.parentElement !== _mainPanelContent) {
-            _mainPanelContent.appendChild(_movedRoot);
+          if (_movedRoot && _movedRoot.parentElement) {
+            try {
+              _movedRoot.parentElement.removeChild(_movedRoot);
+            } catch {}
           }
           if (_movedRoot) {
             _movedRoot.removeAttribute("data-canvas-moved");
@@ -12958,6 +13099,13 @@ function hydrateModeLayoutSlots(layout) {
       _dualLayout = layout.dualLayout;
     if (layout.singleLayout !== undefined)
       _singleLayout = layout.singleLayout;
+    dlog("[settings] mode layout slots hydrated", {
+      singleSlot: _singleLayout != null,
+      singleTabs: Array.isArray(_singleLayout?.tabOrder) ? _singleLayout.tabOrder.length : 0,
+      dualSlot: _dualLayout != null,
+      dualTabs: Array.isArray(_dualLayout?.detachedTabs) ? _dualLayout.detachedTabs.length : 0,
+      drawerSide: layout.drawerSide ?? null
+    });
   }
 }
 function setPanelRefresh(fn) {
@@ -13995,7 +14143,12 @@ async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
         return false;
       }
       const m4 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+      const modalWasOpen2 = m4.isConfigureTabsModalOpen();
       m4.refreshConfigureDraftFromLive();
+      dlog("[tab-list-dnd] configure modal sync (cross-drawer)", {
+        modalWasOpen: modalWasOpen2,
+        refreshed: modalWasOpen2
+      });
       return true;
     }
     const listKey = target.secondary ? "secondaryIds" : "primaryIds";
@@ -14023,7 +14176,12 @@ async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
       return false;
     }
     const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+    const modalWasOpen = m3.isConfigureTabsModalOpen();
     m3.refreshConfigureDraftFromLive();
+    dlog("[tab-list-dnd] configure modal sync (reorder)", {
+      modalWasOpen,
+      refreshed: modalWasOpen
+    });
     return true;
   } catch (err) {
     dwarn("[tab-list-dnd] drop failed:", err);
@@ -18331,8 +18489,10 @@ class LumiverseHost {
       const current = getHostDrawerSettings();
       const merged = { ...current ?? {}, side };
       let ok = patchHostDrawerSettings(merged);
+      let bridge = "fiber";
       if (!ok) {
         ok = await writeHostDrawerSettingsViaApi({ side });
+        bridge = "api";
       }
       if (ok) {
         try {
@@ -18342,8 +18502,10 @@ class LumiverseHost {
           dlog("[host] setSide: drawer-sync flip failed", String(err));
         }
       } else {
+        bridge = "none";
         dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`);
       }
+      dlog("[host] setSide", { side, bridge, result: ok ? "ok" : "degraded" });
       return ok ? "ok" : "degraded";
     } catch {
       return "failed";

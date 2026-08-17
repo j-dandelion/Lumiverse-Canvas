@@ -39,7 +39,7 @@ import { getMainDrawerSide } from '../store'
 import { getLiveIdAssignments } from './assignment'
 import type { OwnedCommitResult as CommitResult } from './owned-commit'
 import { commitDraftToOwnedModel } from './owned-commit'
-import { getHost } from '../recon/dispatch'
+import { getHost, getModel } from '../recon/dispatch'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -1404,7 +1404,14 @@ function buildLiveDraftAndBase(): {
   // but catalog/draft ids are liveIds; against the TabKey facade every
   // lookup missed and the secondary column rendered empty.
   const currentAssignments = new Map(getLiveIdAssignments())
-  const drawerSide = (hostSettings?.side as DrawerSide) || getMainDrawerSide()
+  // The cached host-settings side wins only when present — on NO-GO it is
+  // never stamped (host-settings.ts drops `side` from the cache), so the
+  // modal falls back to the REAL DOM side and shows where the drawers
+  // actually are (the Lumiverse "Drawer side" setting and Canvas "Swap
+  // drawer locations" write the same host field).
+  const hostSide = hostSettings?.side as DrawerSide | undefined
+  const drawerSide = hostSide || getMainDrawerSide()
+  const sideSource = hostSide ? 'host-settings' : 'dom'
 
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
@@ -1433,6 +1440,19 @@ function buildLiveDraftAndBase(): {
   // dirty vs host tabOrder that disagrees with the live strips).
   const base = baseSnapshotFromDraft(draft)
 
+  // Debug diagnostic: one summary line per build so the Configure Tabs
+  // draft can be verified against the live app + the owned model at a
+  // glance (drawer side + per-drawer tab counts + hidden count + which
+  // side source won). Every open / refresh goes through here.
+  dlog('[configure-modal] draft from live', {
+    side: draft.drawerSide,
+    sideSource,
+    primary: draft.primaryIds.length,
+    secondary: draft.secondaryIds.length,
+    hidden: draft.hiddenIds.size,
+    secondDrawerEnabled: getSettings().secondSidebarEnabled,
+  })
+
   return { draft, base, catalog }
 }
 
@@ -1456,6 +1476,7 @@ export function openConfigureTabsModal(): void {
   _draftRef = draft
   _baseSnapshotRef = base
   _baseEpoch++
+  dlog('[configure-modal] open (draft built from live)')
 
   // Create container and render.
   _modalContainer = document.createElement('div')
@@ -1479,6 +1500,7 @@ export function refreshConfigureDraftFromLive(): void {
   _draftRef = draft
   _baseSnapshotRef = base
   _baseEpoch++
+  dlog('[configure-modal] refresh from live (draft rebuilt)')
   renderModal(draft, catalog, null, false)
 }
 
@@ -1546,8 +1568,19 @@ function renderModal(
       secondDrawerEnabled={getSettings().secondSidebarEnabled}
       onSwapSide={() => {
         if (!_draftRef) return
+        const before = _draftRef.drawerSide
         const next = swapDrawerSide(_draftRef)
         _draftRef = next
+        // Diagnostic: the swap is equivalent to toggling Lumiverse's own
+        // "Drawer side" setting — both write drawerSettings.side (Canvas via
+        // host.setSide → settings API/bridge). Log draft + model sides so the
+        // equivalence and the visual column flip are verifiable.
+        dlog('[configure-modal] swap drawer locations', {
+          draftSideBefore: before,
+          draftSideAfter: next.drawerSide,
+          modelSide: getModel()?.side ?? null,
+          visibleSide: getMainDrawerSide(),
+        })
         renderModal(next, catalog, null, false)
         autoCommit()
       }}
@@ -1562,8 +1595,13 @@ function renderModal(
         // Delegate to the central mode-toggle API which handles dirty confirm,
         // session profile capture, and feature lifecycle coordination.
         // Lazy-import to avoid circular dependency at module load time.
+        const target = !getSettings().secondSidebarEnabled
+        dlog('[configure-modal] enable second drawer toggle', {
+          target,
+          current: getSettings().secondSidebarEnabled,
+        })
         void import('../settings/second-drawer-mode').then((m) => {
-          m.requestSecondDrawerMode(!getSettings().secondSidebarEnabled)
+          m.requestSecondDrawerMode(target)
         }).catch((err) => {
           dwarn('[configure-modal] second-drawer-mode import failed:', err)
         })

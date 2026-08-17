@@ -200,9 +200,18 @@ async function run() {
     )
     assert(restored, 'T-DOM-6: restore returns true')
     assert(!isDomPlacedBuiltIn('connections'), 'T-DOM-7: tracking cleared')
+    // 2026-08-17 contract: the root is DETACHED (host re-attaches on
+    // activation via TabPanelContent). It must NOT be appended into the
+    // main panelContent node — that node is parked in the mirror shell, so
+    // orphan roots there render as stacked panels ("content stuck" bug).
     assert(
-      mainContent.contains(root),
-      'T-DOM-8: root back under main panel content',
+      !mainContent.contains(root),
+      'T-DOM-8: root NOT appended into main panel content (detached)',
+    )
+    assertEqual(
+      root.parentElement,
+      null,
+      'T-DOM-8b: root fully detached from any parent',
     )
     assertEqual(
       root.getAttribute(CANVAS_DOM_PLACED_ATTR),
