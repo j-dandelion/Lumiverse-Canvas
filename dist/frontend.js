@@ -7178,7 +7178,11 @@ function injectModalStyles() {
     .canvas-configure-tabs-row.row-locked {
       background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 6%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
     }
+    /* Hidden (disabled) tabs: no card fill — blend into the dialog so the
+       row reads as absent; dimming keeps the disabled cue. Core rows are
+       never hidden, so .row-locked keeps its tinted background. */
     .canvas-configure-tabs-row.row-hidden {
+      background: transparent;
       opacity: 0.6;
     }
     /* Invisible slot holder while the floating clone is the visible row
