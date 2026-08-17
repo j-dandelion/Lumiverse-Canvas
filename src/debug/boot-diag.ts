@@ -75,8 +75,9 @@ export function bootWarn(tag: string, msg?: string): void {
   console.warn(`[Canvas-boot] WARN ${tag}${msg ? ` — ${msg}` : ''}`)
 }
 
-/** Arm the stall watchdog. Call once at setup start. */
-export function armBootWatchdog(onStall: () => void): void {
+/** Arm the stall watchdog. Call once at setup start; call the returned
+ * cancel when setup reaches a terminal step. */
+export function armBootWatchdog(onStall: () => void): () => void {
   const timer = setTimeout(() => {
     onStall()
     push({ t: performance.now() - startedAt, tag: 'watchdog', msg: 'boot did not reach a terminal step in time', kind: 'stall' })
@@ -85,6 +86,12 @@ export function armBootWatchdog(onStall: () => void): void {
   }, WATCHDOG_MS)
   if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
     ;(timer as unknown as { unref: () => void }).unref()
+  }
+  let cancelled = false
+  return () => {
+    if (cancelled) return
+    cancelled = true
+    clearTimeout(timer)
   }
 }
 

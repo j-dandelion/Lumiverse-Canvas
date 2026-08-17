@@ -54,6 +54,13 @@ function armBootWatchdog(onStall) {
   if (typeof timer.unref === "function") {
     timer.unref();
   }
+  let cancelled = false;
+  return () => {
+    if (cancelled)
+      return;
+    cancelled = true;
+    clearTimeout(timer);
+  };
 }
 function dump() {
   return JSON.stringify({
@@ -2640,7 +2647,7 @@ function loadLayoutFromDisk() {
           unsub();
         const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
         if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
-          bootStep(`layout-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt2}ms (${result.status})`);
+          bootStep(`layout-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt2}ms (${result.status})`);
           resolve(result);
         } else {
           resolve({ status: "error", reason: "malformed response" });
@@ -12675,7 +12682,7 @@ function loadSettingsFromDisk() {
           unsub();
         const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
         if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
-          bootStep(`settings-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt2}ms (${result.status})`);
+          bootStep(`settings-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt2}ms (${result.status})`);
           resolve(result);
         } else {
           resolve({ status: "error", reason: "malformed response" });
@@ -18257,7 +18264,7 @@ var _setupGeneration = 0;
 function setup(ctx) {
   const generation = ++_setupGeneration;
   bootStep(`setup-start gen=${generation}`);
-  armBootWatchdog(() => {
+  const cancelBootWatchdog = armBootWatchdog(() => {
     if (generation === _setupGeneration) {
       bootError(`setup-stall gen=${generation}`, new Error("boot did not finish in time"));
     }
@@ -18337,6 +18344,7 @@ function setup(ctx) {
     bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`);
     if (!isCurrent()) {
       plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`);
+      cancelBootWatchdog();
       return;
     }
     if (settingsResult.status === "ok" || settingsResult.status === "empty") {
@@ -18478,9 +18486,11 @@ function setup(ctx) {
       unsuppressMainDrawer();
     }
     dlog(`setup():.then end gen=${generation}`);
+    cancelBootWatchdog();
     bootStep(`setup-done gen=${generation}`, `elapsed since start`);
   }).catch((err) => {
     dlog(`setup():.then caught error gen=${generation}`, err);
+    cancelBootWatchdog();
     bootError(`setup gen=${generation}`, err);
     if (!isCurrent())
       return;
@@ -18502,6 +18512,7 @@ function setup(ctx) {
       return;
     disposed = true;
     active = false;
+    cancelBootWatchdog();
     if (generation !== _setupGeneration)
       return;
     plog(`setup teardown gen=${generation}`);

@@ -70,7 +70,7 @@ export function loadSettingsFromDisk(): Promise<LoadResult<any>> {
           : null
         if (result && typeof result === 'object' &&
             (result.status === 'ok' || result.status === 'empty' || result.status === 'error')) {
-          bootStep(`settings-load-resolved`, `attempt ${attempts + 1} after ${Date.now() - startedAt}ms (${result.status})`)
+          bootStep(`settings-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt}ms (${result.status})`)
           resolve(result as LoadResult<any>)
         } else {
           resolve({ status: 'error', reason: 'malformed response' })

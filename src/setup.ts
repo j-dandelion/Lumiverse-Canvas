@@ -71,7 +71,8 @@ export function setup(ctx: SpindleFrontendContext) {
   // Stall watchdog: if the load chain never settles (e.g. backend IPC
   // requests dropped while the transport was not ready), dump the boot
   // timeline loudly so the failure is diagnosable from the console.
-  armBootWatchdog(() => {
+  // Cancelled when setup reaches a terminal step.
+  const cancelBootWatchdog = armBootWatchdog(() => {
     if (generation === _setupGeneration) {
       // only the current generation reports a stall
       bootError(`setup-stall gen=${generation}`, new Error('boot did not finish in time'))
@@ -191,6 +192,7 @@ export function setup(ctx: SpindleFrontendContext) {
     bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`)
     if (!isCurrent()) {
       plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`)
+      cancelBootWatchdog()
       return
     }
 
@@ -429,9 +431,11 @@ export function setup(ctx: SpindleFrontendContext) {
       unsuppressMainDrawer()
     }
     dlog(`setup():.then end gen=${generation}`)
+    cancelBootWatchdog()
     bootStep(`setup-done gen=${generation}`, `elapsed since start`)
   }).catch((err) => {
     dlog(`setup():.then caught error gen=${generation}`, err)
+    cancelBootWatchdog()
     bootError(`setup gen=${generation}`, err)
     if (!isCurrent()) return
     dwarn('Canvas: split persistence load failed, mounting with defaults:', err)
@@ -460,6 +464,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (disposed) return
     disposed = true
     active = false
+    cancelBootWatchdog()
     // A newer setup owns the shared cleanup registry and backend context.
     if (generation !== _setupGeneration) return
     plog(`setup teardown gen=${generation}`)
