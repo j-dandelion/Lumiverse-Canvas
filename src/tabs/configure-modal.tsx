@@ -80,11 +80,22 @@ let _settling = false
 let _commitPromise: Promise<CommitResult> | null = null
 /** Draft clone at pointerdown — Esc mid-drag restores this (not mid-settle). */
 let _dragDraftSnapshot: ConfigureDraft | null = null
+/** Latest pointer coords during drag — auto-scroll frames hit-test with these. */
+let _lastPointerX = 0
+let _lastPointerY = 0
+/** Drag auto-scroll: scrollable container under the pointer + scroll dir. */
+let _autoScrollContainer: HTMLElement | null = null
+let _autoScrollDir = 0
+let _autoScrollRaf: number | null = null
 
 /** Drop-settle duration — keep in sync with CSS on .overlay-settling + live DnD. */
 const SETTLE_DURATION_MS = 140
 /** Skip settle when already within this many CSS pixels of dest. */
 const SETTLE_MIN_DISTANCE_PX = 2
+/** Auto-scroll: pointer must be within this many px of a container edge. */
+const AUTOSCROLL_EDGE_PX = 56
+/** Auto-scroll: max px scrolled per rAF frame (scales with edge depth). */
+const AUTOSCROLL_SPEED_PX = 14
 
 // ── Built-in tab icon SVGs (lucide paths, 18×18, strokeWidth 1.75) ──
 
@@ -210,6 +221,7 @@ function injectModalStyles(): void {
       gap: 4px;
       padding: 16px 20px 12px 20px;
       border-bottom: 1px solid var(--lumiverse-border, #333);
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-header-row {
       display: flex;
@@ -276,7 +288,7 @@ function injectModalStyles(): void {
       display: flex;
       flex-direction: row;
       gap: 7px;
-      flex: 1;
+      flex: 1 1 auto;
       min-height: 0;
       padding: 12px 20px 20px;
       max-height: min(70vh, 760px);
@@ -545,6 +557,7 @@ function injectModalStyles(): void {
       gap: 8px;
       padding: 10px 20px;
       border-top: 1px solid var(--lumiverse-border, #333);
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-footer-left {
       display: flex;
@@ -597,6 +610,8 @@ function injectModalStyles(): void {
     @media (max-width: 720px) {
       .canvas-configure-tabs-body {
         flex-direction: column;
+        /* Bigger gap between the stacked drawer columns. */
+        gap: 24px;
         max-height: min(90vh, 800px);
       }
       .canvas-configure-tabs-column {
@@ -624,6 +639,13 @@ function injectModalStyles(): void {
       }
       .canvas-configure-tabs-row {
         align-items: flex-start;
+      }
+      /* Footer wraps so Cancel/Done never clip on narrow screens. */
+      .canvas-configure-tabs-footer {
+        flex-wrap: wrap;
+        row-gap: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
       }
     }
     @media (max-width: 480px) {
@@ -742,6 +764,7 @@ function cloneConfigureDraft(d: ConfigureDraft): ConfigureDraft {
 /** Clean up all DnD state. */
 function clearDragState(): void {
   cancelOverlaySettle()
+  stopAutoScroll()
   if (_dragOverlay) {
     _dragOverlay.remove()
     _dragOverlay = null
@@ -765,6 +788,152 @@ function clearDragState(): void {
   _settling = false
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
+}
+
+// ── Drag auto-scroll ──
+//
+// Dragging near the top/bottom edge of a scrollable list (or the stacked
+// body on mobile) scrolls it so rows below the current viewport stay
+// reachable. Runs on rAF so scrolling continues even without pointermoves;
+// each frame re-runs the drop-target hit-test so the placeholder follows
+// the scroll.
+
+/**
+ * Scrollable containers that can participate in drag auto-scroll
+ * (columns' lists first — innermost — and the body when it scrolls).
+ */
+function getAutoScrollCandidates(): HTMLElement[] {
+  const candidates: HTMLElement[] = []
+  for (const el of document.querySelectorAll(
+    '.canvas-configure-tabs-list, .canvas-configure-tabs-body',
+  )) {
+    const node = el as HTMLElement
+    if (node.scrollHeight > node.clientHeight + 1) candidates.push(node)
+  }
+  return candidates
+}
+
+/**
+ * Scroll direction + speed for a pointer position against a container.
+ * +1 scrolls down (pointer near bottom edge), -1 up, 0 idle. Speed scales
+ * with how deep the pointer is inside the edge zone (min 1px/frame).
+ */
+function autoScrollForPoint(
+  container: HTMLElement,
+  x: number,
+  y: number,
+): { dir: number; speed: number } {
+  const rect = container.getBoundingClientRect()
+  if (x < rect.left || x > rect.right) return { dir: 0, speed: 0 }
+  if (y < rect.top - AUTOSCROLL_EDGE_PX || y > rect.bottom + AUTOSCROLL_EDGE_PX) {
+    return { dir: 0, speed: 0 }
+  }
+  if (y < rect.top + AUTOSCROLL_EDGE_PX) {
+    const depth = (rect.top + AUTOSCROLL_EDGE_PX - y) / AUTOSCROLL_EDGE_PX
+    return { dir: -1, speed: Math.max(1, Math.round(AUTOSCROLL_SPEED_PX * depth)) }
+  }
+  if (y > rect.bottom - AUTOSCROLL_EDGE_PX) {
+    const depth = (y - (rect.bottom - AUTOSCROLL_EDGE_PX)) / AUTOSCROLL_EDGE_PX
+    return { dir: 1, speed: Math.max(1, Math.round(AUTOSCROLL_SPEED_PX * depth)) }
+  }
+  return { dir: 0, speed: 0 }
+}
+
+/** Cancel any active drag auto-scroll (idempotent). */
+function stopAutoScroll(): void {
+  if (_autoScrollRaf !== null) {
+    cancelAnimationFrame(_autoScrollRaf)
+    _autoScrollRaf = null
+  }
+  _autoScrollContainer = null
+  _autoScrollDir = 0
+}
+
+/**
+ * Re-evaluate auto-scroll from the latest pointer position. Picks the
+ * innermost scrollable container under the pointer and starts/stops the
+ * rAF loop based on edge proximity.
+ */
+function updateAutoScroll(x: number, y: number): void {
+  if (!_dragActive || _settling) {
+    stopAutoScroll()
+    return
+  }
+
+  // Deepest scrollable container under the pointer wins (list over body).
+  let chosen: HTMLElement | null = null
+  let chosenDepth = -1
+  for (const candidate of getAutoScrollCandidates()) {
+    const rect = candidate.getBoundingClientRect()
+    if (x < rect.left || x > rect.right) continue
+    if (y < rect.top - AUTOSCROLL_EDGE_PX || y > rect.bottom + AUTOSCROLL_EDGE_PX) continue
+    let depth = 0
+    let parent: HTMLElement | null = candidate.parentElement
+    while (parent) {
+      if (
+        parent.classList.contains('canvas-configure-tabs-list') ||
+        parent.classList.contains('canvas-configure-tabs-body')
+      ) {
+        depth++
+      }
+      parent = parent.parentElement
+    }
+    if (depth > chosenDepth) {
+      chosen = candidate
+      chosenDepth = depth
+    }
+  }
+
+  if (!chosen) {
+    stopAutoScroll()
+    return
+  }
+  const { dir } = autoScrollForPoint(chosen, x, y)
+  if (dir === 0) {
+    stopAutoScroll()
+    return
+  }
+  if (_autoScrollContainer !== chosen || _autoScrollDir !== dir) {
+    _autoScrollContainer = chosen
+    _autoScrollDir = dir
+  }
+  if (_autoScrollRaf === null) {
+    _autoScrollRaf = requestAnimationFrame(autoScrollFrame)
+  }
+}
+
+/** One drag auto-scroll frame: scroll, re-hit-test, re-evaluate edges. */
+function autoScrollFrame(): void {
+  _autoScrollRaf = null
+  if (!_dragActive || _settling || !_autoScrollContainer || _autoScrollDir === 0) return
+
+  const container = _autoScrollContainer
+  const { dir, speed } = autoScrollForPoint(container, _lastPointerX, _lastPointerY)
+  if (dir === 0) {
+    stopAutoScroll()
+    return
+  }
+  container.scrollTop += dir * speed
+  // The list scrolled under the pointer — re-run the hit-test so the drop
+  // placeholder follows the scroll.
+  runHitTestAndReorder(_lastPointerX, _lastPointerY)
+  // Re-evaluate edges (pointer is now relatively further from the edge) and
+  // schedule the next frame when still in the zone.
+  updateAutoScroll(_lastPointerX, _lastPointerY)
+}
+
+/**
+ * Hit-test the drop target at pointer coords and live-place if it changed.
+ * Shared by pointermove and the auto-scroll frame.
+ */
+function runHitTestAndReorder(x: number, y: number): void {
+  if (!_dragTabId || _settling) return
+  const target_ = hitTestDropTarget(x, y)
+  if (!target_) return
+  const prev = _lastDropTarget
+  if (prev && prev.side === target_.side && prev.index === target_.index) return
+  _lastDropTarget = target_
+  performDragMove(_dragTabId, target_.side, target_.index)
 }
 
 /**
@@ -1101,21 +1270,19 @@ function ConfigureTabsModalInner(props: ModalProps) {
         _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`
       }
 
-      // Hit-test for drop target
-      const target_ = hitTestDropTarget(ev.clientX, ev.clientY)
-      if (!target_) return
-
-      const prev = _lastDropTarget
-      if (prev && prev.side === target_.side && prev.index === target_.index) return
-      _lastDropTarget = target_
-
-      // fromSide always resolved from live draft inside performDragMove
-      performDragMove(tabId, target_.side, target_.index)
+      // Track the pointer for auto-scroll frames, then hit-test for a drop
+      // target (fromSide always resolved from live draft inside performDragMove).
+      _lastPointerX = ev.clientX
+      _lastPointerY = ev.clientY
+      updateAutoScroll(ev.clientX, ev.clientY)
+      runHitTestAndReorder(ev.clientX, ev.clientY)
     }
 
     const onUp = async (_ev: PointerEvent) => {
-      // Stop tracking pointer; keep overlay + placeholder for settle anim.
+      // Stop tracking pointer + auto-scroll; keep overlay + placeholder for
+      // settle anim.
       detachDragListeners()
+      stopAutoScroll()
       // Release = keep placement; drop Esc-revert snapshot.
       _dragDraftSnapshot = null
 
@@ -1344,7 +1511,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
                 class="canvas-configure-tabs-second-drawer-toggle-label"
                 onClick={() => onToggleSecondDrawer()}
               >
-                Enable second drawer
+                Second drawer
               </span>
               <button
                 class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}

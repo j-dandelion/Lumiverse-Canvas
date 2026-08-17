@@ -7268,6 +7268,7 @@ function injectModalStyles() {
       gap: 4px;
       padding: 16px 20px 12px 20px;
       border-bottom: 1px solid var(--lumiverse-border, #333);
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-header-row {
       display: flex;
@@ -7334,7 +7335,7 @@ function injectModalStyles() {
       display: flex;
       flex-direction: row;
       gap: 7px;
-      flex: 1;
+      flex: 1 1 auto;
       min-height: 0;
       padding: 12px 20px 20px;
       max-height: min(70vh, 760px);
@@ -7603,6 +7604,7 @@ function injectModalStyles() {
       gap: 8px;
       padding: 10px 20px;
       border-top: 1px solid var(--lumiverse-border, #333);
+      flex-shrink: 0;
     }
     .canvas-configure-tabs-footer-left {
       display: flex;
@@ -7655,6 +7657,8 @@ function injectModalStyles() {
     @media (max-width: 720px) {
       .canvas-configure-tabs-body {
         flex-direction: column;
+        /* Bigger gap between the stacked drawer columns. */
+        gap: 24px;
         max-height: min(90vh, 800px);
       }
       .canvas-configure-tabs-column {
@@ -7682,6 +7686,13 @@ function injectModalStyles() {
       }
       .canvas-configure-tabs-row {
         align-items: flex-start;
+      }
+      /* Footer wraps so Cancel/Done never clip on narrow screens. */
+      .canvas-configure-tabs-footer {
+        flex-wrap: wrap;
+        row-gap: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
       }
     }
     @media (max-width: 480px) {
@@ -7780,6 +7791,7 @@ function cloneConfigureDraft(d3) {
 }
 function clearDragState() {
   cancelOverlaySettle();
+  stopAutoScroll();
   if (_dragOverlay) {
     _dragOverlay.remove();
     _dragOverlay = null;
@@ -7803,6 +7815,109 @@ function clearDragState() {
   _settling = false;
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
+}
+function getAutoScrollCandidates() {
+  const candidates = [];
+  for (const el of document.querySelectorAll(".canvas-configure-tabs-list, .canvas-configure-tabs-body")) {
+    const node = el;
+    if (node.scrollHeight > node.clientHeight + 1)
+      candidates.push(node);
+  }
+  return candidates;
+}
+function autoScrollForPoint(container, x2, y3) {
+  const rect = container.getBoundingClientRect();
+  if (x2 < rect.left || x2 > rect.right)
+    return { dir: 0, speed: 0 };
+  if (y3 < rect.top - AUTOSCROLL_EDGE_PX || y3 > rect.bottom + AUTOSCROLL_EDGE_PX) {
+    return { dir: 0, speed: 0 };
+  }
+  if (y3 < rect.top + AUTOSCROLL_EDGE_PX) {
+    const depth = (rect.top + AUTOSCROLL_EDGE_PX - y3) / AUTOSCROLL_EDGE_PX;
+    return { dir: -1, speed: Math.max(1, Math.round(AUTOSCROLL_SPEED_PX * depth)) };
+  }
+  if (y3 > rect.bottom - AUTOSCROLL_EDGE_PX) {
+    const depth = (y3 - (rect.bottom - AUTOSCROLL_EDGE_PX)) / AUTOSCROLL_EDGE_PX;
+    return { dir: 1, speed: Math.max(1, Math.round(AUTOSCROLL_SPEED_PX * depth)) };
+  }
+  return { dir: 0, speed: 0 };
+}
+function stopAutoScroll() {
+  if (_autoScrollRaf !== null) {
+    cancelAnimationFrame(_autoScrollRaf);
+    _autoScrollRaf = null;
+  }
+  _autoScrollContainer = null;
+  _autoScrollDir = 0;
+}
+function updateAutoScroll(x2, y3) {
+  if (!_dragActive || _settling) {
+    stopAutoScroll();
+    return;
+  }
+  let chosen = null;
+  let chosenDepth = -1;
+  for (const candidate of getAutoScrollCandidates()) {
+    const rect = candidate.getBoundingClientRect();
+    if (x2 < rect.left || x2 > rect.right)
+      continue;
+    if (y3 < rect.top - AUTOSCROLL_EDGE_PX || y3 > rect.bottom + AUTOSCROLL_EDGE_PX)
+      continue;
+    let depth = 0;
+    let parent = candidate.parentElement;
+    while (parent) {
+      if (parent.classList.contains("canvas-configure-tabs-list") || parent.classList.contains("canvas-configure-tabs-body")) {
+        depth++;
+      }
+      parent = parent.parentElement;
+    }
+    if (depth > chosenDepth) {
+      chosen = candidate;
+      chosenDepth = depth;
+    }
+  }
+  if (!chosen) {
+    stopAutoScroll();
+    return;
+  }
+  const { dir } = autoScrollForPoint(chosen, x2, y3);
+  if (dir === 0) {
+    stopAutoScroll();
+    return;
+  }
+  if (_autoScrollContainer !== chosen || _autoScrollDir !== dir) {
+    _autoScrollContainer = chosen;
+    _autoScrollDir = dir;
+  }
+  if (_autoScrollRaf === null) {
+    _autoScrollRaf = requestAnimationFrame(autoScrollFrame);
+  }
+}
+function autoScrollFrame() {
+  _autoScrollRaf = null;
+  if (!_dragActive || _settling || !_autoScrollContainer || _autoScrollDir === 0)
+    return;
+  const container = _autoScrollContainer;
+  const { dir, speed } = autoScrollForPoint(container, _lastPointerX, _lastPointerY);
+  if (dir === 0) {
+    stopAutoScroll();
+    return;
+  }
+  container.scrollTop += dir * speed;
+  runHitTestAndReorder(_lastPointerX, _lastPointerY);
+  updateAutoScroll(_lastPointerX, _lastPointerY);
+}
+function runHitTestAndReorder(x2, y3) {
+  if (!_dragTabId || _settling)
+    return;
+  const target_ = hitTestDropTarget(x2, y3);
+  if (!target_)
+    return;
+  const prev = _lastDropTarget;
+  if (prev && prev.side === target_.side && prev.index === target_.index)
+    return;
+  _lastDropTarget = target_;
+  performDragMove(_dragTabId, target_.side, target_.index);
 }
 function snapshotFLIPRects() {
   const rects = new Map;
@@ -8031,17 +8146,14 @@ function ConfigureTabsModalInner(props) {
         _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`;
         _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`;
       }
-      const target_ = hitTestDropTarget(ev.clientX, ev.clientY);
-      if (!target_)
-        return;
-      const prev = _lastDropTarget;
-      if (prev && prev.side === target_.side && prev.index === target_.index)
-        return;
-      _lastDropTarget = target_;
-      performDragMove(tabId, target_.side, target_.index);
+      _lastPointerX = ev.clientX;
+      _lastPointerY = ev.clientY;
+      updateAutoScroll(ev.clientX, ev.clientY);
+      runHitTestAndReorder(ev.clientX, ev.clientY);
     };
     const onUp = async (_ev) => {
       detachDragListeners();
+      stopAutoScroll();
       _dragDraftSnapshot = null;
       try {
         if (_dragActive && _dragOverlay && _dragTabId) {
@@ -8309,7 +8421,7 @@ function ConfigureTabsModalInner(props) {
                     /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-second-drawer-toggle-label",
                       onClick: () => onToggleSecondDrawer(),
-                      children: "Enable second drawer"
+                      children: "Second drawer"
                     }, undefined, false, undefined, this),
                     /* @__PURE__ */ u3("button", {
                       class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
@@ -8509,7 +8621,7 @@ function unmountModal() {
   clearDragState();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, BUILTIN_ICON_SVGS, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
