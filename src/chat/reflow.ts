@@ -34,6 +34,7 @@ import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
+import { getDockInsets } from '../sidebar/dock-offset'
 
 // CSS variable names for content lane insets (published on documentElement).
 export const CONTENT_INSET_L_VAR = '--sidebar-ux-content-inset-l'
@@ -99,6 +100,14 @@ let _reflowRaf: number | null = null
  * on one side, secondary open / pin strip on the other, dock-panel clamp,
  * mobile → {0, 0}. Extracted so the weaver-lane module and other always-on
  * consumers can position content without duplicating the geometry logic.
+ *
+ * Dock panels (e.g. LumiScript) are edge-anchored; the App's own padding
+ * already reserves the dock's width. When a dock sits on the same edge as a
+ * pinned tab strip, the dock is offset to sit just INSIDE the strip
+ * (sidebar/dock-offset.ts), so the strip's full width is reserved on top of
+ * the dock inset. An OPEN drawer overlaps the dock (drawer z > dock z), so the
+ * margin there is the drawer width minus the dock inset (the drawer covers
+ * the dock; only the overhang past the dock needs reserving).
  */
 export function computeContentLaneInsets(): { left: number; right: number } {
   if (isMobileViewport()) {
@@ -106,58 +115,53 @@ export function computeContentLaneInsets(): { left: number; right: number } {
   }
 
   const mainSide = getMainDrawerSide()
-  // When Canvas owns main chrome (taskbarMode desktop), reflow
-  // follows the Canvas main shell — not host wrapperOpen.
-  let mainWidth: number
-  if (isMainMirrorActive()) {
-    if (isCanvasMainOpen()) {
-      mainWidth =
-        parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) ||
-        420
-    } else {
-      // Closed mirror: permanent pin strip still occupies the edge.
-      mainWidth = TAB_LIST_WIDTH_PX
-    }
-  } else {
-    const mainOpen = isMainDrawerOpen()
-    mainWidth = mainOpen ? getMainDrawerWidth() : 0
-    // Legacy pin path: closed host drawer but strip still visible.
-    if (mainWidth === 0 && isTaskbarModeEnabled()) {
-      mainWidth = TAB_LIST_WIDTH_PX
-    }
-  }
+  const dock = getDockInsets()
+
+  // When Canvas owns main chrome (taskbarMode desktop), reflow follows the
+  // Canvas main shell — not host wrapperOpen.
+  const mirrorActive = isMainMirrorActive()
+  const mainOpen = mirrorActive ? isCanvasMainOpen() : isMainDrawerOpen()
+  const mainDrawerW = mainOpen
+    ? mirrorActive
+      ? parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420
+      : getMainDrawerWidth()
+    : 0
+  // Closed mirror / legacy pin path: the permanent pin strip still occupies
+  // the edge (a dock on the same edge is offset just inside it).
+  const mainStrip =
+    !mainOpen && (mirrorActive || isTaskbarModeEnabled()) ? TAB_LIST_WIDTH_PX : 0
 
   // Secondary is opposite main. Open → live width; taskbar mode closed with
   // a secondary pin strip → reserve strip so content does not sit under buttons.
-  let secondaryWidth = isSecondarySidebarOpen()
+  const secOpen = isSecondarySidebarOpen()
+  const secDrawerW = secOpen
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
-  if (
-    secondaryWidth === 0 &&
-    isTaskbarModeEnabled() &&
-    getSecondaryTabList()
-  ) {
-    secondaryWidth = TAB_LIST_WIDTH_PX
-  }
+  const secStrip =
+    !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0
 
-  // Account for the LumiScript dock panel widths. The dock panel and the
-  // drawer on the same side OVERLAP (both at `right: 0` / `left: 0` with
-  // `position: fixed`; the drawer has higher z-index). The App's padding
-  // already pushes the chat by the dock panel's width, so we subtract it
-  // from the drawer's width to avoid double-counting. If the dock panel
-  // is wider than the drawer, the result is clamped to 0.
-  const dockInsets = getDockInsets()
-  let rightMargin: number
-  let leftMargin: number
-  if (mainSide === 'left') {
-    rightMargin = secondaryWidth
-    leftMargin = mainWidth
-  } else {
-    rightMargin = mainWidth
-    leftMargin = secondaryWidth
-  }
-  rightMargin = Math.max(0, rightMargin - dockInsets.right)
-  leftMargin = Math.max(0, leftMargin - dockInsets.left)
+  // Per side: reserve the pinned strip (if any) plus any open-drawer overhang
+  // past the dock inset. The App's padding already reserves the dock width.
+  const leftMargin = Math.max(
+    mainSide === 'left' ? mainStrip : secStrip,
+    mainSide === 'left'
+      ? mainOpen
+        ? Math.max(0, mainDrawerW - dock.left)
+        : 0
+      : secOpen
+        ? Math.max(0, secDrawerW - dock.left)
+        : 0,
+  )
+  const rightMargin = Math.max(
+    mainSide === 'right' ? mainStrip : secStrip,
+    mainSide === 'right'
+      ? mainOpen
+        ? Math.max(0, mainDrawerW - dock.right)
+        : 0
+      : secOpen
+        ? Math.max(0, secDrawerW - dock.right)
+        : 0,
+  )
 
   return { left: leftMargin, right: rightMargin }
 }
@@ -192,18 +196,6 @@ export function scheduleReflow(): void {
     _reflowRaf = null
     updateChatReflow()
   })
-}
-
-/** Read the LumiScript (Spindle) dock panel widths from the App's inline
- *  CSS variables. These are set by Lumiverse's App.tsx based on
- *  `dockInsets` (the max dock panel width per edge). Returns 0 for any
- *  side where the App element isn't found or the variable isn't set. */
-function getDockInsets(): { left: number; right: number } {
-  const appEl = document.querySelector('[data-app-root]') as HTMLElement | null
-  if (!appEl) return { left: 0, right: 0 }
-  const left = parseFloat(appEl.style.getPropertyValue('--spindle-dock-left')) || 0
-  const right = parseFloat(appEl.style.getPropertyValue('--spindle-dock-right')) || 0
-  return { left, right }
 }
 
 export function updateChatReflow(): void {

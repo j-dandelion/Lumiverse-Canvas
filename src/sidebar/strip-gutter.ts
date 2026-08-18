@@ -13,6 +13,7 @@ import { isTaskbarModeEnabled } from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { TAB_LIST_WIDTH_PX } from './styles'
+import { updateDockOffsets } from './dock-offset'
 
 /** html class while strip gutters are active. */
 export const STRIP_GUTTER_CLASS = 'sidebar-ux-strip-gutters'
@@ -25,15 +26,6 @@ const STYLE_ID = 'sidebar-ux-strip-gutter'
 let _dockObserver: MutationObserver | null = null
 let _mediaQuery: MediaQueryList | null = null
 let _onMediaChange: ((e: MediaQueryListEvent) => void) | null = null
-
-/** Read Spindle dock insets from the App element (same model as chat reflow). */
-function getDockInsets(): { left: number; right: number } {
-  const appEl = document.querySelector('[data-app-root]') as HTMLElement | null
-  if (!appEl) return { left: 0, right: 0 }
-  const left = parseFloat(appEl.style.getPropertyValue('--spindle-dock-left')) || 0
-  const right = parseFloat(appEl.style.getPropertyValue('--spindle-dock-right')) || 0
-  return { left, right }
-}
 
 export function injectStripGutterStyles(): void {
   injectStyles(
@@ -81,6 +73,9 @@ function ensureStripGutterObservers(): void {
     if (appEl) {
       _dockObserver = new MutationObserver(() => {
         updateStripGutters()
+        // Dock expand/collapse/resize/add/remove changes the edge inset and
+        // the dock's node geometry → re-apply the dock's strip offset.
+        updateDockOffsets()
       })
       _dockObserver.observe(appEl, { attributes: true, attributeFilter: ['style'] })
     }
@@ -100,7 +95,10 @@ function ensureStripGutterObservers(): void {
   }
 }
 
-/** Compute left/right strip extras after dock overlap (for tests + apply). */
+/** Compute left/right strip gutters (for tests + apply).
+ *  The dock panel on a strip's edge is offset to sit just inside the strip
+ *  (dock-offset.ts), so the gutter is the strip width — the App's own padding
+ *  already reserves the dock inset. */
 export function computeStripGutters(): { left: number; right: number } {
   const mainSide = getMainDrawerSide()
   const mainBase = TAB_LIST_WIDTH_PX
@@ -117,11 +115,7 @@ export function computeStripGutters(): { left: number; right: number } {
     leftBase = secondaryBase
   }
 
-  const dock = getDockInsets()
-  return {
-    left: Math.max(0, leftBase - dock.left),
-    right: Math.max(0, rightBase - dock.right),
-  }
+  return { left: leftBase, right: rightBase }
 }
 
 /** Full clear: vars + class + observers (taskbar mode off / feature teardown). */
@@ -152,4 +146,7 @@ export function updateStripGutters(): void {
   root.classList.add(STRIP_GUTTER_CLASS)
   root.style.setProperty(STRIP_L_VAR, `${left}px`)
   root.style.setProperty(STRIP_R_VAR, `${right}px`)
+  // Re-apply the dock's strip offset whenever taskbar gutters are recomputed
+  // (taskbar enable, side change, secondary presence change).
+  updateDockOffsets()
 }

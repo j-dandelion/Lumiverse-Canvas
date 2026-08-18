@@ -225,6 +225,8 @@ function _resetAll() {
 // --- Imports under test ---
 
 import { updateChatReflow } from '../reflow'
+import { hydrateSettings } from '../../settings/state'
+import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
 
 // --- Test 1: No dock panel (no App element) — no change from baseline ---
 // When there is no App element, getDockInsets returns { left: 0, right: 0 },
@@ -472,6 +474,36 @@ import { updateChatReflow } from '../reflow'
     '0px',
     'test 10: dock left=150, no secondary — --sidebar-ux-chat-ml = 0px'
   )
+}
+
+// --- Test 10b: closed taskbar strip + dock on same edge → full strip margin
+// (the dock is offset to sit just inside the strip by dock-offset.ts; the App
+// padding reserves the dock inset, the strip adds its own 56px on top)
+
+{
+  _resetAll()
+  const { chat } = _installDom({
+    open: false,        // drawer closed → taskbar strip reserved
+    leftSide: false,    // main drawer on right (strip on right edge)
+    appRoot: true,
+    dockRight: 300,     // dock on the same edge as the (right) strip
+  })
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  updateChatReflow()
+  // mainOpen=false, taskbar strip → mainStrip = 56
+  // rightMargin = max(56, 0) = 56 (dock is offset, not subtracted)
+  assertEqual(
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
+    `${TAB_LIST_WIDTH_PX}px`,
+    `test 10b: closed strip + dock right=300 — --sidebar-ux-chat-mr = ${TAB_LIST_WIDTH_PX}px (strip reserved)`
+  )
+  assertEqual(
+    _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
+    '0px',
+    'test 10b: left margin stays 0'
+  )
+  // Restore defaults so later tests see the baseline settings.
+  hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
 }
 
 // --- Test 11: startReflowObserver observes App element for style changes ---

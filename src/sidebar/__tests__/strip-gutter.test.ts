@@ -293,28 +293,30 @@ assertEqual(
   'empty secondary: --sidebar-ux-strip-r = 0px',
 )
 
-// dock wider than strip → 0 extra on that side
+// dock on the strip's edge → gutter is still the strip width (the dock is
+// offset to sit just inside the strip by dock-offset.ts; the App's own padding
+// reserves the dock inset)
 _resetAll()
 _installDom({ leftSide: false, secondaryList: false, dockRight: 100 })
 _hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 const computed = computeStripGutters()
-assertEqual(computed.right, 0, 'dock right 100 > strip 56: right extra = 0')
+assertEqual(computed.right, TAB_LIST_WIDTH_PX, 'dock right 100: right extra = strip width (dock offset, not overlapped)')
 assertEqual(computed.left, 0, 'dock right 100: left still 0 (no secondary)')
 updateStripGutters()
 assertEqual(
   stubDocument.documentElement.style.getPropertyValue(STRIP_R_VAR),
-  '0px',
-  'dock wider than strip: --sidebar-ux-strip-r = 0px',
+  `${TAB_LIST_WIDTH_PX}px`,
+  'dock on strip edge: --sidebar-ux-strip-r = strip width',
 )
 
-// dock narrower than strip → partial extra
+// dock narrower than strip → still full strip width (dock offset)
 _resetAll()
 _installDom({ leftSide: false, secondaryList: false, dockRight: 20 })
 _hydrate({ taskbarMode: true, moveControlsToOuterEdge: true })
 assertEqual(
   computeStripGutters().right,
-  TAB_LIST_WIDTH_PX - 20,
-  'dock right 20: right extra = strip - dock',
+  TAB_LIST_WIDTH_PX,
+  'dock right 20: right extra = strip width (dock offset)',
 )
 
 // mobile → clear vars

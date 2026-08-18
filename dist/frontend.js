@@ -179,7 +179,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "1.9.1";
+var _backendCtx = null, CANVAS_VERSION = "1.9.2";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -907,6 +907,129 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
 `;
 var init_styles = () => {};
 
+// src/sidebar/dock-offset.ts
+function getDockInsets() {
+  if (typeof document === "undefined")
+    return { left: 0, right: 0 };
+  const appEl = document.querySelector("[data-app-root]");
+  if (!appEl)
+    return { left: 0, right: 0 };
+  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
+  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
+  return { left, right };
+}
+function stripPinnedOn(side) {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return false;
+  }
+  const hosts = document.querySelectorAll(PIN_HOST_SEL);
+  for (const host of Array.from(hosts)) {
+    const el = host;
+    const s = el.classList.contains(SIDE_LEFT_CLASS) ? "left" : "right";
+    if (s === side)
+      return true;
+  }
+  return false;
+}
+function readComputedStyle(el) {
+  try {
+    return window.getComputedStyle(el);
+  } catch {
+    return null;
+  }
+}
+function findDockPanels() {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return [];
+  }
+  const out = [];
+  for (const cached of Array.from(_knownDockNodes)) {
+    if (!cached.isConnected)
+      _knownDockNodes.delete(cached);
+  }
+  const els = document.querySelectorAll("div");
+  for (const el of Array.from(els)) {
+    if (_knownDockNodes.has(el)) {
+      out.push(el);
+      continue;
+    }
+    const cs = readComputedStyle(el);
+    if (!cs)
+      continue;
+    if (cs.position !== "fixed")
+      continue;
+    if (cs.zIndex !== "9980")
+      continue;
+    if (cs.top !== "0px" || cs.bottom !== "0px")
+      continue;
+    if (cs.left !== "0px" && cs.right !== "0px")
+      continue;
+    _knownDockNodes.add(el);
+    out.push(el);
+  }
+  return out;
+}
+function dockEdgeOf(panel, cs) {
+  if (panel.style.left)
+    return "left";
+  if (panel.style.right)
+    return "right";
+  if (!cs)
+    return null;
+  if (cs.left === "0px")
+    return "left";
+  if (cs.right === "0px")
+    return "right";
+  return null;
+}
+function updateDockOffsets() {
+  if (typeof document === "undefined" || typeof window === "undefined")
+    return;
+  const dock = getDockInsets();
+  if (dock.left === 0 && dock.right === 0)
+    return;
+  const stripLeft = stripPinnedOn("left");
+  const stripRight = stripPinnedOn("right");
+  const insetsChanged = _lastInsets === null || _lastInsets.left !== dock.left || _lastInsets.right !== dock.right;
+  _lastInsets = { left: dock.left, right: dock.right };
+  const panels = insetsChanged ? findDockPanels() : Array.from(_knownDockNodes);
+  for (const panel of panels) {
+    const cs = readComputedStyle(panel);
+    const edge = dockEdgeOf(panel, cs);
+    if (!edge)
+      continue;
+    const offset = edge === "left" ? stripLeft : stripRight;
+    if (offset) {
+      if (edge === "left") {
+        if (panel.style.left !== `${DOCK_EDGE_OFFSET_PX}px`) {
+          panel.style.left = `${DOCK_EDGE_OFFSET_PX}px`;
+          dlog("[dock-offset] shifted left dock right of strip", { offset: DOCK_EDGE_OFFSET_PX });
+        }
+        if (panel.style.right)
+          panel.style.right = "";
+      } else {
+        if (panel.style.right !== `${DOCK_EDGE_OFFSET_PX}px`) {
+          panel.style.right = `${DOCK_EDGE_OFFSET_PX}px`;
+          dlog("[dock-offset] shifted right dock left of strip", { offset: DOCK_EDGE_OFFSET_PX });
+        }
+        if (panel.style.left)
+          panel.style.left = "";
+      }
+    } else if (panel.style.left || panel.style.right) {
+      panel.style.left = "";
+      panel.style.right = "";
+      dlog("[dock-offset] cleared dock edge offset", { edge });
+    }
+  }
+}
+var DOCK_EDGE_OFFSET_PX, PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host", SIDE_LEFT_CLASS = "sidebar-ux-side-left", _knownDockNodes, _lastInsets = null;
+var init_dock_offset = __esm(() => {
+  init_styles();
+  init_log();
+  DOCK_EDGE_OFFSET_PX = TAB_LIST_WIDTH_PX;
+  _knownDockNodes = new Set;
+});
+
 // src/sidebar/animation.ts
 function parseTranslateX(transform) {
   if (!transform || transform === "none")
@@ -1193,14 +1316,6 @@ __export(exports_strip_gutter, {
   STRIP_L_VAR: () => STRIP_L_VAR,
   STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS
 });
-function getDockInsets() {
-  const appEl = document.querySelector("[data-app-root]");
-  if (!appEl)
-    return { left: 0, right: 0 };
-  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
-  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
-  return { left, right };
-}
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
     /* Static taskbar-mode chrome for Welcome only — no transition.
@@ -1240,6 +1355,7 @@ function ensureStripGutterObservers() {
     if (appEl) {
       _dockObserver = new MutationObserver(() => {
         updateStripGutters();
+        updateDockOffsets();
       });
       _dockObserver.observe(appEl, { attributes: true, attributeFilter: ["style"] });
     }
@@ -1269,11 +1385,7 @@ function computeStripGutters() {
     rightBase = mainBase;
     leftBase = secondaryBase;
   }
-  const dock = getDockInsets();
-  return {
-    left: Math.max(0, leftBase - dock.left),
-    right: Math.max(0, rightBase - dock.right)
-  };
+  return { left: leftBase, right: rightBase };
 }
 function clearStripGutters() {
   clearStripGutterVars();
@@ -1295,6 +1407,7 @@ function updateStripGutters() {
   root.classList.add(STRIP_GUTTER_CLASS);
   root.style.setProperty(STRIP_L_VAR, `${left}px`);
   root.style.setProperty(STRIP_R_VAR, `${right}px`);
+  updateDockOffsets();
 }
 var STRIP_GUTTER_CLASS = "sidebar-ux-strip-gutters", STRIP_L_VAR = "--sidebar-ux-strip-l", STRIP_R_VAR = "--sidebar-ux-strip-r", STYLE_ID = "sidebar-ux-strip-gutter", _dockObserver = null, _mediaQuery = null, _onMediaChange = null;
 var init_strip_gutter = __esm(() => {
@@ -1303,6 +1416,7 @@ var init_strip_gutter = __esm(() => {
   init_assignment();
   init_mobile_exclusion();
   init_styles();
+  init_dock_offset();
 });
 
 // src/sidebar/tab-position.ts
@@ -1623,6 +1737,7 @@ function applyPinnedTabListChrome(tabList, side) {
     setIfDifferent(tabList.style, "borderLeft", INNER_BORDER);
     setIfDifferent(tabList.style, "borderRight", "none");
   }
+  updateDockOffsets();
 }
 function clearPinnedTabListChrome(tabList) {
   tabList.classList.remove(TAB_LIST_PINNED_CLASS);
@@ -1728,6 +1843,7 @@ var init_tab_position = __esm(() => {
   init_mobile_exclusion();
   init_secondary();
   init_styles();
+  init_dock_offset();
 });
 
 // src/dom/host-settings.ts
@@ -10672,36 +10788,16 @@ function computeContentLaneInsets() {
     return { left: 0, right: 0 };
   }
   const mainSide = getMainDrawerSide();
-  let mainWidth;
-  if (isMainMirrorActive()) {
-    if (isCanvasMainOpen()) {
-      mainWidth = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420;
-    } else {
-      mainWidth = TAB_LIST_WIDTH_PX;
-    }
-  } else {
-    const mainOpen = isMainDrawerOpen();
-    mainWidth = mainOpen ? getMainDrawerWidth() : 0;
-    if (mainWidth === 0 && isTaskbarModeEnabled()) {
-      mainWidth = TAB_LIST_WIDTH_PX;
-    }
-  }
-  let secondaryWidth = isSecondarySidebarOpen() ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
-  if (secondaryWidth === 0 && isTaskbarModeEnabled() && getSecondaryTabList()) {
-    secondaryWidth = TAB_LIST_WIDTH_PX;
-  }
-  const dockInsets = getDockInsets2();
-  let rightMargin;
-  let leftMargin;
-  if (mainSide === "left") {
-    rightMargin = secondaryWidth;
-    leftMargin = mainWidth;
-  } else {
-    rightMargin = mainWidth;
-    leftMargin = secondaryWidth;
-  }
-  rightMargin = Math.max(0, rightMargin - dockInsets.right);
-  leftMargin = Math.max(0, leftMargin - dockInsets.left);
+  const dock = getDockInsets();
+  const mirrorActive = isMainMirrorActive();
+  const mainOpen = mirrorActive ? isCanvasMainOpen() : isMainDrawerOpen();
+  const mainDrawerW = mainOpen ? mirrorActive ? parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420 : getMainDrawerWidth() : 0;
+  const mainStrip = !mainOpen && (mirrorActive || isTaskbarModeEnabled()) ? TAB_LIST_WIDTH_PX : 0;
+  const secOpen = isSecondarySidebarOpen();
+  const secDrawerW = secOpen ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
+  const secStrip = !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
+  const leftMargin = Math.max(mainSide === "left" ? mainStrip : secStrip, mainSide === "left" ? mainOpen ? Math.max(0, mainDrawerW - dock.left) : 0 : secOpen ? Math.max(0, secDrawerW - dock.left) : 0);
+  const rightMargin = Math.max(mainSide === "right" ? mainStrip : secStrip, mainSide === "right" ? mainOpen ? Math.max(0, mainDrawerW - dock.right) : 0 : secOpen ? Math.max(0, secDrawerW - dock.right) : 0);
   return { left: leftMargin, right: rightMargin };
 }
 function publishContentLaneInsets() {
@@ -10718,14 +10814,6 @@ function scheduleReflow() {
     _reflowRaf = null;
     updateChatReflow();
   });
-}
-function getDockInsets2() {
-  const appEl = document.querySelector("[data-app-root]");
-  if (!appEl)
-    return { left: 0, right: 0 };
-  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
-  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
-  return { left, right };
 }
 function updateChatReflow() {
   if (isMobileViewport()) {
@@ -10801,6 +10889,7 @@ var init_reflow = __esm(() => {
   init_store();
   init_secondary();
   init_tag_buttons();
+  init_dock_offset();
   init_wait_for();
   init_mobile_exclusion();
   init_state();
@@ -18166,7 +18255,7 @@ var WEAVER_LANE_STYLE_ID = "canvas-weaver-lane-styles";
 var WEAVER_LANE_ATTR = "data-canvas-weaver-lane";
 var WEAVER_INSET_L_VAR = "--sidebar-ux-weaver-inset-l";
 var WEAVER_INSET_R_VAR = "--sidebar-ux-weaver-inset-r";
-var PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host";
+var PIN_HOST_SEL2 = ".sidebar-ux-tab-list-pin-host";
 var _observer3 = null;
 var _rafId2 = null;
 var _active3 = false;
@@ -18312,7 +18401,7 @@ function measurePinStripInsets() {
   }
   const vw = document.documentElement.clientWidth || window.innerWidth || 0;
   const cap = TAB_LIST_WIDTH_PX + 8;
-  for (const el of document.querySelectorAll(PIN_HOST_SEL)) {
+  for (const el of document.querySelectorAll(PIN_HOST_SEL2)) {
     const style = window.getComputedStyle?.(el);
     if (style && (style.display === "none" || style.visibility === "hidden"))
       continue;

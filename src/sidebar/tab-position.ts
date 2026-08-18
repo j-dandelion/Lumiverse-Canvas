@@ -22,6 +22,7 @@ import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
 import { TAB_LIST_WIDTH_PX } from './styles'
+import { updateDockOffsets } from './dock-offset'
 
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
@@ -521,6 +522,11 @@ export function applyPinnedTabListChrome(
     setIfDifferent(tabList.style, 'borderLeft', INNER_BORDER)
     setIfDifferent(tabList.style, 'borderRight', 'none')
   }
+
+  // Re-apply the dock-aware layout: a Spindle dock panel on the same edge as
+  // this strip is shifted to sit just inside it (see dock-offset.ts) so the
+  // strip stays topmost on the screen edge without covering the dock.
+  updateDockOffsets()
 }
 
 /**
