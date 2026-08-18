@@ -962,7 +962,7 @@ function findDockPanels() {
       continue;
     if (cs.top !== "0px" || cs.bottom !== "0px")
       continue;
-    if (cs.left !== "0px" && cs.right !== "0px")
+    if (cs.left !== "0px" && cs.right !== "0px" && !el.style.left && !el.style.right)
       continue;
     _knownDockNodes.add(el);
     out.push(el);
@@ -970,15 +970,19 @@ function findDockPanels() {
   return out;
 }
 function dockEdgeOf(panel, cs) {
+  if (cs) {
+    if (cs.right === "0px")
+      return "right";
+    if (cs.left === "0px")
+      return "left";
+    if (panel.style.left && cs.right === "auto")
+      return "left";
+    if (panel.style.right && cs.left === "auto")
+      return "right";
+  }
   if (panel.style.left)
     return "left";
   if (panel.style.right)
-    return "right";
-  if (!cs)
-    return null;
-  if (cs.left === "0px")
-    return "left";
-  if (cs.right === "0px")
     return "right";
   return null;
 }

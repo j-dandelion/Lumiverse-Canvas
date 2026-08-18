@@ -102,23 +102,38 @@ function findDockPanels(): HTMLElement[] {
     if (cs.position !== 'fixed') continue
     if (cs.zIndex !== '9980') continue
     if (cs.top !== '0px' || cs.bottom !== '0px') continue
-    if (cs.left !== '0px' && cs.right !== '0px') continue
+    // Edge-anchored: the module CSS sets left:0 / right:0, or our own inline
+    // offset moved that anchor to 56px. Either way the panel is on an edge.
+    if (cs.left !== '0px' && cs.right !== '0px' && !el.style.left && !el.style.right) continue
     _knownDockNodes.add(el)
     out.push(el)
   }
   return out
 }
 
-/** Resolve which edge a dock panel is anchored to (inline offset first). */
+/**
+ * Resolve which edge a dock panel is anchored to.
+ *
+ * The CURRENT edge anchor is the computed 0px side (the module CSS sets
+ * `left: 0` or `right: 0`). A previously-applied offset moves that anchor to
+ * 56px, so the inline offset only tells us the edge the dock WAS on — which is
+ * stale after a mid-session side flip (the same node re-renders with the
+ * opposite edge class). Prefer the computed 0px side, then fall back to the
+ * offset side, then to the inline offset (test stubs without computed style).
+ */
 function dockEdgeOf(
   panel: HTMLElement,
   cs: CSSStyleDeclaration | null,
 ): 'left' | 'right' | null {
+  if (cs) {
+    if (cs.right === '0px') return 'right'
+    if (cs.left === '0px') return 'left'
+    // No 0px anchor → an offset is applied (left:56/right:auto or vice versa).
+    if (panel.style.left && cs.right === 'auto') return 'left'
+    if (panel.style.right && cs.left === 'auto') return 'right'
+  }
   if (panel.style.left) return 'left'
   if (panel.style.right) return 'right'
-  if (!cs) return null
-  if (cs.left === '0px') return 'left'
-  if (cs.right === '0px') return 'right'
   return null
 }
 

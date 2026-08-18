@@ -217,6 +217,29 @@ setDockInset('left', 420) // inset changed → rescan finds the new dock
 updateDockOffsets()
 assertEqual(d9b.style.left, `${DOCK_EDGE_OFFSET_PX}px`, 'T9b: newly added dock offset after inset change')
 
+// T10: mid-session side flip (left → right) — the same dock node re-anchors
+// to right:0 while the stale left:56px inline offset persists; the next scan
+// must detect the NEW edge and re-apply on the right (clearing the stale left).
+resetAll()
+const d10 = makeDock('left')
+makePinHost('left')
+setDockInset('left', 420)
+updateDockOffsets()
+assertEqual(d10.style.left, `${DOCK_EDGE_OFFSET_PX}px`, 'T10a: dock offset on the left')
+// User flips the dock side in Spindle settings: the panel re-renders with the
+// right-edge class (right:0) but keeps our stale inline left offset, and the
+// app's dock insets move to the right.
+const cs10 = _computed.get(d10)!
+cs10.left = '56px' // stale inline offset now shows in computed style
+cs10.right = '0px' // new edge anchor from the flipped class
+_pinHosts.length = 0
+makePinHost('right')
+setDockInset('left', 0)
+setDockInset('right', 420)
+updateDockOffsets()
+assertEqual(d10.style.right, `${DOCK_EDGE_OFFSET_PX}px`, 'T10b: dock re-offset on the right after flip')
+assertEqual(d10.style.left, '', 'T10b: stale left offset cleared')
+
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)
 process.exit(failed > 0 ? 1 : 0)
