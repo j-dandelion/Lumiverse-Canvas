@@ -59,12 +59,16 @@ function stopStripGutterObservers(): void {
   _onMediaChange = null
 }
 
-/** Clear class + CSS vars only (keeps dock/media observers for cross-up). */
+/** Clear class + CSS vars only (keeps dock/media observers for cross-up).
+ *  Also releases any dock-panel strip offset — taskbar mode is off or the
+ *  viewport crossed to mobile, so the dock must return flush to the edge
+ *  (otherwise it hangs in empty space beside a strip that no longer exists). */
 function clearStripGutterVars(): void {
   const root = document.documentElement
   root.classList.remove(STRIP_GUTTER_CLASS)
   root.style.removeProperty(STRIP_L_VAR)
   root.style.removeProperty(STRIP_R_VAR)
+  updateDockOffsets()
 }
 
 function ensureStripGutterObservers(): void {

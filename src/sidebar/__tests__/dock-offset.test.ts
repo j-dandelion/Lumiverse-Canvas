@@ -23,6 +23,7 @@ class StubStyle {
   _vars: Record<string, string> = {}
   setProperty(n: string, v: string) { this._vars[n] = v }
   getPropertyValue(n: string) { return this._vars[n] ?? '' }
+  removeProperty(n: string) { delete this._vars[n] }
 }
 
 class StubElement {
@@ -118,8 +119,16 @@ function setDockInset(side: 'left' | 'right', width: number) {
   getComputedStyle: (el: StubElement) => _computed.get(el) ?? new StubStyle(),
   matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
 }
+;(globalThis as any).HTMLElement = StubElement
+;(globalThis as any).Element = StubElement
+;(globalThis as any).MutationObserver = class {
+  observe() {}
+  disconnect() {}
+  takeRecords() { return [] }
+}
 
 import { updateDockOffsets, __resetDockOffsetForTest, DOCK_EDGE_OFFSET_PX } from '../dock-offset'
+import { clearStripGutters } from '../strip-gutter'
 
 // T1: no dock (no app element) → nothing to do, dock style untouched.
 resetAll()
@@ -239,6 +248,20 @@ setDockInset('right', 420)
 updateDockOffsets()
 assertEqual(d10.style.right, `${DOCK_EDGE_OFFSET_PX}px`, 'T10b: dock re-offset on the right after flip')
 assertEqual(d10.style.left, '', 'T10b: stale left offset cleared')
+
+// T11: taskbar teardown (strip-gutter clearStripGutters) releases the offset —
+// regression for "dock hanging in empty space after toggling taskbar off".
+resetAll()
+const d11 = makeDock('left')
+makePinHost('left')
+setDockInset('left', 420)
+updateDockOffsets()
+assertEqual(d11.style.left, `${DOCK_EDGE_OFFSET_PX}px`, 'T11a: offset applied while taskbar strip present')
+// Simulate the taskbar-off teardown: registry calls clearStripGutters()
+// (strips already destroyed), which must clear the dock's offset.
+_pinHosts.length = 0
+clearStripGutters()
+assertEqual(d11.style.left, '', 'T11b: clearStripGutters releases the dock offset')
 
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)

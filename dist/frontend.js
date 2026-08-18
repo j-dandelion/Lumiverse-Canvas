@@ -1352,6 +1352,7 @@ function clearStripGutterVars() {
   root.classList.remove(STRIP_GUTTER_CLASS);
   root.style.removeProperty(STRIP_L_VAR);
   root.style.removeProperty(STRIP_R_VAR);
+  updateDockOffsets();
 }
 function ensureStripGutterObservers() {
   if (!_dockObserver) {
