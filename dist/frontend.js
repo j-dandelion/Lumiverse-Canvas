@@ -179,7 +179,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "1.9.2";
+var _backendCtx = null, CANVAS_VERSION = "1.9.3";
 
 // src/debug/log.ts
 function setDebug(value) {
