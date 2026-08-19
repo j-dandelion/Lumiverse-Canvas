@@ -9,6 +9,8 @@
 
 import { dlog, dwarn } from '../debug/log'
 import { getHostBridge } from '../dom/host-bridge'
+import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
+import { isMainDrawerOpen } from '../store'
 import { getSecondaryWrapper } from '../sidebar/secondary'
 import {
   CANVAS_DOM_PLACED_ATTR,
@@ -46,6 +48,49 @@ let _testSecondaryContent: HTMLElement | null = null
 
 export function __setSecondaryContentForTest(el: HTMLElement | null): void {
   _testSecondaryContent = el
+}
+
+/**
+ * Find the host main drawer's open/close toggle button — the direct-child
+ * <button> of the wrapper whose CSS-module class contains "drawerTab"
+ * (ViewportDrawer renders it as the sibling of the drawer panel). Mirrors
+ * main-persist's findDrawerToggleButton; kept local so the placement graph
+ * does not pull in the persistence watcher.
+ */
+function findMainDrawerToggle(wrapper: HTMLElement): HTMLButtonElement | null {
+  for (const btn of Array.from(wrapper.querySelectorAll(':scope > button'))) {
+    if (/drawerTab/i.test((btn as HTMLElement).className)) {
+      return btn as HTMLButtonElement
+    }
+  }
+  return null
+}
+
+/**
+ * Read the HOST main drawer's CURRENT state from the live DOM: the wrapper's
+ * open class (drawerOpen) and the sidebar's active tab button (drawerTab).
+ *
+ * This is the state WorldBookPanel's visibility gate effectively reads
+ * (drawerOpen && drawerTab === 'lorebook') — NOT Canvas's own tracked active
+ * (resolvePrimaryActiveTabId), which can disagree in taskbar mode (mirror
+ * key). DOM truth is used because the fiber store snapshot (findStoreData)
+ * is frequently null in the live runtime (observed 2026-08-19).
+ */
+function hostMainDrawerDomState(): { open: boolean; tab: string | null } | null {
+  try {
+    const wrapper = getMainWrapper()
+    const open = wrapper ? /wrapperOpen/.test(wrapper.className) : false
+    const sidebar = getMainSidebar()
+    const activeBtn = sidebar?.querySelector(
+      'button.tabBtnActive, button[class*="tabBtnActive"]',
+    ) as HTMLElement | null
+    const tab = activeBtn?.getAttribute('data-tab-id')
+      ?? activeBtn?.getAttribute('title')
+      ?? null
+    return { open, tab }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -113,19 +158,37 @@ export async function moveBuiltInTabToSecondaryContainer(
 
   let root: HTMLElement | undefined = opts.root
   if (!root) {
-    try {
-      root = ui.getBuiltInTabRoot(tabId) as HTMLElement | undefined
-    } catch (err) {
-      dwarn(`[tabmove] getBuiltInTabRoot threw for "${tabId}":`, err)
-      root = undefined
-    }
-  }
-
-  if (!root) {
     // Warm/cold boot: mount via main activation so panel data-fetch effects
     // run before the host reparents the registry root.
+    //
+    // ORDERING (2026-08-18, empty lorebook book-dropdown in the second
+    // drawer): getBuiltInTabRoot → ensureRegistryRoot CREATES the registry
+    // root and mounts the panel as a side effect. The old code resolved the
+    // root BEFORE pre-activating, so the panel mounted while the host main
+    // drawer was showing a different tab and visibility-gated data loads
+    // never fired — WorldBookPanel only calls loadBooks() when
+    // drawerOpen && drawerTab === 'lorebook', so the moved Lorebook tab's
+    // selection dropdown stayed empty. Pre-activate (click the main button)
+    // FIRST so the root is created while the host still has the tab active.
+    const prevMainOpen = isMainDrawerOpen()
+    dlog(
+      `[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` +
+      `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`,
+    )
     const { ensureBuiltInTabActiveInMain } = await import('./assignment')
     await ensureBuiltInTabActiveInMain(tabId, {
+      // The default isTabActiveInMainDrawer reads Canvas's OWN tracked active
+      // (resolvePrimaryActiveTabId), which can report the tab active while the
+      // HOST drawer would not fire the panel's visibility-gated load: taskbar
+      // mode returns the mirror key (the host store's drawerTab can be a
+      // different tab), and a closed drawer leaves drawerOpen false even when
+      // drawerTab matches. Only skip the pre-activation click when the HOST
+      // main drawer actually has the tab active AND open — the one state where
+      // loadBooks already ran or will run when the root mounts.
+      isTabActiveInMainDrawer: () => {
+        const st = hostMainDrawerDomState()
+        return st != null && st.open && st.tab === tabId
+      },
       getBuiltInTabRoot: (id) => {
         try {
           return ui.getBuiltInTabRoot?.(id) as HTMLElement | undefined
@@ -137,6 +200,20 @@ export async function moveBuiltInTabToSecondaryContainer(
     })
     // rAF #1: detached registry root commit + first useEffect (e.g. loadBooks)
     await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    dlog(
+      `[canvas-debug] ASSIGN_SEC_BUILTIN_POST_ACTIVATE tab=${tabId} ` +
+      `hostDrawer=${JSON.stringify(hostMainDrawerDomState())}`,
+    )
+    // The pre-activation click opened the host main drawer (handleTabClick →
+    // openDrawer). Close it again when it was closed before: nothing else in
+    // the move/restore flow re-closes it, and a boot with a closed main
+    // drawer would otherwise come back with it open (the layout's
+    // primary.open is authoritative and must be preserved).
+    if (!prevMainOpen && isMainDrawerOpen()) {
+      const wrapper = getMainWrapper()
+      const toggle = wrapper ? findMainDrawerToggle(wrapper) : null
+      toggle?.click()
+    }
     try {
       root = ui.getBuiltInTabRoot(tabId) as HTMLElement | undefined
     } catch {
@@ -182,7 +259,6 @@ export async function moveBuiltInTabToSecondaryContainer(
       `[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} via=${placed.via} ` +
       `container=${CANVAS_SECONDARY_CONTAINER_ID}`,
     )
-
     const afterLoc = ui.getTabLocation?.(tabId) ?? {
       kind: 'container' as const,
       containerId: CANVAS_SECONDARY_CONTAINER_ID,

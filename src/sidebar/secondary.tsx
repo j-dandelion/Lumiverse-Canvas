@@ -315,22 +315,30 @@ export function reassignSecondaryTabsFromModel(opts?: {
       }
 
       const placed: string[] = []
-      const promises = Array.from(getTabAssignments())
-        .filter(([, side]) => side === 'secondary')
-        .map(async ([tabKey]) => {
-          // The facade is TabKey-keyed; placement functions need liveIds.
-          const liveId = liveIdForFacadeKey(tabKey, tabs)
-          dlog(`[secondary] open loop: resolving ${tabKey} → liveId ${liveId}`)
-          if (!liveId) {
-            dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`)
-            return
-          }
-          const ok = await assignToSecondary(liveId, opts)
-            .then(() => true)
-            .catch(() => false)
-          if (ok) placed.push(liveId)
-        })
-      await Promise.all(promises)
+      // Serialized placement (2026-08-19, empty lorebook dropdown in the
+      // second drawer): assignToSecondary PRE-ACTIVATES each built-in in the
+      // host main drawer — a main-button click so visibility-gated panel data
+      // loads run while the host has the tab active (WorldBookPanel.loadBooks
+      // only fires when drawerOpen && drawerTab === the tab). Promise.all ran
+      // every click back-to-back, so each click overwrote the previous tab's
+      // drawerTab and each panel mounted while the host was on a DIFFERENT
+      // tab → loadBooks never fired and the lorebook dropdown stayed empty.
+      // Placing one tab at a time lets click → mount → move complete before
+      // the next tab's click.
+      for (const [tabKey] of Array.from(getTabAssignments())
+        .filter(([, side]) => side === 'secondary')) {
+        // The facade is TabKey-keyed; placement functions need liveIds.
+        const liveId = liveIdForFacadeKey(tabKey, tabs)
+        dlog(`[secondary] open loop: resolving ${tabKey} → liveId ${liveId}`)
+        if (!liveId) {
+          dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`)
+          continue
+        }
+        const ok = await assignToSecondary(liveId, opts)
+          .then(() => true)
+          .catch(() => false)
+        if (ok) placed.push(liveId)
+      }
       setSuppressAutoActivation(false)
 
       // Content restore (2026-07-31): nothing was displayed above — the

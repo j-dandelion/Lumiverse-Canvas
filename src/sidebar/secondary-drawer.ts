@@ -488,30 +488,26 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     return
   }
 
-  let bridgeRoot: HTMLElement | undefined
-  try {
-    bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId) as HTMLElement | undefined
-  } catch (err) {
-    dwarn(`[SecondaryDrawer] getBuiltInTabRoot threw for "${tabId}":`, err)
-    bridgeRoot = undefined
-  }
-  dlog(
-    `[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} ` +
-    `rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute('data-tab-id') ?? 'null'} via=getBuiltInTabRoot`,
-  )
-
   let root: HTMLElement | undefined
   let placedViaHost = false
 
   // Prefer host tabLocations (bridge + store.moveTabTo), then DOM reparent
   // inside moveBuiltInTabToSecondaryContainer. Do not treat "got a registry
   // root" alone as success — that produced empty secondary panels.
+  //
+  // Do NOT resolve the registry root here: moveBuiltInTabToSecondaryContainer
+  // owns root resolution and pre-activates the tab in the host main drawer
+  // FIRST (a main-button click) so the panel's mount-time/visibility data
+  // effects fire while the host still has the tab active. Pre-resolving the
+  // root here mounted the panel before that pre-activation, so the Lorebook
+  // panel never loaded its book list — its dropdown stayed empty in the
+  // second drawer (WorldBookPanel.loadBooks is gated on
+  // drawerOpen && drawerTab === 'lorebook').
   if (wSpindleUi?.getBuiltInTabRoot) {
     const { moveBuiltInTabToSecondaryContainer } = await import('../tabs/builtin-move')
     root = await moveBuiltInTabToSecondaryContainer({
       tabId,
       deferActivation,
-      root: bridgeRoot,
     })
     placedViaHost = !!root
   }
@@ -531,7 +527,7 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     dwarn(
       '[SecondaryDrawer] assignToSecondary: built-in tab not placed ' +
       '(host location write failed, DOM reparent failed, or root missing).',
-      { tabId, resolvedId, hasBridgeRoot: !!bridgeRoot, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot },
+      { tabId, resolvedId, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot },
     )
     return
   }

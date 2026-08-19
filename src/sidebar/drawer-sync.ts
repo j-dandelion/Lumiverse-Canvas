@@ -594,14 +594,18 @@ export function checkSideChanged(): void {
           const activeId = getActiveSecondaryTabId()
           setSuppressAutoActivation(true)
           try {
-            await Promise.all(
-              Array.from(getTabAssignments())
-                .filter(([, side]) => side === 'secondary')
-                .map(async ([key]) => {
-                  const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
-                  await assignToSecondary(liveId, { setActiveWhenReady: false }).catch(() => {})
-                }),
-            )
+            // Serialized re-attach (2026-08-19): each assignToSecondary
+            // pre-activates its built-in in the host main drawer (a click so
+            // visibility-gated panel data loads fire); Promise.all ran the
+            // clicks back-to-back and each overwrote the previous drawerTab.
+            // One at a time, with a per-iteration generation guard so a
+            // mid-loop side flip still aborts stale assigns.
+            for (const [key] of Array.from(getTabAssignments())
+              .filter(([, side]) => side === 'secondary')) {
+              if (remountGen !== _sideRemountGen) return
+              const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
+              await assignToSecondary(liveId, { setActiveWhenReady: false }).catch(() => {})
+            }
           } finally {
             setSuppressAutoActivation(false)
           }

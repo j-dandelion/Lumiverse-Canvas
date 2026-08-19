@@ -3966,6 +3966,26 @@ __export(exports_builtin_move, {
 function __setSecondaryContentForTest(el) {
   _testSecondaryContent = el;
 }
+function findMainDrawerToggle(wrapper) {
+  for (const btn of Array.from(wrapper.querySelectorAll(":scope > button"))) {
+    if (/drawerTab/i.test(btn.className)) {
+      return btn;
+    }
+  }
+  return null;
+}
+function hostMainDrawerDomState() {
+  try {
+    const wrapper = getMainWrapper();
+    const open = wrapper ? /wrapperOpen/.test(wrapper.className) : false;
+    const sidebar = getMainSidebar();
+    const activeBtn = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const tab = activeBtn?.getAttribute("data-tab-id") ?? activeBtn?.getAttribute("title") ?? null;
+    return { open, tab };
+  } catch {
+    return null;
+  }
+}
 function tryDomPlaceRoot(tabId, root) {
   const secondaryContent = _testSecondaryContent ?? getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
   if (!secondaryContent) {
@@ -4001,16 +4021,14 @@ async function moveBuiltInTabToSecondaryContainer(opts) {
   }
   let root = opts.root;
   if (!root) {
-    try {
-      root = ui.getBuiltInTabRoot(tabId);
-    } catch (err) {
-      dwarn(`[tabmove] getBuiltInTabRoot threw for "${tabId}":`, err);
-      root = undefined;
-    }
-  }
-  if (!root) {
+    const prevMainOpen = isMainDrawerOpen();
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` + `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`);
     const { ensureBuiltInTabActiveInMain } = await Promise.resolve().then(() => (init_assignment(), exports_assignment));
     await ensureBuiltInTabActiveInMain(tabId, {
+      isTabActiveInMainDrawer: () => {
+        const st = hostMainDrawerDomState();
+        return st != null && st.open && st.tab === tabId;
+      },
       getBuiltInTabRoot: (id) => {
         try {
           return ui.getBuiltInTabRoot?.(id);
@@ -4021,6 +4039,12 @@ async function moveBuiltInTabToSecondaryContainer(opts) {
       dlog
     });
     await new Promise((r) => requestAnimationFrame(() => r()));
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_POST_ACTIVATE tab=${tabId} hostDrawer=${JSON.stringify(hostMainDrawerDomState())}`);
+    if (!prevMainOpen && isMainDrawerOpen()) {
+      const wrapper = getMainWrapper();
+      const toggle = wrapper ? findMainDrawerToggle(wrapper) : null;
+      toggle?.click();
+    }
     try {
       root = ui.getBuiltInTabRoot(tabId);
     } catch {
@@ -4082,6 +4106,7 @@ function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
 var _testSecondaryContent = null;
 var init_builtin_move = __esm(() => {
   init_log();
+  init_store();
   init_secondary();
   init_dom_placed_builtin();
   init_host_tab_location();
@@ -4337,22 +4362,13 @@ async function assignBuiltInTabToSecondary(ctx) {
     });
     return;
   }
-  let bridgeRoot;
-  try {
-    bridgeRoot = wSpindleUi?.getBuiltInTabRoot?.(tabId);
-  } catch (err) {
-    dwarn(`[SecondaryDrawer] getBuiltInTabRoot threw for "${tabId}":`, err);
-    bridgeRoot = undefined;
-  }
-  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_AFTER_DOM_LOOKUP tab=${resolvedId} rootFound=${!!bridgeRoot} rootTagId=${bridgeRoot?.getAttribute("data-tab-id") ?? "null"} via=getBuiltInTabRoot`);
   let root;
   let placedViaHost = false;
   if (wSpindleUi?.getBuiltInTabRoot) {
     const { moveBuiltInTabToSecondaryContainer: moveBuiltInTabToSecondaryContainer2 } = await Promise.resolve().then(() => (init_builtin_move(), exports_builtin_move));
     root = await moveBuiltInTabToSecondaryContainer2({
       tabId,
-      deferActivation,
-      root: bridgeRoot
+      deferActivation
     });
     placedViaHost = !!root;
   }
@@ -4365,7 +4381,7 @@ async function assignBuiltInTabToSecondary(ctx) {
     dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
   }
   if (!root) {
-    dwarn("[SecondaryDrawer] assignToSecondary: built-in tab not placed (host location write failed, DOM reparent failed, or root missing).", { tabId, resolvedId, hasBridgeRoot: !!bridgeRoot, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot });
+    dwarn("[SecondaryDrawer] assignToSecondary: built-in tab not placed (host location write failed, DOM reparent failed, or root missing).", { tabId, resolvedId, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot });
     return;
   }
   if (!deferActivation) {
@@ -9723,10 +9739,12 @@ function checkSideChanged() {
           const activeId = getActiveSecondaryTabId();
           setSuppressAutoActivation2(true);
           try {
-            await Promise.all(Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(async ([key]) => {
+            for (const [key] of Array.from(getTabAssignments()).filter(([, side]) => side === "secondary")) {
+              if (remountGen !== _sideRemountGen)
+                return;
               const liveId = liveIdForFacadeKey(key, liveTabs) ?? key;
               await assignToSecondary2(liveId, { setActiveWhenReady: false }).catch(() => {});
-            }));
+            }
           } finally {
             setSuppressAutoActivation2(false);
           }
@@ -12962,18 +12980,17 @@ function reassignSecondaryTabsFromModel(opts) {
       return;
     }
     const placed = [];
-    const promises = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(async ([tabKey]) => {
+    for (const [tabKey] of Array.from(getTabAssignments()).filter(([, side]) => side === "secondary")) {
       const liveId = liveIdForFacadeKey(tabKey, tabs);
       dlog(`[secondary] open loop: resolving ${tabKey} → liveId ${liveId}`);
       if (!liveId) {
         dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`);
-        return;
+        continue;
       }
       const ok = await assignToSecondary2(liveId, opts).then(() => true).catch(() => false);
       if (ok)
         placed.push(liveId);
-    });
-    await Promise.all(promises);
+    }
     setSuppressAutoActivation(false);
     if (isSecondarySidebarOpen() && !getActiveSecondaryTab2() && placed.length > 0) {
       const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null;
