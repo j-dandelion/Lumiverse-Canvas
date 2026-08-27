@@ -119,8 +119,30 @@ export function unmountSecondarySidebar(): void {
   // the wrapper is removed — otherwise the pin host keeps an orphan strip.
   applyTabListPin(false, { force: true })
   if (_secondaryWrapper) {
-    _secondaryWrapper.remove()
+    const oldWrapper = _secondaryWrapper
     _secondaryWrapper = null
+    // Unregister BEFORE removal while the element is still attached. The
+    // host's unregister commit cleans the portalled roots (removeChild)
+    // against the still-parented old content; removing synchronously left
+    // the host entry pointing at a detached element and the next mount's
+    // duplicate unregister made the host throw Node.removeChild on the 4th
+    // Swap after activating a tab. Full teardown (tearDownSecondarySidebar)
+    // still removes synchronously after its own unregister.
+    try {
+      getHostBridge()?.containers?.unregisterContainer?.('canvas-secondary-drawer')
+    } catch (err) {
+      dwarn('[tabmove] unmountSecondarySidebar: unregisterContainer threw:', err)
+    }
+    // Keep the old wrapper as an orphan until the host has committed the
+    // unregister (next tick), then drop it. The new mount's register can
+    // then find the old content still attached during host cleanup.
+    setTimeout(() => {
+      try {
+        oldWrapper.remove()
+      } catch {
+        /* host already detached it */
+      }
+    }, 0)
   }
   // Clear drawer cache too — a stale detached drawer made
   // openSecondarySidebar's `!_secondaryDrawer` check pass while the
@@ -158,27 +180,19 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     onHeaderClose: () => closeSecondarySidebar(),
   })
 
-  // Register the secondary drawer content area with Spindle so built-in
-  // tabs can use requestTabLocation to move into this container.
-  // System-level registration — not gated by extension permissions.
-  // Unregister first on remount so a stale container entry cannot conflict
-  // with the new shell content element (only when the API exists).
+  // NOTE: Do NOT register the container here — shell.content is still
+  // detached (the wrapper is not yet appended to document.body), so
+  // content.isConnected would be false and the host would store a
+  // detached element (later removeChild failures). Registration happens
+  // in mountSecondarySidebar after appendChild. Also never unregister
+  // here: registerContainer is idempotent per id (replace-on-collision),
+  // and a duplicate unregister before register is what made the host
+  // removeChild a detached node on rapid side-flip remounts.
   try {
     const wSpindle = getHostBridge()
     const wContainers = wSpindle?.containers
 
-    if (wContainers?.registerContainer) {
-      try {
-        wContainers.unregisterContainer?.('canvas-secondary-drawer')
-      } catch {
-        /* ignore — host may not have had a prior registration */
-      }
-      wContainers.registerContainer({
-        id: 'canvas-secondary-drawer',
-        side,
-        element: shell.content,
-      })
-    } else {
+    if (!wContainers?.registerContainer) {
       dwarn(
         `[tabmove] createSecondarySidebar: registerContainer SKIPPED — ` +
         `host bridge containers.registerContainer not available ` +
@@ -566,9 +580,37 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   }
   _secondaryWrapper = createSecondarySidebar(options)
   document.body.appendChild(_secondaryWrapper)
+  // Register the secondary content area AFTER append so content.isConnected
+  // is true (a detached register made the host store a detached element and
+  // later cleanup threw). The old wrapper from a side-flip unmount is still
+  // in the DOM as an orphan here, so the host's internal unregister for
+  // this id can removeChild against the still-attached old content. The
+  // orphan sweep is deferred to the next tick for the same reason.
+  try {
+    const content = _secondaryWrapper.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
+    const wContainers = getHostBridge()?.containers
+    if (wContainers?.registerContainer && content) {
+      wContainers.registerContainer({
+        id: 'canvas-secondary-drawer',
+        side: getMainDrawerSide() === 'left' ? 'right' : 'left',
+        element: content,
+      })
+    } else {
+      dwarn(
+        `[tabmove] mountSecondarySidebar: registerContainer SKIPPED — ` +
+        `host bridge containers.registerContainer not available ` +
+        `(setup ctx / window.spindle missing). Built-in tab moves will ` +
+        `silently fail (ContainerTabContent Pass 3 resets to main-drawer).`
+      )
+    }
+  } catch (err) {
+    dwarn(`[tabmove] mountSecondarySidebar: registerContainer THREW:`, err)
+  }
   // Drop any orphan wrappers left by lost module state / failed unmount
   // before a prior remount (rapid side flips). Keep only module-owned.
-  sweepOrphanSecondaryWrappers()
+  // Deferred so the old wrapper stays attached during the host's unregister
+  // commit for the just-registered id.
+  setTimeout(() => sweepOrphanSecondaryWrappers(), 0)
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     drawer: _secondaryWrapper.querySelector('.sidebar-ux-drawer') as HTMLElement,
     tabList: _secondaryWrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement,

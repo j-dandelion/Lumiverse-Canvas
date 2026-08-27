@@ -26,7 +26,7 @@
 // _tabAssignments entries when their source extension unregisters.
 
 import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
-import { getHostDrawerSettings } from '../dom/host-settings'
+import { getHostDrawerSettings, patchHostDrawerSettings } from '../dom/host-settings'
 import {
   getDrawerTabs,
   getMainDrawerSide,
@@ -153,6 +153,129 @@ let _sideRemountGen = 0
 let _applySideChain: Promise<void> = Promise.resolve()
 /** Monotonic id of the latest applyMainDrawerSideChange; stale settles exit early. */
 let _sideApplyGen = 0
+
+// Host Settings side watcher — keeps Lumiverse's own "Drawer side" setting
+// identical to the Canvas side. Store-based (500ms poll of the host settings
+// cache/snapshot), NOT a wrapper-class observer: the old class MO fired on
+// every frame and dispatched swapSides per tick (the 4562↔4564 save loop).
+let _hostSideWatcher: ReturnType<typeof setInterval> | null = null
+let _lastSeenHostSide: 'left' | 'right' | null = null
+let _lastCanvasSwapMs = 0
+let _hostWatcherStarted = false
+
+/** Read the host drawer side from the settings cache or store snapshot. */
+function getHostSide(): 'left' | 'right' | null {
+  const host = getHostDrawerSettings()
+  if (host && (host.side === 'left' || host.side === 'right')) return host.side
+  try {
+    const snap = getStoreSnapshot() as { drawerSettings?: { side?: unknown } } | null
+    const s = snap?.drawerSettings?.side
+    if (s === 'left' || s === 'right') return s as 'left' | 'right'
+  } catch {
+    /* snapshot may be mid-walk */
+  }
+  return null
+}
+
+/**
+ * Write the host side to match the model (boot coalesce + after a Canvas
+ * swap). No-op when the host is not writable; falls back to the settings
+ * API (fire-and-forget — the flip must never depend on this write).
+ */
+function syncHostSideToModel(modelSide: 'left' | 'right'): void {
+  const hostSide = getHostSide()
+  if (hostSide === modelSide) return
+  const ok = patchHostDrawerSettings({ side: modelSide })
+  if (ok) {
+    _lastSeenHostSide = modelSide
+    dlog('[drawer-sync] syncHostSideToModel: host side written to match model', { modelSide, prevHostSide: hostSide })
+  } else if (isHostedBrowserContext()) {
+    // NO-GO path — try the settings API (fire-and-forget; the flip must
+    // never depend on this write succeeding). Only in a hosted browser
+    // context: in tests / non-http pages there is no API to call and a
+    // real fetch must not fire.
+    void import('../dom/host-settings').then((m) => {
+      m.writeHostDrawerSettingsViaApi({ side: modelSide }).then((apiOk) => {
+        if (apiOk) {
+          _lastSeenHostSide = modelSide
+          dlog('[drawer-sync] syncHostSideToModel: host side written via API', { modelSide })
+        }
+      })
+    })
+  }
+}
+
+/** True in the real app page (http/https with a window); false in bun test harnesses. */
+function isHostedBrowserContext(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.location !== 'undefined' &&
+      /^https?:/.test(window.location.protocol)
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Host Settings side watcher — makes Lumiverse's Drawer side identical to
+ * the Canvas side. On boot, prefer the model and write the host to match.
+ * When the USER flips Lumiverse's own setting, unify via a Canvas swap.
+ * The 800ms guard after a Canvas swap suppresses the echo path.
+ */
+export function startHostSideWatcher(): void {
+  if (_hostWatcherStarted) return
+  _hostWatcherStarted = true
+  // Seed lastSeen without dispatching — on boot, prefer model and write host to match model.
+  const initialHost = getHostSide()
+  const modelSide = getMainDrawerSide()
+  _lastSeenHostSide = initialHost
+  if (initialHost && initialHost !== modelSide) {
+    dlog('[drawer-sync] host side differs from model on boot — syncing host to model', { hostSide: initialHost, modelSide })
+    syncHostSideToModel(modelSide)
+  }
+  _hostSideWatcher = setInterval(() => {
+    const hostSide = getHostSide()
+    if (!hostSide) return
+    if (hostSide === _lastSeenHostSide) return
+    _lastSeenHostSide = hostSide
+    const currentModelSide = getMainDrawerSide()
+    if (hostSide === currentModelSide) return
+    // Ignore the echo of our own Canvas swap (model already flipping to hostSide).
+    if (Date.now() - _lastCanvasSwapMs < 800) {
+      dlog('[drawer-sync] host side change ignored — recent Canvas swap', { hostSide, currentModelSide })
+      return
+    }
+    dlog('[drawer-sync] host side change detected — unifying via Canvas', { hostSide, currentModelSide })
+    void import('../recon/dispatch').then((m) => {
+      // swapSides toggles; since hostSide !== currentModelSide, one swap reaches hostSide
+      m.dispatch({ t: 'swapSides' } as unknown as Parameters<typeof m.dispatch>[0]).catch((err) => {
+        dwarn('[drawer-sync] host side unify dispatch failed:', err)
+      })
+    })
+  }, 500)
+  // unref so a pending poll never keeps the process alive in tests; the
+  // browser ignores the method (timers are numbers there).
+  ;(_hostSideWatcher as unknown as { unref?: () => void }).unref?.()
+  registerCleanup(() => stopHostSideWatcher())
+}
+
+export function stopHostSideWatcher(): void {
+  if (_hostSideWatcher) {
+    clearInterval(_hostSideWatcher)
+    _hostSideWatcher = null
+  }
+  _hostWatcherStarted = false
+}
+
+/** Called by applyMainDrawerSideChange when Canvas initiates a swap — records time and syncs host. */
+function recordCanvasSwapAndSyncHost(desired: 'left' | 'right'): void {
+  _lastCanvasSwapMs = Date.now()
+  _lastSeenHostSide = desired
+  // Write host side to match Canvas so host Settings UI reflects the new side and the next poll doesn't flip back.
+  syncHostSideToModel(desired)
+}
 
 // Coalescing: when syncDrawerTabSettings is called multiple times in the
 // same tick (from ResizeObserver, 2x MutationObserver, 2s setInterval, and
@@ -839,6 +962,9 @@ export async function applyMainDrawerSideChange(
     })
 
     setMainDrawerSideOverride(desired)
+    // Record the Canvas-initiated swap and sync the host's own side setting
+    // so Lumiverse Settings stays truthful and the next poll doesn't flip back.
+    recordCanvasSwapAndSyncHost(desired)
 
     // Force remount when last-known differs or was never set (tests / early boot).
     // If already aligned with desired, skip remount but still settle override.
@@ -1064,6 +1190,9 @@ export function startSideChangeWatcher(): void {
     _sideWatcherCleanupRegistered = true
     registerCleanup(() => stopSideChangeWatcher())
   }
+  // Host Settings side watcher — identical side via the store, not the
+  // wrapper class (which fired per frame and caused the 4562↔4564 loop).
+  startHostSideWatcher()
 }
 
 export function stopSideChangeWatcher(): void {

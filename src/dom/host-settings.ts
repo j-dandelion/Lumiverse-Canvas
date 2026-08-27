@@ -293,10 +293,17 @@ export async function writeHostDrawerSettingsViaApi(
 ): Promise<boolean> {
   try {
     const doFetch = _settingsApiFetch ?? ((url: string, init?: RequestInit) => fetch(url, init))
+    // Bound the request: this path is a fire-and-forget fallback and must
+    // never leave background work hanging (e.g. a non-responsive dev host).
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      ? AbortSignal.timeout(3000)
+      : undefined
+    const initBase: RequestInit = signal ? { signal } : {}
     // GET the current row first (404 when never written — fine).
     let current: HostDrawerSettings = {}
     try {
       const res = await doFetch('/api/v1/settings/drawerSettings', {
+        ...initBase,
         method: 'GET',
         credentials: 'include',
         headers: { Accept: 'application/json' },
@@ -312,6 +319,7 @@ export async function writeHostDrawerSettingsViaApi(
     }
     const merged = { ...current, ...patch }
     const res = await doFetch('/api/v1/settings/drawerSettings', {
+      ...initBase,
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
