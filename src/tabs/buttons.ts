@@ -731,13 +731,19 @@ export function clearSecondaryTabButtonActive(): void {
   }
 }
 
-export function showSecondaryTab(tabId: string): void {
+export function showSecondaryTab(tabId: string, opts?: { silent?: boolean }): void {
   // Record which tab is now active. Persistence is unified at the
   // setActiveSecondaryTabId choke point (dispatchTrackedActiveSync), so every
   // activation surface — clicks, reopen, placement-with-activation, handoff,
   // restore — converges the owned model (and layout.json) without per-surface
   // wiring. Restore/placement echoes are no-ops (applySyncActive guards).
-  setActiveSecondaryTabId(tabId)
+  // `silent` is for RECONCILE-ISSUED activations (host.activate echoes the
+  // model's own active into the chrome): the model is already the source, so
+  // re-dispatching syncActive feeds the tracked-active ↔ reconcile loop
+  // (each reconcile's activate flipped the tracked value, which dispatched
+  // syncActive, which changed the model, which made the next reconcile
+  // activate the other key — the 2026-08-27 swap-freeze SAVE_LAYOUT cascade).
+  setActiveSecondaryTabId(tabId, opts)
 
   const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 

@@ -509,7 +509,11 @@ export class LumiverseHost implements HostPort {
   async activate(side: Side, id: LiveTabId): Promise<WriteResult> {
     try {
       if (side === 'secondary') {
-        showSecondaryTab(id)
+        // silent: this is a model→chrome echo (diffActive returns the model's
+        // own active). Without silence, the tracked-active write re-dispatches
+        // syncActive into the queue that just drove this reconcile — the
+        // tracked-active ↔ reconcile feedback loop (swap-freeze, 2026-08-27).
+        showSecondaryTab(id, { silent: true })
         return 'ok'
       }
 

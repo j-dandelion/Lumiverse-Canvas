@@ -121,10 +121,10 @@ export function getActiveSecondaryTabId(): string | null { return _activeSeconda
  * The reducer's guards make already-converged rounds true no-ops, so
  * restore/placement echoes cost one queued no-op.
  */
-export function setActiveSecondaryTabId(tabId: string | null): void {
+export function setActiveSecondaryTabId(tabId: string | null, opts?: { silent?: boolean }): void {
   const changed = tabId !== null && tabId !== _activeSecondaryTabId
   _activeSecondaryTabId = tabId
-  if (changed) {
+  if (changed && !opts?.silent) {
     void import('../recon/dispatch')
       .then((m) => m.dispatchTrackedActiveSync())
       .catch(() => { /* model not bootstrapped yet — no-op */ })

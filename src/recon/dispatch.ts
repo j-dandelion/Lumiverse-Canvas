@@ -20,6 +20,8 @@ let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
 let _restoringPending = false
+/** Coalescing flag for dispatchTrackedActiveSync (see its doc comment). */
+let _trackedSyncScheduled = false
 /** Boot-only retry window for partial restores (late-registering tabs). */
 let _restoreDeadline = 0
 const RESTORE_RETRY_WINDOW_MS = 30_000
@@ -553,6 +555,20 @@ export function dispatchActivateByLiveId(liveId: LiveTabId, side: Side): Promise
  * activations after readiness are unaffected.
  */
 export async function dispatchTrackedActiveSync(): Promise<void> {
+  // Coalesce: writers fire this per CHANGE (remount placement loops set the
+  // tracked id several times in one tick). The body re-reads the tracked
+  // values at run time, so collapsing concurrent triggers into one dispatch
+  // is correct and prevents queue saturation during remount storms.
+  if (_trackedSyncScheduled) return
+  _trackedSyncScheduled = true
+  try {
+    await dispatchTrackedActiveSyncInner()
+  } finally {
+    _trackedSyncScheduled = false
+  }
+}
+
+async function dispatchTrackedActiveSyncInner(): Promise<void> {
   const host = _host
   if (!host) return
   if (_bootstrapping || _restoringPending) {
