@@ -272,6 +272,44 @@ function resetState(): void {
   assertEqual(activated[0], 'h:a', 'T4: fallback activates first placed tab')
 }
 
+// ── B1: boot restore (activateKey) — tracked pre-seeded by the model→chrome
+//    echo, but no root is displayed; the tail must STILL show the persisted
+//    active. (d908d53 boot-empty regression: the tracked guard made the tail
+//    skip, so every placed root stayed display:none → black open drawer.) ──
+{
+  resetState()
+  setTabAssignment('ext:ext:a/A', 'secondary')
+  setTabAssignment('ext:ext:b/B', 'secondary')
+  setupList(['h:a', 'h:b'])
+  setSecondarySidebarOpen(true)
+  // The boot reconcile echo seeds tracked with the persisted active BEFORE
+  // placement (no root existed yet — nothing was ever displayed).
+  setActiveSecondaryTabId('h:a', { silent: true })
+
+  reassignSecondaryTabsFromModel({ activateKey: 'ext:ext:a/A' })
+  await settle()
+
+  assertEqual(activated.length, 1, 'B1: boot tail fires despite seeded tracked')
+  assertEqual(activated[0], 'h:a', 'B1: shows the persisted active')
+}
+
+// ── B2: boot restore, placement-loop branch — same as B1 but the active tab's
+//    button is placed by the loop (not pre-existing in the list). ──
+{
+  resetState()
+  setTabAssignment('ext:ext:a/A', 'secondary')
+  setTabAssignment('ext:ext:b/B', 'secondary')
+  setupList(['h:a']) // h:b not placed yet → placement loop runs
+  setSecondarySidebarOpen(true)
+  setActiveSecondaryTabId('h:b', { silent: true }) // echo seeded b pre-placement
+
+  reassignSecondaryTabsFromModel({ activateKey: 'ext:ext:b/B' })
+  await settle()
+
+  assertEqual(activated.length, 1, 'B2: loop tail fires over seeded tracked')
+  assertEqual(activated[0], 'h:b', 'B2: activates the persisted active, not first')
+}
+
 resetState()
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

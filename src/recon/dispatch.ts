@@ -25,6 +25,33 @@ let _trackedSyncScheduled = false
 /** Boot-only retry window for partial restores (late-registering tabs). */
 let _restoreDeadline = 0
 const RESTORE_RETRY_WINDOW_MS = 30_000
+/** Current boot placement pass (see bootPlacementDone). Null post-shutdown. */
+let _bootPlacementPass: Promise<void> | null = null
+
+// --- Model-commit subscribers (S2 flat renderer) ---
+type ModelSubscriber = () => void
+const _modelSubscribers = new Set<ModelSubscriber>()
+
+/**
+ * Subscribe to model commits (bootstrap, dispatch, host-sync merges). Called
+ * after every `_model` assignment so chrome driven by the model (the S2 main
+ * renderer) can re-render without polling. Returns an unsubscribe function.
+ */
+export function onModelChanged(cb: ModelSubscriber): () => void {
+  _modelSubscribers.add(cb)
+  return () => { _modelSubscribers.delete(cb) }
+}
+
+/** Assign _model; notify subscribers on reference change. Null never notifies
+ *  (teardown — subscribers are torn down with their DOM). */
+function commitModel(next: LayoutModel | null): void {
+  if (_model === next) return
+  _model = next
+  if (next === null) return
+  for (const cb of Array.from(_modelSubscribers)) {
+    try { cb() } catch { /* subscriber errors must not break the queue */ }
+  }
+}
 
 function pendingLayoutTabCount(layout: any): number {
   if (!layout || typeof layout !== 'object') return 0
@@ -126,7 +153,7 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
 export function bootstrap(model: LayoutModel, host: HostPort, version?: string): void {
   _unsubscribeWorldChanged?.()
   const gen = ++_generation
-  _model = model
+  commitModel(model)
   _host = host
   _version = version ?? 'unknown'
   _bootstrapping = true
@@ -146,7 +173,7 @@ export function bootstrap(model: LayoutModel, host: HostPort, version?: string):
     // reconcileAndPersist may have corrected the model (e.g. adopted the
     // observed drawer side when the host could not apply the model's side —
     // NO-GO bridge). Keep that correction.
-    if (next !== model) _model = next
+    if (next !== model) commitModel(next)
     _bootstrapping = false
     if (_worldSyncPending) {
       _worldSyncPending = false
@@ -204,7 +231,7 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
           // shutdown or re-bootstrap that happened while the restore was
           // awaiting must not overwrite the new generation's model.
           if (generation === _generation) {
-            _model = await reconcileAndPersist(merged, generation)
+            commitModel(await reconcileAndPersist(merged, generation))
           }
         } finally {
           _restoringPending = false
@@ -254,7 +281,7 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
     // syncFromHost would mutate _model AFTER the next test's bootstrap had
     // set it, leaking the old host's state into the new test.
     const result = await reconcileAndPersist(next, generation)
-    if (generation === _generation) _model = result
+    if (generation === _generation) commitModel(result)
   })
   _queue = task.catch(() => {})
   return task
@@ -272,6 +299,7 @@ export function shutdown(): void {
   _pendingLayout = null
   _restoringPending = false
   _restoreDeadline = 0
+  _bootPlacementPass = null
   _queue = Promise.resolve()
 }
 
@@ -412,8 +440,8 @@ export function dispatch(intent: Intent): Promise<void> {
       return
     }
 
-    _model = next
-    _model = await reconcileAndPersist(next, gen)
+    commitModel(next)
+    commitModel(await reconcileAndPersist(next, gen))
   })
   // Keep the shared queue usable after a failed host operation while preserving
   // the rejection for the caller that initiated this dispatch.
@@ -439,8 +467,8 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
     })
     if (next === _model) return
 
-    _model = next
-    _model = await reconcileAndPersist(next, gen)
+    commitModel(next)
+    commitModel(await reconcileAndPersist(next, gen))
   })
   _queue = task.catch(() => {})
 
@@ -633,117 +661,71 @@ async function dispatchTrackedActiveSyncInner(): Promise<void> {
  */
 export interface MainMirrorMoveChrome {
   /**
-   * Nearest visible host button for the moved tab's replacement. Non-null
-   * only when the moved tab IS the mirror's active (user moved their
-   * ACTIVE tab) and a neighbor exists. Captured BEFORE placement — the
-   * moved tab's host button is hidden afterward and
-   * findNeighborHostButtonFor skips hidden buttons.
+   * S2: the mirror parity keys are gone — nothing to capture anymore.
+   * The owned model's applyMove adopts the replacement into
+   * active.primary (activeAfterRemoval) and the flat renderer renders
+   * it; applyMainMirrorMoveChrome re-asserts the content from the model.
+   * The shape stays so live DnD / owned-commit call sites compile.
    */
-  neighborBtn: HTMLElement | null
-  /**
-   * Mirror active id when the moved tab is NOT the mirror's active. Used to
-   * re-assert that tab's content after the move (host panel drift — the
-   * "content changed to Loom" regression).
-   */
-  reassertId: string | null
+  neighborBtn: null
+  reassertId: null
 }
 
 /**
- * Capture the taskbar chrome decision for a user-initiated move to the
- * secondary drawer, BEFORE any placement (see MainMirrorMoveChrome). Two
- * cases:
- *   - The moved tab IS the mirror's active: capture the nearest visible
- *     neighbor for the 07-19 handoff.
- *   - Otherwise: remember the mirror's active id for content re-assert.
- * No-op (both fields null) outside taskbar mode or for non-secondary
- * targets.
+ * S2 capture: no-op. The old pre-placement capture (mirror neighbor from
+ * hidden host buttons, exclusive mirror key) died with the parity layer —
+ * the model already owns the neighbor decision (applyMove adoption) and
+ * the renderer renders it once the move intent commits.
  */
 export async function captureMainMirrorMoveChrome(
   liveId: LiveTabId,
   target: Side,
 ): Promise<MainMirrorMoveChrome> {
-  if (target !== 'secondary') return { neighborBtn: null, reassertId: null }
-  const pin = await import('../sidebar/main-tab-pin')
-  if (!pin.isMainTabPinEnabled()) return { neighborBtn: null, reassertId: null }
-  const mirrorKey = pin.getActiveMainMirrorKey()
-  const mirrorId = mirrorKey?.startsWith('id__') ? mirrorKey.slice('id__'.length) : null
-  if (!mirrorId) return { neighborBtn: null, reassertId: null }
-  if (mirrorId === liveId) {
-    const neighborBtn = pin.findNeighborHostButtonFor(liveId)
-    if (neighborBtn) {
-      dlog('[tabmove] capture chrome: active tab moved — neighbor handoff target', {
-        liveId,
-        neighbor: neighborBtn.getAttribute('title') || neighborBtn.getAttribute('data-tab-id'),
-      })
-    }
-    return { neighborBtn, reassertId: null }
-  }
-  return { neighborBtn: null, reassertId: mirrorId }
+  void liveId
+  void target
+  return { neighborBtn: null, reassertId: null }
 }
 
 /**
- * Apply the captured taskbar chrome after a move to the secondary drawer:
- * neighbor handoff (mirror key → neighbor + host button click for content
- * settle) or active-content re-assert, then converge the owned model's
- * primary active to the neighbor (mirror clicks don't always produce
- * host-syncs, so the model's active can lag the mirror key). No-op when
- * taskbar mode turned off between capture and apply. Callers gate on
+ * S2 content re-assert after a move to the secondary drawer: the host
+ * drifts its panel content to the first remaining tab after a container
+ * remount, and reconcile can no longer detect that drift through
+ * diffActive (the world's isActiveInPrimary is model-derived). Re-click
+ * the CURRENT model primary active's host button — after the move intent
+ * commits, applyMove has already adopted the replacement for active-tab
+ * moves; for non-active moves this re-clicks the unchanged active (the
+ * old reassertId behavior). No-op without a model primary active or when
+ * it still points at the tab that just moved. Callers gate on
  * target === 'secondary'.
  */
 export async function applyMainMirrorMoveChrome(
   chrome: MainMirrorMoveChrome,
   liveId: LiveTabId,
 ): Promise<void> {
-  const { neighborBtn, reassertId } = chrome
-  const pin = await import('../sidebar/main-tab-pin')
-  if (!pin.isMainTabPinEnabled()) return
+  void chrome
+  const model = _model
+  const host = _host
+  if (!model || !host) return
+  const key = model.active.primary
+  if (!key) return
+  const id = host.resolve(key)
+  if (!id || id === liveId) return
 
-  if (neighborBtn && neighborBtn.isConnected) {
-    // User moved their ACTIVE tab: hand the mirror key/header/content to
-    // the nearest visible neighbor (07-19 design). The host button click
-    // forces content settle (the host drifts its panel to the first
-    // remaining tab after a container remount).
-    const title = neighborBtn.getAttribute('title') || neighborBtn.getAttribute('aria-label') || undefined
-    dlog(`[tabmove] apply chrome: handing main-mirror to neighbor (${title ?? neighborBtn.getAttribute('data-tab-id')})`)
-    pin.adoptMainMirrorNeighbor(neighborBtn, title)
-  } else if (reassertId) {
-    // Re-assert the user's active tab content (host panel drift — the
-    // "content changed to Loom" regression).
-    //
-    // Scope the lookup to the MAIN sidebar via findMainTabButton. A global
-    // document.querySelector('button[data-tab-id]') can match a Canvas
-    // secondary button (which also carries data-tab-id) when the host's
-    // main button is hidden or untagged — for extension tabs the host button
-    // has no data-tab-id until the tagger runs, so the global query would
-    // find the secondary button and activate the tab in the WRONG drawer
-    // ("activates on the drawer it was moved from"). Dynamic import to
-    // avoid the dispatch → buttons → secondary → dispatch circular dep.
-    const { findMainTabButton } = await import('../tabs/buttons')
-    const btn = findMainTabButton(reassertId) as HTMLElement | null
-    if (btn && btn.isConnected) {
-      dlog(`[tabmove] apply chrome: re-asserting active tab content (${reassertId})`)
-      try { btn.click() } catch { /* host may throw during teardown */ }
-    } else {
-      dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { reassertId })
-    }
-  }
-
-  // Neighbor convergence: keep the owned model aligned with the chrome
-  // handoff. applyMove adopts the replacement for fresh moves when the
-  // model's active matched the moved tab; this covers the stale-active and
-  // already-in-target cases (mirror clicks don't always produce host-syncs,
-  // so the model's primary active can lag the mirror key).
-  if (neighborBtn) {
-    const neighborLiveId = neighborBtn.getAttribute('data-tab-id')
-    if (neighborLiveId) {
-      const neighborKey = _host?.findKey(neighborLiveId)
-      if (neighborKey && _model?.active.primary !== neighborKey) {
-        dlog(`[tabmove] apply chrome: converging model active to neighbor (${neighborKey})`)
-        void dispatch({ t: 'activate', key: neighborKey, side: 'primary' }).catch((err) => {
-          dwarn('[tabmove] apply chrome: neighbor activate dispatch failed:', err)
-        })
-      }
-    }
+  // Scope the lookup to the MAIN sidebar via findMainTabButton. A global
+  // document.querySelector('button[data-tab-id]') can match a Canvas
+  // secondary button (which also carries data-tab-id) when the host's
+  // main button is hidden or untagged — for extension tabs the host button
+  // has no data-tab-id until the tagger runs, so the global query would
+  // find the secondary button and activate the tab in the WRONG drawer.
+  // Dynamic import avoids the dispatch → buttons → secondary → dispatch
+  // circular dep.
+  const { findMainTabButton } = await import('../tabs/buttons')
+  const btn = findMainTabButton(id) as HTMLElement | null
+  if (btn && btn.isConnected) {
+    dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`)
+    try { btn.click() } catch { /* host may throw during teardown */ }
+  } else {
+    dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { id })
   }
 }
 
@@ -892,8 +874,6 @@ export async function placementFirstMoveByLiveId(
         dlog('[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)')
       }
     }
-
-    await applyMainMirrorMoveChrome(chrome, liveId)
   }
 
   // 2. Model update — catch the owned model up to the DOM. Skip if the
@@ -942,9 +922,16 @@ export async function placementFirstMoveByLiveId(
   }
 
   // Secondary drawer neighbor handoff (moves OUT of the second drawer).
-  // The mirror handoff ran at step 1.5 for moves INTO the secondary drawer.
+  // The main-mirror content re-assert ran at step 2.5 for moves INTO the
+  // secondary drawer.
   if (target === 'primary') {
     await applySecondaryNeighborHandoff(secondaryChrome, liveId)
+  }
+
+  // S2 (step 2.5): main-mirror content re-assert AFTER the move intent —
+  // the model's active (applyMove adopt) is only current post-dispatch.
+  if (target === 'secondary') {
+    await applyMainMirrorMoveChrome(chrome, liveId)
   }
 
   // Neighbor convergence lives inside the chrome helpers (shared with the
@@ -1004,15 +991,68 @@ export function bootstrapFromLayout(
   // move (2026-07-31). openOnClosed:false — a closed drawer must not be
   // force-opened; setActiveWhenReady:false — no activation while closed;
   // the persisted active.secondary is shown when the drawer is open.
-  void import('../sidebar/secondary').then((m) => {
-    m.reassignSecondaryTabsFromModel({
-      openOnClosed: false,
-      setActiveWhenReady: false,
-      activateKey: model.active.secondary ?? null,
-    })
-  }).catch((err) => {
-    dwarn('[bootstrap] reassignSecondaryTabsFromModel failed:', err)
-  })
+  const primaryBootKey = model.active.primary
+  // Only meaningful when secondary tabs exist: placements (and their host
+  // force-activation churn) only run then. Single-drawer boots skip.
+  const primaryBootLiveId =
+    primaryBootKey !== null
+    && model.secondary.length > 0
+    && !model.secondary.includes(primaryBootKey)
+      ? host.resolve(primaryBootKey)
+      : null
+  _bootPlacementPass = (async () => {
+    try {
+      const m = await import('../sidebar/secondary')
+      await m.reassignSecondaryTabsFromModel({
+        openOnClosed: false,
+        setActiveWhenReady: false,
+        activateKey: model.active.secondary ?? null,
+      })
+      if (primaryBootLiveId === null) return
+      // Boot-placement primary re-assert (2026-09): each builtin assign
+      // force-activates the tab in the HOST main drawer (lazy panel-data
+      // load) before moving it to secondary, so when the pass settles the
+      // host's active tab is the LAST MOVED tab — a container tab has no
+      // main panelContent, so the mirror's parked node is empty and the main
+      // drawer goes black (content flashes until the churn finishes). User
+      // moves re-assert via their handoff (preserve/neighbor); boot restore
+      // had no such tail. Re-click the persisted primary — mirror-mode
+      // activateMainMirrorFromRestore no-ops mid-session when a user key
+      // exists, so this is boot-only in effect — then let the repark watch
+      // (or the second attempt) park the content React renders.
+      const reassertPrimary = async (): Promise<void> => {
+        try {
+          const mp = await import('../sidebar/main-persist')
+          mp.ensureRestoredPrimaryTab(primaryBootLiveId)
+        } catch { /* non-fatal */ }
+        try {
+          const mm = await import('../sidebar/main-mirror-drawer')
+          mm.ensureHostContentParkedPublic()
+        } catch { /* non-fatal */ }
+      }
+      await reassertPrimary()
+      try {
+        const mm = await import('../sidebar/main-mirror-drawer')
+        if (mm.isMainMirrorActive()) {
+          // Second attempt: covers a coalesced trailing placement run that
+          // finishes after this pass (its tail is click-free, but be safe).
+          setTimeout(() => { void reassertPrimary() }, 500)
+        }
+      } catch { /* non-fatal */ }
+    } catch (err) {
+      dwarn('[bootstrap] reassignSecondaryTabsFromModel failed:', err)
+    }
+  })()
+}
+
+/**
+ * Resolves when the boot placement pass (secondary tab placement + primary
+ * content re-assert) has settled. setup.ts awaits this (capped) before
+ * revealing the main drawer so the pass's host force-activations never flash
+ * other panels in the open mirror.
+ */
+export function bootPlacementDone(): Promise<void> {
+  return _bootPlacementPass ?? Promise.resolve()
 }
 
 export function flush(): Promise<void> {

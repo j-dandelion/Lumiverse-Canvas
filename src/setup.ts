@@ -62,7 +62,7 @@ import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
 import { startWeaverLane } from './modals/weaver-lane'
 import { LumiverseHost } from './host/lumiverse/implementation'
-import { bootstrapFromLayout, shutdown as shutdownCore } from './recon/dispatch'
+import { bootstrapFromLayout, bootPlacementDone, shutdown as shutdownCore } from './recon/dispatch'
 
 let _setupGeneration = 0
 
@@ -347,12 +347,13 @@ export function setup(ctx: SpindleFrontendContext) {
     dlog(`drawerObserver.onTabRegistered`)
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons()
-      // Late extension tabs re-register with a new :N suffix. Heal host
-      // hiddenTabIds and re-apply to secondary/mirror so Configure hide
-      // still sticks after hard refresh. Debounced: many tabs register
+      // Late extension tabs re-register with a new :N suffix. Heal hidden
+      // ids (Canvas bridge copy) and re-apply to secondary/mirror so
+      // Configure hide still sticks after hard refresh. S2: no host
+      // write-back — the model owns hidden. Debounced: many tabs register
       // in a burst at boot.
       void import('./tabs/hidden-tabs').then((m) => {
-        m.scheduleSyncHiddenTabsFromHost({ writeBack: true })
+        m.scheduleSyncHiddenTabsFromHost()
       }).catch(() => { /* ignore */ })
       // When a new tab button appears (late extension registration), refresh
       // the open Configure Tabs modal so the user sees the new tab immediately
@@ -431,6 +432,19 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Restore drawer geometry separately. Tab placement, order, hidden state,
     // active tabs, and drawer metadata are restored by the owned model above.
+    // Reveal serialization (2026-09): the boot placement pass force-activates
+    // each secondary builtin in the host main drawer (lazy panel-data load)
+    // while placing it — if the main drawer is revealed mid-pass, every
+    // activation flashes that panel in the open mirror. Let the pass + the
+    // primary re-assert settle first (capped — a pathological pass must not
+    // stall the restore guard's 3s fail-forward) so the drawer appears once
+    // with its final content.
+    try {
+      await Promise.race([
+        bootPlacementDone(),
+        new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+      ])
+    } catch { /* non-fatal */ }
     dlog(`applyMainDrawer:pre`)
     const s = getSettings()
     const restoreOpen = !!s.persistDrawerOpenState

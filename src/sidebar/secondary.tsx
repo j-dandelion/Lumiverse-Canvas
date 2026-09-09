@@ -289,13 +289,39 @@ export function secondaryTabsAllPlaced(
   })
 }
 
+/**
+ * True when at least one placed secondary root is actually displayed
+ * (carries data-canvas-active; the CSS shows only
+ * `[data-canvas-moved][data-canvas-active]` roots). The tracked cell is
+ * intent-memory, NOT display truth: the boot model→chrome echo seeds it with
+ * the persisted active before any root exists, without displaying anything.
+ */
+function secondaryHasDisplayedRoot(): boolean {
+  const content = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
+  return !!content?.querySelector('[data-canvas-moved][data-canvas-active]')
+}
+
+/** Placement-pass coalescing (2026-09): boot fires overlapping reassign
+ *  invocations (bootstrapFromLayout + openSecondarySidebar's BAIL re-attach),
+ *  each running its own placement loop — every builtin gets force-activated
+ *  in the host and moved TWICE, and the host is left on the last moved tab.
+ *  One placement pass is enough; a dropped call queues a single trailing
+ *  rerun (which hits the all-placed early-return) after the in-flight pass. */
+let _reassignInFlight = false
+let _reassignQueued = false
+
 export function reassignSecondaryTabsFromModel(opts?: {
   openOnClosed?: boolean
   setActiveWhenReady?: boolean
   /** Preferred tab to show after placement (model TabKey, e.g. the layout's active.secondary). */
   activateKey?: string | null
-}): void {
-  import('../sidebar/secondary-drawer').then(
+}): Promise<void> {
+  if (_reassignInFlight) {
+    _reassignQueued = true
+    return Promise.resolve()
+  }
+  _reassignInFlight = true
+  const run = import('../sidebar/secondary-drawer').then(
     async ({ assignToSecondary, activateSecondaryTab }) => {
       setSuppressAutoActivation(true)
       const tabs = drawerObserver.getAllTabs()
@@ -315,13 +341,31 @@ export function reassignSecondaryTabsFromModel(opts?: {
             .map((el) => el.getAttribute('data-tab-id'))
             .filter((id): id is string => !!id)
         : []
+
+      // Tail gate (2026-09 boot-empty regression): bootstrapFromLayout is the
+      // only caller that passes activateKey. At boot the model→chrome echo
+      // (reconcile diffActive → host.activate('secondary') → silent
+      // showSecondaryTab) seeds the TRACKED cell with the persisted active
+      // BEFORE any root is placed — so the mid-session `!tracked` guard made
+      // the empty-content tails skip and every placed root stayed
+      // data-canvas-active-less → `display:none` → a black open drawer at
+      // boot. The boot path therefore keys off DISPLAY truth (nothing shown),
+      // not the tracked cell: the echoed value is the same persisted active
+      // the tail would show anyway, and no user click can exist mid-boot
+      // (a real one would leave a shown root → tail stays silent). Mid-session
+      // reopen keeps the tracked guard so a pinned-strip click (tracked only,
+      // never the state-machine cell) is never overridden by the first tab.
+      const bootRestore = opts?.activateKey != null
+      const tailCanShow = bootRestore
+        ? !secondaryHasDisplayedRoot()
+        : getActiveSecondaryTabId() === null
       if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
         dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`)
-        // Empty-content restore reads the TRACKED active (getActiveSecondaryTabId),
-        // not the state-machine cell: a just-clicked pinned tab wrote only the
+        // Empty-content restore: a just-clicked pinned tab wrote only the
         // tracked cell, and the tail must never overwrite it with listIds[0]
-        // (2026-09 pinned-strip click regression).
-        if (isSecondarySidebarOpen() && !getActiveSecondaryTabId() && listIds.length > 0) {
+        // (2026-09 pinned-strip click regression). Boot restore (activateKey
+        // present) is the exception — see tailCanShow above.
+        if (isSecondarySidebarOpen() && tailCanShow && listIds.length > 0) {
           const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
           const target = preferred && listIds.includes(preferred) ? preferred : listIds[0]!
           dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
@@ -361,9 +405,10 @@ export function reassignSecondaryTabsFromModel(opts?: {
 
       // Content restore (2026-07-31): nothing was displayed above — the
       // finalize's showSecondaryTabDisplay is gated on !deferActivation.
-      // Guard reads the TRACKED active (2026-09): a user click that set the
-      // tracked cell must not be overwritten by the first placed tab.
-      if (isSecondarySidebarOpen() && !getActiveSecondaryTabId() && placed.length > 0) {
+      // A user click that set the tracked cell must not be overwritten by the
+      // first placed tab (2026-09); boot restore uses display truth instead
+      // (see tailCanShow above).
+      if (isSecondarySidebarOpen() && tailCanShow && placed.length > 0) {
         const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
         const target = preferred && placed.includes(preferred) ? preferred : placed[0]!
         dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? ' (preferred missing)' : ''}`)
@@ -372,6 +417,14 @@ export function reassignSecondaryTabsFromModel(opts?: {
       }
     },
   )
+  run.finally(() => {
+    _reassignInFlight = false
+    if (_reassignQueued) {
+      _reassignQueued = false
+      void reassignSecondaryTabsFromModel(opts)
+    }
+  }).catch(() => { /* absorb for fire-and-forget callers (openSecondarySidebar) */ })
+  return run
 }
 
 /**

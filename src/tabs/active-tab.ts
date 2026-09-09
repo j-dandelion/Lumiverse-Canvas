@@ -5,10 +5,8 @@
 
 import { findStoreData, getDrawerTabs, getStoreSnapshot } from '../store'
 import { getMainSidebar } from '../dom/lumiverse'
-import {
-  getMainMirrorActiveTabId,
-  isMainTabPinEnabled,
-} from '../sidebar/main-tab-pin'
+import { getModel, getHost } from '../recon/dispatch'
+import { isMainMirrorActive } from '../sidebar/main-mirror-drawer'
 
 /**
  * Discriminated union describing the active-tab state of the main drawer.
@@ -48,25 +46,30 @@ export function getActiveTabId(): ActiveTabState {
  * User-visible primary active tab id — **single source of truth** for
  * rClick assignTab, live DnD, and Configure quiet commit handoff.
  *
- * Taskbar main-mirror (pin on): only the Canvas exclusive key counts.
- * Host `tabBtnActive` often stays on a parked/top tab while the strip
- * highlights a different tab. Key null = no selection (do not fall back
- * to host) so closed-strip moves do not force-activate a park target.
+ * S2 (2026-09): when the Canvas main shell is the desktop surface, the
+ * owned model's active.primary resolved to its live id IS the selection —
+ * host `tabBtnActive` is never consulted (STALENESS WARNING below applies
+ * equally to the parked/suppressed host drawer). A null model active means
+ * no selection (do not fall back to host) so a closed strip/move does not
+ * force-activate a park target.
  *
- * Pin off: prefer live host DOM `tabBtnActive` (user-visible, sync on
- * click) over Zustand store (can lag a frame). Store is the fallback
- * when DOM has no active button.
+ * Mirror inactive or model missing (mobile until S6, pre-bootstrap):
+ * prefer live host DOM `tabBtnActive` over the Zustand store (can lag a
+ * frame); store is the fallback when DOM has no active button.
  *
- * STALENESS WARNING (2026-07-31): the host drawer's tabBtnActive can stay
- * on a stale tab (often the persisted primary.tabId, e.g. "Databank")
+ * STALENESS WARNING (2026-07-31, host-path only): the host drawer's
+ * tabBtnActive can stay on a stale tab (often the persisted primary.tabId)
  * long after the user clicked elsewhere, and after a move the host's
  * pendingActiveTabReset marks the FIRST remaining tab. Callers must treat
  * a host-flagged active as suspect when its observed location is not the
  * primary side — adoptActive in core/reduce.ts enforces exactly that.
  */
 export function resolvePrimaryActiveTabId(): string | null {
-  if (isMainTabPinEnabled()) {
-    return getMainMirrorActiveTabId()
+  const model = getModel()
+  if (model && isMainMirrorActive()) {
+    const key = model.active.primary
+    if (!key) return null
+    return getHost()?.resolve(key) ?? null
   }
 
   const sidebar = getMainSidebar()

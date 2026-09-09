@@ -10,7 +10,6 @@ import { getHostBridge } from '../../dom/host-bridge'
 import { resolvePrimaryActiveTabId, getActiveSecondaryTabId } from '../../tabs/active-tab'
 import {
   getCanvasHiddenTabIds,
-  mergeHiddenTabIdLists,
   setCanvasHiddenTabIds,
 } from '../../tabs/canvas-hidden'
 import {
@@ -29,7 +28,6 @@ import {
   removeSecondaryTabButton,
   reorderSecondaryTabButtons,
   secondaryTabButtonsReady,
-  reorderMainMirrorTabButtons,
   reorderHostMainTabButtons,
   hideMainTabButton,
   showMainTabButton,
@@ -41,7 +39,7 @@ import {
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
 import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
-import { getMainMirrorDrawer } from '../../sidebar/main-mirror-drawer'
+import { getMainMirrorDrawer, isMainMirrorActive } from '../../sidebar/main-mirror-drawer'
 import { getSecondaryTabList } from '../../sidebar/secondary'
 import { readVisibleTabIdsFromList } from '../../tabs/live-tab-order'
 import { dlog } from '../../debug/log'
@@ -168,8 +166,16 @@ function buildHostEntry(tab: { id: string; extensionId: string; title: string; r
   const location: Side = entryLocationFor(tab, assignments)
   const key = tab.key
   const canvasHidden = new Set(getCanvasHiddenTabIds())
-  const hostSettings = getHostDrawerSettings()
-  const hostHidden = hostSettings?.hiddenTabIds ? new Set(hostSettings.hiddenTabIds as string[]) : new Set<string>()
+  // S2: the host's hiddenTabIds filter only describes a REAL surface when
+  // the host drawer itself is visible — i.e. when the Canvas main shell is
+  // NOT active (mobile until S6). On desktop the shell is the surface,
+  // hidden is model/canvas-copy truth, and a STALE host settings list must
+  // not keep the reconcile's diffHidden fighting (write is gone).
+  const hostHidden = !isMainMirrorActive()
+    ? getHostDrawerSettings()?.hiddenTabIds
+      ? new Set(getHostDrawerSettings()!.hiddenTabIds as string[])
+      : new Set<string>()
+    : new Set<string>()
   const isHidden = canvasHidden.has(tab.id) || hostHidden.has(tab.id)
   const primaryActive = resolvePrimaryActiveTabId()
   const secondaryActive = getActiveSecondaryTabId()
@@ -413,23 +419,18 @@ export class LumiverseHost implements HostPort {
         return 'ok'
       }
 
-      const current = getHostDrawerSettings()
-      const merged = {
-        ...(current ?? {}),
-        tabOrder: ids,
-      }
-
-      // Apply the order to both live primary surfaces before the host's React
-      // settings update settles. DnD removes its overlay immediately after
-      // reconcile; without this handoff the old DOM order becomes visible and
-      // the dropped tab appears to teleport back to its source slot.
+      // S2: the drawerSettings.tabOrder patch is GONE (Q2 — no host
+      // settings writes for order/hidden). What converges the OBSERVED
+      // world instead is the live host DOM: applySyncFromHost rebuilds
+      // primary order wholesale from the host button sequence
+      // (drawer-observer sorts by compareDocumentPosition), so keep ONLY
+      // the invisible DOM reorder of the (CSS-hidden) host buttons. The
+      // mirror strip needs no reorder — the flat renderer renders model
+      // order on each commit (reorderMainMirrorTabButtons died with the
+      // parity layer).
       reorderHostMainTabButtons(ids)
-      reorderMainMirrorTabButtons(ids)
       dlog('[host] setOrder:dom-reordered', { side, ids })
-
-      const ok = patchHostDrawerSettings(merged)
-      dlog('[host] setOrder:settings-written', { side, ids, ok })
-      return ok ? 'ok' : 'degraded'
+      return 'ok'
     } catch {
       return 'failed'
     }
@@ -440,64 +441,37 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setHidden(_side: Side, ids: LiveTabId[]): Promise<WriteResult> {
     try {
-      const current = getHostDrawerSettings()
-      const side = _side
-      // Which live tabs belong to THIS side. The assignment facade
-      // (getTabAssignments) is keyed by TabKey — looking it up by live id
-      // always misses, which made the old per-side filter add EVERY live tab
-      // for the primary side and NONE for the secondary side. Consequences
-      // (2026-08-17 Configure hide no-op report): a primary hide wiped the
-      // other side's hidden ids from the persisted lists, and an unhidden
-      // secondary id was never removed — so it stayed in host/canvas
-      // hiddenTabIds and re-hid on the next host-sync. Resolve the facade by
-      // the frozen key (tab.key) so the filter matches the real side.
+      // S2: the host drawerSettings.hiddenTabIds patch is GONE (Q2/Q3 —
+      // the model owns `hidden`; the Canvas copy is a hydrate bridge and
+      // converge target). Converge the Canvas copy to this side's model
+      // projection (keep the OTHER side's stored hides), then DOM-apply
+      // directly — idempotent on every reconcile-driven hide change (boot
+      // restore, DnD, Configure).
       const assignments = getTabAssignments()
       const sideIds = new Set<string>()
       for (const tab of liveDrawerTabs()) {
         const assignedSide = assignments.get(tab.key)
-        if ((assignedSide === 'secondary') === (side === 'secondary')) {
+        if ((assignedSide === 'secondary') === (_side === 'secondary')) {
           sideIds.add(tab.id)
         }
       }
       // Facade keys (TabKey) for tabs with no live inventory entry (e.g.
-      // DOM-placed secondary tabs whose host button was removed). The hidden
-      // lists are live-id-keyed so these rarely match, but keep them so the
-      // merge never drops a tab that is only known by key.
+      // DOM-placed secondary tabs whose host button was removed).
       for (const [key, assignedSide] of assignments) {
-        if ((assignedSide === 'secondary') === (side === 'secondary')) sideIds.add(key)
+        if ((assignedSide === 'secondary') === (_side === 'secondary')) sideIds.add(key)
       }
-      const currentHidden = Array.isArray(current?.hiddenTabIds)
-        ? current.hiddenTabIds as string[]
-        : []
-      const nextHidden = currentHidden.filter(id => !sideIds.has(id))
-      for (const id of ids) {
-        if (!nextHidden.includes(id)) nextHidden.push(id)
-      }
-      const canvasHidden = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
-      setCanvasHiddenTabIds([...canvasHidden, ...ids])
-      const effective = mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds())
-      const merged = {
-        ...(current ?? {}),
-        hiddenTabIds: effective,
-      }
+      const canvasOtherSide = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
+      setCanvasHiddenTabIds([...canvasOtherSide, ...ids])
+      const effective = new Set<string>([...canvasOtherSide, ...ids])
 
-      // Apply to the Canvas-owned strips DIRECTLY, regardless of the host
-      // write result. The host React filter only reacts when setSetting is
-      // reachable (GO); under NO-GO the main-mirror buttons never get
-      // display:none and the Configure hide toggle is a no-op (2026-08-17).
-      // The pre-owned-model Configure commit did exactly this
-      // (applyHiddenTabIdsToMirror + applyHiddenTabIdsToSecondary at commit
-      // time) — it was lost in the owned-commit refactor. Idempotent, safe on
-      // every reconcile-driven hide change (boot restore, DnD, Configure).
-      // applyHiddenTabIdsToHostMain covers the NON-taskbar MAIN drawer (the
-      // host React drawer — the visible surface when the mirror is absent);
-      // it is a no-op in taskbar mode (mirror handles it).
-      applyHiddenTabIdsToMirror(new Set(effective))
-      applyHiddenTabIdsToSecondary(new Set(effective))
-      applyHiddenTabIdsToHostMain(new Set(effective))
-
-      const ok = patchHostDrawerSettings(merged)
-      return ok ? 'ok' : 'degraded'
+      // Canvas-owned strip applies. The mirror strip's hidden state is
+      // renderer-owned (model.hidden) — applyHiddenTabIdsToMirror skips
+      // renderer-owned buttons; keep it for chrome-only parity during
+      // boot windows before the first render.
+      applyHiddenTabIdsToMirror(effective)
+      applyHiddenTabIdsToSecondary(effective)
+      applyHiddenTabIdsToHostMain(effective)
+      return 'ok'
     } catch {
       return 'failed'
     }
@@ -536,10 +510,15 @@ export class LumiverseHost implements HostPort {
         return 'degraded'
       }
 
-      const { activateMainMirrorFromRestore } = await import(
-        '../../sidebar/main-tab-pin'
-      )
-      activateMainMirrorFromRestore(hostBtn, tab.title)
+      // S2: the mirror key/activateMainMirrorFromRestore machinery is
+      // gone — a primary activation echo is just the host content click.
+      // "Already active" is an idempotent no-op re-render. The mirror's
+      // highlight/title follow the model (flat renderer).
+      try {
+        hostBtn.click()
+      } catch {
+        /* host may throw during teardown */
+      }
       return 'ok'
     } catch {
       return 'failed'

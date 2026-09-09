@@ -445,8 +445,7 @@ export function removeSecondaryTabButton(tabId: string): void {
 
 /**
  * Nearest VISIBLE secondary tab button to the moved tab (above, else
- * below) — the drawer-side analog of main-tab-pin's
- * findNeighborHostButtonFor. Used for the secondary neighbor handoff when
+ * below). Used for the secondary neighbor handoff when
  * the second drawer's ACTIVE tab is moved out (right-click / DnD /
  * Configure): the replacement must be activated in the drawer, not the
  * stale model active. Skips display:none buttons and Settings chrome.
@@ -517,29 +516,14 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
  * (no data-tab-id) also move to their model slot — otherwise setOrder can
  * never converge and the reconcile fires it forever (SAVE_LAYOUT cascade).
  */
-export function reorderMainMirrorTabButtons(ids: string[]): void {
-  const main = document.querySelector(
-    '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main',
-  ) as HTMLElement | null
-  if (!main) return
-  for (const id of ids) {
-    const btn = Array.from(
-      main.querySelectorAll(
-        ':scope > button.sidebar-ux-main-tab-mirror-btn, :scope > button[data-tab-id]',
-      ),
-    ).find((b) => buttonTabId(b as HTMLElement) === id) as HTMLElement | null
-    if (btn && btn.parentElement === main) {
-      main.appendChild(btn)
-    }
-  }
-}
-
 /**
  * Reorder host React main tab-list buttons to match the given id order.
  * Targets the host `.tabList` under `.tabListWrap` (not Settings bottom).
- * React may re-render later from tabOrder; when tabOrder matches this
- * order the visual is stable. Used so primary DnD sticks immediately.
- * Buttons are matched via buttonTabId (see reorderMainMirrorTabButtons).
+ * S2: this is the ONLY order convergence write left — it reorders the
+ * CSS-hidden host buttons so the observed world (drawer-observer reads
+ * host DOM order) follows the model without a drawerSettings.tabOrder
+ * patch. The mirror strip is rendered from the model (flat renderer).
+ * Buttons are matched via buttonTabId.
  */
 export function reorderHostMainTabButtons(ids: string[]): void {
   const sidebar = getMainSidebar()
@@ -603,6 +587,10 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
       .filter(Boolean)
     for (const btn of buttons) {
       const tid = btn.getAttribute('data-tab-id') || ''
+      // S2: buttons carrying data-mirror-key belong to the flat renderer —
+      // its hidden state is model-owned; a canvas-heal apply must not
+      // clobber it.
+      if (btn.hasAttribute('data-mirror-key')) continue
       if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = 'none'
       } else {

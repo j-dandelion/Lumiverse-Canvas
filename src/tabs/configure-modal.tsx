@@ -40,6 +40,7 @@ import { getLiveIdAssignments } from './assignment'
 import type { OwnedCommitResult as CommitResult } from './owned-commit'
 import { commitDraftToOwnedModel } from './owned-commit'
 import { getHost, getModel } from '../recon/dispatch'
+import type { TabKey } from '../core/model'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -1580,6 +1581,56 @@ function buildLiveDraftAndBase(): {
   const drawerSide = hostSide || getMainDrawerSide()
   const sideSource = hostSide ? 'host-settings' : 'dom'
 
+  // ── S2 model source ─────────────────────────────────────────────────
+  // Order + hidden come from the OWNED MODEL, not host tabOrder (the host
+  // settings patch is gone — model is the single source). Draft ids stay
+  // liveIds: resolve each model TabKey via host.resolve (suffix-drift
+  // fallback is inside the resolver). Keys that cannot resolve are
+  // dropped, matching the commit path's resolution semantics.
+  const model = getModel()
+  const host = getHost()
+  if (model && host) {
+    const resolveId = (key: TabKey): string | null => host.resolve(key)
+    const toIds = (keys: readonly TabKey[]): string[] => {
+      const out: string[] = []
+      for (const key of keys) {
+        const id = resolveId(key)
+        if (id) out.push(id)
+      }
+      return out
+    }
+    const modelPrimaryIds = toIds(model.primary)
+    const modelSecondaryIds = toIds(model.secondary)
+    const modelHiddenIds = toIds(model.hidden)
+
+    const draftFromModel = createDraft({
+      catalog,
+      tabOrder: [...modelPrimaryIds, ...modelSecondaryIds],
+      hiddenTabIds: modelHiddenIds,
+      drawerSide,
+      assignments: currentAssignments,
+    })
+    // Align both sides to the live strips — post-S2 the strips are model
+    // renderings (mirror strip + secondary strip), so this is a no-op in
+    // steady state and only protects mid-transition DOM.
+    const draft = alignDraftToLiveVisibleOrder(
+      draftFromModel,
+      readLivePrimaryTabIds(),
+      readLiveSecondaryTabIds(),
+    )
+    const base = baseSnapshotFromDraft(draft)
+    dlog('[configure-modal] draft from model', {
+      side: draft.drawerSide,
+      sideSource,
+      primary: draft.primaryIds.length,
+      secondary: draft.secondaryIds.length,
+      hidden: draft.hiddenIds.size,
+      unresolved: model.primary.length + model.secondary.length - modelPrimaryIds.length - modelSecondaryIds.length,
+    })
+    return { draft, base, catalog }
+  }
+
+  // ── Legacy fallback (no owned model yet — pre-bootstrap float) ──────
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
   // what the user sees in the drawers.

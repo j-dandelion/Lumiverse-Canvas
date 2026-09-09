@@ -1,34 +1,29 @@
-// Main-drawer "keep tab controls visible" — mirror buttons + orchestration.
+// Main-drawer "keep tab controls visible" — pin chrome + orchestration.
 //
-// When taskbarMode is on (desktop), Canvas owns the full main drawer
-// chrome via main-mirror-drawer.ts (headless host + shell + portal). This
-// module:
+// S2 (2026-09): the mirror TAB STRIP is rendered by main-renderer.ts from
+// the owned model (order/hidden/active/chrome). This module no longer
+// clones host buttons, tracks an exclusive mirror key, heals/adopts
+// activations, or writes through to the host drawer. It owns only:
 //
-//   1. Enables/tears down that mirror mode (apply/reconcile entrypoints).
-//   2. Syncs *mirrored* tab buttons into the Canvas main tab list (host
-//      React nodes stay under Lumiverse; clicks forward via .click()).
-//   3. Never hides the pin strip when the host drawer is "open" — visual
-//      open/close is Canvas-owned.
+//   1. Enable/teardown entrypoints for the Canvas main drawer shell.
+//   2. PIN chrome (taskbarMode visual): tab-list reparent to the
+//      body-level edge host between mount and reconcile passes.
+//   3. The host sidebar observer → rAF-coalesced re-render (twin chrome
+//      deltas: icons/labels/tagging settle after React commits).
 //
 // Mobile: always force-off (matches secondary pin).
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
 import { isTaskbarModeEnabled } from '../settings/state'
-import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from './mobile-exclusion'
-import { isShowTabLabels } from './drawer-sync'
-import { getTabSidebar } from '../tabs/assignment'
 import {
   applyMainMirrorDrawer,
-  closeCanvasMainDrawer,
   getMainMirrorTabList,
-  isCanvasMainOpen,
   isMainMirrorActive,
   onMainMirrorTabActivated,
   pinMainMirrorShellTabList,
   reconcileMainMirrorDrawer,
-  setCanvasMainTitle,
   unpinMainMirrorShellTabList,
   __resetMainMirrorForTest,
 } from './main-mirror-drawer'
@@ -39,46 +34,21 @@ import {
   getMainPinHost,
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
-import { deriveShortName, isSettingsButton } from '../tabs/buttons'
-
-/** Canvas-owned tab list class (also on shell tab list when pinned). */
-export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
-
-/** Mirror button class (also carries data-tab-id for shared pin-host CSS). */
-export const MAIN_MIRROR_BTN_CLASS = 'sidebar-ux-main-tab-mirror-btn'
+import {
+  initMainRenderer,
+  renderMainMirrorTabs,
+  teardownMainRenderer,
+} from './main-renderer'
 
 /**
- * Scrollable upper section of the main-mirror strip (built-in + extension tabs).
- * Matches Lumiverse `.tabListWrap` / `.tabList` — flex:1 so Settings can pin
- * to the bottom of the strip.
- */
-export const MAIN_MIRROR_LIST_MAIN_CLASS = 'sidebar-ux-tab-list-main'
-
-/**
- * Bottom section for the Settings mirror — matches Lumiverse `.sidebarBottom`
- * (margin-top auto via flex parent + border-top separator).
- */
-export const MAIN_MIRROR_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
-
-/**
- * Single module state object for main-mirror pin mode.
+ * Single module state object for main-mirror pin chrome.
  *
- * Updates go through `commitState()` as a single `Object.assign` patch —
- * not a multi-step transaction and not copy-on-write. Grouping fields
- * still keeps mutations in one place so callers do not scatter writes.
+ * S2: `activeKey`/`userPicked` are GONE — the owned model's active.primary
+ * is the single highlight/content source (dispatch commit → renderer).
  */
 interface MirrorState {
+  /** PIN chrome only (S1): shell ownership is unconditional on desktop. */
   enabled: boolean
-  activeKey: string | null
-  /**
-   * True while activeKey was established by a user click on a mirror
-   * button (onMirrorClick). Restore/heal paths (host-derived keys) set it
-   * false. `activateMainMirrorFromRestore` must never clobber a
-   * user-picked key — a reconcile/host-driven re-activation of the
-   * persisted primary tab (e.g. after a move to the secondary drawer)
-   * would otherwise steal the highlight/content from the user's tab.
-   */
-  userPicked: boolean
   sidebar: HTMLElement | null
   observer: MutationObserver | null
   reconcileRaf: number | null
@@ -86,8 +56,6 @@ interface MirrorState {
 
 const initialState: MirrorState = {
   enabled: false,
-  activeKey: null,
-  userPicked: false,
   sidebar: null,
   observer: null,
   reconcileRaf: null,
@@ -95,41 +63,10 @@ const initialState: MirrorState = {
 
 let _state: MirrorState = { ...initialState }
 
-/**
- * Commit a mirror-state patch. All state writes go through here.
- *
- * UNIFIED PERSISTENCE CHOKE POINT for the primary side in taskbar mode
- * (2026-08-16): a `activeKey` write IS "the user's active main tab changed".
- * Mirror activations don't reliably produce host-syncs (the host sidebar
- * observer is childList-only; React re-renders are attribute changes), so
- * without an explicit producer the owned model's active.primary lags the
- * mirror key and layout.json gets the STALE key — a hard refresh restores
- * the old tab as active. On a non-null activeKey CHANGE, sync the tracked
- * actives into the model (one round converges BOTH drawers; the secondary
- * setter uses the same producer). Restore-time writes (same key as the
- * freshly booted model) short-circuit as no-ops, so echoes cost nothing.
- */
+/** Commit a mirror-state patch. All state writes go through here. */
 function commitState(updater: (prev: MirrorState) => Partial<MirrorState>): void {
-  const patch = updater(_state)
-  const activeChanged =
-    patch.activeKey !== undefined &&
-    patch.activeKey !== null &&
-    patch.activeKey !== _state.activeKey
-  Object.assign(_state, patch)
-  if (activeChanged) {
-    void import('../recon/dispatch')
-      .then((m) => m.dispatchTrackedActiveSync())
-      .catch((err) => {
-        dwarn('[main-mirror] active persist dispatch failed:', err)
-      })
-  }
+  Object.assign(_state, updater(_state))
 }
-
-/** Mirror button → host button. WeakMap so host GC is free. */
-const _mirrorToHost = new WeakMap<HTMLElement, HTMLElement>()
-
-/** Diagnostic noise guard: log untagged-host mirror buttons once per key. */
-const _noTabIdMirrorLogged = new Set<string>()
 
 /**
  * Enable or disable the main-drawer Canvas mirror PIN (taskbar chrome).
@@ -138,7 +75,7 @@ const _noTabIdMirrorLogged = new Set<string>()
  * S1 gate inversion: the mirror DRAWER shell is Canvas-owned unconditionally
  * on desktop — `enabled` here only controls the PIN chrome (tab list
  * reparented to the screen-edge host). `false` keeps the shell mounted and
- * its button sync live; the tab list rides inside the drawer. Mobile always
+ * its renderer live; the tab list rides inside the drawer. Mobile always
  * tears down the mirror entirely (host drawer is the mobile surface).
  */
 export function applyMainTabListPin(
@@ -160,6 +97,10 @@ export function applyMainTabListPin(
     applyMainMirrorDrawer(true, { force: false })
   }
 
+  // Renderer subscription is idempotent; the immediate render fills a
+  // freshly mounted list without waiting for the next model commit.
+  initMainRenderer()
+
   if (_state.enabled === enabled && !opts?.force) {
     scheduleReconcile()
     return
@@ -168,12 +109,12 @@ export function applyMainTabListPin(
   commitState(() => ({ enabled }))
   ensureObservers()
   if (enabled) {
-    // Pin chrome ON: reparent + sync (reconcileMainMirror pins via
+    // Pin chrome ON: reparent + render (reconcileMainMirror pins via
     // pinMainMirrorShellTabList, idempotent with the mount-time pin).
     reconcileMainMirror()
   } else {
     // Pin chrome OFF: tab list back into the drawer; keep the shell's
-    // button sync live (the shell is the main drawer either way).
+    // renderer live (the shell is the main drawer either way).
     unpinMainMirrorShellTabList()
     reconcileMainMirror()
     void import('./strip-gutter').then((m) => m.clearStripGutters()).catch(() => {})
@@ -208,8 +149,9 @@ export function reconcileMainTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
-  // Drawer shell is always owned on desktop.
+  // Drawer shell is always owned on desktop; renderer keeps filling it.
   reconcileMainMirrorDrawer()
+  initMainRenderer()
   const shouldPin = isTaskbarModeEnabled()
   if (shouldPin) {
     commitState(() => ({ enabled: true }))
@@ -222,7 +164,7 @@ export function reconcileMainTabListPin(): void {
       unpinMainMirrorForChromeOff()
     }
     ensureObservers()
-    // Sync buttons into the shell's own tab list (rides with the panel).
+    // Render into the shell's own tab list (rides with the panel).
     reconcileMainMirror()
   }
   // Side-change remaps main/secondary strip gutters to left/right.
@@ -237,216 +179,26 @@ export function isMainTabListPinActive(): boolean {
 /** Test-only: reset module state without requiring a full document. */
 export function __resetMainTabPinForTest(): void {
   stopObservers()
+  teardownMainRenderer()
   _state = { ...initialState }
   __resetMainMirrorForTest()
   destroyMainPinHost()
 }
 
-/** Test / restore: last Canvas-owned active mirror key (or null). */
-export function getActiveMainMirrorKey(): string | null {
-  return _state.activeKey
-}
-
 /**
- * True while taskbar main-mirror pin owns the primary strip chrome.
- * Quiet DnD uses this to decide whether host `tabBtnActive` is meaningful
- * for user-visible selection (it is not — host parks a tab while the
- * closed strip has no Canvas exclusive selection).
+ * Full teardown of main pin + mirror shell (mobile cross-down, extension
+ * disable). Unlike applyMainTabListPin(false) — which only unpins and keeps
+ * the shell — this removes the Canvas main drawer entirely.
  */
-export function isMainTabPinEnabled(): boolean {
-  return _state.enabled
-}
-
-/**
- * User-visible primary active tab id when taskbar main-mirror owns chrome.
- *
- * Host `tabBtnActive` often lags or stays on a parked tab (e.g. Profile)
- * while Canvas `_state.activeKey` is exclusive for the strip/header.
- * Quiet DnD / handoff must prefer this over host DOM or panel content jumps
- * to the top-most host tab on every primary→secondary drop.
- *
- * Returns bare `data-tab-id` or title fallback from the key, or null when
- * pin is off / no key is set. When pin is on and key is null, callers must
- * treat that as **no user-visible primary selection** (do not fall back to
- * host) or a closed strip will force-activate the parked host tab.
- */
-export function getMainMirrorActiveTabId(): string | null {
-  // Pin enabled is enough — shell may be mid-mount; exclusive key is still truth.
-  if (!_state.enabled) return null
-  const key = _state.activeKey
-  if (!key) return null
-  if (key.startsWith('id__')) return key.slice(4) || null
-  if (key.startsWith('title__')) return key.slice(7) || null
-  return null
-}
-
-/** Test seam: set Canvas-owned mirror active key without host click. */
-export function __setActiveMainMirrorKeyForTest(key: string | null): void {
-  _state.activeKey = key
-}
-
-/** Test seam: mark main-tab pin enabled so getMainMirrorActiveTabId reads the key. */
-export function __setMainTabPinEnabledForTest(on: boolean): void {
-  _state.enabled = on
-}
-
-/**
- * Activate a main tab for layout restore without going through
- * onMirrorClick (which would toggle-close if the drawer is already open
- * on that tab). Clicks the host button for React content, sets the
- * Canvas active key, and opens the mirror drawer.
- */
-export function activateMainMirrorFromRestore(
-  hostBtn: HTMLElement | null,
-  title?: string,
-): void {
-  // Never clobber a user-established selection. The restore path exists to
-  // seed the key when there is no user intent yet (boot restore, first
-  // enable). A later host/reconcile-driven re-activation of the persisted
-  // primary tab (e.g. diffActive after the user moves a tab to the second
-  // drawer) must not steal the highlight or content from the user's tab —
-  // this was the 2026-07-31 "moving a tab activates Databank" regression.
-  if (_state.userPicked) {
-    dlog('[main-mirror] activate-from-restore skipped (user key established)', {
-      keepKey: _state.activeKey,
-      targetTitle: title || hostBtn?.getAttribute('title') || hostBtn?.getAttribute('aria-label') || undefined,
-    })
-    return
-  }
-
-  const resolvedTitle =
-    title ||
-    hostBtn?.getAttribute('title') ||
-    hostBtn?.getAttribute('aria-label') ||
-    undefined
-  if (hostBtn && hostBtn.isConnected) {
-    const key = hostButtonKey(hostBtn)
-    // Set exclusive key *before* host click so reconcile/heal cannot see
-    // null and reseed park (tabBtnActive) in the gap.
-    commitState(() => ({ activeKey: key, userPicked: false }))
-    try {
-      hostBtn.click()
-    } catch {
-      /* host may throw during teardown; key already set */
-    }
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: false }))
-  }
-  onMainMirrorTabActivated(resolvedTitle)
-}
-
-/**
- * Hand the main-mirror chrome to a neighbor after the user moved their
- * ACTIVE primary tab to the second drawer (07-19 neighbor-handoff design).
- *
- * The owned model already adopted the replacement inside applyMove →
- * activeAfterRemoval (nearest visible neighbor); this keeps the mirror key,
- * header title, and host content in sync with it.
- *
- * Unlike activateMainMirrorFromRestore this MAY override a user-picked key:
- * the user's own action (moving their active tab) drove the change. The new
- * key stays user-consequence (userPicked: true) so a later restore/host
- * activation cannot clobber the neighbor either.
- */
-export function adoptMainMirrorNeighbor(
-  hostBtn: HTMLElement | null,
-  title?: string,
-): void {
-  // S1: shell liveness gate (mirror chrome is the main drawer on desktop
-  // regardless of pin state).
-  if (!isMainMirrorActive()) return
-  const resolvedTitle =
-    title ||
-    hostBtn?.getAttribute('title') ||
-    hostBtn?.getAttribute('aria-label') ||
-    undefined
-  if (hostBtn && hostBtn.isConnected) {
-    const key = hostButtonKey(hostBtn)
-    commitState(() => ({ activeKey: key, userPicked: true }))
-    try {
-      hostBtn.click()
-    } catch {
-      /* host may throw during teardown; key already set */
-    }
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: true }))
-  }
-  onMainMirrorTabActivated(resolvedTitle)
-}
-
-/**
- * Align Canvas main-mirror chrome with a host primary activation that
- * did not go through onMirrorClick (handoff, host-driven, heal).
- * No-op when main pin/mirror mode is off.
- *
- * @param opts.open default true — opens drawer + parks via onMainMirrorTabActivated.
- *   Pass false for reconcile heal (title only; do not force-open mid-reconcile).
- */
-export function adoptMainMirrorHostActivation(
-  hostBtn: HTMLElement | null,
-  title?: string,
-  opts?: { open?: boolean },
-): void {
-  // Stamp exclusive key whenever the mirror chrome is live — quiet DnD /
-  // handoff need the key even if the shell is mid-mount or briefly inactive.
-  // S1: gate on shell liveness (the shell is the main drawer on desktop
-  // regardless of pin state), not on the pin flag.
-  if (!isMainMirrorActive() && !_state.enabled) return
-
-  // Never adopt a host-active button that belongs to the SECONDARY drawer
-  // (boot/restore transient — see isSecondaryAssignedHostButton).
-  if (hostBtn && isSecondaryAssignedHostButton(hostBtn)) {
-    dlog('[main-mirror] adopt host activation skipped (secondary-assigned button)', {
-      key: hostButtonKey(hostBtn),
-    })
-    return
-  }
-
-  const resolvedTitle =
-    title ||
-    hostBtn?.getAttribute('title') ||
-    hostBtn?.getAttribute('aria-label') ||
-    undefined
-
-  if (hostBtn && hostBtn.isConnected) {
-    commitState(() => ({ activeKey: hostButtonKey(hostBtn), userPicked: false }))
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: false }))
-  }
-
-  if (!isMainMirrorActive()) {
-    dlog('[main-mirror] adopt host activation (key only; shell inactive)', {
-      key: _state.activeKey,
-      title: resolvedTitle,
-    })
-    return
-  }
-
-  const shouldOpen = opts?.open !== false
-  if (shouldOpen) {
-    onMainMirrorTabActivated(resolvedTitle)
-  } else if (resolvedTitle) {
-    setCanvasMainTitle(resolvedTitle)
-  }
-
-  scheduleReconcile()
-  dlog('[main-mirror] adopt host activation', {
-    key: _state.activeKey,
-    title: resolvedTitle,
-    open: shouldOpen,
-  })
-}
-
-/** Full teardown of main pin + mirror shell (mobile cross-down, extension
- *  disable). Unlike applyMainTabListPin(false) — which only unpins and keeps
- *  the shell — this removes the Canvas main drawer entirely. */
 export function teardownMainPin(): void {
-  commitState(() => ({ enabled: false, activeKey: null }))
+  commitState(() => ({ enabled: false }))
   stopObservers()
+  teardownMainRenderer()
   applyMainMirrorDrawer(false, { force: true })
   destroyMainPinHost()
 }
 
+/** rAF-coalesced reconcile: pin chrome + renderer (twin chrome deltas). */
 function scheduleReconcile(): void {
   if (_state.reconcileRaf !== null) return
   commitState(() => ({
@@ -457,9 +209,14 @@ function scheduleReconcile(): void {
   }))
 }
 
+/**
+ * Pin-chrome half of the old clone reconcile: reparent the shell tab list
+ * into the edge host when pinned, stamp the pinned classes, force the pinned
+ * host visible, then hand the BUTTONS to the flat renderer.
+ */
 function reconcileMainMirror(): void {
-  // S1: sync is gated on shell liveness (desktop mirror mounted), not on pin
-  // state — the unpinned shell still needs buttons + active-key tracking.
+  // S1: gated on shell liveness (desktop mirror mounted), not pin state —
+  // the unpinned shell still needs pin-chrome reset + a render.
   if (!isMainMirrorActive()) return
 
   const side = getMainDrawerSide()
@@ -474,10 +231,6 @@ function reconcileMainMirror(): void {
   const list = resolveMirrorList()
   if (!list) return
 
-  // Mark as main mirror list for tests / CSS.
-  if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
-    list.classList.add(MAIN_MIRROR_LIST_CLASS)
-  }
   if (pinned) {
     if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
       list.classList.add(TAB_LIST_PINNED_CLASS)
@@ -494,310 +247,12 @@ function reconcileMainMirror(): void {
   }
 
   const sidebar = getMainSidebar()
-  if (!sidebar) {
-    while (list.firstChild) list.removeChild(list.firstChild)
-    return
-  }
-
-  if (sidebar !== _state.sidebar) {
+  if (sidebar && sidebar !== _state.sidebar) {
     attachSidebarObserver(sidebar)
   }
 
-  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list)
-
-  const hostButtons = collectHostTabButtons(sidebar)
-  const regularButtons = hostButtons.filter((b) => !isSettingsButton(b))
-  const settingsButtons = hostButtons.filter((b) => isSettingsButton(b))
-  const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)))
-
-  // When the Canvas-owned active key is missing or no longer maps to any
-  // *visible* host button, heal carefully. Covers:
-  //   - first enable of taskbar mode (key starts null; shell title is 'Drawer')
-  //   - tab moved off primary (stale key)
-  // Does not run while a restored key still exists in wantedKeys
-  // (preserves exclusive dual-active guard). Settings is host chrome only.
-  //
-  // Mid primary→secondary: host button is display:none before handoff
-  // finishes. Prefer **keep** that exclusive key over host tabBtnActive —
-  // pendingActiveTabReset almost always leaves the *first* remaining primary
-  // host-active, which would seed Profile/top and make main-mirror handoff
-  // look like "always first tab" even when pickSourceReplacement was correct.
-  if (_state.activeKey == null || !wantedKeys.has(_state.activeKey)) {
-    const prevKey = _state.activeKey
-    const hiddenHostForKey =
-      prevKey != null
-        ? findHostButtonByKeyIncludingHidden(sidebar, prevKey)
-        : null
-    const midMoveHidden =
-      !!hiddenHostForKey && hiddenHostForKey.style.display === 'none'
-
-    if (midMoveHidden) {
-      // Keep key for handoff / post-move stick; mirror clone already dropped.
-      dlog('[main-mirror] active key kept (mid-move host hidden)', { prevKey })
-    } else {
-      const hostActiveBtn =
-        hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null
-      const hostActiveIsSecondary =
-        hostActiveBtn != null && isSecondaryAssignedHostButton(hostActiveBtn)
-      if (
-        hostActiveBtn &&
-        !hostActiveIsSecondary &&
-        !isSettingsButton(hostActiveBtn)
-      ) {
-        const newKey = hostButtonKey(hostActiveBtn)
-        commitState(() => ({ activeKey: newKey, userPicked: false }))
-        const t =
-          hostActiveBtn.getAttribute('title') ||
-          hostActiveBtn.getAttribute('aria-label') ||
-          ''
-        if (t) setCanvasMainTitle(t)
-      } else if (prevKey != null && !hostActiveIsSecondary) {
-        // No usable host active (or it is Settings chrome) — clear. A
-        // host-active tab that is assigned to the SECONDARY drawer is a
-        // transient boot/restore state (re-shown hidden button), NOT a
-        // primary selection: keep the current key instead of clearing it.
-        commitState(() => ({ activeKey: null, userPicked: false }))
-      }
-      if (prevKey !== _state.activeKey) {
-        dlog('[main-mirror] active key healed/seeded', {
-          prevKey,
-          nextKey: _state.activeKey,
-        })
-      }
-    }
-  }
-
-  // Drop stale mirrors anywhere under the list (main + bottom + legacy flat).
-  for (const btn of Array.from(
-    list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`),
-  ) as HTMLElement[]) {
-    const key = btn.getAttribute('data-mirror-key') || ''
-    if (!wantedKeys.has(key)) {
-      btn.remove()
-    }
-  }
-
-  // Built-in / extension tabs: scrollable top section (host .tabListWrap).
-  syncMirrorButtonsInto(mainSection, regularButtons, list)
-
-  // Settings: pinned to strip bottom with separator (host .sidebarBottom).
-  if (settingsButtons.length > 0) {
-    bottomSection.style.display = 'flex'
-    syncMirrorButtonsInto(bottomSection, settingsButtons, list)
-  } else {
-    bottomSection.style.display = 'none'
-    while (bottomSection.firstChild) bottomSection.removeChild(bottomSection.firstChild)
-  }
-
-  // Re-stamp header title from active key. mountMainMirror always creates
-  // the shell with title 'Drawer'; seed/heal above covers first-enable and
-  // stale keys; this path re-stamps when the key survived a remount.
-  if (_state.activeKey != null) {
-    const activeMirror = list.querySelector(
-      `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_state.activeKey)}"]`,
-    ) as HTMLElement | null
-    const title =
-      activeMirror?.getAttribute('title') ||
-      activeMirror?.getAttribute('aria-label') ||
-      ''
-    if (title) {
-      setCanvasMainTitle(title)
-    }
-  }
-
-  dlog('[main-mirror] reconcile tabs', {
-    hostCount: hostButtons.length,
-    regularCount: regularButtons.length,
-    settingsCount: settingsButtons.length,
-    mirrorCount: list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`).length,
-    open: isCanvasMainOpen(),
-    hostOrder: hostButtons.map((b) => hostButtonKey(b)),
-    mirrorOrder: Array.from(
-      list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`),
-    ).map((b) => (b as HTMLElement).getAttribute('data-mirror-key') || mirrorButtonKey(b as HTMLElement)),
-    activeKeys: hostButtons
-      .filter((b) => String(b.className || '').includes('tabBtnActive'))
-      .map((b) => hostButtonKey(b)),
-  })
-}
-
-/** Direct child with class (no CSS :scope — works under test stubs). */
-function directChildByClass(parent: HTMLElement, className: string): HTMLElement | null {
-  for (const child of Array.from(parent.children)) {
-    const el = child as HTMLElement
-    if (el.classList?.contains?.(className) || String(el.className || '').includes(className)) {
-      return el
-    }
-  }
-  return null
-}
-
-/**
- * Host-shaped strip: scrollable main + bottom Settings dock.
- * Outer list is flex column / full height (pinned top+bottom); main takes
- * remaining space; bottom stays at the end with a top border separator.
- */
-function ensureMirrorListStructure(list: HTMLElement): {
-  main: HTMLElement
-  bottom: HTMLElement
-} {
-  let main = directChildByClass(list, MAIN_MIRROR_LIST_MAIN_CLASS)
-  let bottom = directChildByClass(list, MAIN_MIRROR_LIST_BOTTOM_CLASS)
-
-  if (!main) {
-    main = document.createElement('div')
-    main.className = MAIN_MIRROR_LIST_MAIN_CLASS
-    list.insertBefore(main, list.firstChild)
-  }
-  if (!bottom) {
-    bottom = document.createElement('div')
-    bottom.className = MAIN_MIRROR_LIST_BOTTOM_CLASS
-    list.appendChild(bottom)
-  }
-
-  // Adopt any legacy flat mirror buttons into main before reordering sections.
-  for (const child of Array.from(list.children)) {
-    if (
-      child !== main &&
-      child !== bottom &&
-      (child as HTMLElement).classList?.contains(MAIN_MIRROR_BTN_CLASS)
-    ) {
-      main.appendChild(child)
-    }
-  }
-
-  // Canonical order: main then bottom (only structural children).
-  if (list.firstChild !== main) list.insertBefore(main, list.firstChild)
-  if (main.nextSibling !== bottom) list.appendChild(bottom)
-
-  // Outer list fills the pin host; scroll lives in main so Settings stays docked.
-  if (list.style.overflowY !== 'hidden') list.style.overflowY = 'hidden'
-  if (list.style.minHeight !== '0') list.style.minHeight = '0'
-
-  if (main.style.flex !== '1 1 auto') main.style.flex = '1 1 auto'
-  if (main.style.minHeight !== '0') main.style.minHeight = '0'
-  if (main.style.display !== 'flex') main.style.display = 'flex'
-  if (main.style.flexDirection !== 'column') main.style.flexDirection = 'column'
-  // Host .tabList uses gap: 2px (ViewportDrawer.module.css) — not the
-  // outer .sidebar gap of 4px (that only spaces tabListWrap vs bottom).
-  if (main.style.gap !== '2px') main.style.gap = '2px'
-  if (main.style.overflowY !== 'auto') main.style.overflowY = 'auto'
-  if (main.style.overflowX !== 'hidden') main.style.overflowX = 'hidden'
-  if (main.style.scrollbarWidth !== 'none') main.style.scrollbarWidth = 'none'
-
-  if (bottom.style.flexShrink !== '0') bottom.style.flexShrink = '0'
-  if (bottom.style.flexDirection !== 'column') bottom.style.flexDirection = 'column'
-  if (bottom.style.gap !== '2px') bottom.style.gap = '2px'
-  // Match ViewportDrawer.module.css .sidebarBottom
-  if (bottom.style.marginTop !== 'auto') bottom.style.marginTop = 'auto'
-  if (bottom.style.paddingTop !== '8px') bottom.style.paddingTop = '8px'
-  if (bottom.style.borderTop !== '1px solid var(--lumiverse-primary-020)') {
-    bottom.style.borderTop = '1px solid var(--lumiverse-primary-020)'
-  }
-
-  return { main, bottom }
-}
-
-/** Create/order/sync mirror buttons for a host button set into `container`. */
-function syncMirrorButtonsInto(
-  container: HTMLElement,
-  hostButtons: HTMLElement[],
-  listRoot: HTMLElement,
-): void {
-  let insertBefore: ChildNode | null = container.firstChild
-  for (const hostBtn of hostButtons) {
-    const key = hostButtonKey(hostBtn)
-    let mirror = listRoot.querySelector(
-      `button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(key)}"]`,
-    ) as HTMLElement | null
-
-    if (!mirror) {
-      mirror = document.createElement('button')
-      ;(mirror as HTMLButtonElement).type = 'button'
-      mirror.classList.add(MAIN_MIRROR_BTN_CLASS)
-      mirror.setAttribute('data-mirror-key', key)
-      mirror.addEventListener('click', onMirrorClick)
-      // Canvas-owned context menu (host Lumiverse menu only fires on host
-      // React buttons — mirror strip is outside the host sidebar).
-      mirror.addEventListener('contextmenu', onMirrorContextMenu)
-      container.insertBefore(mirror, insertBefore)
-    } else if (mirror.parentElement !== container || mirror !== insertBefore) {
-      container.insertBefore(mirror, insertBefore)
-    }
-
-    syncMirrorFromHost(mirror, hostBtn)
-    _mirrorToHost.set(mirror, hostBtn)
-    insertBefore = mirror.nextSibling
-  }
-
-  // Remove extra non-mirror nodes left in this container (shouldn't happen).
-  for (const child of Array.from(container.children)) {
-    const el = child as HTMLElement
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
-      container.removeChild(el)
-      continue
-    }
-    const key = el.getAttribute('data-mirror-key') || ''
-    if (!hostButtons.some((b) => hostButtonKey(b) === key)) {
-      container.removeChild(el)
-    }
-  }
-}
-
-/**
- * Whether mirror buttons should use labeled (56px) geometry.
- *
- * Prefer host-settings `showTabLabels` (via isShowTabLabels — includes the
- * optimistic cache after Hide/Show). Host button `tabBtnLabeled` lags React
- * commit after hide; on activate/reconcile that stale class re-applied 56px
- * height with empty label DOM ("grow again even when there's no label").
- *
- * Settings is host chrome (gear only) — never labeled, even when tabs show
- * short names. Title/aria-label still say "Settings" for a11y/tooltips.
- */
-function resolveMirrorLabeled(hostBtn: HTMLElement): boolean {
-  if (isSettingsButton(hostBtn)) return false
-  return isShowTabLabels()
-}
-
-/**
- * Match secondary tab button geometry: square 48px (icon-only) / 56px (labeled).
- * Secondary sets these as inline styles at create time; keep main in lockstep.
- *
- * Do NOT set inline background/boxShadow/color — CSS drives hover +
- * .sidebar-ux-tab-active (inline background:transparent was killing the
- * active highlight).
- */
-function applyMirrorButtonChrome(btn: HTMLElement, labeled: boolean): void {
-  const height = labeled ? '56px' : '48px'
-  // Only rewrite when height (or base chrome) drifted — avoid layout thrash.
-  if (btn.style.height === height && btn.style.gap === '1px') {
-    // Still clear any leftover paint overrides so active CSS can apply.
-    btn.style.background = ''
-    btn.style.boxShadow = ''
-    btn.style.color = ''
-    btn.style.borderRadius = ''
-    return
-  }
-  btn.style.width = '100%'
-  btn.style.height = height
-  btn.style.flexShrink = '0'
-  btn.style.display = 'flex'
-  btn.style.flexDirection = 'column'
-  btn.style.alignItems = 'center'
-  btn.style.justifyContent = 'center'
-  btn.style.gap = '1px'
-  btn.style.border = 'none'
-  btn.style.cursor = 'pointer'
-  btn.style.transition = 'all 0.2s ease'
-  // Host .tabBtn has no horizontal padding (ViewportDrawer.module.css).
-  btn.style.padding = '0'
-  btn.style.boxSizing = 'border-box'
-  // Let stylesheet control fill / active chrome.
-  btn.style.background = ''
-  btn.style.boxShadow = ''
-  btn.style.color = ''
-  btn.style.borderRadius = ''
+  // Flat renderer: model-keyed buttons, hidden, active, title, Settings dock.
+  renderMainMirrorTabs()
 }
 
 function resolveMirrorList(): HTMLElement | null {
@@ -811,359 +266,39 @@ function resolveMirrorList(): HTMLElement | null {
   const side = getMainDrawerSide()
   const host = ensureMainPinHost(side)
   if (!host) return null
-  let list = host.querySelector(`.${MAIN_MIRROR_LIST_CLASS}`) as HTMLElement | null
-  if (!list) {
-    list = host.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
-  }
+  let list = host.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
   if (!list) {
     list = document.createElement('div')
     list.classList.add('sidebar-ux-tab-list')
-    list.classList.add(MAIN_MIRROR_LIST_CLASS)
-    list.classList.add(TAB_LIST_PINNED_CLASS)
     host.appendChild(list)
   }
   return list
 }
 
-function collectHostTabButtons(sidebar: HTMLElement): HTMLElement[] {
-  const buttons = Array.from(
-    sidebar.querySelectorAll('button[class*="tabBtn"]'),
-  ) as HTMLElement[]
-  // querySelector already requires tabBtn; only filter host-hidden buttons
-  // (secondary-assigned tabs use display:none via hideMainTabButton).
-  return buttons.filter((b) => b.style.display !== 'none')
-}
-
-function hostButtonKey(btn: HTMLElement): string {
-  const id = btn.getAttribute('data-tab-id')
-  if (id) return `id__${id}`
-  const title = btn.getAttribute('title') || btn.getAttribute('aria-label') || ''
-  if (title) return `title__${title}`
-  return `node__${btn.tagName}__${btn.className}`
-}
-
-/** Host button for a mirror key, including display:none (mid-move hide). */
-function findHostButtonByKeyIncludingHidden(
-  sidebar: HTMLElement,
-  key: string,
-): HTMLElement | null {
-  const buttons = Array.from(
-    sidebar.querySelectorAll('button[class*="tabBtn"]'),
-  ) as HTMLElement[]
-  return buttons.find((b) => hostButtonKey(b) === key) ?? null
-}
-
 /**
- * Find the nearest visible neighbor host button for a moved-away tab — the
- * tab directly above (else below) in the host drawer's visible button order,
- * skipping Settings chrome. Used by the 07-19 neighbor handoff when the
- * user moves their ACTIVE tab; must be called BEFORE the moved tab's button
- * is hidden (display:none buttons are excluded here).
+ * Activate a main tab for layout restore: click the host button for React
+ * content and open/stamp the mirror drawer. The owned model's active.primary
+ * IS the selection (seeded at boot from layout.json) — no mirror key is
+ * written here. Never dispatches through the renderer's click path — that
+ * toggle-closes when the drawer is already open on the same tab.
  */
-export function findNeighborHostButtonFor(tabId: string): HTMLElement | null {
-  const sidebar = getMainSidebar()
-  if (!sidebar) return null
-  const buttons = collectHostTabButtons(sidebar)
-  const idx = buttons.findIndex((b) => b.getAttribute('data-tab-id') === tabId)
-  if (idx === -1) return null
-  for (let i = idx - 1; i >= 0; i--) {
-    if (!isSettingsButton(buttons[i]!)) return buttons[i]!
-  }
-  for (let i = idx + 1; i < buttons.length; i++) {
-    if (!isSettingsButton(buttons[i]!)) return buttons[i]!
-  }
-  return null
-}
-
-/** Key for a mirror button (mirrors hostButtonKey from data-tab-id / title). */
-function mirrorButtonKey(mirror: HTMLElement): string {
-  const id = mirror.getAttribute('data-tab-id')
-  if (id) return `id__${id}`
-  const title = mirror.getAttribute('title') || mirror.getAttribute('aria-label') || ''
-  if (title) return `title__${title}`
-  const dataKey = mirror.getAttribute('data-mirror-key')
-  if (dataKey) return dataKey
-  return `node__${mirror.tagName}__${mirror.className}`
-}
-
-function hostHasTabBtnActive(host: HTMLElement | undefined | null): boolean {
-  if (!host) return false
-  return (
-    host.classList.contains('tabBtnActive') ||
-    String(host.className || '').includes('tabBtnActive')
-  )
-}
-
-/**
- * True when a host button belongs to a tab assigned to the SECONDARY drawer.
- *
- * The host's `tabBtnActive` can sit on a moved tab (the STALENESS WARNING in
- * tabs/active-tab.ts:60): during boot/restore that tab's host button can be
- * momentarily re-shown by a React re-render (the inline display:none from
- * hideMainTabButton is not React-owned), so the heal/seed writers must never
- * adopt it as the main-mirror key. Seeding it flip-flops the key between the
- * persisted primary active and the moved tab — and the unified tracked-active
- * sync (commitState hook) turns every flip into a SAVE_LAYOUT write
- * (constant-bytes boot cascade, 2026-08-17).
- */
-function isSecondaryAssignedHostButton(btn: HTMLElement): boolean {
-  const id =
-    btn.getAttribute('data-tab-id') ||
-    btn.getAttribute('title') ||
-    btn.getAttribute('aria-label') ||
-    ''
-  if (!id) return false
-  try {
-    return getTabSidebar(id) === 'secondary'
-  } catch {
-    return false
-  }
-}
-
-function syncMirrorFromHost(mirror: HTMLElement, hostBtn: HTMLElement): void {
-  const tabId = hostBtn.getAttribute('data-tab-id')
-  if (tabId) mirror.setAttribute('data-tab-id', tabId)
-  else mirror.removeAttribute('data-tab-id')
-
-  // Diagnostic: main-mirror extension-tab buttons often carry no data-tab-id
-  // (host twin untagged). Log once per mirror key so DnD install/live-order
-  // coverage can be verified against the live DOM.
-  if (!tabId) {
-    const key = hostButtonKey(hostBtn)
-    if (!_noTabIdMirrorLogged.has(key)) {
-      _noTabIdMirrorLogged.add(key)
-      dlog('[main-mirror] mirror button has no data-tab-id (host twin untagged)', {
-        key,
-        title: hostBtn.getAttribute('title') || hostBtn.getAttribute('aria-label') || null,
-        hostCls: String(hostBtn.className || ''),
-      })
-    }
-  }
-
-  const title = hostBtn.getAttribute('title') || hostBtn.getAttribute('aria-label') || ''
-  if (title) {
-    mirror.setAttribute('title', title)
-    mirror.setAttribute('aria-label', title)
-  }
-
-  // Match secondary: no tab looks selected while the drawer is closed.
-  // While open, Canvas-owned key is exclusive — host may still mark
-  // Profile (or a previous tab) tabBtnActive during restore/repark, and
-  // OR-ing hostActive would highlight two mirrors at once.
-  // Fallback to host only when no Canvas key is set yet.
-  const key = hostButtonKey(hostBtn)
-  const hostActive = hostHasTabBtnActive(hostBtn)
-  const canvasActive =
-    _state.activeKey != null && key === _state.activeKey
-  const showActive =
-    isCanvasMainOpen() &&
-    (_state.activeKey != null ? canvasActive : hostActive)
-  const wasActive = mirror.classList.contains('sidebar-ux-tab-active')
-  mirror.classList.toggle('sidebar-ux-tab-active', showActive)
-  if (showActive !== wasActive) {
-    dlog('[main-mirror] active toggle', {
-      title: mirror.getAttribute('title'),
-      showActive,
-      hostActive,
-      canvasActive,
-      canvasKey: _state.activeKey,
-      open: isCanvasMainOpen(),
-    })
-  }
-
-  const labeled = resolveMirrorLabeled(hostBtn)
-  mirror.classList.toggle('sidebar-ux-tab-labeled', labeled)
-
-  const nextHtml = buildMirrorInnerHtml(hostBtn, labeled)
-  if (mirror.getAttribute('data-mirror-html') !== nextHtml) {
-    mirror.setAttribute('data-mirror-html', nextHtml)
-    mirror.innerHTML = nextHtml
-  }
-
-  // Keep geometry in sync when labels toggle; never paint-override active CSS.
-  applyMirrorButtonChrome(mirror, labeled)
-}
-
-function buildMirrorInnerHtml(hostBtn: HTMLElement, labeled: boolean): string {
-  const parts: string[] = []
-  const svg = hostBtn.querySelector('svg')
-  if (svg) {
-    parts.push(`<span>${svg.outerHTML}</span>`)
-  }
-  // Host only mounts .tabLabel when showTabLabels is on — and can lag after
-  // Canvas Show. Prefer host short name; fall back to title-derived short
-  // name so main-mirror can rebuild labels immediately after secondary Show.
-  // Omit the span entirely when unlabeled (zero-height still costs 1px flex gap).
-  // Settings never gets a short-name label (host keeps it icon-only).
-  if (labeled && !isSettingsButton(hostBtn)) {
-    const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]') as HTMLElement | null
-    const fromHost = hostLabel ? (hostLabel.textContent || '').trim() : ''
-    const title =
-      hostBtn.getAttribute('title') || hostBtn.getAttribute('aria-label') || ''
-    const text = fromHost || (title ? deriveShortName(title) : '')
-    if (text) {
-      parts.push(
-        `<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`,
-      )
-    }
-  }
-  return parts.join('')
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function cssAttrEscape(value: string): string {
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-    return CSS.escape(value)
-  }
-  return value.replace(/(["\\])/g, '\\$1')
-}
-
-function onMirrorClick(ev: Event): void {
-  ev.preventDefault()
-  ev.stopPropagation()
-  const mirror = ev.currentTarget as HTMLElement
-  const title =
-    mirror.getAttribute('title') ||
-    mirror.getAttribute('aria-label') ||
+export function activateMainMirrorFromRestore(
+  hostBtn: HTMLElement | null,
+  title?: string,
+): void {
+  const resolvedTitle =
+    title ||
+    hostBtn?.getAttribute('title') ||
+    hostBtn?.getAttribute('aria-label') ||
     undefined
-
-  const hostBtn = _mirrorToHost.get(mirror)
-  const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror)
-
-  // Settings is host chrome only (opens Lumiverse settings). Never treat as a
-  // Canvas main-mirror tab: no active key, header title, open, or toggle-close.
-  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null
-  const isSettings =
-    (settingsHost != null && isSettingsButton(settingsHost)) ||
-    isSettingsButton(mirror)
-  if (isSettings) {
-    dlog('[main-mirror] click → settings (host only, no canvas tab)', { key })
-    let target = settingsHost
-    if (!target || !target.isConnected) {
-      reconcileMainMirror()
-      target = _mirrorToHost.get(mirror) ?? null
+  if (hostBtn && hostBtn.isConnected) {
+    try {
+      hostBtn.click()
+    } catch {
+      /* host may throw during teardown */
     }
-    if (target && target.isConnected) {
-      try {
-        target.click()
-      } catch {
-        /* host may throw during teardown */
-      }
-    }
-    return
   }
-
-  // Secondary parity: clicking the already-active tab while open closes the
-  // drawer. When Canvas owns a key, that key alone decides toggle-close —
-  // do not OR host tabBtnActive (Profile can stay host-active after restore
-  // while Canvas key points at another tab; OR would close on Profile click).
-  // Fall back to host/mirror only when no Canvas key is set yet.
-  const wasActive =
-    _state.activeKey != null
-      ? key === _state.activeKey
-      : mirror.classList.contains('sidebar-ux-tab-active') ||
-        hostHasTabBtnActive(hostBtn)
-  if (isCanvasMainOpen() && wasActive) {
-    dlog('[main-mirror] click → close (active tab)', { title, key })
-    closeCanvasMainDrawer()
-    return
-  }
-
-  dlog('[main-mirror] click', {
-    title,
-    key,
-    hostConnected: !!(hostBtn && hostBtn.isConnected),
-    open: isCanvasMainOpen(),
-  })
-  if (!hostBtn || !hostBtn.isConnected) {
-    reconcileMainMirror()
-    const again = _mirrorToHost.get(mirror)
-    if (again && again.isConnected) {
-      const againKey = hostButtonKey(again)
-      // Key before click — same exclusive-pin rule as restore activate.
-      commitState(() => ({ activeKey: againKey, userPicked: true }))
-      try {
-        again.click()
-      } catch {
-        /* host may throw during teardown; key already set */
-      }
-    } else {
-      commitState(() => ({ activeKey: key, userPicked: true }))
-    }
-    onMainMirrorTabActivated(title)
-    return
-  }
-  commitState(() => ({ activeKey: key, userPicked: true }))
-  try {
-    hostBtn.click()
-  } catch {
-    /* ignore; key already set */
-  }
-  onMainMirrorTabActivated(title)
-}
-
-/**
- * Right-click on mirror tabs → forward to host twin so Lumiverse opens its
- * ContextMenu (Configure tabs, Hide/Show labels). Canvas injects "Move to
- * second drawer" via context-menu/index.ts on the synthetic host path
- * (gated by secondSidebarEnabled). Settings is never forwarded.
- */
-function onMirrorContextMenu(ev: Event): void {
-  const e = ev as MouseEvent
-  e.preventDefault()
-  e.stopPropagation()
-  const mirror = e.currentTarget as HTMLElement
-
-  // Settings is host chrome only (same as onMirrorClick) — never forward
-  // contextmenu / open move menu. Host inject path also skips Settings.
-  let hostBtn = _mirrorToHost.get(mirror)
-  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null
-  const isSettings =
-    (settingsHost != null && isSettingsButton(settingsHost)) ||
-    isSettingsButton(mirror)
-  if (isSettings) {
-    dlog('[main-mirror] contextmenu → settings (no host forward)')
-    return
-  }
-
-  if (!hostBtn || !hostBtn.isConnected) {
-    reconcileMainMirror()
-    hostBtn = _mirrorToHost.get(mirror)
-  }
-  if (!hostBtn || !hostBtn.isConnected) {
-    dwarn('[main-mirror] contextmenu: no connected host twin', {
-      title: mirror.getAttribute('title'),
-    })
-    return
-  }
-
-  dlog('[main-mirror] contextmenu → host forward', {
-    title: hostBtn.getAttribute('title') || mirror.getAttribute('title'),
-    x: e.clientX,
-    y: e.clientY,
-  })
-  try {
-    hostBtn.dispatchEvent(
-      new MouseEvent('contextmenu', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: e.clientX,
-        clientY: e.clientY,
-        button: 2,
-        buttons: 2,
-      }),
-    )
-  } catch (err) {
-    dwarn('[main-mirror] contextmenu: host dispatch failed', err)
-  }
+  onMainMirrorTabActivated(resolvedTitle)
 }
 
 function ensureObservers(): void {
@@ -1180,7 +315,9 @@ function attachSidebarObserver(sidebar: HTMLElement): void {
   commitState(() => ({ sidebar }))
   if (typeof MutationObserver === 'undefined') return
   // Coalesce heavily — host React mutates often; never do work sync in
-  // the observer callback beyond scheduling one rAF reconcile.
+  // the observer callback beyond scheduling one rAF reconcile. S2: the
+  // reconcile is pin chrome + flat render (no clone sync) — the observer's
+  // remaining job is twin-chrome convergence (icons/labels register late).
   const observer = new MutationObserver(() => scheduleReconcile())
   observer.observe(sidebar, {
     childList: true,

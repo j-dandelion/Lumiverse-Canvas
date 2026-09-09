@@ -64,6 +64,8 @@ The loop wraps placement in `setSuppressAutoActivation`, and `finalizeAssignToSe
 
 **Rule:** after the loop (suppress released), if the drawer is open and no tab is active, show the preferred tab (`activateKey` — the layout's persisted `active.secondary` from `model.active.secondary`) or the first placed tab via `setActiveSecondaryTabId` + `activateSecondaryTab`.
 
+**Boot exception (2026-09):** "no tab is active" must be judged by DISPLAY truth (`secondaryHasDisplayedRoot()`, i.e. a `[data-canvas-moved][data-canvas-active]` root), not by the tracked cell — on the boot path (`reassignSecondaryTabsFromModel` called WITH `activateKey`, only `bootstrapFromLayout` does) the model→chrome reconcile echo seeds the tracked cell with the persisted active before any root is placed, so a `!getActiveSecondaryTabId()` guard suppresses the tail and every placed root stays `display:none` (black open drawer). Mid-session reopens keep the tracked guard: a pinned-strip click writes only tracked, and the tail must never overwrite the clicked tab with the first-list fallback.
+
 ## 9. Drawer state machine `_state` drifts from the physical open state
 
 `openSecondarySidebar`/`closeSecondarySidebar` live in the shell module; `_state` lives in `secondary-drawer.ts`. The mount-with-`initialOpen` path bypasses `openSecondarySidebar` entirely, so `_state` stayed `'closed'` while the drawer was visibly open (visible in the `finalize open-gate` logs). The `openOnClosed` gate then can't be trusted.
