@@ -173,8 +173,24 @@ function bumpResizeHandles(): void {
 }
 
 function persistCanvasMainOpenState(): void {
-  // Same write path as secondary open/close — owned model persists
-  // drawer state automatically; no-op persistOpenState was retired.
+  // S5: same write path as secondary open/close — dispatch setDrawer(primary)
+  // through the owned model (recon/dispatch). With observe() reading SHELL
+  // truth (CANVAS_MAIN_OPEN_CLASS + MAIN_MIRROR_WIDTH_VAR, restore-gated),
+  // reconcile sees world==model after adoption → no drift, no host writes,
+  // no loop. This makes close-the-shell persist IMMEDIATELY (secondary
+  // parity) instead of waiting for the next host-sync. Dynamic import keeps
+  // the module graph cycle-free; a failed dispatch is swallowed — the next
+  // host-sync re-converges the model from the shell via observe().
+  void import('../recon/dispatch')
+    .then((m) => m.dispatch({
+      t: 'setDrawer',
+      side: 'primary',
+      open: _open,
+      width: readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420),
+    }))
+    .catch((err: unknown) => {
+      dwarn(`[main-mirror] setDrawer(primary) dispatch failed: ${err}`)
+    })
 }
 
 /**

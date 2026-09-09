@@ -43,6 +43,7 @@ import {
   ensureUiPanelsPermission,
 } from './dom/host-bridge'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
+import { showAllMainTabButtons } from './tabs/buttons'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
 } from './settings/state'
@@ -119,6 +120,17 @@ export function setup(ctx: SpindleFrontendContext) {
       teardownMainMirror()
     } catch (err) {
       dwarn('teardownMainMirror on disable failed:', err)
+    }
+  })
+  // S5 vanilla seam: restore every Canvas-hidden host main tab button
+  // (secondary-assignment hides + canvas-hidden hides — both Canvas-owned
+  // inline writers) BEFORE the restore guard lifts, so the vanilla drawer
+  // reappears complete. §6 teardown checklist "showMainTabButton all".
+  registerCleanup(() => {
+    try {
+      showAllMainTabButtons()
+    } catch (err) {
+      dwarn('showAllMainTabButtons on disable failed:', err)
     }
   })
   // A hot extension replacement can happen before the async layout load

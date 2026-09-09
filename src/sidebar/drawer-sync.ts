@@ -45,7 +45,6 @@ import {
   getSecondaryWrapper,
   isSecondarySidebarOpen,
   restyleSecondaryShellSide,
-  liveIdForFacadeKey,
 } from '../sidebar/secondary'
 import {
   getMainMirrorWrapper,
@@ -58,7 +57,7 @@ import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
 import { applyTabListPosition } from './tab-position'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton, readMainButtonShortName } from '../tabs/buttons'
+import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton } from '../tabs/buttons'
 import { drawerObserver } from './drawer-observer'
 
 /**
@@ -683,109 +682,6 @@ export function checkSideChanged(): void {
 export function resetSideRemountStateAfterDisable(): void {
   setMainDrawerSideOverride(null)
   _lastKnownSide = getMainDrawerSide()
-}
-
-/**
- * Re-create secondary tab buttons for every tab currently assigned to the
- * secondary sidebar. Used after the wrapper is recreated (e.g. on a
- * drawer-side flip) so the tab list is restored from the persisted
- * `_tabAssignments` map without requiring the user to re-drag tabs.
- *
- * Mirrors the per-tab button creation in `assignToSecondary`,
- * but in a single pass over the assignments map.
- */
-export function restoreSecondaryTabButtons(): void {
-  const tabs = getDrawerTabs()
-  // The assignment facade is TabKey-keyed ('builtin:regex', 'ext:foo/Bar');
-  // every lookup below works on LIVE ids ('regex', 'spindle:foo:tab:Bar:0').
-  // Convert each key first (same conversion as reassignSecondaryTabsFromModel
-  // / getLiveIdAssignments); keys that are already live ids (legacy map /
-  // pre-bootstrap) fall through untouched. Without this every match missed
-  // and the remounted wrapper came back EMPTY after a Configure swap
-  // (2026-08-16).
-  const liveTabs = tabs.map((t) => ({
-    tabId: t.id,
-    extensionId: t.extensionId,
-    title: t.title,
-  }))
-  for (const [assignedKey, sidebar] of getTabAssignments()) {
-    if (sidebar !== 'secondary') continue
-    const tabId = liveIdForFacadeKey(assignedKey, liveTabs) ?? assignedKey
-    // Exact-match first (canonical path).
-    let tab = tabs && tabs.find(t => t.id === tabId)
-    if (!tab && tabs) {
-      // Suffix-drift fallback: Lumiverse assigns a session-variant suffix
-      // (:1, :2, :3) to extension tab ids. The assignment map may have an
-      // older suffix than the live store (e.g., the wrapper was just
-      // recreated after a side change and the extension re-registered
-      // with a new suffix). Strip the trailing :N from both the stored
-      // id and each live id, then match by the stripped prefix. If
-      // exactly one live id matches, use it.
-      const stripSuffix = (id: string): string => {
-        const lastColon = id.lastIndexOf(':')
-        if (lastColon <= 0) return id
-        const tail = id.slice(lastColon + 1)
-        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id
-      }
-      const storedPrefix = stripSuffix(tabId)
-      const candidates = tabs.filter(t => stripSuffix(t.id) === storedPrefix)
-      if (candidates.length === 1) {
-        tab = candidates[0]
-        dlog(`restoreSecondaryTabButtons: suffix-drift fallback matched stored "${tabId}" -> live "${tab.id}"`)
-      }
-    }
-    if (tab) {
-      // Observer-backed drawer tabs carry iconSvg:'' (button inventory has no
-      // icon); capture the real icon from the main sidebar button so restored
-      // buttons don't fall back to the puzzle placeholder.
-      const mainBtnForIcon = findMainTabButton(tabId)
-      const iconSvg = tab.iconSvg || mainBtnForIcon?.querySelector('svg')?.outerHTML
-      // Label parity: prefer the HOST's rendered short name (read from the
-      // main button's label span — the "shorthand" the main drawer/mirror
-      // shows). Without it the restore labels came from Canvas's
-      // deriveShortName(title), a different truncation (2026-08-16).
-      const shortName = tab.shortName || readMainButtonShortName(mainBtnForIcon as Element)
-      addSecondaryTabButton({ ...tab, iconSvg, shortName })
-      // Re-assert the host button hide: a host React re-render during the
-      // side flip re-creates buttons without Canvas's inline display:none,
-      // which puts every secondary tab back into the main drawer/mirror.
-      // assignToSecondary's finalize would also hide, but the async loop
-      // below may be skipped (gen guard) — hide here so the sync restore
-      // is self-sufficient.
-      hideMainTabButton(tabId)
-      continue
-    }
-    // Bug fix (2026-06-19, follow-up): DOM fallback. When the store
-    // doesn't have the tab (extension tabs moved to secondary are
-    // reparented, so the primary context's store entry may have been
-    // removed), fall back to reading the tab
-    // data from the main sidebar's button. The main sidebar still
-    // renders a button for every tab — even moved-to-secondary tabs
-    // (hidden via display:none by hideMainTabButton). The button has
-    // data-tab-id, title, and an SVG icon child — enough to build a
-    // secondary tab button via addSecondaryTabButton.
-    //
-    // Without this fallback, the user reports "all of the tab buttons
-    // in the second drawer no longer appear" after a drawer-side change
-    // when extension tabs are in the secondary drawer.
-    const mainBtn = findMainTabButton(tabId) as HTMLElement | null
-    if (mainBtn) {
-      const id = mainBtn.getAttribute('data-tab-id') || tabId
-      const title = mainBtn.getAttribute('title') || tabId
-      const svg = mainBtn.querySelector('svg')?.outerHTML
-      addSecondaryTabButton({
-        id,
-        title,
-        shortName: readMainButtonShortName(mainBtn),
-        root: undefined as any, // not used by addSecondaryTabButton body
-        iconSvg: svg,
-      } as any)
-      hideMainTabButton(id)
-      dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`)
-    } else {
-      dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`)
-    }
-  }
 }
 
 let _sideObserver: MutationObserver | null = null

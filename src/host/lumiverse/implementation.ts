@@ -42,6 +42,12 @@ import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
 import { getMainMirrorDrawer, isMainMirrorActive } from '../../sidebar/main-mirror-drawer'
 import { getSecondaryTabList } from '../../sidebar/secondary'
 import { readVisibleTabIdsFromList } from '../../tabs/live-tab-order'
+import {
+  CANVAS_MAIN_ACTIVE_CLASS,
+  CANVAS_MAIN_OPEN_CLASS,
+  MAIN_MIRROR_WIDTH_VAR,
+} from '../../sidebar/styles'
+import { isMainDrawerRestorePending } from '../../sidebar/main-persist'
 import { dlog } from '../../debug/log'
 
 const SECONDARY_WIDTH_VAR = '--canvas-secondary-width'
@@ -332,8 +338,39 @@ export class LumiverseHost implements HostPort {
     }
 
     const drawerSide: DrawerSide = getMainDrawerSide() === 'left' ? 'left' : 'right'
-    const primaryOpen = isMainDrawerOpen()
-    const primaryWidth = getMainDrawerWidth() || DEFAULT_WIDTH
+    // S5 rewire: while the Canvas main shell owns the primary surface
+    // (canvas-main mode active AND the boot restore guard has lifted),
+    // primary open/width are SHELL truth — CANVAS_MAIN_OPEN_CLASS +
+    // MAIN_MIRROR_WIDTH_VAR — not the host wrapper. The host is store-open
+    // forever and headless in this mode, so reading it forced
+    // model.primary.open=true forever (closing the shell never persisted).
+    // During the restore window the shell still shows its pre-restore
+    // (closed) state: keep host reads there so boot persists stay
+    // byte-identical to pre-S5 behavior (no transient open:false clobber of
+    // the stored open:true). Mirrors snapshot.ts's readPrimaryOpen/Width.
+    let shellOwnsPrimary = false
+    let shellPrimaryOpen = false
+    let shellPrimaryWidth = 0
+    try {
+      if (
+        typeof document !== 'undefined'
+        && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)
+        && !isMainDrawerRestorePending()
+      ) {
+        shellOwnsPrimary = true
+        shellPrimaryOpen = document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS)
+        const w = parseFloat(
+          document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR),
+        )
+        shellPrimaryWidth = isFinite(w) && w > 0 ? w : 0
+      }
+    } catch {
+      /* non-DOM test environment */
+    }
+    const primaryOpen = shellOwnsPrimary ? shellPrimaryOpen : isMainDrawerOpen()
+    const primaryWidth = shellOwnsPrimary
+      ? (shellPrimaryWidth || getMainDrawerWidth() || DEFAULT_WIDTH)
+      : (getMainDrawerWidth() || DEFAULT_WIDTH)
     const secondaryOpen = isSecondarySidebarOpen()
     const secondaryWidth = readSecondaryWidth()
 

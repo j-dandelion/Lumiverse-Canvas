@@ -63,6 +63,25 @@ export function showMainTabButton(tabId: string): void {
   if (btn) (btn as HTMLElement).style.display = ''
 }
 
+/**
+ * S5 vanilla seam: clear Canvas's inline `display:none` from EVERY host main
+ * tab button. Both inline-hide writers are Canvas-owned — secondary-assignment
+ * hides (hideMainTabButton from assign/unassign flows) and canvas-hidden
+ * hides (applyHiddenTabIdsToHostMain) — so on extension disable the vanilla
+ * host drawer must show all of them again. No other production path inline-
+ * hides host main tab buttons (§6 teardown checklist "showMainTabButton all").
+ */
+export function showAllMainTabButtons(): void {
+  const sidebar = getMainSidebar()
+  if (!sidebar) return
+  const buttons = Array.from(
+    sidebar.querySelectorAll('button[data-tab-id]'),
+  ) as HTMLElement[]
+  for (const btn of buttons) {
+    if (btn.style.display === 'none') btn.style.display = ''
+  }
+}
+
 export function findMainTabButton(tabId: string): Element | null {
   const sidebar = getMainSidebar()
   if (!sidebar) {

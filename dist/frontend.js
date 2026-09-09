@@ -9015,6 +9015,7 @@ __export(exports_buttons, {
   reorderHostMainTabButtons: () => reorderHostMainTabButtons,
   reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
   secondaryTabButtonsReady: () => secondaryTabButtonsReady,
+  showAllMainTabButtons: () => showAllMainTabButtons,
   showMainTabButton: () => showMainTabButton,
   showSecondaryTab: () => showSecondaryTab,
   updateDrawerTabVisibility: () => updateDrawerTabVisibility
@@ -9042,6 +9043,16 @@ function showMainTabButton(tabId) {
   const btn = findMainTabButton(tabId);
   if (btn)
     btn.style.display = "";
+}
+function showAllMainTabButtons() {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  const buttons = Array.from(sidebar.querySelectorAll("button[data-tab-id]"));
+  for (const btn of buttons) {
+    if (btn.style.display === "none")
+      btn.style.display = "";
+  }
 }
 function findMainTabButton(tabId) {
   const sidebar = getMainSidebar();
@@ -9479,7 +9490,6 @@ __export(exports_drawer_sync, {
   isShowTabLabels: () => isShowTabLabels,
   rebindSideChangeWatcherIfNeeded: () => rebindSideChangeWatcherIfNeeded,
   resetSideRemountStateAfterDisable: () => resetSideRemountStateAfterDisable,
-  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
   startHostSideWatcher: () => startHostSideWatcher,
   startSideChangeWatcher: () => startSideChangeWatcher,
   stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
@@ -9852,60 +9862,6 @@ function resetSideRemountStateAfterDisable() {
   setMainDrawerSideOverride(null);
   _lastKnownSide = getMainDrawerSide();
 }
-function restoreSecondaryTabButtons() {
-  const tabs = getDrawerTabs();
-  const liveTabs = tabs.map((t3) => ({
-    tabId: t3.id,
-    extensionId: t3.extensionId,
-    title: t3.title
-  }));
-  for (const [assignedKey, sidebar] of getTabAssignments()) {
-    if (sidebar !== "secondary")
-      continue;
-    const tabId = liveIdForFacadeKey(assignedKey, liveTabs) ?? assignedKey;
-    let tab = tabs && tabs.find((t3) => t3.id === tabId);
-    if (!tab && tabs) {
-      const stripSuffix = (id) => {
-        const lastColon = id.lastIndexOf(":");
-        if (lastColon <= 0)
-          return id;
-        const tail = id.slice(lastColon + 1);
-        return /^\d+$/.test(tail) ? id.slice(0, lastColon) : id;
-      };
-      const storedPrefix = stripSuffix(tabId);
-      const candidates = tabs.filter((t3) => stripSuffix(t3.id) === storedPrefix);
-      if (candidates.length === 1) {
-        tab = candidates[0];
-        dlog(`restoreSecondaryTabButtons: suffix-drift fallback matched stored "${tabId}" -> live "${tab.id}"`);
-      }
-    }
-    if (tab) {
-      const mainBtnForIcon = findMainTabButton(tabId);
-      const iconSvg = tab.iconSvg || mainBtnForIcon?.querySelector("svg")?.outerHTML;
-      const shortName = tab.shortName || readMainButtonShortName(mainBtnForIcon);
-      addSecondaryTabButton({ ...tab, iconSvg, shortName });
-      hideMainTabButton(tabId);
-      continue;
-    }
-    const mainBtn = findMainTabButton(tabId);
-    if (mainBtn) {
-      const id = mainBtn.getAttribute("data-tab-id") || tabId;
-      const title = mainBtn.getAttribute("title") || tabId;
-      const svg = mainBtn.querySelector("svg")?.outerHTML;
-      addSecondaryTabButton({
-        id,
-        title,
-        shortName: readMainButtonShortName(mainBtn),
-        root: undefined,
-        iconSvg: svg
-      });
-      hideMainTabButton(id);
-      dlog(`restoreSecondaryTabButtons: DOM-fallback restored tab "${id}" from main sidebar button`);
-    } else {
-      dwarn(`restoreSecondaryTabButtons: tab "${tabId}" not found in store or main sidebar`);
-    }
-  }
-}
 function refreshSideGeometry() {
   Promise.resolve().then(() => (init_handles(), exports_handles)).then((m3) => {
     try {
@@ -10175,7 +10131,6 @@ var init_drawer_sync = __esm(() => {
   init_log();
   init_secondary();
   init_main_mirror_drawer();
-  init_assignment();
   init_cleanup();
   init_state();
   init_tab_position();
@@ -10397,7 +10352,16 @@ function bumpReflow() {
 function bumpResizeHandles() {
   mountResizeHandles();
 }
-function persistCanvasMainOpenState() {}
+function persistCanvasMainOpenState() {
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => m3.dispatch({
+    t: "setDrawer",
+    side: "primary",
+    open: _open,
+    width: readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
+  })).catch((err) => {
+    dwarn(`[main-mirror] setDrawer(primary) dispatch failed: ${err}`);
+  });
+}
 function applyMainMirrorRestoredWidth(widthPx) {
   const w3 = Math.ceil(clampSidebarWidth(widthPx));
   if (!(w3 > 0))
@@ -13366,7 +13330,7 @@ function snapshotLayout() {
       const tab = drawerTabs.find((t3) => t3.id === liveId);
       return { tabId: liveId, tabTitle: key, sidebar: "secondary" };
     }),
-    tabOrder: getHostDrawerSettings()?.tabOrder ?? [],
+    tabOrder: snapshotOwnedModelLayout()?.tabOrder ?? getHostDrawerSettings()?.tabOrder ?? [],
     hiddenTabIds: getCanvasHiddenTabIds()
   };
 }
@@ -13437,6 +13401,7 @@ var init_snapshot = __esm(() => {
   init_active_tab();
   init_canvas_hidden();
   init_host_settings();
+  init_dispatch();
   init_state();
   init_store();
 });
@@ -17966,6 +17931,7 @@ init_layout_load();
 init_layout_repo();
 init_settings_repo();
 init_tag_buttons();
+init_buttons();
 init_state();
 init_registry();
 init_cleanup();
@@ -18692,6 +18658,8 @@ init_identity();
 init_main_mirror_drawer();
 init_secondary();
 init_live_tab_order();
+init_styles();
+init_main_persist();
 init_log();
 var SECONDARY_WIDTH_VAR2 = "--canvas-secondary-width";
 var DEFAULT_WIDTH = 420;
@@ -18834,8 +18802,19 @@ class LumiverseHost {
       entries.push(...primaryEntries, ...ordered);
     }
     const drawerSide = getMainDrawerSide() === "left" ? "left" : "right";
-    const primaryOpen = isMainDrawerOpen();
-    const primaryWidth = getMainDrawerWidth() || DEFAULT_WIDTH;
+    let shellOwnsPrimary = false;
+    let shellPrimaryOpen = false;
+    let shellPrimaryWidth = 0;
+    try {
+      if (typeof document !== "undefined" && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS) && !isMainDrawerRestorePending()) {
+        shellOwnsPrimary = true;
+        shellPrimaryOpen = document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS);
+        const w3 = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR));
+        shellPrimaryWidth = isFinite(w3) && w3 > 0 ? w3 : 0;
+      }
+    } catch {}
+    const primaryOpen = shellOwnsPrimary ? shellPrimaryOpen : isMainDrawerOpen();
+    const primaryWidth = shellOwnsPrimary ? shellPrimaryWidth || getMainDrawerWidth() || DEFAULT_WIDTH : getMainDrawerWidth() || DEFAULT_WIDTH;
     const secondaryOpen = isSecondarySidebarOpen();
     const secondaryWidth = readSecondaryWidth2();
     return {
@@ -19093,6 +19072,13 @@ function setup(ctx) {
       teardownMainMirror();
     } catch (err) {
       dwarn("teardownMainMirror on disable failed:", err);
+    }
+  });
+  registerCleanup(() => {
+    try {
+      showAllMainTabButtons();
+    } catch (err) {
+      dwarn("showAllMainTabButtons on disable failed:", err);
     }
   });
   registerCleanup(unsuppressMainDrawer);

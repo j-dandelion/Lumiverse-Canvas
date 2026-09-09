@@ -460,5 +460,67 @@ export {}
   setFakeHostContent(null)
 }
 
-console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
-if (failed > 0) process.exit(1)
+// --- S5: shell open/close dispatches setDrawer(primary) through the real
+//     dispatch → the owned model carries SHELL truth (close persists). ---
+{
+  const { createEmptyModel, builtinKey } = require('../../core/model') as typeof import('../../core/model')
+  const { FakeHost } = require('../../host/fake/implementation') as typeof import('../../host/fake/implementation')
+  const { bootstrap, shutdown, flush } = require('../../recon/dispatch') as typeof import('../../recon/dispatch')
+
+  const key = builtinKey('profile')
+  const fakeHost = new FakeHost([
+    {
+      key, liveId: 'h:profile', location: 'primary',
+      hidden: false, activeInPrimary: true, activeInSecondary: false,
+      hasContentRoot: true, isBuiltin: true,
+    },
+  ])
+  shutdown()
+  bootstrap({
+    ...createEmptyModel(),
+    primary: [key],
+    secondary: [],
+    hidden: [],
+    active: { primary: key, secondary: null },
+    drawers: { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 } },
+  }, fakeHost)
+
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  const fakeContent = new StubElement()
+  fakeContent.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContent)
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'S5 setup: shell active')
+
+  ;(async () => {
+    const dm = require('../../recon/dispatch') as typeof import('../../recon/dispatch')
+    // The shell's setDrawer dispatch is a fire-and-forget dynamic import
+    // chained onto the dispatch queue — poll the model instead of racing it.
+    const waitFor = async (pred: () => boolean, tries = 200): Promise<boolean> => {
+      for (let i = 0; i < tries; i++) {
+        if (pred()) return true
+        await Promise.resolve()
+      }
+      return false
+    }
+
+    openCanvasMainDrawer()
+    const opened = await waitFor(() => dm.getModel()!.drawers.primary.open === true)
+    assert(opened, 'S5.a: shell open → model primary.open=true')
+    assertEqual(dm.getModel()!.drawers.primary.width, 420, 'S5.a2: width carried with the open dispatch')
+
+    closeCanvasMainDrawer()
+    const closed = await waitFor(() => dm.getModel()!.drawers.primary.open === false)
+    assert(closed, 'S5.b: shell close → model primary.open=false (close persists)')
+
+    applyMainMirrorDrawer(false)
+    setFakeHostContent(null)
+    shutdown()
+    __resetMainMirrorForTest()
+
+    console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
+    if (failed > 0) process.exit(1)
+  })()
+}
+
