@@ -1297,6 +1297,48 @@ function createDrawerShell(options) {
     owner
   };
 }
+function restyleShellSide(wrapper, side) {
+  if (!wrapper)
+    return;
+  wrapper.classList.toggle("sidebar-ux-side-left", side === "left");
+  wrapper.classList.toggle("sidebar-ux-side-right", side === "right");
+  const ws = wrapper.style;
+  if (side === "left") {
+    ws.setProperty("left", "0");
+    ws.removeProperty("right");
+    ws.setProperty("flex-direction", "row-reverse");
+  } else {
+    ws.setProperty("right", "0");
+    ws.removeProperty("left");
+    ws.setProperty("flex-direction", "row");
+  }
+  const drawer = wrapper.querySelector(".sidebar-ux-drawer");
+  if (drawer) {
+    drawer.style.setProperty("flex-direction", side === "right" ? "row" : "row-reverse");
+  }
+  const drawerTab = wrapper.querySelector(".sidebar-ux-drawer-tab");
+  if (drawerTab) {
+    if (side === "left") {
+      drawerTab.style.setProperty("border-left", "none");
+      drawerTab.style.removeProperty("border-right");
+      drawerTab.style.setProperty("border-radius", "0 12px 12px 0");
+    } else {
+      drawerTab.style.setProperty("border-right", "none");
+      drawerTab.style.removeProperty("border-left");
+      drawerTab.style.setProperty("border-radius", "12px 0 0 12px");
+    }
+  }
+  const tabList = wrapper.querySelector(".sidebar-ux-tab-list");
+  if (tabList) {
+    if (side === "right") {
+      tabList.style.setProperty("border-right", "1px solid var(--lumiverse-primary-020)");
+      tabList.style.removeProperty("border-left");
+    } else {
+      tabList.style.setProperty("border-left", "1px solid var(--lumiverse-primary-020)");
+      tabList.style.removeProperty("border-right");
+    }
+  }
+}
 var init_drawer_shell = __esm(() => {
   init_styles();
 });
@@ -9428,12 +9470,11 @@ var init_buttons = __esm(() => {
 var exports_drawer_sync = {};
 __export(exports_drawer_sync, {
   __getLastKnownSideForTest: () => __getLastKnownSideForTest,
-  __getSideRemountGenForTest: () => __getSideRemountGenForTest,
   __resetDrawerTabSyncStateForTest: () => __resetDrawerTabSyncStateForTest,
   __resetSideApplyStateForTest: () => __resetSideApplyStateForTest,
   __setLastKnownSideForTest: () => __setLastKnownSideForTest,
   __setSideSettleHardMsForTest: () => __setSideSettleHardMsForTest,
-  applyMainDrawerSideChange: () => applyMainDrawerSideChange,
+  applyCanvasSideChange: () => applyCanvasSideChange,
   checkSideChanged: () => checkSideChanged,
   isShowTabLabels: () => isShowTabLabels,
   rebindSideChangeWatcherIfNeeded: () => rebindSideChangeWatcherIfNeeded,
@@ -9501,24 +9542,26 @@ function getHostSide() {
   } catch {}
   return null;
 }
-function syncHostSideToModel(modelSide) {
+async function syncHostSideToModel(modelSide) {
   const hostSide = getHostSide();
   if (hostSide === modelSide)
-    return;
+    return true;
   const ok = patchHostDrawerSettings({ side: modelSide });
   if (ok) {
     _lastSeenHostSide = modelSide;
     dlog("[drawer-sync] syncHostSideToModel: host side written to match model", { modelSide, prevHostSide: hostSide });
-  } else if (isHostedBrowserContext()) {
-    Promise.resolve().then(() => (init_host_settings(), exports_host_settings)).then((m3) => {
-      m3.writeHostDrawerSettingsViaApi({ side: modelSide }).then((apiOk) => {
-        if (apiOk) {
-          _lastSeenHostSide = modelSide;
-          dlog("[drawer-sync] syncHostSideToModel: host side written via API", { modelSide });
-        }
-      });
-    });
+    return true;
   }
+  if (isHostedBrowserContext()) {
+    const m3 = await Promise.resolve().then(() => (init_host_settings(), exports_host_settings));
+    const apiOk = await m3.writeHostDrawerSettingsViaApi({ side: modelSide });
+    if (apiOk) {
+      _lastSeenHostSide = modelSide;
+      dlog("[drawer-sync] syncHostSideToModel: host side written via API", { modelSide });
+    }
+    return apiOk;
+  }
+  return false;
 }
 function isHostedBrowserContext() {
   try {
@@ -9569,10 +9612,23 @@ function stopHostSideWatcher() {
   }
   _hostWatcherStarted = false;
 }
-function recordCanvasSwapAndSyncHost(desired) {
+async function recordCanvasSwapAndSyncHost(desired) {
   _lastCanvasSwapMs = Date.now();
   _lastSeenHostSide = desired;
-  syncHostSideToModel(desired);
+  const ok = patchHostDrawerSettings({ side: desired });
+  if (ok)
+    return true;
+  try {
+    const m3 = await Promise.resolve().then(() => (init_host_settings(), exports_host_settings));
+    const apiOk = await m3.writeHostDrawerSettingsViaApi({ side: desired });
+    if (apiOk) {
+      _lastSeenHostSide = desired;
+      dlog("[drawer-sync] recordCanvasSwapAndSyncHost: host side written via API", { desired });
+    }
+    return apiOk;
+  } catch {
+    return false;
+  }
 }
 function isShowTabLabels() {
   const host = getHostDrawerSettings();
@@ -9769,82 +9825,30 @@ function syncSecondaryTabLabels(forceShow) {
 }
 function checkSideChanged() {
   const currentSide = getMainDrawerSide();
+  _lastWrittenDrawerTabVars = null;
+  _lastWrittenLabelsKey = null;
+  _lastKnownVerticalPos = null;
+  stopDrawerTabResizeWatcher();
+  stopDrawerTabClassObserver();
+  stopDrawerTabStyleObserver();
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    dlog("[drawer-sync] side changed detected", {
+    dlog("[drawer-sync] side changed detected (geometry-only)", {
       from: _lastKnownSide,
       to: currentSide,
       secondDrawerEnabled: getSettings().secondSidebarEnabled
     });
-    if (getSettings().secondSidebarEnabled) {
-      const wasOpen = isSecondarySidebarOpen();
-      const remountGen = ++_sideRemountGen;
-      unmountSecondarySidebar();
-      _lastWrittenDrawerTabVars = null;
-      _lastWrittenLabelsKey = null;
-      _lastKnownVerticalPos = null;
-      stopDrawerTabResizeWatcher();
-      stopDrawerTabClassObserver();
-      stopDrawerTabStyleObserver();
-      findStoreData(true);
-      mountSecondarySidebar({ initialOpen: wasOpen });
-      reconcileMainMirrorDrawer();
-      Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => {
-        if (remountGen !== _sideRemountGen)
-          return;
-        try {
-          m3.reconcileMainTabListPin();
-        } catch {}
-      });
-      restoreSecondaryTabButtons();
-      Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, setSuppressAutoActivation: setSuppressAutoActivation2 }) => {
-        if (remountGen !== _sideRemountGen)
-          return;
-        try {
-          const liveTabs = getDrawerTabs().map((t3) => ({
-            tabId: t3.id,
-            extensionId: t3.extensionId,
-            title: t3.title
-          }));
-          const activeId = getActiveSecondaryTabId();
-          setSuppressAutoActivation2(true);
-          try {
-            for (const [key] of Array.from(getTabAssignments()).filter(([, side]) => side === "secondary")) {
-              if (remountGen !== _sideRemountGen)
-                return;
-              const liveId = liveIdForFacadeKey(key, liveTabs) ?? key;
-              await assignToSecondary2(liveId, { setActiveWhenReady: false }).catch(() => {});
-            }
-          } finally {
-            setSuppressAutoActivation2(false);
-          }
-          if (remountGen !== _sideRemountGen)
-            return;
-          if (activeId !== null && getTabSidebar(activeId) === "secondary") {
-            showSecondaryTab(activeId);
-          }
-        } catch (err) {
-          dwarn("[drawer-sync] side-remount reassign failed:", err);
-        }
-      });
-      updateDrawerTabVisibility();
-      const activeTabId = getActiveSecondaryTabId();
-      if (activeTabId !== null) {
-        if (getTabSidebar(activeTabId) === "secondary") {
-          showSecondaryTab(activeTabId);
-        }
-      }
-    }
+    applyCanvasSideChange(currentSide, { syncHost: false });
+  } else {
+    _lastKnownSide = currentSide;
+    syncDrawerTabSettings();
   }
   Promise.resolve().then(() => (init_handles(), exports_handles)).then((m3) => {
     try {
       m3.refreshResizeHandles();
     } catch {}
   });
-  _lastKnownSide = currentSide;
-  syncDrawerTabSettings();
 }
 function resetSideRemountStateAfterDisable() {
-  _sideRemountGen++;
   setMainDrawerSideOverride(null);
   _lastKnownSide = getMainDrawerSide();
 }
@@ -9902,26 +9906,60 @@ function restoreSecondaryTabButtons() {
     }
   }
 }
-async function applyMainDrawerSideChange(desired) {
+function refreshSideGeometry() {
+  Promise.resolve().then(() => (init_handles(), exports_handles)).then((m3) => {
+    try {
+      m3.refreshResizeHandles();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_reflow(), exports_reflow)).then((m3) => {
+    try {
+      m3.updateChatReflow();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m3) => {
+    try {
+      m3.updateStripGutters();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => {
+    try {
+      m3.reconcileMainTabListPin();
+    } catch {}
+  });
+  try {
+    applyTabListPosition(getSettings().moveControlsToOuterEdge);
+  } catch {}
+  syncDrawerTabSettings();
+  updateDrawerTabVisibility();
+}
+async function applyCanvasSideChange(desired, opts) {
   const gen = ++_sideApplyGen;
+  const syncHost = opts?.syncHost !== false;
   const run = async () => {
     if (gen !== _sideApplyGen)
-      return;
-    dlog("[drawer-sync] apply drawer side change", {
+      return { writeOk: true };
+    dlog("[drawer-sync] apply canvas side change (geometry-only)", {
       desired,
-      remounting: _lastKnownSide === null || _lastKnownSide !== desired
+      syncHost
     });
+    const priorSide = readMainWrapperSideFromDom() ?? (desired === "left" ? "right" : "left");
     setMainDrawerSideOverride(desired);
-    recordCanvasSwapAndSyncHost(desired);
-    if (_lastKnownSide === null || _lastKnownSide !== desired) {
-      if (_lastKnownSide === null) {
-        _lastKnownSide = desired === "left" ? "right" : "left";
-      }
-      try {
-        checkSideChanged();
-      } catch (err) {
-        dwarn("[drawer-sync] applyMainDrawerSideChange remount failed:", err);
-      }
+    let writeOk = true;
+    if (syncHost) {
+      writeOk = await recordCanvasSwapAndSyncHost(desired);
+    }
+    restyleMainShellSide(desired);
+    restyleSecondaryShellSide(desired === "left" ? "right" : "left");
+    refreshSideGeometry();
+    if (!writeOk) {
+      const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide;
+      setMainDrawerSideOverride(null);
+      restyleMainShellSide(realSide);
+      restyleSecondaryShellSide(realSide === "left" ? "right" : "left");
+      _lastKnownSide = realSide;
+      refreshSideGeometry();
+      return { writeOk: false };
     }
     _lastKnownSide = desired;
     waitForSideSettle(desired, gen).then(() => {
@@ -9930,10 +9968,11 @@ async function applyMainDrawerSideChange(desired) {
       _lastKnownSide = desired;
       rebindSideChangeWatcherIfNeeded();
     });
+    return { writeOk: true };
   };
   const next = _applySideChain.then(run, run);
-  _applySideChain = next.catch(() => {});
-  await next;
+  _applySideChain = next.then(() => {}, () => {});
+  return next;
 }
 function readMainWrapperSideFromDom() {
   const wrapper = getMainWrapper();
@@ -10024,7 +10063,7 @@ function waitForSideSettle(desired, gen) {
         return;
       if (gen === _sideApplyGen) {
         _lastKnownSide = desired;
-        dwarn(`[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`);
+        dwarn(`[drawer-sync] applyCanvasSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`);
       }
       finish();
     }, _sideSettleHardMs);
@@ -10082,13 +10121,9 @@ function __setLastKnownSideForTest(side) {
 function __getLastKnownSideForTest() {
   return _lastKnownSide;
 }
-function __getSideRemountGenForTest() {
-  return _sideRemountGen;
-}
 function __resetSideApplyStateForTest() {
   _sideApplyGen = 0;
   _applySideChain = Promise.resolve();
-  _sideRemountGen = 0;
   _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
 }
 function __resetDrawerTabSyncStateForTest() {
@@ -10133,7 +10168,7 @@ function stopObserverCoordinator() {
     _observerCoordinator = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _hostSideWatcher = null, _lastSeenHostSide = null, _lastCanvasSwapMs = 0, _hostWatcherStarted = false, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _applySideChain, _sideApplyGen = 0, _hostSideWatcher = null, _lastSeenHostSide = null, _lastCanvasSwapMs = 0, _hostWatcherStarted = false, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
 var init_drawer_sync = __esm(() => {
   init_host_settings();
   init_store();
@@ -10143,8 +10178,8 @@ var init_drawer_sync = __esm(() => {
   init_assignment();
   init_cleanup();
   init_state();
+  init_tab_position();
   init_buttons();
-  init_active_tab();
   _applySideChain = Promise.resolve();
   _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
 });
@@ -10282,6 +10317,7 @@ __export(exports_main_mirror_drawer, {
   openCanvasMainDrawer: () => openCanvasMainDrawer,
   pinMainMirrorShellTabList: () => pinMainMirrorShellTabList,
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
+  restyleMainShellSide: () => restyleMainShellSide,
   setCanvasMainTitle: () => setCanvasMainTitle,
   teardownMainMirror: () => teardownMainMirror,
   unpinMainMirrorShellTabList: () => unpinMainMirrorShellTabList,
@@ -10326,7 +10362,13 @@ function applyMainMirrorDrawer(enabled, opts) {
     ensureHostContentParked();
     return;
   }
-  if (_active && (_mountedSide !== side || opts?.force)) {
+  if (_active && _shell && !opts?.force) {
+    restyleMainShellSide(side);
+    ensureHostContentParked();
+    syncDrawerTabSettings();
+    return;
+  }
+  if (_active && opts?.force) {
     const wasOpen = _open;
     teardownMainMirror({ keepWidthVar: true });
     mountMainMirror({ initialOpen: opts?.initialOpen ?? wasOpen });
@@ -10364,6 +10406,16 @@ function applyMainMirrorRestoredWidth(widthPx) {
   if (_shell && !_open) {
     _shell.wrapper.style.transform = `translateX(${closedTransformPx(_shell.side, w3)}px)`;
   }
+}
+function restyleMainShellSide(side) {
+  if (!_shell || !_active)
+    return;
+  const w3 = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420);
+  restyleShellSide(_shell.wrapper, side);
+  _shell.side = side;
+  _mountedSide = side;
+  _shell.wrapper.style.transform = _open ? "translateX(0)" : `translateX(${closedTransformPx(side, w3)}px)`;
+  bumpReflow();
 }
 function openCanvasMainDrawer() {
   if (!_shell || !_active)
@@ -10801,6 +10853,19 @@ var init_main_mirror_drawer = __esm(() => {
 });
 
 // src/chat/reflow.ts
+var exports_reflow = {};
+__export(exports_reflow, {
+  CONTENT_INSET_L_VAR: () => CONTENT_INSET_L_VAR,
+  CONTENT_INSET_R_VAR: () => CONTENT_INSET_R_VAR,
+  clearChatMargins: () => clearChatMargins,
+  computeContentLaneInsets: () => computeContentLaneInsets,
+  injectReflowStyles: () => injectReflowStyles,
+  publishContentLaneInsets: () => publishContentLaneInsets,
+  scheduleReflow: () => scheduleReflow,
+  setChatMargin: () => setChatMargin,
+  startReflowObserver: () => startReflowObserver,
+  updateChatReflow: () => updateChatReflow
+});
 function setChatMargin(side, px) {
   const chat = getChatColumn();
   if (!chat)
@@ -12792,6 +12857,7 @@ __export(exports_secondary, {
   openSecondarySidebar: () => openSecondarySidebar,
   persistSecondaryDrawerOpen: () => persistSecondaryDrawerOpen,
   reassignSecondaryTabsFromModel: () => reassignSecondaryTabsFromModel,
+  restyleSecondaryShellSide: () => restyleSecondaryShellSide,
   secondaryTabsAllPlaced: () => secondaryTabsAllPlaced,
   setSecondarySidebarOpen: () => setSecondarySidebarOpen,
   stopPanelHeaderObservers: () => stopPanelHeaderObservers,
@@ -13060,6 +13126,12 @@ function getClosedTransformPx() {
   const fromVar = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420));
   const w3 = Math.max(measured, fromVar);
   return closedTransformPx(secondarySide2, w3);
+}
+function restyleSecondaryShellSide(side) {
+  if (!_secondaryWrapper || !_secondaryWrapper.isConnected)
+    return;
+  restyleShellSide(_secondaryWrapper, side);
+  _secondaryWrapper.style.transform = _secondarySidebarOpen ? "translateX(0)" : `translateX(${getClosedTransformPx()}px)`;
 }
 function isSecondaryShellLive() {
   return !!(_secondaryWrapper && _secondaryWrapper.isConnected);
@@ -18916,27 +18988,10 @@ class LumiverseHost {
   }
   async setSide(side) {
     try {
-      const current = getHostDrawerSettings();
-      const merged = { ...current ?? {}, side };
-      let ok = patchHostDrawerSettings(merged);
-      let bridge = "fiber";
-      if (!ok) {
-        ok = await writeHostDrawerSettingsViaApi({ side });
-        bridge = "api";
-      }
-      if (ok) {
-        try {
-          const ds = await Promise.resolve().then(() => (init_drawer_sync(), exports_drawer_sync));
-          await ds.applyMainDrawerSideChange(side);
-        } catch (err) {
-          dlog("[host] setSide: drawer-sync flip failed", String(err));
-        }
-      } else {
-        bridge = "none";
-        dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`);
-      }
-      dlog("[host] setSide", { side, bridge, result: ok ? "ok" : "degraded" });
-      return ok ? "ok" : "degraded";
+      const ds = await Promise.resolve().then(() => (init_drawer_sync(), exports_drawer_sync));
+      const res = await ds.applyCanvasSideChange(side);
+      dlog("[host] setSide", { side, result: res.writeOk ? "ok" : "degraded" });
+      return res.writeOk ? "ok" : "degraded";
     } catch {
       return "failed";
     }

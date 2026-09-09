@@ -578,51 +578,20 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setSide(side: DrawerSide): Promise<WriteResult> {
     try {
-      const current = getHostDrawerSettings()
-      const merged = { ...(current ?? {}), side }
-
-      // The host settings write is NO-GO in this runtime (setSetting bridge
-      // unavailable — the full store only lands in fiber while a bare
-      // useStore() component is mounted), so the swap must ALSO go through
-      // the Canvas-side flip (drawer-sync's applyMainDrawerSideChange): it
-      // sets the side override (which getMainDrawerSide prefers, so the
-      // observed world converges and diffSide settles), remounts the
-      // secondary shell on the new edge, and repositions the main mirror.
-      // Without it, "Swap drawer locations" in Configure only changed the
-      // model — nothing moved on screen (2026-07-31).
-      //
-      // The Canvas-side flip is only driven when the host write actually
-      // landed — otherwise the override can never settle and sticks
-      // forever (same-side drawers + SAVE_LAYOUT cascade, 2026-08-17). On
-      // NO-GO, fall back to Lumiverse's OWN settings API (the same PUT the
-      // Settings modal's setSetting flush performs): the server broadcasts
-      // SETTINGS_UPDATED, the client's ws handler reloads settings into the
-      // store, and React re-renders the drawer wrapper — the REAL move.
-      let ok = patchHostDrawerSettings(merged)
-      let bridge: 'fiber' | 'api' | 'none' = 'fiber'
-      if (!ok) {
-        ok = await writeHostDrawerSettingsViaApi({ side })
-        bridge = 'api'
-      }
-      if (ok) {
-        try {
-          const ds = await import('../../sidebar/drawer-sync')
-          await ds.applyMainDrawerSideChange(side)
-        } catch (err) {
-          dlog('[host] setSide: drawer-sync flip failed', String(err))
-        }
-      } else {
-        bridge = 'none'
-        dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`)
-      }
-
-      // Diagnostic: the swap outcome + which write path moved the drawer.
-      // 'fiber' = direct setSetting (GO), 'api' = Lumiverse settings API
-      // (the same PUT the Settings modal's "Drawer side" toggle performs),
-      // 'none' = no host write — the model converges on the real DOM side.
-      dlog('[host] setSide', { side, bridge, result: ok ? 'ok' : 'degraded' })
-
-      return ok ? 'ok' : 'degraded'
+      // S4: the flip is pure geometry on the Canvas shells (drawer-sync's
+      // applyCanvasSideChange restyles both shells in place). The ONE host
+      // side write per swap (patchHostDrawerSettings → hosted-API fallback,
+      // 800ms echo guard) lives inside it — no local write here, so the
+      // 500ms host watcher and the 800ms guard cannot fight a double write
+      // (design doc §4 item 5).
+      const ds = await import('../../sidebar/drawer-sync')
+      const res = await ds.applyCanvasSideChange(side)
+      // 'ok' = the host write landed (patch or API); 'degraded' = it did
+      // not — reconcile's modelSideCorrection then converges the model on
+      // the real side (2026-08-17 enable-toggle poison fix preserved). The
+      // shells themselves never depend on the write (Canvas-owned geometry).
+      dlog('[host] setSide', { side, result: res.writeOk ? 'ok' : 'degraded' })
+      return res.writeOk ? 'ok' : 'degraded'
     } catch {
       return 'failed'
     }

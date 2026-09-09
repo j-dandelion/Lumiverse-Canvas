@@ -29,11 +29,11 @@ When the setting is on (desktop only):
 
 Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... })` so main and secondary look the same: same tab-list surface, 48/56 tabs, edge drawer-tab, open/close animation, closed-state active-highlight rules. Both wrappers also carry the public class **`sidebar-ux-shell`** (plus owner-specific wrapper class and `sidebar-ux-side-*`) for one-selector theming. Pin chrome is shared via `applyPinnedTabListChrome`. **No Lumiverse source changes** — host React still owns the panel content node; only its DOM parent changes while mode is active (restored on teardown). Theme authors: [custom-css.md](custom-css.md).
 
-**Drawer side (left/right):** shell anchor, pin host, closed transform (`−width` left / `+width` right), resize handle, and chat reflow all follow `getMainDrawerSide()`. Side-change remounts via `checkSideChanged` → `reconcileMainTabListPin`.
+**Drawer side (left/right):** shell anchor, pin host, closed transform (`−width` left / `+width` right), resize handle, and chat reflow all follow `getMainDrawerSide()`. **S4 CSS-only swap:** `applyCanvasSideChange(side)` restyles both Canvas shells in place (`restyleShellSide`) — no remount, no container churn; side-change detection feeds geometry only (see below).
 
 `position: fixed` alone is not enough: wrappers always have `transform: translateX(...)`, which would become the containing block for fixed descendants and slide the strip off-screen when closed. Dual pin hosts are keyed by `data-pin-owner` so `sweepStrayPinHosts` never deletes the other drawer's host.
 
-**Secondary lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan. Remount (`mountSecondarySidebar`) re-applies secondary pin from settings. Side-change also calls `reconcileMainTabListPin()` / remounts the main mirror shell.
+**Secondary lifecycle:** both `unmountSecondarySidebar` and `tearDownSecondarySidebar` must unpin first — otherwise the pin host keeps an orphan tab list on `document.body`. On re-pin, the host keeps **exactly one** list (orphans are dropped). `getSecondaryTabList()` resolves wrapper list first (for remount), then the module-owned pin list via `getPinnedTabList()` — never a document-wide first-match that can hit a stale orphan. Remount (`mountSecondarySidebar`) re-applies secondary pin from settings. Side changes restyle both shells in place (S4) and `applyCanvasSideChange` re-runs `reconcileMainTabListPin()` — no remount.
 
 **Why not reparent the host sidebar mount:** the main sidebar is host-owned React. Moving `[data-spindle-mount="sidebar"]` would fight reconciliation. Instead Canvas hides host chrome and portals only the panel content node.
 
@@ -210,13 +210,13 @@ Coalescing: `_syncPending` flag + `_lastWrittenDrawerTabVars` cache prevent redu
 
 ## Side-Change Detection (`startSideChangeWatcher`)
 
-When the user changes the main drawer's side in Lumiverse settings:
-1. `MutationObserver` on the wrapper's class attribute fires
-2. `checkSideChanged()` captures the current side
-3. Unmounts the secondary wrapper
-4. Remounts on the opposite side
-5. Restores all tab buttons and assignments
-6. Re-applies the active tab
+When the main drawer's side changes — Canvas swap (Configure "Swap drawer locations" / boot restore) or a host-driven Lumiverse "Drawer side" flip (S4):
+1. `MutationObserver` on the wrapper's class attribute fires (plus the 500ms host-settings store watcher for model convergence)
+2. `checkSideChanged()` compares against `_lastKnownSide`
+3. Shells lag the DOM → `applyCanvasSideChange(side, { syncHost: false })`: restyle both shells in place (`restyleShellSide`), refresh geometry consumers (handles, reflow, gutters, tab-list position, pin reconcile), NO host write and NO `_lastSeenHostSide` stamp — the 500ms watcher must still observe the change to converge the model
+4. Same side (settle echo) → light sync only (`syncDrawerTabSettings` + handle refresh)
+
+The intentional path (`host.setSide` → `applyCanvasSideChange(side)` with `syncHost: true`) performs the one guarded host write (patch → settings-API fallback) and settles the side override in the background.
 
 ## Mobile Support (`mobile-exclusion.ts`)
 

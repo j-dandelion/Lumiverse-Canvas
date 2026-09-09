@@ -547,13 +547,13 @@ function _resetLastKnownVerticalPos() {
   const host = new LumiverseHost()
   await host.setSide('right')
 
-  assertEqual(getMainDrawerSideOverride(), null, 'SW1: NO-GO swap does NOT set a side override (DOM can never flip)')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW1: NO-GO swap does NOT leave a side override (revert drops it; DOM can never flip)')
   assertEqual(getMainDrawerSide(), 'right', 'SW2: getMainDrawerSide stays on the REAL side (store default right)')
 
   await host.setSide('left')
-  assertEqual(getMainDrawerSideOverride(), null, 'SW3: NO-GO swap back does NOT set a side override')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW3: NO-GO swap back does NOT leave a side override')
   assertEqual(getMainDrawerSide(), 'right', 'SW4: real side unchanged (swap cannot move the DOM)')
-  assertEqual(__getLastKnownSideForTest(), null, 'SW5: no remount machinery touched on NO-GO (no stuck state)')
+  assertEqual(__getLastKnownSideForTest(), 'right', 'SW5: lastKnown stamped to the REAL side after degraded revert (no stuck desired state)')
 
   __resetSideApplyStateForTest()
   setMainDrawerSideOverride(null)

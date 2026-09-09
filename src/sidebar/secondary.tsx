@@ -45,6 +45,7 @@ import {
   closedTransformPx,
   createDrawerShell,
   readWidthCssVar,
+  restyleShellSide,
 } from './drawer-shell'
 
 // Re-export for backward compatibility — the test file imports these
@@ -591,6 +592,21 @@ export function getClosedTransformPx(): number {
   const fromVar = Math.ceil(readWidthCssVar(SECONDARY_WIDTH_VAR, 420))
   const w = Math.max(measured, fromVar)
   return closedTransformPx(secondarySide, w)
+}
+
+/**
+ * S4 CSS-only side swap: restyle the mounted secondary shell for a new
+ * anchor side, in place — no teardown/remount, tab roots and container
+ * registration untouched. Callers must stamp the side override FIRST so
+ * `getMainDrawerSide()` (→ getClosedTransformPx) already reads the new
+ * side when the closed transform is recomputed.
+ */
+export function restyleSecondaryShellSide(side: 'left' | 'right'): void {
+  if (!_secondaryWrapper || !_secondaryWrapper.isConnected) return
+  restyleShellSide(_secondaryWrapper, side)
+  _secondaryWrapper.style.transform = _secondarySidebarOpen
+    ? 'translateX(0)'
+    : `translateX(${getClosedTransformPx()}px)`
 }
 
 /**

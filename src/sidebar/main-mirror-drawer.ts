@@ -21,6 +21,7 @@ import {
   closedTransformPx,
   createDrawerShell,
   readWidthCssVar,
+  restyleShellSide,
   type DrawerShell,
 } from './drawer-shell'
 import { isMobileViewport, isHostMobileDrawerViewport } from './mobile-exclusion'
@@ -122,8 +123,18 @@ export function applyMainMirrorDrawer(
     return
   }
 
-  // Side change or force: remount shell.
-  if (_active && (_mountedSide !== side || opts?.force)) {
+  // S4: side change without force = CSS-only restyle in place. No
+  // teardown/remount mid-session (container churn, content re-park and
+  // boot-flash risk all disappear with the remount path).
+  if (_active && _shell && !opts?.force) {
+    restyleMainShellSide(side)
+    ensureHostContentParked()
+    syncDrawerTabSettings()
+    return
+  }
+
+  // Force: full remount (explicit rebuild / mobile viewport transitions).
+  if (_active && opts?.force) {
     const wasOpen = _open
     teardownMainMirror({ keepWidthVar: true })
     mountMainMirror({ initialOpen: opts?.initialOpen ?? wasOpen })
@@ -177,6 +188,25 @@ export function applyMainMirrorRestoredWidth(widthPx: number): void {
   if (_shell && !_open) {
     _shell.wrapper.style.transform = `translateX(${closedTransformPx(_shell.side, w)}px)`
   }
+}
+
+/**
+ * S4 CSS-only side swap: restyle the mounted main shell for a new anchor
+ * side, in place — no teardown/remount, content stays parked. Stamps
+ * `_shell.side` + `_mountedSide` (closeCanvasMainDrawer /
+ * applyMainMirrorRestoredWidth read `_shell.side` for the closed
+ * transform) and recomputes the wrapper transform for the open state.
+ */
+export function restyleMainShellSide(side: 'left' | 'right'): void {
+  if (!_shell || !_active) return
+  const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
+  restyleShellSide(_shell.wrapper, side)
+  _shell.side = side
+  _mountedSide = side
+  _shell.wrapper.style.transform = _open
+    ? 'translateX(0)'
+    : `translateX(${closedTransformPx(side, w)}px)`
+  bumpReflow()
 }
 
 export function openCanvasMainDrawer(): void {

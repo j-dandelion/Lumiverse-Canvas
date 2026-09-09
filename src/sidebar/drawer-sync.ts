@@ -17,9 +17,11 @@
 // (showTabLabels) was removed — the second drawer always follows
 // the host main-drawer setting.
 //
-// checkSideChanged / startSideChangeWatcher — 2s poll that detects a
-// flip of the main drawer's side in Lumiverse settings and rebuilds
-// the secondary wrapper on the opposite edge.
+// checkSideChanged / startSideChangeWatcher — wrapper-class observer +
+// 500ms host-settings watcher that detect a main drawer side flip
+// (Canvas swap, boot restore, or Lumiverse's own "Drawer side" setting)
+// and apply it as CSS-only geometry: applyCanvasSideChange restyles both
+// Canvas shells in place — no remount, no container churn (S4).
 //
 // startTabRegistrationWatcher — 3s poll that re-tags main sidebar
 // buttons (catches post-MutationObserver registrations) and removes
@@ -32,7 +34,6 @@ import {
   getMainDrawerSide,
   getStoreSnapshot,
   asDrawerStore,
-  findStoreData,
   setMainDrawerSideOverride,
   getMainDrawerSideOverride,
 } from '../store'
@@ -43,22 +44,21 @@ import { dlog, dwarn } from '../debug/log'
 import {
   getSecondaryWrapper,
   isSecondarySidebarOpen,
-  mountSecondarySidebar,
-  unmountSecondarySidebar,
+  restyleSecondaryShellSide,
   liveIdForFacadeKey,
 } from '../sidebar/secondary'
 import {
   getMainMirrorWrapper,
   isCanvasMainOpen,
   isMainMirrorActive,
-  reconcileMainMirrorDrawer,
+  restyleMainShellSide,
 } from './main-mirror-drawer'
-import { getTabAssignments, getTabSidebar, deleteTabAssignment } from '../tabs/assignment'
+import { getTabAssignments } from '../tabs/assignment'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
+import { applyTabListPosition } from './tab-position'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
-import { addSecondaryTabButton, removeSecondaryTabButton, showSecondaryTab, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton, readMainButtonShortName } from '../tabs/buttons'
-import { getActiveSecondaryTabId } from '../tabs/active-tab'
+import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton, readMainButtonShortName } from '../tabs/buttons'
 import { drawerObserver } from './drawer-observer'
 
 /**
@@ -139,19 +139,11 @@ let _mainDrawerTabStyleObserver: MutationObserver | null = null
 let _observerCoordinator: ObserverCoordinator | null = null
 
 /**
- * Generation for side remounts in checkSideChanged. Async follow-ups
- * (assignToSecondary, reconcileMainTabListPin) capture gen at remount and
- * no-op if a newer remount already ran — prevents applying tabs to a
- * previous wrapper after rapid flips.
- */
-let _sideRemountGen = 0
-
-/**
- * Serialize intentional applyMainDrawerSideChange calls so two rapid swaps
+ * Serialize intentional applyCanvasSideChange calls so two rapid swaps
  * do not interleave settle loops / override clears.
  */
 let _applySideChain: Promise<void> = Promise.resolve()
-/** Monotonic id of the latest applyMainDrawerSideChange; stale settles exit early. */
+/** Monotonic id of the latest applyCanvasSideChange; stale settles exit early. */
 let _sideApplyGen = 0
 
 // Host Settings side watcher — keeps Lumiverse's own "Drawer side" setting
@@ -182,27 +174,32 @@ function getHostSide(): 'left' | 'right' | null {
  * swap). No-op when the host is not writable; falls back to the settings
  * API (fire-and-forget — the flip must never depend on this write).
  */
-function syncHostSideToModel(modelSide: 'left' | 'right'): void {
+async function syncHostSideToModel(
+  modelSide: 'left' | 'right',
+): Promise<boolean> {
   const hostSide = getHostSide()
-  if (hostSide === modelSide) return
+  if (hostSide === modelSide) return true
   const ok = patchHostDrawerSettings({ side: modelSide })
   if (ok) {
     _lastSeenHostSide = modelSide
     dlog('[drawer-sync] syncHostSideToModel: host side written to match model', { modelSide, prevHostSide: hostSide })
-  } else if (isHostedBrowserContext()) {
-    // NO-GO path — try the settings API (fire-and-forget; the flip must
-    // never depend on this write succeeding). Only in a hosted browser
-    // context: in tests / non-http pages there is no API to call and a
-    // real fetch must not fire.
-    void import('../dom/host-settings').then((m) => {
-      m.writeHostDrawerSettingsViaApi({ side: modelSide }).then((apiOk) => {
-        if (apiOk) {
-          _lastSeenHostSide = modelSide
-          dlog('[drawer-sync] syncHostSideToModel: host side written via API', { modelSide })
-        }
-      })
-    })
+    return true
   }
+  // NO-GO path — try the settings API. Only in a hosted browser context:
+  // in tests / non-http pages there is no API to call and a real fetch
+  // must not fire. Awaited so applyCanvasSideChange can report ok/degraded
+  // synchronously to host.setSide (reconcile's correction path depends on
+  // the verdict); boot-coalesce callers just don't await the promise.
+  if (isHostedBrowserContext()) {
+    const m = await import('../dom/host-settings')
+    const apiOk = await m.writeHostDrawerSettingsViaApi({ side: modelSide })
+    if (apiOk) {
+      _lastSeenHostSide = modelSide
+      dlog('[drawer-sync] syncHostSideToModel: host side written via API', { modelSide })
+    }
+    return apiOk
+  }
+  return false
 }
 
 /** True in the real app page (http/https with a window); false in bun test harnesses. */
@@ -269,12 +266,33 @@ export function stopHostSideWatcher(): void {
   _hostWatcherStarted = false
 }
 
-/** Called by applyMainDrawerSideChange when Canvas initiates a swap — records time and syncs host. */
-function recordCanvasSwapAndSyncHost(desired: 'left' | 'right'): void {
+/** Called by applyCanvasSideChange when Canvas initiates a swap — records time and syncs host. */
+async function recordCanvasSwapAndSyncHost(
+  desired: 'left' | 'right',
+): Promise<boolean> {
   _lastCanvasSwapMs = Date.now()
   _lastSeenHostSide = desired
-  // Write host side to match Canvas so host Settings UI reflects the new side and the next poll doesn't flip back.
-  syncHostSideToModel(desired)
+  // Write host side to match Canvas so host Settings UI reflects the new
+  // side and the next poll doesn't flip back. Verbatim write semantics of
+  // the old host.setSide: patch first; on NO-GO fall back to the settings
+  // API unconditionally (the same PUT the Settings modal's flush performs;
+  // test harnesses stub it via __setSettingsApiFetchForTest — no real
+  // fetch fires there). The 500ms WATCHER path keeps its gated fallback
+  // instead (syncHostSideToModel) — a real fetch must not fire from a
+  // background poll in non-hosted contexts.
+  const ok = patchHostDrawerSettings({ side: desired })
+  if (ok) return true
+  try {
+    const m = await import('../dom/host-settings')
+    const apiOk = await m.writeHostDrawerSettingsViaApi({ side: desired })
+    if (apiOk) {
+      _lastSeenHostSide = desired
+      dlog('[drawer-sync] recordCanvasSwapAndSyncHost: host side written via API', { desired })
+    }
+    return apiOk
+  } catch {
+    return false
+  }
 }
 
 // Coalescing: when syncDrawerTabSettings is called multiple times in the
@@ -605,182 +623,49 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
   })
 }
 
+/**
+ * S4 geometry-only side-change handler (was: full remount machinery —
+ * unmount/mount secondary, store force-walk, tab-button restore, root
+ * re-attach, main-mirror teardown+mount).
+ *
+ * Sources of a real flip:
+ *  - Canvas swap (Configure "Swap drawer locations" → owned-commit
+ *    swapSides → reconcile diffSide → host.setSide → applyCanvasSideChange
+ *    with syncHost:true) — by the time the host DOM class flips, the
+ *    shells are already restyled; this handler only stamps + light-syncs.
+ *  - Host-driven flip (Lumiverse "Drawer side" setting): the host DOM
+ *    class flips FIRST. The shells lag → restyle via applyCanvasSideChange
+ *    with syncHost:false — pure geometry, NO _lastSeenHostSide stamp, so
+ *    the 500ms host watcher still observes the change and converges the
+ *    model (dispatch swapSides → diffSide → host.setSide no-op).
+ */
 export function checkSideChanged(): void {
   const currentSide = getMainDrawerSide()
+  // Drawer-tab watcher reset: the host React re-render behind a wrapper
+  // class flip can replace the drawer tab element; stale observers +
+  // caches would freeze the edge-toggle sync. The sync body re-attaches
+  // the watchers on the live element (attach-once guards see null refs).
+  // Idempotent + cheap.
+  _lastWrittenDrawerTabVars = null
+  _lastWrittenLabelsKey = null
+  _lastKnownVerticalPos = null
+  stopDrawerTabResizeWatcher()
+  stopDrawerTabClassObserver()
+  stopDrawerTabStyleObserver()
   if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    // Diagnostic: the drawer physically moved — from Canvas's own swap
-    // (applyMainDrawerSideChange → watcher) or from Lumiverse's "Drawer
-    // side" setting (host Settings modal → store → React wrapper flip →
-    // this watcher/mutation path). Either way the secondary shell remounts
-    // on the new edge and the model converges on the observed side.
-    dlog('[drawer-sync] side changed detected', {
+    dlog('[drawer-sync] side changed detected (geometry-only)', {
       from: _lastKnownSide,
       to: currentSide,
       secondDrawerEnabled: getSettings().secondSidebarEnabled,
     })
-    // When the second drawer is off there is no secondary shell to rebuild.
-    // Still fall through to stamp _lastKnownSide + syncDrawerTabSettings so
-    // a later enable does not see a stale "side changed" remount against an
-    // empty assignment map (layout-loss race on disable → swap → re-enable).
-    if (getSettings().secondSidebarEnabled) {
-      // Capture open state BEFORE unmount — unmountSecondarySidebar()
-      // unconditionally sets _secondarySidebarOpen = false.
-      const wasOpen = isSecondarySidebarOpen()
-      // Bump remount gen before unmount so any in-flight async assign/pin
-      // from a prior remount is cancelled when its promise resolves.
-      const remountGen = ++_sideRemountGen
-      unmountSecondarySidebar()
-      // Bug fix (2026-06-19): invalidate caches and stop observers BEFORE
-      // mounting the new wrapper. The new wrapper has no CSS variables set
-      // (its style.cssText doesn't include them) and no observers attached
-      // to the new main drawer tab element. Without this reset:
-      //   1. _runSyncDrawerTabSettings computes newVars from the (possibly
-      //      new) main drawer tab, but newVars === _lastWrittenDrawerTabVars
-      //      (same dimensions, same padding, etc.) — the cache check at
-      //      line 159 short-circuits and the setProperty calls at lines
-      //      162-169 are SKIPPED. The new wrapper's drawer tab then falls
-      //      back to CSS defaults: width=48px, height=auto — the "open/close
-      //      tab becomes large" symptom reported on drawer side change.
-      //   2. _mainDrawerTabResizeObserver / _mainDrawerTabClassObserver /
-      //      _mainDrawerTabStyleObserver point at the OLD main drawer tab
-      //      (now detached). Subsequent syncs (drag resize, compact mode
-      //      toggle) never fire because the observers don't see mutations
-      //      on the new main drawer tab element.
-      //   3. _lastWrittenLabelsKey short-circuits the label visibility
-      //      update similarly (showLabels is a boolean so the cache key is
-      //      stable across mounts, but the new wrapper has no labels
-      //      styled yet).
-      // Resetting all three forces a full re-write on the new wrapper.
-      _lastWrittenDrawerTabVars = null
-      _lastWrittenLabelsKey = null
-      _lastKnownVerticalPos = null
-      stopDrawerTabResizeWatcher()
-      stopDrawerTabClassObserver()
-      stopDrawerTabStyleObserver()
-      // Force-walk the store so the rebuilt wrapper's tab buttons can find
-      // their tabs. The 3s cache (store/index.ts:97) may be stale or
-      // reference elements that were unmounted by Lumiverse's side-change
-      // re-render. getDrawerTabs() below will do a fresh fiber walk.
-      findStoreData(true)
-      mountSecondarySidebar({ initialOpen: wasOpen })
-      // The main mirror has its own side-aware shell lifecycle. Do not rely on
-      // the later pin-list reconciliation to notice that the shell itself is
-      // still mounted on the old edge.
-      reconcileMainMirrorDrawer()
-      // Reposition main-drawer mirror pin on the new main edge (does not
-      // reparent host DOM). Secondary pin is reconciled inside mount.
-      // Guard with remount gen so a late import after a newer flip is a no-op.
-      void import('./main-tab-pin').then((m) => {
-        if (remountGen !== _sideRemountGen) return
-        try {
-          m.reconcileMainTabListPin()
-        } catch {
-          /* ignore teardown races */
-        }
-      })
-      // Restore tab buttons for every tab still assigned to secondary. The
-      // new wrapper is empty after mountSecondarySidebar() (createSecondarySidebar
-      // only builds the chrome), so without this the tab list is blank until
-      // the user re-drags every tab. _tabAssignments is the source of truth
-      // for what's been moved; the actual store data (iconSvg, root, etc.)
-      // comes from getDrawerTabs() inside addSecondaryTabButton.
-      restoreSecondaryTabButtons()
-      // Re-attach the moved tab roots to the freshly-mounted wrapper.
-      // assignToSecondary hits the primary path (root not yet in the new
-      // content) for each tab, appendChild-ing the root and re-tagging it.
-      // Fire-and-forget — DOM work is synchronous inside the async function.
-      // Generation guard: rapid side flips can resolve this promise after a
-      // newer remount already replaced the wrapper — skip stale assigns.
-      // The facade is TabKey-keyed; assignToSecondary works on live ids —
-      // convert (same as restoreSecondaryTabButtons) or every placement
-      // misses with "not found in DrawerObserver or store" (2026-08-16).
-      import('../sidebar/secondary-drawer').then(async ({ assignToSecondary, setSuppressAutoActivation }) => {
-        if (remountGen !== _sideRemountGen) return
-        try {
-          const liveTabs = getDrawerTabs().map((t) => ({
-            tabId: t.id,
-            extensionId: t.extensionId,
-            title: t.title,
-          }))
-          // A drawer-side flip is GEOMETRY-ONLY — tabs stay in their drawers,
-          // and which tab is active does not change. Without suppression, each
-          // assignToSecondary re-promoted ITS tab to the tracked active (last
-          // completion won), so the remount overwrote the user's active
-          // secondary tab with an arbitrary one; the follow-up showSecondaryTab
-          // re-assert (below) then fought it back — each side flip flip-flopped
-          // the tracked active, dispatchTrackedActiveSync wrote
-          // model.active.secondary per flip, and the alternation (side 1 byte +
-          // active 1 byte) defeated the byte-dedup → SAVE_LAYOUT cascade
-          // (2026-08-17 swap-freeze report). Suppress activation for the whole
-          // re-attach loop (same pattern as reassignSecondaryTabsFromModel),
-          // then re-stamp the active — showSecondaryTab(activeTabId) below.
-          const activeId = getActiveSecondaryTabId()
-          setSuppressAutoActivation(true)
-          try {
-            // Serialized re-attach (2026-08-19): each assignToSecondary
-            // pre-activates its built-in in the host main drawer (a click so
-            // visibility-gated panel data loads fire); Promise.all ran the
-            // clicks back-to-back and each overwrote the previous drawerTab.
-            // One at a time, with a per-iteration generation guard so a
-            // mid-loop side flip still aborts stale assigns.
-            for (const [key] of Array.from(getTabAssignments())
-              .filter(([, side]) => side === 'secondary')) {
-              if (remountGen !== _sideRemountGen) return
-              const liveId = liveIdForFacadeKey(key, liveTabs) ?? key
-              await assignToSecondary(liveId, { setActiveWhenReady: false }).catch(() => {})
-            }
-          } finally {
-            setSuppressAutoActivation(false)
-          }
-          if (remountGen !== _sideRemountGen) return
-          // The re-assert inside checkSideChanged ran synchronously BEFORE the
-          // async assigns (whose activation is now suppressed) — the tracked
-          // active still holds it, so no extra write. Keep the guard honest for
-          // callers that changed the active mid-remount.
-          if (activeId !== null && getTabSidebar(activeId) === 'secondary') {
-            showSecondaryTab(activeId)
-          }
-        } catch (err) {
-          dwarn('[drawer-sync] side-remount reassign failed:', err)
-        }
-      })
-      // The drawerTab handle is created with display:none (secondary.tsx:112)
-      // and only becomes visible when this function runs. Without this call,
-      // the clickable edge handle stays hidden after the wrapper is recreated.
-      updateDrawerTabVisibility()
-      // The new wrapper has a hardcoded title "Second drawer" (secondary.tsx:225).
-      // On initial mount, the owned-model restore calls showSecondaryTab()
-      // to set the title to the active tab's name — but that path is not reached
-      // on a side-change remount. Calling showSecondaryTab here restores the
-      // header text and the active state on tab buttons (sidebar-ux-tab-active
-      // class, box-shadow indicator, icon/label color) which are also lost
-      // because addSecondaryTabButton doesn't set the active class.
-      //
-      // Guard: only call if there's an active tab that's still assigned to
-      // secondary. Without this guard, a stale _activeSecondaryTabId (active
-      // tab was moved out before the side change) would cause showSecondaryTab
-      // to mark a non-existent button as active.
-      const activeTabId = getActiveSecondaryTabId()
-      if (activeTabId !== null) {
-        // The tracked active is a live id; the facade is TabKey-keyed, so a
-        // direct map lookup misses. getTabSidebar resolves liveId → TabKey
-        // (host.findKey + heuristic candidates) — without it the header/active
-        // restore was skipped after every side-change remount (2026-08-16).
-        if (getTabSidebar(activeTabId) === 'secondary') {
-          showSecondaryTab(activeTabId)
-        }
-      }
-    }
+    void applyCanvasSideChange(currentSide, { syncHost: false })
+  } else {
+    // Same side (override settle echo) — just light-sync + stamp.
+    _lastKnownSide = currentSide
+    syncDrawerTabSettings()
   }
-  // The main drawer flipped sides. Re-anchor any existing resize handle to
-  // the NEW inner edge. In taskbar mode the mirror remount above mounted a
-  // fresh handle (this then just re-positions it idempotently); in
-  // non-taskbar mode the HOST drawer element survives the React flip and its
-  // handle keeps the old side's position without this call — the "main
-  // resize handle doesn't appear after Swap drawer locations" report. Also
-  // covers the second-drawer-OFF path, which skips the remount above
-  // entirely. Dynamic import avoids a static cycle (handles → secondary →
-  // drawer-sync). Honors the resizeSidebars setting via refreshResizeHandles.
+  // Re-anchor both drawers' resize handles to the new inner edge.
+  // Dynamic import avoids a static cycle (handles → secondary → drawer-sync).
   void import('../resize/handles').then((m) => {
     try {
       m.refreshResizeHandles()
@@ -788,17 +673,14 @@ export function checkSideChanged(): void {
       /* ignore teardown races */
     }
   })
-  _lastKnownSide = currentSide
-  syncDrawerTabSettings()
 }
 
 /**
- * After second-drawer disable: invalidate in-flight side remount follow-ups,
- * drop any intentional side override, and reseed last-known from live main
- * side (post-baseline-restore). Does not remount or apply side changes.
+ * After second-drawer disable: drop any intentional side override and
+ * reseed last-known from the live main side (post-baseline-restore).
+ * Does not apply side changes or restyle shells (S4: no remount machinery).
  */
 export function resetSideRemountStateAfterDisable(): void {
-  _sideRemountGen++
   setMainDrawerSideOverride(null)
   _lastKnownSide = getMainDrawerSide()
 }
@@ -921,67 +803,128 @@ const SIDE_SETTLE_HARD_MS = 2500
 /** Runtime hard settle cap (overridable in tests). */
 let _sideSettleHardMs = SIDE_SETTLE_HARD_MS
 
+/** S4: refresh every geometry consumer after a shell restyle (design §4
+ *  item 3). Dynamic imports avoid static cycles (handles → secondary →
+ *  drawer-sync, etc.). */
+function refreshSideGeometry(): void {
+  void import('../resize/handles').then((m) => {
+    try {
+      m.refreshResizeHandles()
+    } catch {
+      /* ignore teardown races */
+    }
+  })
+  void import('../chat/reflow').then((m) => {
+    try {
+      m.updateChatReflow()
+    } catch {
+      /* ignore */
+    }
+  })
+  void import('./strip-gutter').then((m) => {
+    try {
+      m.updateStripGutters()
+    } catch {
+      /* ignore */
+    }
+  })
+  void import('./main-tab-pin').then((m) => {
+    try {
+      m.reconcileMainTabListPin()
+    } catch {
+      /* ignore teardown races */
+    }
+  })
+  try {
+    applyTabListPosition(getSettings().moveControlsToOuterEdge)
+  } catch {
+    /* ignore */
+  }
+  syncDrawerTabSettings()
+  // The drawerTab handle is display-gated; a restyle must re-evaluate it
+  // (the old remount called this after mount).
+  updateDrawerTabVisibility()
+}
+
 /**
- * Force Canvas to remount/reposition for a newly written main drawer side.
+ * S4: apply a main drawer side change as CSS-only geometry — restyle both
+ * Canvas shells in place, refresh geometry consumers, do the ONE guarded
+ * host side write, and settle the override in the background. No remount,
+ * no container churn, no root moves, no content re-park.
  *
- * Used by Configure "Swap drawer locations": patchHostDrawerSettings updates
- * the Zustand store, but host React may lag before flipping wrapperLeft /
- * wrapperRight. getMainDrawerSide prefers live DOM, so without an override
- * checkSideChanged sees no change and secondary + main-mirror stay put.
+ * Covers all three flip sources (design doc §4):
+ *  - Configure "Swap drawer locations" (owned-commit swapSides → reconcile
+ *    diffSide → host.setSide → here, syncHost:true).
+ *  - Boot restore (diffSide → host.setSide → here, syncHost:true).
+ *  - Host-driven Lumiverse Settings flip (checkSideChanged → here with
+ *    syncHost:false — NO _lastSeenHostSide stamp so the 500ms host watcher
+ *    still observes the change and converges the model via swapSides).
  *
- * Steps:
- *   1. Install main-side override (desired); serialize concurrent remounts.
- *   2. Ensure checkSideChanged remounts (seed _lastKnownSide if needed).
- *   3. Return as soon as Canvas shells are on the desired side.
- *   4. In the background: wait for host DOM class to match and clear the
- *      override (or keep it on hard timeout so lagging DOM cannot reverse-
- *      remount). Re-attach the side MutationObserver if the host replaced
- *      the wrapper.
+ * The override (setMainDrawerSideOverride) protects getMainDrawerSide's
+ * DOM-first read during the host React lag window; waitForSideSettle clears
+ * it when the host DOM matches (or keeps it on hard timeout so lagging DOM
+ * cannot reverse the swap). Never depends on the host write succeeding —
+ * the shells are Canvas-owned; a degraded write is corrected by reconcile's
+ * modelSideCorrection converging on the real side.
  *
  * Why settle is not awaited: configure auto-commit used to block the whole
  * commit queue on host React lag (up to SIDE_SETTLE_HARD_MS). Rapid "Swap
  * drawer locations" clicks then stacked multi-second delays before the next
- * remount. Canvas remount is synchronous under the override; host settle
- * only needs gen-guarded background cleanup.
+ * swap. The restyle is synchronous under the override; host settle only
+ * needs gen-guarded background cleanup.
  */
-export async function applyMainDrawerSideChange(
+export async function applyCanvasSideChange(
   desired: 'left' | 'right',
-): Promise<void> {
+  opts?: { syncHost?: boolean },
+): Promise<{ writeOk: boolean }> {
   const gen = ++_sideApplyGen
-  const run = async (): Promise<void> => {
+  const syncHost = opts?.syncHost !== false
+  const run = async (): Promise<{ writeOk: boolean }> => {
     // A newer apply may have started while we waited on the chain.
-    if (gen !== _sideApplyGen) return
+    if (gen !== _sideApplyGen) return { writeOk: true }
 
-    // Diagnostic: intentional Canvas-side drawer flip (Configure "Swap
-    // drawer locations" / mode-restore side). The side override + remount
-    // below move the secondary shell + mirror; the host write was already
-    // confirmed by the caller (host.setSide).
-    dlog('[drawer-sync] apply drawer side change', {
+    dlog('[drawer-sync] apply canvas side change (geometry-only)', {
       desired,
-      remounting: _lastKnownSide === null || _lastKnownSide !== desired,
+      syncHost,
     })
+    // Observed side before the swap — the degraded-revert target.
+    const priorSide = readMainWrapperSideFromDom()
+      ?? (desired === 'left' ? 'right' : 'left')
 
     setMainDrawerSideOverride(desired)
-    // Record the Canvas-initiated swap and sync the host's own side setting
-    // so Lumiverse Settings stays truthful and the next poll doesn't flip back.
-    recordCanvasSwapAndSyncHost(desired)
-
-    // Force remount when last-known differs or was never set (tests / early boot).
-    // If already aligned with desired, skip remount but still settle override.
-    if (_lastKnownSide === null || _lastKnownSide !== desired) {
-      if (_lastKnownSide === null) {
-        _lastKnownSide = desired === 'left' ? 'right' : 'left'
-      }
-      try {
-        checkSideChanged()
-      } catch (err) {
-        dwarn('[drawer-sync] applyMainDrawerSideChange remount failed:', err)
-      }
+    let writeOk = true
+    if (syncHost) {
+      // The single host side write per swap (800ms echo guard inside).
+      writeOk = await recordCanvasSwapAndSyncHost(desired)
     }
 
-    // Always stamp lastKnown to desired after intentional apply so a
-    // subsequent rebind / startSideChangeWatcher cannot re-seed from lagging
-    // DOM while shells already sit on desired.
+    // Restyle both shells in place. Order: main first (stamps
+    // _shell.side/_mountedSide + recomputes its transform), then secondary
+    // (opposite anchor; its closed-transform read follows the override
+    // already stamped above).
+    restyleMainShellSide(desired)
+    restyleSecondaryShellSide(desired === 'left' ? 'right' : 'left')
+    refreshSideGeometry()
+
+    if (!writeOk) {
+      // Both write paths failed: the swap is physically impossible in this
+      // environment (NO-GO bridge + unreachable API). Revert the geometry
+      // to the observed side and drop the override — reconcile's
+      // modelSideCorrection converges the MODEL on the real side, so the
+      // shells must follow it or they sit orphaned on the desired edge. A
+      // stuck override here was the enable-toggle poison (2026-08-17).
+      const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide
+      setMainDrawerSideOverride(null)
+      restyleMainShellSide(realSide)
+      restyleSecondaryShellSide(realSide === 'left' ? 'right' : 'left')
+      _lastKnownSide = realSide
+      refreshSideGeometry()
+      return { writeOk: false }
+    }
+
+    // Always stamp lastKnown to desired after an intentional apply so a
+    // subsequent rebind / startSideChangeWatcher cannot re-seed from
+    // lagging DOM while shells already sit on desired.
     _lastKnownSide = desired
 
     // Background settle only — do not block configure commit / next swap.
@@ -993,12 +936,14 @@ export async function applyMainDrawerSideChange(
       _lastKnownSide = desired
       rebindSideChangeWatcherIfNeeded()
     })
+
+    return { writeOk: true }
   }
 
-  // Chain: rapid A then B must not interleave remounts. Settle is background.
+  // Chain: rapid A then B must not interleave restyles. Settle is background.
   const next = _applySideChain.then(run, run)
-  _applySideChain = next.catch(() => {})
-  await next
+  _applySideChain = next.then(() => {}, () => {})
+  return next
 }
 
 /** Read main wrapper side from live class tokens only (ignores override). */
@@ -1124,7 +1069,7 @@ function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void
       if (gen === _sideApplyGen) {
         _lastKnownSide = desired
         dwarn(
-          `[drawer-sync] applyMainDrawerSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`,
+          `[drawer-sync] applyCanvasSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`,
         )
       }
       finish()
@@ -1155,7 +1100,7 @@ export function rebindSideChangeWatcherIfNeeded(): void {
 
 export function startSideChangeWatcher(): void {
   if (_sideObserver !== null) return // already running
-  // Only seed lastKnown when never set. After applyMainDrawerSideChange,
+  // Only seed lastKnown when never set. After applyCanvasSideChange,
   // shells may already sit on desired while DOM still lags; stomping
   // lastKnown from getMainDrawerSide() (DOM after override clear) desyncs
   // and can reverse-remount on the next check.
@@ -1211,16 +1156,10 @@ export function __getLastKnownSideForTest(): 'left' | 'right' | null {
   return _lastKnownSide
 }
 
-/** Test-only: remount generation (async assign/pin guards). */
-export function __getSideRemountGenForTest(): number {
-  return _sideRemountGen
-}
-
 /** Test-only: reset apply chain / gen between tests. */
 export function __resetSideApplyStateForTest(): void {
   _sideApplyGen = 0
   _applySideChain = Promise.resolve()
-  _sideRemountGen = 0
   _sideSettleHardMs = SIDE_SETTLE_HARD_MS
 }
 

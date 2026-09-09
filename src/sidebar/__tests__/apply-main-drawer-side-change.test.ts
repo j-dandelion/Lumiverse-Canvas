@@ -1,39 +1,51 @@
-// Tests for applyMainDrawerSideChange — Configure swap remount path.
+// Tests for applyCanvasSideChange — S4 CSS-only side swap.
 //
 // Verifies:
-//   - With DOM lag (old side on wrapper), remount path runs under override
-//     so getMainDrawerSide returns desired during checkSideChanged.
-//   - _lastKnownSide updates to desired after apply.
-//   - Override is cleared after settle when DOM matches (or after timeout).
+//   - NO remount machinery runs on any side change (the S0 payoff: no
+//     secondary unmount/mount, no main-mirror teardown).
+//   - Override stamped; getMainDrawerSide returns desired while DOM lags.
+//   - _lastKnownSide stamps to desired after apply (real side on degraded).
+//   - Override cleared after settle when DOM matches (kept on hard timeout).
+//   - checkSideChanged's MO path drives geometry with syncHost:false —
+//     the host side write NEVER fires from the DOM-observer path.
+//   - syncHost:true performs the guarded host write (patch).
 
 import { mock } from 'bun:test'
 
-// Track remount-related calls without mounting full secondary chrome.
+// Track remount-related calls — every path must keep these at ZERO.
 let mountCalls = 0
 let unmountCalls = 0
-let mirrorReconcileCalls = 0
+let restyleSecondaryCalls = 0
+let restyleMainCalls = 0
+let patchHostCalls = 0
+let apiWriteCalls = 0
 
 mock.module('../secondary', () => ({
   getSecondaryWrapper: () => null,
   isSecondarySidebarOpen: () => false,
-  mountSecondarySidebar: () => { mountCalls++ },
-  unmountSecondarySidebar: () => { unmountCalls++ },
+  restyleSecondaryShellSide: () => { restyleSecondaryCalls++ },
 }))
 
 mock.module('../main-mirror-drawer', () => ({
   getMainMirrorWrapper: () => null,
   isCanvasMainOpen: () => false,
   isMainMirrorActive: () => false,
-  reconcileMainMirrorDrawer: () => { mirrorReconcileCalls++ },
+  restyleMainShellSide: () => { restyleMainCalls++ },
 }))
 
 mock.module('../main-tab-pin', () => ({
   reconcileMainTabListPin: () => {},
 }))
 
+mock.module('../../dom/host-settings', () => ({
+  getHostDrawerSettings: () => null,
+  patchHostDrawerSettings: () => { patchHostCalls++; return true },
+  writeHostDrawerSettingsViaApi: async () => { apiWriteCalls++; return true },
+}))
+
 // Import after mocks
 import {
-  applyMainDrawerSideChange,
+  applyCanvasSideChange,
   checkSideChanged,
   startSideChangeWatcher,
   rebindSideChangeWatcherIfNeeded,
@@ -42,7 +54,6 @@ import {
   __getLastKnownSideForTest,
   __resetSideApplyStateForTest,
   __setSideSettleHardMsForTest,
-  __getSideRemountGenForTest,
   stopSideChangeWatcher,
 } from '../drawer-sync'
 import {
@@ -133,18 +144,24 @@ function installMainWrapper(side: 'left' | 'right') {
 function reset() {
   mountCalls = 0
   unmountCalls = 0
-  mirrorReconcileCalls = 0
+  restyleSecondaryCalls = 0
+  restyleMainCalls = 0
+  patchHostCalls = 0
+  apiWriteCalls = 0
   setMainDrawerSideOverride(null)
   __setLastKnownSideForTest(null)
   __setStoreSnapshotForTest(null)
   stopSideChangeWatcher()
   __resetSideApplyStateForTest()
-  // Default second drawer ON so A1–A8 remount paths stay active.
-  // Prefer hydrate over setSettings so we do not run feature apply.
   hydrateSettings({ secondSidebarEnabled: true })
 }
 
-// ── A1: override makes getMainDrawerSide return desired while DOM lags ──
+function tick(ms = 10): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+// ── A1: checkSideChanged (MO path) applies geometry with syncHost:false —
+// no remount, no host write. ──
 {
   reset()
   installMainWrapper('right')
@@ -155,77 +172,80 @@ function reset() {
   assertEqual(__getLastKnownSideForTest(), 'right', 'A1: last known still right before check')
 
   checkSideChanged()
-  assert(unmountCalls >= 1, 'A1: side change unmounts secondary')
-  assert(mountCalls >= 1, 'A1: side change remounts secondary')
-  assert(mirrorReconcileCalls >= 1, 'A1: side change explicitly reconciles main mirror')
-  assertEqual(__getLastKnownSideForTest(), 'left', 'A1: last known updated to left via override')
+  await tick()
+  assertEqual(unmountCalls, 0, 'A1: NO unmount — remount machinery is gone')
+  assertEqual(mountCalls, 0, 'A1: NO mount — shells restyle in place')
+  assert(restyleMainCalls >= 1, 'A1: main shell restyled in place')
+  assert(restyleSecondaryCalls >= 1, 'A1: secondary shell restyled in place')
+  assertEqual(patchHostCalls, 0, 'A1: MO path does NOT write the host (syncHost:false)')
+  assertEqual(apiWriteCalls, 0, 'A1: MO path does NOT hit the settings API')
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A1: last known updated to left via apply')
   setMainDrawerSideOverride(null)
 }
 
-// ── A2: applyMainDrawerSideChange remounts + settles when DOM flips mid-wait ──
+// ── A2: apply + DOM settles mid-wait → override cleared ──
 {
   reset()
   const { setSide } = installMainWrapper('right')
   __setLastKnownSideForTest('right')
+  __setSideSettleHardMsForTest(300)
 
-  // Flip DOM on next microtask so settle can clear override quickly.
+  // Flip DOM on the FIRST microtask — it must beat the apply chain's
+  // microtask so settle's immediate check sees the matched DOM
+  // (the MutationObserver is a no-op stub in this harness).
   const flip = Promise.resolve().then(() => setSide('left'))
 
-  const applyP = applyMainDrawerSideChange('left')
+  const applyP = applyCanvasSideChange('left', { syncHost: false })
   await flip
   await applyP
+  await tick(30)
 
-  assert(unmountCalls >= 1, 'A2: apply remounts (unmount)')
-  assert(mountCalls >= 1, 'A2: apply remounts (mount)')
-  assert(mirrorReconcileCalls >= 1, 'A2: apply reconciles main mirror')
+  assertEqual(unmountCalls, 0, 'A2: apply restyles (no unmount)')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A2: last known is left')
   assertEqual(getMainDrawerSideOverride(), null, 'A2: override cleared after DOM settles')
   assertEqual(getMainDrawerSide(), 'left', 'A2: getMainDrawerSide is left after settle')
 }
 
-// ── A3: apply with no last-known still forces remount ──
+// ── A3: apply with null last-known still applies ──
 {
   reset()
-  const { setSide } = installMainWrapper('right')
+  installMainWrapper('right')
   __setLastKnownSideForTest(null)
 
-  void Promise.resolve().then(() => setSide('left'))
-
-  await applyMainDrawerSideChange('left')
-  assert(unmountCalls >= 1 || mountCalls >= 1, 'A3: remount path ran with null last-known')
+  await applyCanvasSideChange('left', { syncHost: false })
+  assert(restyleMainCalls >= 1 && restyleSecondaryCalls >= 1, 'A3: restyles ran with null last-known')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A3: last known becomes left')
 }
 
-// ── A4: apply when already on desired side does not double-remount ──
+// ── A4: apply when already on desired side — no remount, override settles ──
 {
   reset()
-  const { setSide } = installMainWrapper('left')
-  setSide('left')
+  installMainWrapper('left')
   __setLastKnownSideForTest('left')
-  mountCalls = 0
-  unmountCalls = 0
 
-  await applyMainDrawerSideChange('left')
+  await applyCanvasSideChange('left', { syncHost: false })
+  await tick()
   assertEqual(unmountCalls, 0, 'A4: no unmount when already on desired side')
   assertEqual(mountCalls, 0, 'A4: no mount when already on desired side')
   assertEqual(getMainDrawerSideOverride(), null, 'A4: override cleared (DOM already matches)')
 }
 
 // ── A5: DOM never settles — keep override + lastKnown stays desired ──
-// Old bug: timeout cleared override while shells sat on desired → getMainDrawerSide
-// returned lagging DOM → next check could remount reverse.
+// Old bug: timeout cleared override while shells sat on desired →
+// getMainDrawerSide returned lagging DOM → reverse flip risk.
 {
   reset()
   installMainWrapper('right') // never flips
   __setLastKnownSideForTest('right')
-  __setSideSettleHardMsForTest(40) // exercise hard-timeout without 2.5s wait
+  __setSideSettleHardMsForTest(40)
 
-  await applyMainDrawerSideChange('left')
+  await applyCanvasSideChange('left', { syncHost: false })
+  await tick(60)
 
   assertEqual(getMainDrawerSideOverride(), 'left', 'A5: override kept when DOM never settles')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A5: lastKnown stamped to desired')
   assertEqual(getMainDrawerSide(), 'left', 'A5: getMainDrawerSide still returns override')
-  assert(unmountCalls >= 1, 'A5: remount still ran under override')
+  assertEqual(unmountCalls, 0, 'A5: no remount under override (geometry only)')
 }
 
 // ── A6: concurrent applies serialize; final side is last desired ──
@@ -234,15 +254,12 @@ function reset() {
   const { setSide } = installMainWrapper('right')
   __setLastKnownSideForTest('right')
 
-  // Start left then right rapidly. DOM settles to right only.
-  const p1 = applyMainDrawerSideChange('left')
-  const p2 = applyMainDrawerSideChange('right')
-  // Flip DOM to final desired after a tick so settle can clear.
-  void Promise.resolve().then(() => setSide('right'))
+  const p1 = applyCanvasSideChange('left', { syncHost: false })
+  const p2 = applyCanvasSideChange('right', { syncHost: false })
+  void tick(15).then(() => setSide('right'))
   await Promise.all([p1, p2])
 
   assertEqual(__getLastKnownSideForTest(), 'right', 'A6: last known ends on last apply (right)')
-  // Override should be cleared once DOM matches right (or still right if lagging).
   const ov = getMainDrawerSideOverride()
   assert(ov === null || ov === 'right', 'A6: override null or final desired, never left')
   assertEqual(getMainDrawerSide(), 'right', 'A6: getMainDrawerSide is right')
@@ -255,39 +272,31 @@ function reset() {
   __setLastKnownSideForTest('left') // shells already on left after apply
   setMainDrawerSideOverride('left')
 
-  // startSideChangeWatcher used to set lastKnown = getMainDrawerSide() which
-  // under override is left (ok) — but after settle-clear + lagging DOM it
-  // would stomp to right. With null-only seed, non-null lastKnown is preserved.
   startSideChangeWatcher()
   assertEqual(__getLastKnownSideForTest(), 'left', 'A7: start does not stomp non-null lastKnown')
 
-  // rebind path also must not stomp.
   rebindSideChangeWatcherIfNeeded()
   assertEqual(__getLastKnownSideForTest(), 'left', 'A7: rebind preserves lastKnown')
 
   stopSideChangeWatcher()
   setMainDrawerSideOverride(null)
-  // After clear, lastKnown still left even though DOM is right — intentional
-  // stamp from apply; only checkSideChanged should update on real change.
   assertEqual(__getLastKnownSideForTest(), 'left', 'A7: lastKnown still left after clear')
 }
 
-// ── A8: checkSideChanged bumps remount gen (async assign guard contract) ──
+// ── A8: syncHost:true performs the guarded host write (patch) ──
 {
   reset()
   installMainWrapper('right')
-  __setLastKnownSideForTest('left')
-  setMainDrawerSideOverride('right')
-  const genBefore = __getSideRemountGenForTest()
-  checkSideChanged()
-  assert(
-    __getSideRemountGenForTest() > genBefore,
-    'A8: remount gen increments on side change',
-  )
+  __setLastKnownSideForTest('right')
+
+  const res = await applyCanvasSideChange('left') // syncHost defaults true
+  assertEqual(res.writeOk, true, 'A8: guarded write reports ok')
+  assert(patchHostCalls >= 1, 'A8: patchHostDrawerSettings called for the swap')
+  assertEqual(apiWriteCalls, 0, 'A8: no API fallback needed (patch seam ok)')
   setMainDrawerSideOverride(null)
 }
 
-// ── A9: secondSidebarEnabled false — side change does NOT remount ──
+// ── A9: second drawer off — geometry still applies (no remount gating) ──
 {
   reset()
   installMainWrapper('right')
@@ -296,35 +305,24 @@ function reset() {
   hydrateSettings({ secondSidebarEnabled: false })
   assertEqual(getSettings().secondSidebarEnabled, false, 'A9: second drawer off')
 
-  const genBefore = __getSideRemountGenForTest()
-  mountCalls = 0
-  unmountCalls = 0
-  mirrorReconcileCalls = 0
-
+  restyleSecondaryCalls = 0
   checkSideChanged()
-
+  await tick()
   assertEqual(unmountCalls, 0, 'A9: no unmount when second drawer off')
   assertEqual(mountCalls, 0, 'A9: no mount when second drawer off')
-  assertEqual(mirrorReconcileCalls, 0, 'A9: no mirror reconcile when second drawer off')
-  assertEqual(__getSideRemountGenForTest(), genBefore, 'A9: remount gen unchanged when gated off')
-  assertEqual(__getLastKnownSideForTest(), 'right', 'A9: lastKnown still updates to current side')
+  assertEqual(__getLastKnownSideForTest(), 'right', 'A9: lastKnown updates to current side')
   setMainDrawerSideOverride(null)
 }
 
-// ── A10: resetSideRemountStateAfterDisable bumps gen, clears override, reseeds ──
+// ── A10: resetSideRemountStateAfterDisable clears override, reseeds ──
 {
   reset()
   installMainWrapper('left')
   __setLastKnownSideForTest('right')
   setMainDrawerSideOverride('right')
-  const genBefore = __getSideRemountGenForTest()
 
   resetSideRemountStateAfterDisable()
 
-  assert(
-    __getSideRemountGenForTest() > genBefore,
-    'A10: remount gen increments on reset after disable',
-  )
   assertEqual(getMainDrawerSideOverride(), null, 'A10: side override cleared')
   assertEqual(
     __getLastKnownSideForTest(),
@@ -336,22 +334,21 @@ function reset() {
 
 // ── A11: apply returns immediately; does not await host DOM settle ──
 // Old bug: configure auto-commit blocked on waitForSideSettle (up to 2.5s),
-// so rapid "Swap drawer locations" clicks queued multi-second remount delays.
+// so rapid "Swap drawer locations" clicks queued multi-second delays.
 {
   reset()
   installMainWrapper('right') // never flips
   __setLastKnownSideForTest('right')
-  // Long hard settle — if apply awaited this, the test would hang ~800ms+.
   __setSideSettleHardMsForTest(800)
 
   const t0 = Date.now()
-  await applyMainDrawerSideChange('left')
+  await applyCanvasSideChange('left', { syncHost: false })
   const elapsed = Date.now() - t0
 
   assert(elapsed < 200, `A11: apply returns without awaiting settle (elapsed=${elapsed}ms)`)
   assertEqual(getMainDrawerSideOverride(), 'left', 'A11: override still held while DOM lags')
-  assertEqual(__getLastKnownSideForTest(), 'left', 'A11: lastKnown desired after remount')
-  assert(unmountCalls >= 1, 'A11: remount still ran before return')
+  assertEqual(__getLastKnownSideForTest(), 'left', 'A11: lastKnown desired after apply')
+  assertEqual(unmountCalls, 0, 'A11: no remount before return')
   assertEqual(getMainDrawerSide(), 'left', 'A11: getMainDrawerSide is override left immediately')
 }
 
@@ -363,15 +360,13 @@ function reset() {
   __setSideSettleHardMsForTest(800)
 
   const t0 = Date.now()
-  const p1 = applyMainDrawerSideChange('left')
-  const p2 = applyMainDrawerSideChange('right')
+  const p1 = applyCanvasSideChange('left', { syncHost: false })
+  const p2 = applyCanvasSideChange('right', { syncHost: false })
   await Promise.all([p1, p2])
   const elapsed = Date.now() - t0
 
   assert(elapsed < 200, `A12: rapid applies do not stack settle waits (elapsed=${elapsed}ms)`)
   assertEqual(__getLastKnownSideForTest(), 'right', 'A12: last known is final desired')
-  // DOM never left 'right', so final apply settles immediately (override null)
-  // or briefly holds 'right'. Never left over from the cancelled first apply.
   const ov = getMainDrawerSideOverride()
   assert(ov === null || ov === 'right', 'A12: override null or final desired, never left')
   assertEqual(getMainDrawerSide(), 'right', 'A12: getMainDrawerSide is right immediately')

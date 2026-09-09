@@ -302,3 +302,65 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
     owner,
   }
 }
+
+/**
+ * S4 CSS-only side swap: restyle an EXISTING Canvas shell for a new anchor
+ * side, in place (no teardown/remount, no container churn). Mirrors the
+ * side-specific inline styles set at construction (createDrawerShell):
+ * wrapper anchor + flex-direction + `sidebar-ux-side-*` class, drawerTab
+ * border/radius, drawer flex-direction, tabList border side.
+ *
+ * Transforms are NOT set here — callers recompute open/closed transforms
+ * from their own state (open flag + width var) since only they know both.
+ * Idempotent: restyling with the current side is a no-op.
+ */
+export function restyleShellSide(
+  wrapper: HTMLElement | null,
+  side: 'left' | 'right',
+): void {
+  if (!wrapper) return
+  wrapper.classList.toggle('sidebar-ux-side-left', side === 'left')
+  wrapper.classList.toggle('sidebar-ux-side-right', side === 'right')
+  const ws = wrapper.style
+  if (side === 'left') {
+    ws.setProperty('left', '0')
+    ws.removeProperty('right')
+    ws.setProperty('flex-direction', 'row-reverse')
+  } else {
+    ws.setProperty('right', '0')
+    ws.removeProperty('left')
+    ws.setProperty('flex-direction', 'row')
+  }
+
+  const drawer = wrapper.querySelector('.sidebar-ux-drawer') as HTMLElement | null
+  if (drawer) {
+    drawer.style.setProperty(
+      'flex-direction',
+      side === 'right' ? 'row' : 'row-reverse',
+    )
+  }
+
+  const drawerTab = wrapper.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
+  if (drawerTab) {
+    if (side === 'left') {
+      drawerTab.style.setProperty('border-left', 'none')
+      drawerTab.style.removeProperty('border-right')
+      drawerTab.style.setProperty('border-radius', '0 12px 12px 0')
+    } else {
+      drawerTab.style.setProperty('border-right', 'none')
+      drawerTab.style.removeProperty('border-left')
+      drawerTab.style.setProperty('border-radius', '12px 0 0 12px')
+    }
+  }
+
+  const tabList = wrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
+  if (tabList) {
+    if (side === 'right') {
+      tabList.style.setProperty('border-right', '1px solid var(--lumiverse-primary-020)')
+      tabList.style.removeProperty('border-left')
+    } else {
+      tabList.style.setProperty('border-left', '1px solid var(--lumiverse-primary-020)')
+      tabList.style.removeProperty('border-right')
+    }
+  }
+}
