@@ -476,26 +476,29 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   )
 }
 
-// --- Test 10b: closed taskbar strip + dock on same edge → full strip margin
-// (the dock is offset to sit just inside the strip by dock-offset.ts; the App
-// padding reserves the dock inset, the strip adds its own 56px on top)
+// --- Test 10b: closed drawer + taskbar SETTING + dock on same edge.
+// S1 gate inversion: the strip reserve keys on the PIN being ACTIVE
+// (isMainTabListPinActive = shell mounted + taskbar chrome), not on the
+// taskbarMode setting alone. This env never mounts the mirror shell, so a
+// closed drawer reserves nothing — the dock clamp leaves 0. The pinned-strip
+// reserve case is covered in reflow-content-insets.test.ts (tests 7/8).
 
 {
   _resetAll()
   const { chat } = _installDom({
-    open: false,        // drawer closed → taskbar strip reserved
-    leftSide: false,    // main drawer on right (strip on right edge)
+    open: false,        // drawer closed
+    leftSide: false,    // main drawer on right
     appRoot: true,
-    dockRight: 300,     // dock on the same edge as the (right) strip
+    dockRight: 300,     // dock on the same edge as the (right) drawer
   })
   hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
   updateChatReflow()
-  // mainOpen=false, taskbar strip → mainStrip = 56
-  // rightMargin = max(56, 0) = 56 (dock is offset, not subtracted)
+  // mainOpen=false, no pin active → mainStrip = 0
+  // rightMargin = max(0, 0) = 0 (no strip, no open drawer overhang)
   assertEqual(
     _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
-    `${TAB_LIST_WIDTH_PX}px`,
-    `test 10b: closed strip + dock right=300 — --sidebar-ux-chat-mr = ${TAB_LIST_WIDTH_PX}px (strip reserved)`
+    '0px',
+    'test 10b: closed unpinned drawer + dock right=300 — --sidebar-ux-chat-mr = 0px (no strip reserve without pin)'
   )
   assertEqual(
     _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),

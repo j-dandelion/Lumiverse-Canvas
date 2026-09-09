@@ -179,6 +179,7 @@ const {
   __getReparkIdleCountForTest,
   restartReparkWatch,
   applyMainMirrorDrawer,
+  reconcileMainMirrorDrawer,
   openCanvasMainDrawer,
   closeCanvasMainDrawer,
   onMainMirrorTabActivated,
@@ -364,6 +365,38 @@ export {}
     idleAfterAdvance >= 10,
     `T12: repark watch re-idled after restart (idle=${idleAfterAdvance})`,
   )
+}
+
+// --- T13: S1 gate inversion — reconcileMainMirrorDrawer mounts the shell
+// on desktop with taskbarMode OFF (Canvas owns the main drawer
+// unconditionally; pin chrome is gated separately in main-tab-pin). ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  // Default settings: taskbarMode = false.
+  reconcileMainMirrorDrawer()
+  assert(isMainMirrorActive(), 'T13: shell active after reconcile with taskbar OFF')
+  const shell = _bodyChildren.find((c) =>
+    String(c.className || '').includes('sidebar-ux-main-mirror-wrapper'),
+  )
+  assert(!!shell, 'T13: main-mirror wrapper present without taskbar mode')
+  // No pin host may be created by the shell mount (taskbar chrome off).
+  assert(
+    !_bodyChildren.some((c) =>
+      String(c.className || '').includes('sidebar-ux-tab-list-pin-host')),
+    'T13: no pin host created (taskbar chrome off)',
+  )
+  // Tear down for the next case.
+  applyMainMirrorDrawer(false)
+}
+
+// --- T14: S1 gate kept — mobile still tears down via reconcile ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 400
+  reconcileMainMirrorDrawer()
+  assert(!isMainMirrorActive(), 'T14: inactive on mobile after reconcile')
+  ;(globalThis as any).window.innerWidth = 1200
 }
 
 console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)

@@ -60,7 +60,7 @@ class StubElement {
 // ── Mock all reflow module dependencies ──
 
 // State shared between mocks
-const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0 }
+const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0, mirrorActive: false, canvasMainOpen: false, mainPinActive: false }
 
 mock.module('../../sidebar/mobile-exclusion', () => ({
   isMobileViewport: () => state.mobile,
@@ -73,11 +73,16 @@ mock.module('../../store', () => ({
   findStoreData: () => {},
   getStoreSnapshot: () => null,
   getDrawerTabs: () => [],
+  getHostStoreTabs: () => [],
 }))
 
 mock.module('../../sidebar/main-mirror-drawer', () => ({
-  isMainMirrorActive: () => false,
-  isCanvasMainOpen: () => false,
+  isMainMirrorActive: () => state.mirrorActive,
+  isCanvasMainOpen: () => state.canvasMainOpen,
+}))
+
+mock.module('../../sidebar/main-tab-pin', () => ({
+  isMainTabListPinActive: () => state.mainPinActive,
 }))
 
 mock.module('../../settings/state', () => ({
@@ -137,6 +142,9 @@ function reset() {
   state.mobile = false
   state.dockLeft = 0
   state.dockRight = 0
+  state.mirrorActive = false
+  state.canvasMainOpen = false
+  state.mainPinActive = false
   _appElStyle = {}
 }
 
@@ -199,11 +207,28 @@ state.mainSide = 'right'
 state.taskbarMode = true
 state.secondaryTabList = true
 state.secondaryOpen = false
-// main closed but taskbarMode → mainWidth = 56 (TAB_LIST_WIDTH_PX) from legacy pin path
+// S1: the main strip reserve keys on the PIN being active (mirror shell
+// mounted + taskbar chrome on) — mainPinActive models the pinned main strip.
+state.mirrorActive = true
+state.mainPinActive = true
+// main closed + main pin active → mainWidth = 56 (TAB_LIST_WIDTH_PX)
 // secondary closed with strip → secondaryWidth = 56
 // mainSide='right', so left=secondary=56, right=main=56
 assertEqual(computeContentLaneInsets().left, 56, 'taskbar mode: left = 56 (secondary strip)')
-assertEqual(computeContentLaneInsets().right, 56, 'taskbar mode: right = 56 (main strip via legacy pin path)')
+assertEqual(computeContentLaneInsets().right, 56, 'taskbar mode: right = 56 (main pinned strip)')
+
+// ── Test 7b: S1 — mirror shell active but NOT pinned (taskbar off):
+// closed drawer leaves no strip reserve (edge tab button overlays, no 56px). ──
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = false
+state.secondaryTabList = false
+state.secondaryOpen = false
+state.mirrorActive = true
+state.mainPinActive = false
+assertEqual(computeContentLaneInsets().left, 0, 'unpinned closed mirror: left = 0')
+assertEqual(computeContentLaneInsets().right, 0, 'unpinned closed mirror: right = 0 (no phantom 56px)')
 
 // ── Test 8: Zero secondary tabs (no strip) ──
 reset()
@@ -211,11 +236,13 @@ state.mainOpen = false
 state.mainSide = 'right'
 state.taskbarMode = true
 state.secondaryTabList = false
-// main closed but taskbarMode → mainWidth = 56
+state.mirrorActive = true
+state.mainPinActive = true
+// main closed + main pin active → mainWidth = 56
 // secondary has no tab list → secondaryWidth = 0
 // mainSide='right', so left=secondary=0, right=main=56
 assertEqual(computeContentLaneInsets().left, 0, 'zero secondary tabs: left = 0')
-assertEqual(computeContentLaneInsets().right, 56, 'zero secondary tabs: right = 56 (main strip via legacy pin path)')
+assertEqual(computeContentLaneInsets().right, 56, 'zero secondary tabs: right = 56 (main pinned strip)')
 
 // ── Test 9: Dock clamp (main right, dock right = 100) ──
 reset()

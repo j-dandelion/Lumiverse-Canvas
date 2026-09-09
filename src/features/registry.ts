@@ -29,7 +29,7 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
-import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled } from '../settings/state'
+import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled, isTaskbarModeEnabled } from '../settings/state'
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug } from '../debug/log'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
@@ -44,7 +44,7 @@ import { cancelLayoutSave } from '../persist/layout-load'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
-import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
+import { applyMainTabListPin, reconcileMainTabListPin, teardownMainPin } from '../sidebar/main-tab-pin'
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
@@ -65,6 +65,9 @@ export interface CanvasFeature {
   /** Apply a settings diff. Optional. The orchestrator only calls this
    *  when prev[id] !== next[id]. */
   apply?(prev: FullCanvasSettings, next: FullCanvasSettings, ctx: SpindleFrontendContext): void
+  /** Mount even when the feature's setting is falsy (S1: main-drawer
+   *  ownership is unconditional — the feature self-gates its chrome). */
+  unconditional?: boolean
 }
 
 // --- Shadow CSS constants (shared by desktop + mobile features) ---
@@ -393,49 +396,65 @@ const tabPositionFeature: CanvasFeature = {
   apply(prev, next) {
     if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge) return
     applyTabListPosition(next.moveControlsToOuterEdge)
+    // S1 gate inversion: outer-edge is an input to the taskbar-chrome gate
+    // (isTaskbarModeEnabled = taskbarMode && outer-edge). The taskbarMode
+    // setting itself did not change, so the taskbar feature's apply() won't
+    // fire — re-apply pin state + reflow here.
+    reconcileTabListPin()
+    reconcileMainTabListPin()
+    updateChatReflow()
   },
 }
 
-/** Taskbar mode (requires moveControlsToOuterEdge):
- *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
- *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
- *    forward to host tab buttons. Hidden while main drawer is open.
- *  - Strip gutters: permanent Welcome/Landing bounds (strip width only);
- *    open drawers overlay Welcome. Chat margins stay with chat reflow.
- *  Secondary remount also calls reconcileTabListPin(); side-change calls
- *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
- *  No-op on mobile (force-unpins / tears down main mirror). */
+/** Main-drawer ownership + taskbar chrome.
+ *
+ * S1 ("Canvas owns the drawers"): the main mirror IS the main drawer and is
+ * ALWAYS mounted on desktop when Canvas is enabled — `taskbarMode` no longer
+ * gates ownership (the host main drawer is hidden and never used on desktop).
+ * `taskbarMode` (+ moveControlsToOuterEdge) now only controls the extra
+ * taskbar CHROME: pinning the main/secondary tab strips to the screen edge,
+ * strip gutters, hidden open/close buttons, and DnD. No-op on mobile (mirror
+ * force-tears-down; host drawer remains the mobile surface until the mobile
+ * task lands).
+ *
+ * User contract (2026-08-25):
+ *   taskbarMode ON  → tabs pinned to screen edge, only panel slides.
+ *   taskbarMode OFF → tabs ride with panel; the shell still owns the drawer.
+ */
 const taskbarModeFeature: CanvasFeature = {
   id: 'taskbarMode',
+  // S1: mount unconditionally — the feature is the mount point for main
+  // drawer ownership; the pin chrome is self-gated inside.
+  unconditional: true,
   mount(_ctx, _layout) {
-    // mount() only runs when taskbarMode is truthy at setup, but still
-    // require outer-edge (settings normalize + apply also enforce this).
-    const on = !!getSettings().taskbarMode && !!getSettings().moveControlsToOuterEdge
-    if (on) {
-      reconcileTabListPin()
-      reconcileMainTabListPin()
-    } else {
-      applyTabListPin(false, { force: true })
-      applyMainTabListPin(false, { force: true })
-    }
+    // Secondary pin is chrome-gated; main mirror ownership is unconditional
+    // but its PIN is chrome-gated.
+    reconcileTabListPin()
+    reconcileMainTabListPin()
     updateDrawerTabVisibility()
     updateStripGutters()
     // Recompute chat reflow (mirror open width / closed strip reserve).
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
-      applyMainTabListPin(false, { force: true })
+      // Full main teardown on disable (applyMainTabListPin(false) only
+      // unpins — the unconditional shell teardown in setup.ts also runs).
+      teardownMainPin()
       updateDrawerTabVisibility()
       clearStripGutters()
       updateChatReflow()
     }
   },
   apply(_prev, next) {
-    const on = !!next.taskbarMode && !!next.moveControlsToOuterEdge
-    applyTabListPin(on, { force: true })
-    applyMainTabListPin(on, { force: true })
+    const chrome = isTaskbarModeEnabled(next)
+    // Main mirror PIN is taskbar chrome (tabs pinned vs riding with panel).
+    // Ownership (drawer shell + host hide) is unconditional — applyMainTabListPin
+    // keeps the shell when chrome is off and only tears down the pin.
+    applyMainTabListPin(chrome, { force: true })
+    // Secondary edge-strip pin + gutters are also taskbar chrome.
+    applyTabListPin(chrome, { force: true })
     updateDrawerTabVisibility()
-    if (on) {
+    if (chrome) {
       updateStripGutters()
     } else {
       clearStripGutters()

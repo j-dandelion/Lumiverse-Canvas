@@ -14,8 +14,7 @@
 import { getMainPanelContent, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
-import { getSettings } from '../settings/state'
-import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
+import { getSettings, isHideDrawerOpenCloseButtonsEnabled, isTaskbarModeEnabled } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { animateWrapper } from './animation'
 import {
@@ -88,13 +87,11 @@ export function getMainMirrorDrawer(): HTMLElement | null {
 }
 
 export function getMainMirrorTabList(): HTMLElement | null {
-  if (!_shell) return null
-  const host = ensureMainPinHost(getMainDrawerSide())
-  if (host) {
-    const pinned = host.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
-    if (pinned) return pinned
-  }
-  return _shell.tabList
+  // The shell's tabList is THE list — when taskbar chrome is on it is
+  // reparented into the body-level pin host (same node), otherwise it rides
+  // inside the drawer. Never call ensureMainPinHost here (S1: pin-host
+  // creation is gated on taskbar visual at the pin sites).
+  return _shell?.tabList ?? null
 }
 
 export function getMainMirrorPanelContent(): HTMLElement | null {
@@ -151,11 +148,9 @@ export function reconcileMainMirrorDrawer(opts?: { initialOpen?: boolean }): voi
     applyMainMirrorDrawer(false, { force: true })
     return
   }
-  const on = !!getSettings().taskbarMode
-  if (!on) {
-    applyMainMirrorDrawer(false, { force: true })
-    return
-  }
+  // S1 gate inversion: the main drawer shell is Canvas-owned unconditionally
+  // on desktop — taskbarMode no longer gates ownership (it only controls the
+  // pin chrome, applied at the pin sites in main-tab-pin / tab-position).
   applyMainMirrorDrawer(true, {
     force: false,
     initialOpen: opts?.initialOpen,
@@ -374,8 +369,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     seedW = undefined
   }
 
-  // Compute initial drawer-tab display: hide requires taskbar mode.
-  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().taskbarMode
+  // Compute initial drawer-tab display: hide requires taskbar mode
+  // (without the pinned strip the edge toggle is the only reopen affordance).
+  const hideTab = isHideDrawerOpenCloseButtonsEnabled()
 
   _shell = createDrawerShell({
     owner: 'main',
@@ -441,11 +437,24 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   bumpReflow()
 }
 
+/** S1 gate: reparent the shell tab list into the body-level pin host ONLY
+ *  when taskbar chrome is on (tabs pinned to the screen edge). Off → the
+ *  list rides inside the drawer (mount-time; runtime flips go through
+ *  pinMainMirrorShellTabList / unpinMainMirrorShellTabList). */
 function pinShellTabList(side: 'left' | 'right'): void {
   if (!_shell) return
+  if (!isTaskbarModeEnabled()) return
+  pinMainMirrorShellTabList(side)
+}
+
+/** Reparent the shell tab list into the pin host (idempotent). Returns the
+ *  host, or null when no shell / no body. Pin callers gate on their own
+ *  pin state — this helper never checks settings. */
+export function pinMainMirrorShellTabList(side: 'left' | 'right'): HTMLElement | null {
+  if (!_shell) return null
   const tabList = _shell.tabList
   const host = ensureMainPinHost(side)
-  if (!host) return
+  if (!host) return null
 
   if (tabList.parentElement && tabList.parentElement !== host) {
     _tabListRestoreParent = tabList.parentElement
@@ -462,6 +471,13 @@ function pinShellTabList(side: 'left' | 'right'): void {
   }
 
   applyPinnedTabListChrome(tabList, side)
+  return host
+}
+
+/** S1: move the (possibly pinned) shell tab list back inside the drawer and
+ *  destroy the pin host. Safe when never pinned (no-op). */
+export function unpinMainMirrorShellTabList(): void {
+  unpinShellTabList()
 }
 
 function unpinShellTabList(): void {
@@ -703,7 +719,11 @@ function sweepOrphanMainMirrorWrappers(): void {
   }
 }
 
-function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
+/** Full teardown of the main mirror shell (content restore, unpin, wrapper
+ *  removal, host-hide style + classes, width var). Public so setup.ts can
+ *  register it as the unconditional shell teardown ahead of
+ *  unsuppressMainDrawer (S1 FIFO fix) and features can full-teardown. */
+export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   stopReparkWatch()
   restoreHostContent()
   clearHostWrapperInline()
@@ -737,6 +757,10 @@ function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
     document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR)
   }
 
+  // Leak fix (2026-08-27): the host-hide <style> element was never removed.
+  // The rules are inert without CANVAS_MAIN_ACTIVE_CLASS, but the element
+  // lingered in <head> after disable.
+  document.getElementById('sidebar-ux-host-main-hide')?.remove()
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS)
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
   _active = false

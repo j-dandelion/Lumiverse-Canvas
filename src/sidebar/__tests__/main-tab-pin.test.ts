@@ -736,6 +736,43 @@ function resetAll() {
   assertEqual(getMainPinHost(), null, 'M8: no host')
 }
 
+// M8b: S1 gate inversion — reconcileMainTabListPin with taskbar OFF still
+// mounts the Canvas main shell (ownership unconditional) and syncs mirror
+// buttons into the shell's own tab list, with NO pin host created.
+{
+  resetAll()
+  const b1 = makeHostBtn('profile', 'Profile', true)
+  const b2 = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(b1)
+  mainSidebar.appendChild(b2)
+  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
+    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    return []
+  }
+  reconcileMainTabListPin()
+  assertEqual(getMainPinHost(), null, 'M8b: no pin host (taskbar chrome off)')
+  assert(!isMainTabListPinActive(), 'M8b: not pin-active')
+  // The shell wrapper is present (body-level) with the mirror list inside.
+  const wrapper = bodyStub.children.find((c) =>
+    String(c.className || '').includes('sidebar-ux-main-mirror-wrapper'),
+  )
+  assert(!!wrapper, 'M8b: main shell mounted without taskbar mode')
+  // Buttons synced into the shell's tab list (rides with the panel).
+  const findList = (el: StubElement): StubElement | null => {
+    if (String(el.className || '').includes('sidebar-ux-tab-list')) return el
+    for (const c of el.children) {
+      const hit = findList(c)
+      if (hit) return hit
+    }
+    return null
+  }
+  const shellList = wrapper ? findList(wrapper) : null
+  assert(!!shellList, 'M8b: shell tab list present')
+  const mirrors = collectMirrorButtons(shellList!)
+  assertEqual(mirrors.length, 2, 'M8b: two mirror buttons synced into shell list')
+  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M8b: first mirror id')
+}
+
 // M9: Settings mirrors into bottom dock with separator chrome (host .sidebarBottom)
 {
   resetAll()

@@ -132,17 +132,19 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
-// --- taskbarMode requires moveControlsToOuterEdge ---
+// --- S1: taskbarMode no longer requires moveControlsToOuterEdge (cascade
+// dropped — ownership is unconditional; the effective pin gate
+// isTaskbarModeEnabled still requires both). ---
 {
-  const cleared = normalizeCanvasSettings(
+  const kept = normalizeCanvasSettings(
     mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: false }),
   )
-  assertEqual(cleared.taskbarMode, false, 'normalize: taskbar off when outer edge off')
-  assertEqual(cleared.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
+  assertEqual(kept.taskbarMode, true, 'normalize: taskbar stays on when outer edge off (S1)')
+  assertEqual(kept.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
   assertEqual(
-    isTaskbarModeEnabled(cleared),
+    isTaskbarModeEnabled(kept),
     false,
-    'isTaskbarModeEnabled false when outer off',
+    'isTaskbarModeEnabled false when outer off (effective gate)',
   )
 
   const both = normalizeCanvasSettings(
@@ -205,7 +207,9 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   )
 }
 
-// Outer-edge off cascades: taskbar cleared → hide cleared
+// S1: outer-edge off no longer cascades taskbar off — taskbar + hide keep
+// their settings (inert while the effective pin gate is off); hide stays
+// cleared only when taskbarMode itself is off.
 {
   const cascade = normalizeCanvasSettings(
     mergeCanvasSettings({
@@ -215,12 +219,12 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     }),
   )
   assertEqual(cascade.moveControlsToOuterEdge, false, 'cascade: outer-edge off')
-  assertEqual(cascade.taskbarMode, false, 'cascade: taskbar cleared')
-  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'cascade: hide cleared')
+  assertEqual(cascade.taskbarMode, true, 'cascade: taskbar kept (S1 — no clearing)')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'cascade: hide kept (taskbar still on)')
   assertEqual(
     isTaskbarModeEnabled(cascade),
     false,
-    'cascade: isTaskbarModeEnabled false',
+    'cascade: isTaskbarModeEnabled false (effective gate)',
   )
   assertEqual(
     isHideDrawerOpenCloseButtonsEnabled(cascade),
@@ -285,13 +289,13 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
       moveControlsToOuterEdge: false,
     }),
   )
-  assertEqual(cascade.taskbarMode, false, 'dnd cascade: taskbar cleared')
-  assertEqual(cascade.dragAndDropDrawerTabs, false, 'dnd cascade: drag cleared')
-  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'dnd cascade: hide cleared')
+  assertEqual(cascade.taskbarMode, true, 'dnd cascade: taskbar kept (S1 — no clearing)')
+  assertEqual(cascade.dragAndDropDrawerTabs, true, 'dnd cascade: drag kept (taskbar still on)')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'dnd cascade: hide kept (taskbar still on)')
   assertEqual(
     isDragAndDropDrawerTabsEnabled(cascade),
     false,
-    'dnd cascade: isDragAndDropDrawerTabsEnabled false',
+    'dnd cascade: isDragAndDropDrawerTabsEnabled false (effective gate)',
   )
 
   // Raw default true survives merge before normalize when taskbar on

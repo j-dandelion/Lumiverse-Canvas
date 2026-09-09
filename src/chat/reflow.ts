@@ -45,6 +45,7 @@ import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { isTaskbarModeEnabled } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
+import { isMainTabListPinActive } from '../sidebar/main-tab-pin'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -117,7 +118,7 @@ export function computeContentLaneInsets(): { left: number; right: number } {
   const mainSide = getMainDrawerSide()
   const dock = getDockInsets()
 
-  // When Canvas owns main chrome (taskbarMode desktop), reflow follows the
+  // When Canvas owns main chrome (desktop), reflow follows the
   // Canvas main shell — not host wrapperOpen.
   const mirrorActive = isMainMirrorActive()
   const mainOpen = mirrorActive ? isCanvasMainOpen() : isMainDrawerOpen()
@@ -126,10 +127,14 @@ export function computeContentLaneInsets(): { left: number; right: number } {
       ? parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420
       : getMainDrawerWidth()
     : 0
-  // Closed mirror / legacy pin path: the permanent pin strip still occupies
-  // the edge (a dock on the same edge is offset just inside it).
+  // Strip reserve ONLY while the tab list is actually pinned to the edge
+  // (taskbar chrome). S1: the mirror shell is active unconditionally on
+  // desktop — a closed unpinned shell leaves only its edge tab button, which
+  // overlays content like the secondary drawerTab (no reserve). Keying on
+  // mirrorActive (the old gate) would phantom-reserve 56px for every closed
+  // drawer with taskbarMode off.
   const mainStrip =
-    !mainOpen && (mirrorActive || isTaskbarModeEnabled()) ? TAB_LIST_WIDTH_PX : 0
+    !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0
 
   // Secondary is opposite main. Open → live width; taskbar mode closed with
   // a secondary pin strip → reserve strip so content does not sit under buttons.

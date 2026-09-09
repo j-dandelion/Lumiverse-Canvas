@@ -53,6 +53,7 @@ import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
+import { teardownMainMirror } from './sidebar/main-mirror-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dlog, dwarn } from './debug/log'
 import { bootStep, bootError, bootWarn, armBootWatchdog } from './debug/boot-diag'
@@ -108,6 +109,18 @@ export function setup(ctx: SpindleFrontendContext) {
   // LOAD_LAYOUT. Host defaults the open drawer to "profile"; without this
   // the default paints for the whole IPC round-trip.
   beginMainDrawerRestoreGuard()
+  // S1 FIFO fix: the main mirror shell is Canvas-owned unconditionally on
+  // desktop, so its teardown must run BEFORE unsuppressMainDrawer in the
+  // FIFO chain — otherwise disable lifts the restore guard while
+  // panelContent is still parked in the shell (one frame of blank host
+  // drawer). cleanupAll runs in registration order.
+  registerCleanup(() => {
+    try {
+      teardownMainMirror()
+    } catch (err) {
+      dwarn('teardownMainMirror on disable failed:', err)
+    }
+  })
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
@@ -300,7 +313,9 @@ export function setup(ctx: SpindleFrontendContext) {
     for (const feature of FEATURES) {
       if (!isCurrent()) return
       if (!feature.mount) continue
-      if (!getSettings()[feature.id]) continue
+      // S1: unconditional features (main-drawer ownership) mount even when
+      // their setting is falsy — they self-gate their chrome internally.
+      if (!feature.unconditional && !getSettings()[feature.id]) continue
       dlog(`mounting feature ${String(feature.id)}`)
       const teardown = feature.mount(ctx, layout)
       if (typeof teardown === 'function') registerCleanup(teardown)

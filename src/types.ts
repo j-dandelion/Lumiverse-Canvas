@@ -165,28 +165,24 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
 }
 
 /**
- * taskbarMode only makes sense with tab lists on the screen edge.
- * Clear it whenever moveControlsToOuterEdge is off (load safety + merge path).
+ * S1 gate inversion: taskbarMode no longer requires moveControlsToOuterEdge.
+ * Canvas owns the main drawer shell unconditionally on desktop; taskbarMode
+ * is a purely visual chrome option ("pin tab strips to the screen edge") and
+ * its effective gate is `isTaskbarModeEnabled()` (taskbarMode && outer-edge)
+ * at the pin sites. The old cascade silently cleared the user's taskbarMode
+ * choice when outer-edge was off — dropped so the setting survives.
  * Idempotent — safe to call after already-normalized settings.
  *
- * hideDrawerOpenCloseButtons and dragAndDropDrawerTabs require taskbarMode
- * (hide: edge button is the only reopen affordance without a pin strip;
- * drag: primary surface is the main-mirror strip). Cascade: outer-edge off →
- * taskbar mode off → hide + drag-and-drop off.
+ * hideDrawerOpenCloseButtons and dragAndDropDrawerTabs still require
+ * taskbarMode (hide: the edge button is the only reopen affordance without
+ * a pin strip; drag: primary surface is the main-mirror strip). They stay
+ * inert (settings kept) while taskbarMode is on but the effective pin gate
+ * is off — no data loss when outer-edge comes back.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
 ): Required<CanvasSettings> {
   let out = s
-  // Cascade 1: taskbar mode requires outer-edge
-  if (out.taskbarMode && !out.moveControlsToOuterEdge) {
-    out = {
-      ...out,
-      taskbarMode: false,
-      hideDrawerOpenCloseButtons: false,
-      dragAndDropDrawerTabs: false,
-    }
-  }
   // Cascade 2: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false }
@@ -204,8 +200,8 @@ export function normalizeCanvasSettingsFields(
  * reading `layout.settings` directly, so new fields added in future versions
  * gracefully appear at their default value.
  *
- * Always returns a normalized full settings object (taskbarMode outer-edge
- * invariant enforced here so future callers cannot skip it).
+ * Always returns a normalized full settings object (hide/dnd taskbarMode
+ * invariants enforced here so future callers cannot skip them).
  */
 export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): Required<CanvasSettings> {
   const out = { ...DEFAULT_CANVAS_SETTINGS }

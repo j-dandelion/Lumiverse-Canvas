@@ -14,7 +14,7 @@
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
-import { getSettings } from '../settings/state'
+import { isTaskbarModeEnabled } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { isMobileViewport } from './mobile-exclusion'
 import { isShowTabLabels } from './drawer-sync'
@@ -26,13 +26,17 @@ import {
   isCanvasMainOpen,
   isMainMirrorActive,
   onMainMirrorTabActivated,
+  pinMainMirrorShellTabList,
   reconcileMainMirrorDrawer,
   setCanvasMainTitle,
+  unpinMainMirrorShellTabList,
   __resetMainMirrorForTest,
 } from './main-mirror-drawer'
 import {
+  clearPinnedTabListChrome,
   destroyMainPinHost,
   ensureMainPinHost,
+  getMainPinHost,
   TAB_LIST_PINNED_CLASS,
 } from './tab-position'
 import { deriveShortName, isSettingsButton } from '../tabs/buttons'
@@ -128,8 +132,14 @@ const _mirrorToHost = new WeakMap<HTMLElement, HTMLElement>()
 const _noTabIdMirrorLogged = new Set<string>()
 
 /**
- * Enable or disable the main-drawer Canvas mirror mode + tab button sync.
+ * Enable or disable the main-drawer Canvas mirror PIN (taskbar chrome).
  * `force: true` re-applies even when already in the target state.
+ *
+ * S1 gate inversion: the mirror DRAWER shell is Canvas-owned unconditionally
+ * on desktop — `enabled` here only controls the PIN chrome (tab list
+ * reparented to the screen-edge host). `false` keeps the shell mounted and
+ * its button sync live; the tab list rides inside the drawer. Mobile always
+ * tears down the mirror entirely (host drawer is the mobile surface).
  */
 export function applyMainTabListPin(
   enabled: boolean,
@@ -141,27 +151,56 @@ export function applyMainTabListPin(
     return
   }
 
-  if (!enabled) {
-    teardownMainPin()
-    return
+  // Desktop: shell ownership first. Only force-remount when ENABLING (the
+  // old re-apply semantics) — unpinning must never churn panelContent, so
+  // the false branch mounts softly (no-op when the shell is already live).
+  if (enabled) {
+    applyMainMirrorDrawer(true, { force: !!opts?.force })
+  } else {
+    applyMainMirrorDrawer(true, { force: false })
   }
 
-  // Mount Canvas main shell + hide host (soft apply unless force).
-  applyMainMirrorDrawer(true, { force: !!opts?.force })
-
-  if (_state.enabled && !opts?.force) {
+  if (_state.enabled === enabled && !opts?.force) {
     scheduleReconcile()
     return
   }
 
-  commitState(() => ({ enabled: true }))
+  commitState(() => ({ enabled }))
   ensureObservers()
-  reconcileMainMirror()
+  if (enabled) {
+    // Pin chrome ON: reparent + sync (reconcileMainMirror pins via
+    // pinMainMirrorShellTabList, idempotent with the mount-time pin).
+    reconcileMainMirror()
+  } else {
+    // Pin chrome OFF: tab list back into the drawer; keep the shell's
+    // button sync live (the shell is the main drawer either way).
+    unpinMainMirrorShellTabList()
+    reconcileMainMirror()
+    void import('./strip-gutter').then((m) => m.clearStripGutters()).catch(() => {})
+  }
+}
+
+/** Tear down only the pin chrome, keep the mirror drawer shell (taskbar OFF). */
+function unpinMainMirrorForChromeOff(): void {
+  try { unpinMainMirrorShellTabList() } catch { /* ignore */ }
+  // Non-creating getter — never ensureMainPinHost here (would re-create the
+  // host we are about to destroy).
+  const host = getMainPinHost()
+  if (host) {
+    const pinnedLists = host.querySelectorAll(`.${TAB_LIST_PINNED_CLASS}`) as NodeListOf<HTMLElement>
+    for (const el of Array.from(pinnedLists)) clearPinnedTabListChrome(el)
+  }
+  destroyMainPinHost()
 }
 
 /**
  * Re-apply main pin from current settings + live DOM.
  * Safe on mount, side-change, viewport cross-up, and settings apply.
+ *
+ * S1 gate inversion: the main mirror shell is ALWAYS mounted on desktop —
+ * taskbarMode no longer gates ownership (it only controls the edge-strip
+ * pin chrome). Mobile still force-tears-down (host drawer is the mobile
+ * surface until the mobile task lands).
  */
 export function reconcileMainTabListPin(): void {
   if (isMobileViewport()) {
@@ -169,16 +208,23 @@ export function reconcileMainTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
+  // Drawer shell is always owned on desktop.
   reconcileMainMirrorDrawer()
-  const on = !!getSettings().taskbarMode
-  if (!on) {
-    teardownMainPin()
-    void import('./strip-gutter').then((m) => m.updateStripGutters())
-    return
+  const shouldPin = isTaskbarModeEnabled()
+  if (shouldPin) {
+    commitState(() => ({ enabled: true }))
+    ensureObservers()
+    reconcileMainMirror()
+  } else {
+    // Gate inversion: shell stays; only the pin chrome tears down.
+    if (_state.enabled) {
+      commitState(() => ({ enabled: false }))
+      unpinMainMirrorForChromeOff()
+    }
+    ensureObservers()
+    // Sync buttons into the shell's own tab list (rides with the panel).
+    reconcileMainMirror()
   }
-  commitState(() => ({ enabled: true }))
-  ensureObservers()
-  reconcileMainMirror()
   // Side-change remaps main/secondary strip gutters to left/right.
   void import('./strip-gutter').then((m) => m.updateStripGutters())
 }
@@ -306,7 +352,9 @@ export function adoptMainMirrorNeighbor(
   hostBtn: HTMLElement | null,
   title?: string,
 ): void {
-  if (!_state.enabled) return
+  // S1: shell liveness gate (mirror chrome is the main drawer on desktop
+  // regardless of pin state).
+  if (!isMainMirrorActive()) return
   const resolvedTitle =
     title ||
     hostBtn?.getAttribute('title') ||
@@ -339,10 +387,11 @@ export function adoptMainMirrorHostActivation(
   title?: string,
   opts?: { open?: boolean },
 ): void {
-  // Stamp exclusive key whenever pin is enabled — quiet DnD / handoff need
-  // the key even if the shell is mid-mount or briefly inactive. Skip open /
-  // park chrome until the mirror shell is live.
-  if (!_state.enabled) return
+  // Stamp exclusive key whenever the mirror chrome is live — quiet DnD /
+  // handoff need the key even if the shell is mid-mount or briefly inactive.
+  // S1: gate on shell liveness (the shell is the main drawer on desktop
+  // regardless of pin state), not on the pin flag.
+  if (!isMainMirrorActive() && !_state.enabled) return
 
   // Never adopt a host-active button that belongs to the SECONDARY drawer
   // (boot/restore transient — see isSecondaryAssignedHostButton).
@@ -388,7 +437,10 @@ export function adoptMainMirrorHostActivation(
   })
 }
 
-function teardownMainPin(): void {
+/** Full teardown of main pin + mirror shell (mobile cross-down, extension
+ *  disable). Unlike applyMainTabListPin(false) — which only unpins and keeps
+ *  the shell — this removes the Canvas main drawer entirely. */
+export function teardownMainPin(): void {
   commitState(() => ({ enabled: false, activeKey: null }))
   stopObservers()
   applyMainMirrorDrawer(false, { force: true })
@@ -400,17 +452,24 @@ function scheduleReconcile(): void {
   commitState(() => ({
     reconcileRaf: requestAnimationFrame(() => {
       commitState(() => ({ reconcileRaf: null }))
-      if (_state.enabled) reconcileMainMirror()
+      if (isMainMirrorActive()) reconcileMainMirror()
     }),
   }))
 }
 
 function reconcileMainMirror(): void {
-  if (!_state.enabled) return
+  // S1: sync is gated on shell liveness (desktop mirror mounted), not on pin
+  // state — the unpinned shell still needs buttons + active-key tracking.
+  if (!isMainMirrorActive()) return
 
   const side = getMainDrawerSide()
-  // Ensure pin host exists (shell mount also creates it).
-  ensureMainPinHost(side)
+  const pinned = _state.enabled
+  // Pin chrome: reparent the shell tab list into the body-level edge host
+  // (idempotent with the mount-time pin). Off → list rides in the drawer.
+  let host: HTMLElement | null = null
+  if (pinned) {
+    host = pinMainMirrorShellTabList(side)
+  }
 
   const list = resolveMirrorList()
   if (!list) return
@@ -419,15 +478,19 @@ function reconcileMainMirror(): void {
   if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
     list.classList.add(MAIN_MIRROR_LIST_CLASS)
   }
-  if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
-    list.classList.add(TAB_LIST_PINNED_CLASS)
-  }
-
-  // Pin host is ALWAYS visible while mode is active — never hide when
-  // host wrapperOpen flips (Canvas owns open/close).
-  const host = ensureMainPinHost(side)
-  if (host && host.style.display === 'none') {
-    host.style.display = ''
+  if (pinned) {
+    if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+      list.classList.add(TAB_LIST_PINNED_CLASS)
+    }
+    // Pin host is ALWAYS visible while pin chrome is active — never hide
+    // when host wrapperOpen flips (Canvas owns open/close).
+    if (host && host.style.display === 'none') {
+      host.style.display = ''
+    }
+  } else if (list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+    // Unpinned: drop the pinned-chrome flag so the list renders as an
+    // in-drawer tab column.
+    list.classList.remove(TAB_LIST_PINNED_CLASS)
   }
 
   const sidebar = getMainSidebar()
@@ -742,7 +805,9 @@ function resolveMirrorList(): HTMLElement | null {
   const fromShell = getMainMirrorTabList()
   if (fromShell) return fromShell
 
-  // Fallback: create a list on the pin host (tests / partial mount).
+  // Fallback: create a list on the pin host (tests / partial mount) — only
+  // while pin chrome is on; an unpinned shell-less state has nothing to sync.
+  if (!_state.enabled) return null
   const side = getMainDrawerSide()
   const host = ensureMainPinHost(side)
   if (!host) return null
