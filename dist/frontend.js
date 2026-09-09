@@ -101,14 +101,6 @@ var init_boot_diag = __esm(() => {
 // src/types.ts
 function normalizeCanvasSettingsFields(s) {
   let out = s;
-  if (out.taskbarMode && !out.moveControlsToOuterEdge) {
-    out = {
-      ...out,
-      taskbarMode: false,
-      hideDrawerOpenCloseButtons: false,
-      dragAndDropDrawerTabs: false
-    };
-  }
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
   }
@@ -169,9 +161,9 @@ var init_types = __esm(() => {
 // src/persist/backend-ctx.ts
 var exports_backend_ctx = {};
 __export(exports_backend_ctx, {
-  setBackendCtx: () => setBackendCtx,
+  CANVAS_VERSION: () => CANVAS_VERSION,
   getBackendCtx: () => getBackendCtx,
-  CANVAS_VERSION: () => CANVAS_VERSION
+  setBackendCtx: () => setBackendCtx
 });
 function getBackendCtx() {
   return _backendCtx;
@@ -215,13 +207,13 @@ var init_log = __esm(() => {
 // src/debug/persist-debug.ts
 var exports_persist_debug = {};
 __export(exports_persist_debug, {
-  syncPersistDebugToBackend: () => syncPersistDebugToBackend,
-  summarizeLayout: () => summarizeLayout,
-  refreshPersistDebugFlag: () => refreshPersistDebugFlag,
-  plog: () => plog,
-  logPersistSave: () => logPersistSave,
+  isPersistDebugEnabled: () => isPersistDebugEnabled,
   logPersistLoad: () => logPersistLoad,
-  isPersistDebugEnabled: () => isPersistDebugEnabled
+  logPersistSave: () => logPersistSave,
+  plog: () => plog,
+  refreshPersistDebugFlag: () => refreshPersistDebugFlag,
+  summarizeLayout: () => summarizeLayout,
+  syncPersistDebugToBackend: () => syncPersistDebugToBackend
 });
 function isPersistDebugEnabled() {
   if (_enabled !== null)
@@ -325,14 +317,14 @@ var init_persist_debug = __esm(() => {
 // src/dom/lumiverse.ts
 var exports_lumiverse = {};
 __export(exports_lumiverse, {
-  getMainWrapper: () => getMainWrapper,
-  getMainSidebar: () => getMainSidebar,
-  getMainPanelHeader: () => getMainPanelHeader,
-  getMainPanelContent: () => getMainPanelContent,
-  getMainPanel: () => getMainPanel,
-  getMainDrawerWidth: () => getMainDrawerWidth,
+  getChatColumn: () => getChatColumn,
   getMainDrawer: () => getMainDrawer,
-  getChatColumn: () => getChatColumn
+  getMainDrawerWidth: () => getMainDrawerWidth,
+  getMainPanel: () => getMainPanel,
+  getMainPanelContent: () => getMainPanelContent,
+  getMainPanelHeader: () => getMainPanelHeader,
+  getMainSidebar: () => getMainSidebar,
+  getMainWrapper: () => getMainWrapper
 });
 function getMainSidebar() {
   return document.querySelector('[data-spindle-mount="sidebar"]');
@@ -392,10 +384,10 @@ function getMainDrawerWidth() {
 // src/dom/host-bridge.ts
 var exports_host_bridge = {};
 __export(exports_host_bridge, {
-  setHostBridgeContext: () => setHostBridgeContext,
-  getHostBridgeContext: () => getHostBridgeContext,
+  ensureUiPanelsPermission: () => ensureUiPanelsPermission,
   getHostBridge: () => getHostBridge,
-  ensureUiPanelsPermission: () => ensureUiPanelsPermission
+  getHostBridgeContext: () => getHostBridgeContext,
+  setHostBridgeContext: () => setHostBridgeContext
 });
 function setHostBridgeContext(ctx) {
   _setupCtx = ctx;
@@ -1312,13 +1304,13 @@ var init_drawer_shell = __esm(() => {
 // src/sidebar/strip-gutter.ts
 var exports_strip_gutter = {};
 __export(exports_strip_gutter, {
-  updateStripGutters: () => updateStripGutters,
-  injectStripGutterStyles: () => injectStripGutterStyles,
-  computeStripGutters: () => computeStripGutters,
-  clearStripGutters: () => clearStripGutters,
-  STRIP_R_VAR: () => STRIP_R_VAR,
+  STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS,
   STRIP_L_VAR: () => STRIP_L_VAR,
-  STRIP_GUTTER_CLASS: () => STRIP_GUTTER_CLASS
+  STRIP_R_VAR: () => STRIP_R_VAR,
+  clearStripGutters: () => clearStripGutters,
+  computeStripGutters: () => computeStripGutters,
+  injectStripGutterStyles: () => injectStripGutterStyles,
+  updateStripGutters: () => updateStripGutters
 });
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
@@ -1427,28 +1419,28 @@ var init_strip_gutter = __esm(() => {
 // src/sidebar/tab-position.ts
 var exports_tab_position = {};
 __export(exports_tab_position, {
-  reconcileTabListPin: () => reconcileTabListPin,
-  isTabListPinned: () => isTabListPinned,
-  getTabListPosition: () => getTabListPosition,
-  getPinnedTabList: () => getPinnedTabList,
-  getMainPinHost: () => getMainPinHost,
-  ensureMainPinHost: () => ensureMainPinHost,
-  destroyMainPinHost: () => destroyMainPinHost,
-  clearPinnedTabListChrome: () => clearPinnedTabListChrome,
-  applyTabListPosition: () => applyTabListPosition,
-  applyTabListPin: () => applyTabListPin,
-  applyPinnedTabListChrome: () => applyPinnedTabListChrome,
-  __setPinHostForTest: () => __setPinHostForTest,
-  __setMainPinHostForTest: () => __setMainPinHostForTest,
-  __resetPinStateForTest: () => __resetPinStateForTest,
-  __getPinHostForTest: () => __getPinHostForTest,
-  __getMainPinHostForTest: () => __getMainPinHostForTest,
-  TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
-  TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
-  TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
-  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
+  PIN_OWNER_MAIN: () => PIN_OWNER_MAIN,
   PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
-  PIN_OWNER_MAIN: () => PIN_OWNER_MAIN
+  TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
+  TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
+  TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
+  TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
+  __getMainPinHostForTest: () => __getMainPinHostForTest,
+  __getPinHostForTest: () => __getPinHostForTest,
+  __resetPinStateForTest: () => __resetPinStateForTest,
+  __setMainPinHostForTest: () => __setMainPinHostForTest,
+  __setPinHostForTest: () => __setPinHostForTest,
+  applyPinnedTabListChrome: () => applyPinnedTabListChrome,
+  applyTabListPin: () => applyTabListPin,
+  applyTabListPosition: () => applyTabListPosition,
+  clearPinnedTabListChrome: () => clearPinnedTabListChrome,
+  destroyMainPinHost: () => destroyMainPinHost,
+  ensureMainPinHost: () => ensureMainPinHost,
+  getMainPinHost: () => getMainPinHost,
+  getPinnedTabList: () => getPinnedTabList,
+  getTabListPosition: () => getTabListPosition,
+  isTabListPinned: () => isTabListPinned,
+  reconcileTabListPin: () => reconcileTabListPin
 });
 function getPinnedTabList() {
   if (!_pinHost)
@@ -1852,6 +1844,23 @@ var init_tab_position = __esm(() => {
 });
 
 // src/dom/host-settings.ts
+var exports_host_settings = {};
+__export(exports_host_settings, {
+  __setHostSetSettingForTest: () => __setHostSetSettingForTest,
+  __setSettingsApiFetchForTest: () => __setSettingsApiFetchForTest,
+  clearHostSettingsCache: () => clearHostSettingsCache,
+  getHostDrawerSettings: () => getHostDrawerSettings,
+  isHostDrawerSettingsWritable: () => isHostDrawerSettingsWritable,
+  patchHostDrawerSettings: () => patchHostDrawerSettings,
+  writeHostDrawerSettingsViaApi: () => writeHostDrawerSettingsViaApi
+});
+function __setHostSetSettingForTest(fn, drawerSettings) {
+  _testSetSetting = fn;
+  if (drawerSettings !== undefined) {
+    _cachedDrawerSettings = drawerSettings;
+    _cacheTimestamp = Date.now();
+  }
+}
 function scanForHostSettings(fiber, depth, maxDepth, visited) {
   if (!fiber || depth > maxDepth || visited.has(fiber))
     return;
@@ -1972,12 +1981,18 @@ function patchHostDrawerSettings(partial) {
   findStoreData(true);
   return true;
 }
+function __setSettingsApiFetchForTest(fn) {
+  _settingsApiFetch = fn;
+}
 async function writeHostDrawerSettingsViaApi(patch) {
   try {
     const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
+    const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(3000) : undefined;
+    const initBase = signal ? { signal } : {};
     let current = {};
     try {
       const res2 = await doFetch("/api/v1/settings/drawerSettings", {
+        ...initBase,
         method: "GET",
         credentials: "include",
         headers: { Accept: "application/json" }
@@ -1991,6 +2006,7 @@ async function writeHostDrawerSettingsViaApi(patch) {
     } catch {}
     const merged = { ...current, ...patch };
     const res = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -2006,6 +2022,18 @@ async function writeHostDrawerSettingsViaApi(patch) {
     dlog("writeHostDrawerSettingsViaApi: failed", String(err));
     return false;
   }
+}
+function isHostDrawerSettingsWritable() {
+  if (_testSetSetting)
+    return true;
+  findHostSettings();
+  return _cachedSetSetting !== null;
+}
+function clearHostSettingsCache() {
+  _cachedDrawerSettings = null;
+  _cachedSetSetting = null;
+  _cacheTimestamp = 0;
+  _testSetSetting = null;
 }
 var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
 var init_host_settings = __esm(() => {
@@ -2317,6 +2345,81 @@ function foldIntents(model, intents) {
 }
 var init_reduce = () => {};
 
+// src/tabs/active-tab.ts
+var exports_active_tab = {};
+__export(exports_active_tab, {
+  getActiveSecondaryTabId: () => getActiveSecondaryTabId,
+  getActiveTabId: () => getActiveTabId,
+  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
+  resolvePrimaryActiveTabId: () => resolvePrimaryActiveTabId,
+  setActiveSecondaryTabId: () => setActiveSecondaryTabId
+});
+function getActiveTabId() {
+  findStoreData(true);
+  const store = getStoreSnapshot();
+  if (store && typeof store.drawerOpen === "boolean") {
+    if (!store.drawerOpen)
+      return { state: "closed" };
+    if (typeof store.drawerTab === "string") {
+      return { state: "active", id: store.drawerTab };
+    }
+  }
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return { state: "unknown" };
+  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]');
+  if (!activeBtn)
+    return { state: "unknown" };
+  const activeTitle = activeBtn.getAttribute("title") || "";
+  if (!activeTitle)
+    return { state: "unknown" };
+  const tabs = getDrawerTabs();
+  const tab = tabs.find((t) => t.title === activeTitle);
+  if (tab)
+    return { state: "active", id: tab.id };
+  return { state: "active", id: activeTitle };
+}
+function resolvePrimaryActiveTabId() {
+  const model = getModel();
+  if (model && isMainMirrorActive()) {
+    const key = model.active.primary;
+    if (!key)
+      return null;
+    return getHost()?.resolve(key) ?? null;
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar) {
+    const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const id = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || null;
+    if (id)
+      return id;
+  }
+  const active = getActiveTabId();
+  if (active.state === "active")
+    return active.id;
+  return null;
+}
+function isTabActiveInMainDrawer(tabId) {
+  const id = resolvePrimaryActiveTabId();
+  return id != null && id === tabId;
+}
+function getActiveSecondaryTabId() {
+  return _activeSecondaryTabId;
+}
+function setActiveSecondaryTabId(tabId, opts) {
+  const changed = tabId !== null && tabId !== _activeSecondaryTabId;
+  _activeSecondaryTabId = tabId;
+  if (changed && !opts?.silent) {
+    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => m.dispatchTrackedActiveSync()).catch(() => {});
+  }
+}
+var _activeSecondaryTabId = null;
+var init_active_tab = __esm(() => {
+  init_store();
+  init_dispatch();
+  init_main_mirror_drawer();
+});
+
 // src/recon/reconcile.ts
 function modelMatchesWorld(model, resolved, world) {
   for (const side of ["primary", "secondary"]) {
@@ -2407,6 +2510,20 @@ function diffActive(model, side, resolved, world) {
   const modelActive = model.active[side];
   if (!modelActive)
     return null;
+  if (side === "secondary") {
+    const trackedId = getActiveSecondaryTabId();
+    if (trackedId !== null) {
+      let trackedKey = null;
+      for (const [key, id2] of resolved) {
+        if (id2 === trackedId) {
+          trackedKey = key;
+          break;
+        }
+      }
+      if (trackedKey !== null && trackedKey !== modelActive)
+        return null;
+    }
+  }
   const id = resolved.get(modelActive);
   if (!id)
     return null;
@@ -2583,6 +2700,7 @@ async function reconcile(model, host) {
 var _epochId = 0, _activeEpoch = false, _echoDropped = 0, _nonEchoDetected = 0, _queuedPostEpoch = false;
 var init_reconcile = __esm(() => {
   init_log();
+  init_active_tab();
 });
 
 // src/core/model.ts
@@ -2930,286 +3048,7 @@ var init_layout_repo = __esm(() => {
   _pendingSaves = new Map;
 });
 
-// src/sidebar/main-tab-pin.ts
-var exports_main_tab_pin = {};
-__export(exports_main_tab_pin, {
-  reconcileMainTabListPin: () => reconcileMainTabListPin,
-  isMainTabPinEnabled: () => isMainTabPinEnabled,
-  isMainTabListPinActive: () => isMainTabListPinActive,
-  getMainMirrorActiveTabId: () => getMainMirrorActiveTabId,
-  getActiveMainMirrorKey: () => getActiveMainMirrorKey,
-  findNeighborHostButtonFor: () => findNeighborHostButtonFor,
-  applyMainTabListPin: () => applyMainTabListPin,
-  adoptMainMirrorNeighbor: () => adoptMainMirrorNeighbor,
-  adoptMainMirrorHostActivation: () => adoptMainMirrorHostActivation,
-  activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
-  __setMainTabPinEnabledForTest: () => __setMainTabPinEnabledForTest,
-  __setActiveMainMirrorKeyForTest: () => __setActiveMainMirrorKeyForTest,
-  __resetMainTabPinForTest: () => __resetMainTabPinForTest,
-  MAIN_MIRROR_LIST_MAIN_CLASS: () => MAIN_MIRROR_LIST_MAIN_CLASS,
-  MAIN_MIRROR_LIST_CLASS: () => MAIN_MIRROR_LIST_CLASS,
-  MAIN_MIRROR_LIST_BOTTOM_CLASS: () => MAIN_MIRROR_LIST_BOTTOM_CLASS,
-  MAIN_MIRROR_BTN_CLASS: () => MAIN_MIRROR_BTN_CLASS
-});
-function commitState(updater) {
-  const patch = updater(_state);
-  const activeChanged = patch.activeKey !== undefined && patch.activeKey !== null && patch.activeKey !== _state.activeKey;
-  Object.assign(_state, patch);
-  if (activeChanged) {
-    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => m.dispatchTrackedActiveSync()).catch((err) => {
-      dwarn("[main-mirror] active persist dispatch failed:", err);
-    });
-  }
-}
-function applyMainTabListPin(enabled, opts) {
-  if (isMobileViewport()) {
-    if (enabled && !opts?.force)
-      return;
-    teardownMainPin();
-    return;
-  }
-  if (!enabled) {
-    teardownMainPin();
-    return;
-  }
-  applyMainMirrorDrawer(true, { force: !!opts?.force });
-  if (_state.enabled && !opts?.force) {
-    scheduleReconcile();
-    return;
-  }
-  commitState(() => ({ enabled: true }));
-  ensureObservers();
-  reconcileMainMirror();
-}
-function reconcileMainTabListPin() {
-  if (isMobileViewport()) {
-    applyMainTabListPin(false, { force: true });
-    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-    return;
-  }
-  reconcileMainMirrorDrawer();
-  const on = !!getSettings().taskbarMode;
-  if (!on) {
-    teardownMainPin();
-    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-    return;
-  }
-  commitState(() => ({ enabled: true }));
-  ensureObservers();
-  reconcileMainMirror();
-  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-}
-function isMainTabListPinActive() {
-  return _state.enabled && isMainMirrorActive();
-}
-function __resetMainTabPinForTest() {
-  stopObservers();
-  _state = { ...initialState };
-  __resetMainMirrorForTest();
-  destroyMainPinHost();
-}
-function getActiveMainMirrorKey() {
-  return _state.activeKey;
-}
-function isMainTabPinEnabled() {
-  return _state.enabled;
-}
-function getMainMirrorActiveTabId() {
-  if (!_state.enabled)
-    return null;
-  const key = _state.activeKey;
-  if (!key)
-    return null;
-  if (key.startsWith("id__"))
-    return key.slice(4) || null;
-  if (key.startsWith("title__"))
-    return key.slice(7) || null;
-  return null;
-}
-function __setActiveMainMirrorKeyForTest(key) {
-  _state.activeKey = key;
-}
-function __setMainTabPinEnabledForTest(on) {
-  _state.enabled = on;
-}
-function activateMainMirrorFromRestore(hostBtn, title) {
-  if (_state.userPicked) {
-    dlog("[main-mirror] activate-from-restore skipped (user key established)", {
-      keepKey: _state.activeKey,
-      targetTitle: title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined
-    });
-    return;
-  }
-  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
-  if (hostBtn && hostBtn.isConnected) {
-    const key = hostButtonKey(hostBtn);
-    commitState(() => ({ activeKey: key, userPicked: false }));
-    try {
-      hostBtn.click();
-    } catch {}
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: false }));
-  }
-  onMainMirrorTabActivated(resolvedTitle);
-}
-function adoptMainMirrorNeighbor(hostBtn, title) {
-  if (!_state.enabled)
-    return;
-  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
-  if (hostBtn && hostBtn.isConnected) {
-    const key = hostButtonKey(hostBtn);
-    commitState(() => ({ activeKey: key, userPicked: true }));
-    try {
-      hostBtn.click();
-    } catch {}
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: true }));
-  }
-  onMainMirrorTabActivated(resolvedTitle);
-}
-function adoptMainMirrorHostActivation(hostBtn, title, opts) {
-  if (!_state.enabled)
-    return;
-  if (hostBtn && isSecondaryAssignedHostButton(hostBtn)) {
-    dlog("[main-mirror] adopt host activation skipped (secondary-assigned button)", {
-      key: hostButtonKey(hostBtn)
-    });
-    return;
-  }
-  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
-  if (hostBtn && hostBtn.isConnected) {
-    commitState(() => ({ activeKey: hostButtonKey(hostBtn), userPicked: false }));
-  } else if (resolvedTitle) {
-    commitState(() => ({ activeKey: `title__${resolvedTitle}`, userPicked: false }));
-  }
-  if (!isMainMirrorActive()) {
-    dlog("[main-mirror] adopt host activation (key only; shell inactive)", {
-      key: _state.activeKey,
-      title: resolvedTitle
-    });
-    return;
-  }
-  const shouldOpen = opts?.open !== false;
-  if (shouldOpen) {
-    onMainMirrorTabActivated(resolvedTitle);
-  } else if (resolvedTitle) {
-    setCanvasMainTitle(resolvedTitle);
-  }
-  scheduleReconcile();
-  dlog("[main-mirror] adopt host activation", {
-    key: _state.activeKey,
-    title: resolvedTitle,
-    open: shouldOpen
-  });
-}
-function teardownMainPin() {
-  commitState(() => ({ enabled: false, activeKey: null }));
-  stopObservers();
-  applyMainMirrorDrawer(false, { force: true });
-  destroyMainPinHost();
-}
-function scheduleReconcile() {
-  if (_state.reconcileRaf !== null)
-    return;
-  commitState(() => ({
-    reconcileRaf: requestAnimationFrame(() => {
-      commitState(() => ({ reconcileRaf: null }));
-      if (_state.enabled)
-        reconcileMainMirror();
-    })
-  }));
-}
-function reconcileMainMirror() {
-  if (!_state.enabled)
-    return;
-  const side = getMainDrawerSide();
-  ensureMainPinHost(side);
-  const list = resolveMirrorList();
-  if (!list)
-    return;
-  if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
-    list.classList.add(MAIN_MIRROR_LIST_CLASS);
-  }
-  if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
-    list.classList.add(TAB_LIST_PINNED_CLASS);
-  }
-  const host = ensureMainPinHost(side);
-  if (host && host.style.display === "none") {
-    host.style.display = "";
-  }
-  const sidebar = getMainSidebar();
-  if (!sidebar) {
-    while (list.firstChild)
-      list.removeChild(list.firstChild);
-    return;
-  }
-  if (sidebar !== _state.sidebar) {
-    attachSidebarObserver(sidebar);
-  }
-  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list);
-  const hostButtons = collectHostTabButtons(sidebar);
-  const regularButtons = hostButtons.filter((b) => !isSettingsButton(b));
-  const settingsButtons = hostButtons.filter((b) => isSettingsButton(b));
-  const wantedKeys = new Set(hostButtons.map((b) => hostButtonKey(b)));
-  if (_state.activeKey == null || !wantedKeys.has(_state.activeKey)) {
-    const prevKey = _state.activeKey;
-    const hiddenHostForKey = prevKey != null ? findHostButtonByKeyIncludingHidden(sidebar, prevKey) : null;
-    const midMoveHidden = !!hiddenHostForKey && hiddenHostForKey.style.display === "none";
-    if (midMoveHidden) {
-      dlog("[main-mirror] active key kept (mid-move host hidden)", { prevKey });
-    } else {
-      const hostActiveBtn = hostButtons.find((b) => hostHasTabBtnActive(b)) ?? null;
-      const hostActiveIsSecondary = hostActiveBtn != null && isSecondaryAssignedHostButton(hostActiveBtn);
-      if (hostActiveBtn && !hostActiveIsSecondary && !isSettingsButton(hostActiveBtn)) {
-        const newKey = hostButtonKey(hostActiveBtn);
-        commitState(() => ({ activeKey: newKey, userPicked: false }));
-        const t = hostActiveBtn.getAttribute("title") || hostActiveBtn.getAttribute("aria-label") || "";
-        if (t)
-          setCanvasMainTitle(t);
-      } else if (prevKey != null && !hostActiveIsSecondary) {
-        commitState(() => ({ activeKey: null, userPicked: false }));
-      }
-      if (prevKey !== _state.activeKey) {
-        dlog("[main-mirror] active key healed/seeded", {
-          prevKey,
-          nextKey: _state.activeKey
-        });
-      }
-    }
-  }
-  for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
-    const key = btn.getAttribute("data-mirror-key") || "";
-    if (!wantedKeys.has(key)) {
-      btn.remove();
-    }
-  }
-  syncMirrorButtonsInto(mainSection, regularButtons, list);
-  if (settingsButtons.length > 0) {
-    bottomSection.style.display = "flex";
-    syncMirrorButtonsInto(bottomSection, settingsButtons, list);
-  } else {
-    bottomSection.style.display = "none";
-    while (bottomSection.firstChild)
-      bottomSection.removeChild(bottomSection.firstChild);
-  }
-  if (_state.activeKey != null) {
-    const activeMirror = list.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(_state.activeKey)}"]`);
-    const title = activeMirror?.getAttribute("title") || activeMirror?.getAttribute("aria-label") || "";
-    if (title) {
-      setCanvasMainTitle(title);
-    }
-  }
-  dlog("[main-mirror] reconcile tabs", {
-    hostCount: hostButtons.length,
-    regularCount: regularButtons.length,
-    settingsCount: settingsButtons.length,
-    mirrorCount: list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`).length,
-    open: isCanvasMainOpen(),
-    hostOrder: hostButtons.map((b) => hostButtonKey(b)),
-    mirrorOrder: Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`)).map((b) => b.getAttribute("data-mirror-key") || mirrorButtonKey(b)),
-    activeKeys: hostButtons.filter((b) => String(b.className || "").includes("tabBtnActive")).map((b) => hostButtonKey(b))
-  });
-}
+// src/sidebar/main-renderer.ts
 function directChildByClass(parent, className) {
   for (const child of Array.from(parent.children)) {
     const el = child;
@@ -3276,40 +3115,49 @@ function ensureMirrorListStructure(list) {
   }
   return { main, bottom };
 }
-function syncMirrorButtonsInto(container, hostButtons, listRoot) {
-  let insertBefore = container.firstChild;
-  for (const hostBtn of hostButtons) {
-    const key = hostButtonKey(hostBtn);
-    let mirror = listRoot.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(key)}"]`);
-    if (!mirror) {
-      mirror = document.createElement("button");
-      mirror.type = "button";
-      mirror.classList.add(MAIN_MIRROR_BTN_CLASS);
-      mirror.setAttribute("data-mirror-key", key);
-      mirror.addEventListener("click", onMirrorClick);
-      mirror.addEventListener("contextmenu", onMirrorContextMenu);
-      container.insertBefore(mirror, insertBefore);
-    } else if (mirror.parentElement !== container || mirror !== insertBefore) {
-      container.insertBefore(mirror, insertBefore);
-    }
-    syncMirrorFromHost(mirror, hostBtn);
-    _mirrorToHost.set(mirror, hostBtn);
-    insertBefore = mirror.nextSibling;
-  }
-  for (const child of Array.from(container.children)) {
-    const el = child;
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
-      container.removeChild(el);
-      continue;
-    }
-    const key = el.getAttribute("data-mirror-key") || "";
-    if (!hostButtons.some((b) => hostButtonKey(b) === key)) {
-      container.removeChild(el);
-    }
-  }
+function keyTitle(key) {
+  const builtin = parseBuiltinKey(key);
+  if (builtin)
+    return builtin;
+  const ext = parseExtensionKey(key);
+  if (ext)
+    return ext.tabName;
+  return null;
 }
-function resolveMirrorLabeled(hostBtn) {
-  if (isSettingsButton(hostBtn))
+function twinForKey(key) {
+  const host = getHost();
+  const liveId = host ? host.resolve(key) : null;
+  if (liveId) {
+    const btn = findMainTabButton(liveId);
+    if (btn)
+      return { liveId, btn };
+  }
+  const title = keyTitle(key);
+  if (title) {
+    const btn = findMainTabButton(title);
+    return { liveId, btn };
+  }
+  return { liveId, btn: null };
+}
+function twinForMirror(mirror) {
+  const liveId = mirror.getAttribute("data-tab-id");
+  if (liveId) {
+    const btn = findMainTabButton(liveId);
+    if (btn)
+      return { liveId, btn };
+  }
+  const key = mirror.getAttribute("data-mirror-key");
+  if (key && !key.startsWith("__")) {
+    return twinForKey(key);
+  }
+  if (key === SETTINGS_MIRROR_KEY) {
+    const btn = findSettingsTwin();
+    return { liveId: btn?.getAttribute("data-tab-id") ?? null, btn };
+  }
+  return { liveId: liveId ?? null, btn: null };
+}
+function resolveMirrorLabeled(twin, isSettings) {
+  if (isSettings)
     return false;
   return isShowTabLabels();
 }
@@ -3340,147 +3188,16 @@ function applyMirrorButtonChrome(btn, labeled) {
   btn.style.color = "";
   btn.style.borderRadius = "";
 }
-function resolveMirrorList() {
-  const fromShell = getMainMirrorTabList();
-  if (fromShell)
-    return fromShell;
-  const side = getMainDrawerSide();
-  const host = ensureMainPinHost(side);
-  if (!host)
-    return null;
-  let list = host.querySelector(`.${MAIN_MIRROR_LIST_CLASS}`);
-  if (!list) {
-    list = host.querySelector(".sidebar-ux-tab-list");
-  }
-  if (!list) {
-    list = document.createElement("div");
-    list.classList.add("sidebar-ux-tab-list");
-    list.classList.add(MAIN_MIRROR_LIST_CLASS);
-    list.classList.add(TAB_LIST_PINNED_CLASS);
-    host.appendChild(list);
-  }
-  return list;
-}
-function collectHostTabButtons(sidebar) {
-  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
-  return buttons.filter((b) => b.style.display !== "none");
-}
-function hostButtonKey(btn) {
-  const id = btn.getAttribute("data-tab-id");
-  if (id)
-    return `id__${id}`;
-  const title = btn.getAttribute("title") || btn.getAttribute("aria-label") || "";
-  if (title)
-    return `title__${title}`;
-  return `node__${btn.tagName}__${btn.className}`;
-}
-function findHostButtonByKeyIncludingHidden(sidebar, key) {
-  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
-  return buttons.find((b) => hostButtonKey(b) === key) ?? null;
-}
-function findNeighborHostButtonFor(tabId) {
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return null;
-  const buttons = collectHostTabButtons(sidebar);
-  const idx = buttons.findIndex((b) => b.getAttribute("data-tab-id") === tabId);
-  if (idx === -1)
-    return null;
-  for (let i = idx - 1;i >= 0; i--) {
-    if (!isSettingsButton(buttons[i]))
-      return buttons[i];
-  }
-  for (let i = idx + 1;i < buttons.length; i++) {
-    if (!isSettingsButton(buttons[i]))
-      return buttons[i];
-  }
-  return null;
-}
-function mirrorButtonKey(mirror) {
-  const id = mirror.getAttribute("data-tab-id");
-  if (id)
-    return `id__${id}`;
-  const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || "";
-  if (title)
-    return `title__${title}`;
-  const dataKey = mirror.getAttribute("data-mirror-key");
-  if (dataKey)
-    return dataKey;
-  return `node__${mirror.tagName}__${mirror.className}`;
-}
-function hostHasTabBtnActive(host) {
-  if (!host)
-    return false;
-  return host.classList.contains("tabBtnActive") || String(host.className || "").includes("tabBtnActive");
-}
-function isSecondaryAssignedHostButton(btn) {
-  const id = btn.getAttribute("data-tab-id") || btn.getAttribute("title") || btn.getAttribute("aria-label") || "";
-  if (!id)
-    return false;
-  try {
-    return getTabSidebar(id) === "secondary";
-  } catch {
-    return false;
-  }
-}
-function syncMirrorFromHost(mirror, hostBtn) {
-  const tabId = hostBtn.getAttribute("data-tab-id");
-  if (tabId)
-    mirror.setAttribute("data-tab-id", tabId);
-  else
-    mirror.removeAttribute("data-tab-id");
-  if (!tabId) {
-    const key2 = hostButtonKey(hostBtn);
-    if (!_noTabIdMirrorLogged.has(key2)) {
-      _noTabIdMirrorLogged.add(key2);
-      dlog("[main-mirror] mirror button has no data-tab-id (host twin untagged)", {
-        key: key2,
-        title: hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || null,
-        hostCls: String(hostBtn.className || "")
-      });
-    }
-  }
-  const title = hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || "";
-  if (title) {
-    mirror.setAttribute("title", title);
-    mirror.setAttribute("aria-label", title);
-  }
-  const key = hostButtonKey(hostBtn);
-  const hostActive = hostHasTabBtnActive(hostBtn);
-  const canvasActive = _state.activeKey != null && key === _state.activeKey;
-  const showActive = isCanvasMainOpen() && (_state.activeKey != null ? canvasActive : hostActive);
-  const wasActive = mirror.classList.contains("sidebar-ux-tab-active");
-  mirror.classList.toggle("sidebar-ux-tab-active", showActive);
-  if (showActive !== wasActive) {
-    dlog("[main-mirror] active toggle", {
-      title: mirror.getAttribute("title"),
-      showActive,
-      hostActive,
-      canvasActive,
-      canvasKey: _state.activeKey,
-      open: isCanvasMainOpen()
-    });
-  }
-  const labeled = resolveMirrorLabeled(hostBtn);
-  mirror.classList.toggle("sidebar-ux-tab-labeled", labeled);
-  const nextHtml = buildMirrorInnerHtml(hostBtn, labeled);
-  if (mirror.getAttribute("data-mirror-html") !== nextHtml) {
-    mirror.setAttribute("data-mirror-html", nextHtml);
-    mirror.innerHTML = nextHtml;
-  }
-  applyMirrorButtonChrome(mirror, labeled);
-}
-function buildMirrorInnerHtml(hostBtn, labeled) {
+function buildMirrorInnerHtml(twin, labeled, isSettings, fallbackTitle) {
   const parts = [];
-  const svg = hostBtn.querySelector("svg");
+  const svg = twin?.querySelector("svg") ?? null;
   if (svg) {
     parts.push(`<span>${svg.outerHTML}</span>`);
   }
-  if (labeled && !isSettingsButton(hostBtn)) {
-    const hostLabel = hostBtn.querySelector('span[class*="tabLabel"]');
+  if (labeled && !isSettings) {
+    const hostLabel = twin?.querySelector('span[class*="tabLabel"]');
     const fromHost = hostLabel ? (hostLabel.textContent || "").trim() : "";
-    const title = hostBtn.getAttribute("title") || hostBtn.getAttribute("aria-label") || "";
-    const text = fromHost || (title ? deriveShortName(title) : "");
+    const text = fromHost || (fallbackTitle ? deriveShortName(fallbackTitle) : "");
     if (text) {
       parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
     }
@@ -3496,21 +3213,142 @@ function cssAttrEscape(value) {
   }
   return value.replace(/(["\\])/g, "\\$1");
 }
+function findSettingsTwin() {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return null;
+  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
+  for (const btn of buttons) {
+    if (isSettingsButton(btn))
+      return btn;
+  }
+  return null;
+}
+function ensureMirrorButton(container, listRoot, mirrorKey, insertBefore) {
+  let mirror = listRoot.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(mirrorKey)}"]`);
+  if (!mirror) {
+    mirror = document.createElement("button");
+    mirror.type = "button";
+    mirror.classList.add(MAIN_MIRROR_BTN_CLASS);
+    mirror.setAttribute("data-mirror-key", mirrorKey);
+    mirror.addEventListener("click", onMirrorClick);
+    mirror.addEventListener("contextmenu", onMirrorContextMenu);
+    container.insertBefore(mirror, insertBefore);
+  } else if (mirror.parentElement !== container || mirror !== insertBefore) {
+    container.insertBefore(mirror, insertBefore);
+  }
+  return mirror;
+}
+function renderMainMirrorTabs() {
+  const list = getMainMirrorTabList();
+  if (!list)
+    return;
+  if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
+    list.classList.add(MAIN_MIRROR_LIST_CLASS);
+  }
+  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list);
+  const model = getModel();
+  if (!model) {
+    return;
+  }
+  const open = isCanvasMainOpen();
+  const activeKey = model.active.primary;
+  const regularKeys = model.primary;
+  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
+  const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length ? regularKeys[0] : null;
+  let insertBefore = mainSection.firstChild;
+  for (const key of regularKeys) {
+    const twin = twinForKey(key);
+    const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
+    insertBefore = mirror.nextSibling;
+    if (twin.liveId)
+      mirror.setAttribute("data-tab-id", twin.liveId);
+    else
+      mirror.removeAttribute("data-tab-id");
+    const fallbackTitle = keyTitle(key) ?? twin.btn?.getAttribute("title") ?? "";
+    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || fallbackTitle;
+    if (title) {
+      mirror.setAttribute("title", title);
+      mirror.setAttribute("aria-label", title);
+    }
+    const hidden = isHidden(model, key) && key !== forceVisibleKey;
+    mirror.style.display = hidden ? "none" : "";
+    const showActive = open && activeKey === key && !hidden;
+    mirror.classList.toggle("sidebar-ux-tab-active", showActive);
+    const labeled = resolveMirrorLabeled(twin.btn, false);
+    mirror.classList.toggle("sidebar-ux-tab-labeled", labeled);
+    const nextHtml = buildMirrorInnerHtml(twin.btn, labeled, false, title);
+    if (mirror.getAttribute("data-mirror-html") !== nextHtml) {
+      mirror.setAttribute("data-mirror-html", nextHtml);
+      mirror.innerHTML = nextHtml;
+    }
+    applyMirrorButtonChrome(mirror, labeled);
+  }
+  const wantedKeys = new Set(regularKeys);
+  for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
+    const key = btn.getAttribute("data-mirror-key") || "";
+    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
+      btn.remove();
+    }
+  }
+  for (const child of Array.from(mainSection.children)) {
+    const el = child;
+    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+      mainSection.removeChild(el);
+    }
+  }
+  const settingsTwin = findSettingsTwin();
+  if (settingsTwin) {
+    bottomSection.style.display = "flex";
+    const settingsMirror = ensureMirrorButton(bottomSection, list, SETTINGS_MIRROR_KEY, bottomSection.firstChild);
+    const title = settingsTwin.getAttribute("title") || settingsTwin.getAttribute("aria-label") || "Settings";
+    const settingsTwinId = settingsTwin.getAttribute("data-tab-id") || "";
+    if (settingsTwinId)
+      settingsMirror.setAttribute("data-tab-id", settingsTwinId);
+    else
+      settingsMirror.removeAttribute("data-tab-id");
+    settingsMirror.setAttribute("title", title);
+    settingsMirror.setAttribute("aria-label", title);
+    settingsMirror.classList.remove("sidebar-ux-tab-active");
+    settingsMirror.classList.remove("sidebar-ux-tab-labeled");
+    const settingsHtml = buildMirrorInnerHtml(settingsTwin, false, true, title);
+    if (settingsMirror.getAttribute("data-mirror-html") !== settingsHtml) {
+      settingsMirror.setAttribute("data-mirror-html", settingsHtml);
+      settingsMirror.innerHTML = settingsHtml;
+    }
+    applyMirrorButtonChrome(settingsMirror, false);
+  } else {
+    bottomSection.style.display = "none";
+    while (bottomSection.firstChild)
+      bottomSection.removeChild(bottomSection.firstChild);
+  }
+  if (open && activeKey !== null && visibleKeys(model, "primary").length > 0) {
+    const twin = twinForKey(activeKey);
+    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || keyTitle(activeKey) || "";
+    if (title)
+      setCanvasMainTitle(title);
+  }
+  dlog("[main-renderer] render tabs", {
+    order: Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`)).map((b) => b.getAttribute("data-mirror-key") || "?"),
+    activeKey,
+    open,
+    hidden: model.hidden.length
+  });
+}
 function onMirrorClick(ev) {
   ev.preventDefault();
   ev.stopPropagation();
   const mirror = ev.currentTarget;
+  const key = mirror.getAttribute("data-mirror-key") || "";
   const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || undefined;
-  const hostBtn = _mirrorToHost.get(mirror);
-  const key = hostBtn ? hostButtonKey(hostBtn) : mirrorButtonKey(mirror);
-  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null;
-  const isSettings = settingsHost != null && isSettingsButton(settingsHost) || isSettingsButton(mirror);
+  const twin = twinForMirror(mirror);
+  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror) || twin.btn != null && isSettingsButton(twin.btn);
   if (isSettings) {
-    dlog("[main-mirror] click → settings (host only, no canvas tab)", { key });
-    let target = settingsHost;
-    if (!target || !target.isConnected) {
-      reconcileMainMirror();
-      target = _mirrorToHost.get(mirror) ?? null;
+    dlog("[main-renderer] click → settings (host only, no canvas tab)", { key });
+    let target = twin.btn && twin.btn.isConnected ? twin.btn : null;
+    if (!target) {
+      renderMainMirrorTabs();
+      target = twinForMirror(mirror).btn;
     }
     if (target && target.isConnected) {
       try {
@@ -3519,37 +3357,23 @@ function onMirrorClick(ev) {
     }
     return;
   }
-  const wasActive = _state.activeKey != null ? key === _state.activeKey : mirror.classList.contains("sidebar-ux-tab-active") || hostHasTabBtnActive(hostBtn);
-  if (isCanvasMainOpen() && wasActive) {
-    dlog("[main-mirror] click → close (active tab)", { title, key });
+  const model = getModel();
+  if (isCanvasMainOpen() && model != null && model.active.primary === key) {
+    dlog("[main-renderer] click → close (active tab)", { title, key });
     closeCanvasMainDrawer();
     return;
   }
-  dlog("[main-mirror] click", {
-    title,
-    key,
-    hostConnected: !!(hostBtn && hostBtn.isConnected),
-    open: isCanvasMainOpen()
-  });
-  if (!hostBtn || !hostBtn.isConnected) {
-    reconcileMainMirror();
-    const again = _mirrorToHost.get(mirror);
-    if (again && again.isConnected) {
-      const againKey = hostButtonKey(again);
-      commitState(() => ({ activeKey: againKey, userPicked: true }));
-      try {
-        again.click();
-      } catch {}
-    } else {
-      commitState(() => ({ activeKey: key, userPicked: true }));
-    }
-    onMainMirrorTabActivated(title);
-    return;
+  if (twin.btn && twin.btn.isConnected) {
+    try {
+      twin.btn.click();
+    } catch {}
   }
-  commitState(() => ({ activeKey: key, userPicked: true }));
-  try {
-    hostBtn.click();
-  } catch {}
+  const liveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
+  if (liveId) {
+    dispatchActivateByLiveId(liveId, "primary").catch(() => {});
+  } else if (key && !key.startsWith("__")) {
+    dispatch({ t: "activate", key, side: "primary" }).catch(() => {});
+  }
   onMainMirrorTabActivated(title);
 }
 function onMirrorContextMenu(ev) {
@@ -3557,30 +3381,30 @@ function onMirrorContextMenu(ev) {
   e.preventDefault();
   e.stopPropagation();
   const mirror = e.currentTarget;
-  let hostBtn = _mirrorToHost.get(mirror);
-  const settingsHost = hostBtn && hostBtn.isConnected ? hostBtn : null;
-  const isSettings = settingsHost != null && isSettingsButton(settingsHost) || isSettingsButton(mirror);
+  const key = mirror.getAttribute("data-mirror-key") || "";
+  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror);
   if (isSettings) {
-    dlog("[main-mirror] contextmenu → settings (no host forward)");
+    dlog("[main-renderer] contextmenu → settings (no host forward)");
     return;
   }
-  if (!hostBtn || !hostBtn.isConnected) {
-    reconcileMainMirror();
-    hostBtn = _mirrorToHost.get(mirror);
+  let twin = twinForMirror(mirror);
+  if ((!twin.btn || !twin.btn.isConnected) && !key.startsWith("__")) {
+    renderMainMirrorTabs();
+    twin = twinForMirror(mirror);
   }
-  if (!hostBtn || !hostBtn.isConnected) {
-    dwarn("[main-mirror] contextmenu: no connected host twin", {
+  if (!twin.btn || !twin.btn.isConnected) {
+    dwarn("[main-renderer] contextmenu: no connected host twin", {
       title: mirror.getAttribute("title")
     });
     return;
   }
-  dlog("[main-mirror] contextmenu → host forward", {
-    title: hostBtn.getAttribute("title") || mirror.getAttribute("title"),
+  dlog("[main-renderer] contextmenu → host forward", {
+    title: twin.btn.getAttribute("title") || mirror.getAttribute("title"),
     x: e.clientX,
     y: e.clientY
   });
   try {
-    hostBtn.dispatchEvent(new MouseEvent("contextmenu", {
+    twin.btn.dispatchEvent(new MouseEvent("contextmenu", {
       bubbles: true,
       cancelable: true,
       view: window,
@@ -3590,8 +3414,205 @@ function onMirrorContextMenu(ev) {
       buttons: 2
     }));
   } catch (err) {
-    dwarn("[main-mirror] contextmenu: host dispatch failed", err);
+    dwarn("[main-renderer] contextmenu: host dispatch failed", err);
   }
+}
+function scheduleMainMirrorRender() {
+  if (_renderRaf !== null)
+    return;
+  if (typeof requestAnimationFrame !== "function") {
+    renderMainMirrorTabs();
+    return;
+  }
+  _renderRaf = requestAnimationFrame(() => {
+    _renderRaf = null;
+    try {
+      renderMainMirrorTabs();
+    } catch {}
+  });
+}
+function initMainRenderer() {
+  if (!_unsubModelChanged) {
+    _unsubModelChanged = onModelChanged(() => scheduleMainMirrorRender());
+  }
+  renderMainMirrorTabs();
+}
+function teardownMainRenderer() {
+  if (_unsubModelChanged) {
+    _unsubModelChanged();
+    _unsubModelChanged = null;
+  }
+  if (_renderRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_renderRaf);
+  }
+  _renderRaf = null;
+}
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged = null, _renderRaf = null;
+var init_main_renderer = __esm(() => {
+  init_dispatch();
+  init_drawer_sync();
+  init_main_mirror_drawer();
+  init_buttons();
+  init_log();
+});
+
+// src/sidebar/main-tab-pin.ts
+var exports_main_tab_pin = {};
+__export(exports_main_tab_pin, {
+  __resetMainTabPinForTest: () => __resetMainTabPinForTest,
+  activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
+  applyMainTabListPin: () => applyMainTabListPin,
+  isMainTabListPinActive: () => isMainTabListPinActive,
+  reconcileMainTabListPin: () => reconcileMainTabListPin,
+  teardownMainPin: () => teardownMainPin
+});
+function commitState(updater) {
+  Object.assign(_state, updater(_state));
+}
+function applyMainTabListPin(enabled, opts) {
+  if (isMobileViewport()) {
+    if (enabled && !opts?.force)
+      return;
+    teardownMainPin();
+    return;
+  }
+  if (enabled) {
+    applyMainMirrorDrawer(true, { force: !!opts?.force });
+  } else {
+    applyMainMirrorDrawer(true, { force: false });
+  }
+  initMainRenderer();
+  if (_state.enabled === enabled && !opts?.force) {
+    scheduleReconcile();
+    return;
+  }
+  commitState(() => ({ enabled }));
+  ensureObservers();
+  if (enabled) {
+    reconcileMainMirror();
+  } else {
+    unpinMainMirrorShellTabList();
+    reconcileMainMirror();
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.clearStripGutters()).catch(() => {});
+  }
+}
+function unpinMainMirrorForChromeOff() {
+  try {
+    unpinMainMirrorShellTabList();
+  } catch {}
+  const host = getMainPinHost();
+  if (host) {
+    const pinnedLists = host.querySelectorAll(`.${TAB_LIST_PINNED_CLASS}`);
+    for (const el of Array.from(pinnedLists))
+      clearPinnedTabListChrome(el);
+  }
+  destroyMainPinHost();
+}
+function reconcileMainTabListPin() {
+  if (isMobileViewport()) {
+    applyMainTabListPin(false, { force: true });
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+    return;
+  }
+  reconcileMainMirrorDrawer();
+  initMainRenderer();
+  const shouldPin = isTaskbarModeEnabled();
+  if (shouldPin) {
+    commitState(() => ({ enabled: true }));
+    ensureObservers();
+    reconcileMainMirror();
+  } else {
+    if (_state.enabled) {
+      commitState(() => ({ enabled: false }));
+      unpinMainMirrorForChromeOff();
+    }
+    ensureObservers();
+    reconcileMainMirror();
+  }
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+}
+function isMainTabListPinActive() {
+  return _state.enabled && isMainMirrorActive();
+}
+function __resetMainTabPinForTest() {
+  stopObservers();
+  teardownMainRenderer();
+  _state = { ...initialState };
+  __resetMainMirrorForTest();
+  destroyMainPinHost();
+}
+function teardownMainPin() {
+  commitState(() => ({ enabled: false }));
+  stopObservers();
+  teardownMainRenderer();
+  applyMainMirrorDrawer(false, { force: true });
+  destroyMainPinHost();
+}
+function scheduleReconcile() {
+  if (_state.reconcileRaf !== null)
+    return;
+  commitState(() => ({
+    reconcileRaf: requestAnimationFrame(() => {
+      commitState(() => ({ reconcileRaf: null }));
+      if (isMainMirrorActive())
+        reconcileMainMirror();
+    })
+  }));
+}
+function reconcileMainMirror() {
+  if (!isMainMirrorActive())
+    return;
+  const side = getMainDrawerSide();
+  const pinned = _state.enabled;
+  let host = null;
+  if (pinned) {
+    host = pinMainMirrorShellTabList(side);
+  }
+  const list = resolveMirrorList();
+  if (!list)
+    return;
+  if (pinned) {
+    if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+      list.classList.add(TAB_LIST_PINNED_CLASS);
+    }
+    if (host && host.style.display === "none") {
+      host.style.display = "";
+    }
+  } else if (list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+    list.classList.remove(TAB_LIST_PINNED_CLASS);
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar && sidebar !== _state.sidebar) {
+    attachSidebarObserver(sidebar);
+  }
+  renderMainMirrorTabs();
+}
+function resolveMirrorList() {
+  const fromShell = getMainMirrorTabList();
+  if (fromShell)
+    return fromShell;
+  if (!_state.enabled)
+    return null;
+  const side = getMainDrawerSide();
+  const host = ensureMainPinHost(side);
+  if (!host)
+    return null;
+  let list = host.querySelector(".sidebar-ux-tab-list");
+  if (!list) {
+    list = document.createElement("div");
+    list.classList.add("sidebar-ux-tab-list");
+    host.appendChild(list);
+  }
+  return list;
+}
+function activateMainMirrorFromRestore(hostBtn, title) {
+  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
+  if (hostBtn && hostBtn.isConnected) {
+    try {
+      hostBtn.click();
+    } catch {}
+  }
+  onMainMirrorTabActivated(resolvedTitle);
 }
 function ensureObservers() {
   const sidebar = getMainSidebar();
@@ -3627,110 +3648,33 @@ function stopObservers() {
     commitState(() => ({ reconcileRaf: null }));
   }
 }
-var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", initialState, _state, _mirrorToHost, _noTabIdMirrorLogged;
+var initialState, _state;
 var init_main_tab_pin = __esm(() => {
   init_store();
   init_state();
-  init_log();
   init_mobile_exclusion();
-  init_drawer_sync();
-  init_assignment();
   init_main_mirror_drawer();
   init_tab_position();
-  init_buttons();
+  init_main_renderer();
   initialState = {
     enabled: false,
-    activeKey: null,
-    userPicked: false,
     sidebar: null,
     observer: null,
     reconcileRaf: null
   };
   _state = { ...initialState };
-  _mirrorToHost = new WeakMap;
-  _noTabIdMirrorLogged = new Set;
-});
-
-// src/tabs/active-tab.ts
-var exports_active_tab = {};
-__export(exports_active_tab, {
-  setActiveSecondaryTabId: () => setActiveSecondaryTabId,
-  resolvePrimaryActiveTabId: () => resolvePrimaryActiveTabId,
-  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
-  getActiveTabId: () => getActiveTabId,
-  getActiveSecondaryTabId: () => getActiveSecondaryTabId
-});
-function getActiveTabId() {
-  findStoreData(true);
-  const store = getStoreSnapshot();
-  if (store && typeof store.drawerOpen === "boolean") {
-    if (!store.drawerOpen)
-      return { state: "closed" };
-    if (typeof store.drawerTab === "string") {
-      return { state: "active", id: store.drawerTab };
-    }
-  }
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return { state: "unknown" };
-  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]');
-  if (!activeBtn)
-    return { state: "unknown" };
-  const activeTitle = activeBtn.getAttribute("title") || "";
-  if (!activeTitle)
-    return { state: "unknown" };
-  const tabs = getDrawerTabs();
-  const tab = tabs.find((t) => t.title === activeTitle);
-  if (tab)
-    return { state: "active", id: tab.id };
-  return { state: "active", id: activeTitle };
-}
-function resolvePrimaryActiveTabId() {
-  if (isMainTabPinEnabled()) {
-    return getMainMirrorActiveTabId();
-  }
-  const sidebar = getMainSidebar();
-  if (sidebar) {
-    const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-    const id = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || null;
-    if (id)
-      return id;
-  }
-  const active = getActiveTabId();
-  if (active.state === "active")
-    return active.id;
-  return null;
-}
-function isTabActiveInMainDrawer(tabId) {
-  const id = resolvePrimaryActiveTabId();
-  return id != null && id === tabId;
-}
-function getActiveSecondaryTabId() {
-  return _activeSecondaryTabId;
-}
-function setActiveSecondaryTabId(tabId) {
-  const changed = tabId !== null && tabId !== _activeSecondaryTabId;
-  _activeSecondaryTabId = tabId;
-  if (changed) {
-    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => m.dispatchTrackedActiveSync()).catch(() => {});
-  }
-}
-var _activeSecondaryTabId = null;
-var init_active_tab = __esm(() => {
-  init_store();
-  init_main_tab_pin();
 });
 
 // src/tabs/host-tab-location.ts
 var exports_host_tab_location = {};
 __export(exports_host_tab_location, {
-  requestHostTabToSecondary: () => requestHostTabToSecondary,
-  requestHostTabToMain: () => requestHostTabToMain,
-  requestHostTabLocation: () => requestHostTabLocation,
-  locationMatches: () => locationMatches,
-  getHostMoveTabTo: () => getHostMoveTabTo,
+  CANVAS_SECONDARY_CONTAINER_ID: () => CANVAS_SECONDARY_CONTAINER_ID,
   __setHostMoveTabToForTest: () => __setHostMoveTabToForTest,
-  CANVAS_SECONDARY_CONTAINER_ID: () => CANVAS_SECONDARY_CONTAINER_ID
+  getHostMoveTabTo: () => getHostMoveTabTo,
+  locationMatches: () => locationMatches,
+  requestHostTabLocation: () => requestHostTabLocation,
+  requestHostTabToMain: () => requestHostTabToMain,
+  requestHostTabToSecondary: () => requestHostTabToSecondary
 });
 function __setHostMoveTabToForTest(fn) {
   _testMoveTabTo = fn;
@@ -3953,15 +3897,15 @@ var init_dom_placed_builtin = __esm(() => {
 // src/tabs/builtin-move.ts
 var exports_builtin_move = {};
 __export(exports_builtin_move, {
-  restoreDomPlacedBuiltInToMain: () => restoreDomPlacedBuiltInToMain,
-  resolveMainPanelContentForRestore: () => resolveMainPanelContentForRestore,
-  moveBuiltInTabToSecondaryContainer: () => moveBuiltInTabToSecondaryContainer,
-  markDomPlacedBuiltIn: () => markDomPlacedBuiltIn,
-  isDomPlacedBuiltIn: () => isDomPlacedBuiltIn,
-  clearDomPlacedBuiltIn: () => clearDomPlacedBuiltIn,
-  __setSecondaryContentForTest: () => __setSecondaryContentForTest,
+  CANVAS_DOM_PLACED_ATTR: () => CANVAS_DOM_PLACED_ATTR,
   __clearDomPlacedForTest: () => __clearDomPlacedForTest,
-  CANVAS_DOM_PLACED_ATTR: () => CANVAS_DOM_PLACED_ATTR
+  __setSecondaryContentForTest: () => __setSecondaryContentForTest,
+  clearDomPlacedBuiltIn: () => clearDomPlacedBuiltIn,
+  isDomPlacedBuiltIn: () => isDomPlacedBuiltIn,
+  markDomPlacedBuiltIn: () => markDomPlacedBuiltIn,
+  moveBuiltInTabToSecondaryContainer: () => moveBuiltInTabToSecondaryContainer,
+  resolveMainPanelContentForRestore: () => resolveMainPanelContentForRestore,
+  restoreDomPlacedBuiltInToMain: () => restoreDomPlacedBuiltInToMain
 });
 function __setSecondaryContentForTest(el) {
   _testSecondaryContent = el;
@@ -4116,18 +4060,18 @@ var init_builtin_move = __esm(() => {
 // src/sidebar/secondary-drawer.ts
 var exports_secondary_drawer = {};
 __export(exports_secondary_drawer, {
-  unassignFromSecondary: () => unassignFromSecondary,
-  teardownSecondaryDrawer: () => teardownSecondaryDrawer,
-  setSuppressAutoActivation: () => setSuppressAutoActivation,
-  setRestoringFromLayout: () => setRestoringFromLayout,
-  markDrawerOpenState: () => markDrawerOpenState,
-  isSuppressAutoActivation: () => isSuppressAutoActivation,
-  isRestoringFromLayout: () => isRestoringFromLayout,
-  initSecondaryDrawer: () => initSecondaryDrawer,
-  getSecondaryDrawerState: () => getSecondaryDrawerState,
-  getActiveSecondaryTab: () => getActiveSecondaryTab,
+  activateSecondaryTab: () => activateSecondaryTab,
   assignToSecondary: () => assignToSecondary,
-  activateSecondaryTab: () => activateSecondaryTab
+  getActiveSecondaryTab: () => getActiveSecondaryTab,
+  getSecondaryDrawerState: () => getSecondaryDrawerState,
+  initSecondaryDrawer: () => initSecondaryDrawer,
+  isRestoringFromLayout: () => isRestoringFromLayout,
+  isSuppressAutoActivation: () => isSuppressAutoActivation,
+  markDrawerOpenState: () => markDrawerOpenState,
+  setRestoringFromLayout: () => setRestoringFromLayout,
+  setSuppressAutoActivation: () => setSuppressAutoActivation,
+  teardownSecondaryDrawer: () => teardownSecondaryDrawer,
+  unassignFromSecondary: () => unassignFromSecondary
 });
 function setRestoringFromLayout(value) {
   _restoringFromLayout = value;
@@ -4678,24 +4622,44 @@ var init_secondary_drawer = __esm(() => {
 // src/recon/dispatch.ts
 var exports_dispatch = {};
 __export(exports_dispatch, {
-  snapshotOwnedModelLayout: () => snapshotOwnedModelLayout,
-  shutdown: () => shutdown,
-  placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
-  getModel: () => getModel,
-  getHost: () => getHost,
-  flush: () => flush,
-  dispatchTrackedActiveSync: () => dispatchTrackedActiveSync,
-  dispatchMoveByLiveId: () => dispatchMoveByLiveId,
-  dispatchBatch: () => dispatchBatch,
-  dispatchActivateByLiveId: () => dispatchActivateByLiveId,
-  dispatch: () => dispatch,
-  captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
-  captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
-  bootstrapFromLayout: () => bootstrapFromLayout,
-  bootstrap: () => bootstrap,
+  applyMainMirrorMoveChrome: () => applyMainMirrorMoveChrome,
   applySecondaryNeighborHandoff: () => applySecondaryNeighborHandoff,
-  applyMainMirrorMoveChrome: () => applyMainMirrorMoveChrome
+  bootPlacementDone: () => bootPlacementDone,
+  bootstrap: () => bootstrap,
+  bootstrapFromLayout: () => bootstrapFromLayout,
+  captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
+  captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
+  dispatch: () => dispatch,
+  dispatchActivateByLiveId: () => dispatchActivateByLiveId,
+  dispatchBatch: () => dispatchBatch,
+  dispatchMoveByLiveId: () => dispatchMoveByLiveId,
+  dispatchTrackedActiveSync: () => dispatchTrackedActiveSync,
+  flush: () => flush,
+  getHost: () => getHost,
+  getModel: () => getModel,
+  onModelChanged: () => onModelChanged,
+  placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
+  shutdown: () => shutdown,
+  snapshotOwnedModelLayout: () => snapshotOwnedModelLayout
 });
+function onModelChanged(cb) {
+  _modelSubscribers.add(cb);
+  return () => {
+    _modelSubscribers.delete(cb);
+  };
+}
+function commitModel(next) {
+  if (_model === next)
+    return;
+  _model = next;
+  if (next === null)
+    return;
+  for (const cb of Array.from(_modelSubscribers)) {
+    try {
+      cb();
+    } catch {}
+  }
+}
 function pendingLayoutTabCount(layout) {
   if (!layout || typeof layout !== "object")
     return 0;
@@ -4761,7 +4725,7 @@ function sameKeys2(a, b) {
 function bootstrap(model, host, version) {
   _unsubscribeWorldChanged?.();
   const gen = ++_generation;
-  _model = model;
+  commitModel(model);
   _host = host;
   _version = version ?? "unknown";
   _bootstrapping = true;
@@ -4781,7 +4745,7 @@ function bootstrap(model, host, version) {
     if (gen !== _generation || _host !== host)
       return;
     if (next !== model)
-      _model = next;
+      commitModel(next);
     _bootstrapping = false;
     if (_worldSyncPending) {
       _worldSyncPending = false;
@@ -4816,7 +4780,7 @@ function enqueueHostSync(host, generation) {
         _restoringPending = true;
         try {
           if (generation === _generation) {
-            _model = await reconcileAndPersist(merged, generation);
+            commitModel(await reconcileAndPersist(merged, generation));
           }
         } finally {
           _restoringPending = false;
@@ -4854,7 +4818,7 @@ function enqueueHostSync(host, generation) {
       return;
     const result = await reconcileAndPersist(next, generation);
     if (generation === _generation)
-      _model = result;
+      commitModel(result);
   });
   _queue = task.catch(() => {});
   return task;
@@ -4871,6 +4835,7 @@ function shutdown() {
   _pendingLayout = null;
   _restoringPending = false;
   _restoreDeadline = 0;
+  _bootPlacementPass = null;
   _queue = Promise.resolve();
 }
 function getModel() {
@@ -4958,8 +4923,8 @@ function dispatch(intent) {
       dlog("[dispatch] no-op (reduce returned same model)", { t: intent.t });
       return;
     }
-    _model = next;
-    _model = await reconcileAndPersist(next, gen);
+    commitModel(next);
+    commitModel(await reconcileAndPersist(next, gen));
   });
   _queue = task.catch(() => {});
   return task;
@@ -4982,8 +4947,8 @@ function dispatchBatch(intents) {
     });
     if (next === _model)
       return;
-    _model = next;
-    _model = await reconcileAndPersist(next, gen);
+    commitModel(next);
+    commitModel(await reconcileAndPersist(next, gen));
   });
   _queue = task.catch(() => {});
   return task;
@@ -5038,6 +5003,16 @@ function dispatchActivateByLiveId(liveId, side) {
   return dispatch({ t: "activate", key, side });
 }
 async function dispatchTrackedActiveSync() {
+  if (_trackedSyncScheduled)
+    return;
+  _trackedSyncScheduled = true;
+  try {
+    await dispatchTrackedActiveSyncInner();
+  } finally {
+    _trackedSyncScheduled = false;
+  }
+}
+async function dispatchTrackedActiveSyncInner() {
   const host = _host;
   if (!host)
     return;
@@ -5057,59 +5032,28 @@ async function dispatchTrackedActiveSync() {
   await dispatch({ t: "syncActive", primary, secondary });
 }
 async function captureMainMirrorMoveChrome(liveId, target) {
-  if (target !== "secondary")
-    return { neighborBtn: null, reassertId: null };
-  const pin = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
-  if (!pin.isMainTabPinEnabled())
-    return { neighborBtn: null, reassertId: null };
-  const mirrorKey = pin.getActiveMainMirrorKey();
-  const mirrorId = mirrorKey?.startsWith("id__") ? mirrorKey.slice("id__".length) : null;
-  if (!mirrorId)
-    return { neighborBtn: null, reassertId: null };
-  if (mirrorId === liveId) {
-    const neighborBtn = pin.findNeighborHostButtonFor(liveId);
-    if (neighborBtn) {
-      dlog("[tabmove] capture chrome: active tab moved — neighbor handoff target", {
-        liveId,
-        neighbor: neighborBtn.getAttribute("title") || neighborBtn.getAttribute("data-tab-id")
-      });
-    }
-    return { neighborBtn, reassertId: null };
-  }
-  return { neighborBtn: null, reassertId: mirrorId };
+  return { neighborBtn: null, reassertId: null };
 }
 async function applyMainMirrorMoveChrome(chrome, liveId) {
-  const { neighborBtn, reassertId } = chrome;
-  const pin = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
-  if (!pin.isMainTabPinEnabled())
+  const model = _model;
+  const host = _host;
+  if (!model || !host)
     return;
-  if (neighborBtn && neighborBtn.isConnected) {
-    const title = neighborBtn.getAttribute("title") || neighborBtn.getAttribute("aria-label") || undefined;
-    dlog(`[tabmove] apply chrome: handing main-mirror to neighbor (${title ?? neighborBtn.getAttribute("data-tab-id")})`);
-    pin.adoptMainMirrorNeighbor(neighborBtn, title);
-  } else if (reassertId) {
-    const { findMainTabButton: findMainTabButton2 } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
-    const btn = findMainTabButton2(reassertId);
-    if (btn && btn.isConnected) {
-      dlog(`[tabmove] apply chrome: re-asserting active tab content (${reassertId})`);
-      try {
-        btn.click();
-      } catch {}
-    } else {
-      dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { reassertId });
-    }
-  }
-  if (neighborBtn) {
-    const neighborLiveId = neighborBtn.getAttribute("data-tab-id");
-    if (neighborLiveId) {
-      const neighborKey = _host?.findKey(neighborLiveId);
-      if (neighborKey && _model?.active.primary !== neighborKey) {
-        dlog(`[tabmove] apply chrome: converging model active to neighbor (${neighborKey})`);
-        dispatch({ t: "activate", key: neighborKey, side: "primary" }).catch((err) => {
-          dwarn("[tabmove] apply chrome: neighbor activate dispatch failed:", err);
-        });
-      }
-    }
+  const key = model.active.primary;
+  if (!key)
+    return;
+  const id = host.resolve(key);
+  if (!id || id === liveId)
+    return;
+  const { findMainTabButton: findMainTabButton2 } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
+  const btn = findMainTabButton2(id);
+  if (btn && btn.isConnected) {
+    dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`);
+    try {
+      btn.click();
+    } catch {}
+  } else {
+    dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { id });
   }
 }
 async function captureSecondaryNeighborForMove(liveId) {
@@ -5184,7 +5128,6 @@ async function placementFirstMoveByLiveId(liveId, target) {
         dlog("[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)");
       }
     }
-    await applyMainMirrorMoveChrome(chrome, liveId);
   }
   const key = host.findKey(liveId);
   if (!key) {
@@ -5222,6 +5165,9 @@ async function placementFirstMoveByLiveId(liveId, target) {
   if (target === "primary") {
     await applySecondaryNeighborHandoff(secondaryChrome, liveId);
   }
+  if (target === "secondary") {
+    await applyMainMirrorMoveChrome(chrome, liveId);
+  }
 }
 function bootstrapFromLayout(layout, host, version) {
   let model = buildModelFromLayout(layout, (id) => host.findKey(id));
@@ -5248,20 +5194,49 @@ function bootstrapFromLayout(layout, host, version) {
     modelPrimary: model.primary.length,
     modelSecondary: model.secondary.length
   });
-  Promise.resolve().then(() => (init_secondary(), exports_secondary)).then((m) => {
-    m.reassignSecondaryTabsFromModel({
-      openOnClosed: false,
-      setActiveWhenReady: false,
-      activateKey: model.active.secondary ?? null
-    });
-  }).catch((err) => {
-    dwarn("[bootstrap] reassignSecondaryTabsFromModel failed:", err);
-  });
+  const primaryBootKey = model.active.primary;
+  const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
+  _bootPlacementPass = (async () => {
+    try {
+      const m = await Promise.resolve().then(() => (init_secondary(), exports_secondary));
+      await m.reassignSecondaryTabsFromModel({
+        openOnClosed: false,
+        setActiveWhenReady: false,
+        activateKey: model.active.secondary ?? null
+      });
+      if (primaryBootLiveId === null)
+        return;
+      const reassertPrimary = async () => {
+        try {
+          const mp = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
+          mp.ensureRestoredPrimaryTab(primaryBootLiveId);
+        } catch {}
+        try {
+          const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+          mm.ensureHostContentParkedPublic();
+        } catch {}
+      };
+      await reassertPrimary();
+      try {
+        const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        if (mm.isMainMirrorActive()) {
+          setTimeout(() => {
+            reassertPrimary();
+          }, 500);
+        }
+      } catch {}
+    } catch (err) {
+      dwarn("[bootstrap] reassignSecondaryTabsFromModel failed:", err);
+    }
+  })();
+}
+function bootPlacementDone() {
+  return _bootPlacementPass ?? Promise.resolve();
 }
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _trackedSyncScheduled = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -5270,6 +5245,7 @@ var init_dispatch = __esm(() => {
   init_state();
   init_log();
   _queue = Promise.resolve();
+  _modelSubscribers = new Set;
 });
 
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
@@ -5933,23 +5909,23 @@ var init_identity = () => {};
 // src/tabs/configure-model.ts
 var exports_configure_model = {};
 __export(exports_configure_model, {
-  swapDrawerSide: () => swapDrawerSide,
-  setHidden: () => setHidden,
-  reorderWithinVisible: () => reorderWithinVisible,
-  reorderWithin: () => reorderWithin,
-  reorderVisibleInList: () => reorderVisibleInList,
-  rebaseBaseIfEpochUnchanged: () => rebaseBaseIfEpochUnchanged,
-  partitionDisplayLists: () => partitionDisplayLists,
-  moveTabVisible: () => moveTabVisible,
-  moveTab: () => moveTab,
-  leftColumnIsSecondary: () => leftColumnIsSecondary,
-  isDraftDirty: () => isDraftDirty,
-  insertAtVisibleIndex: () => insertAtVisibleIndex,
-  encodeHostTabOrder: () => encodeHostTabOrder,
-  createDraft: () => createDraft,
-  baseSnapshotFromDraft: () => baseSnapshotFromDraft,
+  alignDraftToLiveVisibleOrder: () => alignDraftToLiveVisibleOrder,
   alignIdsToLiveVisibleOrder: () => alignIdsToLiveVisibleOrder,
-  alignDraftToLiveVisibleOrder: () => alignDraftToLiveVisibleOrder
+  baseSnapshotFromDraft: () => baseSnapshotFromDraft,
+  createDraft: () => createDraft,
+  encodeHostTabOrder: () => encodeHostTabOrder,
+  insertAtVisibleIndex: () => insertAtVisibleIndex,
+  isDraftDirty: () => isDraftDirty,
+  leftColumnIsSecondary: () => leftColumnIsSecondary,
+  moveTab: () => moveTab,
+  moveTabVisible: () => moveTabVisible,
+  partitionDisplayLists: () => partitionDisplayLists,
+  rebaseBaseIfEpochUnchanged: () => rebaseBaseIfEpochUnchanged,
+  reorderVisibleInList: () => reorderVisibleInList,
+  reorderWithin: () => reorderWithin,
+  reorderWithinVisible: () => reorderWithinVisible,
+  setHidden: () => setHidden,
+  swapDrawerSide: () => swapDrawerSide
 });
 function normalizeIdsToCatalog(ids, catalog) {
   const byTitle = new Map;
@@ -6292,17 +6268,17 @@ var init_canvas_hidden = __esm(() => {
 // src/tabs/hidden-tabs.ts
 var exports_hidden_tabs = {};
 __export(exports_hidden_tabs, {
-  syncHiddenTabsFromHost: () => syncHiddenTabsFromHost,
-  setCanvasHiddenTabIds: () => setCanvasHiddenTabIds,
-  scheduleSyncHiddenTabsFromHost: () => scheduleSyncHiddenTabsFromHost,
-  resolveHiddenTabIdsForDraft: () => resolveHiddenTabIdsForDraft,
-  mergeHiddenTabIdLists: () => mergeHiddenTabIdLists,
-  isTabIdHidden: () => isTabIdHidden,
-  hydrateCanvasHiddenFromLayout: () => hydrateCanvasHiddenFromLayout,
-  healHiddenTabIds: () => healHiddenTabIds,
-  getCanvasHiddenTabIds: () => getCanvasHiddenTabIds,
+  __resetCanvasHiddenTabIdsForTest: () => __resetCanvasHiddenTabIdsForTest,
   collectLiveTabIdsForHiddenHeal: () => collectLiveTabIdsForHiddenHeal,
-  __resetCanvasHiddenTabIdsForTest: () => __resetCanvasHiddenTabIdsForTest
+  getCanvasHiddenTabIds: () => getCanvasHiddenTabIds,
+  healHiddenTabIds: () => healHiddenTabIds,
+  hydrateCanvasHiddenFromLayout: () => hydrateCanvasHiddenFromLayout,
+  isTabIdHidden: () => isTabIdHidden,
+  mergeHiddenTabIdLists: () => mergeHiddenTabIdLists,
+  resolveHiddenTabIdsForDraft: () => resolveHiddenTabIdsForDraft,
+  scheduleSyncHiddenTabsFromHost: () => scheduleSyncHiddenTabsFromHost,
+  setCanvasHiddenTabIds: () => setCanvasHiddenTabIds,
+  syncHiddenTabsFromHost: () => syncHiddenTabsFromHost
 });
 function collectLiveTabIdsForHiddenHeal() {
   const ids = new Set;
@@ -6338,42 +6314,24 @@ function scheduleSyncHiddenTabsFromHost(opts) {
   _debouncedSyncTimer = setTimeout(() => {
     _debouncedSyncTimer = null;
     try {
-      syncHiddenTabsFromHost({ writeBack: opts?.writeBack !== false });
+      syncHiddenTabsFromHost();
     } catch {}
   }, delayMs);
 }
-function syncHiddenTabsFromHost(opts) {
-  const writeBack = opts?.writeBack !== false;
+function syncHiddenTabsFromHost() {
   const host = getHostDrawerSettings();
   const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
   const canvasStored = getCanvasHiddenTabIds();
   const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
   const liveIds = collectLiveTabIdsForHiddenHeal();
-  const forHost = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
+  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
-  setCanvasHiddenTabIds(forHost);
-  let wroteBack = false;
-  if (writeBack && forHost.length > 0) {
-    const hostSame = forHost.length === hostStored.length && forHost.every((id, i3) => id === hostStored[i3]);
-    if (!hostSame) {
-      wroteBack = patchHostDrawerSettings({ hiddenTabIds: forHost });
-      if (wroteBack) {
-        dlog("[hidden-tabs] healed hiddenTabIds write-back", {
-          from: hostStored,
-          to: forHost
-        });
-      } else {
-        dlog("[hidden-tabs] host write-back NO-GO; Canvas layout copy retained", {
-          hidden: forHost
-        });
-      }
-    }
-  }
+  setCanvasHiddenTabIds(forCanvas);
   const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
   applyHiddenTabIdsToSecondary(applySet);
   applyHiddenTabIdsToMirror(applySet);
   applyHiddenTabIdsToHostMain(applySet);
-  return { hiddenIds: forHost, wroteBack };
+  return { hiddenIds: forCanvas };
 }
 function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
   const stored = normalizeHiddenIds(storedHidden);
@@ -6388,7 +6346,6 @@ var init_hidden_tabs = __esm(() => {
   init_configure_catalog();
   init_buttons();
   init_secondary();
-  init_log();
   init_canvas_hidden();
   init_canvas_hidden();
 });
@@ -7306,14 +7263,14 @@ var init_second_drawer_mode = __esm(() => {
 // src/tabs/configure-modal.tsx
 var exports_configure_modal = {};
 __export(exports_configure_modal, {
-  refreshConfigureDraftFromLive: () => refreshConfigureDraftFromLive,
-  openConfigureTabsModal: () => openConfigureTabsModal,
-  isConfigureTabsModalOpen: () => isConfigureTabsModalOpen,
-  getConfigureDraftRef: () => getConfigureDraftRef,
-  getConfigureBaseRef: () => getConfigureBaseRef,
-  forceUnmountConfigureTabsModal: () => forceUnmountConfigureTabsModal,
+  closeConfigureTabsModal: () => closeConfigureTabsModal,
   flushConfigureCommits: () => flushConfigureCommits,
-  closeConfigureTabsModal: () => closeConfigureTabsModal
+  forceUnmountConfigureTabsModal: () => forceUnmountConfigureTabsModal,
+  getConfigureBaseRef: () => getConfigureBaseRef,
+  getConfigureDraftRef: () => getConfigureDraftRef,
+  isConfigureTabsModalOpen: () => isConfigureTabsModalOpen,
+  openConfigureTabsModal: () => openConfigureTabsModal,
+  refreshConfigureDraftFromLive: () => refreshConfigureDraftFromLive
 });
 function injectModalStyles() {
   if (typeof document === "undefined")
@@ -8317,14 +8274,14 @@ function ConfigureTabsModalInner(props) {
         return /* @__PURE__ */ u3("span", {
           class: "canvas-configure-tabs-icon-wrap",
           dangerouslySetInnerHTML: { __html: svg }
-        }, undefined, false, undefined, this);
+        });
       }
     }
     if (tab.kind === "extension" && tab.iconSvg) {
       return /* @__PURE__ */ u3("span", {
         class: "canvas-configure-tabs-icon-wrap",
         dangerouslySetInnerHTML: { __html: tab.iconSvg }
-      }, undefined, false, undefined, this);
+      });
     }
     if (tab.kind === "extension" && tab.iconUrl) {
       return /* @__PURE__ */ u3("span", {
@@ -8332,14 +8289,14 @@ function ConfigureTabsModalInner(props) {
         children: /* @__PURE__ */ u3("img", {
           src: tab.iconUrl,
           alt: ""
-        }, undefined, false, undefined, this)
-      }, undefined, false, undefined, this);
+        })
+      });
     }
     return /* @__PURE__ */ u3("span", {
       class: "canvas-configure-tabs-icon-wrap",
       style: "font-size:15px;font-weight:600;",
       children: tab.title.charAt(0)
-    }, undefined, false, undefined, this);
+    });
   };
   const renderTabRow = (tab, index, side) => {
     const isHidden3 = draft.hiddenIds.has(tab.id);
@@ -8367,35 +8324,35 @@ function ConfigureTabsModalInner(props) {
                 cx: "9",
                 cy: "5",
                 r: "1.5"
-              }, undefined, false, undefined, this),
+              }),
               /* @__PURE__ */ u3("circle", {
                 cx: "9",
                 cy: "12",
                 r: "1.5"
-              }, undefined, false, undefined, this),
+              }),
               /* @__PURE__ */ u3("circle", {
                 cx: "9",
                 cy: "19",
                 r: "1.5"
-              }, undefined, false, undefined, this),
+              }),
               /* @__PURE__ */ u3("circle", {
                 cx: "15",
                 cy: "5",
                 r: "1.5"
-              }, undefined, false, undefined, this),
+              }),
               /* @__PURE__ */ u3("circle", {
                 cx: "15",
                 cy: "12",
                 r: "1.5"
-              }, undefined, false, undefined, this),
+              }),
               /* @__PURE__ */ u3("circle", {
                 cx: "15",
                 cy: "19",
                 r: "1.5"
-              }, undefined, false, undefined, this)
+              })
             ]
-          }, undefined, true, undefined, this)
-        }, undefined, false, undefined, this),
+          })
+        }),
         /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-row-info",
           children: [
@@ -8409,25 +8366,25 @@ function ConfigureTabsModalInner(props) {
                     /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-row-title",
                       children: tab.title
-                    }, undefined, false, undefined, this),
+                    }),
                     isCore && /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-badge",
                       children: "Core"
-                    }, undefined, false, undefined, this),
+                    }),
                     tab.kind === "extension" && /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-badge canvas-configure-tabs-badge-muted",
                       children: "Extension"
-                    }, undefined, false, undefined, this)
+                    })
                   ]
-                }, undefined, true, undefined, this),
+                }),
                 description && /* @__PURE__ */ u3("p", {
                   class: "canvas-configure-tabs-row-description",
                   children: description
-                }, undefined, false, undefined, this)
+                })
               ]
-            }, undefined, true, undefined, this)
+            })
           ]
-        }, undefined, true, undefined, this),
+        }),
         /* @__PURE__ */ u3("button", {
           class: `canvas-configure-tabs-toggle${!isHidden3 ? " toggle-on" : ""}`,
           disabled: isLocked,
@@ -8438,9 +8395,9 @@ function ConfigureTabsModalInner(props) {
           },
           onPointerDown: (e3) => e3.stopPropagation(),
           onMouseDown: (e3) => e3.stopPropagation()
-        }, undefined, false, undefined, this)
+        })
       ]
-    }, tab.id, true, undefined, this);
+    }, tab.id);
   };
   const primaryDesc = leftIsSecondaryVal ? "Tabs shown in the right sidebar drawer." : "Tabs shown in the left sidebar drawer.";
   const secondaryDesc = leftIsSecondaryVal ? "Tabs shown in the left sidebar drawer." : "Tabs shown in the right sidebar drawer.";
@@ -8450,13 +8407,13 @@ function ConfigureTabsModalInner(props) {
       /* @__PURE__ */ u3("h3", {
         class: "canvas-configure-tabs-section-title",
         children: title
-      }, undefined, false, undefined, this),
+      }),
       /* @__PURE__ */ u3("p", {
         class: "canvas-configure-tabs-section-desc",
         children: desc
-      }, undefined, false, undefined, this)
+      })
     ]
-  }, undefined, true, undefined, this);
+  });
   const renderColumn = (tabs, side, sectionHeader) => /* @__PURE__ */ u3("div", {
     class: "canvas-configure-tabs-column",
     children: [
@@ -8467,10 +8424,10 @@ function ConfigureTabsModalInner(props) {
         children: tabs.length === 0 ? /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-empty",
           children: "No tabs assigned"
-        }, undefined, false, undefined, this) : tabs.map((tab, i3) => renderTabRow(tab, i3, side))
-      }, undefined, false, undefined, this)
+        }) : tabs.map((tab, i3) => renderTabRow(tab, i3, side))
+      })
     ]
-  }, undefined, true, undefined, this);
+  });
   const leftColumn = renderColumn(leftIsSecondaryVal ? secondaryTabs : primaryTabs, leftIsSecondaryVal ? "secondary" : "primary", renderColumnHeader(leftIsSecondaryVal ? "Second Drawer Tabs" : "Main Drawer Tabs", leftIsSecondaryVal ? secondaryDesc : primaryDesc));
   const rightColumn = renderColumn(leftIsSecondaryVal ? primaryTabs : secondaryTabs, leftIsSecondaryVal ? "primary" : "secondary", renderColumnHeader(leftIsSecondaryVal ? "Main Drawer Tabs" : "Second Drawer Tabs", leftIsSecondaryVal ? primaryDesc : secondaryDesc));
   return /* @__PURE__ */ u3("div", {
@@ -8491,7 +8448,7 @@ function ConfigureTabsModalInner(props) {
               children: [
                 /* @__PURE__ */ u3("h2", {
                   children: "Configure Tabs"
-                }, undefined, false, undefined, this),
+                }),
                 /* @__PURE__ */ u3("div", {
                   class: "canvas-configure-tabs-header-actions",
                   children: /* @__PURE__ */ u3("button", {
@@ -8513,39 +8470,39 @@ function ConfigureTabsModalInner(props) {
                           y1: "6",
                           x2: "6",
                           y2: "18"
-                        }, undefined, false, undefined, this),
+                        }),
                         /* @__PURE__ */ u3("line", {
                           x1: "6",
                           y1: "6",
                           x2: "18",
                           y2: "18"
-                        }, undefined, false, undefined, this)
+                        })
                       ]
-                    }, undefined, true, undefined, this)
-                  }, undefined, false, undefined, this)
-                }, undefined, false, undefined, this)
+                    })
+                  })
+                })
               ]
-            }, undefined, true, undefined, this),
+            }),
             /* @__PURE__ */ u3("p", {
               class: "canvas-configure-tabs-subtitle",
               children: "Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible."
-            }, undefined, false, undefined, this)
+            })
           ]
-        }, undefined, true, undefined, this),
+        }),
         secondDrawerEnabled ? /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-body",
           children: [
             leftColumn,
             rightColumn
           ]
-        }, undefined, true, undefined, this) : /* @__PURE__ */ u3("div", {
+        }) : /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-body canvas-configure-tabs-body--single",
           children: renderColumn(primaryTabs, "primary", renderColumnHeader("Drawer Tabs", "Tabs in the sidebar drawer."))
-        }, undefined, false, undefined, this),
+        }),
         commitError && /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-error",
           children: commitError
-        }, undefined, false, undefined, this),
+        }),
         /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-footer",
           children: [
@@ -8559,23 +8516,23 @@ function ConfigureTabsModalInner(props) {
                       class: "canvas-configure-tabs-second-drawer-toggle-label",
                       onClick: () => onToggleSecondDrawer(),
                       children: "Second drawer"
-                    }, undefined, false, undefined, this),
+                    }),
                     /* @__PURE__ */ u3("button", {
                       class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
                       onClick: (e3) => {
                         e3.stopPropagation();
                         onToggleSecondDrawer();
                       }
-                    }, undefined, false, undefined, this)
+                    })
                   ]
-                }, undefined, true, undefined, this),
+                }),
                 secondDrawerEnabled && /* @__PURE__ */ u3("button", {
                   class: "canvas-configure-tabs-swap-btn",
                   onClick: onSwapSide,
                   children: "Swap drawer locations"
-                }, undefined, false, undefined, this)
+                })
               ]
-            }, undefined, true, undefined, this),
+            }),
             /* @__PURE__ */ u3("div", {
               class: "canvas-configure-tabs-footer-right",
               children: [
@@ -8584,20 +8541,20 @@ function ConfigureTabsModalInner(props) {
                   onClick: onCancel,
                   disabled: committing,
                   children: "Cancel"
-                }, undefined, false, undefined, this),
+                }),
                 /* @__PURE__ */ u3("button", {
                   class: "canvas-configure-tabs-btn canvas-configure-tabs-btn-primary",
                   onClick: onDone,
                   disabled: committing,
                   children: committing ? "Applying…" : "Done"
-                }, undefined, false, undefined, this)
+                })
               ]
-            }, undefined, true, undefined, this)
+            })
           ]
-        }, undefined, true, undefined, this)
+        })
       ]
-    }, undefined, true, undefined, this)
-  }, undefined, false, undefined, this);
+    })
+  });
 }
 function buildLiveDraftAndBase() {
   const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
@@ -8606,6 +8563,41 @@ function buildLiveDraftAndBase() {
   const hostSide = hostSettings?.side;
   const drawerSide = hostSide || getMainDrawerSide();
   const sideSource = hostSide ? "host-settings" : "dom";
+  const model = getModel();
+  const host = getHost();
+  if (model && host) {
+    const resolveId = (key) => host.resolve(key);
+    const toIds = (keys) => {
+      const out = [];
+      for (const key of keys) {
+        const id = resolveId(key);
+        if (id)
+          out.push(id);
+      }
+      return out;
+    };
+    const modelPrimaryIds = toIds(model.primary);
+    const modelSecondaryIds = toIds(model.secondary);
+    const modelHiddenIds = toIds(model.hidden);
+    const draftFromModel = createDraft({
+      catalog,
+      tabOrder: [...modelPrimaryIds, ...modelSecondaryIds],
+      hiddenTabIds: modelHiddenIds,
+      drawerSide,
+      assignments: currentAssignments
+    });
+    const draft2 = alignDraftToLiveVisibleOrder(draftFromModel, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
+    const base2 = baseSnapshotFromDraft(draft2);
+    dlog("[configure-modal] draft from model", {
+      side: draft2.drawerSide,
+      sideSource,
+      primary: draft2.primaryIds.length,
+      secondary: draft2.secondaryIds.length,
+      hidden: draft2.hiddenIds.size,
+      unresolved: model.primary.length + model.secondary.length - modelPrimaryIds.length - modelSecondaryIds.length
+    });
+    return { draft: draft2, base: base2, catalog };
+  }
   const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
   const draftFromHost = createDraft({
     catalog,
@@ -8745,7 +8737,7 @@ function renderModal(draft, catalog, commitError, committing) {
       }
       unmountModal();
     }
-  }, undefined, false, undefined, this), _modalContainer);
+  }), _modalContainer);
 }
 function unmountModal() {
   if (!_modalContainer)
@@ -8961,30 +8953,29 @@ var init_tab_context_menu = __esm(() => {
 // src/tabs/buttons.ts
 var exports_buttons = {};
 __export(exports_buttons, {
-  updateDrawerTabVisibility: () => updateDrawerTabVisibility,
-  showSecondaryTab: () => showSecondaryTab,
-  showMainTabButton: () => showMainTabButton,
-  secondaryTabButtonsReady: () => secondaryTabButtonsReady,
-  reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
-  reorderMainMirrorTabButtons: () => reorderMainMirrorTabButtons,
-  reorderHostMainTabButtons: () => reorderHostMainTabButtons,
-  removeSecondaryTabButton: () => removeSecondaryTabButton,
-  readMainButtonShortName: () => readMainButtonShortName,
-  isSettingsButton: () => isSettingsButton,
-  hideMainTabButton: () => hideMainTabButton,
-  findSafeFallbackButton: () => findSafeFallbackButton,
-  findNeighborSecondaryButtonFor: () => findNeighborSecondaryButtonFor,
-  findMainTabButton: () => findMainTabButton,
-  deriveShortName: () => deriveShortName,
-  cssEscape: () => cssEscape2,
-  clearSecondaryTabButtonActive: () => clearSecondaryTabButtonActive,
-  buttonTabId: () => buttonTabId,
-  applyHiddenTabIdsToSecondary: () => applyHiddenTabIdsToSecondary,
-  applyHiddenTabIdsToMirror: () => applyHiddenTabIdsToMirror,
-  applyHiddenTabIdsToHostMain: () => applyHiddenTabIdsToHostMain,
-  addSecondaryTabButton: () => addSecondaryTabButton,
+  __setHideMainTabButtonForTest: () => __setHideMainTabButtonForTest,
   __setShowMainTabButtonForTest: () => __setShowMainTabButtonForTest,
-  __setHideMainTabButtonForTest: () => __setHideMainTabButtonForTest
+  addSecondaryTabButton: () => addSecondaryTabButton,
+  applyHiddenTabIdsToHostMain: () => applyHiddenTabIdsToHostMain,
+  applyHiddenTabIdsToMirror: () => applyHiddenTabIdsToMirror,
+  applyHiddenTabIdsToSecondary: () => applyHiddenTabIdsToSecondary,
+  buttonTabId: () => buttonTabId,
+  clearSecondaryTabButtonActive: () => clearSecondaryTabButtonActive,
+  cssEscape: () => cssEscape2,
+  deriveShortName: () => deriveShortName,
+  findMainTabButton: () => findMainTabButton,
+  findNeighborSecondaryButtonFor: () => findNeighborSecondaryButtonFor,
+  findSafeFallbackButton: () => findSafeFallbackButton,
+  hideMainTabButton: () => hideMainTabButton,
+  isSettingsButton: () => isSettingsButton,
+  readMainButtonShortName: () => readMainButtonShortName,
+  removeSecondaryTabButton: () => removeSecondaryTabButton,
+  reorderHostMainTabButtons: () => reorderHostMainTabButtons,
+  reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
+  secondaryTabButtonsReady: () => secondaryTabButtonsReady,
+  showMainTabButton: () => showMainTabButton,
+  showSecondaryTab: () => showSecondaryTab,
+  updateDrawerTabVisibility: () => updateDrawerTabVisibility
 });
 function __setHideMainTabButtonForTest(fn) {
   _hideMainTabButtonOverride = fn;
@@ -9277,17 +9268,6 @@ function reorderSecondaryTabButtons(ids) {
     }
   }
 }
-function reorderMainMirrorTabButtons(ids) {
-  const main = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
-  if (!main)
-    return;
-  for (const id of ids) {
-    const btn = Array.from(main.querySelectorAll(":scope > button.sidebar-ux-main-tab-mirror-btn, :scope > button[data-tab-id]")).find((b2) => buttonTabId(b2) === id);
-    if (btn && btn.parentElement === main) {
-      main.appendChild(btn);
-    }
-  }
-}
 function reorderHostMainTabButtons(ids) {
   const sidebar = getMainSidebar();
   if (!sidebar)
@@ -9326,6 +9306,8 @@ function applyHiddenTabIdsToMirror(hiddenIds) {
     const liveIds = buttons.map((b2) => b2.getAttribute("data-tab-id") || "").filter(Boolean);
     for (const btn of buttons) {
       const tid = btn.getAttribute("data-tab-id") || "";
+      if (btn.hasAttribute("data-mirror-key"))
+        continue;
       if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = "none";
       } else {
@@ -9392,8 +9374,8 @@ function clearSecondaryTabButtonActive() {
     btn.classList.remove("sidebar-ux-tab-active");
   }
 }
-function showSecondaryTab(tabId) {
-  setActiveSecondaryTabId(tabId);
+function showSecondaryTab(tabId, opts) {
+  setActiveSecondaryTabId(tabId, opts);
   const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
   const movedRoots = secondaryContent ? Array.from(secondaryContent.querySelectorAll("[data-canvas-moved]")) : [];
   let activeTitle = findMainTabButton(tabId)?.getAttribute("title") || "";
@@ -9445,26 +9427,28 @@ var init_buttons = __esm(() => {
 // src/sidebar/drawer-sync.ts
 var exports_drawer_sync = {};
 __export(exports_drawer_sync, {
-  syncSecondaryTabLabels: () => syncSecondaryTabLabels,
-  syncDrawerTabSettings: () => syncDrawerTabSettings,
-  stopSideChangeWatcher: () => stopSideChangeWatcher,
-  stopObserverCoordinator: () => stopObserverCoordinator,
-  stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
-  stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
-  stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
-  startSideChangeWatcher: () => startSideChangeWatcher,
-  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
-  resetSideRemountStateAfterDisable: () => resetSideRemountStateAfterDisable,
-  rebindSideChangeWatcherIfNeeded: () => rebindSideChangeWatcherIfNeeded,
-  isShowTabLabels: () => isShowTabLabels,
-  checkSideChanged: () => checkSideChanged,
-  applyMainDrawerSideChange: () => applyMainDrawerSideChange,
-  __setSideSettleHardMsForTest: () => __setSideSettleHardMsForTest,
-  __setLastKnownSideForTest: () => __setLastKnownSideForTest,
-  __resetSideApplyStateForTest: () => __resetSideApplyStateForTest,
-  __resetDrawerTabSyncStateForTest: () => __resetDrawerTabSyncStateForTest,
+  __getLastKnownSideForTest: () => __getLastKnownSideForTest,
   __getSideRemountGenForTest: () => __getSideRemountGenForTest,
-  __getLastKnownSideForTest: () => __getLastKnownSideForTest
+  __resetDrawerTabSyncStateForTest: () => __resetDrawerTabSyncStateForTest,
+  __resetSideApplyStateForTest: () => __resetSideApplyStateForTest,
+  __setLastKnownSideForTest: () => __setLastKnownSideForTest,
+  __setSideSettleHardMsForTest: () => __setSideSettleHardMsForTest,
+  applyMainDrawerSideChange: () => applyMainDrawerSideChange,
+  checkSideChanged: () => checkSideChanged,
+  isShowTabLabels: () => isShowTabLabels,
+  rebindSideChangeWatcherIfNeeded: () => rebindSideChangeWatcherIfNeeded,
+  resetSideRemountStateAfterDisable: () => resetSideRemountStateAfterDisable,
+  restoreSecondaryTabButtons: () => restoreSecondaryTabButtons,
+  startHostSideWatcher: () => startHostSideWatcher,
+  startSideChangeWatcher: () => startSideChangeWatcher,
+  stopDrawerTabClassObserver: () => stopDrawerTabClassObserver,
+  stopDrawerTabResizeWatcher: () => stopDrawerTabResizeWatcher,
+  stopDrawerTabStyleObserver: () => stopDrawerTabStyleObserver,
+  stopHostSideWatcher: () => stopHostSideWatcher,
+  stopObserverCoordinator: () => stopObserverCoordinator,
+  stopSideChangeWatcher: () => stopSideChangeWatcher,
+  syncDrawerTabSettings: () => syncDrawerTabSettings,
+  syncSecondaryTabLabels: () => syncSecondaryTabLabels
 });
 
 class ObserverCoordinator {
@@ -9504,6 +9488,91 @@ class ObserverCoordinator {
       _runSyncDrawerTabSettings();
     }
   }
+}
+function getHostSide() {
+  const host = getHostDrawerSettings();
+  if (host && (host.side === "left" || host.side === "right"))
+    return host.side;
+  try {
+    const snap = getStoreSnapshot();
+    const s3 = snap?.drawerSettings?.side;
+    if (s3 === "left" || s3 === "right")
+      return s3;
+  } catch {}
+  return null;
+}
+function syncHostSideToModel(modelSide) {
+  const hostSide = getHostSide();
+  if (hostSide === modelSide)
+    return;
+  const ok = patchHostDrawerSettings({ side: modelSide });
+  if (ok) {
+    _lastSeenHostSide = modelSide;
+    dlog("[drawer-sync] syncHostSideToModel: host side written to match model", { modelSide, prevHostSide: hostSide });
+  } else if (isHostedBrowserContext()) {
+    Promise.resolve().then(() => (init_host_settings(), exports_host_settings)).then((m3) => {
+      m3.writeHostDrawerSettingsViaApi({ side: modelSide }).then((apiOk) => {
+        if (apiOk) {
+          _lastSeenHostSide = modelSide;
+          dlog("[drawer-sync] syncHostSideToModel: host side written via API", { modelSide });
+        }
+      });
+    });
+  }
+}
+function isHostedBrowserContext() {
+  try {
+    return typeof window !== "undefined" && typeof window.location !== "undefined" && /^https?:/.test(window.location.protocol);
+  } catch {
+    return false;
+  }
+}
+function startHostSideWatcher() {
+  if (_hostWatcherStarted)
+    return;
+  _hostWatcherStarted = true;
+  const initialHost = getHostSide();
+  const modelSide = getMainDrawerSide();
+  _lastSeenHostSide = initialHost;
+  if (initialHost && initialHost !== modelSide) {
+    dlog("[drawer-sync] host side differs from model on boot — syncing host to model", { hostSide: initialHost, modelSide });
+    syncHostSideToModel(modelSide);
+  }
+  _hostSideWatcher = setInterval(() => {
+    const hostSide = getHostSide();
+    if (!hostSide)
+      return;
+    if (hostSide === _lastSeenHostSide)
+      return;
+    _lastSeenHostSide = hostSide;
+    const currentModelSide = getMainDrawerSide();
+    if (hostSide === currentModelSide)
+      return;
+    if (Date.now() - _lastCanvasSwapMs < 800) {
+      dlog("[drawer-sync] host side change ignored — recent Canvas swap", { hostSide, currentModelSide });
+      return;
+    }
+    dlog("[drawer-sync] host side change detected — unifying via Canvas", { hostSide, currentModelSide });
+    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
+      m3.dispatch({ t: "swapSides" }).catch((err) => {
+        dwarn("[drawer-sync] host side unify dispatch failed:", err);
+      });
+    });
+  }, 500);
+  _hostSideWatcher.unref?.();
+  registerCleanup(() => stopHostSideWatcher());
+}
+function stopHostSideWatcher() {
+  if (_hostSideWatcher) {
+    clearInterval(_hostSideWatcher);
+    _hostSideWatcher = null;
+  }
+  _hostWatcherStarted = false;
+}
+function recordCanvasSwapAndSyncHost(desired) {
+  _lastCanvasSwapMs = Date.now();
+  _lastSeenHostSide = desired;
+  syncHostSideToModel(desired);
 }
 function isShowTabLabels() {
   const host = getHostDrawerSettings();
@@ -9843,6 +9912,7 @@ async function applyMainDrawerSideChange(desired) {
       remounting: _lastKnownSide === null || _lastKnownSide !== desired
     });
     setMainDrawerSideOverride(desired);
+    recordCanvasSwapAndSyncHost(desired);
     if (_lastKnownSide === null || _lastKnownSide !== desired) {
       if (_lastKnownSide === null) {
         _lastKnownSide = desired === "left" ? "right" : "left";
@@ -9997,6 +10067,7 @@ function startSideChangeWatcher() {
     _sideWatcherCleanupRegistered = true;
     registerCleanup(() => stopSideChangeWatcher());
   }
+  startHostSideWatcher();
 }
 function stopSideChangeWatcher() {
   if (_sideObserver === null)
@@ -10062,7 +10133,7 @@ function stopObserverCoordinator() {
     _observerCoordinator = null;
   }
 }
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _sideRemountGen = 0, _applySideChain, _sideApplyGen = 0, _hostSideWatcher = null, _lastSeenHostSide = null, _lastCanvasSwapMs = 0, _hostWatcherStarted = false, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
 var init_drawer_sync = __esm(() => {
   init_host_settings();
   init_store();
@@ -10193,27 +10264,28 @@ var init_panel_header_sync = __esm(() => {
 // src/sidebar/main-mirror-drawer.ts
 var exports_main_mirror_drawer = {};
 __export(exports_main_mirror_drawer, {
-  updateMainMirrorDrawerTabVisibility: () => updateMainMirrorDrawerTabVisibility,
-  setCanvasMainTitle: () => setCanvasMainTitle,
-  restartReparkWatch: () => restartReparkWatch,
-  reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
-  openCanvasMainDrawer: () => openCanvasMainDrawer,
-  onMainMirrorTabActivated: () => onMainMirrorTabActivated,
-  isMainMirrorActive: () => isMainMirrorActive,
-  isCanvasMainOpen: () => isCanvasMainOpen,
-  getMainMirrorWrapper: () => getMainMirrorWrapper,
-  getMainMirrorWidthVar: () => getMainMirrorWidthVar,
-  getMainMirrorTitleEl: () => getMainMirrorTitleEl,
-  getMainMirrorTabList: () => getMainMirrorTabList,
-  getMainMirrorPanelContent: () => getMainMirrorPanelContent,
-  getMainMirrorDrawer: () => getMainMirrorDrawer,
-  ensureHostContentParkedPublic: () => ensureHostContentParkedPublic,
-  closeCanvasMainDrawer: () => closeCanvasMainDrawer,
-  applyMainMirrorRestoredWidth: () => applyMainMirrorRestoredWidth,
-  applyMainMirrorDrawer: () => applyMainMirrorDrawer,
+  MAIN_MIRROR_WIDTH_VAR: () => MAIN_MIRROR_WIDTH_VAR,
   __resetMainMirrorForTest: () => __resetMainMirrorForTest,
-  __getReparkIdleCountForTest: () => __getReparkIdleCountForTest,
-  MAIN_MIRROR_WIDTH_VAR: () => MAIN_MIRROR_WIDTH_VAR
+  applyMainMirrorDrawer: () => applyMainMirrorDrawer,
+  applyMainMirrorRestoredWidth: () => applyMainMirrorRestoredWidth,
+  closeCanvasMainDrawer: () => closeCanvasMainDrawer,
+  ensureHostContentParkedPublic: () => ensureHostContentParkedPublic,
+  getMainMirrorDrawer: () => getMainMirrorDrawer,
+  getMainMirrorPanelContent: () => getMainMirrorPanelContent,
+  getMainMirrorTabList: () => getMainMirrorTabList,
+  getMainMirrorTitleEl: () => getMainMirrorTitleEl,
+  getMainMirrorWidthVar: () => getMainMirrorWidthVar,
+  getMainMirrorWrapper: () => getMainMirrorWrapper,
+  isCanvasMainOpen: () => isCanvasMainOpen,
+  isMainMirrorActive: () => isMainMirrorActive,
+  onMainMirrorTabActivated: () => onMainMirrorTabActivated,
+  openCanvasMainDrawer: () => openCanvasMainDrawer,
+  pinMainMirrorShellTabList: () => pinMainMirrorShellTabList,
+  reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
+  setCanvasMainTitle: () => setCanvasMainTitle,
+  teardownMainMirror: () => teardownMainMirror,
+  unpinMainMirrorShellTabList: () => unpinMainMirrorShellTabList,
+  updateMainMirrorDrawerTabVisibility: () => updateMainMirrorDrawerTabVisibility
 });
 function getMainMirrorWidthVar() {
   return MAIN_MIRROR_WIDTH_VAR;
@@ -10231,15 +10303,7 @@ function getMainMirrorDrawer() {
   return _shell?.drawer ?? null;
 }
 function getMainMirrorTabList() {
-  if (!_shell)
-    return null;
-  const host = ensureMainPinHost(getMainDrawerSide());
-  if (host) {
-    const pinned = host.querySelector(".sidebar-ux-tab-list");
-    if (pinned)
-      return pinned;
-  }
-  return _shell.tabList;
+  return _shell?.tabList ?? null;
 }
 function getMainMirrorPanelContent() {
   return _shell?.content ?? null;
@@ -10274,11 +10338,6 @@ function applyMainMirrorDrawer(enabled, opts) {
 }
 function reconcileMainMirrorDrawer(opts) {
   if (isMobileViewport()) {
-    applyMainMirrorDrawer(false, { force: true });
-    return;
-  }
-  const on = !!getSettings().taskbarMode;
-  if (!on) {
     applyMainMirrorDrawer(false, { force: true });
     return;
   }
@@ -10325,7 +10384,6 @@ function openCanvasMainDrawer() {
   });
   bumpReflow();
   persistCanvasMainOpenState();
-  restartReparkWatch();
 }
 function closeCanvasMainDrawer() {
   if (!_shell || !_active)
@@ -10373,13 +10431,9 @@ function onMainMirrorTabActivated(title) {
   ensureHostContentParked();
   openCanvasMainDrawer();
   requestAnimationFrame(() => ensureHostContentParked());
-  restartReparkWatch();
 }
 function __resetMainMirrorForTest() {
   teardownMainMirror();
-}
-function __getReparkIdleCountForTest() {
-  return _reparkIdleCount;
 }
 function updateMainMirrorDrawerTabVisibility() {
   if (!_shell || !_active)
@@ -10464,7 +10518,7 @@ function mountMainMirror(opts) {
   } catch {
     seedW = undefined;
   }
-  const hideTab = !!getSettings().hideDrawerOpenCloseButtons && !!getSettings().taskbarMode;
+  const hideTab = isHideDrawerOpenCloseButtonsEnabled();
   _shell = createDrawerShell({
     owner: "main",
     side,
@@ -10505,7 +10559,6 @@ function mountMainMirror(opts) {
     mainPanel: _shell.panel
   });
   ensureHostContentParked();
-  startReparkWatch();
   if (!_open && isMainDrawerOpen()) {
     openCanvasMainDrawer();
   }
@@ -10518,10 +10571,17 @@ function mountMainMirror(opts) {
 function pinShellTabList(side) {
   if (!_shell)
     return;
+  if (!isTaskbarModeEnabled())
+    return;
+  pinMainMirrorShellTabList(side);
+}
+function pinMainMirrorShellTabList(side) {
+  if (!_shell)
+    return null;
   const tabList = _shell.tabList;
   const host = ensureMainPinHost(side);
   if (!host)
-    return;
+    return null;
   if (tabList.parentElement && tabList.parentElement !== host) {
     _tabListRestoreParent = tabList.parentElement;
     _tabListRestoreNext = tabList.nextSibling;
@@ -10536,6 +10596,10 @@ function pinShellTabList(side) {
     host.appendChild(tabList);
   }
   applyPinnedTabListChrome(tabList, side);
+  return host;
+}
+function unpinMainMirrorShellTabList() {
+  unpinShellTabList();
 }
 function unpinShellTabList() {
   if (!_shell)
@@ -10669,41 +10733,6 @@ function restoreHostContent() {
   _contentRestoreParent = null;
   _contentRestoreNext = null;
 }
-function startReparkWatch() {
-  stopReparkWatch();
-  _reparkIdleCount = 0;
-  const tickMs = () => typeof document !== "undefined" && document.documentElement.classList.contains("sidebar-ux-main-restore-pending") ? 50 : 500;
-  const tick = () => {
-    _reparkTimer = null;
-    if (!_active || !_shell)
-      return;
-    const el = resolveHostPanelContent();
-    if (el && el.parentElement !== _shell.content) {
-      dlog("[main-mirror] re-park: React moved panelContent back to host");
-      ensureHostContentParked();
-      _reparkIdleCount = 0;
-    } else {
-      _reparkIdleCount++;
-      if (_reparkIdleCount >= REPARK_IDLE_STOP_COUNT) {
-        dlog("[main-mirror] repark watch idle-stopped");
-        return;
-      }
-    }
-    _reparkTimer = setTimeout(tick, tickMs());
-  };
-  _reparkTimer = setTimeout(tick, tickMs());
-}
-function restartReparkWatch() {
-  if (_active && _shell)
-    startReparkWatch();
-}
-function stopReparkWatch() {
-  if (_reparkTimer !== null) {
-    clearTimeout(_reparkTimer);
-    _reparkTimer = null;
-  }
-  _reparkIdleCount = 0;
-}
 function clearHostWrapperInline() {
   const wrap = getMainWrapper();
   if (!wrap)
@@ -10726,7 +10755,6 @@ function sweepOrphanMainMirrorWrappers() {
   }
 }
 function teardownMainMirror(opts) {
-  stopReparkWatch();
   restoreHostContent();
   clearHostWrapperInline();
   unpinShellTabList();
@@ -10748,6 +10776,7 @@ function teardownMainMirror(opts) {
     }
     document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR);
   }
+  document.getElementById("sidebar-ux-host-main-hide")?.remove();
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
   _active = false;
@@ -10755,10 +10784,9 @@ function teardownMainMirror(opts) {
   _mountedSide = null;
   bumpReflow();
 }
-var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _reparkTimer = null, _reparkIdleCount = 0, REPARK_IDLE_STOP_COUNT = 10;
+var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
-  init_state();
   init_state();
   init_log();
   init_animation();
@@ -10815,7 +10843,7 @@ function computeContentLaneInsets() {
   const mirrorActive = isMainMirrorActive();
   const mainOpen = mirrorActive ? isCanvasMainOpen() : isMainDrawerOpen();
   const mainDrawerW = mainOpen ? mirrorActive ? parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420 : getMainDrawerWidth() : 0;
-  const mainStrip = !mainOpen && (mirrorActive || isTaskbarModeEnabled()) ? TAB_LIST_WIDTH_PX : 0;
+  const mainStrip = !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0;
   const secOpen = isSecondarySidebarOpen();
   const secDrawerW = secOpen ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
   const secStrip = !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
@@ -10918,15 +10946,16 @@ var init_reflow = __esm(() => {
   init_state();
   init_styles();
   init_main_mirror_drawer();
+  init_main_tab_pin();
 });
 
 // src/resize/handles.ts
 var exports_handles = {};
 __export(exports_handles, {
-  refreshResizeHandles: () => refreshResizeHandles,
-  mountResizeHandles: () => mountResizeHandles,
+  createResizeHandle: () => createResizeHandle,
   isPointerResizeActive: () => isPointerResizeActive,
-  createResizeHandle: () => createResizeHandle
+  mountResizeHandles: () => mountResizeHandles,
+  refreshResizeHandles: () => refreshResizeHandles
 });
 function isPointerResizeActive() {
   return window.matchMedia("(pointer: coarse)").matches;
@@ -11188,28 +11217,22 @@ var init_persist_polling = __esm(() => {
 // src/sidebar/main-persist.ts
 var exports_main_persist = {};
 __export(exports_main_persist, {
-  waitForDrawerDOM: () => waitForDrawerDOM,
-  unsuppressMainDrawer: () => unsuppressMainDrawer,
-  suppressMainDrawer: () => suppressMainDrawer,
-  stopMainDrawerPersistence: () => stopMainDrawerPersistence,
-  startMainDrawerPersistence: () => startMainDrawerPersistence,
-  stampPanelBodyHide: () => stampPanelBodyHide,
-  restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
-  isMainDrawerRestorePending: () => isMainDrawerRestorePending,
-  isHostPrimaryTabActive: () => isHostPrimaryTabActive,
-  findDrawerToggleButton: () => findDrawerToggleButton,
-  ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
+  beginMainDrawerRestoreGuard: () => beginMainDrawerRestoreGuard,
   cleanupDomPoll: () => cleanupDomPoll,
-  beginMainDrawerRestoreGuard: () => beginMainDrawerRestoreGuard
+  ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
+  findDrawerToggleButton: () => findDrawerToggleButton,
+  isHostPrimaryTabActive: () => isHostPrimaryTabActive,
+  isMainDrawerRestorePending: () => isMainDrawerRestorePending,
+  restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
+  stampPanelBodyHide: () => stampPanelBodyHide,
+  startMainDrawerPersistence: () => startMainDrawerPersistence,
+  stopMainDrawerPersistence: () => stopMainDrawerPersistence,
+  suppressMainDrawer: () => suppressMainDrawer,
+  unsuppressMainDrawer: () => unsuppressMainDrawer,
+  waitForDrawerDOM: () => waitForDrawerDOM
 });
 function readWrapperOpen(wrapper) {
   return wrapper.classList.toString().includes("wrapperOpen");
-}
-function readActiveTabId(sidebar) {
-  const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  if (!active)
-    return null;
-  return active.getAttribute("data-tab-id") || active.getAttribute("title") || null;
 }
 function ensureRestoreGuardStyles() {
   if (typeof document === "undefined")
@@ -11358,7 +11381,7 @@ function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
 }
 function isHostPrimaryTabActive(targetTabId) {
-  const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+  const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
   const active = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
   if (!active)
     return false;
@@ -11523,7 +11546,7 @@ async function restoreTab(targetTabId, preferMirror, timeout, opts) {
 function clickRestoredPrimaryTab(targetTabId, preferMirror) {
   if (!targetTabId)
     return false;
-  const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+  const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
   let tabBtn = sidebar?.querySelector(`button[data-tab-id="${CSS.escape(targetTabId)}"]`);
   if (!tabBtn) {
     tabBtn = sidebar?.querySelector(`button[title="${CSS.escape(targetTabId)}"]`);
@@ -11589,7 +11612,7 @@ function scheduleRestoreTabThenUnsuppress(targetTabId, preferMirror, fallbackCli
         clickRestoredPrimaryTab(targetTabId, preferMirror);
       }
     } else if (fallbackClickFirstHostTab) {
-      const sidebar = _sidebar || document.querySelector('[data-spindle-mount="sidebar"]');
+      const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
       const first = sidebar?.querySelector('button[class*="tabBtn"]');
       if (first) {
         try {
@@ -11621,18 +11644,6 @@ function findDrawerToggleButton(wrapper) {
   }
   return null;
 }
-function pushCurrentState() {
-  if (!_wrapper)
-    return;
-  const canvasMain = !!getSettings().taskbarMode && typeof window !== "undefined" && window.innerWidth > 600;
-  const open = canvasMain ? document.documentElement.classList.contains("sidebar-ux-canvas-main-open") : readWrapperOpen(_wrapper);
-  const tabId = _sidebar ? readActiveTabId(_sidebar) : null;
-  if (open === _lastSeenOpen && tabId === _lastSeenTabId)
-    return;
-  _lastSeenOpen = open;
-  _lastSeenTabId = tabId;
-  if (!canvasMain || tabId !== null) {}
-}
 function _initObservers(drawer) {
   let wrapper = drawer;
   const parent = drawer.parentElement;
@@ -11643,18 +11654,13 @@ function _initObservers(drawer) {
   if (grandparent && grandparent.classList.toString().match(/wrapper/i)) {
     wrapper = grandparent;
   }
-  const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
   _wrapper = wrapper;
-  _sidebar = sidebar;
-  _lastSeenOpen = readWrapperOpen(wrapper);
-  _lastSeenTabId = sidebar ? readActiveTabId(sidebar) : null;
   suppressMainDrawer();
   _classObserver = new MutationObserver((mutations) => {
     if (_stopped)
       return;
     for (const m3 of mutations) {
       if (m3.type === "attributes" && m3.attributeName === "class") {
-        pushCurrentState();
         if (wrapper) {
           const isOpen = readWrapperOpen(wrapper);
           enforceExclusionOnOpen("primary");
@@ -11665,44 +11671,6 @@ function _initObservers(drawer) {
     }
   });
   _classObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
-  if (sidebar) {
-    _tabObserver = new MutationObserver((mutations) => {
-      if (_stopped)
-        return;
-      for (const m3 of mutations) {
-        if (m3.type === "attributes" && m3.attributeName === "class") {
-          const target = m3.target;
-          if (target.className && /tabBtn/.test(target.className)) {
-            pushCurrentState();
-            break;
-          }
-        } else if (m3.type === "childList") {
-          pushCurrentState();
-          break;
-        }
-      }
-    });
-    _tabObserver.observe(sidebar, {
-      attributes: true,
-      attributeFilter: ["class"],
-      childList: true,
-      subtree: true
-    });
-  }
-  let mountedAt = Date.now();
-  _resizeObserver = new ResizeObserver(() => {
-    if (_stopped)
-      return;
-    if (Date.now() - mountedAt < MOUNT_QUIET_MS)
-      return;
-    if (_resizeDebounce)
-      clearTimeout(_resizeDebounce);
-    _resizeDebounce = setTimeout(() => {
-      if (_stopped)
-        return;
-    }, RESIZE_DEBOUNCE_MS);
-  });
-  _resizeObserver.observe(wrapper);
 }
 function startMainDrawerPersistence() {
   if (!_stopped)
@@ -11720,9 +11688,7 @@ function startMainDrawerPersistence() {
 function ensureRestoredPrimaryTab(targetTabId) {
   if (!targetTabId || _stopped)
     return;
-  const taskbarMode = !!getSettings().taskbarMode;
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
-  clickRestoredPrimaryTab(targetTabId, taskbarMode && !isMobile);
+  clickRestoredPrimaryTab(targetTabId, isMainMirrorActive());
 }
 function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) {
   if (_stopped)
@@ -11737,10 +11703,9 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
     return;
   }
   const clampedWidth = restoreWidth && typeof targetWidthPx === "number" && targetWidthPx > 0 ? clampSidebarWidth(targetWidthPx) : null;
-  const taskbarMode = !!getSettings().taskbarMode;
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 600;
+  const mirrorActive = isMainMirrorActive();
   const isHostMobile = isHostMobileDrawerViewport();
-  if (taskbarMode && !isMobile) {
+  if (mirrorActive) {
     Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
       if (_stopped) {
         unsuppressMainDrawer();
@@ -11763,7 +11728,7 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
     });
     return;
   }
-  if (isHostMobile && !taskbarMode && drawer) {
+  if (isHostMobile && drawer) {
     drawer.style.removeProperty("width");
     wrapper.style.removeProperty("--drawer-panel-w");
     if (!isMobileViewport()) {
@@ -11819,42 +11784,23 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
 function stopMainDrawerPersistence() {
   if (_stopped)
     return;
-  if (_resizeDebounce) {
-    clearTimeout(_resizeDebounce);
-    _resizeDebounce = null;
-  }
   _stopped = true;
   if (_classObserver) {
     _classObserver.disconnect();
     _classObserver = null;
   }
-  if (_tabObserver) {
-    _tabObserver.disconnect();
-    _tabObserver = null;
-  }
-  if (_resizeObserver) {
-    _resizeObserver.disconnect();
-    _resizeObserver = null;
-  }
-  if (_resizeDebounce) {
-    clearTimeout(_resizeDebounce);
-    _resizeDebounce = null;
-  }
   cleanupDomPoll();
   unsuppressMainDrawer();
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove();
   _wrapper = null;
-  _sidebar = null;
-  _lastSeenOpen = null;
-  _lastSeenTabId = null;
 }
-var RESIZE_DEBOUNCE_MS = 300, MOUNT_QUIET_MS = 500, UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _sidebar = null, _classObserver = null, _tabObserver = null, _resizeObserver = null, _resizeDebounce = null, _stopped = true, _lastSeenOpen = null, _lastSeenTabId = null, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
-  init_state();
   init_log();
   init_handles();
   init_mobile_exclusion();
   init_persist_polling();
+  init_main_mirror_drawer();
   init_persist_polling();
   PANEL_BODY_HIDE_SELECTOR = '[class*="_panelContent_"],' + "[data-canvas-main-panel-content]," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *";
 });
@@ -11862,12 +11808,12 @@ var init_main_persist = __esm(() => {
 // src/sidebar/mobile-exclusion.ts
 var exports_mobile_exclusion = {};
 __export(exports_mobile_exclusion, {
-  syncHostMainDrawerToMobileWidth: () => syncHostMainDrawerToMobileWidth,
-  startMobileExclusion: () => startMobileExclusion,
-  setMobileOpenClass: () => setMobileOpenClass,
-  isMobileViewport: () => isMobileViewport,
+  enforceExclusionOnOpen: () => enforceExclusionOnOpen,
   isHostMobileDrawerViewport: () => isHostMobileDrawerViewport,
-  enforceExclusionOnOpen: () => enforceExclusionOnOpen
+  isMobileViewport: () => isMobileViewport,
+  setMobileOpenClass: () => setMobileOpenClass,
+  startMobileExclusion: () => startMobileExclusion,
+  syncHostMainDrawerToMobileWidth: () => syncHostMainDrawerToMobileWidth
 });
 function syncCssVarToDrawerWidth() {
   const el = document.documentElement;
@@ -12079,20 +12025,20 @@ var init_activation_handoff = __esm(() => {
 // src/tabs/assignment.ts
 var exports_assignment = {};
 __export(exports_assignment, {
-  setTabAssignment: () => setTabAssignment,
-  setActiveSecondaryTabId: () => setActiveSecondaryTabId,
-  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
-  hasTabAssignment: () => hasTabAssignment,
-  hasSecondaryAssignedTabs: () => hasSecondaryAssignedTabs,
-  getTabSidebar: () => getTabSidebar,
-  getTabAssignments: () => getTabAssignments,
-  getLiveIdAssignments: () => getLiveIdAssignments,
-  getLiveIdAssignmentEntries: () => getLiveIdAssignmentEntries,
-  getActiveSecondaryTabId: () => getActiveSecondaryTabId,
-  ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
-  deleteTabAssignment: () => deleteTabAssignment,
+  assignTab: () => assignTab,
   clearTabAssignments: () => clearTabAssignments,
-  assignTab: () => assignTab
+  deleteTabAssignment: () => deleteTabAssignment,
+  ensureBuiltInTabActiveInMain: () => ensureBuiltInTabActiveInMain,
+  getActiveSecondaryTabId: () => getActiveSecondaryTabId,
+  getLiveIdAssignmentEntries: () => getLiveIdAssignmentEntries,
+  getLiveIdAssignments: () => getLiveIdAssignments,
+  getTabAssignments: () => getTabAssignments,
+  getTabSidebar: () => getTabSidebar,
+  hasSecondaryAssignedTabs: () => hasSecondaryAssignedTabs,
+  hasTabAssignment: () => hasTabAssignment,
+  isTabActiveInMainDrawer: () => isTabActiveInMainDrawer,
+  setActiveSecondaryTabId: () => setActiveSecondaryTabId,
+  setTabAssignment: () => setTabAssignment
 });
 function _resolvedKey(liveId) {
   const host = getHost();
@@ -12649,18 +12595,18 @@ var init_drawer_observer = __esm(() => {
 // src/store/index.ts
 var exports_store = {};
 __export(exports_store, {
-  setMainDrawerSideOverride: () => setMainDrawerSideOverride,
-  isMainDrawerOpen: () => isMainDrawerOpen,
-  getStoreSnapshot: () => getStoreSnapshot,
-  getMainDrawerSideOverride: () => getMainDrawerSideOverride,
-  getMainDrawerSide: () => getMainDrawerSide,
-  getHostStoreTabs: () => getHostStoreTabs,
-  getDrawerTabs: () => getDrawerTabs,
-  getActiveModal: () => getActiveModal,
-  findStoreData: () => findStoreData,
-  asDrawerStore: () => asDrawerStore,
+  __setDrawerTabsForTest: () => __setDrawerTabsForTest,
   __setStoreSnapshotForTest: () => __setStoreSnapshotForTest,
-  __setDrawerTabsForTest: () => __setDrawerTabsForTest
+  asDrawerStore: () => asDrawerStore,
+  findStoreData: () => findStoreData,
+  getActiveModal: () => getActiveModal,
+  getDrawerTabs: () => getDrawerTabs,
+  getHostStoreTabs: () => getHostStoreTabs,
+  getMainDrawerSide: () => getMainDrawerSide,
+  getMainDrawerSideOverride: () => getMainDrawerSideOverride,
+  getStoreSnapshot: () => getStoreSnapshot,
+  isMainDrawerOpen: () => isMainDrawerOpen,
+  setMainDrawerSideOverride: () => setMainDrawerSideOverride
 });
 function asDrawerStore(store) {
   return store;
@@ -12826,32 +12772,32 @@ var init_store = __esm(() => {
 // src/sidebar/secondary.tsx
 var exports_secondary = {};
 __export(exports_secondary, {
-  unmountSecondarySidebar: () => unmountSecondarySidebar,
-  tearDownSecondarySidebar: () => tearDownSecondarySidebar,
-  syncPanelHeaderFromMain: () => syncPanelHeaderFromMain2,
-  stopPanelHeaderObservers: () => stopPanelHeaderObservers,
-  setSecondarySidebarOpen: () => setSecondarySidebarOpen,
-  secondaryTabsAllPlaced: () => secondaryTabsAllPlaced,
-  reassignSecondaryTabsFromModel: () => reassignSecondaryTabsFromModel,
-  persistSecondaryDrawerOpen: () => persistSecondaryDrawerOpen,
-  openSecondarySidebar: () => openSecondarySidebar,
-  mountSecondarySidebar: () => mountSecondarySidebar,
-  liveIdForFacadeKey: () => liveIdForFacadeKey,
-  isSecondarySidebarOpen: () => isSecondarySidebarOpen,
-  isSecondaryShellLive: () => isSecondaryShellLive,
-  injectDrawerTabStyles: () => injectDrawerTabStyles,
-  getSecondaryWrapper: () => getSecondaryWrapper,
-  getSecondaryTabList: () => getSecondaryTabList,
-  getSecondaryPanel: () => getSecondaryPanel,
-  getSecondaryDrawer: () => getSecondaryDrawer,
-  getClosedTransformPx: () => getClosedTransformPx,
-  ensureSecondaryShellMounted: () => ensureSecondaryShellMounted,
-  createSecondarySidebar: () => createSecondarySidebar,
-  closeSecondarySidebar: () => closeSecondarySidebar,
-  animateWrapper: () => animateWrapper,
-  __setSecondaryWrapperForTest: () => __setSecondaryWrapperForTest,
+  PUZZLE_ICON_SVG: () => PUZZLE_ICON_SVG,
   SECONDARY_WIDTH_VAR: () => SECONDARY_WIDTH_VAR,
-  PUZZLE_ICON_SVG: () => PUZZLE_ICON_SVG
+  __setSecondaryWrapperForTest: () => __setSecondaryWrapperForTest,
+  animateWrapper: () => animateWrapper,
+  closeSecondarySidebar: () => closeSecondarySidebar,
+  createSecondarySidebar: () => createSecondarySidebar,
+  ensureSecondaryShellMounted: () => ensureSecondaryShellMounted,
+  getClosedTransformPx: () => getClosedTransformPx,
+  getSecondaryDrawer: () => getSecondaryDrawer,
+  getSecondaryPanel: () => getSecondaryPanel,
+  getSecondaryTabList: () => getSecondaryTabList,
+  getSecondaryWrapper: () => getSecondaryWrapper,
+  injectDrawerTabStyles: () => injectDrawerTabStyles,
+  isSecondaryShellLive: () => isSecondaryShellLive,
+  isSecondarySidebarOpen: () => isSecondarySidebarOpen,
+  liveIdForFacadeKey: () => liveIdForFacadeKey,
+  mountSecondarySidebar: () => mountSecondarySidebar,
+  openSecondarySidebar: () => openSecondarySidebar,
+  persistSecondaryDrawerOpen: () => persistSecondaryDrawerOpen,
+  reassignSecondaryTabsFromModel: () => reassignSecondaryTabsFromModel,
+  secondaryTabsAllPlaced: () => secondaryTabsAllPlaced,
+  setSecondarySidebarOpen: () => setSecondarySidebarOpen,
+  stopPanelHeaderObservers: () => stopPanelHeaderObservers,
+  syncPanelHeaderFromMain: () => syncPanelHeaderFromMain2,
+  tearDownSecondarySidebar: () => tearDownSecondarySidebar,
+  unmountSecondarySidebar: () => unmountSecondarySidebar
 });
 function syncPanelHeaderFromMain2() {
   syncPanelHeaderFromMain(() => _secondaryWrapper);
@@ -12885,8 +12831,18 @@ function setSecondarySidebarOpen(open) {
 function unmountSecondarySidebar() {
   applyTabListPin(false, { force: true });
   if (_secondaryWrapper) {
-    _secondaryWrapper.remove();
+    const oldWrapper = _secondaryWrapper;
     _secondaryWrapper = null;
+    try {
+      getHostBridge()?.containers?.unregisterContainer?.("canvas-secondary-drawer");
+    } catch (err) {
+      dwarn("[tabmove] unmountSecondarySidebar: unregisterContainer threw:", err);
+    }
+    setTimeout(() => {
+      try {
+        oldWrapper.remove();
+      } catch {}
+    }, 0);
   }
   _secondaryDrawer = null;
   _secondarySidebarOpen = false;
@@ -12917,16 +12873,7 @@ function createSecondarySidebar(options) {
   try {
     const wSpindle = getHostBridge();
     const wContainers = wSpindle?.containers;
-    if (wContainers?.registerContainer) {
-      try {
-        wContainers.unregisterContainer?.("canvas-secondary-drawer");
-      } catch {}
-      wContainers.registerContainer({
-        id: "canvas-secondary-drawer",
-        side,
-        element: shell.content
-      });
-    } else {
+    if (!wContainers?.registerContainer) {
       dwarn(`[tabmove] createSecondarySidebar: registerContainer SKIPPED — ` + `host bridge containers.registerContainer not available ` + `(setup ctx / window.spindle missing). Built-in tab moves will ` + `silently fail (ContainerTabContent Pass 3 resets to main-drawer).`);
     }
   } catch (err) {
@@ -12961,15 +12908,26 @@ function secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds) {
     return liveId === null || present.has(liveId);
   });
 }
+function secondaryHasDisplayedRoot() {
+  const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  return !!content?.querySelector("[data-canvas-moved][data-canvas-active]");
+}
 function reassignSecondaryTabsFromModel(opts) {
-  Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, activateSecondaryTab: activateSecondaryTab2, getActiveSecondaryTab: getActiveSecondaryTab2 }) => {
+  if (_reassignInFlight) {
+    _reassignQueued = true;
+    return Promise.resolve();
+  }
+  _reassignInFlight = true;
+  const run = Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, activateSecondaryTab: activateSecondaryTab2 }) => {
     setSuppressAutoActivation(true);
     const tabs = drawerObserver.getAllTabs();
     const modelSecondaryKeys = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(([key]) => key);
     const listIds = getSecondaryTabList() ? Array.from(getSecondaryTabList().querySelectorAll("button[data-tab-id]")).map((el) => el.getAttribute("data-tab-id")).filter((id) => !!id) : [];
+    const bootRestore = opts?.activateKey != null;
+    const tailCanShow = bootRestore ? !secondaryHasDisplayedRoot() : getActiveSecondaryTabId() === null;
     if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
       dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`);
-      if (isSecondarySidebarOpen() && !getActiveSecondaryTab2() && listIds.length > 0) {
+      if (isSecondarySidebarOpen() && tailCanShow && listIds.length > 0) {
         const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null;
         const target = preferred && listIds.includes(preferred) ? preferred : listIds[0];
         dlog(`[secondary] open loop: showing "${target}" (placed, no active)`);
@@ -12992,7 +12950,7 @@ function reassignSecondaryTabsFromModel(opts) {
         placed.push(liveId);
     }
     setSuppressAutoActivation(false);
-    if (isSecondarySidebarOpen() && !getActiveSecondaryTab2() && placed.length > 0) {
+    if (isSecondarySidebarOpen() && tailCanShow && placed.length > 0) {
       const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null;
       const target = preferred && placed.includes(preferred) ? preferred : placed[0];
       dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? " (preferred missing)" : ""}`);
@@ -13000,6 +12958,14 @@ function reassignSecondaryTabsFromModel(opts) {
       activateSecondaryTab2(target);
     }
   });
+  run.finally(() => {
+    _reassignInFlight = false;
+    if (_reassignQueued) {
+      _reassignQueued = false;
+      reassignSecondaryTabsFromModel(opts);
+    }
+  }).catch(() => {});
+  return run;
 }
 function persistSecondaryDrawerOpen(open) {
   Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
@@ -13124,7 +13090,22 @@ function mountSecondarySidebar(options) {
   }
   _secondaryWrapper = createSecondarySidebar(options);
   document.body.appendChild(_secondaryWrapper);
-  sweepOrphanSecondaryWrappers();
+  try {
+    const content = _secondaryWrapper.querySelector(".sidebar-ux-panel-content");
+    const wContainers = getHostBridge()?.containers;
+    if (wContainers?.registerContainer && content) {
+      wContainers.registerContainer({
+        id: "canvas-secondary-drawer",
+        side: getMainDrawerSide() === "left" ? "right" : "left",
+        element: content
+      });
+    } else {
+      dwarn(`[tabmove] mountSecondarySidebar: registerContainer SKIPPED — ` + `host bridge containers.registerContainer not available (setup ctx / window.spindle missing). Built-in tab moves will silently fail (ContainerTabContent Pass 3 resets to main-drawer).`);
+    }
+  } catch (err) {
+    dwarn(`[tabmove] mountSecondarySidebar: registerContainer THREW:`, err);
+  }
+  setTimeout(() => sweepOrphanSecondaryWrappers(), 0);
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     drawer: _secondaryWrapper.querySelector(".sidebar-ux-drawer"),
     tabList: _secondaryWrapper.querySelector(".sidebar-ux-tab-list"),
@@ -13226,7 +13207,7 @@ function tearDownSecondarySidebar() {
   stopPanelHeaderObservers();
   resetPanelHeaderSyncCache();
 }
-var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null;
+var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null, _reassignInFlight = false, _reassignQueued = false;
 var init_secondary = __esm(() => {
   init_store();
   init_reflow();
@@ -13511,25 +13492,25 @@ var init_settings_repo = __esm(() => {
 // src/settings/state.ts
 var exports_state = {};
 __export(exports_state, {
-  setSingleLayoutSlot: () => setSingleLayoutSlot,
-  setSettings: () => setSettings,
-  setPanelRefresh: () => setPanelRefresh,
-  setLastLoadedLayout: () => setLastLoadedLayout,
-  setDualLayoutSlot: () => setDualLayoutSlot,
-  refreshSettingsPanel: () => refreshSettingsPanel,
-  persistSettings: () => persistSettings,
-  normalizeCanvasSettings: () => normalizeCanvasSettings,
-  isTaskbarModeEnabled: () => isTaskbarModeEnabled,
-  isHideDrawerOpenCloseButtonsEnabled: () => isHideDrawerOpenCloseButtonsEnabled,
-  isDragAndDropDrawerTabsEnabled: () => isDragAndDropDrawerTabsEnabled,
-  hydrateSettings: () => hydrateSettings,
-  hydrateModeLayoutSlots: () => hydrateModeLayoutSlots,
-  getSingleLayoutSlot: () => getSingleLayoutSlot,
-  getSettings: () => getSettings,
-  getLastLoadedLayout: () => getLastLoadedLayout,
-  getDualLayoutSlot: () => getDualLayoutSlot,
+  cancelSettingsSave: () => cancelSettingsSave,
   flushSettingsSave: () => flushSettingsSave,
-  cancelSettingsSave: () => cancelSettingsSave
+  getDualLayoutSlot: () => getDualLayoutSlot,
+  getLastLoadedLayout: () => getLastLoadedLayout,
+  getSettings: () => getSettings,
+  getSingleLayoutSlot: () => getSingleLayoutSlot,
+  hydrateModeLayoutSlots: () => hydrateModeLayoutSlots,
+  hydrateSettings: () => hydrateSettings,
+  isDragAndDropDrawerTabsEnabled: () => isDragAndDropDrawerTabsEnabled,
+  isHideDrawerOpenCloseButtonsEnabled: () => isHideDrawerOpenCloseButtonsEnabled,
+  isTaskbarModeEnabled: () => isTaskbarModeEnabled,
+  normalizeCanvasSettings: () => normalizeCanvasSettings,
+  persistSettings: () => persistSettings,
+  refreshSettingsPanel: () => refreshSettingsPanel,
+  setDualLayoutSlot: () => setDualLayoutSlot,
+  setLastLoadedLayout: () => setLastLoadedLayout,
+  setPanelRefresh: () => setPanelRefresh,
+  setSettings: () => setSettings,
+  setSingleLayoutSlot: () => setSingleLayoutSlot
 });
 function getSettings() {
   return _settings;
@@ -16600,8 +16581,8 @@ function ToastSurface() {
       class: `canvas-slash-toast canvas-slash-toast--${t3.kind}`,
       "data-kind": t3.kind,
       children: t3.text
-    }, t3.id, false, undefined, this))
-  }, undefined, false, undefined, this);
+    }, t3.id))
+  });
 }
 function handleToastEvent(e3) {
   const { kind, text } = e3.detail;
@@ -17323,36 +17304,34 @@ var init_registry = __esm(() => {
       if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge)
         return;
       applyTabListPosition(next.moveControlsToOuterEdge);
+      reconcileTabListPin();
+      reconcileMainTabListPin();
+      updateChatReflow();
     }
   };
   taskbarModeFeature = {
     id: "taskbarMode",
+    unconditional: true,
     mount(_ctx4, _layout) {
-      const on = !!getSettings().taskbarMode && !!getSettings().moveControlsToOuterEdge;
-      if (on) {
-        reconcileTabListPin();
-        reconcileMainTabListPin();
-      } else {
-        applyTabListPin(false, { force: true });
-        applyMainTabListPin(false, { force: true });
-      }
+      reconcileTabListPin();
+      reconcileMainTabListPin();
       updateDrawerTabVisibility();
       updateStripGutters();
       updateChatReflow();
       return () => {
         applyTabListPin(false, { force: true });
-        applyMainTabListPin(false, { force: true });
+        teardownMainPin();
         updateDrawerTabVisibility();
         clearStripGutters();
         updateChatReflow();
       };
     },
     apply(_prev, next) {
-      const on = !!next.taskbarMode && !!next.moveControlsToOuterEdge;
-      applyTabListPin(on, { force: true });
-      applyMainTabListPin(on, { force: true });
+      const chrome = isTaskbarModeEnabled(next);
+      applyMainTabListPin(chrome, { force: true });
+      applyTabListPin(chrome, { force: true });
       updateDrawerTabVisibility();
-      if (on) {
+      if (chrome) {
         updateStripGutters();
       } else {
         clearStripGutters();
@@ -17923,6 +17902,7 @@ init_mobile_exclusion();
 init_drawer_sync();
 init_drawer_observer();
 init_secondary_drawer();
+init_main_mirror_drawer();
 
 // src/context-menu/index.ts
 init_store();
@@ -18695,8 +18675,7 @@ function buildHostEntry(tab) {
   const location = entryLocationFor(tab, assignments);
   const key = tab.key;
   const canvasHidden = new Set(getCanvasHiddenTabIds());
-  const hostSettings = getHostDrawerSettings();
-  const hostHidden = hostSettings?.hiddenTabIds ? new Set(hostSettings.hiddenTabIds) : new Set;
+  const hostHidden = !isMainMirrorActive() ? getHostDrawerSettings()?.hiddenTabIds ? new Set(getHostDrawerSettings().hiddenTabIds) : new Set : new Set;
   const isHidden3 = canvasHidden.has(tab.id) || hostHidden.has(tab.id);
   const primaryActive = resolvePrimaryActiveTabId();
   const secondaryActive = getActiveSecondaryTabId();
@@ -18843,55 +18822,34 @@ class LumiverseHost {
         reorderSecondaryTabButtons(ids);
         return "ok";
       }
-      const current = getHostDrawerSettings();
-      const merged = {
-        ...current ?? {},
-        tabOrder: ids
-      };
       reorderHostMainTabButtons(ids);
-      reorderMainMirrorTabButtons(ids);
       dlog("[host] setOrder:dom-reordered", { side, ids });
-      const ok = patchHostDrawerSettings(merged);
-      dlog("[host] setOrder:settings-written", { side, ids, ok });
-      return ok ? "ok" : "degraded";
+      return "ok";
     } catch {
       return "failed";
     }
   }
   async setHidden(_side, ids) {
     try {
-      const current = getHostDrawerSettings();
-      const side = _side;
       const assignments = getTabAssignments();
       const sideIds = new Set;
       for (const tab of liveDrawerTabs()) {
         const assignedSide = assignments.get(tab.key);
-        if (assignedSide === "secondary" === (side === "secondary")) {
+        if (assignedSide === "secondary" === (_side === "secondary")) {
           sideIds.add(tab.id);
         }
       }
       for (const [key, assignedSide] of assignments) {
-        if (assignedSide === "secondary" === (side === "secondary"))
+        if (assignedSide === "secondary" === (_side === "secondary"))
           sideIds.add(key);
       }
-      const currentHidden = Array.isArray(current?.hiddenTabIds) ? current.hiddenTabIds : [];
-      const nextHidden = currentHidden.filter((id) => !sideIds.has(id));
-      for (const id of ids) {
-        if (!nextHidden.includes(id))
-          nextHidden.push(id);
-      }
-      const canvasHidden = getCanvasHiddenTabIds().filter((id) => !sideIds.has(id));
-      setCanvasHiddenTabIds([...canvasHidden, ...ids]);
-      const effective = mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds());
-      const merged = {
-        ...current ?? {},
-        hiddenTabIds: effective
-      };
-      applyHiddenTabIdsToMirror(new Set(effective));
-      applyHiddenTabIdsToSecondary(new Set(effective));
-      applyHiddenTabIdsToHostMain(new Set(effective));
-      const ok = patchHostDrawerSettings(merged);
-      return ok ? "ok" : "degraded";
+      const canvasOtherSide = getCanvasHiddenTabIds().filter((id) => !sideIds.has(id));
+      setCanvasHiddenTabIds([...canvasOtherSide, ...ids]);
+      const effective = new Set([...canvasOtherSide, ...ids]);
+      applyHiddenTabIdsToMirror(effective);
+      applyHiddenTabIdsToSecondary(effective);
+      applyHiddenTabIdsToHostMain(effective);
+      return "ok";
     } catch {
       return "failed";
     }
@@ -18899,7 +18857,7 @@ class LumiverseHost {
   async activate(side, id) {
     try {
       if (side === "secondary") {
-        showSecondaryTab(id);
+        showSecondaryTab(id, { silent: true });
         return "ok";
       }
       const tabs = liveDrawerTabs();
@@ -18911,8 +18869,9 @@ class LumiverseHost {
         dlog("[host] activate: findMainTabButton returned null", { side, id });
         return "degraded";
       }
-      const { activateMainMirrorFromRestore: activateMainMirrorFromRestore2 } = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
-      activateMainMirrorFromRestore2(hostBtn, tab.title);
+      try {
+        hostBtn.click();
+      } catch {}
       return "ok";
     } catch {
       return "failed";
@@ -19074,6 +19033,13 @@ function setup(ctx) {
   let active = true;
   const isCurrent = () => active && generation === _setupGeneration;
   beginMainDrawerRestoreGuard();
+  registerCleanup(() => {
+    try {
+      teardownMainMirror();
+    } catch (err) {
+      dwarn("teardownMainMirror on disable failed:", err);
+    }
+  });
   registerCleanup(unsuppressMainDrawer);
   registerCleanup(() => {
     if (generation === _setupGeneration)
@@ -19193,7 +19159,7 @@ function setup(ctx) {
         return;
       if (!feature.mount)
         continue;
-      if (!getSettings()[feature.id])
+      if (!feature.unconditional && !getSettings()[feature.id])
         continue;
       dlog(`mounting feature ${String(feature.id)}`);
       const teardown = feature.mount(ctx, layout);
@@ -19217,7 +19183,7 @@ function setup(ctx) {
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons();
       Promise.resolve().then(() => (init_hidden_tabs(), exports_hidden_tabs)).then((m3) => {
-        m3.scheduleSyncHiddenTabsFromHost({ writeBack: true });
+        m3.scheduleSyncHiddenTabsFromHost();
       }).catch(() => {});
       Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
         m3.refreshConfigureDraftFromLive();
@@ -19260,6 +19226,12 @@ function setup(ctx) {
       shutdown();
       coreHost.shutdown();
     });
+    try {
+      await Promise.race([
+        bootPlacementDone(),
+        new Promise((resolve) => setTimeout(resolve, 1500))
+      ]);
+    } catch {}
     dlog(`applyMainDrawer:pre`);
     const s3 = getSettings();
     const restoreOpen = !!s3.persistDrawerOpenState;

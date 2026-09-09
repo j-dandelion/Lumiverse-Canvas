@@ -59,13 +59,6 @@ let _contentRestoreParent: HTMLElement | null = null
 let _contentRestoreNext: ChildNode | null = null
 /** Last side we mounted for — skip full remount when unchanged. */
 let _mountedSide: 'left' | 'right' | null = null
-/** Soft re-park if React pulls content back into the host tree. */
-let _reparkTimer: ReturnType<typeof setTimeout> | null = null
-/** Consecutive ticks where content was already parked — idle-stop threshold. */
-let _reparkIdleCount = 0
-/** After this many consecutive idle ticks, stop repark watch. */
-const REPARK_IDLE_STOP_COUNT = 10
-
 export function getMainMirrorWidthVar(): string {
   return MAIN_MIRROR_WIDTH_VAR
 }
@@ -203,9 +196,6 @@ export function openCanvasMainDrawer(): void {
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => { dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`) })
   bumpReflow()
   persistCanvasMainOpenState()
-  // Re-arm repark watch: drawer open can trigger React re-renders that
-  // reinsert panelContent into the host tree after the watch idle-stopped.
-  restartReparkWatch()
 }
 
 export function closeCanvasMainDrawer(): void {
@@ -268,18 +258,10 @@ export function onMainMirrorTabActivated(title?: string): void {
   ensureHostContentParked()
   openCanvasMainDrawer()
   requestAnimationFrame(() => ensureHostContentParked())
-  // Re-arm repark watch: tab clicks trigger React re-renders that can
-  // reinsert panelContent into the host tree after the watch idle-stopped.
-  restartReparkWatch()
 }
 
 export function __resetMainMirrorForTest(): void {
   teardownMainMirror()
-}
-
-/** Test accessor: current repark idle count. */
-export function __getReparkIdleCountForTest(): number {
-  return _reparkIdleCount
 }
 
 /** Update the main mirror's drawer edge toggle visibility based on settings.
@@ -423,7 +405,6 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
 
   // Park host panelContent into the shell for the whole mode lifetime.
   ensureHostContentParked()
-  startReparkWatch()
 
   if (!_open && isMainDrawerOpen()) {
     openCanvasMainDrawer()
@@ -645,53 +626,6 @@ function restoreHostContent(): void {
   _contentRestoreNext = null
 }
 
-function startReparkWatch(): void {
-  stopReparkWatch()
-  _reparkIdleCount = 0
-  // Lightweight poll — no MutationObserver (that fought React). If host
-  // React re-inserts panelContent under the hidden wrapper, put it back.
-  // Faster interval while restore-pending so tab-switch remounts don't
-  // paint profile under the host for a frame.
-  // Stops after REPARK_IDLE_STOP_COUNT consecutive ticks where content
-  // was already correctly parked (no React re-insertion).
-  const tickMs = () =>
-    (typeof document !== 'undefined'
-      && document.documentElement.classList.contains('sidebar-ux-main-restore-pending'))
-      ? 50
-      : 500
-  const tick = () => {
-    _reparkTimer = null
-    if (!_active || !_shell) return
-    const el = resolveHostPanelContent()
-    if (el && el.parentElement !== _shell.content) {
-      dlog('[main-mirror] re-park: React moved panelContent back to host')
-      ensureHostContentParked()
-      _reparkIdleCount = 0
-    } else {
-      _reparkIdleCount++
-      if (_reparkIdleCount >= REPARK_IDLE_STOP_COUNT) {
-        dlog('[main-mirror] repark watch idle-stopped')
-        return
-      }
-    }
-    _reparkTimer = setTimeout(tick, tickMs())
-  }
-  _reparkTimer = setTimeout(tick, tickMs())
-}
-
-/** Re-arm repark watch (e.g. after restore-pending begins or tab click). */
-export function restartReparkWatch(): void {
-  if (_active && _shell) startReparkWatch()
-}
-
-function stopReparkWatch(): void {
-  if (_reparkTimer !== null) {
-    clearTimeout(_reparkTimer)
-    _reparkTimer = null
-  }
-  _reparkIdleCount = 0
-}
-
 function clearHostWrapperInline(): void {
   const wrap = getMainWrapper()
   if (!wrap) return
@@ -724,7 +658,6 @@ function sweepOrphanMainMirrorWrappers(): void {
  *  register it as the unconditional shell teardown ahead of
  *  unsuppressMainDrawer (S1 FIFO fix) and features can full-teardown. */
 export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
-  stopReparkWatch()
   restoreHostContent()
   clearHostWrapperInline()
   unpinShellTabList()

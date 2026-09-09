@@ -237,8 +237,6 @@ mock.module('../../../sidebar/main-mirror-drawer', () => ({
   openCanvasMainDrawer: () => {},
   closeCanvasMainDrawer: () => {},
   ensureHostContentParkedPublic: () => {},
-  restartReparkWatch: () => {},
-  __getReparkIdleCountForTest: () => 0,
   __resetMainMirrorForTest: () => {},
   MAIN_MIRROR_WIDTH_VAR: '--sidebar-ux-main-mirror-w',
 }))

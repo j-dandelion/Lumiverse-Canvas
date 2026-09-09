@@ -58,15 +58,6 @@ import { isMainMirrorActive } from './main-mirror-drawer'
 // Re-export for back-compat so existing imports keep working.
 export { waitForDrawerDOM, cleanupDomPoll } from './persist-polling'
 
-// Debounce window for resize-triggered writes (ms). Mirrors the
-// 300ms debounce in persistLayout so drag-to-resize coalesces to a
-// single on-disk write.
-const RESIZE_DEBOUNCE_MS = 300
-// Suppression window after the watcher mounts (ms). The host's
-// initial mount fires the ResizeObserver once with a 0→N transition;
-// we drop the first burst to avoid a redundant "drawer just resized
-// to its current width" save.
-const MOUNT_QUIET_MS = 500
 // Timeout (ms) to unsuppress the wrapper even if restore fails or the
 // async LOAD_LAYOUT never arrives. Prevents a permanently hidden drawer.
 const UNSUPPRESS_TIMEOUT_MS = 3000
@@ -93,14 +84,8 @@ const RESTORE_CONTENT_FALLBACK_MS = 50
 // the live layout snapshot so every save path (settings-toggle, pagehide
 // flush, manual save) sees the live main-drawer state.
 let _wrapper: HTMLElement | null = null
-let _sidebar: HTMLElement | null = null
 let _classObserver: MutationObserver | null = null
-let _tabObserver: MutationObserver | null = null
-let _resizeObserver: ResizeObserver | null = null
-let _resizeDebounce: ReturnType<typeof setTimeout> | null = null
 let _stopped = true
-let _lastSeenOpen: boolean | null = null
-let _lastSeenTabId: string | null = null
 let _unsuppressTimer: ReturnType<typeof setTimeout> | null = null
 /** Re-stamps inline hide on newly mounted panel bodies during restore. */
 let _panelHideObserver: MutationObserver | null = null
@@ -118,18 +103,6 @@ let _contentFallbackTimer: ReturnType<typeof setTimeout> | null = null
  */
 function readWrapperOpen(wrapper: HTMLElement): boolean {
   return wrapper.classList.toString().includes('wrapperOpen')
-}
-
-/**
- * Read the active tab id from the sidebar. The host marks the active
- * tab button with `tabBtnActive`; we return the button's `data-tab-id`
- * if present, else its `title` attribute (which the host uses to
- * render the localized tab name).
- */
-function readActiveTabId(sidebar: HTMLElement): string | null {
-  const active = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]') as HTMLElement | null
-  if (!active) return null
-  return active.getAttribute('data-tab-id') || active.getAttribute('title') || null
 }
 
 function ensureRestoreGuardStyles(): void {
@@ -326,9 +299,9 @@ export function isMainDrawerRestorePending(): boolean {
  * (stored "spindle:…:tab:memory:1" vs host data-tab-id "memory").
  */
 export function isHostPrimaryTabActive(targetTabId: string): boolean {
-  const sidebar =
-    _sidebar
-    || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+  const sidebar = document.querySelector(
+    '[data-spindle-mount="sidebar"]',
+  ) as HTMLElement | null
   const active = sidebar?.querySelector(
     'button.tabBtnActive, button[class*="tabBtnActive"]',
   ) as HTMLElement | null
@@ -563,9 +536,9 @@ async function restoreTab(
  */
 function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boolean): boolean {
   if (!targetTabId) return false
-  const sidebar =
-    _sidebar
-    || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+  const sidebar = document.querySelector(
+    '[data-spindle-mount="sidebar"]',
+  ) as HTMLElement | null
   let tabBtn =
     sidebar?.querySelector(
       `button[data-tab-id="${CSS.escape(targetTabId)}"]`,
@@ -684,9 +657,9 @@ function scheduleRestoreTabThenUnsuppress(
         clickRestoredPrimaryTab(targetTabId, preferMirror)
       }
     } else if (fallbackClickFirstHostTab) {
-      const sidebar =
-        _sidebar
-        || (document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null)
+      const sidebar = document.querySelector(
+        '[data-spindle-mount="sidebar"]',
+      ) as HTMLElement | null
       const first =
         sidebar?.querySelector('button[class*="tabBtn"]') as HTMLButtonElement | null
       if (first) {
@@ -736,35 +709,6 @@ export function findDrawerToggleButton(wrapper: HTMLElement): HTMLButtonElement 
 }
 
 /**
- * Persist the current main-drawer state to disk. Called on every
- * observed change. We snapshot via the cache rather than re-reading
- * the DOM, so the persistence layer's live layout snapshot is consistent
- * with what we just observed.
- */
-function pushCurrentState() {
-  if (!_wrapper) return
-  // Canvas main-mirror owns open/close; host wrapperOpen is headless and
-  // must not clobber primary.open. Still track active tabId from host.
-  // S1: mirror-liveness (desktop shell) replaces the taskbarMode check —
-  // the shell is the main drawer even when unpinned.
-  const canvasMain = isMainMirrorActive()
-  const open = canvasMain
-    ? document.documentElement.classList.contains('sidebar-ux-canvas-main-open')
-    : readWrapperOpen(_wrapper)
-  const tabId = _sidebar ? readActiveTabId(_sidebar) : null
-  if (open === _lastSeenOpen && tabId === _lastSeenTabId) return
-  _lastSeenOpen = open
-  _lastSeenTabId = tabId
-  // Owned model tracks drawer state; no-op setMainDrawerState retired.
-  // Open transitions are persisted by open/closeCanvasMainDrawer in mirror
-  // mode; host mode still needs the watcher write. Tab-only changes always
-  // persist so primary.tabId stays fresh.
-  if (!canvasMain || tabId !== null) {
-    // Persist via the owned model; no-op persistOpenState was retired.
-  }
-}
-
-/**
  * Core initialization: attach all observers, seed state, suppress/restore.
  * Extracted from startMainDrawerPersistence so it can be called either
  * immediately (drawer already in DOM) or after _waitForDrawerDOM resolves.
@@ -792,12 +736,7 @@ function _initObservers(drawer: HTMLElement): void {
   if (grandparent && grandparent.classList.toString().match(/wrapper/i)) {
     wrapper = grandparent
   }
-  const sidebar = document.querySelector('[data-spindle-mount="sidebar"]') as HTMLElement | null
-
   _wrapper = wrapper
-  _sidebar = sidebar
-  _lastSeenOpen = readWrapperOpen(wrapper)
-  _lastSeenTabId = sidebar ? readActiveTabId(sidebar) : null
 
   // Immediately hide the wrapper to prevent a flash of the default
   // (open) state while the async LOAD_LAYOUT round-trip resolves.
@@ -809,13 +748,13 @@ function _initObservers(drawer: HTMLElement): void {
 
 
   // Observe the wrapper's class attribute. Open/close transitions
-  // toggle `wrapperOpen`; the MutationObserver fires once per
-  // change, so we don't need any internal debounce here.
+  // toggle `wrapperOpen`. S3: this observer now serves ONLY the mobile
+  // exclusion hooks — host-state persistence flows through the owned
+  // model (dispatch), not host-DOM observation.
   _classObserver = new MutationObserver((mutations) => {
     if (_stopped) return
     for (const m of mutations) {
       if (m.type === 'attributes' && m.attributeName === 'class') {
-        pushCurrentState()
         // Mobile exclusion: detect closed→open transition
         if (wrapper) {
           const isOpen = readWrapperOpen(wrapper)
@@ -827,51 +766,6 @@ function _initObservers(drawer: HTMLElement): void {
     }
   })
   _classObserver.observe(wrapper, { attributes: true, attributeFilter: ['class'] })
-
-  // Observe the sidebar's tab list for active-tab transitions. The
-  // host moves `tabBtnActive` between buttons; the MutationObserver
-  // fires for each class change inside the subtree.
-  if (sidebar) {
-    _tabObserver = new MutationObserver((mutations) => {
-      if (_stopped) return
-      for (const m of mutations) {
-        if (m.type === 'attributes' && m.attributeName === 'class') {
-          const target = m.target as HTMLElement
-          if (target.className && /tabBtn/.test(target.className)) {
-            pushCurrentState()
-            break
-          }
-        } else if (m.type === 'childList') {
-          pushCurrentState()
-          break
-        }
-      }
-    })
-    _tabObserver.observe(sidebar, {
-      attributes: true,
-      attributeFilter: ['class'],
-      childList: true,
-      subtree: true,
-    })
-  }
-
-  // Width: ResizeObserver with debounce. The 500ms MOUNT_QUIET_MS
-  // suppression prevents the very first observation callback (which
-  // fires on initial layout) from triggering a redundant save.
-  let mountedAt = Date.now()
-  _resizeObserver = new ResizeObserver(() => {
-    if (_stopped) return
-    if (Date.now() - mountedAt < MOUNT_QUIET_MS) return
-    if (_resizeDebounce) clearTimeout(_resizeDebounce)
-    _resizeDebounce = setTimeout(() => {
-      if (_stopped) return
-
-      // Persist via the owned model; no-op persistLayout was retired.
-    }, RESIZE_DEBOUNCE_MS)
-  })
-  _resizeObserver.observe(wrapper)
-
-  
 }
 
 export function startMainDrawerPersistence(): void {
@@ -1072,25 +966,12 @@ export function restoreMainDrawerFromDom(
 
 export function stopMainDrawerPersistence(): void {
   if (_stopped) return
-  // Extension updates do not necessarily emit pagehide. Preserve a width
-  // change whose local debounce has not reached persistLayout yet.
-  if (_resizeDebounce) {
-    clearTimeout(_resizeDebounce)
-    _resizeDebounce = null
-    // Persist via the owned model; no-op persistOpenState was retired.
-  }
   _stopped = true
   if (_classObserver) { _classObserver.disconnect(); _classObserver = null }
-  if (_tabObserver) { _tabObserver.disconnect(); _tabObserver = null }
-  if (_resizeObserver) { _resizeObserver.disconnect(); _resizeObserver = null }
-  if (_resizeDebounce) { clearTimeout(_resizeDebounce); _resizeDebounce = null }
   cleanupDomPoll()
   // Lift any in-flight restore guard so teardown does not leave the
   // drawer permanently hidden.
   unsuppressMainDrawer()
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove()
   _wrapper = null
-  _sidebar = null
-  _lastSeenOpen = null
-  _lastSeenTabId = null
 }
