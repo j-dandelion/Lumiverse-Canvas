@@ -3,6 +3,13 @@ import type { Intent } from '../core/intents'
 import { listForSide, isHidden, visibleKeys, sideOfKey } from '../core/select'
 import type { HostPort, LiveTabId, ReconcileReport, StepReport, DrawerState, EchoInfo } from '../host/port'
 import { dlog } from '../debug/log'
+// Pending-adoption guard (2026-09): the tracked secondary active is the
+// user's live intent; the model adopts it asynchronously via the queued
+// syncActive dispatch. Reading it here lets the echo diff suppress stale
+// model→chrome activations. Function-hoisted — this edge sits inside the
+// pre-existing active-tab ↔ main-tab-pin ↔ drawer-sync cycle, with no
+// eval-order reads.
+import { getActiveSecondaryTabId } from '../tabs/active-tab'
 
 let _epochId = 0
 let _activeEpoch = false
@@ -142,6 +149,28 @@ function diffActive(
 ): LiveTabId | null {
   const modelActive = model.active[side]
   if (!modelActive) return null
+
+  // Pending-adoption guard (2026-09, secondary side): a tracked write (user
+  // click / assign-with-activation) that the model has not yet adopted means
+  // the adoption dispatch (syncActive) is already queued. Echoing the stale
+  // model value here clobbers the user's activation — clicking a pinned-strip
+  // tab while the drawer is closed: the open-state dispatch's reconcile ran
+  // before the click's syncActive and re-showed the previous tab. Invariant:
+  // tracked ≠ model (by key) ⟺ pending adoption — silent reconcile echoes
+  // write the tracked cell to the model's value, and unassign clears it.
+  if (side === 'secondary') {
+    const trackedId = getActiveSecondaryTabId()
+    if (trackedId !== null) {
+      let trackedKey: TabKey | null = null
+      for (const [key, id] of resolved) {
+        if (id === trackedId) {
+          trackedKey = key
+          break
+        }
+      }
+      if (trackedKey !== null && trackedKey !== modelActive) return null
+    }
+  }
 
   const id = resolved.get(modelActive)
   if (!id) return null

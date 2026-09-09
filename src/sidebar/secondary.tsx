@@ -40,7 +40,7 @@ import type { TabKey } from '../core/model'
 import { drawerObserver } from './drawer-observer'
 import { syncPanelHeaderFromMain as _syncPanelHeaderImpl, stopPanelHeaderObservers as _stopPanelHeaderObservers, resetPanelHeaderSyncCache } from './panel-header-sync'
 import { setSuppressAutoActivation, markDrawerOpenState } from './secondary-drawer'
-import { setActiveSecondaryTabId } from '../tabs/active-tab'
+import { setActiveSecondaryTabId, getActiveSecondaryTabId } from '../tabs/active-tab'
 import {
   closedTransformPx,
   createDrawerShell,
@@ -296,7 +296,7 @@ export function reassignSecondaryTabsFromModel(opts?: {
   activateKey?: string | null
 }): void {
   import('../sidebar/secondary-drawer').then(
-    async ({ assignToSecondary, activateSecondaryTab, getActiveSecondaryTab }) => {
+    async ({ assignToSecondary, activateSecondaryTab }) => {
       setSuppressAutoActivation(true)
       const tabs = drawerObserver.getAllTabs()
 
@@ -317,7 +317,11 @@ export function reassignSecondaryTabsFromModel(opts?: {
         : []
       if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
         dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`)
-        if (isSecondarySidebarOpen() && !getActiveSecondaryTab() && listIds.length > 0) {
+        // Empty-content restore reads the TRACKED active (getActiveSecondaryTabId),
+        // not the state-machine cell: a just-clicked pinned tab wrote only the
+        // tracked cell, and the tail must never overwrite it with listIds[0]
+        // (2026-09 pinned-strip click regression).
+        if (isSecondarySidebarOpen() && !getActiveSecondaryTabId() && listIds.length > 0) {
           const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
           const target = preferred && listIds.includes(preferred) ? preferred : listIds[0]!
           dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
@@ -357,7 +361,9 @@ export function reassignSecondaryTabsFromModel(opts?: {
 
       // Content restore (2026-07-31): nothing was displayed above — the
       // finalize's showSecondaryTabDisplay is gated on !deferActivation.
-      if (isSecondarySidebarOpen() && !getActiveSecondaryTab() && placed.length > 0) {
+      // Guard reads the TRACKED active (2026-09): a user click that set the
+      // tracked cell must not be overwritten by the first placed tab.
+      if (isSecondarySidebarOpen() && !getActiveSecondaryTabId() && placed.length > 0) {
         const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
         const target = preferred && placed.includes(preferred) ? preferred : placed[0]!
         dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? ' (preferred missing)' : ''}`)
