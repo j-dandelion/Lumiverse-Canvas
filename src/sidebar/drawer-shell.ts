@@ -77,8 +77,15 @@ export function readWidthCssVar(varName: string, fallback = 420): number {
   }
 }
 
+/** S6: full-viewport width expression for mobile shells (+1px oversize —
+ *  under fractional zoom/AA the scaled viewport resolves ~1px short).
+ *  Shared by createDrawerShell's mobile branch, the main shell's
+ *  restyle-in-place sync, and the mobile CSS blocks. */
+export const FULL_BLEED_WIDTH_EXPR =
+  'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'
+
 /** Read the Lumiverse UI zoom scale (1 if undefined / unparseable). */
-function readUiScale(): number {
+export function readUiScale(): number {
   try {
     return parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale')
@@ -174,7 +181,7 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
   drawer.className = 'sidebar-ux-drawer'
   drawer.style.cssText = `
     width: ${fullViewportWidth
-      ? 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'
+      ? FULL_BLEED_WIDTH_EXPR
       : `var(${widthCssVar}, ${defaultWidth}px)`};
     height: 100%;
     position: relative;

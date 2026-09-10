@@ -1,4 +1,4 @@
-// Canvas-owned main drawer when taskbarMode is on (desktop).
+// Canvas-owned main drawer (desktop AND mobile — S6).
 //
 // Same shape as the secondary drawer (shared createDrawerShell):
 //   - Hide host main chrome via document-level CSS (no class fight with React).
@@ -8,6 +8,9 @@
 //     transform and resize are free (content lives in the flex/transform tree).
 //   - No body overlay, no per-frame fixed-position layout, no MutationObserver.
 //   - Mirror tab buttons forward .click() for activation.
+//   - Mobile (≤600px): shell = full-bleed main surface, horizontal tab list
+//     (@media CSS), mutual exclusion with the secondary (S6). Restyle-in-place
+//     on viewport crossing — no remount (content stays parked).
 //
 // Canvas-only — no Lumiverse source changes.
 
@@ -20,11 +23,18 @@ import { animateWrapper } from './animation'
 import {
   closedTransformPx,
   createDrawerShell,
+  FULL_BLEED_WIDTH_EXPR,
+  readUiScale,
   readWidthCssVar,
   restyleShellSide,
   type DrawerShell,
 } from './drawer-shell'
-import { isMobileViewport, isHostMobileDrawerViewport } from './mobile-exclusion'
+import {
+  enforceExclusionOnOpen,
+  isMobileViewport,
+  isHostMobileDrawerViewport,
+  setMobileOpenClass,
+} from './mobile-exclusion'
 import {
   applyPinnedTabListChrome,
   applyTabListPosition,
@@ -36,9 +46,11 @@ import {
 } from './tab-position'
 import {
   MAIN_MIRROR_WIDTH_VAR,
+  MAIN_MIRROR_MOBILE_CSS,
   CANVAS_MAIN_ACTIVE_CLASS,
   CANVAS_MAIN_OPEN_CLASS,
 } from './styles'
+import { injectStyles } from '../debug/styles'
 import { updateChatReflow } from '../chat/reflow'
 import { mountResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings } from './drawer-sync'
@@ -60,12 +72,17 @@ let _contentRestoreParent: HTMLElement | null = null
 let _contentRestoreNext: ChildNode | null = null
 /** Last side we mounted for — skip full remount when unchanged. */
 let _mountedSide: 'left' | 'right' | null = null
+/** S6: desktop width captured on cross-down so cross-up can restore it
+ *  (the mobile full-bleed width overwrites MAIN_MIRROR_WIDTH_VAR). */
+let _desktopWidth: number | null = null
 export function getMainMirrorWidthVar(): string {
   return MAIN_MIRROR_WIDTH_VAR
 }
 
 export function isMainMirrorActive(): boolean {
-  return _active && !isMobileViewport()
+  // S6: platform-neutral — the shell owns the main surface on desktop AND
+  // mobile (full-bleed, horizontal list). No mobile gate.
+  return _active
 }
 
 export function isCanvasMainOpen(): boolean {
@@ -97,19 +114,15 @@ export function getMainMirrorTitleEl(): HTMLElement | null {
 }
 
 /**
- * Enable/disable Canvas main mirror mode.
- * When on (desktop): hide host drawer chrome, mount shell, pin tab list,
- * park host panelContent into the shell (secondary-style).
+ * Enable/disable Canvas main mirror mode (desktop AND mobile — S6: the
+ * shell owns the main surface on both).
+ * When on: hide host drawer chrome, mount shell, pin tab list (desktop
+ * taskbar chrome only), park host panelContent into the shell.
  */
 export function applyMainMirrorDrawer(
   enabled: boolean,
   opts?: { force?: boolean; initialOpen?: boolean },
 ): void {
-  if (isMobileViewport()) {
-    if (_active || opts?.force) teardownMainMirror()
-    return
-  }
-
   if (!enabled) {
     teardownMainMirror()
     return
@@ -146,15 +159,14 @@ export function applyMainMirrorDrawer(
   })
 }
 
-/** Re-apply from settings (mount, side-change, viewport cross-up). */
+/** Re-apply from settings (mount, side-change, viewport cross). S6: no
+ *  platform gate — the shell owns both desktop and mobile; crossings
+ *  restyle in place via syncMainMirrorToViewport (called from
+ *  mobile-exclusion's cross handlers). */
 export function reconcileMainMirrorDrawer(opts?: { initialOpen?: boolean }): void {
-  if (isMobileViewport()) {
-    applyMainMirrorDrawer(false, { force: true })
-    return
-  }
   // S1 gate inversion: the main drawer shell is Canvas-owned unconditionally
-  // on desktop — taskbarMode no longer gates ownership (it only controls the
-  // pin chrome, applied at the pin sites in main-tab-pin / tab-position).
+  // — taskbarMode no longer gates ownership (it only controls the pin
+  // chrome, applied at the pin sites in main-tab-pin / tab-position).
   applyMainMirrorDrawer(true, {
     force: false,
     initialOpen: opts?.initialOpen,
@@ -242,6 +254,7 @@ export function openCanvasMainDrawer(): void {
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => { dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`) })
   bumpReflow()
   persistCanvasMainOpenState()
+  mobileExclusionAfterToggle(true)
 }
 
 export function closeCanvasMainDrawer(): void {
@@ -258,6 +271,23 @@ export function closeCanvasMainDrawer(): void {
   // Content stays parked in the shell while mode is active (secondary parity).
   bumpReflow()
   persistCanvasMainOpenState()
+  mobileExclusionAfterToggle(false)
+}
+
+/** S6 mobile exclusion: mirror the shell open state into the mobile body
+ *  class and, when OPENING on mobile, close the secondary silently (same
+ *  semantics the host-side classObserver hook provided while the host
+ *  wrapper was the surface — secondary.open=true survives in layout.json).
+ *  Desktop: no-op. Secondary-open → shell-close runs the other direction
+ *  via mobile-exclusion's enforceExclusionOnOpen('secondary'). */
+function mobileExclusionAfterToggle(open: boolean): void {
+  if (!isMobileViewport()) return
+  try {
+    setMobileOpenClass('primary', open)
+    if (open) enforceExclusionOnOpen('primary')
+  } catch (err) {
+    dwarn(`[main-mirror] mobile exclusion failed: ${err}`)
+  }
 }
 
 /** Clear active highlight on main mirror tab buttons (secondary close parity). */
@@ -311,12 +341,71 @@ export function __resetMainMirrorForTest(): void {
 }
 
 /** Update the main mirror's drawer edge toggle visibility based on settings.
- *  No-op when no shell or on mobile (main mirror isn't active on mobile).
- *  Desktop: hide when hideDrawerOpenCloseButtons is on AND taskbar mode is on. */
+ *  No-op when no shell. S6: applies on mobile too (secondary parity — the
+ *  body-class CSS in SECONDARY_MOBILE_CSS/MAIN_MIRROR_MOBILE_CSS hides the
+ *  toggle while the OTHER drawer is open; this controls the setting-driven
+ *  hide). */
 export function updateMainMirrorDrawerTabVisibility(): void {
   if (!_shell || !_active) return
-  if (isMobileViewport()) return
   _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? 'none' : 'flex'
+}
+
+/** S6: mobile horizontal-tab-list + full-bleed CSS for the main shell
+ *  (mirror of the secondary's SECONDARY_MOBILE_CSS). Idempotent by id. */
+function injectMainMirrorMobileStyles(): void {
+  injectStyles('sidebar-ux-main-mirror-mobile', MAIN_MIRROR_MOBILE_CSS)
+}
+
+/**
+ * S6 restyle-in-place: swap the shell between desktop (var-driven width)
+ * and mobile (full-bleed) presentation WITHOUT remounting — content stays
+ * parked (S4 invariant). Called from mobile-exclusion's matchMedia cross
+ * handler and rAF-coalesced resize path.
+ *
+ * Width bookkeeping: on cross-down the current desktop width is captured
+ * into _desktopWidth BEFORE the full-bleed approx overwrites the var; on
+ * cross-up it is restored (fallback: whatever the var holds, clamped).
+ */
+export function syncMainMirrorToViewport(): void {
+  if (!_shell || !_active) return
+  try {
+    if (isMobileViewport()) {
+      if (_desktopWidth == null) {
+        const cur = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0)
+        _desktopWidth = cur > 0 ? cur : null
+      }
+      // Host zooms its children — innerWidth is device-px; un-scale to CSS px
+      // (same approximation createDrawerShell uses for the transform var).
+      const w = Math.round(window.innerWidth / readUiScale())
+      document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w}px`)
+      _shell.drawer.style.width = FULL_BLEED_WIDTH_EXPR
+      _shell.wrapper.style.transform = _open
+        ? 'translateX(0)'
+        : `translateX(${closedTransformPx(_shell.side, w)}px)`
+      // S6: full-bleed shell has no resize affordance — sweep any handles
+      // a desktop phase left behind (narrow fine-pointer windows).
+      const handles = _shell.drawer.querySelectorAll('.sidebar-ux-resize-handle')
+      for (const h of Array.from(handles)) (h as HTMLElement).remove()
+    } else {
+      const w = _desktopWidth != null
+        ? Math.ceil(clampSidebarWidth(_desktopWidth))
+        : readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
+      _desktopWidth = null
+      document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w}px`)
+      _shell.drawer.style.width = `var(${MAIN_MIRROR_WIDTH_VAR}, 420px)`
+      _shell.wrapper.style.transform = _open
+        ? 'translateX(0)'
+        : `translateX(${closedTransformPx(_shell.side, w)}px)`
+      // Pin chrome may need re-asserting after a mobile phase (the list
+      // rode in the drawer; taskbar pin re-applies on desktop).
+      void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch(() => {})
+      // Re-assert resize handles (a mobile phase swept them).
+      bumpResizeHandles()
+    }
+  } catch (err) {
+    dwarn(`[main-mirror] syncMainMirrorToViewport failed: ${err}`)
+  }
+  bumpReflow()
 }
 
 function injectHostHideStyles(): void {
@@ -389,12 +478,15 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   document.documentElement.classList.add(CANVAS_MAIN_ACTIVE_CLASS)
 
   const side = getMainDrawerSide()
+  const mobile = isMobileViewport()
   let seedW: number | undefined
-  try {
-    const hostW = getMainDrawerWidth()
-    seedW = hostW > 0 ? hostW : undefined
-  } catch {
-    seedW = undefined
+  if (!mobile) {
+    try {
+      const hostW = getMainDrawerWidth()
+      seedW = hostW > 0 ? hostW : undefined
+    } catch {
+      seedW = undefined
+    }
   }
 
   // Compute initial drawer-tab display: hide requires taskbar mode
@@ -407,6 +499,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     widthCssVar: MAIN_MIRROR_WIDTH_VAR,
     defaultWidth: 420,
     initialWidth: seedW,
+    // S6: mobile = full-bleed main surface (scaled viewport +1px; the px
+    // approximation lands in MAIN_MIRROR_WIDTH_VAR for transforms).
+    fullViewportWidth: mobile,
     initialOpen: opts.initialOpen,
     title: 'Drawer',
     // When hide is on, show the edge toggle only for reopening (none = no chrome).
@@ -425,6 +520,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   _shell.content.style.padding = '0'
   _shell.content.setAttribute('data-canvas-main-content-slot', '1')
 
+  if (mobile) injectMainMirrorMobileStyles()
+
   document.body.appendChild(_shell.wrapper)
   // Drop orphan main-mirror shells left by incomplete teardown / rapid
   // side remounts. Keep only the module-owned wrapper.
@@ -441,7 +538,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     _shell.drawerTab.classList.remove('sidebar-ux-drawer-tab--active')
   }
 
-  pinShellTabList(side)
+  // S6: pin chrome is desktop taskbar visual only — on mobile the list
+  // rides inside the full-bleed drawer (horizontal @media CSS).
+  if (!mobile) pinShellTabList(side)
 
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     mainDrawer: _shell.drawer,
@@ -460,7 +559,9 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   // Stamp host panel-header metrics onto this shell (secondary + main-mirror).
   resetPanelHeaderSyncCache()
   syncPanelHeaderFromMain(() => _shell?.wrapper ?? null)
-  bumpResizeHandles()
+  // S6: no resize handles on a full-bleed shell (crossing sweeps/re-mounts
+  // them via syncMainMirrorToViewport).
+  if (!mobile) bumpResizeHandles()
   bumpReflow()
 }
 
@@ -740,6 +841,8 @@ export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   // The rules are inert without CANVAS_MAIN_ACTIVE_CLASS, but the element
   // lingered in <head> after disable.
   document.getElementById('sidebar-ux-host-main-hide')?.remove()
+  // S6: the mobile horizontal-list CSS element too.
+  document.getElementById('sidebar-ux-main-mirror-mobile')?.remove()
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS)
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
   _active = false

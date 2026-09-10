@@ -859,7 +859,9 @@ export function restoreMainDrawerFromDom(
         unsuppressMainDrawer()
         return
       }
-      if (clampedWidth !== null) {
+      if (clampedWidth !== null && !isMobileViewport()) {
+        // S6: on mobile the shell is full-bleed — never stamp the saved
+        // desktop width over the viewport width.
         m.applyMainMirrorRestoredWidth(clampedWidth)
       }
       if (!restoreOpen) {

@@ -27,6 +27,20 @@ class StubStyle {
   set display(v: string) { this._props['display'] = v }
   get flexDirection() { return this._props['flexDirection'] ?? '' }
   set flexDirection(v: string) { this._props['flexDirection'] = v }
+  // S6 harness: createDrawerShell writes drawer chrome via cssText — parse
+  // the width declaration so full-bleed/var-driven assertions can read it.
+  set cssText(v: string) {
+    this._props = {}
+    for (const decl of String(v).split(';')) {
+      const i = decl.indexOf(':')
+      if (i > 0) this._props[decl.slice(0, i).trim()] = decl.slice(i + 1).trim()
+    }
+  }
+  get cssText() {
+    return Object.entries(this._props).map(([k, v]) => `${k}: ${v};`).join(' ')
+  }
+  get width() { return this._props['width'] ?? '' }
+  set width(v: string) { this._props['width'] = v }
   setProperty(k: string, v: string, _p?: string) { this._props[k] = v }
   removeProperty(k: string) { delete this._props[k] }
   getPropertyValue(k: string) { return this._props[k] ?? '' }
@@ -253,12 +267,18 @@ export {}
   assert(!isMainMirrorActive(), 'T4: still inactive after apply(false)')
 }
 
-// --- T5: isMainMirrorActive false on mobile ---
+// --- T5 (S6): isMainMirrorActive TRUE on mobile — the shell owns the
+//     mobile main surface now (full-bleed mount, horizontal list). ---
 {
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 400
   applyMainMirrorDrawer(true)
-  assert(!isMainMirrorActive(), 'T5: inactive on mobile viewport')
+  assert(isMainMirrorActive(), 'T5 (S6): shell ACTIVE on mobile viewport (full-bleed mount)')
+  assert(
+    String((mainMirrorModule.getMainMirrorDrawer() as any)?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'T5b (S6): mobile mount is full-bleed (inline width = scaled-viewport calc)',
+  )
+  __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 1200
 }
 
@@ -335,13 +355,14 @@ export {}
   applyMainMirrorDrawer(false)
 }
 
-// --- T14: S1 gate kept — mobile still tears down via reconcile ---
+// --- T14 (S6): reconcile MOUNTS on mobile too (shell owns both surfaces) ---
 {
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 400
   reconcileMainMirrorDrawer()
-  assert(!isMainMirrorActive(), 'T14: inactive on mobile after reconcile')
+  assert(isMainMirrorActive(), 'T14 (S6): shell ACTIVE on mobile after reconcile')
   ;(globalThis as any).window.innerWidth = 1200
+  __resetMainMirrorForTest()
 }
 
 // =====================================================================
@@ -519,8 +540,114 @@ export {}
     shutdown()
     __resetMainMirrorForTest()
 
-    console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
-    if (failed > 0) process.exit(1)
+    await runS6Tests()
   })()
+}
+
+// =====================================================================
+// S6: mobile main shell — full-bleed mount, restyle-in-place crossing,
+// Canvas↔Canvas exclusion. Defined after the S5 block (hoisted); called
+// from the S5 tail so the summary prints once, at the true end.
+// =====================================================================
+async function runS6Tests(): Promise<void> {
+  const { syncMainMirrorToViewport } = mainMirrorModule
+  const { enforceExclusionOnOpen } = await import('../mobile-exclusion')
+  const { MAIN_MIRROR_WIDTH_VAR } = await import('../styles')
+
+  // Body classList stub — setMobileOpenClass touches document.body.
+  const bodyStub = (globalThis as any).document.body as any
+  if (!bodyStub.classList) {
+    const cls = new Set<string>()
+    bodyStub.classList = {
+      add: (c: string) => cls.add(c),
+      remove: (c: string) => cls.delete(c),
+      contains: (c: string) => cls.has(c),
+    }
+  }
+  // Drain the dynamic-import chains the S6 paths fire.
+  const settle = async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }
+
+  // ── S6.a: mobile mount — full-bleed, list rides IN the drawer ──
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentA = new StubElement()
+  fakeContentA.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentA)
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'S6.a1: shell active on mobile')
+  assert(
+    String((mainMirrorModule.getMainMirrorDrawer() as any)?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'S6.a2: full-bleed inline width at mobile mount',
+  )
+  const listAtMount = mainMirrorModule.getMainMirrorTabList() as any
+  assert(!!listAtMount && listAtMount.parentElement === mainMirrorModule.getMainMirrorDrawer(),
+    'S6.a3: tab list rides IN the drawer on mobile (no pin reparent)')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  ;(globalThis as any).window.innerWidth = 1200
+  __resetMainMirrorForTest()
+  await settle()
+
+  // ── S6.b: crossing sync — desktop → mobile → desktop, no remount ──
+  const fakeContentB = new StubElement()
+  fakeContentB.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentB)
+  applyMainMirrorDrawer(true)
+  _docEl.style.setProperty(MAIN_MIRROR_WIDTH_VAR, '420px')
+  closeCanvasMainDrawer()
+  const drawerB = mainMirrorModule.getMainMirrorDrawer() as any
+  assert(
+    String(drawerB?.style.width ?? '').includes('var(--sidebar-ux-main-mirror-w'),
+    'S6.b1: desktop width is var-driven',
+  )
+  ;(globalThis as any).window.innerWidth = 390
+  syncMainMirrorToViewport()
+  assert(
+    String(drawerB?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'S6.b2: cross-down → full-bleed width (restyle-in-place)',
+  )
+  assertEqual(_docEl.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR), '390px', 'S6.b3: var = innerWidth approximation')
+  {
+    // Sign follows the shell's anchored side (stub store default may be
+    // either) — closed = ±(ceil(w)+1) away from the viewport edge.
+    const { closedTransformPx } = await import('../drawer-shell')
+    const { getMainDrawerSide } = await import('../../store')
+    const expected = `translateX(${closedTransformPx(getMainDrawerSide() as 'left' | 'right', 390)}px)`
+    assertEqual(
+      String((mainMirrorModule.getMainMirrorWrapper() as any)?.style.transform ?? ''),
+      expected,
+      'S6.b4: closed transform tracks the full-bleed width (ceil+1)',
+    )
+  }
+  ;(globalThis as any).window.innerWidth = 1200
+  syncMainMirrorToViewport()
+  assert(
+    String(drawerB?.style.width ?? '').includes('var(--sidebar-ux-main-mirror-w'),
+    'S6.b5: cross-up → width var-driven again',
+  )
+  assertEqual(_docEl.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR), '420px', 'S6.b6: desktop width restored from the cross-down capture')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  __resetMainMirrorForTest()
+  await settle()
+
+  // ── S6.c: exclusion — secondary opens → the SHELL closes directly ──
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentC = new StubElement()
+  fakeContentC.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentC)
+  applyMainMirrorDrawer(true)
+  openCanvasMainDrawer()
+  assert(isCanvasMainOpen(), 'S6.c1: shell open on mobile')
+  enforceExclusionOnOpen('secondary')
+  await settle()
+  assert(!isCanvasMainOpen(), 'S6.c2: secondary-open exclusion closed the SHELL (no host-toggle indirection)')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  await settle()
+
+  console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
+  if (failed > 0) process.exit(1)
 }
 

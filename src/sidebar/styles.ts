@@ -117,6 +117,55 @@ export const SECONDARY_MOBILE_CSS = `
 }
 `
 
+// S6: main shell on mobile — horizontal tab list + full-bleed, mirroring
+// the secondary's SECONDARY_MOBILE_CSS layout. Scoped to the main mirror
+// wrapper so desktop (and the secondary) are untouched. Injected at main
+// mirror mount (mobile) via injectMainMirrorMobileStyles.
+export const MAIN_MIRROR_MOBILE_CSS = `
+@media (max-width: 600px) {
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer {
+    flex-direction: column !important;
+    overflow: hidden !important;
+    /* Belt-and-braces full-bleed: matches the JS inline width set by
+       createDrawerShell(fullViewportWidth) / syncMainMirrorToViewport.
+       Same +1px oversize (fractional zoom/AA underfill). Literal is
+       inlined (drawer-shell ↔ styles cycle: styles is a leaf module). */
+    width: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px) !important;
+  }
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    border-bottom: 1px solid var(--lumiverse-primary-020) !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Active tab: bottom underline on mobile. Must beat the desktop
+     .sidebar-ux-side-left/right inset rules → same shape as the
+     secondary block (wrapper-scoped + !important). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+    border-radius: 8px 8px 0 0 !important;
+  }
+  /* Panel content fills below the horizontal list. */
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-panel {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    width: 100% !important;
+  }
+}
+`
+
 export function injectDrawerTabStyles(): void {
   injectStyles('sidebar-ux-drawer-tab-styles', `
     .sidebar-ux-drawer-tab {

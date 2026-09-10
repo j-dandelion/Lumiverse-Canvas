@@ -896,6 +896,49 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     pointer-events: none;
   }
 }
+`, MAIN_MIRROR_MOBILE_CSS = `
+@media (max-width: 600px) {
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer {
+    flex-direction: column !important;
+    overflow: hidden !important;
+    /* Belt-and-braces full-bleed: matches the JS inline width set by
+       createDrawerShell(fullViewportWidth) / syncMainMirrorToViewport.
+       Same +1px oversize (fractional zoom/AA underfill). Literal is
+       inlined (drawer-shell ↔ styles cycle: styles is a leaf module). */
+    width: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px) !important;
+  }
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    border-bottom: 1px solid var(--lumiverse-primary-020) !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Active tab: bottom underline on mobile. Must beat the desktop
+     .sidebar-ux-side-left/right inset rules → same shape as the
+     secondary block (wrapper-scoped + !important). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
+    box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+    border-radius: 8px 8px 0 0 !important;
+  }
+  /* Panel content fills below the horizontal list. */
+  .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-panel {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    width: 100% !important;
+  }
+}
 `;
 var init_styles = () => {};
 
@@ -1181,7 +1224,7 @@ function createDrawerShell(options) {
   const drawer = document.createElement("div");
   drawer.className = "sidebar-ux-drawer";
   drawer.style.cssText = `
-    width: ${fullViewportWidth ? "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)" : `var(${widthCssVar}, ${defaultWidth}px)`};
+    width: ${fullViewportWidth ? FULL_BLEED_WIDTH_EXPR : `var(${widthCssVar}, ${defaultWidth}px)`};
     height: 100%;
     position: relative;
     display: flex;
@@ -1339,6 +1382,7 @@ function restyleShellSide(wrapper, side) {
     }
   }
 }
+var FULL_BLEED_WIDTH_EXPR = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)";
 var init_drawer_shell = __esm(() => {
   init_styles();
 });
@@ -10274,6 +10318,7 @@ __export(exports_main_mirror_drawer, {
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
   restyleMainShellSide: () => restyleMainShellSide,
   setCanvasMainTitle: () => setCanvasMainTitle,
+  syncMainMirrorToViewport: () => syncMainMirrorToViewport,
   teardownMainMirror: () => teardownMainMirror,
   unpinMainMirrorShellTabList: () => unpinMainMirrorShellTabList,
   updateMainMirrorDrawerTabVisibility: () => updateMainMirrorDrawerTabVisibility
@@ -10282,7 +10327,7 @@ function getMainMirrorWidthVar() {
   return MAIN_MIRROR_WIDTH_VAR;
 }
 function isMainMirrorActive() {
-  return _active && !isMobileViewport();
+  return _active;
 }
 function isCanvasMainOpen() {
   return _open && isMainMirrorActive();
@@ -10303,11 +10348,6 @@ function getMainMirrorTitleEl() {
   return _shell?.title ?? null;
 }
 function applyMainMirrorDrawer(enabled, opts) {
-  if (isMobileViewport()) {
-    if (_active || opts?.force)
-      teardownMainMirror();
-    return;
-  }
   if (!enabled) {
     teardownMainMirror();
     return;
@@ -10334,10 +10374,6 @@ function applyMainMirrorDrawer(enabled, opts) {
   });
 }
 function reconcileMainMirrorDrawer(opts) {
-  if (isMobileViewport()) {
-    applyMainMirrorDrawer(false, { force: true });
-    return;
-  }
   applyMainMirrorDrawer(true, {
     force: false,
     initialOpen: opts?.initialOpen
@@ -10400,6 +10436,7 @@ function openCanvasMainDrawer() {
   });
   bumpReflow();
   persistCanvasMainOpenState();
+  mobileExclusionAfterToggle(true);
 }
 function closeCanvasMainDrawer() {
   if (!_shell || !_active)
@@ -10416,6 +10453,18 @@ function closeCanvasMainDrawer() {
   clearMainMirrorActiveHighlights();
   bumpReflow();
   persistCanvasMainOpenState();
+  mobileExclusionAfterToggle(false);
+}
+function mobileExclusionAfterToggle(open) {
+  if (!isMobileViewport())
+    return;
+  try {
+    setMobileOpenClass("primary", open);
+    if (open)
+      enforceExclusionOnOpen("primary");
+  } catch (err) {
+    dwarn(`[main-mirror] mobile exclusion failed: ${err}`);
+  }
 }
 function clearMainMirrorActiveHighlights() {
   const list = getMainMirrorTabList();
@@ -10454,9 +10503,40 @@ function __resetMainMirrorForTest() {
 function updateMainMirrorDrawerTabVisibility() {
   if (!_shell || !_active)
     return;
-  if (isMobileViewport())
-    return;
   _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
+}
+function injectMainMirrorMobileStyles() {
+  injectStyles("sidebar-ux-main-mirror-mobile", MAIN_MIRROR_MOBILE_CSS);
+}
+function syncMainMirrorToViewport() {
+  if (!_shell || !_active)
+    return;
+  try {
+    if (isMobileViewport()) {
+      if (_desktopWidth == null) {
+        const cur = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0);
+        _desktopWidth = cur > 0 ? cur : null;
+      }
+      const w3 = Math.round(window.innerWidth / readUiScale());
+      document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w3}px`);
+      _shell.drawer.style.width = FULL_BLEED_WIDTH_EXPR;
+      _shell.wrapper.style.transform = _open ? "translateX(0)" : `translateX(${closedTransformPx(_shell.side, w3)}px)`;
+      const handles = _shell.drawer.querySelectorAll(".sidebar-ux-resize-handle");
+      for (const h4 of Array.from(handles))
+        h4.remove();
+    } else {
+      const w3 = _desktopWidth != null ? Math.ceil(clampSidebarWidth(_desktopWidth)) : readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420);
+      _desktopWidth = null;
+      document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w3}px`);
+      _shell.drawer.style.width = `var(${MAIN_MIRROR_WIDTH_VAR}, 420px)`;
+      _shell.wrapper.style.transform = _open ? "translateX(0)" : `translateX(${closedTransformPx(_shell.side, w3)}px)`;
+      Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => m3.reconcileMainTabListPin()).catch(() => {});
+      bumpResizeHandles();
+    }
+  } catch (err) {
+    dwarn(`[main-mirror] syncMainMirrorToViewport failed: ${err}`);
+  }
+  bumpReflow();
 }
 function injectHostHideStyles() {
   const id = "sidebar-ux-host-main-hide";
@@ -10527,12 +10607,15 @@ function mountMainMirror(opts) {
   injectHostHideStyles();
   document.documentElement.classList.add(CANVAS_MAIN_ACTIVE_CLASS);
   const side = getMainDrawerSide();
+  const mobile = isMobileViewport();
   let seedW;
-  try {
-    const hostW = getMainDrawerWidth();
-    seedW = hostW > 0 ? hostW : undefined;
-  } catch {
-    seedW = undefined;
+  if (!mobile) {
+    try {
+      const hostW = getMainDrawerWidth();
+      seedW = hostW > 0 ? hostW : undefined;
+    } catch {
+      seedW = undefined;
+    }
   }
   const hideTab = isHideDrawerOpenCloseButtonsEnabled();
   _shell = createDrawerShell({
@@ -10541,6 +10624,7 @@ function mountMainMirror(opts) {
     widthCssVar: MAIN_MIRROR_WIDTH_VAR,
     defaultWidth: 420,
     initialWidth: seedW,
+    fullViewportWidth: mobile,
     initialOpen: opts.initialOpen,
     title: "Drawer",
     drawerTabDisplay: hideTab ? "none" : "flex",
@@ -10556,6 +10640,8 @@ function mountMainMirror(opts) {
   _shell.content.style.flexDirection = "column";
   _shell.content.style.padding = "0";
   _shell.content.setAttribute("data-canvas-main-content-slot", "1");
+  if (mobile)
+    injectMainMirrorMobileStyles();
   document.body.appendChild(_shell.wrapper);
   sweepOrphanMainMirrorWrappers();
   _active = true;
@@ -10568,7 +10654,8 @@ function mountMainMirror(opts) {
     document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
     _shell.drawerTab.classList.remove("sidebar-ux-drawer-tab--active");
   }
-  pinShellTabList(side);
+  if (!mobile)
+    pinShellTabList(side);
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     mainDrawer: _shell.drawer,
     mainTabList: getMainMirrorTabList() ?? _shell.tabList,
@@ -10581,7 +10668,8 @@ function mountMainMirror(opts) {
   syncDrawerTabSettings();
   resetPanelHeaderSyncCache();
   syncPanelHeaderFromMain(() => _shell?.wrapper ?? null);
-  bumpResizeHandles();
+  if (!mobile)
+    bumpResizeHandles();
   bumpReflow();
 }
 function pinShellTabList(side) {
@@ -10793,6 +10881,7 @@ function teardownMainMirror(opts) {
     document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR);
   }
   document.getElementById("sidebar-ux-host-main-hide")?.remove();
+  document.getElementById("sidebar-ux-main-mirror-mobile")?.remove();
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
   _active = false;
@@ -10800,7 +10889,7 @@ function teardownMainMirror(opts) {
   _mountedSide = null;
   bumpReflow();
 }
-var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null;
+var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _desktopWidth = null;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
   init_state();
@@ -11740,7 +11829,7 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
         unsuppressMainDrawer();
         return;
       }
-      if (clampedWidth !== null) {
+      if (clampedWidth !== null && !isMobileViewport()) {
         m3.applyMainMirrorRestoredWidth(clampedWidth);
       }
       if (!restoreOpen) {
@@ -11914,17 +12003,23 @@ function setMobileOpenClass(which, open) {
   }
 }
 function _closeMainDrawer() {
-  const wrapper = getMainWrapper();
-  if (!wrapper)
-    return;
-  if (!wrapper.classList.toString().includes("wrapperOpen"))
-    return;
-  const btn = findDrawerToggleButton(wrapper);
-  if (btn) {
-    try {
-      btn.click();
-    } catch {}
-  }
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
+    if (m3.isMainMirrorActive()) {
+      m3.closeCanvasMainDrawer();
+      return;
+    }
+    const wrapper = getMainWrapper();
+    if (!wrapper)
+      return;
+    if (!wrapper.classList.toString().includes("wrapperOpen"))
+      return;
+    const btn = findDrawerToggleButton(wrapper);
+    if (btn) {
+      try {
+        btn.click();
+      } catch {}
+    }
+  }).catch(() => {});
 }
 function enforceExclusionOnOpen(which) {
   if (!isMobileViewport())
@@ -11942,8 +12037,8 @@ function startMobileExclusion() {
   _mediaQuery3 = window.matchMedia("(max-width: 600px)");
   function _updateDrawerWidth() {
     cancelWrapperAnimation();
-    const wrapper2 = getSecondaryWrapper();
-    const drawer = wrapper2?.querySelector(".sidebar-ux-drawer");
+    const wrapper = getSecondaryWrapper();
+    const drawer = wrapper?.querySelector(".sidebar-ux-drawer");
     if (!drawer)
       return;
     if (isMobileViewport()) {
@@ -11952,24 +12047,30 @@ function startMobileExclusion() {
       drawer.style.width = `var(${SECONDARY_WIDTH_VAR}, 420px)`;
     }
     syncCssVarToDrawerWidth();
-    if (wrapper2) {
+    if (wrapper) {
       const closedPx = getClosedTransformPx();
-      wrapper2.style.transform = isSecondarySidebarOpen() ? "translateX(0)" : `translateX(${closedPx}px)`;
+      wrapper.style.transform = isSecondarySidebarOpen() ? "translateX(0)" : `translateX(${closedPx}px)`;
     }
     syncHostMainDrawerToMobileWidth();
   }
   _onMediaChange3 = (e3) => {
+    Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => m3.syncMainMirrorToViewport()).catch(() => {});
     if (e3.matches) {
       _updateDrawerWidth();
       if (isSecondarySidebarOpen()) {
         closeSecondarySidebar({ silent: true });
         setMobileOpenClass("secondary", false);
       }
-      const wrapper2 = getMainWrapper();
-      if (wrapper2) {
-        const isOpen = wrapper2.classList.toString().includes("wrapperOpen");
-        setMobileOpenClass("primary", isOpen);
-      }
+      Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
+        if (m3.isMainMirrorActive()) {
+          setMobileOpenClass("primary", m3.isCanvasMainOpen());
+          return;
+        }
+        const wrapper = getMainWrapper();
+        if (wrapper) {
+          setMobileOpenClass("primary", wrapper.classList.toString().includes("wrapperOpen"));
+        }
+      }).catch(() => {});
       Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
       Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => m3.reconcileMainTabListPin());
     } else {
@@ -11984,6 +12085,7 @@ function startMobileExclusion() {
   _mediaQuery3.addEventListener("change", _onMediaChange3);
   const _onResize = () => {
     syncHostMainDrawerToMobileWidth();
+    Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => m3.syncMainMirrorToViewport()).catch(() => {});
     if (!isMobileViewport())
       return;
     if (_resizeRafId !== null)
@@ -11999,15 +12101,21 @@ function startMobileExclusion() {
   if (isMobileViewport()) {
     _updateDrawerWidth();
   }
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => m3.syncMainMirrorToViewport()).catch(() => {});
   if (isMobileViewport() && isSecondarySidebarOpen()) {
     closeSecondarySidebar({ silent: true });
     setMobileOpenClass("secondary", false);
   }
-  const wrapper = getMainWrapper();
-  if (wrapper) {
-    const isOpen = wrapper.classList.toString().includes("wrapperOpen");
-    setMobileOpenClass("primary", isOpen);
-  }
+  Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => {
+    if (m3.isMainMirrorActive()) {
+      setMobileOpenClass("primary", m3.isCanvasMainOpen());
+      return;
+    }
+    const wrapper = getMainWrapper();
+    if (wrapper) {
+      setMobileOpenClass("primary", wrapper.classList.toString().includes("wrapperOpen"));
+    }
+  }).catch(() => {});
   return () => {
     if (_resizeRafId !== null) {
       cancelAnimationFrame(_resizeRafId);
