@@ -225,6 +225,33 @@ function buildEntryFromAssignment(tabKey: string): HostTabEntry {
   }
 }
 
+/**
+ * Does the Canvas main shell OWN the primary drawer surface right now?
+ *
+ * Same condition observe() uses to read SHELL truth for primary open/width:
+ * canvas-main mode active (CANVAS_MAIN_ACTIVE_CLASS on <html>) AND the boot
+ * restore guard has lifted (isMainDrawerRestorePending() == false).
+ *
+ * While TRUE, the shell is the ONLY writer of primary open — every shell
+ * transition (open/close) persists itself via the setDrawer intent, and
+ * observe() feeds shell truth back into the model. A model→chrome drawer
+ * write landing in this window is definitionally a STALE echo of an
+ * in-flight shell transition (the intent queue is async; the shell has
+ * already moved on), and forcing it re-triggers the shell's own persist —
+ * the open/close ping-pong → SAVE_LAYOUT freeze (2026-09 live-verify #1).
+ */
+export function mainShellOwnsPrimarySurface(): boolean {
+  try {
+    return (
+      typeof document !== 'undefined'
+      && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)
+      && !isMainDrawerRestorePending()
+    )
+  } catch {
+    return false
+  }
+}
+
 // ===========================================================================
 // LumiverseHost — HostPort implementation against live Lumiverse
 // ===========================================================================
@@ -351,21 +378,17 @@ export class LumiverseHost implements HostPort {
     let shellOwnsPrimary = false
     let shellPrimaryOpen = false
     let shellPrimaryWidth = 0
-    try {
-      if (
-        typeof document !== 'undefined'
-        && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)
-        && !isMainDrawerRestorePending()
-      ) {
-        shellOwnsPrimary = true
+    if (mainShellOwnsPrimarySurface()) {
+      shellOwnsPrimary = true
+      try {
         shellPrimaryOpen = document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS)
         const w = parseFloat(
           document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR),
         )
         shellPrimaryWidth = isFinite(w) && w > 0 ? w : 0
+      } catch {
+        /* non-DOM test environment */
       }
-    } catch {
-      /* non-DOM test environment */
     }
     const primaryOpen = shellOwnsPrimary ? shellPrimaryOpen : isMainDrawerOpen()
     const primaryWidth = shellOwnsPrimary
@@ -576,6 +599,29 @@ export class LumiverseHost implements HostPort {
         if (s.width > 0 && typeof document !== 'undefined') {
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${s.width}px`)
         }
+        return 'ok'
+      }
+
+      // Shell-owned echo suppression (2026-09, live-verify #1): while the
+      // Canvas shell owns the primary surface it is the ONLY writer of
+      // primary open — every shell transition already persists itself via
+      // its own setDrawer intent. A model→chrome write arriving here is a
+      // STALE echo of an in-flight transition (async intent queue): forcing
+      // it toggles the shell back, the toggle re-persists the opposite
+      // state, and the two writers ping-pong SAVE_LAYOUT forever (freeze).
+      // Suppress: shell truth converges into the model via observe() on the
+      // next host-sync instead. Width: the model's width is itself a read
+      // of MAIN_MIRROR_WIDTH_VAR — re-stamping the var from it is idempotent
+      // at best, stale-fighting at worst; skip it too.
+      //
+      // Un-gated paths keep the toggle: mirror inactive (toggle is a no-op
+      // without a shell) and the restore window (boot seeding owns the
+      // pre-guard shell state — byte-identical to pre-fix behavior).
+      if (mainShellOwnsPrimarySurface()) {
+        dlog('[host] setDrawer: shell owns primary — stale echo suppressed', {
+          open: s.open,
+          width: s.width,
+        })
         return 'ok'
       }
 

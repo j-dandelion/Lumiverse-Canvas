@@ -18853,6 +18853,13 @@ function buildEntryFromAssignment(tabKey) {
     hasContentRoot: false
   };
 }
+function mainShellOwnsPrimarySurface() {
+  try {
+    return typeof document !== "undefined" && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS) && !isMainDrawerRestorePending();
+  } catch {
+    return false;
+  }
+}
 
 class LumiverseHost {
   _dispose = null;
@@ -18910,14 +18917,14 @@ class LumiverseHost {
     let shellOwnsPrimary = false;
     let shellPrimaryOpen = false;
     let shellPrimaryWidth = 0;
-    try {
-      if (typeof document !== "undefined" && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS) && !isMainDrawerRestorePending()) {
-        shellOwnsPrimary = true;
+    if (mainShellOwnsPrimarySurface()) {
+      shellOwnsPrimary = true;
+      try {
         shellPrimaryOpen = document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS);
         const w3 = parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR));
         shellPrimaryWidth = isFinite(w3) && w3 > 0 ? w3 : 0;
-      }
-    } catch {}
+      } catch {}
+    }
     const primaryOpen = shellOwnsPrimary ? shellPrimaryOpen : isMainDrawerOpen();
     const primaryWidth = shellOwnsPrimary ? shellPrimaryWidth || getMainDrawerWidth() || DEFAULT_WIDTH : getMainDrawerWidth() || DEFAULT_WIDTH;
     const secondaryOpen = isSecondarySidebarOpen();
@@ -19044,6 +19051,13 @@ class LumiverseHost {
         if (s3.width > 0 && typeof document !== "undefined") {
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR2, `${s3.width}px`);
         }
+        return "ok";
+      }
+      if (mainShellOwnsPrimarySurface()) {
+        dlog("[host] setDrawer: shell owns primary — stale echo suppressed", {
+          open: s3.open,
+          width: s3.width
+        });
         return "ok";
       }
       const current = getHostDrawerSettings();
