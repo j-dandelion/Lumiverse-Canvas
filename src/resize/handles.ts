@@ -25,8 +25,10 @@ import {
   isMainMirrorActive,
   MAIN_MIRROR_WIDTH_VAR,
 } from '../sidebar/main-mirror-drawer'
+import { readWidthCssVar } from '../sidebar/drawer-shell'
 import { getSettings } from '../settings/state'
 import { applyTabListPosition } from '../sidebar/tab-position'
+import { dwarn } from '../debug/log'
 
 export function isPointerResizeActive(): boolean {
   return window.matchMedia('(pointer: coarse)').matches
@@ -164,6 +166,27 @@ function positionHostMainHandle(handle: HTMLElement, mainSide: 'left' | 'right')
   }
 }
 
+/**
+ * Commit a completed resize drag to the owned model. The drag writes the new
+ * width straight to DOM/CSS; the model (and therefore the persisted layout)
+ * only learns about it through a setDrawer intent. Without this dispatch the
+ * stored width stays pre-drag, so a reload — or any reconcile — snaps the
+ * drawer back (live-verify #9: "drawer resizing does not persist").
+ *
+ * Fire-and-forget: persistModel runs inside the dispatch queue, and a failed
+ * dispatch is swallowed because the model width is only one input to the
+ * durable layout — the next host-sync re-observes the mounted width.
+ */
+export function persistResizeWidth(side: 'primary' | 'secondary', widthPx: number): void {
+  if (!isFinite(widthPx) || widthPx <= 0) return
+  const width = clampSidebarWidth(widthPx)
+  void import('../recon/dispatch')
+    .then((m) => m.dispatch({ t: 'setDrawer', side, width }))
+    .catch((err: unknown) => {
+      dwarn(`[resize] setDrawer(${side}) width persist failed:`, err)
+    })
+}
+
 export function mountResizeHandles(): void {
   if (isPointerResizeActive()) return // Skip resize handles on mobile
 
@@ -190,7 +213,7 @@ export function mountResizeHandles(): void {
             scheduleReflow()
           },
           () => {
-            // Persist via the owned model; no-op persistLayout was retired.
+            persistResizeWidth('primary', readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420))
           },
           () => isCanvasMainOpen(),
         )
@@ -244,9 +267,7 @@ export function mountResizeHandles(): void {
             scheduleReflow()
           },
           () => {
-            const width = getMainDrawerWidth()
-            void width
-            // Persist via the owned model; no-op persistLayout was retired.
+            persistResizeWidth('primary', getMainDrawerWidth())
           },
           () => isMainDrawerOpen()
         )
@@ -301,8 +322,7 @@ export function mountResizeHandles(): void {
             scheduleReflow()
           },
           () => {
-            const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
-            // Persist via the owned model; no-op persistLayout was retired.
+            persistResizeWidth('secondary', readWidthCssVar(SECONDARY_WIDTH_VAR, 420))
           },
           () => isSecondarySidebarOpen()
         )

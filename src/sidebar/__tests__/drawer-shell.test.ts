@@ -106,6 +106,12 @@ const { createDrawerShell, restyleShellSide } = await import('../drawer-shell')
     secondary.wrapper.getAttribute('data-drawer-owner') === 'secondary',
     'secondary: data-drawer-owner',
   )
+  // Live-verify #10: the two shells must NOT share one glyph. Secondary keeps
+  // Canvas's panel icon.
+  assert(
+    secondary.drawerTab.children[0]?.innerHTML.includes('line x1="9"') === true,
+    'secondary: keeps Canvas panel glyph',
+  )
 }
 
 {
@@ -121,6 +127,16 @@ const { createDrawerShell, restyleShellSide } = await import('../drawer-shell')
   )
   assert(main.wrapper.classList.contains('sidebar-ux-side-left'), 'main: has side class')
   assert(main.wrapper.getAttribute('data-drawer-owner') === 'main', 'main: data-drawer-owner')
+  // Live-verify #10: main keeps the vanilla Lumiverse drawerTab glyph
+  // (lucide `Sparkles`, ViewportDrawer.tsx), not Canvas's panel icon.
+  assert(
+    main.drawerTab.children[0]?.innerHTML.includes('M9.937 15.5') === true,
+    'main: keeps vanilla Sparkles glyph',
+  )
+  assert(
+    main.drawerTab.children[0]?.innerHTML.includes('line x1="9"') === false,
+    'main: does NOT use the Canvas panel glyph',
+  )
 }
 
 // ── restyleShellSide: drawer flex is pin-aware ──

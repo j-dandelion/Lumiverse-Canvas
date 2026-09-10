@@ -1213,7 +1213,7 @@ function createDrawerShell(options) {
   `;
   const iconWrapper = document.createElement("div");
   iconWrapper.className = "sidebar-ux-drawer-tab-icon";
-  iconWrapper.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`;
+  iconWrapper.innerHTML = owner === "main" ? VANILLA_MAIN_DRAWER_TAB_ICON : CANVAS_DRAWER_TAB_ICON;
   drawerTab.appendChild(iconWrapper);
   if (onDrawerTabClick) {
     drawerTab.addEventListener("click", onDrawerTabClick);
@@ -1381,7 +1381,7 @@ function restyleShellSide(wrapper, side) {
     }
   }
 }
-var FULL_BLEED_WIDTH_EXPR = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)";
+var FULL_BLEED_WIDTH_EXPR = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)", CANVAS_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`, VANILLA_MAIN_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>`;
 var init_drawer_shell = __esm(() => {
   init_styles();
 });
@@ -11166,6 +11166,7 @@ __export(exports_handles, {
   createResizeHandle: () => createResizeHandle,
   isPointerResizeActive: () => isPointerResizeActive,
   mountResizeHandles: () => mountResizeHandles,
+  persistResizeWidth: () => persistResizeWidth,
   refreshResizeHandles: () => refreshResizeHandles
 });
 function isPointerResizeActive() {
@@ -11257,6 +11258,14 @@ function positionHostMainHandle(handle, mainSide) {
     handle.style.right = "calc(var(--drawer-panel-w, 420px) - 4px)";
   }
 }
+function persistResizeWidth(side, widthPx) {
+  if (!isFinite(widthPx) || widthPx <= 0)
+    return;
+  const width = clampSidebarWidth(widthPx);
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => m3.dispatch({ t: "setDrawer", side, width })).catch((err) => {
+    dwarn(`[resize] setDrawer(${side}) width persist failed:`, err);
+  });
+}
 function mountResizeHandles() {
   if (isPointerResizeActive())
     return;
@@ -11272,7 +11281,9 @@ function mountResizeHandles() {
           const newWidth = clampSidebarWidth(startWidth + delta);
           document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`);
           scheduleReflow();
-        }, () => {}, () => isCanvasMainOpen());
+        }, () => {
+          persistResizeWidth("primary", readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420));
+        }, () => isCanvasMainOpen());
         positionCanvasHandle(handle, mainSide);
         mirrorDrawer.appendChild(handle);
         applyTabListPosition(getSettings().moveControlsToOuterEdge, {
@@ -11302,7 +11313,7 @@ function mountResizeHandles() {
           }
           scheduleReflow();
         }, () => {
-          const width = getMainDrawerWidth();
+          persistResizeWidth("primary", getMainDrawerWidth());
         }, () => isMainDrawerOpen());
         positionHostMainHandle(handle, mainSide);
         mainDrawer.appendChild(handle);
@@ -11328,7 +11339,7 @@ function mountResizeHandles() {
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`);
           scheduleReflow();
         }, () => {
-          const width = parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420;
+          persistResizeWidth("secondary", readWidthCssVar(SECONDARY_WIDTH_VAR, 420));
         }, () => isSecondarySidebarOpen());
         positionCanvasHandle(handle, secondarySide2);
         secondaryDrawer.appendChild(handle);
@@ -11374,8 +11385,10 @@ var init_handles = __esm(() => {
   init_reflow();
   init_secondary();
   init_main_mirror_drawer();
+  init_drawer_shell();
   init_state();
   init_tab_position();
+  init_log();
 });
 
 // src/sidebar/persist-polling.ts
