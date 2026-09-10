@@ -44,11 +44,15 @@ import {
 } from '../persist/layout-load'
 import { hasDetachedTabs, seedDualLayoutFromLive } from '../layout/snapshot'
 import {
+  bootPlacementDone,
+  flush,
   getHost,
   getModel,
   snapshotOwnedModelLayout,
 } from '../recon/dispatch'
 import { CANVAS_VERSION } from '../persist/backend-ctx'
+import type { LegacyLayout } from '../persist/layout-model'
+import { serializeModelToSingleLayout } from '../persist/layout-model'
 import { commitDraftToOwnedModel } from '../tabs/owned-commit'
 import {
   buildSingleLayoutFromLiveHost,
@@ -335,10 +339,29 @@ async function finishDisable(): Promise<void> {
   }
 
   // 2. Determine the single-drawer layout to restore: the persisted
-  //    singleLayout slot (freshest), else the live host state (last
-  //    resort). The session-only vanilla baseline capture is retired — the
-  //    slot IS the durable baseline.
+  //    singleLayout slot (freshest), else a single projection of the
+  //    CURRENT owned model, else the live host (last resort). The model
+  //    fold carries the Canvas hidden set and live order — the host-DOM
+  //    walk cannot (Canvas hidden state lives in the canvas copy, and the
+  //    host button DOM loses it here post-teardown) — so it beats
+  //    buildSingleLayoutFromLiveHost. The host walk stays the fallback for
+  //    headless/test seams where no model exists.
   let singleLayout = getSingleLayoutSlot()
+  if (!singleLayout) {
+    const fallbackHost = getHost()
+    const fallbackModel = getModel()
+    if (fallbackModel && fallbackHost) {
+      singleLayout = serializeModelToSingleLayout(
+        fallbackModel,
+        (key) => fallbackHost.resolve(key),
+        CANVAS_VERSION,
+      )
+      dlog('[second-drawer-mode] single layout folded from owned model (no slot)', {
+        tabOrder: singleLayout.tabOrder?.length ?? 0,
+        hidden: Array.isArray(singleLayout.hiddenTabIds) ? singleLayout.hiddenTabIds.length : 0,
+      })
+    }
+  }
   if (!singleLayout) {
     try {
       singleLayout = buildSingleLayoutFromLiveHost()
@@ -490,20 +513,33 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     })
 
     // Save the single-drawer layout BEFORE any dual UI mount. While the
-    // second drawer is off, the owned model IS the single-drawer layout
-    // (finishDisable restored it into the model), so serialize it into the
-    // singleLayout profile slot — that is what finishDisable restores on the
-    // way back. This slot is ALSO the durable vanilla baseline (the
-    // session-only baseline capture is retired — REFACTOR-PLAN v2 §4.6).
-    // Guard: never overwrite the slot with a dual model (the fallback case
-    // where a disable had no single layout to restore left the model dual
-    // while the drawer is off).
-    const singleSnapshot = snapshotOwnedModelLayout()
+    // second drawer is off, the owned model's single-projection IS the
+    // single-drawer layout, so serialize it into the singleLayout profile
+    // slot — that is what finishDisable restores on the way back. The slot
+    // is ALSO the durable vanilla baseline (REFACTOR-PLAN v2 §4.6).
+    //
+    // Capture is a SINGLE projection of the current model, not the raw
+    // serialization: when the drawer is off but the model still holds
+    // secondary tabs (the documented disable-fallback boot anomaly — a dual
+    // top-level blob while secondSidebarEnabled=false), a raw dual
+    // serialization would corrupt this slot with detachedTabs, and SKIPPING
+    // the capture leaves a STALE slot that disable then restores wholesale
+    // (live-verify #2: enable→disable reverted hidden/side/order of a
+    // pre-hidden-tabs slot). The fold is lossless for mode purposes: all
+    // tabs primary (primary-then-secondary order), hidden preserved,
+    // geometry + side from the live primary drawer.
+    const hostNow = getHost()
     const modelNow = getModel()
-    if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
+    if (hostNow && modelNow) {
+      const singleSnapshot = serializeModelToSingleLayout(
+        modelNow,
+        (key) => hostNow.resolve(key),
+        CANVAS_VERSION,
+      )
       setSingleLayoutSlot(singleSnapshot)
       dlog('[second-drawer-mode] saved single layout slot:', {
         primary: singleSnapshot.tabOrder?.length ?? 0,
+        hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0,
       })
     }
 
@@ -564,11 +600,27 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // 100ms-debounced fire now snapshots the post-restore live state.
     persistSettings()
 
+    // The restore above queues the boot PLACEMENT pass (secondary tab
+    // placements + host moves + primary re-assert), which runs OUTSIDE the
+    // dispatch queue. Awaiting flush() alone does not wait for it — the
+    // still-open Configure modal used to be refreshed from a mid-placement
+    // state (primary column stale, restored tabs invisible in the secondary
+    // column) until it was closed and reopened (live-verify #3). Wait for
+    // the pass to settle (capped), plus any intents it scheduled, THEN
+    // refresh the modal.
+    try {
+      await Promise.race([
+        bootPlacementDone(),
+        new Promise((r) => setTimeout(r, 5000)),
+      ])
+      await flush()
+    } catch { /* best-effort */ }
+
     // If the Configure Tabs modal is still open, refresh its draft from
     // the now-enabled live state so it reflects the re-enabled layout.
-    // Runs AFTER the restore attempt above so the modal shows the dual
-    // tabs (not the pre-restore empty state). Flush any in-flight commits
-    // first so refresh does not clobber a mid-flight rebase.
+    // Runs AFTER the restore + placement pass above so the modal shows the
+    // dual tabs (not the pre-restore empty state). Flush any in-flight
+    // commits first so refresh does not clobber a mid-flight rebase.
     try {
       const m = await import('../tabs/configure-modal')
       if (m.isConfigureTabsModalOpen()) {

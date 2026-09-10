@@ -2961,6 +2961,21 @@ function buildModelFromLayout(layout, findKey, side) {
     side: layout.drawerSide ?? side ?? "left"
   };
 }
+function serializeModelToSingleLayout(model, resolve, version) {
+  return {
+    version,
+    primary: {
+      open: model.drawers.primary.open,
+      width: model.drawers.primary.width,
+      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined
+    },
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
+    hiddenTabIds: model.hidden.map((key) => resolve(key)).filter(Boolean),
+    drawerSide: model.side
+  };
+}
 function resolveStoredId(storedId, findKey) {
   const exact = findKey(storedId);
   if (exact)
@@ -7174,6 +7189,17 @@ async function finishDisable() {
   }
   let singleLayout = getSingleLayoutSlot();
   if (!singleLayout) {
+    const fallbackHost = getHost();
+    const fallbackModel = getModel();
+    if (fallbackModel && fallbackHost) {
+      singleLayout = serializeModelToSingleLayout(fallbackModel, (key) => fallbackHost.resolve(key), CANVAS_VERSION);
+      dlog("[second-drawer-mode] single layout folded from owned model (no slot)", {
+        tabOrder: singleLayout.tabOrder?.length ?? 0,
+        hidden: Array.isArray(singleLayout.hiddenTabIds) ? singleLayout.hiddenTabIds.length : 0
+      });
+    }
+  }
+  if (!singleLayout) {
     try {
       singleLayout = buildSingleLayoutFromLiveHost();
       dlog("[second-drawer-mode] single layout built from live host (no slot)");
@@ -7235,12 +7261,14 @@ async function requestSecondDrawerMode(next) {
       dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs) ? switchDualSlot.detachedTabs.length : 0,
       modelSecondary: getModel()?.secondary.length ?? 0
     });
-    const singleSnapshot = snapshotOwnedModelLayout();
+    const hostNow = getHost();
     const modelNow = getModel();
-    if (singleSnapshot && (!modelNow || modelNow.secondary.length === 0)) {
+    if (hostNow && modelNow) {
+      const singleSnapshot = serializeModelToSingleLayout(modelNow, (key) => hostNow.resolve(key), CANVAS_VERSION);
       setSingleLayoutSlot(singleSnapshot);
       dlog("[second-drawer-mode] saved single layout slot:", {
-        primary: singleSnapshot.tabOrder?.length ?? 0
+        primary: singleSnapshot.tabOrder?.length ?? 0,
+        hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0
       });
     }
     const layoutBefore = getLastLoadedLayout();
@@ -7266,6 +7294,13 @@ async function requestSecondDrawerMode(next) {
       }
     }
     persistSettings();
+    try {
+      await Promise.race([
+        bootPlacementDone(),
+        new Promise((r3) => setTimeout(r3, 5000))
+      ]);
+      await flush();
+    } catch {}
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
       if (m3.isConfigureTabsModalOpen()) {
@@ -7341,6 +7376,7 @@ var init_second_drawer_mode = __esm(() => {
   init_layout_load();
   init_snapshot();
   init_dispatch();
+  init_layout_model();
   init_owned_commit();
   init_mode_profiles();
   init_drawer_sync();

@@ -133,6 +133,38 @@ export function buildModelFromLayout(
 }
 
 /**
+ * Serialize the model as a SINGLE-drawer layout regardless of the model's
+ * shape. When the model still holds secondary tabs (the documented
+ * disable-fallback state: the drawer is off but a dual-shaped model was
+ * booted from a dual top-level blob), every secondary key is folded into
+ * the primary order (primary-then-secondary), detachedTabs is emptied, and
+ * the secondary drawer state is neutral. Hidden set, primary geometry and
+ * side are preserved — a single-mode "what the user would see if the
+ * second drawer were off" projection.
+ */
+export function serializeModelToSingleLayout(
+  model: LayoutModel,
+  resolve: (key: TabKey) => string | null,
+  version: string,
+): LegacyLayout {
+  return {
+    version,
+    primary: {
+      open: model.drawers.primary.open,
+      width: model.drawers.primary.width,
+      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined,
+    },
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    // Fold: secondary keys appended after the primary keys, serialized as
+    // live ids exactly like a dual serialization's tabOrder.
+    tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
+    hiddenTabIds: model.hidden.map(key => resolve(key)).filter(Boolean) as string[],
+    drawerSide: model.side,
+  }
+}
+
+/**
  * Map a stored tab id (from the layout blob) to a stable TabKey.
  * Tries exact match first, then suffix-stripped match.
  */
