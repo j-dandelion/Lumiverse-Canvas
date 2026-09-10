@@ -3707,14 +3707,14 @@ function resolveMirrorList() {
   }
   return list;
 }
-function activateMainMirrorFromRestore(hostBtn, title) {
+function activateMainMirrorFromRestore(hostBtn, title, opts) {
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
     try {
       hostBtn.click();
     } catch {}
   }
-  onMainMirrorTabActivated(resolvedTitle);
+  onMainMirrorTabActivated(resolvedTitle, opts);
 }
 function ensureObservers() {
   const sidebar = getMainSidebar();
@@ -5299,6 +5299,22 @@ function bootstrapFromLayout(layout, host, version) {
   const primaryBootKey = model.active.primary;
   const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
   _bootPlacementPass = (async () => {
+    let gate = null;
+    let gateReleased = false;
+    let gateSafety = null;
+    const releaseGate = () => {
+      if (gateReleased)
+        return;
+      gateReleased = true;
+      try {
+        gate?.releaseSecondaryPlacementReveal();
+      } catch {}
+    };
+    try {
+      gate = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
+      gate.holdSecondaryPlacementReveal();
+      gateSafety = setTimeout(releaseGate, 5000);
+    } catch {}
     try {
       const m = await Promise.resolve().then(() => (init_secondary(), exports_secondary));
       await m.reassignSecondaryTabsFromModel({
@@ -5329,6 +5345,10 @@ function bootstrapFromLayout(layout, host, version) {
       } catch {}
     } catch (err) {
       dwarn("[bootstrap] reassignSecondaryTabsFromModel failed:", err);
+    } finally {
+      if (gateSafety)
+        clearTimeout(gateSafety);
+      releaseGate();
     }
   })();
 }
@@ -10358,6 +10378,7 @@ __export(exports_main_mirror_drawer, {
   isMainMirrorActive: () => isMainMirrorActive,
   onMainMirrorTabActivated: () => onMainMirrorTabActivated,
   openCanvasMainDrawer: () => openCanvasMainDrawer,
+  persistCanvasMainOpenState: () => persistCanvasMainOpenState,
   pinMainMirrorShellTabList: () => pinMainMirrorShellTabList,
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
   restyleMainShellSide: () => restyleMainShellSide,
@@ -10522,7 +10543,7 @@ function setCanvasMainTitle(text) {
   if (_shell?.title)
     _shell.title.textContent = text || "Drawer";
 }
-function onMainMirrorTabActivated(title) {
+function onMainMirrorTabActivated(title, opts) {
   if (!_active)
     return;
   if (title)
@@ -10538,7 +10559,11 @@ function onMainMirrorTabActivated(title) {
     });
   } catch {}
   ensureHostContentParked();
-  openCanvasMainDrawer();
+  if (opts?.open === false) {
+    dlog("[main-mirror] activation without open (restore re-assert)");
+  } else {
+    openCanvasMainDrawer();
+  }
   requestAnimationFrame(() => ensureHostContentParked());
 }
 function __resetMainMirrorForTest() {
@@ -11387,11 +11412,13 @@ __export(exports_main_persist, {
   ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
   findDrawerToggleButton: () => findDrawerToggleButton,
   holdMainDrawerReveal: () => holdMainDrawerReveal,
+  holdSecondaryPlacementReveal: () => holdSecondaryPlacementReveal,
   isHostPrimaryTabActive: () => isHostPrimaryTabActive,
   isMainDrawerRestorePending: () => isMainDrawerRestorePending,
   isMainDrawerRevealHeld: () => isMainDrawerRevealHeld,
   isMainDrawerVisualGuardActive: () => isMainDrawerVisualGuardActive,
   releaseMainDrawerReveal: () => releaseMainDrawerReveal,
+  releaseSecondaryPlacementReveal: () => releaseSecondaryPlacementReveal,
   restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
   stampPanelBodyHide: () => stampPanelBodyHide,
   startMainDrawerPersistence: () => startMainDrawerPersistence,
@@ -11413,7 +11440,12 @@ function ensureRestoreGuardStyles() {
   el.id = RESTORE_GUARD_STYLE_ID;
   el.textContent = `
     html.${RESTORE_PENDING_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]),
-    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper {
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper,
+    /* Secondary shell too (live-verify #5): features mount during the guard
+     * window, so the second drawer's strip would otherwise be visible/populate
+     * while the main restore is still running. Revealed with the main by the
+     * same fade at unsuppress. */
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-secondary-wrapper {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
@@ -11427,7 +11459,8 @@ function ensureRestoreGuardStyles() {
       opacity: 0 !important;
       pointer-events: none !important;
     }
-    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"],
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
@@ -11451,6 +11484,44 @@ function ensureRestoreGuardStyles() {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
+    }
+    /* Pinned secondary strip lives on a body-level host OUTSIDE the wrapper
+     * (tab-position.ts) — without this rule the serial placement loop's
+     * button-by-button appends are visible during the hold (live-verify #5).
+     * The MAIN pin host is deliberately absent: its buttons are not rebuilt
+     * during the pass, and hiding it would blink working chrome. */
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* One-shot reveal fade after the hold lifts (live-verify #5): the settled
+     * drawers + pinned secondary strip fade in instead of snapping. The class
+     * is removed after the animation window (playRevealIn). */
+    html.${REVEAL_IN_CLASS} .sidebar-ux-main-mirror-wrapper,
+    html.${REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
+    }
+    @keyframes sidebar-ux-reveal-fade-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    /* Secondary placement gate (live-verify #5 final): the boot placement pass
+     * can outlive the main reveal (1.5s cap), so keep the second drawer + its
+     * pinned strip hidden until placements settle — panel content must never
+     * paint before its tab buttons. */
+    html.${SECONDARY_PLACEMENT_HOLD_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${SECONDARY_PLACEMENT_HOLD_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Late gate release (main already visible): secondary-only fade with the
+     * shared keyframes, so the second drawer appears smoothly on its own. */
+    html.${SECONDARY_REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${SECONDARY_REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
     }
   `;
   document.head.appendChild(el);
@@ -11562,6 +11633,7 @@ function unsuppressMainDrawer() {
     stampPanelBodyHide();
     return;
   }
+  const wasPending = isMainDrawerRestorePending();
   if (_unsuppressTimer) {
     clearTimeout(_unsuppressTimer);
     _unsuppressTimer = null;
@@ -11570,6 +11642,8 @@ function unsuppressMainDrawer() {
   stopPanelHideObserver();
   clearPanelBodyHide();
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS);
+  if (wasPending && !_stopped)
+    playRevealIn();
 }
 function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
@@ -11603,6 +11677,24 @@ function holdMainDrawerReveal() {
     dwarn(`main-persist: holdMainDrawerReveal failed: ${err}`);
   }
 }
+function playRevealIn() {
+  if (typeof document === "undefined")
+    return;
+  try {
+    document.documentElement.classList.add(REVEAL_IN_CLASS);
+    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)`);
+    if (_revealInTimer)
+      clearTimeout(_revealInTimer);
+    _revealInTimer = setTimeout(() => {
+      _revealInTimer = null;
+      try {
+        document.documentElement.classList.remove(REVEAL_IN_CLASS);
+      } catch {}
+    }, REVEAL_IN_MS + 60);
+  } catch (err) {
+    dwarn(`main-persist: playRevealIn failed: ${err}`);
+  }
+}
 function releaseMainDrawerReveal() {
   if (_revealHolds === 0)
     return;
@@ -11617,9 +11709,60 @@ function releaseMainDrawerReveal() {
     if (!isMainDrawerRestorePending()) {
       stopPanelHideObserver();
       clearPanelBodyHide();
+      playRevealIn();
     }
   } catch (err) {
     dwarn(`main-persist: releaseMainDrawerReveal failed: ${err}`);
+  }
+}
+function playSecondaryRevealIn() {
+  if (typeof document === "undefined")
+    return;
+  try {
+    document.documentElement.classList.add(SECONDARY_REVEAL_IN_CLASS);
+    dlog(`main-persist: secondary reveal fade-in ON (${REVEAL_IN_MS}ms)`);
+    if (_secondaryRevealTimer)
+      clearTimeout(_secondaryRevealTimer);
+    _secondaryRevealTimer = setTimeout(() => {
+      _secondaryRevealTimer = null;
+      try {
+        document.documentElement.classList.remove(SECONDARY_REVEAL_IN_CLASS);
+      } catch {}
+    }, REVEAL_IN_MS + 60);
+  } catch (err) {
+    dwarn(`main-persist: playSecondaryRevealIn failed: ${err}`);
+  }
+}
+function holdSecondaryPlacementReveal() {
+  if (typeof document === "undefined")
+    return;
+  _secondaryPlacementHolds++;
+  if (_secondaryPlacementHolds !== 1)
+    return;
+  try {
+    ensureRestoreGuardStyles();
+    document.documentElement.classList.add(SECONDARY_PLACEMENT_HOLD_CLASS);
+    dlog("main-persist: secondary placement gate ON");
+  } catch (err) {
+    dwarn(`main-persist: holdSecondaryPlacementReveal failed: ${err}`);
+  }
+}
+function releaseSecondaryPlacementReveal() {
+  if (_secondaryPlacementHolds === 0)
+    return;
+  _secondaryPlacementHolds--;
+  if (_secondaryPlacementHolds > 0)
+    return;
+  if (typeof document === "undefined")
+    return;
+  try {
+    document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS);
+    dlog("main-persist: secondary placement gate OFF");
+    if (!isMainDrawerRestorePending() && !isMainDrawerRevealHeld()) {
+      playSecondaryRevealIn();
+    }
+  } catch (err) {
+    dwarn(`main-persist: releaseSecondaryPlacementReveal failed: ${err}`);
   }
 }
 function isHostPrimaryTabActive(targetTabId) {
@@ -11788,7 +11931,7 @@ async function restoreTab(targetTabId, preferMirror, timeout, opts) {
   repark?.();
   await unsuppressAfterTwoPaints();
 }
-function clickRestoredPrimaryTab(targetTabId, preferMirror) {
+function clickRestoredPrimaryTab(targetTabId, preferMirror, opts) {
   if (!targetTabId)
     return false;
   const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
@@ -11805,7 +11948,7 @@ function clickRestoredPrimaryTab(targetTabId, preferMirror) {
   if (preferMirror || document.documentElement.classList.contains("sidebar-ux-canvas-main-active")) {
     Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => {
       const title = tabBtn?.getAttribute("title") || tabBtn?.getAttribute("aria-label") || targetTabId;
-      m3.activateMainMirrorFromRestore(tabBtn, title);
+      m3.activateMainMirrorFromRestore(tabBtn, title, opts);
     }).catch((err) => {
       dlog(`main-persist restore: activateMainMirrorFromRestore failed: ${err}`);
       if (tabBtn) {
@@ -11933,7 +12076,7 @@ function startMainDrawerPersistence() {
 function ensureRestoredPrimaryTab(targetTabId) {
   if (!targetTabId || _stopped)
     return;
-  clickRestoredPrimaryTab(targetTabId, isMainMirrorActive());
+  clickRestoredPrimaryTab(targetTabId, isMainMirrorActive(), { open: false });
 }
 function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) {
   if (_stopped)
@@ -11969,6 +12112,7 @@ function restoreMainDrawerFromDom(targetOpen, targetTabId, targetWidthPx, opts) 
       } else {
         m3.closeCanvasMainDrawer();
         unsuppressMainDrawer();
+        m3.persistCanvasMainOpenState();
       }
     });
     return;
@@ -12036,14 +12180,26 @@ function stopMainDrawerPersistence() {
   }
   cleanupDomPoll();
   _revealHolds = 0;
+  _secondaryPlacementHolds = 0;
   if (typeof document !== "undefined") {
     document.documentElement.classList.remove(REVEAL_HOLD_CLASS);
+    if (_revealInTimer) {
+      clearTimeout(_revealInTimer);
+      _revealInTimer = null;
+    }
+    document.documentElement.classList.remove(REVEAL_IN_CLASS);
+    document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS);
+    if (_secondaryRevealTimer) {
+      clearTimeout(_secondaryRevealTimer);
+      _secondaryRevealTimer = null;
+    }
+    document.documentElement.classList.remove(SECONDARY_REVEAL_IN_CLASS);
   }
   unsuppressMainDrawer();
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove();
   _wrapper = null;
 }
-var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", REVEAL_HOLD_CLASS = "sidebar-ux-main-reveal-hold", _revealHolds = 0, RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", REVEAL_HOLD_CLASS = "sidebar-ux-main-reveal-hold", REVEAL_IN_CLASS = "sidebar-ux-main-reveal-in", REVEAL_IN_MS = 180, _revealHolds = 0, _revealInTimer = null, SECONDARY_PLACEMENT_HOLD_CLASS = "sidebar-ux-secondary-placement-hold", SECONDARY_REVEAL_IN_CLASS = "sidebar-ux-secondary-reveal-in", _secondaryPlacementHolds = 0, _secondaryRevealTimer = null, RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_log();
   init_handles();
@@ -13181,13 +13337,19 @@ function secondaryHasDisplayedRoot() {
   const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
   return !!content?.querySelector("[data-canvas-moved][data-canvas-active]");
 }
-function reassignSecondaryTabsFromModel(opts) {
-  if (_reassignInFlight) {
-    _reassignQueued = true;
-    return Promise.resolve();
-  }
-  _reassignInFlight = true;
-  const run = Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, activateSecondaryTab: activateSecondaryTab2 }) => {
+function mergeReassignOpts(prev, next) {
+  if (!prev)
+    return next;
+  if (!next)
+    return prev;
+  return {
+    openOnClosed: prev.openOnClosed === false || next.openOnClosed === false ? false : next.openOnClosed ?? prev.openOnClosed,
+    setActiveWhenReady: prev.setActiveWhenReady === false || next.setActiveWhenReady === false ? false : next.setActiveWhenReady ?? prev.setActiveWhenReady,
+    activateKey: next.activateKey !== undefined ? next.activateKey : prev.activateKey
+  };
+}
+function runReassign(opts) {
+  return Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer)).then(async ({ assignToSecondary: assignToSecondary2, activateSecondaryTab: activateSecondaryTab2 }) => {
     setSuppressAutoActivation(true);
     const tabs = drawerObserver.getAllTabs();
     const modelSecondaryKeys = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(([key]) => key);
@@ -13227,14 +13389,39 @@ function reassignSecondaryTabsFromModel(opts) {
       activateSecondaryTab2(target);
     }
   });
-  run.finally(() => {
-    _reassignInFlight = false;
-    if (_reassignQueued) {
+}
+function reassignSecondaryTabsFromModel(opts) {
+  if (_reassignDraining) {
+    _reassignQueued = true;
+    _reassignQueuedOpts = mergeReassignOpts(_reassignQueuedOpts, opts);
+    dlog("[secondary] reassign coalesced — awaiting drain");
+    return new Promise((resolve) => {
+      _reassignWaiters.push(resolve);
+    });
+  }
+  _reassignDraining = true;
+  const drain = (async () => {
+    let current = opts;
+    let runs = 0;
+    for (;; ) {
+      try {
+        await runReassign(current);
+      } catch (err) {
+        dwarn("[secondary] reassign: run failed:", err);
+      }
+      runs++;
+      if (!_reassignQueued)
+        break;
       _reassignQueued = false;
-      reassignSecondaryTabsFromModel(opts);
+      current = _reassignQueuedOpts;
+      _reassignQueuedOpts = undefined;
     }
-  }).catch(() => {});
-  return run;
+    _reassignDraining = false;
+    dlog(`[secondary] reassign drain settled (${runs} run${runs === 1 ? "" : "s"})`);
+    for (const resolve of _reassignWaiters.splice(0))
+      resolve();
+  })();
+  return drain;
 }
 function persistSecondaryDrawerOpen(open) {
   Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
@@ -13482,7 +13669,7 @@ function tearDownSecondarySidebar() {
   stopPanelHeaderObservers();
   resetPanelHeaderSyncCache();
 }
-var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null, _reassignInFlight = false, _reassignQueued = false;
+var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null, _reassignDraining = false, _reassignQueued = false, _reassignQueuedOpts, _reassignWaiters;
 var init_secondary = __esm(() => {
   init_store();
   init_reflow();
@@ -13506,6 +13693,7 @@ var init_secondary = __esm(() => {
   init_drawer_shell();
   init_styles();
   init_animation();
+  _reassignWaiters = [];
 });
 
 // src/layout/snapshot.ts

@@ -14,6 +14,9 @@
 // release clears; stopMainDrawerPersistence clears a stranded hold; the
 // settle helper resolves.
 
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
 let passed = 0
 let failed = 0
 function assert(cond: unknown, msg: string) {
@@ -22,6 +25,9 @@ function assert(cond: unknown, msg: string) {
 
 const RESTORE_PENDING = 'sidebar-ux-main-restore-pending'
 const REVEAL_HOLD = 'sidebar-ux-main-reveal-hold'
+const REVEAL_IN = 'sidebar-ux-main-reveal-in'
+const SECONDARY_HOLD = 'sidebar-ux-secondary-placement-hold'
+const SECONDARY_REVEAL = 'sidebar-ux-secondary-reveal-in'
 
 // =====================================================================
 // Minimal DOM stubs (before importing main-persist)
@@ -99,6 +105,42 @@ assert(
   panelNodes.every((n) => n._props.get('visibility') === 'hidden' && n._props.get('opacity') === '0'),
   'T1: panel bodies inline-stamped while held',
 )
+// Live-verify #5: the pinned secondary strip lives on a body-level pin host
+// OUTSIDE `.sidebar-ux-secondary-wrapper` — the hold must hide it too or the
+// serial placement loop's button-by-button appends stay visible.
+{
+  const css = styleEl?.textContent ?? ''
+  const holdStart = css.indexOf(REVEAL_HOLD)
+  const restoreSection = css.slice(0, holdStart)
+  const holdSection = css.slice(holdStart)
+  assert(
+    holdStart !== -1 && holdSection.includes('.sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"]'),
+    'T1: reveal-hold CSS covers the pinned secondary strip',
+  )
+  assert(
+    restoreSection.includes('.sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"]'),
+    'T1: restore guard also covers the pinned secondary strip (boot parity)',
+  )
+  assert(
+    restoreSection.includes('.sidebar-ux-secondary-wrapper'),
+    'T1: restore guard hides the secondary shell during the boot window',
+  )
+  // Reveal fade (live-verify #5 polish): keyframes + the class selector for
+  // shells + pinned secondary strip.
+  assert(css.includes('@keyframes sidebar-ux-reveal-fade-in'), 'T1: reveal fade keyframes injected')
+  assert(css.includes(`.${REVEAL_IN} .sidebar-ux-secondary-wrapper`), 'T1: reveal fade covers the secondary shell')
+  // Secondary placement gate (live-verify #5 final): a slow boot pass must
+  // not let the panel paint before its tab strip.
+  assert(
+    css.includes(`.${SECONDARY_HOLD} .sidebar-ux-secondary-wrapper`) &&
+    css.includes(`.${SECONDARY_HOLD} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"]`),
+    'T1: secondary placement gate CSS covers shell + pinned strip',
+  )
+  assert(
+    css.includes(`.${SECONDARY_REVEAL} .sidebar-ux-secondary-wrapper`),
+    'T1: late-release secondary fade CSS present',
+  )
+}
 
 // --- T2: restore-path unsuppress is deferred while held ---
 mp.unsuppressMainDrawer()
@@ -112,7 +154,7 @@ mp.releaseMainDrawerReveal()
 assert(mp.isMainDrawerRevealHeld() === true, 'T3: one release of two — still held')
 assert(classes.has(REVEAL_HOLD), 'T3: class still present while nested hold remains')
 
-// --- T4: final release lifts everything ---
+// --- T4: final release lifts everything + starts the one-shot reveal fade ---
 mp.releaseMainDrawerReveal()
 assert(mp.isMainDrawerRevealHeld() === false, 'T4: hold released')
 assert(!classes.has(REVEAL_HOLD), 'T4: hold class removed')
@@ -121,10 +163,16 @@ assert(
   panelNodes.every((n) => !n._props.has('visibility') && !n._props.has('opacity')),
   'T4: panel inline stamps cleared on release',
 )
+assert(classes.has(REVEAL_IN), 'T4: reveal fade class added on release')
+
+// --- T4b: the reveal fade class auto-removes after the animation window ---
+await new Promise((r) => setTimeout(r, 280))
+assert(!classes.has(REVEAL_IN), 'T4b: reveal fade class auto-removed')
 
 // --- T5: release with no active hold is a no-op ---
 mp.releaseMainDrawerReveal()
 assert(mp.isMainDrawerRevealHeld() === false, 'T5: extra release no-op')
+assert(!classes.has(REVEAL_IN), 'T5: no-op release does not start a fade')
 
 // --- T6: settle helper resolves (stopped watcher fast-path) ---
 {
@@ -134,13 +182,81 @@ assert(mp.isMainDrawerRevealHeld() === false, 'T5: extra release no-op')
   assert(resolved, 'T6: waitForMainContentSettled resolves')
 }
 
-// --- T7: teardown clears a stranded hold ---
+// --- T7: teardown clears a stranded hold + a pending reveal fade ---
 mp.startMainDrawerPersistence()
 mp.holdMainDrawerReveal()
+mp.holdMainDrawerReveal()
 assert(mp.isMainDrawerRevealHeld() === true, 'T7: hold active before teardown')
+mp.releaseMainDrawerReveal()
+mp.releaseMainDrawerReveal()
+assert(classes.has(REVEAL_IN), 'T7: reveal fade active before teardown')
 mp.stopMainDrawerPersistence()
 assert(mp.isMainDrawerRevealHeld() === false, 'T7: teardown cleared the hold')
 assert(!classes.has(REVEAL_HOLD), 'T7: teardown removed the hold class')
+assert(!classes.has(REVEAL_IN), 'T7: teardown removed the pending reveal fade class/timer')
+
+// --- T8: the BOOT reveal (restore-guard lift) also plays the fade ---
+// Hard refresh: drawers stay hidden behind sidebar-ux-main-restore-pending for
+// the boot restore window, then unsuppressMainDrawer reveals them. That reveal
+// must fade too (the earlier fix only covered the mid-session hold release).
+mp.startMainDrawerPersistence()
+mp.suppressMainDrawer()
+assert(classes.has(RESTORE_PENDING), 'T8: restore guard active before reveal')
+assert(!classes.has(REVEAL_IN), 'T8: no fade while the guard holds')
+mp.unsuppressMainDrawer()
+assert(!classes.has(RESTORE_PENDING), 'T8: restore guard lifted')
+assert(classes.has(REVEAL_IN), 'T8: boot reveal plays the fade')
+// Auto-remove, then prove an idempotent unsuppress (guard already gone) does
+// NOT start a second fade.
+await new Promise((r) => setTimeout(r, 280))
+assert(!classes.has(REVEAL_IN), 'T8: boot fade auto-removes')
+mp.unsuppressMainDrawer()
+assert(!classes.has(REVEAL_IN), 'T8: idempotent unsuppress does not restart the fade')
+mp.stopMainDrawerPersistence()
+assert(!classes.has(REVEAL_IN), 'T8: teardown clears the boot fade')
+
+// --- T9: secondary placement gate (live-verify #5 final) ---
+// The boot placement pass can outlive the capped main reveal; the second
+// drawer + pinned strip stay hidden until it settles. A late release (main
+// already visible) gets a secondary-only fade.
+mp.startMainDrawerPersistence()
+mp.holdSecondaryPlacementReveal()
+mp.holdSecondaryPlacementReveal()
+assert(classes.has(SECONDARY_HOLD), 'T9: gate class added (nested)')
+mp.releaseSecondaryPlacementReveal()
+assert(classes.has(SECONDARY_HOLD), 'T9: one release of two — still gated')
+// Release while the boot restore guard owns visibility: drop the class, no
+// secondary-only fade (the guard's reveal fades both drawers).
+mp.suppressMainDrawer()
+mp.releaseSecondaryPlacementReveal()
+assert(!classes.has(SECONDARY_HOLD), 'T9: gate lifted at zero holds')
+assert(!classes.has(SECONDARY_REVEAL), 'T9: no secondary fade while the boot guard owns visibility')
+mp.unsuppressMainDrawer()
+// Late release after the main is visible → secondary-only fade.
+mp.holdSecondaryPlacementReveal()
+mp.releaseSecondaryPlacementReveal()
+assert(classes.has(SECONDARY_REVEAL), 'T9: late release plays the secondary-only fade')
+await new Promise((r) => setTimeout(r, 280))
+assert(!classes.has(SECONDARY_REVEAL), 'T9: secondary fade auto-removes')
+mp.stopMainDrawerPersistence()
+assert(!classes.has(SECONDARY_HOLD), 'T9: teardown clears the gate class')
+assert(!classes.has(SECONDARY_REVEAL), 'T9: teardown clears a pending secondary fade')
+
+// --- T10: boot primary re-assert suppresses the open side effect ---
+// ensureRestoredPrimaryTab is a CONTENT re-assert run by the boot placement
+// pass (and its +500ms retry) AFTER restoreMainDrawerFromDom honored the
+// persisted open state. It must pass `open:false` through the mirror restore
+// activation or a persisted-closed drawer reopens on every refresh.
+{
+  const src = readFileSync(join(process.cwd(), 'src/sidebar/main-persist.ts'), 'utf8')
+  const start = src.indexOf('export function ensureRestoredPrimaryTab')
+  const body = start !== -1 ? src.slice(start, start + 1200) : ''
+  assert(start !== -1, 'T10: ensureRestoredPrimaryTab present')
+  assert(
+    /clickRestoredPrimaryTab\(\s*targetTabId,\s*isMainMirrorActive\(\),\s*\{\s*open:\s*false\s*\}\s*\)/.test(body),
+    'T10: ensureRestoredPrimaryTab passes open:false (content re-assert never opens)',
+  )
+}
 
 // ── Summary ──
 console.log(`PASS: ${passed}`)

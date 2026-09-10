@@ -302,27 +302,60 @@ function secondaryHasDisplayedRoot(): boolean {
   return !!content?.querySelector('[data-canvas-moved][data-canvas-active]')
 }
 
-/** Placement-pass coalescing (2026-09): boot fires overlapping reassign
- *  invocations (bootstrapFromLayout + openSecondarySidebar's BAIL re-attach),
- *  each running its own placement loop — every builtin gets force-activated
- *  in the host and moved TWICE, and the host is left on the last moved tab.
- *  One placement pass is enough; a dropped call queues a single trailing
- *  rerun (which hits the all-placed early-return) after the in-flight pass. */
-let _reassignInFlight = false
-let _reassignQueued = false
-
-export function reassignSecondaryTabsFromModel(opts?: {
+/** Placement-pass options (boot restore / open re-attach). */
+type ReassignSecondaryOpts = {
   openOnClosed?: boolean
   setActiveWhenReady?: boolean
   /** Preferred tab to show after placement (model TabKey, e.g. the layout's active.secondary). */
   activateKey?: string | null
-}): Promise<void> {
-  if (_reassignInFlight) {
-    _reassignQueued = true
-    return Promise.resolve()
+}
+
+/** Placement-pass coalescing (2026-09; promise contract fixed 2026-09 live-verify
+ *  #5): boot fires overlapping reassign invocations (bootstrapFromLayout +
+ *  openSecondarySidebar's BAIL re-attach), each running its own placement loop —
+ *  every builtin gets force-activated in the host and moved TWICE, and the host
+ *  is left on the last moved tab. One drain serializes them; calls arriving
+ *  mid-drain queue a single trailing rerun and get a WAITER promise that resolves
+ *  only after the whole drain settles.
+ *
+ *  The promise contract matters: the mode-switch reveal hold awaits
+ *  bootPlacementDone() → this function. The old coalesce path returned
+ *  `Promise.resolve()` immediately, so the hold released while the serial
+ *  placement loop was still appending buttons — the second drawer's tabs popped
+ *  in one by one. An awaiting caller now observes "placements settled", and the
+ *  queued call's opts (notably the boot `activateKey`) are merged into the
+ *  trailing rerun instead of being dropped. Fire-and-forget callers are
+ *  unaffected: they simply ignore the (longer-lived) promise. */
+let _reassignDraining = false
+let _reassignQueued = false
+let _reassignQueuedOpts: ReassignSecondaryOpts | undefined
+const _reassignWaiters: Array<() => void> = []
+
+/** Merge a queued call's opts into the trailing rerun. Quiet flags win
+ *  (`false` — never auto-open/activate on a coalesced rerun), and an explicit
+ *  `activateKey` from the newest caller overrides (`null` = no preference). */
+function mergeReassignOpts(
+  prev: ReassignSecondaryOpts | undefined,
+  next: ReassignSecondaryOpts | undefined,
+): ReassignSecondaryOpts | undefined {
+  if (!prev) return next
+  if (!next) return prev
+  return {
+    openOnClosed:
+      prev.openOnClosed === false || next.openOnClosed === false
+        ? false
+        : (next.openOnClosed ?? prev.openOnClosed),
+    setActiveWhenReady:
+      prev.setActiveWhenReady === false || next.setActiveWhenReady === false
+        ? false
+        : (next.setActiveWhenReady ?? prev.setActiveWhenReady),
+    activateKey: next.activateKey !== undefined ? next.activateKey : prev.activateKey,
   }
-  _reassignInFlight = true
-  const run = import('../sidebar/secondary-drawer').then(
+}
+
+/** One placement run (serial loop + activation tail). */
+function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
+  return import('../sidebar/secondary-drawer').then(
     async ({ assignToSecondary, activateSecondaryTab }) => {
       setSuppressAutoActivation(true)
       const tabs = drawerObserver.getAllTabs()
@@ -418,14 +451,45 @@ export function reassignSecondaryTabsFromModel(opts?: {
       }
     },
   )
-  run.finally(() => {
-    _reassignInFlight = false
-    if (_reassignQueued) {
+}
+
+/**
+ * Re-attach every model-assigned secondary tab into the shell (serial drain;
+ * idempotent placements). Resolves when ALL pending placement work has
+ * settled — including the trailing rerun queued by an overlapping caller (see
+ * the coalescing note above). Awaiting callers (the boot placement pass /
+ * reveal hold) therefore observe true completion; fire-and-forget callers
+ * (openSecondarySidebar) ignore the longer-lived promise.
+ */
+export function reassignSecondaryTabsFromModel(opts?: ReassignSecondaryOpts): Promise<void> {
+  if (_reassignDraining) {
+    _reassignQueued = true
+    _reassignQueuedOpts = mergeReassignOpts(_reassignQueuedOpts, opts)
+    dlog('[secondary] reassign coalesced — awaiting drain')
+    return new Promise<void>((resolve) => { _reassignWaiters.push(resolve) })
+  }
+  _reassignDraining = true
+  const drain = (async () => {
+    let current = opts
+    let runs = 0
+    for (;;) {
+      try {
+        await runReassign(current)
+      } catch (err) {
+        // Errors must not wedge the drain: log, then let a queued caller rerun.
+        dwarn('[secondary] reassign: run failed:', err)
+      }
+      runs++
+      if (!_reassignQueued) break
       _reassignQueued = false
-      void reassignSecondaryTabsFromModel(opts)
+      current = _reassignQueuedOpts
+      _reassignQueuedOpts = undefined
     }
-  }).catch(() => { /* absorb for fire-and-forget callers (openSecondarySidebar) */ })
-  return run
+    _reassignDraining = false
+    dlog(`[secondary] reassign drain settled (${runs} run${runs === 1 ? '' : 's'})`)
+    for (const resolve of _reassignWaiters.splice(0)) resolve()
+  })()
+  return drain
 }
 
 /**

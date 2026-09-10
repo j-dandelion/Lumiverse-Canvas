@@ -135,7 +135,7 @@ tab_active → (unassignFromSecondary non-last) → open
 9. Persist open state
 10. Set mobile body class
 
-**BAIL-already-open trap:** when the drawer is already open (e.g. open at boot), `openSecondarySidebar` bails before step 8 — restored tabs would stay unplaced in the main drawer. The BAIL path calls `reassignSecondaryTabsFromModel()` itself, and `bootstrapFromLayout` also triggers it with `{ openOnClosed: false, setActiveWhenReady: false }` so a closed drawer is never force-opened. See [pitfalls.md](pitfalls.md) §7.
+**BAIL-already-open trap:** when the drawer is already open (e.g. open at boot), `openSecondarySidebar` bails before step 8 — restored tabs would stay unplaced in the main drawer. The BAIL path calls `reassignSecondaryTabsFromModel()` itself, and `bootstrapFromLayout` also triggers it with `{ openOnClosed: false, setActiveWhenReady: false }` so a closed drawer is never force-opened. The two calls overlap, so `reassignSecondaryTabsFromModel` coalesces them through a serial **drain** whose returned promise resolves only after all pending runs settle (queued callers' opts merge into the trailing rerun) — awaiting callers (the boot placement pass / reveal hold) must observe true completion. See [pitfalls.md](pitfalls.md) §7.
 
 **Content-restore trap:** the re-assignment loop suppresses auto-activation, and `finalizeAssignToSecondary`'s `showSecondaryTabDisplay` is gated on `!deferActivation` — the loop places tabs but displays none. `reassignSecondaryTabsFromModel` therefore shows the preferred tab afterwards (`activateKey` — the persisted `active.secondary` — or the first placed) when the drawer is open and nothing is active. See [pitfalls.md](pitfalls.md) §8.
 

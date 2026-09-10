@@ -365,6 +365,24 @@ export {}
   __resetMainMirrorForTest()
 }
 
+// --- T15 (live-verify): restore content re-assert must NOT change the
+//     persisted open state. The boot placement pass's primary re-assert routes
+//     through activateMainMirrorFromRestore with `open:false`, so
+//     onMainMirrorTabActivated parks content/title but leaves a persisted-closed
+//     shell closed. Previously the re-assert (and its +500ms retry) reopened the
+//     drawer after restoreMainDrawerFromDom had honored `primary.open: false`. ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  applyMainMirrorDrawer(true) // mounts closed
+  assert(!isCanvasMainOpen(), 'T15: shell mounted closed')
+  onMainMirrorTabActivated('Theme', { open: false })
+  assert(!isCanvasMainOpen(), 'T15: activation with open:false keeps the shell closed')
+  onMainMirrorTabActivated('Theme')
+  assert(isCanvasMainOpen(), 'T15: default activation still opens')
+  __resetMainMirrorForTest()
+}
+
 // =====================================================================
 // S3 content single-path — event-driven park (repark poll removed)
 // =====================================================================

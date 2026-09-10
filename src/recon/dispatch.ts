@@ -1001,6 +1001,25 @@ export function bootstrapFromLayout(
       ? host.resolve(primaryBootKey)
       : null
   _bootPlacementPass = (async () => {
+    // Secondary placement visual gate (2026-09, live-verify #5 final): this
+    // pass serializes secondary placements and can outlive the main restore
+    // reveal (setup caps its wait at 1.5s). Hold the second drawer + pinned
+    // strip hidden until placements settle so its active panel can never
+    // paint before the tab buttons. Released in the finally; the 5s safety
+    // cap guarantees the drawer can never stay hidden after a wedged pass.
+    let gate: typeof import('../sidebar/main-persist') | null = null
+    let gateReleased = false
+    let gateSafety: ReturnType<typeof setTimeout> | null = null
+    const releaseGate = () => {
+      if (gateReleased) return
+      gateReleased = true
+      try { gate?.releaseSecondaryPlacementReveal() } catch { /* non-fatal */ }
+    }
+    try {
+      gate = await import('../sidebar/main-persist')
+      gate.holdSecondaryPlacementReveal()
+      gateSafety = setTimeout(releaseGate, 5000)
+    } catch { /* non-fatal */ }
     try {
       const m = await import('../sidebar/secondary')
       await m.reassignSecondaryTabsFromModel({
@@ -1041,6 +1060,9 @@ export function bootstrapFromLayout(
       } catch { /* non-fatal */ }
     } catch (err) {
       dwarn('[bootstrap] reassignSecondaryTabsFromModel failed:', err)
+    } finally {
+      if (gateSafety) clearTimeout(gateSafety)
+      releaseGate()
     }
   })()
 }

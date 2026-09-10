@@ -184,7 +184,13 @@ function bumpResizeHandles(): void {
   mountResizeHandles()
 }
 
-function persistCanvasMainOpenState(): void {
+/**
+ * Persist the shell's current open/width into the owned model (S5 write path).
+ * Exported for `restoreMainDrawerFromDom`: after the restore guard lifts, the
+ * layout's target state is re-asserted so a boot-window host-truth sync cannot
+ * leave the model/disk stale-true for a persisted-closed drawer.
+ */
+export function persistCanvasMainOpenState(): void {
   // S5: same write path as secondary open/close — dispatch setDrawer(primary)
   // through the owned model (recon/dispatch). With observe() reading SHELL
   // truth (CANVAS_MAIN_OPEN_CLASS + MAIN_MIRROR_WIDTH_VAR, restore-gated),
@@ -304,7 +310,10 @@ export function setCanvasMainTitle(text: string): void {
 }
 
 /** Called after mirror tab click to open + title. Content already in shell. */
-export function onMainMirrorTabActivated(title?: string): void {
+export function onMainMirrorTabActivated(
+  title?: string,
+  opts?: { open?: boolean },
+): void {
   if (!_active) return
   if (title) setCanvasMainTitle(title)
 
@@ -332,7 +341,16 @@ export function onMainMirrorTabActivated(title?: string): void {
 
   // Host React may swap panel children a frame later — re-park if needed.
   ensureHostContentParked()
-  openCanvasMainDrawer()
+  if (opts?.open === false) {
+    // Content re-assert only (boot placement pass): the persisted layout owns
+    // open/close. Without this, the pass's re-assert (and its +500ms retry)
+    // reopened the shell after restoreMainDrawerFromDom had honored a
+    // persisted `primary.open: false` (live-verify: main drawer opens on
+    // refresh despite "Remember drawer open/close state").
+    dlog('[main-mirror] activation without open (restore re-assert)')
+  } else {
+    openCanvasMainDrawer()
+  }
   requestAnimationFrame(() => ensureHostContentParked())
 }
 

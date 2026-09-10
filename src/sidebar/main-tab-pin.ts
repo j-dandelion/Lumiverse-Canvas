@@ -281,10 +281,15 @@ function resolveMirrorList(): HTMLElement | null {
  * IS the selection (seeded at boot from layout.json) — no mirror key is
  * written here. Never dispatches through the renderer's click path — that
  * toggle-closes when the drawer is already open on the same tab.
+ *
+ * `opts.open === false` suppresses the shell open (content/title/park only) —
+ * used by the boot placement pass's primary re-assert, which must never
+ * change the persisted open/close state.
  */
 export function activateMainMirrorFromRestore(
   hostBtn: HTMLElement | null,
   title?: string,
+  opts?: { open?: boolean },
 ): void {
   const resolvedTitle =
     title ||
@@ -298,7 +303,7 @@ export function activateMainMirrorFromRestore(
       /* host may throw during teardown */
     }
   }
-  onMainMirrorTabActivated(resolvedTitle)
+  onMainMirrorTabActivated(resolvedTitle, opts)
 }
 
 function ensureObservers(): void {

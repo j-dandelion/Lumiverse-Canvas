@@ -58,6 +58,8 @@ When a container move (`requestTabLocation ok via=bridge`) remounts the host's d
 
 **Rule:** `bootstrapFromLayout` calls `reassignSecondaryTabsFromModel({ openOnClosed: false, setActiveWhenReady: false })` — placement at boot regardless of open state, never force-opening a closed drawer. `openSecondarySidebar`'s BAIL path calls it too (defaults) for mid-session re-opens.
 
+**Promise contract (2026-09 live-verify #5):** the two callers overlap constantly (BAIL re-attach starts first; the boot pass call is coalesced). The coalesced call must NOT return `Promise.resolve()` — an awaiting caller (`bootPlacementDone()` → the mode-switch reveal hold) would observe "settled" while the serial loop is still appending buttons (the second drawer's tabs popped in one by one). `reassignSecondaryTabsFromModel` runs a drain: overlapping calls queue a single trailing rerun and get a waiter that resolves only when run + rerun have finished; the queued call's opts are merged into the rerun (quiet `false` flags win; an explicit `activateKey` overrides), so the boot `activateKey` tail survives coalescing.
+
 ## 8. The re-assignment loop suppresses activation — display it yourself after
 
 The loop wraps placement in `setSuppressAutoActivation`, and `finalizeAssignToSecondary`'s `showSecondaryTabDisplay` is gated on `!deferActivation` — so the loop creates buttons and reparents roots but **never displays content**. A drawer populated with tabs but an empty content area until a click is the tell.

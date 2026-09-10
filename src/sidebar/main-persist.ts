@@ -78,8 +78,29 @@ const RESTORE_GUARD_STYLE_ID = 'sidebar-ux-main-restore-guard'
 // would resume stale host-truth reads (the live-verify #1 ping-pong class).
 // This class affects paint only — hold/release around the enable restore.
 const REVEAL_HOLD_CLASS = 'sidebar-ux-main-reveal-hold'
+// One-shot fade-in played when the hold lifts (2026-09): the settled drawers +
+// pinned secondary strip fade in instead of snapping. Class-based keyframe
+// animation, auto-removed after the animation window.
+const REVEAL_IN_CLASS = 'sidebar-ux-main-reveal-in'
+/** Fade-in duration (ms); keep in sync with the injected stylesheet. */
+const REVEAL_IN_MS = 180
 /** Nested hold count; 0 = no active reveal hold. */
 let _revealHolds = 0
+/** Auto-removal timer for REVEAL_IN_CLASS. */
+let _revealInTimer: ReturnType<typeof setTimeout> | null = null
+// Secondary placement gate (2026-09, live-verify #5 final): the boot placement
+// pass serializes secondary placements and can outlive the main restore reveal
+// (setup caps its wait at 1.5s). This VISUAL-ONLY class keeps the second
+// drawer + pinned strip hidden until the pass settles, so panel content never
+// paints before its tab buttons. Separate from the main reveal hold: the main
+// surface stays on its own schedule.
+const SECONDARY_PLACEMENT_HOLD_CLASS = 'sidebar-ux-secondary-placement-hold'
+// Secondary-only reveal fade for a LATE gate release (main already visible).
+const SECONDARY_REVEAL_IN_CLASS = 'sidebar-ux-secondary-reveal-in'
+/** Nested secondary placement holds; 0 = gate open. */
+let _secondaryPlacementHolds = 0
+/** Auto-removal timer for SECONDARY_REVEAL_IN_CLASS. */
+let _secondaryRevealTimer: ReturnType<typeof setTimeout> | null = null
 // Host tabBtnActive must hold for this many consecutive polls before we
 // consider chrome "host-ready". Mirror-only active must NOT count (Canvas
 // paints mirror highlight before React commits panel children).
@@ -128,7 +149,12 @@ function ensureRestoreGuardStyles(): void {
   // inline hide or data-canvas-restore-hide marker).
   el.textContent = `
     html.${RESTORE_PENDING_CLASS} [class*="_wrapper_"]:has([data-spindle-mount="sidebar"]),
-    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper {
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-main-mirror-wrapper,
+    /* Secondary shell too (live-verify #5): features mount during the guard
+     * window, so the second drawer's strip would otherwise be visible/populate
+     * while the main restore is still running. Revealed with the main by the
+     * same fade at unsuppress. */
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-secondary-wrapper {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
@@ -142,7 +168,8 @@ function ensureRestoreGuardStyles(): void {
       opacity: 0 !important;
       pointer-events: none !important;
     }
-    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"],
+    html.${RESTORE_PENDING_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
@@ -166,6 +193,44 @@ function ensureRestoreGuardStyles(): void {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
+    }
+    /* Pinned secondary strip lives on a body-level host OUTSIDE the wrapper
+     * (tab-position.ts) — without this rule the serial placement loop's
+     * button-by-button appends are visible during the hold (live-verify #5).
+     * The MAIN pin host is deliberately absent: its buttons are not rebuilt
+     * during the pass, and hiding it would blink working chrome. */
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* One-shot reveal fade after the hold lifts (live-verify #5): the settled
+     * drawers + pinned secondary strip fade in instead of snapping. The class
+     * is removed after the animation window (playRevealIn). */
+    html.${REVEAL_IN_CLASS} .sidebar-ux-main-mirror-wrapper,
+    html.${REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
+    }
+    @keyframes sidebar-ux-reveal-fade-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    /* Secondary placement gate (live-verify #5 final): the boot placement pass
+     * can outlive the main reveal (1.5s cap), so keep the second drawer + its
+     * pinned strip hidden until placements settle — panel content must never
+     * paint before its tab buttons. */
+    html.${SECONDARY_PLACEMENT_HOLD_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${SECONDARY_PLACEMENT_HOLD_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* Late gate release (main already visible): secondary-only fade with the
+     * shared keyframes, so the second drawer appears smoothly on its own. */
+    html.${SECONDARY_REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
+    html.${SECONDARY_REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+      animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
     }
   `
   document.head.appendChild(el)
@@ -315,11 +380,18 @@ export function unsuppressMainDrawer(): void {
     stampPanelBodyHide()
     return
   }
+  // Boot reveal: when this call actually lifts an active restore guard, fade
+  // the settled shells in instead of snapping (live-verify #5 polish). Only
+  // when the guard was active (no repeated fade on idempotent unsuppress) and
+  // never during teardown (_stopped) — stopMainDrawerPersistence clears the
+  // class first and the cleanup-chain unsuppress must not resurrect it.
+  const wasPending = isMainDrawerRestorePending()
   if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
   stopContentSettleWatch()
   stopPanelHideObserver()
   clearPanelBodyHide()
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS)
+  if (wasPending && !_stopped) playRevealIn()
 }
 
 /** True while restore-pending guard is active (main-mirror park consults this). */
@@ -375,8 +447,32 @@ export function holdMainDrawerReveal(): void {
 }
 
 /**
+ * Play the one-shot reveal fade (REVEAL_IN_CLASS) on the Canvas shells +
+ * pinned secondary strip. Called when the mid-session hold lifts; the class is
+ * removed after the animation window so it never lingers. No-op while the boot
+ * restore guard still owns visibility (the fade would run hidden).
+ */
+function playRevealIn(): void {
+  if (typeof document === 'undefined') return
+  try {
+    document.documentElement.classList.add(REVEAL_IN_CLASS)
+    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)`)
+    if (_revealInTimer) clearTimeout(_revealInTimer)
+    _revealInTimer = setTimeout(() => {
+      _revealInTimer = null
+      try {
+        document.documentElement.classList.remove(REVEAL_IN_CLASS)
+      } catch { /* teardown raced the timer */ }
+    }, REVEAL_IN_MS + 60)
+  } catch (err) {
+    dwarn(`main-persist: playRevealIn failed: ${err}`)
+  }
+}
+
+/**
  * Release a reveal hold; at zero the visual guard lifts (unless the boot
- * restore guard is still active, which owns its own teardown).
+ * restore guard is still active, which owns its own teardown) and the settled
+ * drawers play a quick fade-in.
  */
 export function releaseMainDrawerReveal(): void {
   if (_revealHolds === 0) return
@@ -389,9 +485,72 @@ export function releaseMainDrawerReveal(): void {
     if (!isMainDrawerRestorePending()) {
       stopPanelHideObserver()
       clearPanelBodyHide()
+      playRevealIn()
     }
   } catch (err) {
     dwarn(`main-persist: releaseMainDrawerReveal failed: ${err}`)
+  }
+}
+
+/** Secondary-only fade for a late placement-gate release (main already shown). */
+function playSecondaryRevealIn(): void {
+  if (typeof document === 'undefined') return
+  try {
+    document.documentElement.classList.add(SECONDARY_REVEAL_IN_CLASS)
+    dlog(`main-persist: secondary reveal fade-in ON (${REVEAL_IN_MS}ms)`)
+    if (_secondaryRevealTimer) clearTimeout(_secondaryRevealTimer)
+    _secondaryRevealTimer = setTimeout(() => {
+      _secondaryRevealTimer = null
+      try {
+        document.documentElement.classList.remove(SECONDARY_REVEAL_IN_CLASS)
+      } catch { /* teardown raced the timer */ }
+    }, REVEAL_IN_MS + 60)
+  } catch (err) {
+    dwarn(`main-persist: playSecondaryRevealIn failed: ${err}`)
+  }
+}
+
+/**
+ * Hold the secondary placement gate (refcounted, VISUAL-ONLY). The second
+ * drawer shell + pinned strip stay hidden until the boot placement pass has
+ * fully settled, so its serial button-by-button placement + active-root paint
+ * can never flash content before the strip. Used by `bootstrapFromLayout`'s
+ * pass; unlike the main reveal hold it never touches the main surface, so a
+ * slow pass cannot stall the main reveal (see releaseMainDrawerReveal).
+ */
+export function holdSecondaryPlacementReveal(): void {
+  if (typeof document === 'undefined') return
+  _secondaryPlacementHolds++
+  if (_secondaryPlacementHolds !== 1) return
+  try {
+    ensureRestoreGuardStyles()
+    document.documentElement.classList.add(SECONDARY_PLACEMENT_HOLD_CLASS)
+    dlog('main-persist: secondary placement gate ON')
+  } catch (err) {
+    dwarn(`main-persist: holdSecondaryPlacementReveal failed: ${err}`)
+  }
+}
+
+/**
+ * Release the secondary placement gate; at zero the second drawer is shown.
+ * While the boot restore guard or the main reveal hold still owns visibility
+ * the class is simply dropped (their reveal fades both drawers). When the main
+ * is already visible, play the secondary-only fade so a late finish still
+ * appears smoothly.
+ */
+export function releaseSecondaryPlacementReveal(): void {
+  if (_secondaryPlacementHolds === 0) return
+  _secondaryPlacementHolds--
+  if (_secondaryPlacementHolds > 0) return
+  if (typeof document === 'undefined') return
+  try {
+    document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS)
+    dlog('main-persist: secondary placement gate OFF')
+    if (!isMainDrawerRestorePending() && !isMainDrawerRevealHeld()) {
+      playSecondaryRevealIn()
+    }
+  } catch (err) {
+    dwarn(`main-persist: releaseSecondaryPlacementReveal failed: ${err}`)
   }
 }
 
@@ -648,9 +807,14 @@ async function restoreTab(
  * Never dispatches through main-mirror onMirrorClick — that path
  * toggle-closes when the drawer is already open on the same tab.
  * When taskbar mode / canvas-main is active, also set the Canvas active
- * key + open via activateMainMirrorFromRestore.
+ * key via activateMainMirrorFromRestore; `opts.open === false` suppresses
+ * the shell open (content re-assert only).
  */
-function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boolean): boolean {
+function clickRestoredPrimaryTab(
+  targetTabId: string | null,
+  preferMirror: boolean,
+  opts?: { open?: boolean },
+): boolean {
   if (!targetTabId) return false
   const sidebar = document.querySelector(
     '[data-spindle-mount="sidebar"]',
@@ -683,7 +847,7 @@ function clickRestoredPrimaryTab(targetTabId: string | null, preferMirror: boole
         tabBtn?.getAttribute('title') ||
         tabBtn?.getAttribute('aria-label') ||
         targetTabId
-      m.activateMainMirrorFromRestore(tabBtn, title)
+      m.activateMainMirrorFromRestore(tabBtn, title, opts)
     }).catch((err) => {
       dlog(`main-persist restore: activateMainMirrorFromRestore failed: ${err}`)
       // Fallback: host click only if available
@@ -914,7 +1078,13 @@ export function ensureRestoredPrimaryTab(targetTabId: string): void {
   // the host button can still carry tabBtnActive while ContainerTabContent
   // has not re-rendered into main-drawer yet. Re-click forces content settle.
   // S1: prefer the mirror path whenever the Canvas main shell is the surface.
-  clickRestoredPrimaryTab(targetTabId, isMainMirrorActive())
+  //
+  // `open: false` (live-verify): this is a CONTENT re-assert called by the
+  // boot placement pass (and its +500ms retry) — it must never touch the
+  // shell's open/close state. It previously ran after
+  // restoreMainDrawerFromDom had honored a persisted `primary.open: false`
+  // and reopened the drawer via onMainMirrorTabActivated.
+  clickRestoredPrimaryTab(targetTabId, isMainMirrorActive(), { open: false })
 }
 
 /**
@@ -992,6 +1162,12 @@ export function restoreMainDrawerFromDom(
       } else {
         m.closeCanvasMainDrawer()
         unsuppressMainDrawer()
+        // Re-assert the persisted closed state AFTER the guard lifts: during
+        // the restore window observe() reads host truth (default-open), and a
+        // boot host-sync can adopt open:true into the model/disk. observe()
+        // now reads shell truth (closed), so this write is drift-free and
+        // keeps "close → refresh → stays closed" durable.
+        m.persistCanvasMainOpenState()
       }
     })
     return
@@ -1088,10 +1264,18 @@ export function stopMainDrawerPersistence(): void {
   if (_classObserver) { _classObserver.disconnect(); _classObserver = null }
   cleanupDomPoll()
   // Drop any mid-session reveal hold + lift any in-flight restore guard so
-  // teardown does not leave the drawer permanently hidden/stamped.
+  // teardown does not leave the drawer permanently hidden/stamped. Also kill
+  // a pending reveal fade + the secondary placement gate so no stray class
+  // survives the unload.
   _revealHolds = 0
+  _secondaryPlacementHolds = 0
   if (typeof document !== 'undefined') {
     document.documentElement.classList.remove(REVEAL_HOLD_CLASS)
+    if (_revealInTimer) { clearTimeout(_revealInTimer); _revealInTimer = null }
+    document.documentElement.classList.remove(REVEAL_IN_CLASS)
+    document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS)
+    if (_secondaryRevealTimer) { clearTimeout(_secondaryRevealTimer); _secondaryRevealTimer = null }
+    document.documentElement.classList.remove(SECONDARY_REVEAL_IN_CLASS)
   }
   unsuppressMainDrawer()
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove()
