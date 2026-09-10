@@ -400,7 +400,7 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(stopConfigureTabsIntercept)
 
     // Tab-list drag-and-drop is settings-gated (dragAndDropDrawerTabs feature;
-    // requires taskbar mode). Mounted via FEATURES when enabled.
+    // toggle-only since S7). Mounted via FEATURES when enabled.
 
     // Weaver Studio content-lane containment is always on while Canvas is
     // loaded, independent of chatReflow setting. It constrains the weaver

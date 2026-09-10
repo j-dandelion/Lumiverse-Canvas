@@ -104,9 +104,6 @@ function normalizeCanvasSettingsFields(s) {
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
   }
-  if (out.dragAndDropDrawerTabs && !out.taskbarMode) {
-    out = { ...out, dragAndDropDrawerTabs: false };
-  }
   return out;
 }
 function mergeCanvasSettings(saved) {
@@ -3287,6 +3284,10 @@ function buildMirrorInnerHtml(twin, labeled, isSettings, fallbackTitle) {
     if (text) {
       parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
     }
+  }
+  const badge = twin?.querySelector('span[class*="tabBadge"]');
+  if (badge) {
+    parts.push(badge.outerHTML);
   }
   return parts.join("");
 }
@@ -13706,7 +13707,7 @@ function isHideDrawerOpenCloseButtonsEnabled(s3 = _settings) {
   return !!s3.hideDrawerOpenCloseButtons && isTaskbarModeEnabled(s3);
 }
 function isDragAndDropDrawerTabsEnabled(s3 = _settings) {
-  return !!s3.dragAndDropDrawerTabs && isTaskbarModeEnabled(s3);
+  return !!s3.dragAndDropDrawerTabs;
 }
 function hydrateSettings(raw) {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));
@@ -17772,12 +17773,11 @@ function buildSettingsPanelDOM() {
     disabled: !getSettings().taskbarMode
   });
   secSidebars.appendChild(hideDrawerTabToggleRow);
-  const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }), { disabled: () => !getSettings().taskbarMode });
+  const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }));
   const dragAndDropDrawerTabsRow = buildSettingRow({
     label: "Drag and drop drawer tabs",
-    hint: 'Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Requires "Taskbar mode". Desktop only (viewport wider than 600px); on mobile use Configure Tabs.',
-    control: dragAndDropDrawerTabs.btn,
-    disabled: !getSettings().taskbarMode
+    hint: "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.",
+    control: dragAndDropDrawerTabs.btn
   });
   secSidebars.appendChild(dragAndDropDrawerTabsRow);
   const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }));
@@ -17857,9 +17857,6 @@ function buildSettingsPanelDOM() {
       hideDrawerTabToggle.btn.disabled = d3;
       hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-      dragAndDropDrawerTabs.btn.disabled = d3;
-      dragAndDropDrawerTabs.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      dragAndDropDrawerTabsRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
     }
     for (const row of [compact]) {
       const d3 = !getSettings().secondSidebarEnabled;

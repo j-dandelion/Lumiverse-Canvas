@@ -40,9 +40,9 @@ assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults 
 assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
 assertEqual(settings.hideDrawerOpenCloseButtons, false, 'hideDrawerOpenCloseButtons defaults to false')
-// Default true in DEFAULT_CANVAS_SETTINGS, but normalize clears it when taskbar is off
-// (getSettings() after hydrate is normalized — taskbar default false → drag forced off).
-assertEqual(settings.dragAndDropDrawerTabs, false, 'dragAndDropDrawerTabs defaults to false after normalize (taskbar off)')
+// Default true in DEFAULT_CANVAS_SETTINGS and stays on after normalize
+// (S7 removed the taskbar cascade — the toggle is the only gate).
+assertEqual(settings.dragAndDropDrawerTabs, true, 'dragAndDropDrawerTabs defaults to true (S7 toggle-only gate)')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
@@ -247,9 +247,10 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when taskbar off')
 }
 
-// --- dragAndDropDrawerTabs requires taskbarMode ---
+// --- dragAndDropDrawerTabs: toggle-only gate (S7 — taskbar cascade removed) ---
 {
-  const cleared = normalizeCanvasSettings(
+  // Toggle on + taskbar OFF → kept by normalize AND effectively enabled.
+  const onTaskbarOff = normalizeCanvasSettings(
     mergeCanvasSettings({
       dragAndDropDrawerTabs: true,
       taskbarMode: false,
@@ -257,14 +258,14 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     }),
   )
   assertEqual(
-    cleared.dragAndDropDrawerTabs,
-    false,
-    'dragAndDrop cleared when taskbar mode is off',
+    onTaskbarOff.dragAndDropDrawerTabs,
+    true,
+    'dnd S7: drag kept when taskbar mode is off (cascade removed)',
   )
   assertEqual(
-    isDragAndDropDrawerTabsEnabled(cleared),
-    false,
-    'isDragAndDropDrawerTabsEnabled false when drag cleared',
+    isDragAndDropDrawerTabsEnabled(onTaskbarOff),
+    true,
+    'dnd S7: isDragAndDropDrawerTabsEnabled true with taskbar off (toggle-only gate)',
   )
 
   const both = normalizeCanvasSettings(
@@ -278,9 +279,24 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(
     isDragAndDropDrawerTabsEnabled(both),
     true,
-    'isDragAndDropDrawerTabsEnabled true when all three on',
+    'isDragAndDropDrawerTabsEnabled true when taskbar + outer-edge on',
   )
 
+  // Toggle off → disabled regardless of taskbar mode.
+  const offTaskbarOn = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      dragAndDropDrawerTabs: false,
+      taskbarMode: true,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(
+    isDragAndDropDrawerTabsEnabled(offTaskbarOn),
+    false,
+    'dnd S7: toggle off → disabled even with taskbar on',
+  )
+
+  // hide still cascades (unchanged) while drag no longer does.
   const cascade = normalizeCanvasSettings(
     mergeCanvasSettings({
       dragAndDropDrawerTabs: true,
@@ -289,24 +305,24 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
       moveControlsToOuterEdge: false,
     }),
   )
-  assertEqual(cascade.taskbarMode, true, 'dnd cascade: taskbar kept (S1 — no clearing)')
-  assertEqual(cascade.dragAndDropDrawerTabs, true, 'dnd cascade: drag kept (taskbar still on)')
-  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'dnd cascade: hide kept (taskbar still on)')
+  assertEqual(cascade.taskbarMode, true, 'dnd cascade: taskbar kept (S1 — outer-edge off does not clear)')
+  assertEqual(cascade.dragAndDropDrawerTabs, true, 'dnd cascade: drag kept (S7 — no clearing)')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'dnd cascade: hide kept (taskbar on)')
   assertEqual(
     isDragAndDropDrawerTabsEnabled(cascade),
-    false,
-    'dnd cascade: isDragAndDropDrawerTabsEnabled false (effective gate)',
+    true,
+    'dnd cascade: isDragAndDropDrawerTabsEnabled true (S7 — outer-edge off no longer disables)',
   )
 
-  // Raw default true survives merge before normalize when taskbar on
+  // Raw default true survives merge before normalize with taskbar off too.
   const rawDefault = mergeCanvasSettings({
-    taskbarMode: true,
+    taskbarMode: false,
     moveControlsToOuterEdge: true,
   })
   assertEqual(
     rawDefault.dragAndDropDrawerTabs,
     true,
-    'merge default dragAndDropDrawerTabs true when taskbar on',
+    'merge default dragAndDropDrawerTabs true with taskbar off (S7)',
   )
 }
 

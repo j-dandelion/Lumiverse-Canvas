@@ -303,13 +303,11 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   const dragAndDropDrawerTabs = makeToggle(
     () => getSettings().dragAndDropDrawerTabs,
     (v) => setSettings({ dragAndDropDrawerTabs: v }),
-    { disabled: () => !getSettings().taskbarMode },
   )
   const dragAndDropDrawerTabsRow = buildSettingRow({
     label: 'Drag and drop drawer tabs',
-    hint: 'Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Requires "Taskbar mode". Desktop only (viewport wider than 600px); on mobile use Configure Tabs.',
+    hint: 'Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.',
     control: dragAndDropDrawerTabs.btn,
-    disabled: !getSettings().taskbarMode,
   })
   secSidebars.appendChild(dragAndDropDrawerTabsRow)
 
@@ -425,15 +423,13 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       taskbarMode.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       taskbarModeRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
-    // hideDrawerOpenCloseButtons + dragAndDropDrawerTabs require taskbarMode.
+    // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs
+    // no longer does — toggle-only gate, see isDragAndDropDrawerTabsEnabled).
     {
       const d = !getSettings().taskbarMode
       hideDrawerTabToggle.btn.disabled = d
       hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
-      dragAndDropDrawerTabs.btn.disabled = d
-      dragAndDropDrawerTabs.btn.style.cursor = d ? 'not-allowed' : 'pointer'
-      dragAndDropDrawerTabsRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
     }
     // compact gated by second-drawer master toggle (resizeSidebars is always-on).
     for (const row of [compact]) {

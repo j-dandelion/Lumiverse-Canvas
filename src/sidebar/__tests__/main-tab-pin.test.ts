@@ -187,6 +187,13 @@ class StubElement {
         if (nested) return nested
       }
     }
+    if (sel.includes('tabBadge')) {
+      for (const c of this.children) {
+        if (c.className.includes('tabBadge')) return c
+        const nested = c.querySelector(sel)
+        if (nested) return nested
+      }
+    }
     if (sel === 'svg') {
       for (const c of this.children) {
         if (c.tagName === 'SVG' || c.tagName === 'svg') return c
@@ -345,7 +352,11 @@ Object.defineProperty(StubElement.prototype, 'outerHTML', {
     if (this.tagName === 'svg' || this.tagName === 'SVG') {
       return `<svg data-stub="${this.getAttribute('data-icon') || ''}"></svg>`
     }
-    return `<${this.tagName}></${this.tagName}>`
+    // B1 (S7): serialize class + textContent so badge clones are
+    // distinguishable in mirror innerHTML assertions.
+    const cls = this.className ? ` class="${this.className}"` : ''
+    const text = (this as any)._text ?? ''
+    return `<${this.tagName}${cls}>${text}</${this.tagName}>`
   },
   configurable: true,
 })
@@ -569,6 +580,7 @@ import {
   MAIN_MIRROR_BTN_CLASS,
   MAIN_MIRROR_LIST_MAIN_CLASS,
   MAIN_MIRROR_LIST_BOTTOM_CLASS,
+  renderMainMirrorTabs,
 } from '../main-renderer'
 import {
   bootstrap,
@@ -1267,6 +1279,49 @@ function reset(): void {
   assertEqual(settingsMirror.style.height, '48px', 'M18: Settings stays icon-only height')
   assert(!String(settingsMirror.innerHTML || '').includes('sidebar-ux-tab-label'), 'M18: Settings has no label span')
   assertEqual(settingsMirror.getAttribute('title'), 'Settings', 'M18: tooltip title preserved')
+
+  clearHostSettingsCache()
+}
+
+// B1/B2 (S7): extension tab badge (host dt.badge → span.tabBadge) is copied
+// into the mirror button HTML after the label, and twin badge changes are
+// picked up by the next render (data-mirror-html cache invalidates).
+{
+  reset()
+  clearHostSettingsCache()
+  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
+  const profile = makeHostBtn('profile', 'Profile', true)
+  const badge = new StubElement()
+  badge.tagName = 'SPAN'
+  badge.className = 'tabBadge_xyz'
+  badge.classList.add('tabBadge_xyz')
+  ;(badge as any).textContent = '3'
+  profile.appendChild(badge)
+  mainSidebar.appendChild(profile)
+  await bootMirror({ primary: [PROFILE] })
+
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrorFor = () =>
+    collectMirrorButtons(list).find(
+      (m) => m.getAttribute('data-mirror-key') === PROFILE,
+    )!
+  const html = String(mirrorFor().innerHTML || '')
+  assert(html.includes('tabBadge'), 'B1: badge span copied into mirror HTML')
+  assert(html.includes('>3<'), 'B1: badge text carried over')
+  assert(
+    html.indexOf('sidebar-ux-tab-label') !== -1 &&
+      html.indexOf('tabBadge') > html.indexOf('sidebar-ux-tab-label'),
+    'B1: badge after label (host DOM order)',
+  )
+
+  // B2: change the twin badge text → next render shows the new badge
+  // (production trigger: sidebar observer → scheduleReconcile → render;
+  // direct call exercises the render + data-mirror-html cache logic).
+  ;(badge as any).textContent = '7'
+  renderMainMirrorTabs()
+  const html2 = String(mirrorFor().innerHTML || '')
+  assert(html2.includes('>7<'), 'B2: updated badge text on re-render')
 
   clearHostSettingsCache()
 }

@@ -483,8 +483,9 @@ const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
 }
 
 /** Long-press drag-and-drop reorder/move on drawer tab buttons.
- *  Requires taskbar mode (normalize cascade + isDragAndDropDrawerTabsEnabled).
- *  Primary surface is main-mirror; commit still reorders host React buttons. */
+ *  Taskbar-agnostic (S7: toggle-only gate — the main shell is always mounted,
+ *  so main-mirror is always the primary surface; ≤600px is a no-op).
+ *  Commit still reorders host React buttons. */
 const dragAndDropDrawerTabsFeature: CanvasFeature = {
   id: 'dragAndDropDrawerTabs',
   mount() {

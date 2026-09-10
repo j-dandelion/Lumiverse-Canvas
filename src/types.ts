@@ -77,8 +77,9 @@ export interface CanvasSettings {
 
   /** Drag-and-drop to reorder drawer tabs within a list or move them
    *  between primary and secondary. Mouse: distance-based lift (~6px);
-   *  touch/pen: long-press. Requires `taskbarMode` (primary surface is
-   *  the Canvas main-mirror strip). Desktop only (≤600px no-op). Default on. */
+   *  touch/pen: long-press. Taskbar-agnostic (S7: the Canvas main shell is
+   *  always mounted, so the mirror strip is always the primary surface).
+   *  Desktop only (≤600px no-op). Default on. */
   dragAndDropDrawerTabs?: boolean
 
   /** Show box-shadow on drawers at min-width: 601px (desktop). */
@@ -173,11 +174,12 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  * choice when outer-edge was off — dropped so the setting survives.
  * Idempotent — safe to call after already-normalized settings.
  *
- * hideDrawerOpenCloseButtons and dragAndDropDrawerTabs still require
- * taskbarMode (hide: the edge button is the only reopen affordance without
- * a pin strip; drag: primary surface is the main-mirror strip). They stay
- * inert (settings kept) while taskbarMode is on but the effective pin gate
- * is off — no data loss when outer-edge comes back.
+ * S7: drag-and-drop is taskbar-agnostic (the main shell is always mounted
+ * since S1, so the mirror strip is always the primary mid-drag surface; the
+ * old gate's reason is obsolete). Only hideDrawerOpenCloseButtons still
+ * requires taskbarMode (the edge button is the only reopen affordance
+ * without a pin strip). Idempotent — safe to call after already-normalized
+ * settings.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
@@ -187,10 +189,8 @@ export function normalizeCanvasSettingsFields(
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false }
   }
-  // Cascade 3: drag-and-drop drawer tabs requires taskbar mode
-  if (out.dragAndDropDrawerTabs && !out.taskbarMode) {
-    out = { ...out, dragAndDropDrawerTabs: false }
-  }
+  // Cascade 3 (drag requires taskbar mode) REMOVED in S7 — the toggle is
+  // the only gate; see isDragAndDropDrawerTabsEnabled.
   return out
 }
 
@@ -200,8 +200,8 @@ export function normalizeCanvasSettingsFields(
  * reading `layout.settings` directly, so new fields added in future versions
  * gracefully appear at their default value.
  *
- * Always returns a normalized full settings object (hide/dnd taskbarMode
- * invariants enforced here so future callers cannot skip them).
+ * Always returns a normalized full settings object (the hide-opens taskbarMode
+ * invariant is enforced here so future callers cannot skip it).
  */
 export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): Required<CanvasSettings> {
   const out = { ...DEFAULT_CANVAS_SETTINGS }

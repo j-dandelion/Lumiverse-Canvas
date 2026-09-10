@@ -100,7 +100,10 @@ export function isHideDrawerOpenCloseButtonsEnabled(
 export function isDragAndDropDrawerTabsEnabled(
   s: FullCanvasSettings = _settings,
 ): boolean {
-  return !!s.dragAndDropDrawerTabs && isTaskbarModeEnabled(s)
+  // S7: taskbar-agnostic — the Canvas main shell is always mounted (S1), so
+  // the mirror strip is always the primary mid-drag surface; mobile is a
+  // no-op inside tab-list-dnd (≤600px). The toggle is the only gate.
+  return !!s.dragAndDropDrawerTabs
 }
 
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {

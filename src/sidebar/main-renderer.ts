@@ -283,6 +283,19 @@ function buildMirrorInnerHtml(twin: HTMLElement | null, labeled: boolean, isSett
       )
     }
   }
+  // S7: extension tab badge (host `dt.badge` → span.tabBadge in
+  // ViewportDrawer.tsx). Copied AFTER the label to match host DOM order; the
+  // CSS-module class is document-global so the clone styles identically
+  // inside the mirror. Freshness is observer-driven — twin badge mutations
+  // hit the sidebar observer (childList+subtree) → scheduleReconcile →
+  // re-render, and the data-mirror-html cache rewrites only on change.
+  // NEVER copy the data-spindle-mount span — the loader's document-first
+  // match would re-portal the extension mount into the mirror (§7 veto:
+  // don't steal drawer_tab mounts).
+  const badge = twin?.querySelector('span[class*="tabBadge"]') as HTMLElement | null
+  if (badge) {
+    parts.push(badge.outerHTML)
+  }
   return parts.join('')
 }
 

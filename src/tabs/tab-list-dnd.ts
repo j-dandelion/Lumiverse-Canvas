@@ -23,8 +23,9 @@
 // every pointermove (cheap compositor work). Hit-test, DOM reorder, and
 // FLIP animation are coalesced via requestAnimationFrame.
 //
-// Requires taskbar mode (settings-gated): primary mid-drag surface is
-// main-mirror only. Reorderable lists get mid-drag FLIP: secondary
+// Taskbar-agnostic (S7: toggle-only gate — the Canvas main shell is always
+// mounted, so main-mirror is always the primary mid-drag surface).
+// Reorderable lists get mid-drag FLIP: secondary
 // .sidebar-ux-tab-list and main-mirror .sidebar-ux-tab-list-main. Commit
 // uses visible-index helpers so hidden tabs do not make primary reorder a
 // no-op; hit-test + mid-drag also skip display:none so settle DOM matches
@@ -385,7 +386,7 @@ function getButtonTabId(btn: HTMLElement): string | null {
 
 /**
  * True when the container is eligible for mid-drag FLIP reorder.
- * Secondary list + mirror main/bottom sections only (taskbar mode required).
+ * Secondary list + mirror main/bottom sections only.
  */
 function isReorderableContainer(el: HTMLElement): boolean {
   if (el.classList.contains(MIRROR_MAIN_CLASS)) return true
@@ -421,8 +422,8 @@ function getReorderParent(btn: HTMLElement): HTMLElement | null {
  * Collect all potential drop containers and their side.
  * Mirror uses main/bottom *sections* (where buttons actually live) so
  * hit-test and insertBefore stay within the correct flex column.
- * Host React `.tabList` is not a mid-drag surface (taskbar mode required;
- * commit still reorders host buttons through the owned model).
+ * Host React `.tabList` is not a mid-drag surface (commit reorders host
+ * buttons through the owned model).
  */
 function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
   const containers: { el: HTMLElement; secondary: boolean }[] = []
@@ -433,7 +434,7 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
     if (secList) containers.push({ el: secList, secondary: true })
   }
 
-  // 2. Main-mirror primary strip (Canvas-owned under taskbar mode).
+  // 2. Main-mirror primary strip (Canvas-owned, always mounted on desktop).
   //    Settings bottom dock is not a drop target — host chrome stays pinned.
   const mirrorList = document.querySelector(
     `.${MIRROR_LIST_CLASS}`,
