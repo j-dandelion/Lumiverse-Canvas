@@ -438,9 +438,11 @@ function injectHostHideStyles(): void {
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
      *
-     * Skip visibility/opacity force while html.sidebar-ux-main-restore-pending
-     * (see main-persist restore guard). Otherwise visibility:visible !important
-     * paints profile content through a parent with visibility:hidden.
+     * Skip visibility/opacity force while a main-persist visual guard is up:
+     * html.sidebar-ux-main-restore-pending (boot restore) or
+     * html.sidebar-ux-main-reveal-hold (mid-session mode-switch reveal).
+     * Otherwise visibility:visible !important paints profile content through
+     * a parent with visibility:hidden.
      */
     .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       flex: 1 1 auto;
@@ -456,7 +458,7 @@ function injectHostHideStyles(): void {
       right: auto !important;
       bottom: auto !important;
     }
-    html:not(.sidebar-ux-main-restore-pending)
+    html:not(.sidebar-ux-main-restore-pending):not(.sidebar-ux-main-reveal-hold)
       .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       visibility: visible !important;
       pointer-events: auto !important;
@@ -701,8 +703,9 @@ function ensureHostContentParked(): void {
       _contentRestoreNext = hostContent.nextSibling
     }
     // Clear any leftover fixed-overlay styles from earlier approaches.
-    // During restore-pending, do NOT clear visibility/opacity — main-persist
-    // stamps those so the profile body never paints mid-tab-switch.
+    // During a visual guard (boot restore-pending / mid-session reveal hold),
+    // do NOT clear visibility/opacity — main-persist stamps those so the
+    // profile body never paints mid-tab-switch.
     const s = hostContent.style
     for (const prop of [
       'top', 'left', 'right', 'bottom', 'width', 'height',
@@ -711,7 +714,11 @@ function ensureHostContentParked(): void {
     ]) {
       s.removeProperty(prop)
     }
-    if (!restorePending) {
+    const visualGuard =
+      restorePending
+      || (typeof document !== 'undefined'
+        && document.documentElement.classList.contains('sidebar-ux-main-reveal-hold'))
+    if (!visualGuard) {
       for (const prop of ['visibility', 'opacity', 'pointer-events']) {
         s.removeProperty(prop)
       }

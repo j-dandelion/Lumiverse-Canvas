@@ -45,7 +45,7 @@
 
 import { getMainDrawer } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
-import { dlog } from '../debug/log'
+import { dlog, dwarn } from '../debug/log'
 import { isPointerResizeActive } from '../resize/handles'
 import { enforceExclusionOnOpen, isHostMobileDrawerViewport, isMobileViewport, setMobileOpenClass } from './mobile-exclusion'
 import { waitForDrawerDOM, cleanupDomPoll } from './persist-polling'
@@ -70,6 +70,16 @@ const RESTORE_TAB_CLICK_MS = 0
 // until primary open/tab restore finishes (prevents profile flash).
 const RESTORE_PENDING_CLASS = 'sidebar-ux-main-restore-pending'
 const RESTORE_GUARD_STYLE_ID = 'sidebar-ux-main-restore-guard'
+// Mid-session mode-switch reveal hold (2026-09 live-verify #4): a VISUAL-ONLY
+// class that hides both Canvas drawer shells + every main panel body while the
+// runtime enable placement pass pre-activates host tabs. Deliberately separate
+// from RESTORE_PENDING_CLASS: isMainDrawerRestorePending() gates observe()
+// shell truth + setDrawer echo suppression (S1/S5), so flipping it mid-session
+// would resume stale host-truth reads (the live-verify #1 ping-pong class).
+// This class affects paint only — hold/release around the enable restore.
+const REVEAL_HOLD_CLASS = 'sidebar-ux-main-reveal-hold'
+/** Nested hold count; 0 = no active reveal hold. */
+let _revealHolds = 0
 // Host tabBtnActive must hold for this many consecutive polls before we
 // consider chrome "host-ready". Mirror-only active must NOT count (Canvas
 // paints mirror highlight before React commits panel children).
@@ -137,6 +147,26 @@ function ensureRestoreGuardStyles(): void {
       opacity: 0 !important;
       pointer-events: none !important;
     }
+    /* Mid-session mode-switch reveal hold (visual-only): hide BOTH Canvas
+     * shells + every panel body while the enable placement pass churns host
+     * tabs, so the drawers reveal once, settled. Same inline-stamp backup as
+     * the restore guard (React can remount panel bodies). */
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    html.${REVEAL_HOLD_CLASS} [class*="_panelContent_"],
+    html.${REVEAL_HOLD_CLASS} [data-canvas-main-panel-content],
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper .sidebar-ux-panel-content,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper .sidebar-ux-panel-content > * {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
   `
   document.head.appendChild(el)
 }
@@ -171,7 +201,7 @@ const PANEL_BODY_HIDE_SELECTOR =
  */
 export function stampPanelBodyHide(): void {
   if (typeof document === 'undefined') return
-  if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+  if (!isMainDrawerVisualGuardActive()) return
   const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR)
   for (const node of Array.from(nodes)) {
     const el = node as HTMLElement
@@ -204,7 +234,7 @@ function startPanelHideObserver(): void {
   if (typeof document === 'undefined' || _panelHideObserver) return
   stampPanelBodyHide()
   _panelHideObserver = new MutationObserver((mutations) => {
-    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+    if (!isMainDrawerVisualGuardActive()) return
     let needs = false
     for (const m of mutations) {
       if (m.type === 'childList') {
@@ -274,8 +304,17 @@ export function suppressMainDrawer(): void {
 
 /**
  * Restore visibility after restore is done. Safe to call multiple times; idempotent.
+ *
+ * While a mid-session reveal hold is active the request is deferred: the hold
+ * owns visibility until releaseMainDrawerReveal(). Without this, the restore
+ * path's own unsuppress (restoreTab tail) would lift the guard while the
+ * enable placement pass is still churning host tabs.
  */
 export function unsuppressMainDrawer(): void {
+  if (_revealHolds > 0) {
+    stampPanelBodyHide()
+    return
+  }
   if (_unsuppressTimer) { clearTimeout(_unsuppressTimer); _unsuppressTimer = null }
   stopContentSettleWatch()
   stopPanelHideObserver()
@@ -287,6 +326,73 @@ export function unsuppressMainDrawer(): void {
 export function isMainDrawerRestorePending(): boolean {
   return typeof document !== 'undefined'
     && document.documentElement.classList.contains(RESTORE_PENDING_CLASS)
+}
+
+/** True while the mid-session reveal hold is active (visual-only). */
+export function isMainDrawerRevealHeld(): boolean {
+  return _revealHolds > 0
+}
+
+/**
+ * True while ANY main-drawer visual guard wants panel bodies hidden: the boot
+ * restore guard OR the mid-session reveal hold. Drives stampPanelBodyHide, the
+ * panel-hide observer, and the content-settle watch.
+ */
+export function isMainDrawerVisualGuardActive(): boolean {
+  if (typeof document === 'undefined') return false
+  try {
+    const cl = document.documentElement.classList
+    return cl.contains(RESTORE_PENDING_CLASS) || cl.contains(REVEAL_HOLD_CLASS)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Begin a mid-session reveal hold (refcounted, VISUAL-ONLY). While held, both
+ * Canvas drawer shells + every main panel body are hidden and unsuppress
+ * requests are deferred, so a mode-switch restore can churn host tabs (the
+ * placement pass pre-activates each secondary builtin) invisibly and reveal
+ * once when released.
+ *
+ * Deliberately does NOT add RESTORE_PENDING_CLASS: isMainDrawerRestorePending()
+ * gates observe() shell truth + setDrawer echo suppression — flipping that
+ * mid-session would resume stale host-truth reads (live-verify #1 class).
+ */
+export function holdMainDrawerReveal(): void {
+  if (typeof document === 'undefined') return
+  _revealHolds++
+  if (_revealHolds !== 1) return
+  try {
+    ensureRestoreGuardStyles()
+    document.documentElement.classList.add(REVEAL_HOLD_CLASS)
+    startPanelHideObserver()
+    stampPanelBodyHide()
+    dlog('main-persist: reveal hold ON (mode switch)')
+  } catch (err) {
+    dwarn(`main-persist: holdMainDrawerReveal failed: ${err}`)
+  }
+}
+
+/**
+ * Release a reveal hold; at zero the visual guard lifts (unless the boot
+ * restore guard is still active, which owns its own teardown).
+ */
+export function releaseMainDrawerReveal(): void {
+  if (_revealHolds === 0) return
+  _revealHolds--
+  if (_revealHolds > 0) return
+  if (typeof document === 'undefined') return
+  try {
+    document.documentElement.classList.remove(REVEAL_HOLD_CLASS)
+    dlog('main-persist: reveal hold OFF (mode switch)')
+    if (!isMainDrawerRestorePending()) {
+      stopPanelHideObserver()
+      clearPanelBodyHide()
+    }
+  } catch (err) {
+    dwarn(`main-persist: releaseMainDrawerReveal failed: ${err}`)
+  }
 }
 
 /**
@@ -389,7 +495,7 @@ function startContentSettleWatch(
 
   let sawMutation = false
   _contentSettleObserver = new MutationObserver(() => {
-    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS)) return
+    if (!isMainDrawerVisualGuardActive()) return
     sawMutation = true
     if (_contentQuietTimer != null) clearTimeout(_contentQuietTimer)
     if (_contentFallbackTimer != null) {
@@ -437,6 +543,16 @@ function waitForSettle(timeout: number): Promise<void> {
     // Hard timeout (fail-forward)
     hardTimer = setTimeout(() => settle(), Math.max(0, timeout))
   })
+}
+
+/**
+ * Await main panel-body content quiescence (public wrapper over the private
+ * content-settle watcher). Used by the mode-switch reveal hold: the placement
+ * pass re-asserts the persisted primary, so wait for the React commit before
+ * releasing the hold — the reveal must never show a stale panel.
+ */
+export function waitForMainContentSettled(timeoutMs = 1000): Promise<void> {
+  return waitForSettle(timeoutMs)
 }
 
 /**
@@ -971,8 +1087,12 @@ export function stopMainDrawerPersistence(): void {
   _stopped = true
   if (_classObserver) { _classObserver.disconnect(); _classObserver = null }
   cleanupDomPoll()
-  // Lift any in-flight restore guard so teardown does not leave the
-  // drawer permanently hidden.
+  // Drop any mid-session reveal hold + lift any in-flight restore guard so
+  // teardown does not leave the drawer permanently hidden/stamped.
+  _revealHolds = 0
+  if (typeof document !== 'undefined') {
+    document.documentElement.classList.remove(REVEAL_HOLD_CLASS)
+  }
   unsuppressMainDrawer()
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove()
   _wrapper = null

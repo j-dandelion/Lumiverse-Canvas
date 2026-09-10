@@ -561,60 +561,80 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       seedDualLayoutFromLive()
     }
 
-    setSettings({ secondSidebarEnabled: true })
-
-    // Restore dual assignments. The persisted dualLayout slot is the
-    // freshest saved dual layout (written by finishDisable + by the owned
-    // model's persist path while dual is active, and hydrated back at boot).
-    // The lastLoaded and session-profile fallbacks are retired — the slot
-    // is the only mode state (REFACTOR-PLAN v2 §4.6).
-    //
-    // After a first-enable seed, the dual slot is empty and lastLoaded has
-    // detachedTabs: [], so no restore branch runs — the secondary stays
-    // empty/closed.
-    //
-    // Cancel debounced saves first so the post-setSettings write does not
-    // clobber disk with pre-restore live empty tabs.
-    cancelSettingsSave()
-    cancelLayoutSave()
-    const host = getHost()
-    const dualSlot = getDualLayoutSlot()
-    const restoreSource = [dualSlot]
-      .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
-    if (restoreSource && host) {
-      dlog('[second-drawer-mode] owned-model restore for re-enable:', {
-        tabs: (restoreSource.detachedTabs as unknown[]).length,
-        source: 'dual-slot',
-      })
-      const result = await restoreSingleModeLayout(restoreSource, host)
-      if (!result.ok) {
-        dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? 'unknown'}`)
-      }
-    }
-
-    // Re-arm the debounced settings save. setSettings above armed it, but the
-    // cancelSettingsSave() right after (to keep the mid-restore empty layout
-    // out of the snapshot) killed that timer — and layout saves never write
-    // settings. Without this re-arm, an enable would only live in memory and
-    // revert on the next hard refresh. The restore is awaited above, so the
-    // 100ms-debounced fire now snapshots the post-restore live state.
-    persistSettings()
-
-    // The restore above queues the boot PLACEMENT pass (secondary tab
-    // placements + host moves + primary re-assert), which runs OUTSIDE the
-    // dispatch queue. Awaiting flush() alone does not wait for it — the
-    // still-open Configure modal used to be refreshed from a mid-placement
-    // state (primary column stale, restored tabs invisible in the secondary
-    // column) until it was closed and reopened (live-verify #3). Wait for
-    // the pass to settle (capped), plus any intents it scheduled, THEN
-    // refresh the modal.
+    // ── Atomic mode-switch reveal (2026-09 live-verify #4) ──
+    // The restore below queues the boot PLACEMENT pass, which pre-activates
+    // each secondary built-in in the host main drawer (lazy panel-data load).
+    // With the main mirror already visible, every activation paints that
+    // panel into the parked node for a frame or two — enabling the drawer
+    // showed the panels flashing one by one. Hold a VISUAL-ONLY guard across
+    // mount + placement + content settle, then release once so both drawers
+    // appear settled. NOT the restore-pending class: its gate controls
+    // observe() shell truth / setDrawer suppression (S1/S5) and must stay
+    // off mid-session.
+    const persistMod = await import('../sidebar/main-persist')
+    persistMod.holdMainDrawerReveal()
     try {
-      await Promise.race([
-        bootPlacementDone(),
-        new Promise((r) => setTimeout(r, 5000)),
-      ])
-      await flush()
-    } catch { /* best-effort */ }
+      setSettings({ secondSidebarEnabled: true })
+
+      // Restore dual assignments. The persisted dualLayout slot is the
+      // freshest saved dual layout (written by finishDisable + by the owned
+      // model's persist path while dual is active, and hydrated back at boot).
+      // The lastLoaded and session-profile fallbacks are retired — the slot
+      // is the only mode state (REFACTOR-PLAN v2 §4.6).
+      //
+      // After a first-enable seed, the dual slot is empty and lastLoaded has
+      // detachedTabs: [], so no restore branch runs — the secondary stays
+      // empty/closed.
+      //
+      // Cancel debounced saves first so the post-setSettings write does not
+      // clobber disk with pre-restore live empty tabs.
+      cancelSettingsSave()
+      cancelLayoutSave()
+      const host = getHost()
+      const dualSlot = getDualLayoutSlot()
+      const restoreSource = [dualSlot]
+        .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
+      if (restoreSource && host) {
+        dlog('[second-drawer-mode] owned-model restore for re-enable:', {
+          tabs: (restoreSource.detachedTabs as unknown[]).length,
+          source: 'dual-slot',
+        })
+        const result = await restoreSingleModeLayout(restoreSource, host)
+        if (!result.ok) {
+          dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? 'unknown'}`)
+        }
+      }
+
+      // Re-arm the debounced settings save. setSettings above armed it, but the
+      // cancelSettingsSave() right after (to keep the mid-restore empty layout
+      // out of the snapshot) killed that timer — and layout saves never write
+      // settings. Without this re-arm, an enable would only live in memory and
+      // revert on the next hard refresh. The restore is awaited above, so the
+      // 100ms-debounced fire now snapshots the post-restore live state.
+      persistSettings()
+
+      // The restore above queues the boot PLACEMENT pass (secondary tab
+      // placements + host moves + primary re-assert), which runs OUTSIDE the
+      // dispatch queue. Awaiting flush() alone does not wait for it — the
+      // still-open Configure modal used to be refreshed from a mid-placement
+      // state (primary column stale, restored tabs invisible in the secondary
+      // column) until it was closed and reopened (live-verify #3). Wait for
+      // the pass to settle (capped), plus any intents it scheduled, THEN
+      // refresh the modal.
+      try {
+        await Promise.race([
+          bootPlacementDone(),
+          new Promise((r) => setTimeout(r, 5000)),
+        ])
+        await flush()
+        // The pass re-asserts the persisted primary and re-parks its content
+        // node; wait for the React commit so the reveal below never shows a
+        // stale panel for a frame.
+        await persistMod.waitForMainContentSettled(1000)
+      } catch { /* best-effort */ }
+    } finally {
+      persistMod.releaseMainDrawerReveal()
+    }
 
     // If the Configure Tabs modal is still open, refresh its draft from
     // the now-enabled live state so it reflects the re-enabled layout.

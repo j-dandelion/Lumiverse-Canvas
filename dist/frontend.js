@@ -7277,30 +7277,37 @@ async function requestSecondDrawerMode(next) {
       dlog("[second-drawer-mode] first enable — seeding dual layout from live");
       seedDualLayoutFromLive();
     }
-    setSettings({ secondSidebarEnabled: true });
-    cancelSettingsSave();
-    cancelLayoutSave();
-    const host = getHost();
-    const dualSlot = getDualLayoutSlot();
-    const restoreSource = [dualSlot].find((l3) => l3 && Array.isArray(l3.detachedTabs) && l3.detachedTabs.length > 0);
-    if (restoreSource && host) {
-      dlog("[second-drawer-mode] owned-model restore for re-enable:", {
-        tabs: restoreSource.detachedTabs.length,
-        source: "dual-slot"
-      });
-      const result = await restoreSingleModeLayout(restoreSource, host);
-      if (!result.ok) {
-        dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? "unknown"}`);
-      }
-    }
-    persistSettings();
+    const persistMod = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
+    persistMod.holdMainDrawerReveal();
     try {
-      await Promise.race([
-        bootPlacementDone(),
-        new Promise((r3) => setTimeout(r3, 5000))
-      ]);
-      await flush();
-    } catch {}
+      setSettings({ secondSidebarEnabled: true });
+      cancelSettingsSave();
+      cancelLayoutSave();
+      const host = getHost();
+      const dualSlot = getDualLayoutSlot();
+      const restoreSource = [dualSlot].find((l3) => l3 && Array.isArray(l3.detachedTabs) && l3.detachedTabs.length > 0);
+      if (restoreSource && host) {
+        dlog("[second-drawer-mode] owned-model restore for re-enable:", {
+          tabs: restoreSource.detachedTabs.length,
+          source: "dual-slot"
+        });
+        const result = await restoreSingleModeLayout(restoreSource, host);
+        if (!result.ok) {
+          dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? "unknown"}`);
+        }
+      }
+      persistSettings();
+      try {
+        await Promise.race([
+          bootPlacementDone(),
+          new Promise((r3) => setTimeout(r3, 5000))
+        ]);
+        await flush();
+        await persistMod.waitForMainContentSettled(1000);
+      } catch {}
+    } finally {
+      persistMod.releaseMainDrawerReveal();
+    }
     try {
       const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
       if (m3.isConfigureTabsModalOpen()) {
@@ -10605,9 +10612,11 @@ function injectHostHideStyles() {
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
      *
-     * Skip visibility/opacity force while html.sidebar-ux-main-restore-pending
-     * (see main-persist restore guard). Otherwise visibility:visible !important
-     * paints profile content through a parent with visibility:hidden.
+     * Skip visibility/opacity force while a main-persist visual guard is up:
+     * html.sidebar-ux-main-restore-pending (boot restore) or
+     * html.sidebar-ux-main-reveal-hold (mid-session mode-switch reveal).
+     * Otherwise visibility:visible !important paints profile content through
+     * a parent with visibility:hidden.
      */
     .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       flex: 1 1 auto;
@@ -10623,7 +10632,7 @@ function injectHostHideStyles() {
       right: auto !important;
       bottom: auto !important;
     }
-    html:not(.sidebar-ux-main-restore-pending)
+    html:not(.sidebar-ux-main-restore-pending):not(.sidebar-ux-main-reveal-hold)
       .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > [${CONTENT_MARK_ATTR}] {
       visibility: visible !important;
       pointer-events: auto !important;
@@ -10811,7 +10820,8 @@ function ensureHostContentParked() {
     ]) {
       s3.removeProperty(prop);
     }
-    if (!restorePending) {
+    const visualGuard = restorePending || typeof document !== "undefined" && document.documentElement.classList.contains("sidebar-ux-main-reveal-hold");
+    if (!visualGuard) {
       for (const prop of ["visibility", "opacity", "pointer-events"]) {
         s3.removeProperty(prop);
       }
@@ -11376,15 +11386,20 @@ __export(exports_main_persist, {
   cleanupDomPoll: () => cleanupDomPoll,
   ensureRestoredPrimaryTab: () => ensureRestoredPrimaryTab,
   findDrawerToggleButton: () => findDrawerToggleButton,
+  holdMainDrawerReveal: () => holdMainDrawerReveal,
   isHostPrimaryTabActive: () => isHostPrimaryTabActive,
   isMainDrawerRestorePending: () => isMainDrawerRestorePending,
+  isMainDrawerRevealHeld: () => isMainDrawerRevealHeld,
+  isMainDrawerVisualGuardActive: () => isMainDrawerVisualGuardActive,
+  releaseMainDrawerReveal: () => releaseMainDrawerReveal,
   restoreMainDrawerFromDom: () => restoreMainDrawerFromDom,
   stampPanelBodyHide: () => stampPanelBodyHide,
   startMainDrawerPersistence: () => startMainDrawerPersistence,
   stopMainDrawerPersistence: () => stopMainDrawerPersistence,
   suppressMainDrawer: () => suppressMainDrawer,
   unsuppressMainDrawer: () => unsuppressMainDrawer,
-  waitForDrawerDOM: () => waitForDrawerDOM
+  waitForDrawerDOM: () => waitForDrawerDOM,
+  waitForMainContentSettled: () => waitForMainContentSettled
 });
 function readWrapperOpen(wrapper) {
   return wrapper.classList.toString().includes("wrapperOpen");
@@ -11417,6 +11432,26 @@ function ensureRestoreGuardStyles() {
       opacity: 0 !important;
       pointer-events: none !important;
     }
+    /* Mid-session mode-switch reveal hold (visual-only): hide BOTH Canvas
+     * shells + every panel body while the enable placement pass churns host
+     * tabs, so the drawers reveal once, settled. Same inline-stamp backup as
+     * the restore guard (React can remount panel bodies). */
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    html.${REVEAL_HOLD_CLASS} [class*="_panelContent_"],
+    html.${REVEAL_HOLD_CLASS} [data-canvas-main-panel-content],
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper .sidebar-ux-panel-content,
+    html.${REVEAL_HOLD_CLASS} .sidebar-ux-secondary-wrapper .sidebar-ux-panel-content > * {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
   `;
   document.head.appendChild(el);
 }
@@ -11436,7 +11471,7 @@ function isPanelBodyNode(el) {
 function stampPanelBodyHide() {
   if (typeof document === "undefined")
     return;
-  if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+  if (!isMainDrawerVisualGuardActive())
     return;
   const nodes = document.querySelectorAll(PANEL_BODY_HIDE_SELECTOR);
   for (const node of Array.from(nodes)) {
@@ -11470,7 +11505,7 @@ function startPanelHideObserver() {
     return;
   stampPanelBodyHide();
   _panelHideObserver = new MutationObserver((mutations) => {
-    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+    if (!isMainDrawerVisualGuardActive())
       return;
     let needs = false;
     for (const m3 of mutations) {
@@ -11523,6 +11558,10 @@ function suppressMainDrawer() {
   stampPanelBodyHide();
 }
 function unsuppressMainDrawer() {
+  if (_revealHolds > 0) {
+    stampPanelBodyHide();
+    return;
+  }
   if (_unsuppressTimer) {
     clearTimeout(_unsuppressTimer);
     _unsuppressTimer = null;
@@ -11534,6 +11573,54 @@ function unsuppressMainDrawer() {
 }
 function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
+}
+function isMainDrawerRevealHeld() {
+  return _revealHolds > 0;
+}
+function isMainDrawerVisualGuardActive() {
+  if (typeof document === "undefined")
+    return false;
+  try {
+    const cl = document.documentElement.classList;
+    return cl.contains(RESTORE_PENDING_CLASS) || cl.contains(REVEAL_HOLD_CLASS);
+  } catch {
+    return false;
+  }
+}
+function holdMainDrawerReveal() {
+  if (typeof document === "undefined")
+    return;
+  _revealHolds++;
+  if (_revealHolds !== 1)
+    return;
+  try {
+    ensureRestoreGuardStyles();
+    document.documentElement.classList.add(REVEAL_HOLD_CLASS);
+    startPanelHideObserver();
+    stampPanelBodyHide();
+    dlog("main-persist: reveal hold ON (mode switch)");
+  } catch (err) {
+    dwarn(`main-persist: holdMainDrawerReveal failed: ${err}`);
+  }
+}
+function releaseMainDrawerReveal() {
+  if (_revealHolds === 0)
+    return;
+  _revealHolds--;
+  if (_revealHolds > 0)
+    return;
+  if (typeof document === "undefined")
+    return;
+  try {
+    document.documentElement.classList.remove(REVEAL_HOLD_CLASS);
+    dlog("main-persist: reveal hold OFF (mode switch)");
+    if (!isMainDrawerRestorePending()) {
+      stopPanelHideObserver();
+      clearPanelBodyHide();
+    }
+  } catch (err) {
+    dwarn(`main-persist: releaseMainDrawerReveal failed: ${err}`);
+  }
 }
 function isHostPrimaryTabActive(targetTabId) {
   const sidebar = document.querySelector('[data-spindle-mount="sidebar"]');
@@ -11602,7 +11689,7 @@ function startContentSettleWatch(onSettled) {
   }
   let sawMutation = false;
   _contentSettleObserver = new MutationObserver(() => {
-    if (!document.documentElement.classList.contains(RESTORE_PENDING_CLASS))
+    if (!isMainDrawerVisualGuardActive())
       return;
     sawMutation = true;
     if (_contentQuietTimer != null)
@@ -11643,6 +11730,9 @@ function waitForSettle(timeout) {
     startContentSettleWatch(() => settle());
     hardTimer = setTimeout(() => settle(), Math.max(0, timeout));
   });
+}
+function waitForMainContentSettled(timeoutMs = 1000) {
+  return waitForSettle(timeoutMs);
 }
 function unsuppressAfterTwoPaints() {
   return new Promise((resolve) => {
@@ -11945,11 +12035,15 @@ function stopMainDrawerPersistence() {
     _classObserver = null;
   }
   cleanupDomPoll();
+  _revealHolds = 0;
+  if (typeof document !== "undefined") {
+    document.documentElement.classList.remove(REVEAL_HOLD_CLASS);
+  }
   unsuppressMainDrawer();
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove();
   _wrapper = null;
 }
-var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", REVEAL_HOLD_CLASS = "sidebar-ux-main-reveal-hold", _revealHolds = 0, RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_log();
   init_handles();

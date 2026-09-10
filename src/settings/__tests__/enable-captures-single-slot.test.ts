@@ -111,6 +111,20 @@ mock.module('../../tabs/owned-commit', () => ({
   commitDraftToOwnedModel: async () => ({ ok: true }),
 }))
 
+// ── Reveal-hold ordering spies (live-verify #4) ──
+// The enable path must hold the visual guard before setSettings/restore, wait
+// for the placement pass + content settle, then release — so the drawers
+// reveal once, settled. Partial mock (spread the real module) keeps every
+// unmocked main-persist export working for mode-profiles/dispatch.
+const realMainPersist = await import('../../sidebar/main-persist')
+const mpEvents: string[] = []
+mock.module('../../sidebar/main-persist', () => ({
+  ...realMainPersist,
+  holdMainDrawerReveal: () => { mpEvents.push('hold') },
+  releaseMainDrawerReveal: () => { mpEvents.push('release') },
+  waitForMainContentSettled: async () => { mpEvents.push('settle') },
+}))
+
 // ── Dynamic imports (after mock.module calls) ──
 const [{ requestSecondDrawerMode }] = await Promise.all([import('../second-drawer-mode')])
 const [
@@ -231,6 +245,12 @@ assert(
   lastRefreshPrimary!.includes(PROFILE) && lastRefreshPrimary!.includes(REGEX),
   'modal refresh saw the SETTLED dual model (full placement state, not mid-flight)',
 )
+
+// Reveal-hold ordering (live-verify #4): held first, settled after the pass,
+// released last — and released by the time enable resolves (modal refresh is
+// now post-release).
+assertEqual(mpEvents.join(','), 'hold,settle,release',
+  'enable: hold → settle → release exactly once, in order')
 
 // ══ Phase 2: disable (ON → OFF). The restore must use the FRESH folded slot,
 // not the stale capture planted above — hidden must survive. ══
