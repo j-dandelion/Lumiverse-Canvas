@@ -17,7 +17,7 @@
 
 import { getMainDrawerSide } from '../store'
 import { getMainDrawer, getMainSidebar, getMainPanel } from '../dom/lumiverse'
-import { getSettings } from '../settings/state'
+import { getSettings, isTaskbarModeEnabled } from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
@@ -377,9 +377,12 @@ export function reconcileTabListPin(): void {
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }
-  // Taskbar mode only pins secondary when it has tabs — empty strip must not show.
+  // Taskbar mode only pins secondary when it has tabs — empty strip must not
+  // show. Effective gate (taskbarMode && moveControlsToOuterEdge) — matches
+  // every other pin/effective site; an outer-edge OFF toggle must unpin even
+  // though the raw taskbarMode setting survives (S1 dropped the cascade).
   const want =
-    !!getSettings().taskbarMode && hasSecondaryAssignedTabs()
+    isTaskbarModeEnabled() && hasSecondaryAssignedTabs()
   applyTabListPin(want, { force: true })
   // Side-change / remount: remap strip gutters to the current main side.
   void import('./strip-gutter').then((m) => m.updateStripGutters())

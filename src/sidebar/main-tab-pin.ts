@@ -15,10 +15,12 @@
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
-import { isTaskbarModeEnabled } from '../settings/state'
+import { getSettings, isTaskbarModeEnabled } from '../settings/state'
 import { isMobileViewport } from './mobile-exclusion'
 import {
   applyMainMirrorDrawer,
+  getMainMirrorDrawer,
+  getMainMirrorPanel,
   getMainMirrorTabList,
   isMainMirrorActive,
   onMainMirrorTabActivated,
@@ -28,6 +30,7 @@ import {
   __resetMainMirrorForTest,
 } from './main-mirror-drawer'
 import {
+  applyTabListPosition,
   clearPinnedTabListChrome,
   destroyMainPinHost,
   ensureMainPinHost,
@@ -167,6 +170,18 @@ export function reconcileMainTabListPin(): void {
     // Render into the shell's own tab list (rides with the panel).
     reconcileMainMirror()
   }
+  // Live-verify #8: the VISIBLE Canvas main shell must follow
+  // moveControlsToOuterEdge on a runtime toggle. Position calls elsewhere
+  // resolve the HIDDEN host main drawer (getMainDrawer/getMainSidebar); the
+  // shell previously only got its flex/borders at mount / side-swap, so the
+  // outer-edge toggle left the main drawer stale until refresh. Runs after
+  // the pin/unpin above so clearPinnedTabListChrome's border reset cannot
+  // clobber the in-drawer borders.
+  applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+    mainDrawer: getMainMirrorDrawer(),
+    mainTabList: getMainMirrorTabList(),
+    mainPanel: getMainMirrorPanel(),
+  })
   // Side-change remaps main/secondary strip gutters to left/right.
   void import('./strip-gutter').then((m) => m.updateStripGutters())
 }

@@ -566,6 +566,32 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   setMainDrawerSideOverride(null)
 }
 
+// C20 (live-verify #8): reconcileTabListPin uses the EFFECTIVE taskbar gate
+// (taskbarMode && moveControlsToOuterEdge). With S1's dropped cascade,
+// taskbarMode stays true when outer-edge is switched off — the secondary
+// strip must unpin with it (previously the raw taskbarMode gate kept it
+// pinned while the main drawer unpinned).
+{
+  resetStubs('right')
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  applyTabListPin(true, { force: true })
+  assert(stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C20: pre — pinned while forced on')
+
+  reconcileTabListPin()
+  assert(
+    !stubTabList.classList.contains(TAB_LIST_PINNED_CLASS),
+    'C20: outer-edge OFF unpins despite raw taskbarMode true',
+  )
+  assertEqual(__getPinHostForTest(), null, 'C20: pin host destroyed on effective-off')
+
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  reconcileTabListPin()
+  assert(
+    stubTabList.classList.contains(TAB_LIST_PINNED_CLASS),
+    'C20: outer-edge back ON re-pins',
+  )
+}
+
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)
 process.exit(failed > 0 ? 1 : 0)

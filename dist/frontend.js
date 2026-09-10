@@ -1726,7 +1726,7 @@ function reconcileTabListPin() {
     Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
-  const want = !!getSettings().taskbarMode && hasSecondaryAssignedTabs();
+  const want = isTaskbarModeEnabled() && hasSecondaryAssignedTabs();
   applyTabListPin(want, { force: true });
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
 }
@@ -3633,6 +3633,11 @@ function reconcileMainTabListPin() {
     ensureObservers();
     reconcileMainMirror();
   }
+  applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+    mainDrawer: getMainMirrorDrawer(),
+    mainTabList: getMainMirrorTabList(),
+    mainPanel: getMainMirrorPanel()
+  });
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
 }
 function isMainTabListPinActive() {

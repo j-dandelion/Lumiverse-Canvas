@@ -597,7 +597,7 @@ import {
   type TabKey,
   type LayoutModel,
 } from '../../core/model'
-import { isCanvasMainOpen, getMainMirrorTitleEl } from '../main-mirror-drawer'
+import { isCanvasMainOpen, getMainMirrorDrawer, getMainMirrorTitleEl } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 
 /** Collect mirror buttons from the list (nested under main/bottom sections). */
@@ -627,6 +627,7 @@ import {
   __setHostSetSettingForTest,
   clearHostSettingsCache,
 } from '../../dom/host-settings'
+import { hydrateSettings } from '../../settings/state'
 
 function makeLiveTab(key: TabKey, liveId: string, overrides?: Partial<LiveTab>): LiveTab {
   return {
@@ -951,6 +952,57 @@ function reset(): void {
   const mirrors = collectMirrorButtons(shellList!)
   assertEqual(mirrors.length, 2, 'M8b: two mirror buttons rendered into shell list')
   assertEqual(mirrors[0].getAttribute('data-mirror-key'), PROFILE, 'M8b: first mirror keyed by model key')
+  shutdownModel()
+}
+
+// M8c (live-verify #8): a runtime "Move tab controls to outer edge" toggle
+// must refresh the VISIBLE main shell's orientation. Before the fix,
+// reconcileMainTabListPin only handled pin chrome; the other position pass
+// (`applyTabListPosition(enabled)` with no opts) targets the HIDDEN host main
+// drawer, so the shell kept its mount-time flex until a hard refresh.
+{
+  reset()
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', true))
+  wireMainSidebarButtons()
+  const host = new FakeHost([makeLiveTab(PROFILE, 'profile')])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  hydrateSettings({ moveControlsToOuterEdge: false, taskbarMode: false })
+  bootstrap(model, host)
+  await flush()
+  reconcileMainTabListPin()
+
+  const shellDrawer = getMainMirrorDrawer() as unknown as StubElement | null
+  assert(!!shellDrawer, 'M8c: main shell drawer mounted')
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row',
+    'M8c: default flex (side right, controls sit in the drawer)',
+  )
+
+  hydrateSettings({ moveControlsToOuterEdge: true })
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8c: outer-edge ON flips the visible shell flex',
+  )
+
+  hydrateSettings({ moveControlsToOuterEdge: false })
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row',
+    'M8c: outer-edge OFF restores the visible shell flex',
+  )
+
+  // Leave global settings at defaults for the cases that follow.
+  hydrateSettings(null)
   shutdownModel()
 }
 
