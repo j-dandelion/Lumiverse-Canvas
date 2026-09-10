@@ -9888,12 +9888,13 @@ function _runSyncDrawerTabSettings() {
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
   if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings();
+    const effectiveMainVh = settings.mainDrawerTabOverrideVh !== undefined ? settings.mainDrawerTabOverrideVh : posVh;
     if (settings.mirrorCompactPosition) {
       if (drawerTab)
-        drawerTab.style.marginTop = `${posVh}vh`;
+        drawerTab.style.marginTop = `${effectiveMainVh}vh`;
       const mainMirrorTab2 = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
       if (mainMirrorTab2)
-        mainMirrorTab2.style.marginTop = `${posVh}vh`;
+        mainMirrorTab2.style.marginTop = `${effectiveMainVh}vh`;
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       if (drawerTab)
         drawerTab.style.marginTop = "";

@@ -532,11 +532,21 @@ function _runSyncDrawerTabSettings(): void {
   if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings()
 
+    // Canvas drag overrides take precedence over the host position
+    // (drawerTabPosition/apply.ts), and the mirror sources the MAIN's
+    // EFFECTIVE position. A side change resets `_lastKnownVerticalPos`
+    // (checkSideChanged), which re-runs this block — using raw `posVh` here
+    // clobbered a dragged handle with the stale host value and snapped both
+    // handles back to default after "Swap drawer locations" (live-verify #11).
+    const effectiveMainVh = settings.mainDrawerTabOverrideVh !== undefined
+      ? settings.mainDrawerTabOverrideVh
+      : posVh
+
     if (settings.mirrorCompactPosition) {
-      if (drawerTab) drawerTab.style.marginTop = `${posVh}vh`
-      // Canvas main edge toggle tracks host vertical position too.
+      if (drawerTab) drawerTab.style.marginTop = `${effectiveMainVh}vh`
+      // Canvas main edge toggle tracks the main vertical position too.
       const mainMirrorTab = mainMirrorWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
-      if (mainMirrorTab) mainMirrorTab.style.marginTop = `${posVh}vh`
+      if (mainMirrorTab) mainMirrorTab.style.marginTop = `${effectiveMainVh}vh`
     } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
       if (drawerTab) drawerTab.style.marginTop = ''  // mirror off, no override → clear
     }

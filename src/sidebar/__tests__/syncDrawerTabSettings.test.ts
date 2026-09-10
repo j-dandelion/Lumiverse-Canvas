@@ -407,6 +407,45 @@ import { getSettings } from '../../settings/state'
 }
 
 // ============================================================
+// C10 (live-verify #11): side-change reset + Canvas main override.
+//   A side change resets the sync caches (`_lastKnownVerticalPos = null`).
+//   With mirror ON and a Canvas main-handle override, the re-run must use
+//   the MAIN's EFFECTIVE position (override > host) — before the fix it
+//   re-stamped the stale host value and both handles snapped back to
+//   default after "Swap drawer locations".
+// ============================================================
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.style.marginTop = '0vh'  // stale host default
+  secondaryDrawerTab.style = new StubStyle()
+  _resetLastKnownVerticalPos()
+
+  const liveSettings = getSettings() as any
+  const prevMirror = liveSettings.mirrorCompactPosition
+  const prevMainOverride = liveSettings.mainDrawerTabOverrideVh
+  liveSettings.mirrorCompactPosition = true
+  liveSettings.mainDrawerTabOverrideVh = 35
+
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryDrawerTab.style.marginTop, '35vh',
+    'C10.a: mirror follows the main override, not the stale host position')
+
+  // No override → the mirror still follows the host position.
+  liveSettings.mainDrawerTabOverrideVh = undefined
+  mainDrawerTab.style.marginTop = '12vh'
+  _resetLastKnownVerticalPos()
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryDrawerTab.style.marginTop, '12vh',
+    'C10.b: without an override the mirror follows the host position')
+
+  // Restore settings
+  liveSettings.mirrorCompactPosition = prevMirror
+  liveSettings.mainDrawerTabOverrideVh = prevMainOverride
+}
+
+// ============================================================
 // T7: Coalescing — 10 calls in the same tick result in 1 body run.
 //   Regression for the bug where style observer + rAF retry + ResizeObserver
 //   all fired syncDrawerTabSettings() 12+ times per tick, flooding the console.
