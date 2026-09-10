@@ -207,6 +207,8 @@ import {
   setTabAssignment,
   deleteTabAssignment,
 } from '../../tabs/assignment'
+import { setMainDrawerSideOverride } from '../../store'
+import { hydrateSettings } from '../../settings/state'
 
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
@@ -525,6 +527,43 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   deleteTabAssignment(STUB_SECONDARY_TAB)
   reconcileTabListPin()
   assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C18: unpinned after last delete')
+}
+
+// C19: side swap re-anchors the pinned secondary strip + re-orients the
+// drawer flex (S4 live-verify issue #7). Before the fix, a CSS-only swap
+// moved the wrapper but left the body-level pin host/list on the old edge —
+// which is the NEW main edge — so the secondary strip covered the main one.
+{
+  resetStubs('right') // main left → secondary right
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  applyTabListPin(true)
+  assertEqual(stubTabList.style.right, '0', 'C19: pre — list pinned right')
+  assertEqual(stubDrawer.style.flexDirection, 'row-reverse', 'C19: pre — row-reverse for right pin')
+
+  // Swap: main → right, secondary → left (override outruns host DOM).
+  setMainDrawerSideOverride('right')
+  reconcileTabListPin()
+
+  assertEqual(stubTabList.style.left, '0', 'C19: list re-anchored to left')
+  assertEqual(stubTabList.style.right, '', 'C19: old right anchor cleared')
+  assertEqual(
+    stubDrawer.style.flexDirection,
+    'row',
+    'C19: drawer flex re-oriented to left pin (spacer outer)',
+  )
+  assertEqual(
+    stubTabList.style.borderRight,
+    '1px solid var(--lumiverse-primary-020)',
+    'C19: tab-list border flipped to panel-facing right',
+  )
+  const host = __getPinHostForTest()
+  assert(!!host, 'C19: pin host still live after re-anchor')
+  assertEqual(
+    (host as unknown as StubElement).style.left,
+    '0',
+    'C19: pin host moved to left edge',
+  )
+  setMainDrawerSideOverride(null)
 }
 
 console.log(`PASS: ${passed}`)

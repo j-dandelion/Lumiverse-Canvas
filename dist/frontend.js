@@ -1352,9 +1352,12 @@ function restyleShellSide(wrapper, side) {
     ws.removeProperty("left");
     ws.setProperty("flex-direction", "row");
   }
+  const tabList = wrapper.querySelector(".sidebar-ux-tab-list");
+  const pinned = tabList === null;
   const drawer = wrapper.querySelector(".sidebar-ux-drawer");
   if (drawer) {
-    drawer.style.setProperty("flex-direction", side === "right" ? "row" : "row-reverse");
+    const wantFlex = side === "right" ? pinned ? "row-reverse" : "row" : pinned ? "row" : "row-reverse";
+    drawer.style.setProperty("flex-direction", wantFlex);
   }
   const drawerTab = wrapper.querySelector(".sidebar-ux-drawer-tab");
   if (drawerTab) {
@@ -1368,7 +1371,6 @@ function restyleShellSide(wrapper, side) {
       drawerTab.style.setProperty("border-radius", "12px 0 0 12px");
     }
   }
-  const tabList = wrapper.querySelector(".sidebar-ux-tab-list");
   if (tabList) {
     if (side === "right") {
       tabList.style.setProperty("border-right", "1px solid var(--lumiverse-primary-020)");
@@ -9992,7 +9994,17 @@ function refreshSideGeometry() {
     } catch {}
   });
   try {
+    reconcileTabListPin();
+  } catch {}
+  try {
     applyTabListPosition(getSettings().moveControlsToOuterEdge);
+  } catch {}
+  try {
+    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+      mainDrawer: getMainMirrorDrawer(),
+      mainTabList: getMainMirrorTabList(),
+      mainPanel: getMainMirrorPanel()
+    });
   } catch {}
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
@@ -10369,6 +10381,7 @@ __export(exports_main_mirror_drawer, {
   closeCanvasMainDrawer: () => closeCanvasMainDrawer,
   ensureHostContentParkedPublic: () => ensureHostContentParkedPublic,
   getMainMirrorDrawer: () => getMainMirrorDrawer,
+  getMainMirrorPanel: () => getMainMirrorPanel,
   getMainMirrorPanelContent: () => getMainMirrorPanelContent,
   getMainMirrorTabList: () => getMainMirrorTabList,
   getMainMirrorTitleEl: () => getMainMirrorTitleEl,
@@ -10405,6 +10418,9 @@ function getMainMirrorDrawer() {
 }
 function getMainMirrorTabList() {
   return _shell?.tabList ?? null;
+}
+function getMainMirrorPanel() {
+  return _shell?.panel ?? null;
 }
 function getMainMirrorPanelContent() {
   return _shell?.content ?? null;
@@ -11179,6 +11195,7 @@ function createResizeHandle(direction, onResize, onResizeEnd, enabled) {
     e3.stopPropagation();
     startX = e3.clientX;
     startWidth = handle.parentElement?.getBoundingClientRect().width || 420;
+    const dragDirection = typeof direction === "function" ? direction() : direction;
     _resizeDragging = true;
     handle.style.background = "var(--lumiverse-primary-020, rgba(255, 255, 255, 0.1))";
     let dragOverlay = null;
@@ -11197,7 +11214,7 @@ function createResizeHandle(direction, onResize, onResizeEnd, enabled) {
       contentArea.appendChild(dragOverlay);
     }
     const onMove = (e4) => {
-      const delta = direction === "right" ? e4.clientX - startX : startX - e4.clientX;
+      const delta = dragDirection === "right" ? e4.clientX - startX : startX - e4.clientX;
       onResize(startWidth, delta);
     };
     const onUp = () => {
@@ -11246,8 +11263,7 @@ function mountResizeHandles() {
       if (existing) {
         positionCanvasHandle(existing, mainSide);
       } else {
-        const mainDirection = mainSide === "left" ? "right" : "left";
-        const handle = createResizeHandle(mainDirection, (startWidth, delta) => {
+        const handle = createResizeHandle(() => getMainDrawerSide() === "left" ? "right" : "left", (startWidth, delta) => {
           const newWidth = clampSidebarWidth(startWidth + delta);
           document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`);
           scheduleReflow();
@@ -11269,8 +11285,7 @@ function mountResizeHandles() {
       if (existing) {
         positionHostMainHandle(existing, mainSide);
       } else {
-        const mainDirection = mainSide === "left" ? "right" : "left";
-        const handle = createResizeHandle(mainDirection, (startWidth, delta) => {
+        const handle = createResizeHandle(() => getMainDrawerSide() === "left" ? "right" : "left", (startWidth, delta) => {
           const newWidth = clampSidebarWidth(startWidth + delta);
           const drawer = getMainDrawer();
           const wrapper = getMainWrapper();
@@ -11303,8 +11318,7 @@ function mountResizeHandles() {
       if (existing) {
         positionCanvasHandle(existing, secondarySide2);
       } else {
-        const secondaryDirection = secondarySide2 === "right" ? "left" : "right";
-        const handle = createResizeHandle(secondaryDirection, (startWidth, delta) => {
+        const handle = createResizeHandle(() => getMainDrawerSide() === "left" ? "left" : "right", (startWidth, delta) => {
           const newWidth = clampSidebarWidth(startWidth + delta);
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`);
           scheduleReflow();

@@ -105,6 +105,13 @@ export function getMainMirrorTabList(): HTMLElement | null {
   return _shell?.tabList ?? null
 }
 
+/** The shell's panel frame (tab list + panel flex parent). Used by the
+ *  side-swap geometry pass so `applyTabListPosition` targets the VISIBLE
+ *  Canvas shell, not the hidden host main drawer. */
+export function getMainMirrorPanel(): HTMLElement | null {
+  return _shell?.panel ?? null
+}
+
 export function getMainMirrorPanelContent(): HTMLElement | null {
   return _shell?.content ?? null
 }

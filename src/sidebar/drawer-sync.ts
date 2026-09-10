@@ -47,6 +47,9 @@ import {
   restyleSecondaryShellSide,
 } from '../sidebar/secondary'
 import {
+  getMainMirrorDrawer,
+  getMainMirrorPanel,
+  getMainMirrorTabList,
   getMainMirrorWrapper,
   isCanvasMainOpen,
   isMainMirrorActive,
@@ -55,7 +58,7 @@ import {
 import { getTabAssignments } from '../tabs/assignment'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSettings } from '../settings/state'
-import { applyTabListPosition } from './tab-position'
+import { applyTabListPosition, reconcileTabListPin } from './tab-position'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
 import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton } from '../tabs/buttons'
 import { drawerObserver } from './drawer-observer'
@@ -731,8 +734,34 @@ function refreshSideGeometry(): void {
       /* ignore teardown races */
     }
   })
+  // Secondary pin chrome follows the side too. The S4 restyle moves the
+  // secondary WRAPPER, but the tab list lives on a body-level pin host while
+  // pinned — without this reconcile the strip stays on the old secondary
+  // edge (which is the new main edge) and paints over the main strip.
+  // Force re-pin also restores the pinned drawer flex + panel border.
   try {
+    reconcileTabListPin()
+  } catch {
+    /* ignore teardown races */
+  }
+  try {
+    // Hidden HOST main drawer: keep its own flex/border in step for the
+    // eventual Canvas teardown (pre-S4 behavior; host chrome is not visible
+    // while the shell owns the surface).
     applyTabListPosition(getSettings().moveControlsToOuterEdge)
+  } catch {
+    /* ignore */
+  }
+  try {
+    // The mounted Canvas main shell is the VISIBLE main drawer — refresh
+    // ITS flex/border. The call above targets the hidden host nodes; this
+    // one restores the pinned (spacer-to-outer-edge) orientation that
+    // restyleShellSide must guess before the pin state is re-applied.
+    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+      mainDrawer: getMainMirrorDrawer(),
+      mainTabList: getMainMirrorTabList(),
+      mainPanel: getMainMirrorPanel(),
+    })
   } catch {
     /* ignore */
   }

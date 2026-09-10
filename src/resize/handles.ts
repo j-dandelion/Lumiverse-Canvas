@@ -34,8 +34,19 @@ export function isPointerResizeActive(): boolean {
 
 let _resizeDragging = false
 
+/**
+ * Expand direction for a drag: `'right'` grows the drawer on a rightward
+ * drag, `'left'` on a leftward drag.
+ *
+ * A function is read at DRAG START, not at creation. The S4 CSS-only side
+ * swap re-anchors an existing handle in place (no remount), so a direction
+ * captured at mount would survive the swap and invert every later resize —
+ * always pass the live side reader (`() => currentSide === 'left' ? … `).
+ */
+export type ResizeDirection = 'left' | 'right' | (() => 'left' | 'right')
+
 export function createResizeHandle(
-  direction: 'left' | 'right',
+  direction: ResizeDirection,
   onResize: (startWidth: number, deltaPx: number) => void,
   onResizeEnd: () => void,
   enabled?: () => boolean
@@ -69,6 +80,10 @@ export function createResizeHandle(
     e.stopPropagation()
     startX = e.clientX
     startWidth = handle.parentElement?.getBoundingClientRect().width || 420
+    // Resolve the direction for THIS drag — the side may have swapped since
+    // the handle was mounted (S4 restyles in place; no remount resets this).
+    const dragDirection: 'left' | 'right' =
+      typeof direction === 'function' ? direction() : direction
     _resizeDragging = true
     handle.style.background = 'var(--lumiverse-primary-020, rgba(255, 255, 255, 0.1))'
 
@@ -95,7 +110,7 @@ export function createResizeHandle(
 
     const onMove = (e: PointerEvent) => {
       // Direction-based delta: 'right' = expand on rightward drag, 'left' = expand on leftward drag
-      const delta = direction === 'right' ? e.clientX - startX : startX - e.clientX
+      const delta = dragDirection === 'right' ? e.clientX - startX : startX - e.clientX
       onResize(startWidth, delta)
     }
 
@@ -165,9 +180,10 @@ export function mountResizeHandles(): void {
         // NEW inner edge instead of leaving it on the pre-flip edge.
         positionCanvasHandle(existing, mainSide)
       } else {
-        const mainDirection = mainSide === 'left' ? 'right' : 'left'
         const handle = createResizeHandle(
-          mainDirection,
+          // Live read (S4 restyle-in-place): a side swap keeps this handle,
+          // so a mount-time direction would invert later drags.
+          () => (getMainDrawerSide() === 'left' ? 'right' : 'left'),
           (startWidth, delta) => {
             const newWidth = clampSidebarWidth(startWidth + delta)
             document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${newWidth}px`)
@@ -210,10 +226,10 @@ export function mountResizeHandles(): void {
       } else {
         // Handle direction: 'right' means expand on rightward drag (drawer is on left, handle at right edge)
         //                   'left' means expand on leftward drag (drawer is on right, handle at left edge)
-        const mainDirection = mainSide === 'left' ? 'right' : 'left'
-
+        // Live read: the host drawer node survives a side flip (only the
+        // wrapper class flips), so the direction must track the current side.
         const handle = createResizeHandle(
-          mainDirection,
+          () => (getMainDrawerSide() === 'left' ? 'right' : 'left'),
           (startWidth, delta) => {
             const newWidth = clampSidebarWidth(startWidth + delta)
             const drawer = getMainDrawer()
@@ -274,11 +290,11 @@ export function mountResizeHandles(): void {
       } else {
         // Direction follows from the secondary's position: a drawer on the
         // right has its handle on the left edge (drag left to expand toward
-        // content), and vice versa.
-        const secondaryDirection = secondarySide === 'right' ? 'left' : 'right'
-
+        // content), and vice versa. Live read (S4 keeps the handle across a
+        // side swap). Secondary side = opposite of the main side:
+        // main left → secondary right → expand left; main right → expand right.
         const handle = createResizeHandle(
-          secondaryDirection,
+          () => (getMainDrawerSide() === 'left' ? 'left' : 'right'),
           (startWidth, delta) => {
             const newWidth = clampSidebarWidth(startWidth + delta)
             document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${newWidth}px`)

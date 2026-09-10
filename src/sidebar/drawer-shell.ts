@@ -339,12 +339,25 @@ export function restyleShellSide(
     ws.setProperty('flex-direction', 'row')
   }
 
+  const tabList = wrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
+  // Pin detection without a settings import (this module is a leaf): while
+  // pinned, the tab list is reparented to the body-level pin host, so the
+  // wrapper no longer contains it and the 56px spacer sits in the drawer's
+  // DOM order ([spacer, panel]). The flex direction that parks the spacer on
+  // the screen-edge side is the OPPOSITE of the in-flow (unpinned) default.
+  const pinned = tabList === null
+
   const drawer = wrapper.querySelector('.sidebar-ux-drawer') as HTMLElement | null
   if (drawer) {
-    drawer.style.setProperty(
-      'flex-direction',
-      side === 'right' ? 'row' : 'row-reverse',
-    )
+    const wantFlex =
+      side === 'right'
+        ? pinned
+          ? 'row-reverse'
+          : 'row'
+        : pinned
+          ? 'row'
+          : 'row-reverse'
+    drawer.style.setProperty('flex-direction', wantFlex)
   }
 
   const drawerTab = wrapper.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
@@ -360,7 +373,6 @@ export function restyleShellSide(
     }
   }
 
-  const tabList = wrapper.querySelector('.sidebar-ux-tab-list') as HTMLElement | null
   if (tabList) {
     if (side === 'right') {
       tabList.style.setProperty('border-right', '1px solid var(--lumiverse-primary-020)')

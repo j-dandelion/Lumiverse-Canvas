@@ -19,6 +19,21 @@ let restyleSecondaryCalls = 0
 let restyleMainCalls = 0
 let patchHostCalls = 0
 let apiWriteCalls = 0
+// Side-swap geometry: the secondary pin must be re-reconciled, and the
+// position pass must target the VISIBLE Canvas main shell (not the hidden
+// host main drawer) via the main* opts.
+let pinReconcileCalls = 0
+let positionCalls = 0
+// `any`: the value is assigned from inside the mock factory below; a
+// precise nullable type gets flow-narrowed to `never` under this project's
+// TS settings (test-file noise otherwise).
+let lastPositionOpts: any = null
+
+const MAIN_SHELL = {
+  drawer: { style: {} },
+  tabList: { style: {} },
+  panel: { style: {} },
+}
 
 mock.module('../secondary', () => ({
   getSecondaryWrapper: () => null,
@@ -26,11 +41,22 @@ mock.module('../secondary', () => ({
   restyleSecondaryShellSide: () => { restyleSecondaryCalls++ },
 }))
 
+mock.module('../tab-position', () => ({
+  applyTabListPosition: (_enabled: boolean, opts?: typeof lastPositionOpts) => {
+    positionCalls++
+    if (opts) lastPositionOpts = opts
+  },
+  reconcileTabListPin: () => { pinReconcileCalls++ },
+}))
+
 mock.module('../main-mirror-drawer', () => ({
   getMainMirrorWrapper: () => null,
   isCanvasMainOpen: () => false,
   isMainMirrorActive: () => false,
   restyleMainShellSide: () => { restyleMainCalls++ },
+  getMainMirrorDrawer: () => MAIN_SHELL.drawer,
+  getMainMirrorTabList: () => MAIN_SHELL.tabList,
+  getMainMirrorPanel: () => MAIN_SHELL.panel,
 }))
 
 mock.module('../main-tab-pin', () => ({
@@ -148,6 +174,9 @@ function reset() {
   restyleMainCalls = 0
   patchHostCalls = 0
   apiWriteCalls = 0
+  pinReconcileCalls = 0
+  positionCalls = 0
+  lastPositionOpts = null
   setMainDrawerSideOverride(null)
   __setLastKnownSideForTest(null)
   __setStoreSnapshotForTest(null)
@@ -177,6 +206,11 @@ function tick(ms = 10): Promise<void> {
   assertEqual(mountCalls, 0, 'A1: NO mount — shells restyle in place')
   assert(restyleMainCalls >= 1, 'A1: main shell restyled in place')
   assert(restyleSecondaryCalls >= 1, 'A1: secondary shell restyled in place')
+  assert(pinReconcileCalls >= 1, 'A1: secondary pin re-reconciled for the new side')
+  assert(positionCalls >= 2, 'A1: position applied to host + Canvas main shell')
+  assert(lastPositionOpts?.mainDrawer === MAIN_SHELL.drawer, 'A1: position pass targets Canvas main drawer')
+  assert(lastPositionOpts?.mainTabList === MAIN_SHELL.tabList, 'A1: position pass targets Canvas main tab list')
+  assert(lastPositionOpts?.mainPanel === MAIN_SHELL.panel, 'A1: position pass targets Canvas main panel')
   assertEqual(patchHostCalls, 0, 'A1: MO path does NOT write the host (syncHost:false)')
   assertEqual(apiWriteCalls, 0, 'A1: MO path does NOT hit the settings API')
   assertEqual(__getLastKnownSideForTest(), 'left', 'A1: last known updated to left via apply')
@@ -293,6 +327,8 @@ function tick(ms = 10): Promise<void> {
   assertEqual(res.writeOk, true, 'A8: guarded write reports ok')
   assert(patchHostCalls >= 1, 'A8: patchHostDrawerSettings called for the swap')
   assertEqual(apiWriteCalls, 0, 'A8: no API fallback needed (patch seam ok)')
+  assert(pinReconcileCalls >= 1, 'A8: secondary pin re-reconciled on the syncHost path')
+  assert(lastPositionOpts?.mainDrawer === MAIN_SHELL.drawer, 'A8: Canvas main shell targeted on syncHost path')
   setMainDrawerSideOverride(null)
 }
 
