@@ -11530,10 +11530,14 @@ function ensureRestoreGuardStyles() {
     }
     /* One-shot reveal fade after the hold lifts (live-verify #5): the settled
      * drawers + pinned secondary strip fade in instead of snapping. The class
-     * is removed after the animation window (playRevealIn). */
+     * is removed after the animation window (playRevealIn). The MAIN pin strip
+     * is hidden only by the BOOT guard, so its fade rides the companion
+     * boot-only class (live-verify #12) — adding it to the mid-session release
+     * would restart a visible strip from opacity 0. */
     html.${REVEAL_IN_CLASS} .sidebar-ux-main-mirror-wrapper,
     html.${REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
-    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"],
+    html.${REVEAL_IN_MAIN_HOST_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
       animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
     }
     @keyframes sidebar-ux-reveal-fade-in {
@@ -11676,7 +11680,7 @@ function unsuppressMainDrawer() {
   clearPanelBodyHide();
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS);
   if (wasPending && !_stopped)
-    playRevealIn();
+    playRevealIn({ mainPinHost: true });
 }
 function isMainDrawerRestorePending() {
   return typeof document !== "undefined" && document.documentElement.classList.contains(RESTORE_PENDING_CLASS);
@@ -11710,18 +11714,22 @@ function holdMainDrawerReveal() {
     dwarn(`main-persist: holdMainDrawerReveal failed: ${err}`);
   }
 }
-function playRevealIn() {
+function playRevealIn(opts) {
   if (typeof document === "undefined")
     return;
   try {
     document.documentElement.classList.add(REVEAL_IN_CLASS);
-    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)`);
+    if (opts?.mainPinHost) {
+      document.documentElement.classList.add(REVEAL_IN_MAIN_HOST_CLASS);
+    }
+    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)${opts?.mainPinHost ? " + main pin strip" : ""}`);
     if (_revealInTimer)
       clearTimeout(_revealInTimer);
     _revealInTimer = setTimeout(() => {
       _revealInTimer = null;
       try {
         document.documentElement.classList.remove(REVEAL_IN_CLASS);
+        document.documentElement.classList.remove(REVEAL_IN_MAIN_HOST_CLASS);
       } catch {}
     }, REVEAL_IN_MS + 60);
   } catch (err) {
@@ -12221,6 +12229,7 @@ function stopMainDrawerPersistence() {
       _revealInTimer = null;
     }
     document.documentElement.classList.remove(REVEAL_IN_CLASS);
+    document.documentElement.classList.remove(REVEAL_IN_MAIN_HOST_CLASS);
     document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS);
     if (_secondaryRevealTimer) {
       clearTimeout(_secondaryRevealTimer);
@@ -12232,7 +12241,7 @@ function stopMainDrawerPersistence() {
   document.getElementById(RESTORE_GUARD_STYLE_ID)?.remove();
   _wrapper = null;
 }
-var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", REVEAL_HOLD_CLASS = "sidebar-ux-main-reveal-hold", REVEAL_IN_CLASS = "sidebar-ux-main-reveal-in", REVEAL_IN_MS = 180, _revealHolds = 0, _revealInTimer = null, SECONDARY_PLACEMENT_HOLD_CLASS = "sidebar-ux-secondary-placement-hold", SECONDARY_REVEAL_IN_CLASS = "sidebar-ux-secondary-reveal-in", _secondaryPlacementHolds = 0, _secondaryRevealTimer = null, RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
+var UNSUPPRESS_TIMEOUT_MS = 3000, RESTORE_TAB_CLICK_MS = 0, RESTORE_PENDING_CLASS = "sidebar-ux-main-restore-pending", RESTORE_GUARD_STYLE_ID = "sidebar-ux-main-restore-guard", REVEAL_HOLD_CLASS = "sidebar-ux-main-reveal-hold", REVEAL_IN_CLASS = "sidebar-ux-main-reveal-in", REVEAL_IN_MAIN_HOST_CLASS = "sidebar-ux-main-reveal-in-host", REVEAL_IN_MS = 180, _revealHolds = 0, _revealInTimer = null, SECONDARY_PLACEMENT_HOLD_CLASS = "sidebar-ux-secondary-placement-hold", SECONDARY_REVEAL_IN_CLASS = "sidebar-ux-secondary-reveal-in", _secondaryPlacementHolds = 0, _secondaryRevealTimer = null, RESTORE_HOST_STABLE_POLLS = 2, RESTORE_CONTENT_QUIET_MS = 40, RESTORE_CONTENT_FALLBACK_MS = 50, _wrapper = null, _classObserver = null, _stopped = true, _unsuppressTimer = null, _panelHideObserver = null, _panelHideRaf = null, _contentSettleObserver = null, _contentQuietTimer = null, _contentFallbackTimer = null, PANEL_BODY_HIDE_SELECTOR, RESTORE_TAB_POLL_MAX = 50, RESTORE_TAB_POLL_MS = 16;
 var init_main_persist = __esm(() => {
   init_log();
   init_handles();

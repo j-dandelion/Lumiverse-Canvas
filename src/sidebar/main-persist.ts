@@ -82,6 +82,13 @@ const REVEAL_HOLD_CLASS = 'sidebar-ux-main-reveal-hold'
 // pinned secondary strip fade in instead of snapping. Class-based keyframe
 // animation, auto-removed after the animation window.
 const REVEAL_IN_CLASS = 'sidebar-ux-main-reveal-in'
+// Boot-only companion to REVEAL_IN_CLASS: the MAIN pin strip is hidden by the
+// BOOT restore guard but deliberately NOT by the mid-session reveal hold (its
+// buttons are not rebuilt). It must fade back in with the drawers on the boot
+// reveal — otherwise, with no drawers open, the only visible chrome pops
+// (live-verify #12). Separate class so the mid-session release, where the
+// strip is already visible, never restarts it from opacity 0.
+const REVEAL_IN_MAIN_HOST_CLASS = 'sidebar-ux-main-reveal-in-host'
 /** Fade-in duration (ms); keep in sync with the injected stylesheet. */
 const REVEAL_IN_MS = 180
 /** Nested hold count; 0 = no active reveal hold. */
@@ -206,10 +213,14 @@ function ensureRestoreGuardStyles(): void {
     }
     /* One-shot reveal fade after the hold lifts (live-verify #5): the settled
      * drawers + pinned secondary strip fade in instead of snapping. The class
-     * is removed after the animation window (playRevealIn). */
+     * is removed after the animation window (playRevealIn). The MAIN pin strip
+     * is hidden only by the BOOT guard, so its fade rides the companion
+     * boot-only class (live-verify #12) — adding it to the mid-session release
+     * would restart a visible strip from opacity 0. */
     html.${REVEAL_IN_CLASS} .sidebar-ux-main-mirror-wrapper,
     html.${REVEAL_IN_CLASS} .sidebar-ux-secondary-wrapper,
-    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"] {
+    html.${REVEAL_IN_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"],
+    html.${REVEAL_IN_MAIN_HOST_CLASS} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"] {
       animation: sidebar-ux-reveal-fade-in ${REVEAL_IN_MS}ms ease-out both;
     }
     @keyframes sidebar-ux-reveal-fade-in {
@@ -391,7 +402,9 @@ export function unsuppressMainDrawer(): void {
   stopPanelHideObserver()
   clearPanelBodyHide()
   document.documentElement.classList.remove(RESTORE_PENDING_CLASS)
-  if (wasPending && !_stopped) playRevealIn()
+  // Boot reveal is the only path where the MAIN pin strip was hidden (by the
+  // guard) — fade it back in with the drawers (live-verify #12).
+  if (wasPending && !_stopped) playRevealIn({ mainPinHost: true })
 }
 
 /** True while restore-pending guard is active (main-mirror park consults this). */
@@ -451,17 +464,26 @@ export function holdMainDrawerReveal(): void {
  * pinned secondary strip. Called when the mid-session hold lifts; the class is
  * removed after the animation window so it never lingers. No-op while the boot
  * restore guard still owns visibility (the fade would run hidden).
+ *
+ * `opts.mainPinHost` additionally fades the MAIN pinned strip via the boot-only
+ * companion class. Only the boot reveal passes it: that is the only path where
+ * the main strip was hidden (by the restore guard) and must fade back in
+ * (live-verify #12). Mid-session holds leave the main strip visible.
  */
-function playRevealIn(): void {
+function playRevealIn(opts?: { mainPinHost?: boolean }): void {
   if (typeof document === 'undefined') return
   try {
     document.documentElement.classList.add(REVEAL_IN_CLASS)
-    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)`)
+    if (opts?.mainPinHost) {
+      document.documentElement.classList.add(REVEAL_IN_MAIN_HOST_CLASS)
+    }
+    dlog(`main-persist: reveal fade-in ON (${REVEAL_IN_MS}ms)${opts?.mainPinHost ? ' + main pin strip' : ''}`)
     if (_revealInTimer) clearTimeout(_revealInTimer)
     _revealInTimer = setTimeout(() => {
       _revealInTimer = null
       try {
         document.documentElement.classList.remove(REVEAL_IN_CLASS)
+        document.documentElement.classList.remove(REVEAL_IN_MAIN_HOST_CLASS)
       } catch { /* teardown raced the timer */ }
     }, REVEAL_IN_MS + 60)
   } catch (err) {
@@ -1273,6 +1295,7 @@ export function stopMainDrawerPersistence(): void {
     document.documentElement.classList.remove(REVEAL_HOLD_CLASS)
     if (_revealInTimer) { clearTimeout(_revealInTimer); _revealInTimer = null }
     document.documentElement.classList.remove(REVEAL_IN_CLASS)
+    document.documentElement.classList.remove(REVEAL_IN_MAIN_HOST_CLASS)
     document.documentElement.classList.remove(SECONDARY_PLACEMENT_HOLD_CLASS)
     if (_secondaryRevealTimer) { clearTimeout(_secondaryRevealTimer); _secondaryRevealTimer = null }
     document.documentElement.classList.remove(SECONDARY_REVEAL_IN_CLASS)

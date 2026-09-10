@@ -26,6 +26,7 @@ function assert(cond: unknown, msg: string) {
 const RESTORE_PENDING = 'sidebar-ux-main-restore-pending'
 const REVEAL_HOLD = 'sidebar-ux-main-reveal-hold'
 const REVEAL_IN = 'sidebar-ux-main-reveal-in'
+const REVEAL_IN_MAIN = 'sidebar-ux-main-reveal-in-host'
 const SECONDARY_HOLD = 'sidebar-ux-secondary-placement-hold'
 const SECONDARY_REVEAL = 'sidebar-ux-secondary-reveal-in'
 
@@ -129,6 +130,12 @@ assert(
   // shells + pinned secondary strip.
   assert(css.includes('@keyframes sidebar-ux-reveal-fade-in'), 'T1: reveal fade keyframes injected')
   assert(css.includes(`.${REVEAL_IN} .sidebar-ux-secondary-wrapper`), 'T1: reveal fade covers the secondary shell')
+  // live-verify #12: the boot-only companion class fades the MAIN pin strip
+  // (the only visible chrome when no drawers are open).
+  assert(
+    css.includes(`.${REVEAL_IN_MAIN} .sidebar-ux-tab-list-pin-host[data-pin-owner="main"]`),
+    'T1: boot reveal fade covers the main pinned strip',
+  )
   // Secondary placement gate (live-verify #5 final): a slow boot pass must
   // not let the panel paint before its tab strip.
   assert(
@@ -164,10 +171,15 @@ assert(
   'T4: panel inline stamps cleared on release',
 )
 assert(classes.has(REVEAL_IN), 'T4: reveal fade class added on release')
+// live-verify #12: a MID-SESSION release leaves the main strip visible
+// throughout — the boot-only companion must NOT be added (it would restart
+// a visible strip from opacity 0).
+assert(!classes.has(REVEAL_IN_MAIN), 'T4: mid-session release does not fade the main strip')
 
 // --- T4b: the reveal fade class auto-removes after the animation window ---
 await new Promise((r) => setTimeout(r, 280))
 assert(!classes.has(REVEAL_IN), 'T4b: reveal fade class auto-removed')
+assert(!classes.has(REVEAL_IN_MAIN), 'T4b: main strip companion class absent')
 
 // --- T5: release with no active hold is a no-op ---
 mp.releaseMainDrawerReveal()
@@ -203,17 +215,32 @@ mp.startMainDrawerPersistence()
 mp.suppressMainDrawer()
 assert(classes.has(RESTORE_PENDING), 'T8: restore guard active before reveal')
 assert(!classes.has(REVEAL_IN), 'T8: no fade while the guard holds')
+assert(!classes.has(REVEAL_IN_MAIN), 'T8: no main-strip fade while the guard holds')
 mp.unsuppressMainDrawer()
 assert(!classes.has(RESTORE_PENDING), 'T8: restore guard lifted')
 assert(classes.has(REVEAL_IN), 'T8: boot reveal plays the fade')
+// live-verify #12: the boot reveal also fades the MAIN pin strip (the guard
+// had hidden it; with no drawers open it is the only visible chrome).
+assert(classes.has(REVEAL_IN_MAIN), 'T8: boot reveal fades the main pin strip')
 // Auto-remove, then prove an idempotent unsuppress (guard already gone) does
 // NOT start a second fade.
 await new Promise((r) => setTimeout(r, 280))
 assert(!classes.has(REVEAL_IN), 'T8: boot fade auto-removes')
+assert(!classes.has(REVEAL_IN_MAIN), 'T8: main-strip fade auto-removes')
 mp.unsuppressMainDrawer()
 assert(!classes.has(REVEAL_IN), 'T8: idempotent unsuppress does not restart the fade')
+assert(!classes.has(REVEAL_IN_MAIN), 'T8: idempotent unsuppress does not restart the main-strip fade')
 mp.stopMainDrawerPersistence()
 assert(!classes.has(REVEAL_IN), 'T8: teardown clears the boot fade')
+assert(!classes.has(REVEAL_IN_MAIN), 'T8: teardown clears the main-strip fade')
+
+// --- T8b: teardown while the BOOT fade is still pending clears both classes ---
+mp.startMainDrawerPersistence()
+mp.suppressMainDrawer()
+mp.unsuppressMainDrawer()
+assert(classes.has(REVEAL_IN) && classes.has(REVEAL_IN_MAIN), 'T8b: boot fade active before teardown')
+mp.stopMainDrawerPersistence()
+assert(!classes.has(REVEAL_IN) && !classes.has(REVEAL_IN_MAIN), 'T8b: teardown clears both boot fade classes')
 
 // --- T9: secondary placement gate (live-verify #5 final) ---
 // The boot placement pass can outlive the capped main reveal; the second
