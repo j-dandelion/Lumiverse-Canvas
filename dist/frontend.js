@@ -3799,8 +3799,18 @@ function __setHostActiveTabIdForTest(id) {
 function __setClearPendingActiveTabResetForTest(fn) {
   _testClearPendingActiveTabReset = fn;
 }
+function readActiveTabStoreSnapshot() {
+  let snap = getStoreSnapshot();
+  const usable = !!snap && (typeof snap.clearPendingActiveTabReset === "function" || typeof snap.drawerTab === "string");
+  if (!usable) {
+    findStoreData(true);
+    snap = getStoreSnapshot();
+  }
+  return snap;
+}
 function clearSpuriousActiveTabReset(movedTabId) {
   let activeId = "";
+  let snap = null;
   if (_testHostActiveTabId !== undefined) {
     activeId = _testHostActiveTabId ?? "";
   } else {
@@ -3808,26 +3818,33 @@ function clearSpuriousActiveTabReset(movedTabId) {
       const activeBtn = getMainSidebar()?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
       activeId = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || "";
     } catch {}
+    if (!activeId) {
+      snap = readActiveTabStoreSnapshot();
+      if (typeof snap?.drawerTab === "string")
+        activeId = snap.drawerTab;
+    }
+  }
+  if (!activeId) {
+    dlog(`[tabmove] spurious-reset guard skipped: host active unknown (moved "${movedTabId}")`);
+    return false;
   }
   const movedIsActive = !!activeId && (activeId === movedTabId || movedTabId.endsWith(`:${activeId}`) || movedTabId.includes(`:tab:${activeId}`));
   if (movedIsActive)
     return false;
   let clear = _testClearPendingActiveTabReset;
   if (!clear) {
-    let snap = getStoreSnapshot();
-    if (!snap || typeof snap.clearPendingActiveTabReset !== "function") {
-      findStoreData(true);
-      snap = getStoreSnapshot();
-    }
+    snap = snap ?? readActiveTabStoreSnapshot();
     if (snap && typeof snap.clearPendingActiveTabReset === "function") {
       clear = snap.clearPendingActiveTabReset;
     }
   }
-  if (!clear)
+  if (!clear) {
+    dlog(`[tabmove] spurious-reset guard: clearPendingActiveTabReset unavailable (moved "${movedTabId}")`);
     return false;
+  }
   try {
     clear();
-    dlog(`[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId || "unknown"}")`);
+    dlog(`[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId}")`);
     return true;
   } catch (err) {
     dwarn("[tabmove] clearPendingActiveTabReset threw:", err);
@@ -4142,8 +4159,11 @@ async function moveBuiltInTabToSecondaryContainer(opts) {
       try {
         const { findMainTabButton: findMainTabButton2 } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
         const prevBtn = findMainTabButton2(prevActiveTabId);
-        if (prevBtn && prevBtn.isConnected)
+        if (prevBtn && prevBtn.isConnected && prevBtn.style.display !== "none") {
           prevBtn.click();
+        } else {
+          dlog(`[tabmove] pre-activation restore skipped for "${prevActiveTabId}" (button ${prevBtn ? "hidden" : "missing"})`);
+        }
       } catch (err) {
         dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`);
       }

@@ -211,7 +211,18 @@ export async function moveBuiltInTabToSecondaryContainer(
       try {
         const { findMainTabButton } = await import('./buttons')
         const prevBtn = findMainTabButton(prevActiveTabId) as HTMLElement | null
-        if (prevBtn && prevBtn.isConnected) prevBtn.click()
+        // Never restore onto a hidden button: Canvas hides moved-out main
+        // buttons with inline display:none and the host's tabBtnActive can be
+        // stale, so clicking one would activate a tab that belongs to the
+        // secondary drawer (review batch 1).
+        if (prevBtn && prevBtn.isConnected && prevBtn.style.display !== 'none') {
+          prevBtn.click()
+        } else {
+          dlog(
+            `[tabmove] pre-activation restore skipped for "${prevActiveTabId}" ` +
+            `(button ${prevBtn ? 'hidden' : 'missing'})`,
+          )
+        }
       } catch (err) {
         dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`)
       }

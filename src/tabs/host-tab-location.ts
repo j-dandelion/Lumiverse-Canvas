@@ -68,8 +68,31 @@ export function __setClearPendingActiveTabResetForTest(fn: (() => void) | null):
  * paints. Active-tab moves keep the reset: the neighbor handoff owns the
  * replacement. Returns true when a spurious reset was cleared.
  */
+type ActiveTabStoreSnapshot = {
+  clearPendingActiveTabReset?: unknown
+  drawerTab?: unknown
+}
+
+/**
+ * Resolve the host store snapshot, forcing a fresh fiber walk only when the
+ * cached snapshot cannot satisfy the read. Keeps the #13 guard working when
+ * the DOM active read is unavailable (teardown / non-DOM) and avoids a second
+ * fiber walk when the snapshot was already loaded for the action lookup.
+ */
+function readActiveTabStoreSnapshot(): ActiveTabStoreSnapshot | null {
+  let snap = getStoreSnapshot() as ActiveTabStoreSnapshot | null
+  const usable = !!snap
+    && (typeof snap.clearPendingActiveTabReset === 'function' || typeof snap.drawerTab === 'string')
+  if (!usable) {
+    findStoreData(true)
+    snap = getStoreSnapshot() as ActiveTabStoreSnapshot | null
+  }
+  return snap
+}
+
 export function clearSpuriousActiveTabReset(movedTabId: string): boolean {
   let activeId = ''
+  let snap: ActiveTabStoreSnapshot | null = null
   if (_testHostActiveTabId !== undefined) {
     activeId = _testHostActiveTabId ?? ''
   } else {
@@ -79,6 +102,22 @@ export function clearSpuriousActiveTabReset(movedTabId: string): boolean {
       ) as HTMLElement | null
       activeId = activeBtn?.getAttribute('data-tab-id') || activeBtn?.getAttribute('title') || ''
     } catch { /* non-DOM test env */ }
+    if (!activeId) {
+      // DOM read unavailable: fall back to the host store's drawerTab, the
+      // addressed active id for the host's ViewportDrawer.
+      snap = readActiveTabStoreSnapshot()
+      if (typeof snap?.drawerTab === 'string') activeId = snap.drawerTab
+    }
+  }
+  if (!activeId) {
+    // Unknown active: KEEP the host's reset. We cannot distinguish an
+    // active-tab move (whose replacement the reset must drive) from a
+    // non-active one, and clearing a legitimate reset would leave the host on
+    // a moved-out tab. The host's own fallback + Canvas's neighbor handoff
+    // both converge. Logged so a live "still flickers" report can tell this
+    // apart from a resolved-and-cleared round (review batch 1).
+    dlog(`[tabmove] spurious-reset guard skipped: host active unknown (moved "${movedTabId}")`)
+    return false
   }
   // Tolerant match: stored composite ids ("spindle:…:tab:<id>:N") vs the
   // host button's bare data-tab-id/title.
@@ -91,20 +130,21 @@ export function clearSpuriousActiveTabReset(movedTabId: string): boolean {
 
   let clear = _testClearPendingActiveTabReset
   if (!clear) {
-    let snap = getStoreSnapshot() as { clearPendingActiveTabReset?: unknown } | null
-    if (!snap || typeof snap.clearPendingActiveTabReset !== 'function') {
-      findStoreData(true)
-      snap = getStoreSnapshot() as { clearPendingActiveTabReset?: unknown } | null
-    }
+    snap = snap ?? readActiveTabStoreSnapshot()
     if (snap && typeof snap.clearPendingActiveTabReset === 'function') {
       clear = snap.clearPendingActiveTabReset as () => void
     }
   }
-  if (!clear) return false
+  if (!clear) {
+    // Visibility for the production no-op risk: without this line a missing
+    // store action silently disables the whole #13 fix.
+    dlog(`[tabmove] spurious-reset guard: clearPendingActiveTabReset unavailable (moved "${movedTabId}")`)
+    return false
+  }
   try {
     clear()
     dlog(
-      `[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId || 'unknown'}")`,
+      `[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId}")`,
     )
     return true
   } catch (err) {

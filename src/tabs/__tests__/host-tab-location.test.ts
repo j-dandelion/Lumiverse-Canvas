@@ -217,6 +217,22 @@ function restore() {
 }
 
 // =====================================================================
+// T9 (review batch 1): an UNKNOWN host active must keep the reset. We cannot
+// distinguish an active-tab move (which the host's reset must drive) from a
+// non-active one when neither the DOM nor the store exposes the active, so
+// clearing here would suppress a legitimate replacement.
+// =====================================================================
+{
+  let cleared = 0
+  __setHostActiveTabIdForTest(null)
+  __setClearPendingActiveTabResetForTest(() => { cleared++ })
+
+  assertEqual(clearSpuriousActiveTabReset('personas'), false, 'T9a: unknown active → not cleared')
+  assertEqual(cleared, 0, 'T9b: clear action never called')
+  restore()
+}
+
+// =====================================================================
 // Summary
 // =====================================================================
 if (failed > 0) {
