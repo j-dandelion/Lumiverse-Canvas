@@ -1,15 +1,16 @@
-// Reassign tails must read the TRACKED active (2026-09): clicking a
-// pinned-strip tab while the drawer is closed writes only the tracked cell
-// (tabs/active-tab.ts) — the state-machine cell (secondary-drawer
-// `_activeTabId`) is not updated by the click path. The empty-content
-// restore tails in reassignSecondaryTabsFromModel previously guarded on the
-// STATE-MACHINE cell, so after the active tab was moved out (cell nulled),
-// clicking another pinned tab made the tail auto-activate the FIRST placed
-// tab instead of the clicked one.
+// Reassign tails use DISPLAY TRUTH (2026-09): the tracked active
+// (tabs/active-tab.ts) is intent-memory — the boot model→chrome echo seeds
+// it with the persisted active even when the drawer was closed and no root
+// was ever displayed. Guarding the empty-content tails on `tracked === null`
+// made "close secondary → refresh → open" skip activation: no root gained
+// data-canvas-active → empty panel + no highlight. A real pinned-strip click
+// runs showSecondaryTab, which sets data-canvas-active on the root, so
+// `secondaryHasDisplayedRoot()` preserves the click and only fires the tail
+// when nothing is displayed. The target is the tracked/boot-restore tab
+// (fallback: first placed), never an arbitrary first tab.
 //
 // These tests drive the REAL reassignSecondaryTabsFromModel with
-// module-mocked drawer-observer + secondary-drawer (activation captured)
-// and assert the tails no-op when the tracked cell holds the user's click.
+// module-mocked drawer-observer + secondary-drawer (activation captured).
 
 let passed = 0
 let failed = 0
@@ -78,6 +79,16 @@ class StubElement {
   querySelector(sel: string): StubElement | null {
     if (sel === '.sidebar-ux-tab-list' && this._tabList) return this._tabList
     if (sel === '.sidebar-ux-panel-content' && this._panelContent) return this._panelContent
+    if (sel === '[data-canvas-moved][data-canvas-active]') {
+      // secondaryHasDisplayedRoot() probes the panel content for a displayed
+      // moved root — walk the stub tree for both attributes.
+      const walk = (n: StubElement): StubElement | null => {
+        if (n.getAttribute('data-canvas-moved') !== null && n.getAttribute('data-canvas-active') !== null) return n
+        for (const c of n.children) { const hit = walk(c); if (hit) return hit }
+        return null
+      }
+      for (const c of this.children) { const hit = walk(c); if (hit) return hit }
+    }
     return null
   }
   querySelectorAll(sel: string): StubElement[] {
@@ -195,8 +206,20 @@ function setupList(buttonIds: string[]): StubElement {
   ;(list as any)._buttons = buttons
   list.className = 'sidebar-ux-tab-list'
   ;(wrapper as any)._tabList = list
+  const content = new StubElement()
+  content.className = 'sidebar-ux-panel-content'
+  ;(wrapper as any)._panelContent = content
   __setSecondaryWrapperForTest(wrapper as any)
   return wrapper
+}
+
+/** Mark a placed root as displayed (showSecondaryTab sets both attrs). */
+function displayRoot(wrapper: StubElement, id: string): void {
+  const content = (wrapper as any)._panelContent as StubElement
+  const root = new StubElement()
+  root.setAttribute('data-canvas-moved', id)
+  root.setAttribute('data-canvas-active', '')
+  content.appendChild(root)
 }
 
 function resetState(): void {
@@ -208,20 +231,40 @@ function resetState(): void {
   __setSecondaryWrapperForTest(null)
 }
 
-// ── T1: all-placed branch — tracked click wins, no auto-activation ──
+// ── T1: all-placed branch — a DISPLAYED pinned click is preserved ──
+{
+  resetState()
+  setTabAssignment('ext:ext:a/A', 'secondary')
+  setTabAssignment('ext:ext:b/B', 'secondary')
+  const wrapper = setupList(['h:a', 'h:b'])
+  setSecondarySidebarOpen(true)
+  // The user clicked pinned tab 'h:a': showSecondaryTab displayed its root.
+  displayRoot(wrapper, 'h:a')
+  setActiveSecondaryTabId('h:a', { silent: true })
+
+  reassignSecondaryTabsFromModel()
+  await settle()
+
+  assertEqual(activated.length, 0, 'T1: no auto-activation over the displayed clicked tab')
+}
+
+// ── T1b: all-placed branch — echo-seeded tracked + NOTHING displayed
+//    ("close secondary → refresh → open") → show the tracked tab ──
 {
   resetState()
   setTabAssignment('ext:ext:a/A', 'secondary')
   setTabAssignment('ext:ext:b/B', 'secondary')
   setupList(['h:a', 'h:b'])
   setSecondarySidebarOpen(true)
-  // The user clicked pinned tab 'h:a' (tracked cell only).
-  setActiveSecondaryTabId('h:a', { silent: true })
+  // The boot reconcile echo seeded tracked while the drawer was closed; no
+  // root was ever displayed.
+  setActiveSecondaryTabId('h:b', { silent: true })
 
   reassignSecondaryTabsFromModel()
   await settle()
 
-  assertEqual(activated.length, 0, 'T1: no auto-activation over the clicked tab')
+  assertEqual(activated.length, 1, 'T1b: tail fires when nothing is displayed')
+  assertEqual(activated[0], 'h:b', 'T1b: shows the tracked tab, not the first')
 }
 
 // ── T2: all-placed branch — no tracked (restore/empty) → first-list fallback ──
@@ -240,20 +283,38 @@ function resetState(): void {
   assertEqual(activated[0], 'h:a', 'T2: fallback activates first list tab')
 }
 
-// ── T3: placement-loop branch — tracked click wins, no auto-activation ──
+// ── T3: placement-loop branch — a DISPLAYED pinned click is preserved ──
 {
   resetState()
   setTabAssignment('ext:ext:a/A', 'secondary')
   setTabAssignment('ext:ext:b/B', 'secondary')
   // Only one button placed → the placement loop runs for the second tab.
-  setupList(['h:a'])
+  const wrapper = setupList(['h:a'])
+  setSecondarySidebarOpen(true)
+  displayRoot(wrapper, 'h:b')
+  setActiveSecondaryTabId('h:b', { silent: true })
+
+  reassignSecondaryTabsFromModel()
+  await settle()
+
+  assertEqual(activated.length, 0, 'T3: loop tail does not overwrite the displayed clicked tab')
+}
+
+// ── T3b: placement-loop branch — echo-seeded tracked + nothing displayed →
+//    activate the tracked tab (not the first placed) ──
+{
+  resetState()
+  setTabAssignment('ext:ext:a/A', 'secondary')
+  setTabAssignment('ext:ext:b/B', 'secondary')
+  setupList(['h:a']) // h:b not placed yet → placement loop runs
   setSecondarySidebarOpen(true)
   setActiveSecondaryTabId('h:b', { silent: true })
 
   reassignSecondaryTabsFromModel()
   await settle()
 
-  assertEqual(activated.length, 0, 'T3: loop tail does not overwrite the clicked tab')
+  assertEqual(activated.length, 1, 'T3b: loop tail fires when nothing is displayed')
+  assertEqual(activated[0], 'h:b', 'T3b: activates the tracked tab, not the first placed')
 }
 
 // ── T4: placement-loop branch — no tracked → first-placed fallback ──

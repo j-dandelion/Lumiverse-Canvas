@@ -136,11 +136,14 @@ export function setup(ctx: SpindleFrontendContext) {
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
-  registerCleanup(() => {
-    // Only clear if we still own this generation's ctx (replacement setup
-    // already installed a newer context).
-    if (generation === _setupGeneration) setHostBridgeContext(null)
-  })
+  // NOTE (2026-09-12 teardown fix): the host-bridge context must stay alive
+  // through the WHOLE cleanup chain — feature teardowns (notably
+  // tearDownSecondarySidebar) use ctx.ui to move built-in tabs back to the
+  // host drawer and classify built-in vs extension roots. It is cleared at
+  // the END of the returned teardown, after cleanupAll(). An early clear here
+  // ran before those teardowns and left built-in tabLocations pointing at the
+  // removed secondary container → the vanilla drawer returned with an empty
+  // tab strip.
 
   // Force-flush any pending debounced save before the page unloads.
   // Without these, a settings change made <100ms before close is lost.
@@ -515,5 +518,9 @@ export function setup(ctx: SpindleFrontendContext) {
     // hydration; cancellation is the final teardown step.
     cancelLoadSavedLayout()
     if (getBackendCtx() === ctx) setBackendCtx(null)
+    // Clear the host-bridge context only AFTER the cleanup chain has fully
+    // run (2026-09-12): feature teardowns use ctx.ui for built-in tab restore.
+    // The generation check above guarantees we never clear a newer ctx.
+    setHostBridgeContext(null)
   }
 }

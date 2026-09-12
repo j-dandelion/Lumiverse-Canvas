@@ -210,6 +210,134 @@ export function getStoreSnapshot(): Record<string, unknown> | null {
   return _storeSnapshotCache
 }
 
+/**
+ * Call a main-store Zustand action directly from the React fiber tree.
+ *
+ * Teardown paths need this: during extension disable the host invalidates the
+ * frontend generation BEFORE running the cleanup chain, so every ctx API call
+ * throws `SPINDLE_FRONTEND_INACTIVE` (assertFrontendActive) — but the raw
+ * store action (`useStore.getState()[name]`) still works. The critical one is
+ * `unregisterContainer`: while Canvas's container entry stays registered, the
+ * host keeps routing its tabs into the detached Canvas element and never heals
+ * them; once removed, ContainerTabContent's Pass 3 resets every affected tab
+ * to `{kind:'main-drawer'}`.
+ *
+ * How the API object is found: zustand v5's `useStore` calls
+ * `React.useCallback(() => selector(api.getState()), [api, selector])`, and
+ * React stores a useCallback hook as `[callback, deps]` — so the deps array
+ * contains the store API (`{getState, setState, subscribe, …}`) for EVERY
+ * component that subscribes with a selector.
+ *
+ * Returns false when the action is not reachable so callers can log/degrade.
+ */
+type HostStoreApi = {
+  getState?: () => Record<string, unknown> | null
+  setState?: (...args: unknown[]) => unknown
+}
+
+function looksLikeStoreApi(v: unknown): v is HostStoreApi {
+  if (!v || (typeof v !== 'object' && typeof v !== 'function')) return false
+  const rec = v as HostStoreApi
+  return typeof rec.getState === 'function' && typeof rec.setState === 'function'
+}
+
+/** Bounded recursive search for a store API in a hook memoizedState. */
+function findStoreApiIn(value: unknown, depth: number): HostStoreApi | null {
+  if (depth < 0 || value == null) return null
+  const t = typeof value
+  if (t !== 'object' && t !== 'function') return null
+  if (looksLikeStoreApi(value)) return value
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findStoreApiIn(item, depth - 1)
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+function scanFiberForStoreApi(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fiber: any,
+  depth: number,
+  maxDepth: number,
+  visited: Set<unknown>,
+): HostStoreApi | null {
+  if (!fiber || depth > maxDepth || visited.has(fiber)) return null
+  visited.add(fiber)
+
+  let hook = fiber.memoizedState
+  let hookIdx = 0
+  while (hook && hookIdx < 60) {
+    const hit = findStoreApiIn(hook.memoizedState, 3)
+    if (hit) {
+      try {
+        const state = hit.getState?.()
+        if (state && typeof state === 'object'
+            && ('unregisterContainer' in state || 'drawerTabs' in state)) {
+          return hit
+        }
+      } catch { /* not the app store — keep scanning */ }
+    }
+    hook = hook.next
+    hookIdx++
+  }
+
+  return scanFiberForStoreApi(fiber.child, depth + 1, maxDepth, visited)
+      ?? scanFiberForStoreApi(fiber.sibling, depth, maxDepth, visited)
+}
+
+/** Locate the host Zustand API object via React fiber hook deps. */
+export function findHostStoreApi(): HostStoreApi | null {
+  if (typeof document === 'undefined') return null
+  const anchors: Array<Element | null> = []
+  try {
+    anchors.push(
+      getMainSidebar(),
+      document.getElementById?.('root') ?? null,
+      document.getElementById?.('app') ?? null,
+      document.body ?? null,
+    )
+  } catch { /* non-DOM environment */ }
+
+  for (const el of anchors) {
+    if (!el) continue
+    const fiber = getFiberFromElement(el)
+    if (!fiber) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let root: any = fiber
+    while (root?.return) root = root.return
+    const hit = scanFiberForStoreApi(root, 0, 90, new Set())
+    if (hit) return hit
+  }
+  return null
+}
+
+export function callHostStoreAction(name: string, ...args: unknown[]): boolean {
+  // Preferred: the real Zustand API from React hook deps.
+  const api = findHostStoreApi()
+  if (api?.getState) {
+    try {
+      const state = api.getState()
+      const fn = state?.[name]
+      if (typeof fn === 'function') {
+        ;(fn as (...a: unknown[]) => unknown).apply(state, args)
+        return true
+      }
+    } catch { /* fall through to the snapshot cache */ }
+  }
+  // Fallback: the coarse fiber snapshot cache (may not carry actions).
+  findStoreData(true)
+  const snapFn = (_storeSnapshotCache as Record<string, unknown> | null)?.[name]
+  if (typeof snapFn !== 'function') return false
+  try {
+    ;(snapFn as (...a: unknown[]) => unknown)(...args)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function isMainDrawerOpen(): boolean {
   // DOM first: the wrapper's className updates synchronously when the user
   // closes/opens the drawer, so it's the authoritative "is the drawer

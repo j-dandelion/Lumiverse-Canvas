@@ -43,7 +43,7 @@ import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../persist/layout-load'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
-import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
+import { applyTabListPosition, applyTabListPin, clearTabListPosition, reconcileTabListPin } from '../sidebar/tab-position'
 import { applyMainTabListPin, reconcileMainTabListPin, teardownMainPin } from '../sidebar/main-tab-pin'
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
@@ -531,5 +531,9 @@ export function alwaysCleanups(): Teardown[] {
   return [
     unmountToastSurface,
     slashAlwaysCleanup,
+    // Outer-edge writes inline flex/borders on the HOST drawer elements;
+    // without this reset a disable while outer-edge was on left the vanilla
+    // tab strip flipped to the outer edge (2026-09-12 teardown report).
+    clearTabListPosition,
   ]
 }

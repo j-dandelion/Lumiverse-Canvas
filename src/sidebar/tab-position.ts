@@ -325,6 +325,32 @@ export function applyTabListPosition(
   }
 }
 
+/**
+ * Remove Canvas's inline position/chrome writes from the drawer elements,
+ * restoring the vanilla host layout. Called from the always-cleanups chain on
+ * extension disable: the outer-edge toggle writes inline flex-direction /
+ * borders on the HOST main drawer + sidebar (+ panel), and nothing else
+ * reverses them — the disabled Vanilla drawer came back with its tab strip
+ * flipped to the outer edge (2026-09-12 teardown report). The Canvas shells
+ * are removed by their own teardowns, so this only needs the host elements
+ * (secondary entries are belt & suspenders while the wrapper is still up).
+ */
+export function clearTabListPosition(): void {
+  const clearProps = (
+    el: StyledElement | null | undefined,
+    props: readonly string[],
+  ): void => {
+    if (!el?.style) return
+    for (const p of props) (el.style as any)[p] = ''
+  }
+  clearProps(getSecondaryDrawer(), ['flexDirection'])
+  clearProps(getSecondaryTabList(), ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'])
+  clearProps(getSecondaryPanel(), ['borderLeft', 'borderRight'])
+  clearProps(getMainDrawer(), ['flexDirection'])
+  clearProps(getMainSidebar(), ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'])
+  clearProps(getMainPanel(), ['borderLeft', 'borderRight'])
+}
+
 /** Read the current inline style state of the elements. Returns
  *  empty strings for any element that is null. */
 export function getTabListPosition(opts?: ElementOpts): {

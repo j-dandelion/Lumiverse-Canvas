@@ -108,7 +108,7 @@ Object.defineProperty(stubSidebar, 'parentElement', {
 }
 
 // --- Import after stubs are in place ---
-import { applyTabListPosition, getTabListPosition } from '../tab-position'
+import { applyTabListPosition, clearTabListPosition, getTabListPosition } from '../tab-position'
 import { __setSecondaryWrapperForTest } from '../secondary'
 
 // Stub elements expose a StubStyle, not a real CSSStyleDeclaration. The
@@ -512,6 +512,35 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(stubTabList.style.borderLeft, '1px solid var(--lumiverse-primary-020)', 'C13: side=left build default matches apply(false) borderLeft')
   assert(stubTabList.style.borderRight === '' || stubTabList.style.borderRight === 'none',
     'C13: side=left inactive border is empty or "none"')
+}
+
+// ============================================================
+// C14: clearTabListPosition removes Canvas's inline writes (disable seam)
+// ============================================================
+{
+  stubWrapper.className = 'wrapperRight'
+  stubWrapper.closest = () => stubWrapper
+  stubDrawerParent.style = new StubStyle()
+  stubSidebar.style = new StubStyle()
+  stubMainPanel.style = new StubStyle()
+
+  // Simulate outer-edge ON applied to the HOST main elements.
+  applyTabListPosition(true, fullOpts(stubDrawer, stubTabList, stubHandle, stubDrawerParent, stubSidebar))
+  assert(stubDrawerParent.style.flexDirection !== '', 'C14 precondition: host main drawer flipped')
+  assert(
+    stubSidebar.style.borderLeft !== '' || stubSidebar.style.borderRight !== '',
+    'C14 precondition: host main tab list border written',
+  )
+
+  clearTabListPosition()
+
+  assertEqual(stubDrawerParent.style.flexDirection, '', 'C14: main drawer flex cleared')
+  assertEqual(stubSidebar.style.borderLeft, '', 'C14: main tab list borderLeft cleared')
+  assertEqual(stubSidebar.style.borderRight, '', 'C14: main tab list borderRight cleared')
+  assertEqual(stubSidebar.style.borderTop, '', 'C14: main tab list borderTop cleared')
+  assertEqual(stubSidebar.style.borderBottom, '', 'C14: main tab list borderBottom cleared')
+  assertEqual(stubMainPanel.style.borderLeft, '', 'C14: main panel borderLeft cleared')
+  assertEqual(stubMainPanel.style.borderRight, '', 'C14: main panel borderRight cleared')
 }
 
 // ============================================================

@@ -13,7 +13,7 @@
 // transform is -width). getClosedTransformPx() centralizes this.
 import { getMainSidebar, getMainPanelContent } from '../dom/lumiverse'
 import { getHostBridge } from '../dom/host-bridge'
-import { getDrawerTabs, getMainDrawerSide } from '../store'
+import { getDrawerTabs, getMainDrawerSide, callHostStoreAction } from '../store'
 import { updateChatReflow } from '../chat/reflow'
 // NOTE: drawer-sync.ts imports from this module (bidirectional). Both modules
 // only call each other from inside function bodies — never at module init time.
@@ -22,7 +22,7 @@ import { syncDrawerTabSettings } from './drawer-sync'
 import { mountResizeHandles } from '../resize/handles'
 import { isTabActiveInMainDrawer, clearTabAssignments, getTabAssignments } from '../tabs/assignment'
 import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } from '../tabs/buttons'
-import { requestHostTabToMain } from '../tabs/host-tab-location'
+import { requestHostTabToMain, CANVAS_SECONDARY_CONTAINER_ID } from '../tabs/host-tab-location'
 import { restoreDomPlacedBuiltInToMain } from '../tabs/dom-placed-builtin'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
 import { animateWrapper } from './animation'
@@ -376,32 +376,34 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
             .filter((id): id is string => !!id)
         : []
 
-      // Tail gate (2026-09 boot-empty regression): bootstrapFromLayout is the
-      // only caller that passes activateKey. At boot the model→chrome echo
+      // Tail gate — DISPLAY TRUTH for both boot and mid-session (boot-empty
+      // regression 2026-09; mid-session half fixed 2026-09-12). The tracked
+      // cell is intent-memory, NOT display truth: the model→chrome echo
       // (reconcile diffActive → host.activate('secondary') → silent
-      // showSecondaryTab) seeds the TRACKED cell with the persisted active
-      // BEFORE any root is placed — so the mid-session `!tracked` guard made
-      // the empty-content tails skip and every placed root stayed
-      // data-canvas-active-less → `display:none` → a black open drawer at
-      // boot. The boot path therefore keys off DISPLAY truth (nothing shown),
-      // not the tracked cell: the echoed value is the same persisted active
-      // the tail would show anyway, and no user click can exist mid-boot
-      // (a real one would leave a shown root → tail stays silent). Mid-session
-      // reopen keeps the tracked guard so a pinned-strip click (tracked only,
-      // never the state-machine cell) is never overridden by the first tab.
-      const bootRestore = opts?.activateKey != null
-      const tailCanShow = bootRestore
-        ? !secondaryHasDisplayedRoot()
-        : getActiveSecondaryTabId() === null
+      // showSecondaryTab) seeds it with the persisted active before any root
+      // is placed — including a boot with the drawer CLOSED, where nothing was
+      // ever displayed. The old mid-session guard (`tracked === null`) treated
+      // that echo as a user click, so "close secondary → refresh → open" ran
+      // the all-placed branch with tailCanShow=false: no root gained
+      // data-canvas-active → empty panel + no highlight. A real pinned-strip
+      // click runs showSecondaryTab, which sets data-canvas-active on the
+      // root, so display truth covers the click-preservation case too.
+      const tailCanShow = !secondaryHasDisplayedRoot()
+      // Preferred candidate: boot restore = the persisted active.secondary
+      // (activateKey); mid-session = the tracked cell (last user click or the
+      // echo's persisted value) — the tab a reopen should land on. When it is
+      // absent or not placed, the tails fall back to the first placed tab.
+      const preferredLive = opts?.activateKey
+        ? liveIdForFacadeKey(opts.activateKey, tabs)
+        : getActiveSecondaryTabId()
       if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
         dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`)
-        // Empty-content restore: a just-clicked pinned tab wrote only the
-        // tracked cell, and the tail must never overwrite it with listIds[0]
-        // (2026-09 pinned-strip click regression). Boot restore (activateKey
-        // present) is the exception — see tailCanShow above.
+        // Empty-content restore: a just-clicked pinned tab has ALREADY
+        // displayed its root (showSecondaryTab), so tailCanShow is false and
+        // nothing runs. When the tail does run, the preferred value is the
+        // tracked/activateKey tab, never an arbitrary first tab.
         if (isSecondarySidebarOpen() && tailCanShow && listIds.length > 0) {
-          const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
-          const target = preferred && listIds.includes(preferred) ? preferred : listIds[0]!
+          const target = preferredLive && listIds.includes(preferredLive) ? preferredLive : listIds[0]!
           dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
           setActiveSecondaryTabId(target)
           activateSecondaryTab(target)
@@ -439,13 +441,12 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
 
       // Content restore (2026-07-31): nothing was displayed above — the
       // finalize's showSecondaryTabDisplay is gated on !deferActivation.
-      // A user click that set the tracked cell must not be overwritten by the
-      // first placed tab (2026-09); boot restore uses display truth instead
-      // (see tailCanShow above).
+      // tailCanShow already excludes the displayed-click case (display truth);
+      // preferredLive keeps the tracked/boot-restore tab as the target instead
+      // of blindly showing the first placed tab.
       if (isSecondarySidebarOpen() && tailCanShow && placed.length > 0) {
-        const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null
-        const target = preferred && placed.includes(preferred) ? preferred : placed[0]!
-        dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? ' (preferred missing)' : ''}`)
+        const target = preferredLive && placed.includes(preferredLive) ? preferredLive : placed[0]!
+        dlog(`[secondary] open loop: showing "${target}"${preferredLive && preferredLive !== target ? ' (preferred missing)' : ''}`)
         setActiveSecondaryTabId(target)
         activateSecondaryTab(target)
       }
@@ -852,72 +853,114 @@ export function tearDownSecondarySidebar(): void {
       title: t.title,
     }))
     for (const [assignedKey] of Array.from(getTabAssignments())) {
-      const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey
-      // Built-in detection: the host bridge can lazy-resolve a root for
-      // built-in tab IDs. Extension tab IDs return undefined.
-      const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null
-      const _movedRoot = _secondaryWrapper?.querySelector(
-        `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
-      ) as HTMLElement | null
-      const _domPlaced = !!_movedRoot?.hasAttribute('data-canvas-dom-placed')
-
-      if (_isBuiltIn) {
-        // Prefer verified host reset (bridge + store.moveTabTo fallback).
+      try {
+        const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey
+        // Built-in detection: the host bridge can lazy-resolve a root for
+        // built-in tab IDs. Extension tab IDs return undefined.
+        //
+        // Extension disable: the host invalidates the frontend generation
+        // BEFORE running the cleanup chain, so this call throws
+        // `SPINDLE_FRONTEND_INACTIVE`. Swallow it and treat the tab as a
+        // Canvas-owned root — the DOM hand-off below restores it. Without
+        // this, ONE throw aborted the whole teardown: the wrapper stayed in
+        // the DOM with every root still inside, and the vanilla drawer
+        // rendered empty panels (2026-09-12 live report — lorebook stuck).
+        let _isBuiltIn = false
         try {
-          requestHostTabToMain(tabId)
-        } catch (err) {
-          if (_wSpindleUi?.requestTabLocation) {
-            try {
-              _wSpindleUi.requestTabLocation(tabId, { kind: 'main-drawer' })
-            } catch (err2) {
-              dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err2)
-            }
-          } else {
-            dwarn(`[tabmove] teardown: requestHostTabToMain failed for tabId=${tabId}:`, err)
-          }
+          _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null
+        } catch {
+          _isBuiltIn = false
         }
-      }
+        const _movedRoot = _secondaryWrapper?.querySelector(
+          `.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`
+        ) as HTMLElement | null
+        const _domPlaced = !!_movedRoot?.hasAttribute('data-canvas-dom-placed')
 
-      // Extension roots and DOM-placed non-CORE built-ins: Canvas owns the
-      // node — DETACH it back to host ownership. The host re-attaches the
-      // root into TabPanelContent's containerRef when the tab activates
-      // (and ContainerTabContent Pass 3 heals stale tabLocations). Do NOT
-      // append into main panelContent: that node is the node the main-mirror
-      // parks in its shell, so orphan roots there render as stacked panels
-      // inside the mirror — the "content stays on a previous tab" bug after
-      // Configure → Enable second drawer OFF (2026-08-17). Host-owned CORE
-      // roots skip this so React reconciliation is not raced (duplicate
-      // stack bug).
-      if (!_isBuiltIn || _domPlaced) {
-        if (_domPlaced) {
-          restoreDomPlacedBuiltInToMain(tabId, _movedRoot)
-        } else {
-          if (_movedRoot && _movedRoot.parentElement) {
-            try {
-              _movedRoot.parentElement.removeChild(_movedRoot)
-            } catch {
-              /* host may have removed it already */
+        if (_isBuiltIn) {
+          // Prefer verified host reset (bridge + store.moveTabTo fallback).
+          try {
+            requestHostTabToMain(tabId)
+          } catch (err) {
+            if (_wSpindleUi?.requestTabLocation) {
+              try {
+                _wSpindleUi.requestTabLocation(tabId, { kind: 'main-drawer' })
+              } catch (err2) {
+                dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err2)
+              }
+            } else {
+              dwarn(`[tabmove] teardown: requestHostTabToMain failed for tabId=${tabId}:`, err)
             }
           }
-          if (_movedRoot) {
-            _movedRoot.removeAttribute('data-canvas-moved')
-            _movedRoot.removeAttribute('data-canvas-active')
-            _movedRoot.removeAttribute('data-canvas-dom-placed')
-            _movedRoot.style.removeProperty('position')
-            _movedRoot.style.removeProperty('inset')
-            _movedRoot.style.removeProperty('display')
+        }
+
+        // Extension roots and DOM-placed non-CORE built-ins: Canvas owns the
+        // node — DETACH it back to host ownership. The host re-attaches the
+        // root into TabPanelContent's containerRef when the tab activates
+        // (and ContainerTabContent Pass 3 heals stale tabLocations). Do NOT
+        // append into main panelContent: that node is the node the main-mirror
+        // parks in its shell, so orphan roots there render as stacked panels
+        // inside the mirror — the "content stays on a previous tab" bug after
+        // Configure → Enable second drawer OFF (2026-08-17). Host-owned CORE
+        // roots skip this so React reconciliation is not raced (duplicate
+        // stack bug).
+        if (!_isBuiltIn || _domPlaced) {
+          if (_domPlaced) {
+            restoreDomPlacedBuiltInToMain(tabId, _movedRoot)
+          } else {
+            if (_movedRoot && _movedRoot.parentElement) {
+              try {
+                _movedRoot.parentElement.removeChild(_movedRoot)
+              } catch {
+                /* host may have removed it already */
+              }
+            }
+            if (_movedRoot) {
+              _movedRoot.removeAttribute('data-canvas-moved')
+              _movedRoot.removeAttribute('data-canvas-active')
+              _movedRoot.removeAttribute('data-canvas-dom-placed')
+              _movedRoot.style.removeProperty('position')
+              _movedRoot.style.removeProperty('inset')
+              _movedRoot.style.removeProperty('display')
+            }
           }
         }
+        showMainTabButton(tabId)
+      } catch (err) {
+        // A single tab's restore must never abort the wrapper removal and
+        // leave every remaining root parked in the dead Canvas shell.
+        dwarn(`[tabmove] teardown: restore failed for "${assignedKey}":`, err)
       }
-      showMainTabButton(tabId)
     }
     // Unregister the container from the host bridge so re-enabling
     // (mount → registerContainer) doesn't conflict with a stale entry.
+    //
+    // Extension disable: the ctx wrapper is generation-gated and throws
+    // SPINDLE_FRONTEND_INACTIVE. The unregister is REQUIRED for the host to
+    // heal the tabs — while the entry stays registered, ContainerTabContent
+    // keeps routing tab roots into the detached Canvas element and Pass 3
+    // never resets them to main-drawer (live report 2026-09-12: Theme/Lore/
+    // Profile panels stayed empty after disable). Fall back to the raw
+    // Zustand action via the fiber snapshot.
+    let containerUnregistered = false
     try {
       const wContainers = getHostBridge()?.containers
-      wContainers?.unregisterContainer?.('canvas-secondary-drawer')
+      if (wContainers?.unregisterContainer) {
+        wContainers.unregisterContainer(CANVAS_SECONDARY_CONTAINER_ID)
+        containerUnregistered = true
+      }
     } catch (err) {
       dwarn('[tabmove] teardown: unregisterContainer failed:', err)
+    }
+    if (!containerUnregistered
+        && callHostStoreAction('unregisterContainer', CANVAS_SECONDARY_CONTAINER_ID)) {
+      containerUnregistered = true
+      dlog('[tabmove] teardown: unregisterContainer via raw store action')
+    }
+    if (!containerUnregistered) {
+      dwarn(
+        '[tabmove] teardown: unregisterContainer unavailable — tabs mapped to ' +
+        `"${CANVAS_SECONDARY_CONTAINER_ID}" may not heal until the page reloads`,
+      )
     }
     // Drop the secondary drawer's resize handle explicitly so a re-mount
     // creates a fresh one (the wrapper.remove() below also drops it — this
@@ -945,7 +988,17 @@ export function tearDownSecondarySidebar(): void {
   // Main-mirror filters display:none host buttons and only rebuilds on its
   // own reconcile (observer does not watch style). Teardown unhides secondary
   // tabs via showMainTabButton — force pin strip to pick them up.
-  void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => {
+  //
+  // Guard (2026-09-12 teardown report): only refresh while the main mirror is
+  // live. On extension disable teardownMainMirror has already run, and
+  // reconcileMainTabListPin → reconcileMainMirrorDrawer REMOUNTS the shell
+  // unconditionally (S1 ownership) — a post-disable Canvas shell with an
+  // empty tab list left at the outer edge. Mid-session (second-drawer toggle
+  // off) the mirror is active and the refresh still runs.
+  void import('./main-tab-pin').then(async (m) => {
+    const mirror = await import('./main-mirror-drawer')
+    if (mirror.isMainMirrorActive()) m.reconcileMainTabListPin()
+  }).catch((err) => {
     dwarn('[tabmove] teardown: reconcileMainTabListPin failed:', err)
   })
   // Disconnect the panel-header observers (tearDownSecondarySidebar is

@@ -1519,6 +1519,7 @@ __export(exports_tab_position, {
   applyTabListPin: () => applyTabListPin,
   applyTabListPosition: () => applyTabListPosition,
   clearPinnedTabListChrome: () => clearPinnedTabListChrome,
+  clearTabListPosition: () => clearTabListPosition,
   destroyMainPinHost: () => destroyMainPinHost,
   ensureMainPinHost: () => ensureMainPinHost,
   getMainPinHost: () => getMainPinHost,
@@ -1688,6 +1689,20 @@ function applyTabListPosition(enabled, opts) {
     if (mainPanel)
       applyPanelChatBorder(mainPanel, side, chatBorder);
   }
+}
+function clearTabListPosition() {
+  const clearProps = (el, props) => {
+    if (!el?.style)
+      return;
+    for (const p of props)
+      el.style[p] = "";
+  };
+  clearProps(getSecondaryDrawer(), ["flexDirection"]);
+  clearProps(getSecondaryTabList(), ["borderTop", "borderBottom", "borderLeft", "borderRight"]);
+  clearProps(getSecondaryPanel(), ["borderLeft", "borderRight"]);
+  clearProps(getMainDrawer(), ["flexDirection"]);
+  clearProps(getMainSidebar(), ["borderTop", "borderBottom", "borderLeft", "borderRight"]);
+  clearProps(getMainPanel(), ["borderLeft", "borderRight"]);
 }
 function getTabListPosition(opts) {
   const empty = {
@@ -13200,6 +13215,8 @@ __export(exports_store, {
   __setDrawerTabsForTest: () => __setDrawerTabsForTest,
   __setStoreSnapshotForTest: () => __setStoreSnapshotForTest,
   asDrawerStore: () => asDrawerStore,
+  callHostStoreAction: () => callHostStoreAction,
+  findHostStoreApi: () => findHostStoreApi,
   findStoreData: () => findStoreData,
   getActiveModal: () => getActiveModal,
   getDrawerTabs: () => getDrawerTabs,
@@ -13317,6 +13334,95 @@ function getHostStoreTabs() {
 function getStoreSnapshot() {
   findStoreData();
   return _storeSnapshotCache;
+}
+function looksLikeStoreApi(v3) {
+  if (!v3 || typeof v3 !== "object" && typeof v3 !== "function")
+    return false;
+  const rec = v3;
+  return typeof rec.getState === "function" && typeof rec.setState === "function";
+}
+function findStoreApiIn(value, depth) {
+  if (depth < 0 || value == null)
+    return null;
+  const t3 = typeof value;
+  if (t3 !== "object" && t3 !== "function")
+    return null;
+  if (looksLikeStoreApi(value))
+    return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findStoreApiIn(item, depth - 1);
+      if (hit)
+        return hit;
+    }
+  }
+  return null;
+}
+function scanFiberForStoreApi(fiber, depth, maxDepth, visited) {
+  if (!fiber || depth > maxDepth || visited.has(fiber))
+    return null;
+  visited.add(fiber);
+  let hook = fiber.memoizedState;
+  let hookIdx = 0;
+  while (hook && hookIdx < 60) {
+    const hit = findStoreApiIn(hook.memoizedState, 3);
+    if (hit) {
+      try {
+        const state = hit.getState?.();
+        if (state && typeof state === "object" && (("unregisterContainer" in state) || ("drawerTabs" in state))) {
+          return hit;
+        }
+      } catch {}
+    }
+    hook = hook.next;
+    hookIdx++;
+  }
+  return scanFiberForStoreApi(fiber.child, depth + 1, maxDepth, visited) ?? scanFiberForStoreApi(fiber.sibling, depth, maxDepth, visited);
+}
+function findHostStoreApi() {
+  if (typeof document === "undefined")
+    return null;
+  const anchors = [];
+  try {
+    anchors.push(getMainSidebar(), document.getElementById?.("root") ?? null, document.getElementById?.("app") ?? null, document.body ?? null);
+  } catch {}
+  for (const el of anchors) {
+    if (!el)
+      continue;
+    const fiber = getFiberFromElement(el);
+    if (!fiber)
+      continue;
+    let root = fiber;
+    while (root?.return)
+      root = root.return;
+    const hit = scanFiberForStoreApi(root, 0, 90, new Set);
+    if (hit)
+      return hit;
+  }
+  return null;
+}
+function callHostStoreAction(name, ...args) {
+  const api = findHostStoreApi();
+  if (api?.getState) {
+    try {
+      const state = api.getState();
+      const fn = state?.[name];
+      if (typeof fn === "function") {
+        fn.apply(state, args);
+        return true;
+      }
+    } catch {}
+  }
+  findStoreData(true);
+  const snapFn = _storeSnapshotCache?.[name];
+  if (typeof snapFn !== "function")
+    return false;
+  try {
+    snapFn(...args);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function isMainDrawerOpen() {
   const wrapper = getMainWrapper();
@@ -13532,13 +13638,12 @@ function runReassign(opts) {
     const tabs = drawerObserver.getAllTabs();
     const modelSecondaryKeys = Array.from(getTabAssignments()).filter(([, side]) => side === "secondary").map(([key]) => key);
     const listIds = getSecondaryTabList() ? Array.from(getSecondaryTabList().querySelectorAll("button[data-tab-id]")).map((el) => el.getAttribute("data-tab-id")).filter((id) => !!id) : [];
-    const bootRestore = opts?.activateKey != null;
-    const tailCanShow = bootRestore ? !secondaryHasDisplayedRoot() : getActiveSecondaryTabId() === null;
+    const tailCanShow = !secondaryHasDisplayedRoot();
+    const preferredLive = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : getActiveSecondaryTabId();
     if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
       dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`);
       if (isSecondarySidebarOpen() && tailCanShow && listIds.length > 0) {
-        const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null;
-        const target = preferred && listIds.includes(preferred) ? preferred : listIds[0];
+        const target = preferredLive && listIds.includes(preferredLive) ? preferredLive : listIds[0];
         dlog(`[secondary] open loop: showing "${target}" (placed, no active)`);
         setActiveSecondaryTabId(target);
         activateSecondaryTab2(target);
@@ -13560,9 +13665,8 @@ function runReassign(opts) {
     }
     setSuppressAutoActivation(false);
     if (isSecondarySidebarOpen() && tailCanShow && placed.length > 0) {
-      const preferred = opts?.activateKey ? liveIdForFacadeKey(opts.activateKey, tabs) : null;
-      const target = preferred && placed.includes(preferred) ? preferred : placed[0];
-      dlog(`[secondary] open loop: showing "${target}"${preferred && preferred !== target ? " (preferred missing)" : ""}`);
+      const target = preferredLive && placed.includes(preferredLive) ? preferredLive : placed[0];
+      dlog(`[secondary] open loop: showing "${target}"${preferredLive && preferredLive !== target ? " (preferred missing)" : ""}`);
       setActiveSecondaryTabId(target);
       activateSecondaryTab2(target);
     }
@@ -13785,51 +13889,71 @@ function tearDownSecondarySidebar() {
       title: t3.title
     }));
     for (const [assignedKey] of Array.from(getTabAssignments())) {
-      const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey;
-      const _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null;
-      const _movedRoot = _secondaryWrapper?.querySelector(`.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
-      const _domPlaced = !!_movedRoot?.hasAttribute("data-canvas-dom-placed");
-      if (_isBuiltIn) {
+      try {
+        const tabId = liveIdForFacadeKey(assignedKey, _liveTabs) ?? assignedKey;
+        let _isBuiltIn = false;
         try {
-          requestHostTabToMain(tabId);
-        } catch (err) {
-          if (_wSpindleUi?.requestTabLocation) {
-            try {
-              _wSpindleUi.requestTabLocation(tabId, { kind: "main-drawer" });
-            } catch (err2) {
-              dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err2);
+          _isBuiltIn = _wSpindleUi?.getBuiltInTabRoot?.(tabId) != null;
+        } catch {
+          _isBuiltIn = false;
+        }
+        const _movedRoot = _secondaryWrapper?.querySelector(`.sidebar-ux-panel-content [data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
+        const _domPlaced = !!_movedRoot?.hasAttribute("data-canvas-dom-placed");
+        if (_isBuiltIn) {
+          try {
+            requestHostTabToMain(tabId);
+          } catch (err) {
+            if (_wSpindleUi?.requestTabLocation) {
+              try {
+                _wSpindleUi.requestTabLocation(tabId, { kind: "main-drawer" });
+              } catch (err2) {
+                dwarn(`[tabmove] teardown: requestTabLocation failed for tabId=${tabId}:`, err2);
+              }
+            } else {
+              dwarn(`[tabmove] teardown: requestHostTabToMain failed for tabId=${tabId}:`, err);
             }
+          }
+        }
+        if (!_isBuiltIn || _domPlaced) {
+          if (_domPlaced) {
+            restoreDomPlacedBuiltInToMain(tabId, _movedRoot);
           } else {
-            dwarn(`[tabmove] teardown: requestHostTabToMain failed for tabId=${tabId}:`, err);
+            if (_movedRoot && _movedRoot.parentElement) {
+              try {
+                _movedRoot.parentElement.removeChild(_movedRoot);
+              } catch {}
+            }
+            if (_movedRoot) {
+              _movedRoot.removeAttribute("data-canvas-moved");
+              _movedRoot.removeAttribute("data-canvas-active");
+              _movedRoot.removeAttribute("data-canvas-dom-placed");
+              _movedRoot.style.removeProperty("position");
+              _movedRoot.style.removeProperty("inset");
+              _movedRoot.style.removeProperty("display");
+            }
           }
         }
+        showMainTabButton(tabId);
+      } catch (err) {
+        dwarn(`[tabmove] teardown: restore failed for "${assignedKey}":`, err);
       }
-      if (!_isBuiltIn || _domPlaced) {
-        if (_domPlaced) {
-          restoreDomPlacedBuiltInToMain(tabId, _movedRoot);
-        } else {
-          if (_movedRoot && _movedRoot.parentElement) {
-            try {
-              _movedRoot.parentElement.removeChild(_movedRoot);
-            } catch {}
-          }
-          if (_movedRoot) {
-            _movedRoot.removeAttribute("data-canvas-moved");
-            _movedRoot.removeAttribute("data-canvas-active");
-            _movedRoot.removeAttribute("data-canvas-dom-placed");
-            _movedRoot.style.removeProperty("position");
-            _movedRoot.style.removeProperty("inset");
-            _movedRoot.style.removeProperty("display");
-          }
-        }
-      }
-      showMainTabButton(tabId);
     }
+    let containerUnregistered = false;
     try {
       const wContainers = getHostBridge()?.containers;
-      wContainers?.unregisterContainer?.("canvas-secondary-drawer");
+      if (wContainers?.unregisterContainer) {
+        wContainers.unregisterContainer(CANVAS_SECONDARY_CONTAINER_ID);
+        containerUnregistered = true;
+      }
     } catch (err) {
       dwarn("[tabmove] teardown: unregisterContainer failed:", err);
+    }
+    if (!containerUnregistered && callHostStoreAction("unregisterContainer", CANVAS_SECONDARY_CONTAINER_ID)) {
+      containerUnregistered = true;
+      dlog("[tabmove] teardown: unregisterContainer via raw store action");
+    }
+    if (!containerUnregistered) {
+      dwarn("[tabmove] teardown: unregisterContainer unavailable — tabs mapped to " + `"${CANVAS_SECONDARY_CONTAINER_ID}" may not heal until the page reloads`);
     }
     _secondaryWrapper.querySelector(".sidebar-ux-resize-handle")?.remove();
     _secondaryWrapper.remove();
@@ -13841,7 +13965,11 @@ function tearDownSecondarySidebar() {
   setMobileOpenClass("secondary", false);
   updateChatReflow();
   Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m3) => m3.updateStripGutters());
-  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then((m3) => m3.reconcileMainTabListPin()).catch((err) => {
+  Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin)).then(async (m3) => {
+    const mirror = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+    if (mirror.isMainMirrorActive())
+      m3.reconcileMainTabListPin();
+  }).catch((err) => {
     dwarn("[tabmove] teardown: reconcileMainTabListPin failed:", err);
   });
   stopPanelHeaderObservers();
@@ -17779,7 +17907,8 @@ function slashAlwaysCleanup() {
 function alwaysCleanups() {
   return [
     unmountToastSurface,
-    slashAlwaysCleanup
+    slashAlwaysCleanup,
+    clearTabListPosition
   ];
 }
 var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISABLE_MOBILE_ID = "sidebar-ux-shadow-disable-mobile", shadowDisableCss = (media, width) => `
@@ -19706,10 +19835,6 @@ function setup(ctx) {
     }
   });
   registerCleanup(unsuppressMainDrawer);
-  registerCleanup(() => {
-    if (generation === _setupGeneration)
-      setHostBridgeContext(null);
-  });
   const flushOnUnload = () => {
     try {
       flushPendingSaves();
@@ -19944,6 +20069,7 @@ function setup(ctx) {
     cancelLoadSavedLayout();
     if (getBackendCtx() === ctx)
       setBackendCtx(null);
+    setHostBridgeContext(null);
   };
 }
 
