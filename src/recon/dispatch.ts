@@ -20,8 +20,9 @@ let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
 let _restoringPending = false
-/** Coalescing flag for dispatchTrackedActiveSync (see its doc comment). */
+/** Coalescing flags for dispatchTrackedActiveSync (see its doc comment). */
 let _trackedSyncScheduled = false
+let _trackedSyncQueued = false
 /** Boot-only retry window for partial restores (late-registering tabs). */
 let _restoreDeadline = 0
 const RESTORE_RETRY_WINDOW_MS = 30_000
@@ -293,6 +294,8 @@ export function shutdown(): void {
   _unsubscribeWorldChanged = null
   _bootstrapping = false
   _worldSyncPending = false
+  _trackedSyncScheduled = false
+  _trackedSyncQueued = false
   _host = null
   _model = null
   _version = 'unknown'
@@ -596,10 +599,21 @@ export async function dispatchTrackedActiveSync(): Promise<void> {
   // tracked id several times in one tick). The body re-reads the tracked
   // values at run time, so collapsing concurrent triggers into one dispatch
   // is correct and prevents queue saturation during remount storms.
-  if (_trackedSyncScheduled) return
+  //
+  // A trigger arriving DURING the await (after the body already read the
+  // tracked values) must not be dropped: queue one trailing rerun that
+  // re-reads at run time (review batch 3). Without it, rapid secondary clicks
+  // could leave model.active.secondary on the earlier tab and persist it.
+  if (_trackedSyncScheduled) {
+    _trackedSyncQueued = true
+    return
+  }
   _trackedSyncScheduled = true
   try {
-    await dispatchTrackedActiveSyncInner()
+    do {
+      _trackedSyncQueued = false
+      await dispatchTrackedActiveSyncInner()
+    } while (_trackedSyncQueued)
   } finally {
     _trackedSyncScheduled = false
   }

@@ -168,6 +168,20 @@ let _clickSuppressorEl: HTMLElement | null = null
 let _docClickSuppressor: ((e: Event) => void) | null = null
 let _clickSuppressorTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * Capture-phase contextmenu suppressor installed for the drag's lifetime.
+ * It is otherwise removed only in onUp, so a teardown mid-drag (extension
+ * disable / DnD toggle-off) left the whole page's right-click suppressed
+ * (review batch 3). Stored module-level so teardown can always remove it.
+ */
+let _dragContextMenuSuppressor: ((e: Event) => void) | null = null
+
+function removeDragContextMenuSuppressor(): void {
+  if (!_dragContextMenuSuppressor) return
+  document.removeEventListener('contextmenu', _dragContextMenuSuppressor, true)
+  _dragContextMenuSuppressor = null
+}
+
 // ── rAF-coalesced drag-frame state ──
 
 let _rafId: number | null = null
@@ -1394,11 +1408,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   document.body.classList.add('canvas-tab-list-dnd-dragging')
 
   // Suppress context menu during drag (capture-phase preventDefault)
-  // so host long-press contextmenu does not fire while dragging.
+  // so host long-press contextmenu does not fire while dragging. Stored
+  // module-level so teardown can always remove it (review batch 3).
+  removeDragContextMenuSuppressor()
   const suppressCtx = (e: Event) => {
     e.preventDefault()
     e.stopPropagation()
   }
+  _dragContextMenuSuppressor = suppressCtx
   document.addEventListener('contextmenu', suppressCtx, true)
 
   // Suppress post-drag synthetic click (source + document capture).
@@ -1453,7 +1470,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         : null,
     })
 
-    document.removeEventListener('contextmenu', suppressCtx, true)
+    removeDragContextMenuSuppressor()
 
     // Keep click suppressors through this task so the browser's
     // compatibility click (after pointerup returns / at await yield)
@@ -2075,6 +2092,14 @@ export function tearDownTabListDnd(): void {
   }
   if (_drag.phase !== 'idle') {
     removeClickSuppressorNow()
+    // The contextmenu suppressor is otherwise removed only in onUp; leaving
+    // it installed kept the whole page's right-click suppressed after
+    // teardown (review batch 3). Then detach the pointer listeners while the
+    // phase is still `dragging` — cleanupDragVisuals() zeroes it, after which
+    // detachDragPointerListeners() is a no-op (the old cleanup→clear order
+    // leaked onMove/onUp onto document).
+    removeDragContextMenuSuppressor()
+    detachDragPointerListeners()
     // Cancel any pending rAF / settle
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId)

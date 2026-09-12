@@ -590,6 +590,37 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
   __setDrawerTabsForTest(null)
 })()
 
+// Teardown-mid-drag lifecycle (review batch 3): the capture-phase contextmenu
+// suppressor is otherwise removed only in onUp, so disabling DnD mid-drag used
+// to leave the whole page's right-click suppressed; and cleanupDragVisuals()
+// zeroes `_drag.phase` before clearDragState()'s detach, so the old
+// cleanup→clear order leaked the document onMove/onUp listeners.
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/tabs/tab-list-dnd.ts'), 'utf8')
+  const teardownIdx = src.indexOf('export function tearDownTabListDnd')
+  const block = teardownIdx === -1 ? '' : src.slice(teardownIdx, teardownIdx + 1400)
+  if (!block) {
+    failed++
+    console.error('FAIL: tearDownTabListDnd not found')
+  } else {
+    if (block.includes('removeDragContextMenuSuppressor()')) passed++
+    else {
+      failed++
+      console.error('FAIL: teardown removes the drag contextmenu suppressor')
+    }
+    // Match CALL LINES (4-space indent), not the explanatory comment text.
+    const detachIdx = block.search(/(^|\n)\s{4}detachDragPointerListeners\(\)/)
+    const cleanupIdx = block.search(/(^|\n)\s{4}cleanupDragVisuals\(\)/)
+    if (detachIdx !== -1 && cleanupIdx !== -1 && detachIdx < cleanupIdx) passed++
+    else {
+      failed++
+      console.error('FAIL: teardown detaches pointer listeners before cleanupDragVisuals() zeroes the phase')
+    }
+  }
+}
+
 // Report
 const total = passed + failed
 console.log(`\nTab-list-DnD convention tests: ${passed}/${total} passed${failed > 0 ? `, ${failed} FAILED` : ''}`)

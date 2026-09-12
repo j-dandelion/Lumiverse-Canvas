@@ -5019,6 +5019,8 @@ function shutdown() {
   _unsubscribeWorldChanged = null;
   _bootstrapping = false;
   _worldSyncPending = false;
+  _trackedSyncScheduled = false;
+  _trackedSyncQueued = false;
   _host = null;
   _model = null;
   _version = "unknown";
@@ -5198,11 +5200,16 @@ function dispatchActivateByLiveId(liveId, side) {
   return dispatch({ t: "activate", key, side });
 }
 async function dispatchTrackedActiveSync() {
-  if (_trackedSyncScheduled)
+  if (_trackedSyncScheduled) {
+    _trackedSyncQueued = true;
     return;
+  }
   _trackedSyncScheduled = true;
   try {
-    await dispatchTrackedActiveSyncInner();
+    do {
+      _trackedSyncQueued = false;
+      await dispatchTrackedActiveSyncInner();
+    } while (_trackedSyncQueued);
   } finally {
     _trackedSyncScheduled = false;
   }
@@ -5451,7 +5458,7 @@ function bootPlacementDone() {
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _trackedSyncScheduled = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -14255,6 +14262,12 @@ function shouldActivateDragFromDistance(dx, dy, threshold = DRAG_ACTIVATE_DISTAN
 function usesLongPressActivation(pointerType) {
   return pointerType === "touch" || pointerType === "pen";
 }
+function removeDragContextMenuSuppressor() {
+  if (!_dragContextMenuSuppressor)
+    return;
+  document.removeEventListener("contextmenu", _dragContextMenuSuppressor, true);
+  _dragContextMenuSuppressor = null;
+}
 function dndOrderSnapshot() {
   return {
     primary: readLivePrimaryTabIds(),
@@ -14973,10 +14986,12 @@ function startDrag(btn, pointerEvent) {
   document.body.style.userSelect = "none";
   document.body.style.cursor = "grabbing";
   document.body.classList.add("canvas-tab-list-dnd-dragging");
+  removeDragContextMenuSuppressor();
   const suppressCtx = (e3) => {
     e3.preventDefault();
     e3.stopPropagation();
   };
+  _dragContextMenuSuppressor = suppressCtx;
   document.addEventListener("contextmenu", suppressCtx, true);
   installClickSuppressor(btn);
   const onMove = (ev) => {
@@ -15006,7 +15021,7 @@ function startDrag(btn, pointerEvent) {
         container: capturedTarget.container.className
       } : null
     });
-    document.removeEventListener("contextmenu", suppressCtx, true);
+    removeDragContextMenuSuppressor();
     scheduleClickSuppressorRemoval();
     detachDragPointerListeners();
     _drag = {
@@ -15386,6 +15401,8 @@ function tearDownTabListDnd() {
   }
   if (_drag.phase !== "idle") {
     removeClickSuppressorNow();
+    removeDragContextMenuSuppressor();
+    detachDragPointerListeners();
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId);
       _rafId = null;
@@ -15404,7 +15421,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_owned_commit();
