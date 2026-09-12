@@ -32,7 +32,9 @@ if (typeof (globalThis as any).document === 'undefined') {
 }
 
 // --- snapshotLayout returns a layout object ---
-import { snapshotLayout } from '../persist'
+// (layout/persist.ts was split: snapshot/build helpers now live in
+// layout/snapshot.ts, lifecycle stubs in persist/layout-load.ts.)
+import { snapshotLayout } from '../snapshot'
 import {
   CANVAS_MAIN_ACTIVE_CLASS,
   CANVAS_MAIN_OPEN_CLASS,
@@ -80,12 +82,13 @@ document.documentElement.style.removeProperty(MAIN_MIRROR_WIDTH_VAR)
 // --- loadSavedLayout is retired (Task 10.2) ---
 // loadSavedLayout is now a no-op stub that returns null. The owned
 // model loads layout via loadLayoutFromDisk in src/persist/layout-repo.ts.
-import { loadSavedLayout } from '../persist'
+import { loadSavedLayout } from '../../persist/layout-load'
 const result = loadSavedLayout()
 assert(result === null, 'loadSavedLayout stub returns null')
 
 // --- cancelLayoutSave is callable ---
-import { cancelLayoutSave, cancelLoadSavedLayout, isPersistenceEnabled } from '../persist'
+import { cancelLayoutSave, cancelLoadSavedLayout } from '../../persist/layout-load'
+import { isPersistenceEnabled } from '../snapshot'
 try {
   cancelLayoutSave()
   assert(true, 'cancelLayoutSave does not throw')
@@ -100,7 +103,7 @@ import { hydrateSettings } from '../../settings/state'
 import {
   isOpenStatePersistenceEnabled,
   isWidthPersistenceEnabled,
-} from '../persist'
+} from '../snapshot'
 try {
   hydrateSettings({
     persistDrawerOpenState: false,
@@ -134,7 +137,7 @@ if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)
 
 // --- buildPersistedLayout freezes dual when secondSidebarEnabled is false ---
-import { buildPersistedLayout } from '../persist'
+import { buildPersistedLayout } from '../snapshot'
 import { setSettings, getSettings } from '../../settings/state'
 
 // Store original settings

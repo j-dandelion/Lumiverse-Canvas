@@ -10,7 +10,13 @@ for test_file in $(find src -name '*.test.*' -type f | sort); do
   REL_PATH="${test_file#src/}"
 
   EXIT_CODE=0
-  OUTPUT=$(bun run "$test_file" 2>&1) || EXIT_CODE=$?
+  if grep -q "bun:test" "$test_file"; then
+    # Files written for bun's native test runner (describe/test/expect) must
+    # run under `bun test`; `bun run` rejects them outright.
+    OUTPUT=$(bun test "$test_file" 2>&1) || EXIT_CODE=$?
+  else
+    OUTPUT=$(bun run "$test_file" 2>&1) || EXIT_CODE=$?
+  fi
 
   HAS_FAILED=$(echo "$OUTPUT" | grep -cE "FAILED: [1-9]" 2>/dev/null || true)
 

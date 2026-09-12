@@ -586,14 +586,18 @@ async function testHostActivationTheft() {
     assert(r1.echo.postEpochScheduled === true, 'T1d: post-epoch scheduled')
   }
 
-  // Flush the post-epoch reconcile — it re-asserts A
+  // Flush the post-epoch reconcile. The steal is a NEWER world change than
+  // the model's activation — echo suppression must not fight it (the same
+  // principle as the S0b loop fix and the #13 host-reset handling). The
+  // owned model adopts the host's active on the next syncFromHost.
   await flushMicrotasks()
   assertEqual(epochState().active, false, 'T1e: epoch closed')
 
-  // After post-epoch converge, A should be active again
   const w = host.observe()
   const aEntry = w.tabs.find(t => t.key === A)
-  assert(aEntry!.isActiveInPrimary, 'T1f: A is active after post-epoch re-assert')
+  const profileEntry = w.tabs.find(t => t.key === PROFILE)
+  assert(profileEntry!.isActiveInPrimary, 'T1f: the host steal (PROFILE) survives — no re-assert fight')
+  assert(!aEntry!.isActiveInPrimary, 'T1f: the pre-steal model active is not force re-activated')
 
   unsub()
 }

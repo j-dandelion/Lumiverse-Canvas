@@ -72,6 +72,9 @@ const _styles = new Map<string, string>()
 ;(globalThis as any).cancelAnimationFrame = () => {}
 
 import { mock } from 'bun:test'
+// Spread the real module so newly-imported exports keep linking; the stubs
+// below only neutralize what this test isolates.
+import * as actualMainMirror from '../../../sidebar/main-mirror-drawer'
 
 // ── Recording toggle mock — the exact seam the guard suppresses ──
 const state = {
@@ -81,8 +84,12 @@ const state = {
 }
 
 mock.module('../../../sidebar/main-mirror-drawer', () => ({
+  ...actualMainMirror,
   getMainMirrorDrawer: () => null,
+  getMainMirrorTabList: () => null,
+  getMainMirrorPanel: () => null,
   isMainMirrorActive: () => false,
+  onMainMirrorTabActivated: () => {},
   applyMainMirrorDrawer: () => {},
   openCanvasMainDrawer: () => { state.toggleCalls.push('open') },
   closeCanvasMainDrawer: () => { state.toggleCalls.push('close') },
@@ -105,7 +112,9 @@ const { CANVAS_MAIN_ACTIVE_CLASS, MAIN_MIRROR_WIDTH_VAR } = await import('../../
 // Not exported: the restore-guard class literal (main-persist.ts:71).
 const RESTORE_PENDING_CLASS = 'sidebar-ux-main-restore-pending'
 
-const HOST_WIDTH_VAR = '--canvas-main-mirror-width'
+// The var implementation.setDrawer actually writes (Batch 2 fixed the dead
+// '--canvas-main-mirror-width' literal).
+const HOST_WIDTH_VAR = MAIN_MIRROR_WIDTH_VAR
 const host = () => new LumiverseHost()
 
 // ── 1. mainShellOwnsPrimarySurface truth table ──

@@ -27,8 +27,10 @@ const sum = summarizeLayout({
 assert(sum.includes('v=1.8.0.9'), 'summarize version')
 assert(sum.includes('tabs=2'), 'summarize tabs')
 assert(sum.includes('hidden=1'), 'summarize hidden')
-assert(sum.includes('allDef=false'), 'summarize non-default settings')
-assert(sum.includes('nonDef='), 'summarize nonDef count')
+// The old `allDef=` flag was replaced by the settings block's `nonDef=`
+// count: exactly one non-default (debugMode: true) in the fixture.
+assert(sum.includes('nonDef=1'), 'summarize non-default settings count')
+assert(sum.includes('settings{keys='), 'summarize settings block')
 
 // --- flag off by default in tests (no localStorage key) ---
 refreshPersistDebugFlag()

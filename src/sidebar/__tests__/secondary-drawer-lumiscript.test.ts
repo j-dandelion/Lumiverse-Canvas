@@ -30,6 +30,15 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
 let _fakeSidebar: any = null
 ;(globalThis as any).document = {
+  documentElement: {
+    classList: {
+      _c: new Set<string>(),
+      add(c: string) { this._c.add(c) },
+      remove(c: string) { this._c.delete(c) },
+      contains(c: string) { return this._c.has(c) },
+    },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+  },
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeSidebar
     return null

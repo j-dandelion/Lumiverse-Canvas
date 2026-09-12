@@ -37,6 +37,8 @@ async function main(): Promise<void> {
     const { moveBuiltInTabToSecondaryContainer } = await import('../../tabs/builtin-move')
     const fakeRoot = {
       setAttribute() {},
+      getAttribute() { return null },
+      removeAttribute() {},
       querySelector() { return null },
     } as any
 

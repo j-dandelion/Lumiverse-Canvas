@@ -560,6 +560,7 @@ const domPlacedRoots = new Map<string, StubElement>()
 mock.module('../../sidebar/secondary', () => ({
   SECONDARY_WIDTH_VAR: '--sidebar-ux-secondary-width',
   PUZZLE_ICON_SVG: '',
+  restyleSecondaryShellSide: () => {},
   isSecondarySidebarOpen: () => secondaryState.open,
   getSecondaryWrapper: () => secondaryState.wrapper,
   getSecondaryDrawer: () => secondaryState.wrapper,
@@ -672,7 +673,9 @@ const [
 ] = await Promise.all([import('../../recon/dispatch')])
 const [{ serializeModelToLayout }] = await Promise.all([import('../../persist/layout-model')])
 const [
-  { applyMainTabListPin, getActiveMainMirrorKey, __resetMainTabPinForTest },
+  // S2: getActiveMainMirrorKey is gone — the model's active.primary is the
+  // highlight/selection source (the renderer renders it).
+  { applyMainTabListPin, __resetMainTabPinForTest },
 ] = await Promise.all([import('../../sidebar/main-tab-pin')])
 const [{ __resetMainMirrorForTest }] = await Promise.all([import('../../sidebar/main-mirror-drawer')])
 const [
@@ -773,9 +776,9 @@ async function runRepro() {
   applyMainTabListPin(true, { force: true })
 
   // User session state: active main tab = summary, picked by the user.
-  const summaryMirror = mirrorFor('id__summary')
+  const summaryMirror = mirrorFor('builtin:summary')
   assert(!!summaryMirror, 'R1a: summary mirror button exists (dual)')
-  const loreMirror = mirrorFor('id__lore')
+  const loreMirror = mirrorFor('builtin:lore')
   assert(!!loreMirror, 'R1b: lore mirror button exists (dual)')
   if (summaryMirror) {
       summaryMirror.click()
@@ -783,7 +786,7 @@ async function runRepro() {
     await settle()
   }
   assertEqual(hostSummary.clickCount, 1, 'R1c: boot user click forwarded to host summary button')
-  assertEqual(getActiveMainMirrorKey(), 'id__summary', 'R1d: mirror key = summary')
+  assertEqual(getModel()?.active.primary, SUMMARY, 'R1d: model primary active = summary after the mirror click')
 
   // Enable main-drawer persistence so the restore path runs for real.
   startMainDrawerPersistence()
@@ -802,12 +805,12 @@ async function runRepro() {
   }
 
   // Mirror must still be mounted with both tabs.
-  assert(!!mirrorFor('id__lore'), 'R1g: lore mirror button still present after disable')
-  assert(!!mirrorFor('id__summary'), 'R1h: summary mirror button still present after disable')
-  assert(!!mirrorFor('id__presets'), 'R1i: presets mirror button now present (host button re-shown)')
+  assert(!!mirrorFor('builtin:lore'), 'R1g: lore mirror button still present after disable')
+  assert(!!mirrorFor('builtin:summary'), 'R1h: summary mirror button still present after disable')
+  assert(!!mirrorFor('builtin:presets'), 'R1i: presets mirror button now present (host button re-shown)')
 
   // ── THE USER CLICK: activate Lore after the disable ──
-  const loreMirrorAfter = mirrorFor('id__lore')
+  const loreMirrorAfter = mirrorFor('builtin:lore')
   assert(!!loreMirrorAfter, 'R1j: lore mirror present for click')
   if (loreMirrorAfter) {
     loreMirrorAfter.click()
@@ -815,7 +818,7 @@ async function runRepro() {
   }
 
   // (a) mirror chrome: key + visuals moved
-  assertEqual(getActiveMainMirrorKey(), 'id__lore', 'R1k: mirror key moved to lore')
+  assertEqual(getModel()?.active.primary, LORE, 'R1k: model primary active moved to lore')
 
   // (b) the HOST must have received the click → content switch
   assertEqual(hostLore.clickCount, 1, 'R1l: host lore button clicked after disable (content switch)')
@@ -873,7 +876,7 @@ async function runStaleParkRepro() {
   applyMainTabListPin(true, { force: true })
 
   // Park P1 (the original host panelContent) via the open path.
-  const summaryMirror = mirrorFor('id__summary')
+  const summaryMirror = mirrorFor('builtin:summary')
   assert(!!summaryMirror, 'R2a: mirror present')
   if (summaryMirror) summaryMirror.click()
   await settle()
@@ -910,14 +913,14 @@ async function runStaleParkRepro() {
   containerRef2.appendChild(mainSidebar.roots['summary'])
 
   // A user click (or the repark watch tick) must re-park the LIVE node.
-  const loreMirror = mirrorFor('id__lore')
+  const loreMirror = mirrorFor('builtin:lore')
   assert(!!loreMirror, 'R2d: lore mirror present')
   if (loreMirror) loreMirror.click()
   await settle()
-  const loreMirrorAfter = mirrorFor('id__lore')
+  const loreMirrorAfter = mirrorFor('builtin:lore')
   assert(!!loreMirrorAfter, 'R2d2: lore mirror present after settle')
   if (loreMirrorAfter) {
-    assert(loreMirrorAfter.getAttribute('data-mirror-key') === 'id__lore', 'R2i: mirror chrome intact')
+    assert(loreMirrorAfter.getAttribute('data-mirror-key') === 'builtin:lore', 'R2i: mirror chrome intact')
   }
 
   assert(p2.parentElement === shell, 'R2e: new panelContent parked in the shell slot')
@@ -981,7 +984,7 @@ async function runDomPlacedRestoreRepro() {
   })
 
   applyMainTabListPin(true, { force: true })
-  const summaryMirror = mirrorFor('id__summary')
+  const summaryMirror = mirrorFor('builtin:summary')
   assert(!!summaryMirror, 'R3a: mirror present')
   if (summaryMirror) summaryMirror.click()
   await settle()
@@ -1027,7 +1030,7 @@ async function runDomPlacedRestoreRepro() {
   )
   // Host re-attach on activation: clicking presets' mirror moves its root
   // into the containerRef (TabPanelContent contract).
-  const presetsMirror = mirrorFor('id__presets')
+  const presetsMirror = mirrorFor('builtin:presets')
   assert(!!presetsMirror, 'R3g: presets mirror present')
   if (presetsMirror) presetsMirror.click()
   await settle()

@@ -14,10 +14,34 @@
 // open/close decision is observable.
 
 import { mock } from 'bun:test'
+// Spread the real modules so newly-imported exports keep linking; the stubs
+// below only neutralize what this test isolates.
+import * as actualSettingsState from '../../settings/state'
+import * as actualActiveTab from '../../tabs/active-tab'
+import * as actualMainTabPin from '../../sidebar/main-tab-pin'
 // Type-only: erased at runtime, no module execution (kept separate from the
 // runtime imports below so mock.module ordering is unambiguous).
 import type { LiveTab } from '../../host/fake/implementation'
 import type { LayoutModel, TabKey, Side } from '../../core/model'
+
+// Minimal DOM stub: the move path's main-mirror content re-assert resolves a
+// host main button via document queries (findMainTabButton) even though this
+// test only asserts the drawer-open decision.
+;(globalThis as any).document = {
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  getElementById: () => null,
+  documentElement: {
+    classList: { contains: () => false, add() {}, remove() {} },
+    style: { getPropertyValue: () => '', setProperty() {}, removeProperty() {} },
+  },
+  body: {
+    querySelector: () => null,
+    appendChild() {},
+    removeChild() {},
+    classList: { add() {}, remove() {}, contains: () => false },
+  },
+}
 
 // ── Mock state + recording spies ──
 let _mobile = false
@@ -56,6 +80,7 @@ mock.module('../../sidebar/mobile-exclusion', () => ({
 // Main-mirror pin: keep the chrome capture/apply no-ops so the test stays
 // focused on the drawer-open decision (taskbar pin is desktop chrome).
 mock.module('../../sidebar/main-tab-pin', () => ({
+  ...actualMainTabPin,
   isMainTabPinEnabled: () => false,
   getActiveMainMirrorKey: () => null,
   findNeighborHostButtonFor: () => null,
@@ -65,14 +90,18 @@ mock.module('../../sidebar/main-tab-pin', () => ({
 
 // No tracked secondary active → no neighbor handoff on moves out.
 mock.module('../../tabs/active-tab', () => ({
+  ...actualActiveTab,
   getActiveSecondaryTabId: () => null,
   setActiveSecondaryTabId: () => {},
+  isTabActiveInMainDrawer: () => false,
+  resolvePrimaryActiveTabId: () => null,
 }))
 
 // settings/state pulls the whole feature graph (panel → registry →
 // drawer-sync/tab-position/secondary). dispatch.ts only needs the mode
 // layout slots — stub them so the test stays on the placement path.
 mock.module('../../settings/state', () => ({
+  ...actualSettingsState,
   getSingleLayoutSlot: () => null,
   getDualLayoutSlot: () => null,
   getSettings: () => ({ secondSidebarEnabled: true }),

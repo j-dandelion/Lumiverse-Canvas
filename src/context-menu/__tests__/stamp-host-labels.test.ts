@@ -47,15 +47,25 @@ class StubEl {
 
 const { mock } = await import('bun:test')
 
+// Spread the real modules so production imports that grow over time keep
+// linking; the stubs below only neutralize what this test isolates.
+import * as actualStore from '../../store'
+import * as actualLumiverse from '../../dom/lumiverse'
+
 mock.module('../../sidebar/drawer-sync', () => ({
   isShowTabLabels: () => _mockShow,
   syncSecondaryTabLabels: () => {},
   syncDrawerTabSettings: () => {},
 }))
 
-// Other imports pulled by context-menu/index — stub minimally
-mock.module('../../dom/lumiverse', () => ({ getMainSidebar: () => null }))
+// Other imports pulled by context-menu/index — stub minimally (keep the other
+// exports the module now uses, e.g. getMainPanel).
+mock.module('../../dom/lumiverse', () => ({
+  ...actualLumiverse,
+  getMainSidebar: () => null,
+}))
 mock.module('../../store', () => ({
+  ...actualStore,
   findStoreData: () => {},
   getDrawerTabs: () => [],
 }))

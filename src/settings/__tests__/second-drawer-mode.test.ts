@@ -24,6 +24,9 @@
 ;(globalThis as any).getComputedStyle = () => ({})
 
 import { mock } from 'bun:test'
+// Spread the real module so newly-imported exports keep linking; the test's
+// overrides below only neutralize the calls it isolates.
+import * as actualDispatch from '../../recon/dispatch'
 
 // ── Mock transitive deps of settings/second-drawer-mode.ts ──
 // (real modules: settings/state, persist/layout-load, persist/settings-repo,
@@ -60,11 +63,14 @@ mock.module('../../layout/snapshot', () => ({
 }))
 
 mock.module('../../recon/dispatch', () => ({
+  ...actualDispatch,
   bootstrapFromLayout: () => { calls.bootstrapFromLayout++ },
   flush: async () => {},
   getHost: () => ({ resolve: (k: string) => k }),
   getModel: () => null,
   snapshotOwnedModelLayout: () => null,
+  onModelChanged: () => () => {},
+  dispatchActivateByLiveId: async () => {},
   dispatch: async () => {},
   dispatchBatch: async () => {},
   dispatchMoveByLiveId: async () => {},

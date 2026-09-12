@@ -33,6 +33,15 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 }
 ;(globalThis as any).getComputedStyle = () => ({ display: '' })
 ;(globalThis as any).document = {
+  documentElement: {
+    classList: {
+      _c: new Set<string>(),
+      add(c: string) { this._c.add(c) },
+      remove(c: string) { this._c.delete(c) },
+      contains(c: string) { return this._c.has(c) },
+    },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+  },
   querySelector(_sel: string) { return null },
   querySelectorAll(_sel: string) { return [] },
   body: { appendChild(_child: unknown) {} },
@@ -70,6 +79,8 @@ function buildFakeSecondaryWrapper() {
           if (force === undefined ? !classes.has(cls) : force) classes.add(cls)
           else classes.delete(cls)
         },
+        add(cls: string) { classes.add(cls) },
+        remove(cls: string) { classes.delete(cls) },
         contains(cls: string) { return classes.has(cls) },
       },
       click() {},

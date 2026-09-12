@@ -2,7 +2,7 @@
 // boot/restore window into a SAVE_LAYOUT cascade.
 //
 // During a hard refresh the restore machinery writes the tracked actives
-// (mirror heal/restore key + secondary setter re-asserts) WHILE the observed
+// (the secondary setter re-assert) WHILE the observed
 // world is still flip-flopping (facade lag: the placement pass runs after
 // the first host-syncs; React re-renders re-show hidden host buttons). Each
 // tracked write now dispatches syncActive → reconcileAndPersist. If those
@@ -125,26 +125,18 @@ async function testBootStormPersistCount() {
   bootstrapFromLayout(USER_LAYOUT, host, 'test-v1.0')
   await settle()
 
-  // Restore-driven tracked-active writes (the mirror restore + secondary
-  // re-assert) — these now fire the unified sync.
-  const { __setMainTabPinEnabledForTest, __resetMainTabPinForTest, activateMainMirrorFromRestore } =
-    await import('../../sidebar/main-tab-pin')
-  __setMainTabPinEnabledForTest(true)
-  const spindleBtn = {
-    isConnected: true,
-    getAttribute: (k: string) => (k === 'data-tab-id' ? 'profile' : 'Profile'),
-  } as unknown as HTMLElement
-  // Restore-driven tracked-active writes (the mirror restore + secondary
-  // re-assert) — these now fire the unified sync.
-  activateMainMirrorFromRestore(spindleBtn, 'Profile')
+  // Restore-driven tracked-active write (the secondary restore re-assert)
+  // fires the unified sync. The old mirror-key half of this repro died with
+  // the S2 parity layer: the model's adoptActive location guard is what
+  // refuses a secondary-assigned tab as the primary active now.
   const { setActiveSecondaryTabId } = await import('../../tabs/active-tab')
   setActiveSecondaryTabId('h:b')
   await settle()
 
-  // The storm: the host tabBtnActive flip-flops between PROFILE and B (B's
+  // The storm: the host's tabBtnActive flip-flops between PROFILE and B (B's
   // host button momentarily re-shown by a React re-render). B stays on the
   // SECONDARY drawer in the observed world (the facade/placement has run);
-  // the heal/adopt writers must refuse to seed the mirror key from B.
+  // adoptActive must refuse B because its observed location is not primary.
   const base = host.observe()
   const worldFlip = (bActive: boolean): ObservedWorld => ({
     ...base,
@@ -156,54 +148,29 @@ async function testBootStormPersistCount() {
           : t,
     ),
   })
-  const { getActiveMainMirrorKey: getKey } = await import('../../sidebar/main-tab-pin')
   for (let i = 0; i < 8; i++) {
-    if (i % 2 === 0) {
-      const bBtn = {
-        isConnected: true,
-        getAttribute: (k: string) => (k === 'data-tab-id' ? 'h:b' : 'B'),
-      } as unknown as HTMLElement
-      adoptMirrorKey(bBtn)
-    } else {
-      adoptMirrorKey(spindleBtn)
-    }
     await dispatch({ t: 'syncFromHost', observed: worldFlip(i % 2 === 0) })
     await settle()
-    console.log(`[C1] round ${i}: mirror key = ${getKey()}`)
+    console.log(`[C1] round ${i}: primary active = ${String(getModel()?.active.primary)}`)
   }
 
-  const { getActiveMainMirrorKey } = await import('../../sidebar/main-tab-pin')
-  const mirrorKeyAfterStorm = getActiveMainMirrorKey()
-  __resetMainTabPinForTest()
   const model = getModel()
   assert(model != null, 'C1a: model present after storm')
   if (model) {
     assert(model.secondary.includes(B), 'C1b: B settled in secondary')
+    // The mirror key must NEVER land on a secondary-assigned tab (the
+    // location guard) — that adoption was the flip that cascaded writes.
+    assertEqualLoose(model.active.primary, PROFILE, 'C1c: primary active stayed on the primary tab')
   }
 
-  // The mirror key must NEVER land on a secondary-assigned tab (the heal /
-  // host-adoption guard) — that adoption was the flip that cascaded writes.
-  assertEqualLoose(mirrorKeyAfterStorm, 'id__profile', 'C1c: mirror key stayed on the primary tab')
-
-  // The storm must not cascade: B stays on secondary and the mirror key
-  // stays guarded, so the sync rounds are identity — only the boot
-  // convergence writes (bootstrap + heal/restore) may land.
+  // The storm must not cascade: content-equal sync rounds short-circuit on
+  // identity — only the boot convergence writes (bootstrap + tracked write)
+  // may land.
   console.log(`[C1] SAVE_LAYOUT writes during storm: ${writes.length}`)
   assert(writes.length <= 4, `C1d: storm produces at most 4 convergence writes, got ${writes.length}`)
 
   __resetLayoutRepoForTest()
   shutdown()
-}
-
-// Drive the mirror key through the real commitState path (the heal/restore
-// writer) so the unified hook fires.
-// Drive the mirror key through the real commitState path (the heal/restore
-// writer) so the unified hook fires. The host-activation adopt is the same
-// choke point as the heal (both seed from host tabBtnActive).
-function adoptMirrorKey(btn: HTMLElement): void {
-  void import('../../sidebar/main-tab-pin').then((m) => {
-    m.adoptMainMirrorHostActivation(btn, btn.getAttribute('title') ?? undefined)
-  })
 }
 
 await testBootStormPersistCount()

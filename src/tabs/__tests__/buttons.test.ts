@@ -1070,78 +1070,12 @@ import { __setDrawerTabsForTest } from '../../store'
 })()
 
 // ============================================================
-// T31: reorderMainMirrorTabButtons moves UNTAGGED extension buttons
+// T31 — REMOVED (S2): `reorderMainMirrorTabButtons` was part of the deleted
+// parity layer. The mirror order is now rendered wholesale from the model by
+// main-renderer.ts on every model commit, so the "untagged extension button
+// missing from the DOM reorder → perpetual setOrder" class cannot occur here.
+// Renderer coverage lives in sidebar/__tests__/main-tab-pin.test.ts.
 // ============================================================
-// setOrder's DOM reorder must move untagged extension mirror buttons to
-// their model slot (matched via buttonTabId). Without this, the observed
-// order can never equal the model order → reconcile fires setOrder forever
-// → infinite SAVE_LAYOUT cascade.
-;(() => {
-  const { reorderMainMirrorTabButtons } = require('../buttons') as typeof import('../buttons')
-
-  // Mirror main-section stub with appendChild-moves-to-end semantics.
-  const items: any[] = []
-  const mkBtn = (opts: { id?: string; title?: string; ext?: boolean }) => {
-    const el: any = {
-      getAttribute(name: string) {
-        if (name === 'data-tab-id') return opts.id ?? null
-        if (name === 'title') return opts.title ?? null
-        return null
-      },
-      get className() {
-        return opts.ext
-          ? 'sidebar-ux-main-tab-mirror-btn'
-          : 'sidebar-ux-main-tab-mirror-btn'
-      },
-      parentElement: null as any,
-    }
-    el.parentElement = section
-    items.push(el)
-    return el
-  }
-  const section: any = {
-    querySelectorAll(_sel: string) { return [...items] },
-    appendChild(child: any) {
-      const idx = items.indexOf(child)
-      if (idx >= 0) items.splice(idx, 1)
-      items.push(child)
-    },
-  }
-  // A, B tagged; EXT untagged (title only, mirror class).
-  mkBtn({ id: 'a' })
-  mkBtn({ id: 'b' })
-  const extBtn = mkBtn({ title: 'Ext Tab' })
-
-  const prevQS = (globalThis as any).document.querySelector
-  ;(globalThis as any).document.querySelector = (sel: string) =>
-    sel === '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main' ? section : null
-
-  // Model order: [a, EXT, b] — EXT must slot between a and b.
-  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,Ext Tab,b',
-    'T31: untagged extension button moved to its model slot (no setOrder cascade)',
-  )
-
-  // Idempotent — a second call leaves the order unchanged (converges).
-  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,Ext Tab,b',
-    'T31.b: reorder idempotent once converged',
-  )
-
-  // EXT last: appends to the end (past the tagged b).
-  reorderMainMirrorTabButtons(['a', 'b', 'Ext Tab'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,b,Ext Tab',
-    'T31.c: untagged extension append works',
-  )
-
-  ;(globalThis as any).document.querySelector = prevQS
-})()
 
 // =====================================================================
 // B33: findMainTabButton title-fallback must NOT clobber an existing

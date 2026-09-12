@@ -33,6 +33,9 @@ function assertNotIncludes(list: string[], id: string, msg: string) {
 }
 
 import { mock } from 'bun:test'
+// Spread the real module so newly-imported exports keep linking; the stub
+// below only neutralizes what this test isolates.
+import * as actualStore from '../../../store'
 
 // ── Shared mock state ──
 const HONE_LIVE = 'spindle:ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d:tab:hone:1'
@@ -99,9 +102,11 @@ mock.module('../../../tabs/buttons', () => ({
 }))
 
 mock.module('../../../store', () => ({
+  ...actualStore,
   findStoreData: () => {},
   getMainDrawerSide: () => 'left',
   isMainDrawerOpen: () => false,
+  getDrawerTabs: () => [],
 }))
 
 mock.module('../../../dom/lumiverse', () => ({
@@ -169,7 +174,9 @@ function host() {
   const res = await h.setHidden('secondary', [])
 
   assertEqual(res, 'ok', 'A1: setHidden returns ok')
-  assertNotIncludes(state.hostSettings.hiddenTabIds, HONE_LIVE, 'A2: host hiddenTabIds no longer has the unhidden secondary id')
+  // S2: hidden is MODEL-owned — setHidden no longer patches the host list.
+  // The host copy is whatever the host itself holds; Canvas hidden is truth.
+  assertIncludes(state.hostSettings.hiddenTabIds, HONE_LIVE, 'A2: host hiddenTabIds untouched (S2 model-owned)')
   assertNotIncludes(getCanvasHiddenTabIds(), HONE_LIVE, 'A3: canvas hidden list no longer has the unhidden secondary id')
 }
 
@@ -195,7 +202,8 @@ function host() {
   const res = await h.setHidden('primary', ['connections'])
 
   assertEqual(res, 'ok', 'B1: setHidden returns ok')
-  assertIncludes(state.hostSettings.hiddenTabIds, 'connections', 'B2: host hiddenTabIds includes the newly hidden primary tab')
+  // S2: the host list is not written — only the Canvas copy is authoritative.
+  assertNotIncludes(state.hostSettings.hiddenTabIds, 'connections', 'B2: host hiddenTabIds NOT patched (S2 model-owned)')
   assertIncludes(state.hostSettings.hiddenTabIds, HONE_LIVE, 'B3: host hiddenTabIds KEEPS the secondary hide (not wiped)')
   const canvas = getCanvasHiddenTabIds()
   assertIncludes(canvas, 'connections', 'B4: canvas hidden list includes the primary hide')
@@ -237,7 +245,9 @@ function host() {
   assertIncludes(state.secondaryCalls, HONE_LIVE, 'C2: secondary strip applied for the secondary hide (NO-GO)')
   assertIncludes(state.secondaryCalls, 'connections', 'C3: secondary applicator receives the effective union (primary hide preserved)')
   assertIncludes(state.hostMainCalls, 'connections', 'C3b: host MAIN applicator receives the effective union (NO-GO)')
-  assertEqual(state.hostSettings.hiddenTabIds.includes(HONE_LIVE), true, 'C4: host list still persisted even when patch NO-GO (cache stamped)')
+  // S2: no host write on any path (GO or NO-GO); the Canvas copy carries it.
+  assertNotIncludes(state.hostSettings.hiddenTabIds, HONE_LIVE, 'C4: host list NOT patched (S2 model-owned)')
+  assertIncludes(getCanvasHiddenTabIds(), HONE_LIVE, 'C5: canvas hidden list persisted the secondary hide')
   state.patchResult = true
 }
 
