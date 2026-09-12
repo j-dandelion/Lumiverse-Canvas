@@ -9,8 +9,8 @@ for test_file in $(find src -name '*.test.*' -type f | sort); do
   TOTAL_FILES=$((TOTAL_FILES + 1))
   REL_PATH="${test_file#src/}"
 
-  OUTPUT=$(bun run "$test_file" 2>&1) || true
-  EXIT_CODE=$?
+  EXIT_CODE=0
+  OUTPUT=$(bun run "$test_file" 2>&1) || EXIT_CODE=$?
 
   HAS_FAILED=$(echo "$OUTPUT" | grep -cE "FAILED: [1-9]" 2>/dev/null || true)
 

@@ -220,7 +220,9 @@ async function moveCorruptFile(key: string, reason: string): Promise<void> {
 }
 
 async function saveLayout(state: any): Promise<void> {
-  if (!state || typeof state !== 'object') return
+  if (!state || typeof state !== 'object') {
+    throw new Error('invalid layout payload (not an object)')
+  }
   const json = JSON.stringify(state, null, 2)
   pblog('disk-write layout start', `bytes=${json.length}`)
   try {
@@ -230,11 +232,17 @@ async function saveLayout(state: any): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err)
     pblog('disk-write layout fail', msg)
     if (DEBUG) spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`)
+    // Rethrow so the SAVE_LAYOUT queue ack reports {status:'error'}: a
+    // swallowed failure made every write look successful to the frontend's
+    // reliability layer, even though nothing reached disk (review B2).
+    throw err instanceof Error ? err : new Error(msg)
   }
 }
 
 async function saveSettings(state: { version?: number; settings?: unknown }): Promise<void> {
-  if (!state || typeof state !== 'object') return
+  if (!state || typeof state !== 'object') {
+    throw new Error('invalid settings payload (not an object)')
+  }
   const json = JSON.stringify(state, null, 2)
   pblog('disk-write settings start', `bytes=${json.length}`)
   try {
@@ -244,6 +252,8 @@ async function saveSettings(state: { version?: number; settings?: unknown }): Pr
     const msg = err instanceof Error ? err.message : String(err)
     pblog('disk-write settings fail', msg)
     if (DEBUG) spindle.log.error(`[SidebarUX] Failed to save settings: ${msg}`)
+    // Rethrow so the SAVE_SETTINGS queue ack reports {status:'error'} (review B2).
+    throw err instanceof Error ? err : new Error(msg)
   }
 }
 

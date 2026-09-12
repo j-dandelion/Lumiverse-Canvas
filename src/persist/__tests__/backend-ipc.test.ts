@@ -124,6 +124,32 @@ async function main(): Promise<void> {
   assertEqual(lastSent('LAYOUT_DATA')?.result?.status, 'error', 'B4d corrupt layout.json → status error')
   assert([...mem.keys()].some((k) => k.startsWith('layout.corrupt-')), 'B4e corrupt layout preserved under .corrupt- key')
 
+  // B5 — a storage failure must ack {status:'error'}, not ok. The old
+  // saveLayout/saveSettings caught and logged, so the chained `.then` always
+  // acked ok and the frontend's reliability layer never retried (review B2).
+  mem.clear(); written.length = 0; sent.length = 0
+  const storage = (globalThis as any).spindle.storage
+  const origWrite = storage.write
+  storage.write = async () => { throw new Error('disk full') }
+  try {
+    await dispatch({ type: 'SAVE_LAYOUT', layout: { version: 2, drawerSide: 'left' }, saveId: 11 })
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.saveId, 11, 'B5a failed layout save result carries saveId')
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'error', 'B5b failed layout write → status error')
+
+    await dispatch({ type: 'SAVE_SETTINGS', settings: { version: 2, settings: {} }, saveId: 12 })
+    assertEqual(lastSent('SAVE_SETTINGS_RESULT')?.result?.status, 'error', 'B5c failed settings write → status error')
+
+    // Invalid payloads are programmer errors, not silent successes.
+    await dispatch({ type: 'SAVE_LAYOUT', saveId: 13 })
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'error', 'B5d invalid layout payload → status error')
+  } finally {
+    storage.write = origWrite
+  }
+  // The queue must stay usable after a failure.
+  await dispatch({ type: 'SAVE_LAYOUT', layout: { version: 2, drawerSide: 'right' }, saveId: 14 })
+  assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'ok', 'B5e queue recovers after a failed save')
+  assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.saveId, 14, 'B5f recovery ack correlates saveId')
+
   console.log(`persist/backend-ipc: ${passed} passed, ${failed} failed`)
   if (failed > 0) {
     process.exitCode = 1

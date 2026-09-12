@@ -300,6 +300,9 @@ export function shutdown(): void {
   _restoringPending = false
   _restoreDeadline = 0
   _bootPlacementPass = null
+  // Never inherit the previous session's dedup key: a fresh setup must be
+  // able to write the same content again (review B3).
+  _lastPersistedLayout = null
   _queue = Promise.resolve()
 }
 
@@ -391,10 +394,16 @@ function persistModel(model: LayoutModel): void {
   // surfaced via the debug log and will be retried on the next dispatch.
   saveLayoutToDisk(layout).then((r) => {
     if (r.status === 'error') {
+      // A failed write must not stay dedup-cached: the next dispatch with the
+      // same content has to retry, otherwise the change only lives in memory
+      // (review B3). Only clear OUR entry — a newer persist may already have
+      // succeeded and re-armed the cache.
+      if (_lastPersistedLayout === json) _lastPersistedLayout = null
       // eslint-disable-next-line no-console
       console.warn('[canvas] saveLayoutToDisk failed:', r.reason)
     }
   }).catch((err: unknown) => {
+    if (_lastPersistedLayout === json) _lastPersistedLayout = null
     // eslint-disable-next-line no-console
     console.warn('[canvas] saveLayoutToDisk rejected:', err)
   })
