@@ -2216,6 +2216,8 @@ function applyMove(model, key, to, index, activateDest) {
     const without = removeFrom(srcList, key);
     const absIdx = visibleToAbsoluteIndex({ ...model, [from]: without }, from, index);
     const newList = insertAt(without, key, absIdx);
+    if (sameOrder(newList, srcList))
+      return model;
     next = { ...model, [from]: newList };
   } else {
     const newSrc = removeFrom(srcList, key);
@@ -2247,12 +2249,28 @@ function applyReorder(model, key, side, index) {
   const without = removeFrom(list, key);
   const absIdx = visibleToAbsoluteIndex({ ...model, [side]: without }, side, index);
   const newList = insertAt(without, key, absIdx);
+  if (sameOrder(newList, list))
+    return model;
   return { ...model, [side]: newList };
+}
+function sameOrder(a, b) {
+  if (a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++) {
+    if (a[i] !== b[i])
+      return false;
+  }
+  return true;
 }
 function applySetHidden(model, key, hide) {
   if (!keyExists(model, key))
     return model;
-  let next = { ...model, hidden: toggleHidden(model.hidden, key, hide) };
+  const nextHidden = toggleHidden(model.hidden, key, hide);
+  const membershipChanged = nextHidden !== model.hidden;
+  const activeAffected = hide && (model.active.primary === key || model.active.secondary === key);
+  if (!membershipChanged && !activeAffected)
+    return model;
+  let next = membershipChanged ? { ...model, hidden: nextHidden } : model;
   if (hide) {
     if (model.active.primary === key) {
       const replacement = activeAfterRemoval(next, "primary", key);
@@ -2531,6 +2549,8 @@ function mergeSideOrder(model, side, resolved) {
   const list = listForSide(model, side);
   const out = [];
   for (const key of list) {
+    if (side === "secondary" && isHidden(model, key))
+      continue;
     const id = resolved.get(key);
     if (id)
       out.push(id);
@@ -2538,7 +2558,7 @@ function mergeSideOrder(model, side, resolved) {
   return out;
 }
 function observeSideOrder(world, side) {
-  return world.tabs.filter((t) => t.location === side).map((t) => t.liveId);
+  return world.tabs.filter((t) => t.location === side && !(side === "secondary" && t.isHidden)).map((t) => t.liveId);
 }
 function diffSetOrder(model, side, resolved, world) {
   const want = mergeSideOrder(model, side, resolved);
@@ -4886,22 +4906,31 @@ function mergeResolvedInto(current, rebuilt) {
   const primary = mergeSide("primary");
   const secondary = mergeSide("secondary");
   const hidden = rebuilt.hidden.filter((k) => inModel.has(k));
+  const keepUser = _pendingWindowUserState;
   const next = {
     ...current,
     primary,
     secondary,
-    hidden,
+    hidden: keepUser ? current.hidden : hidden,
     active: {
       primary: current.active.primary ?? rebuilt.active.primary,
       secondary: current.active.secondary ?? rebuilt.active.secondary
     },
-    drawers: rebuilt.drawers,
-    side: rebuilt.side
+    drawers: keepUser ? current.drawers : rebuilt.drawers,
+    side: keepUser ? current.side : rebuilt.side
   };
   if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
     return current;
   }
   return next;
+}
+function markPendingWindowUserIntent(intent) {
+  if (_pendingLayout === null)
+    return;
+  const t = intent.t;
+  if (t === "setDrawer" || t === "swapSides" || t === "setHidden") {
+    _pendingWindowUserState = true;
+  }
 }
 function sameKeys2(a, b) {
   if (a.length !== b.length)
@@ -5027,6 +5056,7 @@ function shutdown() {
   _pendingLayout = null;
   _restoringPending = false;
   _restoreDeadline = 0;
+  _pendingWindowUserState = false;
   _bootPlacementPass = null;
   _lastPersistedLayout = null;
   _queue = Promise.resolve();
@@ -5115,6 +5145,7 @@ function dispatch(intent) {
       return;
     if (!_model || !_host)
       return;
+    markPendingWindowUserIntent(intent);
     const next = reduce(_model, intent);
     if (next === _model) {
       dlog("[dispatch] no-op (reduce returned same model)", { t: intent.t });
@@ -5136,6 +5167,8 @@ function dispatchBatch(intents) {
       return;
     if (!_model || !_host)
       return;
+    for (const intent of intents)
+      markPendingWindowUserIntent(intent);
     const next = foldIntents(_model, intents);
     dlog("[dispatch] batch", {
       intents,
@@ -5380,6 +5413,7 @@ function bootstrapFromLayout(layout, host, version) {
     }
   }
   _restoringPending = false;
+  _pendingWindowUserState = false;
   const expected = pendingLayoutTabCount(layout);
   const resolved = model.primary.length + model.secondary.length;
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
@@ -5458,7 +5492,7 @@ function bootPlacementDone() {
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -8551,12 +8585,12 @@ function ConfigureTabsModalInner(props) {
     });
   };
   const renderTabRow = (tab, index, side) => {
-    const isHidden3 = draft.hiddenIds.has(tab.id);
+    const isHidden2 = draft.hiddenIds.has(tab.id);
     const isLocked = tab.hideLocked;
     const isCore = tab.kind === "builtin" && tab.hideLocked;
     const description = tab.description || "";
     return /* @__PURE__ */ u3("div", {
-      class: `canvas-configure-tabs-row${isHidden3 ? " row-hidden" : ""}${isLocked ? " row-locked" : ""}`,
+      class: `canvas-configure-tabs-row${isHidden2 ? " row-hidden" : ""}${isLocked ? " row-locked" : ""}`,
       "data-tab-id": tab.id,
       "data-row-index": index,
       children: [
@@ -8638,12 +8672,12 @@ function ConfigureTabsModalInner(props) {
           ]
         }),
         /* @__PURE__ */ u3("button", {
-          class: `canvas-configure-tabs-toggle${!isHidden3 ? " toggle-on" : ""}`,
+          class: `canvas-configure-tabs-toggle${!isHidden2 ? " toggle-on" : ""}`,
           disabled: isLocked,
-          title: isLocked ? "Cannot hide this tab" : isHidden3 ? "Show tab" : "Hide tab",
+          title: isLocked ? "Cannot hide this tab" : isHidden2 ? "Show tab" : "Hide tab",
           onClick: (e3) => {
             e3.stopPropagation();
-            onToggleHide(tab.id, !isHidden3);
+            onToggleHide(tab.id, !isHidden2);
           },
           onPointerDown: (e3) => e3.stopPropagation(),
           onMouseDown: (e3) => e3.stopPropagation()
@@ -10800,8 +10834,13 @@ function mountMainMirror(opts) {
   let seedW;
   if (!mobile) {
     try {
-      const hostW = getMainDrawerWidth();
-      seedW = hostW > 0 ? hostW : undefined;
+      const existing = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0);
+      if (existing > 0) {
+        seedW = existing;
+      } else {
+        const hostW = getMainDrawerWidth();
+        seedW = hostW > 0 ? hostW : undefined;
+      }
     } catch {
       seedW = undefined;
     }
@@ -19287,7 +19326,7 @@ function buildHostEntry(tab) {
   const key = tab.key;
   const canvasHidden = new Set(getCanvasHiddenTabIds());
   const hostHidden = !isMainMirrorActive() ? getHostDrawerSettings()?.hiddenTabIds ? new Set(getHostDrawerSettings().hiddenTabIds) : new Set : new Set;
-  const isHidden3 = canvasHidden.has(tab.id) || hostHidden.has(tab.id);
+  const isHidden2 = canvasHidden.has(tab.id) || hostHidden.has(tab.id);
   const primaryActive = resolvePrimaryActiveTabId();
   const secondaryActive = getActiveSecondaryTabId();
   return {
@@ -19295,7 +19334,7 @@ function buildHostEntry(tab) {
     liveId: tab.id,
     isBuiltin: !tab.extensionId,
     location,
-    isHidden: isHidden3,
+    isHidden: isHidden2,
     isActiveInPrimary: primaryActive === tab.id,
     isActiveInSecondary: secondaryActive === tab.id,
     hasContentRoot: tab.root != null
@@ -19305,7 +19344,7 @@ function buildEntryFromAssignment(tabKey) {
   const assignments = getTabAssignments();
   const location = assignments.get(tabKey) === "secondary" ? "secondary" : "primary";
   const canvasHidden = new Set(getCanvasHiddenTabIds());
-  const isHidden3 = canvasHidden.has(tabKey);
+  const isHidden2 = canvasHidden.has(tabKey);
   const primaryActive = resolvePrimaryActiveTabId();
   const secondaryActive = getActiveSecondaryTabId();
   return {
@@ -19313,7 +19352,7 @@ function buildEntryFromAssignment(tabKey) {
     liveId: "",
     isBuiltin: false,
     location,
-    isHidden: isHidden3,
+    isHidden: isHidden2,
     isActiveInPrimary: primaryActive === tabKey,
     isActiveInSecondary: secondaryActive === tabKey,
     hasContentRoot: false

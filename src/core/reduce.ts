@@ -43,6 +43,9 @@ function applyMove(model: LayoutModel, key: TabKey, to: Side, index: number, act
     const without = removeFrom(srcList, key)
     const absIdx = visibleToAbsoluteIndex({ ...model, [from]: without }, from, index)
     const newList = insertAt(without, key, absIdx)
+    // No-op moves (same visible slot) keep the model identity so dispatch's
+    // `next === _model` gate short-circuits (review batch 4).
+    if (sameOrder(newList, srcList)) return model
     next = { ...model, [from]: newList }
   } else {
     const newSrc = removeFrom(srcList, key)
@@ -82,13 +85,33 @@ function applyReorder(model: LayoutModel, key: TabKey, side: Side, index: number
   const without = removeFrom(list, key)
   const absIdx = visibleToAbsoluteIndex({ ...model, [side]: without }, side, index)
   const newList = insertAt(without, key, absIdx)
+  // A reorder that lands the key back in its current slot is a no-op; keep
+  // the reference (Configure emits one reorder per key on every save).
+  if (sameOrder(newList, list)) return model
   return { ...model, [side]: newList }
+}
+
+/** Element-wise equality for TabKey lists (order-sensitive). */
+function sameOrder(a: readonly TabKey[], b: readonly TabKey[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 function applySetHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutModel {
   if (!keyExists(model, key)) return model
 
-  let next: LayoutModel = { ...model, hidden: toggleHidden(model.hidden, key, hide) }
+  const nextHidden = toggleHidden(model.hidden, key, hide)
+  const membershipChanged = nextHidden !== model.hidden
+  const activeAffected = hide
+    && (model.active.primary === key || model.active.secondary === key)
+  // No membership change and no active replacement → identity (a Configure
+  // save emits one setHidden per key even when nothing changed).
+  if (!membershipChanged && !activeAffected) return model
+
+  let next: LayoutModel = membershipChanged ? { ...model, hidden: nextHidden } : model
 
   if (hide) {
     if (model.active.primary === key) {

@@ -67,6 +67,13 @@ function mergeSideOrder(
   const list = listForSide(model, side)
   const out: LiveTabId[] = []
   for (const key of list) {
+    // SECONDARY order is derived from the visible tab-list DOM, with hidden /
+    // unplaced entries appended at the end — hidden order is unobservable
+    // there, and including it made every reconcile issue a phantom setOrder
+    // that could never converge (review batch 4). PRIMARY order is the full
+    // button sequence and reorderHostMainTabButtons needs every id to place
+    // the list correctly, so hidden keys stay in.
+    if (side === 'secondary' && isHidden(model, key)) continue
     const id = resolved.get(key)
     if (id) out.push(id)
   }
@@ -75,7 +82,7 @@ function mergeSideOrder(
 
 function observeSideOrder(world: ObservedWorld, side: Side): LiveTabId[] {
   return world.tabs
-    .filter(t => t.location === side)
+    .filter(t => t.location === side && !(side === 'secondary' && t.isHidden))
     .map(t => t.liveId)
 }
 

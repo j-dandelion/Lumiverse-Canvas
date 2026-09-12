@@ -513,8 +513,17 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   let seedW: number | undefined
   if (!mobile) {
     try {
-      const hostW = getMainDrawerWidth()
-      seedW = hostW > 0 ? hostW : undefined
+      // A keepWidthVar remount (taskbar-chrome toggle) already carries the
+      // user's Canvas width in MAIN_MIRROR_WIDTH_VAR — prefer it over the
+      // hidden host drawer's width, which Canvas does not keep in sync
+      // (review batch 4: enabling taskbar mode used to snap the width back).
+      const existing = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0)
+      if (existing > 0) {
+        seedW = existing
+      } else {
+        const hostW = getMainDrawerWidth()
+        seedW = hostW > 0 ? hostW : undefined
+      }
     } catch {
       seedW = undefined
     }

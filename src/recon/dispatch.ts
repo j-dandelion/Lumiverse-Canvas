@@ -19,6 +19,14 @@ let _unsubscribeWorldChanged: (() => void) | null = null
 let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
+/**
+ * True once the user changed drawer geometry / hidden state / side inside the
+ * pending-restore window. `mergeResolvedInto` then keeps the USER's copies
+ * instead of re-adopting the rebuilt (layout) ones — a late-resolving tab
+ * must not undo a resize/open-close/hide made while it registered
+ * (review batch 4).
+ */
+let _pendingWindowUserState = false
 let _restoringPending = false
 /** Coalescing flags for dispatchTrackedActiveSync (see its doc comment). */
 let _trackedSyncScheduled = false
@@ -112,17 +120,21 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
   const primary = mergeSide('primary')
   const secondary = mergeSide('secondary')
   const hidden = rebuilt.hidden.filter((k) => inModel.has(k))
+  // User actions inside the pending window win over the layout for the
+  // fields the rebuild would otherwise overwrite wholesale (drawer geometry,
+  // hidden set, side). Only active had this guard before.
+  const keepUser = _pendingWindowUserState
   const next: LayoutModel = {
     ...current,
     primary,
     secondary,
-    hidden,
+    hidden: keepUser ? current.hidden : hidden,
     active: {
       primary: current.active.primary ?? rebuilt.active.primary,
       secondary: current.active.secondary ?? rebuilt.active.secondary,
     },
-    drawers: rebuilt.drawers,
-    side: rebuilt.side,
+    drawers: keepUser ? current.drawers : rebuilt.drawers,
+    side: keepUser ? current.side : rebuilt.side,
   }
   // Identity-preserving when nothing changed.
   if (
@@ -140,6 +152,21 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
     return current
   }
   return next
+}
+
+/** Order-sensitive array equality for TabKey lists. */
+/**
+ * Record user changes to state that `mergeResolvedInto` otherwise re-adopts
+ * from the rebuilt layout while a restore is pending. Only geometry / hidden
+ * / side are marked; tab placement is already add-only in the merge and the
+ * active key has its own `current ?? rebuilt` guard.
+ */
+function markPendingWindowUserIntent(intent: Intent): void {
+  if (_pendingLayout === null) return
+  const t = intent.t
+  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden') {
+    _pendingWindowUserState = true
+  }
 }
 
 /** Order-sensitive array equality for TabKey lists. */
@@ -302,6 +329,7 @@ export function shutdown(): void {
   _pendingLayout = null
   _restoringPending = false
   _restoreDeadline = 0
+  _pendingWindowUserState = false
   _bootPlacementPass = null
   // Never inherit the previous session's dedup key: a fresh setup must be
   // able to write the same content again (review B3).
@@ -446,6 +474,7 @@ export function dispatch(intent: Intent): Promise<void> {
     if (gen !== _generation) return
     if (!_model || !_host) return
 
+    markPendingWindowUserIntent(intent)
     const next = reduce(_model, intent)
     if (next === _model) {
       dlog('[dispatch] no-op (reduce returned same model)', { t: intent.t })
@@ -471,6 +500,7 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
     if (gen !== _generation) return
     if (!_model || !_host) return
 
+    for (const intent of intents) markPendingWindowUserIntent(intent)
     const next = foldIntents(_model, intents)
     dlog('[dispatch] batch', {
       intents,
@@ -984,6 +1014,7 @@ export function bootstrapFromLayout(
   // later world changes — merging at saved indices — until everything
   // resolves or the boot deadline expires.
   _restoringPending = false
+  _pendingWindowUserState = false
   const expected = pendingLayoutTabCount(layout)
   const resolved = model.primary.length + model.secondary.length
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS

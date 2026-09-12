@@ -991,6 +991,28 @@ await testPlacementCrossSide()
 await testIdempotenceAfterFullConvergence()
 await testSequentialModelConvergence()
 await testDrawerStateReconciliation()
+// ============================================================================
+// A16 — hidden tabs: the order diff must exclude unobservable hidden entries
+// ============================================================================
+async function testHiddenOrderConvergence() {
+  const HID = extensionKey('ext', 'hid')
+  const host = new FakeHost([
+    makeLiveTab(A, 'h:a', 'secondary', { activeInSecondary: true }),
+    makeLiveTab(B, 'h:b', 'secondary'),
+    makeLiveTab(HID, 'h:hid', 'secondary', { hidden: true }),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    secondary: [A, HID, B],
+    hidden: [HID],
+    active: { primary: null, secondary: A },
+  }
+  const r1 = await reconcile(model, host)
+  assertEqual(r1.ops, 0, 'A16a: hidden secondary tab produces no phantom setOrder')
+  const r2 = await reconcile(model, host)
+  assertEqual(r2.ops, 0, 'A16b: idempotent with a non-terminal hidden secondary tab')
+}
+
 await testSideSwap()
 await testActiveNull()
 await testLateRegistrationCrossSide()
@@ -1011,6 +1033,9 @@ await testSuffixDrift()
 await testHostActivationTheft()
 // Adversarial — commit lag (microtask delay)
 await testCommitLag()
+// Adversarial — hidden tabs must not produce phantom setOrder rounds
+await testHiddenOrderConvergence()
+
 // Adversarial — bridge→store→DOM retry
 await testPlaceRetryAfterFailed()
 await testNonReadyInventoryDefersWrites()

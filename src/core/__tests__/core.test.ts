@@ -962,7 +962,45 @@ function test_edge_cases() {
   assert(!keyExists(m4, PROFILE), 'keyExists false')
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Identity preservation for no-op intents (review batch 4)
+// ═══════════════════════════════════════════════════════════════════
+function testNoOpIdentity() {
+  const base: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, EXT_A],
+    secondary: [EXT_B],
+    hidden: [],
+    active: { primary: PROFILE, secondary: EXT_B },
+  }
+
+  assert(
+    reduce(base, { t: 'reorder', key: EXT_A, side: 'primary', index: 1 }) === base,
+    'identity: reorder to the same slot returns the same model',
+  )
+  const moved = reduce(base, { t: 'reorder', key: EXT_A, side: 'primary', index: 0 })
+  assert(moved !== base, 'identity: real reorder returns a new model')
+  assertArraysEqual(listForSide(moved, 'primary'), [EXT_A, PROFILE], 'identity: real reorder applied')
+
+  assert(
+    reduce(base, { t: 'setHidden', key: EXT_A, hidden: false }) === base,
+    'identity: setHidden(already visible) returns the same model',
+  )
+  const hidden = reduce(base, { t: 'setHidden', key: EXT_A, hidden: true })
+  assert(hidden !== base, 'identity: real setHidden returns a new model')
+  assert(
+    reduce(hidden, { t: 'setHidden', key: EXT_A, hidden: true }) === hidden,
+    'identity: repeating a hide returns the same model',
+  )
+
+  assert(
+    reduce(base, { t: 'move', key: EXT_A, to: 'primary', index: 1, activateDest: false }) === base,
+    'identity: same-side move to the same slot returns the same model',
+  )
+}
+
 test_edge_cases()
+testNoOpIdentity()
 
 // ═══════════════════════════════════════════════════════════════════
 // Report
