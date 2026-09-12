@@ -486,7 +486,7 @@ import {
   __setMainTabPinEnabledForTest,
 } from '../main-tab-pin'
 import { captureMainMirrorMoveChrome, captureSecondaryNeighborForMove } from '../../recon/dispatch'
-import { isCanvasMainOpen, getMainMirrorTitleEl } from '../main-mirror-drawer'
+import { isCanvasMainOpen, getMainMirrorTitleEl, applyMainMirrorDrawer, isMainMirrorActive } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 import {
   __setHostSetSettingForTest,
@@ -852,6 +852,24 @@ function reset(): void {
   applyMainTabListPin(true, { force: true })
   assertEqual(getMainPinHost(), null, 'M6: no host on mobile')
   assert(!isMainTabListPinActive(), 'M6: inactive on mobile')
+}
+
+// M6b (review batch 2): a mobile reconcile must KEEP the shell (S6). The old
+// mobile branch force-tore the whole mirror down, so narrowing the window
+// with the main drawer open destroyed it; the shell must survive.
+{
+  reset()
+  ;(globalThis as any).window.matchMedia = (query: string) => ({
+    matches: /max-width:\s*600px/.test(query),
+    addEventListener() {},
+    removeEventListener() {},
+  })
+  applyMainMirrorDrawer(true, { force: true })
+  assert(isMainMirrorActive(), 'M6b: shell active on mobile after mount')
+  reconcileMainTabListPin()
+  assert(isMainMirrorActive(), 'M6b: mobile reconcile keeps the shell (no teardown)')
+  assertEqual(getMainPinHost(), null, 'M6b: no pin host on mobile')
+  applyMainMirrorDrawer(false, { force: true })
 }
 
 // M7: hidden is MODEL-owned — a hidden key renders display:none; a host

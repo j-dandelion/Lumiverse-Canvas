@@ -46,11 +46,11 @@ import {
   CANVAS_MAIN_ACTIVE_CLASS,
   CANVAS_MAIN_OPEN_CLASS,
   MAIN_MIRROR_WIDTH_VAR,
+  SECONDARY_WIDTH_VAR,
 } from '../../sidebar/styles'
 import { isMainDrawerRestorePending } from '../../sidebar/main-persist'
 import { dlog } from '../../debug/log'
 
-const SECONDARY_WIDTH_VAR = '--canvas-secondary-width'
 const DEFAULT_WIDTH = 420
 
 // ---------------------------------------------------------------------------
@@ -646,7 +646,9 @@ export class LumiverseHost implements HostPort {
       }
       if (s.width > 0) {
         if (typeof document !== 'undefined') {
-          document.documentElement.style.setProperty('--canvas-main-mirror-width', `${s.width}px`)
+          // Use the var the main shell actually reads (styles.ts). The old
+          // '--canvas-main-mirror-width' literal matched no reader.
+          document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${s.width}px`)
         }
       }
 

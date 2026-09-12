@@ -3575,9 +3575,13 @@ function commitState(updater) {
 }
 function applyMainTabListPin(enabled, opts) {
   if (isMobileViewport()) {
-    if (enabled && !opts?.force)
-      return;
-    teardownMainPin();
+    applyMainMirrorDrawer(true, { force: false });
+    initMainRenderer();
+    if (_state.enabled) {
+      commitState(() => ({ enabled: false }));
+      unpinMainMirrorForChromeOff();
+    }
+    reconcileMainMirror();
     return;
   }
   if (enabled) {
@@ -3614,7 +3618,7 @@ function unpinMainMirrorForChromeOff() {
 }
 function reconcileMainTabListPin() {
   if (isMobileViewport()) {
-    applyMainTabListPin(false, { force: true });
+    applyMainTabListPin(false);
     Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
     return;
   }
@@ -6907,19 +6911,19 @@ function cancelLayoutSave() {
   }
 }
 function flushPendingSaves() {
+  flushSettingsSave();
   if (!isLayoutRepoArmed()) {
     logPersistSave("flush", null, { skipped: "not-armed", loadInProgress: _loadInProgress });
     return;
   }
   if (_loadInProgress) {
-    logPersistSave("flush", null, { skipped: "load-in-progress", loadInProgress: true });
+    logPersistSave("flush", null, { skipped: "load-in-progress", loadInProgress: _loadInProgress });
     return;
   }
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer);
     _saveLayoutTimer = null;
   }
-  flushSettingsSave();
   syncPersistDebugToBackend((msg) => getBackendCtx()?.sendToBackend(msg));
   logPersistSave("flush", null, { loadInProgress: _loadInProgress });
   const layout = buildPersistedLayout();
@@ -6983,7 +6987,8 @@ async function restoreSingleModeLayout(slot, host) {
       tabId = pickSafeFallbackTabId();
     if (open && !tabId)
       tabId = pickSafeFallbackTabId();
-    restoreMainDrawerFromDom(open, tabId, undefined, {
+    const width = getSettings().persistDrawerWidth && typeof slot.primary?.width === "number" ? slot.primary.width : undefined;
+    restoreMainDrawerFromDom(open, tabId, width, {
       restoreOpen: true,
       restoreWidth: true
     });
@@ -7077,6 +7082,7 @@ var init_mode_profiles = __esm(() => {
   init_active_tab();
   init_dispatch();
   init_main_persist();
+  init_state();
 });
 
 // src/settings/second-drawer-mode.ts
@@ -10686,6 +10692,7 @@ function syncMainMirrorToViewport() {
     return;
   try {
     if (isMobileViewport()) {
+      injectMainMirrorMobileStyles();
       if (_desktopWidth == null) {
         const cur = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0);
         _desktopWidth = cur > 0 ? cur : null;
@@ -11062,6 +11069,7 @@ function teardownMainMirror(opts) {
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
   _active = false;
   _open = false;
+  _desktopWidth = null;
   _mountedSide = null;
   bumpReflow();
 }
@@ -19208,12 +19216,11 @@ init_live_tab_order();
 init_styles();
 init_main_persist();
 init_log();
-var SECONDARY_WIDTH_VAR2 = "--canvas-secondary-width";
 var DEFAULT_WIDTH = 420;
 function readSecondaryWidth2() {
   if (typeof document === "undefined")
     return DEFAULT_WIDTH;
-  return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR2)) || DEFAULT_WIDTH;
+  return parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || DEFAULT_WIDTH;
 }
 function classifyTab(tabId, drawerExtensionId) {
   const bridge = getHostBridge();
@@ -19491,7 +19498,7 @@ class LumiverseHost {
           closeSecondarySidebar();
         }
         if (s3.width > 0 && typeof document !== "undefined") {
-          document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR2, `${s3.width}px`);
+          document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${s3.width}px`);
         }
         return "ok";
       }
@@ -19518,7 +19525,7 @@ class LumiverseHost {
       }
       if (s3.width > 0) {
         if (typeof document !== "undefined") {
-          document.documentElement.style.setProperty("--canvas-main-mirror-width", `${s3.width}px`);
+          document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${s3.width}px`);
         }
       }
       return "ok";

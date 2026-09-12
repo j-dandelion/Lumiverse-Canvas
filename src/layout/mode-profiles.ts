@@ -24,6 +24,7 @@ import { getMainDrawerWidth } from '../dom/lumiverse'
 import type { HostPort } from '../host/port'
 import { bootstrapFromLayout, flush as flushOwnedModel } from '../recon/dispatch'
 import { restoreMainDrawerFromDom } from '../sidebar/main-persist'
+import { getSettings } from '../settings/state'
 
 /**
  * Build a durable single-drawer layout from the CURRENT live host state.
@@ -98,7 +99,15 @@ export async function restoreSingleModeLayout(
     let tabId: string | null = slot.primary?.tabId ?? null
     if (tabId && !isTabKnownAndVisible(tabId)) tabId = pickSafeFallbackTabId()
     if (open && !tabId) tabId = pickSafeFallbackTabId()
-    restoreMainDrawerFromDom(open, tabId, undefined, {
+    // Restore the slot's saved main width when width persistence is on
+    // (review batch 2). Passing undefined made the mode switch keep the live
+    // width, and the next shell-truth host sync then overwrote the slot.
+    // Mirrors snapshot.isWidthPersistenceEnabled() without importing
+    // layout/snapshot (partial test mocks of it omit new exports).
+    const width = getSettings().persistDrawerWidth && typeof slot.primary?.width === 'number'
+      ? slot.primary.width
+      : undefined
+    restoreMainDrawerFromDom(open, tabId, width, {
       restoreOpen: true,
       restoreWidth: true,
     })

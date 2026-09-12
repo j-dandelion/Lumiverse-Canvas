@@ -395,6 +395,10 @@ export function syncMainMirrorToViewport(): void {
   if (!_shell || !_active) return
   try {
     if (isMobileViewport()) {
+      // A desktop shell crossing down needs the mobile stylesheet: it is
+      // media-scoped and safe on desktop, but mount only injects it when the
+      // shell was BORN mobile. Idempotent (injectStyles dedups by id).
+      injectMainMirrorMobileStyles()
       if (_desktopWidth == null) {
         const cur = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 0)
         _desktopWidth = cur > 0 ? cur : null
@@ -879,6 +883,9 @@ export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
   _active = false
   _open = false
+  // A desktop width captured for a cross-up must not survive teardown: the
+  // next desktop resize would restore it over the new shell's width.
+  _desktopWidth = null
   _mountedSide = null
   bumpReflow()
 }

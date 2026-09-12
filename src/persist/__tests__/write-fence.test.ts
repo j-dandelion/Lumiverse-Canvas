@@ -4,6 +4,24 @@
 //   15. Settings survive a layout load failure, and layout survives a settings load failure.
 //   16. (Migration tested in backend — frontend repos test the fence.)
 
+// Minimal DOM stub: persistSettings → buildPersistedLayout reads the host
+// drawer via document queries even here (review batch 2 added the first
+// settings-flush path that builds a snapshot without a mounted DOM).
+;(globalThis as any).document = {
+  documentElement: {
+    classList: {
+      _c: new Set<string>(),
+      contains(c: string) { return this._c.has(c) },
+      add(c: string) { this._c.add(c) },
+      remove(c: string) { this._c.delete(c) },
+    },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+  },
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  body: { querySelector: () => null, appendChild() {}, removeChild() {} },
+}
+
 let passed = 0
 let failed = 0
 function assert(cond: unknown, msg: string) {
@@ -68,6 +86,8 @@ import {
   isSettingsRepoArmed,
   __resetSettingsRepoForTest,
 } from '../settings-repo'
+import { flushPendingSaves } from '../layout-load'
+import { persistSettings } from '../../settings/state'
 
 function reset() {
   __resetLayoutRepoForTest()
@@ -252,6 +272,28 @@ function sleep(ms: number): Promise<void> {
   assert(elapsed >= 200, `18b: waits out the window (took ${elapsed}ms)`)
   assert(String(result.reason).includes('timed out'), '18b: reason mentions timeout')
   __resetBootLoadParamsForTest()
+}
+
+// --- 19a: pending settings save flushes even when the layout repo is unarmed ---
+// layout.json and settings.json are independent. `flushPendingSaves` used to
+// return at the unarmed-layout guard BEFORE flushing settings, so a toggle
+// made <100ms before unload was lost when the layout load had failed
+// (review batch 2).
+{
+  reset()
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  setLayoutRepoBackendCtx(ctx)
+  armSettingsRepo()
+  // Layout repo deliberately left unarmed (simulates a failed/error load).
+  assert(!isLayoutRepoArmed(), '19a: layout repo unarmed')
+
+  persistSettings()
+  flushPendingSaves()
+  assert(
+    ctx._saves().some((m: BackendMsg) => m.type === 'SAVE_SETTINGS'),
+    '19a: pending settings save flushed despite unarmed layout repo',
+  )
 }
 
 console.log(`persist/write-fence: ${passed} passed, ${failed} failed`)

@@ -11,7 +11,7 @@
 //   3. The host sidebar observer → rAF-coalesced re-render (twin chrome
 //      deltas: icons/labels/tagging settle after React commits).
 //
-// Mobile: always force-off (matches secondary pin).
+// Mobile: the shell stays mounted (S6); pin chrome is force-off.
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
@@ -78,16 +78,26 @@ function commitState(updater: (prev: MirrorState) => Partial<MirrorState>): void
  * S1 gate inversion: the mirror DRAWER shell is Canvas-owned unconditionally
  * on desktop — `enabled` here only controls the PIN chrome (tab list
  * reparented to the screen-edge host). `false` keeps the shell mounted and
- * its renderer live; the tab list rides inside the drawer. Mobile always
- * tears down the mirror entirely (host drawer is the mobile surface).
+ * its renderer live; the tab list rides inside the drawer.
+ *
+ * S6: mobile keeps the shell too and has no pin chrome. A settings apply or
+ * reconcile must NEVER tear the shell down here — `teardownMainPin` is the
+ * extension-disable path (setup.ts also tears the mirror down directly).
  */
 export function applyMainTabListPin(
   enabled: boolean,
   opts?: { force?: boolean },
 ): void {
   if (isMobileViewport()) {
-    if (enabled && !opts?.force) return
-    teardownMainPin()
+    // Mount/keep the shell; if a desktop phase left the pin on (cross-down),
+    // unpin in place so the list rides in the full-bleed drawer.
+    applyMainMirrorDrawer(true, { force: false })
+    initMainRenderer()
+    if (_state.enabled) {
+      commitState(() => ({ enabled: false }))
+      unpinMainMirrorForChromeOff()
+    }
+    reconcileMainMirror()
     return
   }
 
@@ -143,12 +153,13 @@ function unpinMainMirrorForChromeOff(): void {
  *
  * S1 gate inversion: the main mirror shell is ALWAYS mounted on desktop —
  * taskbarMode no longer gates ownership (it only controls the edge-strip
- * pin chrome). Mobile still force-tears-down (host drawer is the mobile
- * surface until the mobile task lands).
+ * pin chrome). S6: the same holds on mobile (full-bleed shell); the old
+ * force-teardown made every mobile reconcile / narrow-window cross destroy
+ * the drawer.
  */
 export function reconcileMainTabListPin(): void {
   if (isMobileViewport()) {
-    applyMainTabListPin(false, { force: true })
+    applyMainTabListPin(false)
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
   }

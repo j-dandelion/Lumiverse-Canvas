@@ -108,6 +108,25 @@ const host = new FakeHost([
   assert(world.tabs.every((t) => t.location === 'primary'), 'host converges to all-primary after single restore')
 }
 
+// ── Mode width restore (review batch 2) ──
+// restoreSingleModeLayout must thread the slot's saved main width into
+// restoreMainDrawerFromDom. It used to pass undefined, so a mode switch kept
+// the live width and the next shell-truth host sync adopted that over the
+// slot's saved width (each mode's width silently degraded to the other's).
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/layout/mode-profiles.ts'), 'utf8')
+  assert(
+    /typeof slot\.primary\?\.width === 'number'/.test(src),
+    'mode restore reads the slot width',
+  )
+  assert(
+    /restoreMainDrawerFromDom\(open, tabId, width,/.test(src),
+    'mode restore threads the width into restoreMainDrawerFromDom',
+  )
+}
+
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)
 if (failed > 0) process.exit(1)
