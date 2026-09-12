@@ -135,5 +135,29 @@ ok(
   'T-PRE-6: drawer-sync remount loop places serially',
 )
 
+// 7. live-verify #13: the pre-activation is a MOUNT mechanism — after the
+//    root exists, the helper must restore the host's previous active tab so
+//    the moved tab's content never paints in the main drawer, and so the
+//    later move-out is a non-active move for the pendingActiveTabReset guard
+//    (clearSpuriousActiveTabReset in host-tab-location).
+{
+  const prevCaptureIdx = helperSrc.indexOf('const prevActiveTabId')
+  const ensureCallIdx = helperSrc.indexOf('await ensureBuiltInTabActiveInMain(tabId')
+  const restoreIdx = helperSrc.indexOf('findMainTabButton(prevActiveTabId)')
+  ok(
+    prevCaptureIdx !== -1 && /hostMainDrawerDomState\(\)\?\.tab/.test(helperSrc),
+    'T-PRE-7: helper captures the host active tab before the pre-activation click',
+  )
+  ok(
+    restoreIdx !== -1 && helperSrc.includes('prevActiveTabId !== tabId'),
+    'T-PRE-7: helper restores the previous active when a different tab was moved',
+  )
+  ok(
+    prevCaptureIdx !== -1 && ensureCallIdx !== -1 && restoreIdx !== -1 &&
+      prevCaptureIdx < ensureCallIdx && ensureCallIdx < restoreIdx,
+    'T-PRE-7: capture → pre-activate → restore ordering',
+  )
+}
+
 console.log(`builtin-move-preactivate: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

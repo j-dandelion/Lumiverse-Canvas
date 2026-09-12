@@ -3778,7 +3778,10 @@ var init_main_tab_pin = __esm(() => {
 var exports_host_tab_location = {};
 __export(exports_host_tab_location, {
   CANVAS_SECONDARY_CONTAINER_ID: () => CANVAS_SECONDARY_CONTAINER_ID,
+  __setClearPendingActiveTabResetForTest: () => __setClearPendingActiveTabResetForTest,
+  __setHostActiveTabIdForTest: () => __setHostActiveTabIdForTest,
   __setHostMoveTabToForTest: () => __setHostMoveTabToForTest,
+  clearSpuriousActiveTabReset: () => clearSpuriousActiveTabReset,
   getHostMoveTabTo: () => getHostMoveTabTo,
   locationMatches: () => locationMatches,
   requestHostTabLocation: () => requestHostTabLocation,
@@ -3789,6 +3792,47 @@ function __setHostMoveTabToForTest(fn) {
   _testMoveTabTo = fn;
   _cachedMoveTabTo = fn;
   _moveTabToCacheTs = Date.now();
+}
+function __setHostActiveTabIdForTest(id) {
+  _testHostActiveTabId = id;
+}
+function __setClearPendingActiveTabResetForTest(fn) {
+  _testClearPendingActiveTabReset = fn;
+}
+function clearSpuriousActiveTabReset(movedTabId) {
+  let activeId = "";
+  if (_testHostActiveTabId !== undefined) {
+    activeId = _testHostActiveTabId ?? "";
+  } else {
+    try {
+      const activeBtn = getMainSidebar()?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+      activeId = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || "";
+    } catch {}
+  }
+  const movedIsActive = !!activeId && (activeId === movedTabId || movedTabId.endsWith(`:${activeId}`) || movedTabId.includes(`:tab:${activeId}`));
+  if (movedIsActive)
+    return false;
+  let clear = _testClearPendingActiveTabReset;
+  if (!clear) {
+    let snap = getStoreSnapshot();
+    if (!snap || typeof snap.clearPendingActiveTabReset !== "function") {
+      findStoreData(true);
+      snap = getStoreSnapshot();
+    }
+    if (snap && typeof snap.clearPendingActiveTabReset === "function") {
+      clear = snap.clearPendingActiveTabReset;
+    }
+  }
+  if (!clear)
+    return false;
+  try {
+    clear();
+    dlog(`[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId || "unknown"}")`);
+    return true;
+  } catch (err) {
+    dwarn("[tabmove] clearPendingActiveTabReset threw:", err);
+    return false;
+  }
 }
 function locationMatches(actual, expected) {
   const effective = actual ?? { kind: "main-drawer" };
@@ -3924,15 +3968,17 @@ function requestHostTabLocation(tabId, location) {
   return { ok: false, via: "none" };
 }
 function requestHostTabToSecondary(tabId) {
-  return requestHostTabLocation(tabId, {
+  const res = requestHostTabLocation(tabId, {
     kind: "container",
     containerId: CANVAS_SECONDARY_CONTAINER_ID
   });
+  clearSpuriousActiveTabReset(tabId);
+  return res;
 }
 function requestHostTabToMain(tabId) {
   return requestHostTabLocation(tabId, { kind: "main-drawer" });
 }
-var CANVAS_SECONDARY_CONTAINER_ID = "canvas-secondary-drawer", _cachedMoveTabTo = null, _moveTabToCacheTs = 0, MOVE_TAB_TO_TTL_MS = 3000, _testMoveTabTo = null;
+var CANVAS_SECONDARY_CONTAINER_ID = "canvas-secondary-drawer", _cachedMoveTabTo = null, _moveTabToCacheTs = 0, MOVE_TAB_TO_TTL_MS = 3000, _testMoveTabTo = null, _testHostActiveTabId, _testClearPendingActiveTabReset = null;
 var init_host_tab_location = __esm(() => {
   init_fiber();
   init_store();
@@ -4075,6 +4121,7 @@ async function moveBuiltInTabToSecondaryContainer(opts) {
   let root = opts.root;
   if (!root) {
     const prevMainOpen = isMainDrawerOpen();
+    const prevActiveTabId = hostMainDrawerDomState()?.tab ?? null;
     dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` + `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`);
     const { ensureBuiltInTabActiveInMain } = await Promise.resolve().then(() => (init_assignment(), exports_assignment));
     await ensureBuiltInTabActiveInMain(tabId, {
@@ -4091,6 +4138,16 @@ async function moveBuiltInTabToSecondaryContainer(opts) {
       },
       dlog
     });
+    if (prevActiveTabId && prevActiveTabId !== tabId) {
+      try {
+        const { findMainTabButton: findMainTabButton2 } = await Promise.resolve().then(() => (init_buttons(), exports_buttons));
+        const prevBtn = findMainTabButton2(prevActiveTabId);
+        if (prevBtn && prevBtn.isConnected)
+          prevBtn.click();
+      } catch (err) {
+        dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`);
+      }
+    }
     await new Promise((r) => requestAnimationFrame(() => r()));
     dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_POST_ACTIVATE tab=${tabId} hostDrawer=${JSON.stringify(hostMainDrawerDomState())}`);
     if (!prevMainOpen && isMainDrawerOpen()) {
@@ -4945,6 +5002,7 @@ function shutdown() {
   _restoringPending = false;
   _restoreDeadline = 0;
   _bootPlacementPass = null;
+  _lastPersistedLayout = null;
   _queue = Promise.resolve();
 }
 function getModel() {
@@ -4995,9 +5053,13 @@ function persistModel(model) {
   });
   saveLayoutToDisk(layout).then((r) => {
     if (r.status === "error") {
+      if (_lastPersistedLayout === json)
+        _lastPersistedLayout = null;
       console.warn("[canvas] saveLayoutToDisk failed:", r.reason);
     }
   }).catch((err) => {
+    if (_lastPersistedLayout === json)
+      _lastPersistedLayout = null;
     console.warn("[canvas] saveLayoutToDisk rejected:", err);
   });
 }

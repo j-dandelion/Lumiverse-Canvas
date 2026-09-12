@@ -39,6 +39,80 @@ export function __setHostMoveTabToForTest(fn: MoveTabToFn | null): void {
   _moveTabToCacheTs = Date.now()
 }
 
+/** Test seam: override the host-active read (undefined = read the DOM). */
+let _testHostActiveTabId: string | null | undefined
+export function __setHostActiveTabIdForTest(id: string | null | undefined): void {
+  _testHostActiveTabId = id
+}
+
+/** Test seam: override the host store's clearPendingActiveTabReset action. */
+let _testClearPendingActiveTabReset: (() => void) | null = null
+export function __setClearPendingActiveTabResetForTest(fn: (() => void) | null): void {
+  _testClearPendingActiveTabReset = fn
+}
+
+/**
+ * Host content-drift guard (live-verify #13).
+ *
+ * The host sets `pendingActiveTabReset` for ANY tab leaving the main drawer
+ * (spindle-placement.moveTabTo), and ViewportDrawer's effect then switches
+ * the host active tab to the FIRST remaining tab — even when the moved tab
+ * was NOT the active one. Canvas's post-move re-assert clicks the real
+ * active back, which the user sees as the active tab's content (e.g.
+ * profile) flickering on every main→second drag. The reverse direction
+ * (second→main) writes a `main-drawer` location, which never sets the flag
+ * — hence the asymmetry.
+ *
+ * When the moved tab is not the host's current active, clear the flag
+ * synchronously (before React's effect runs) so the spurious switch never
+ * paints. Active-tab moves keep the reset: the neighbor handoff owns the
+ * replacement. Returns true when a spurious reset was cleared.
+ */
+export function clearSpuriousActiveTabReset(movedTabId: string): boolean {
+  let activeId = ''
+  if (_testHostActiveTabId !== undefined) {
+    activeId = _testHostActiveTabId ?? ''
+  } else {
+    try {
+      const activeBtn = getMainSidebar()?.querySelector(
+        'button.tabBtnActive, button[class*="tabBtnActive"]',
+      ) as HTMLElement | null
+      activeId = activeBtn?.getAttribute('data-tab-id') || activeBtn?.getAttribute('title') || ''
+    } catch { /* non-DOM test env */ }
+  }
+  // Tolerant match: stored composite ids ("spindle:…:tab:<id>:N") vs the
+  // host button's bare data-tab-id/title.
+  const movedIsActive = !!activeId && (
+    activeId === movedTabId
+    || movedTabId.endsWith(`:${activeId}`)
+    || movedTabId.includes(`:tab:${activeId}`)
+  )
+  if (movedIsActive) return false
+
+  let clear = _testClearPendingActiveTabReset
+  if (!clear) {
+    let snap = getStoreSnapshot() as { clearPendingActiveTabReset?: unknown } | null
+    if (!snap || typeof snap.clearPendingActiveTabReset !== 'function') {
+      findStoreData(true)
+      snap = getStoreSnapshot() as { clearPendingActiveTabReset?: unknown } | null
+    }
+    if (snap && typeof snap.clearPendingActiveTabReset === 'function') {
+      clear = snap.clearPendingActiveTabReset as () => void
+    }
+  }
+  if (!clear) return false
+  try {
+    clear()
+    dlog(
+      `[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId || 'unknown'}")`,
+    )
+    return true
+  } catch (err) {
+    dwarn('[tabmove] clearPendingActiveTabReset threw:', err)
+    return false
+  }
+}
+
 export function locationMatches(
   actual: { kind: string; containerId?: string } | null | undefined,
   expected: SpindleTabLocation,
@@ -227,10 +301,16 @@ export function requestHostTabLocation(
 
 /** Convenience: place tab into canvas-secondary-drawer. */
 export function requestHostTabToSecondary(tabId: string): RequestHostTabLocationResult {
-  return requestHostTabLocation(tabId, {
+  const res = requestHostTabLocation(tabId, {
     kind: 'container',
     containerId: CANVAS_SECONDARY_CONTAINER_ID,
   })
+  // Live-verify #13: the move-out set the host's pendingActiveTabReset; clear
+  // it for non-active moved tabs so the host does not switch the active tab
+  // (and repaint the main content) away from the user's choice. Runs even on
+  // a failed move: a bridge attempt can set the flag before the verify fails.
+  clearSpuriousActiveTabReset(tabId)
+  return res
 }
 
 /** Convenience: restore tab to main drawer. */

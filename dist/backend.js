@@ -212,8 +212,9 @@ async function moveCorruptFile2(key, reason) {
   }
 }
 async function saveLayout(state) {
-  if (!state || typeof state !== "object")
-    return;
+  if (!state || typeof state !== "object") {
+    throw new Error("invalid layout payload (not an object)");
+  }
   const json = JSON.stringify(state, null, 2);
   pblog("disk-write layout start", `bytes=${json.length}`);
   try {
@@ -224,11 +225,13 @@ async function saveLayout(state) {
     pblog("disk-write layout fail", msg);
     if (DEBUG)
       spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`);
+    throw err instanceof Error ? err : new Error(msg);
   }
 }
 async function saveSettings(state) {
-  if (!state || typeof state !== "object")
-    return;
+  if (!state || typeof state !== "object") {
+    throw new Error("invalid settings payload (not an object)");
+  }
   const json = JSON.stringify(state, null, 2);
   pblog("disk-write settings start", `bytes=${json.length}`);
   try {
@@ -239,6 +242,7 @@ async function saveSettings(state) {
     pblog("disk-write settings fail", msg);
     if (DEBUG)
       spindle.log.error(`[SidebarUX] Failed to save settings: ${msg}`);
+    throw err instanceof Error ? err : new Error(msg);
   }
 }
 spindle.onFrontendMessage(async (payload) => {
