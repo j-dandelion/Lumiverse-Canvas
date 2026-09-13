@@ -7,7 +7,11 @@
 // only builds chrome. Host/Lumiverse source is never modified.
 
 import { clampSidebarWidth } from '../dom/clamp'
-import { injectDrawerTabStyles } from './styles'
+import {
+  injectDrawerTabStyles,
+  LOCATION_CLASS_BOTTOM,
+  LOCATION_CLASS_TOP,
+} from './styles'
 import type { DrawerLocation } from '../types'
 
 export type DrawerShellOwner = 'main' | 'secondary'
@@ -413,8 +417,16 @@ export function restyleShellSide(
   // the screen-edge side is the OPPOSITE of the in-flow (unpinned) default.
   const pinned = tabList === null
 
+  // S8: while Top/Bottom, the pin spacer is 0×0 and the drawer flex write
+  // would fight the horizontal layout — skip it (the panel fills either way).
+  const horizontalLocation =
+    typeof document !== 'undefined'
+    && !!document.documentElement?.classList
+    && (document.documentElement.classList.contains(LOCATION_CLASS_TOP)
+      || document.documentElement.classList.contains(LOCATION_CLASS_BOTTOM))
+
   const drawer = wrapper.querySelector('.sidebar-ux-drawer') as HTMLElement | null
-  if (drawer) {
+  if (drawer && !horizontalLocation) {
     const wantFlex =
       side === 'right'
         ? pinned

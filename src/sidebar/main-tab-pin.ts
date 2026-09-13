@@ -227,9 +227,18 @@ export function teardownMainPin(): void {
 /** rAF-coalesced reconcile: pin chrome + renderer (twin chrome deltas). */
 function scheduleReconcile(): void {
   if (_state.reconcileRaf !== null) return
+  // S8: snapshot the effective pin gate at schedule time. The rAF runs late
+  // (after React commits); a location/taskbar/viewport flip in the same frame
+  // must not apply stale chrome — re-run the full gate when it moved.
+  const wantPinAtSchedule = isTaskbarModeEnabled() && !isMobileViewport()
   commitState(() => ({
     reconcileRaf: requestAnimationFrame(() => {
       commitState(() => ({ reconcileRaf: null }))
+      const wantPinNow = isTaskbarModeEnabled() && !isMobileViewport()
+      if (wantPinNow !== wantPinAtSchedule) {
+        reconcileMainTabListPin()
+        return
+      }
       if (isMainMirrorActive()) reconcileMainMirror()
     }),
   }))

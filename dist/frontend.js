@@ -1390,6 +1390,21 @@ function applyWrapperStripEdge(wrapper, edge) {
   if (wrapper.style.bottom !== bottom)
     wrapper.style.bottom = bottom;
 }
+function syncSpacerForLocation(spacer, location) {
+  if (!spacer)
+    return;
+  if (location === "sides") {
+    if (spacer.style.width !== "56px")
+      spacer.style.width = "56px";
+    if (spacer.style.height !== "auto")
+      spacer.style.height = "auto";
+  } else {
+    if (spacer.style.width !== "0px")
+      spacer.style.width = "0px";
+    if (spacer.style.height !== "0px")
+      spacer.style.height = "0px";
+  }
+}
 function readWidthCssVar(varName, fallback = 420) {
   try {
     const style = document.documentElement?.style;
@@ -1595,8 +1610,9 @@ function restyleShellSide(wrapper, side) {
   }
   const tabList = wrapper.querySelector(".sidebar-ux-tab-list");
   const pinned = tabList === null;
+  const horizontalLocation = typeof document !== "undefined" && !!document.documentElement?.classList && (document.documentElement.classList.contains(LOCATION_CLASS_TOP) || document.documentElement.classList.contains(LOCATION_CLASS_BOTTOM));
   const drawer = wrapper.querySelector(".sidebar-ux-drawer");
-  if (drawer) {
+  if (drawer && !horizontalLocation) {
     const wantFlex = side === "right" ? pinned ? "row-reverse" : "row" : pinned ? "row" : "row-reverse";
     drawer.style.setProperty("flex-direction", wantFlex);
   }
@@ -1747,6 +1763,10 @@ var exports_tab_position = {};
 __export(exports_tab_position, {
   PIN_OWNER_MAIN: () => PIN_OWNER_MAIN,
   PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
+  STRIP_AXIS_ATTR: () => STRIP_AXIS_ATTR,
+  STRIP_AXIS_HORIZONTAL: () => STRIP_AXIS_HORIZONTAL,
+  STRIP_AXIS_VERTICAL: () => STRIP_AXIS_VERTICAL,
+  STRIP_EDGE_ATTR: () => STRIP_EDGE_ATTR,
   TAB_LIST_PINNED_CLASS: () => TAB_LIST_PINNED_CLASS,
   TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
   TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
@@ -1844,21 +1864,58 @@ function destroyMainPinHost() {
   }
   sweepStrayPinHosts();
 }
+function secondaryZonePresent() {
+  if (!getSettings().secondSidebarEnabled)
+    return false;
+  if (!isSecondaryShellLive())
+    return false;
+  if (!hasSecondaryAssignedTabs())
+    return false;
+  return !!getSecondaryTabList();
+}
 function applyPinHostChrome(host, side, owner) {
+  const loc = getDrawerLocation();
+  const horizontal = loc !== "sides";
+  const edge = horizontal ? getStripEdge() : side;
   host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`;
   host.setAttribute("data-pin-owner", owner);
-  setIfDifferent(host.style, "position", "fixed");
-  setIfDifferent(host.style, "top", SAFE_TOP);
-  setIfDifferent(host.style, "bottom", SAFE_BOTTOM);
-  setIfDifferent(host.style, "zIndex", PIN_Z_INDEX);
-  setIfDifferent(host.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(host.style, "pointerEvents", "none");
-  if (side === "right") {
-    setIfDifferent(host.style, "right", "0");
-    setIfDifferent(host.style, "left", "");
+  host.setAttribute(STRIP_AXIS_ATTR, horizontal ? STRIP_AXIS_HORIZONTAL : STRIP_AXIS_VERTICAL);
+  if (edge)
+    host.setAttribute(STRIP_EDGE_ATTR, edge);
+  const s = host.style;
+  setIfDifferent(s, "position", "fixed");
+  setIfDifferent(s, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(s, "pointerEvents", "none");
+  if (horizontal) {
+    setIfDifferent(s, "height", "var(--sidebar-ux-strip-h, 56px)");
+    if (edge === "top") {
+      setIfDifferent(s, "top", SAFE_TOP);
+      setIfDifferent(s, "bottom", "");
+    } else {
+      setIfDifferent(s, "bottom", SAFE_BOTTOM);
+      setIfDifferent(s, "top", "");
+    }
+    const dual = secondaryZonePresent();
+    setIfDifferent(s, "width", dual ? "50%" : "100%");
+    if (side === "right") {
+      setIfDifferent(s, "right", SAFE_RIGHT);
+      setIfDifferent(s, "left", "");
+    } else {
+      setIfDifferent(s, "left", SAFE_LEFT);
+      setIfDifferent(s, "right", "");
+    }
   } else {
-    setIfDifferent(host.style, "left", "0");
-    setIfDifferent(host.style, "right", "");
+    setIfDifferent(s, "top", SAFE_TOP);
+    setIfDifferent(s, "bottom", SAFE_BOTTOM);
+    setIfDifferent(s, "height", "");
+    setIfDifferent(s, "width", `${TAB_LIST_WIDTH_PX}px`);
+    if (side === "right") {
+      setIfDifferent(s, "right", "0");
+      setIfDifferent(s, "left", "");
+    } else {
+      setIfDifferent(s, "left", "0");
+      setIfDifferent(s, "right", "");
+    }
   }
 }
 function setIfDifferent(el, prop, val) {
@@ -1923,10 +1980,13 @@ function applyTabListPosition(enabled, opts) {
   const mainTabList = opts?.mainTabList ?? getMainSidebar();
   const mainPanel = opts?.mainPanel ?? getMainPanel();
   if (mainDrawer && mainTabList) {
-    const mainDefaultFlex = side === "left" ? "row-reverse" : "row";
-    const mainToggledFlex = side === "left" ? "row" : "row-reverse";
-    const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex;
-    applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex);
+    const mainPinned = typeof mainTabList.classList?.contains === "function" && mainTabList.classList.contains(TAB_LIST_PINNED_CLASS);
+    if (!mainPinned) {
+      const mainDefaultFlex = side === "left" ? "row-reverse" : "row";
+      const mainToggledFlex = side === "left" ? "row" : "row-reverse";
+      const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex;
+      applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex);
+    }
     if (mainPanel)
       applyPanelChatBorder(mainPanel, side, chatBorder);
   }
@@ -2053,14 +2113,36 @@ function removeOrphanTabListsFromHost(keep) {
   }
 }
 function applyPinnedTabListChrome(tabList, side) {
+  const loc = getDrawerLocation();
+  const horizontal = loc !== "sides";
   const innerBorderSide = side === "right" ? "left" : "right";
   tabList.classList.add(TAB_LIST_PINNED_CLASS);
+  setIfDifferent(tabList.style, "pointerEvents", "auto");
+  if (horizontal) {
+    setIfDifferent(tabList.style, "position", "absolute");
+    setIfDifferent(tabList.style, "top", "");
+    setIfDifferent(tabList.style, "bottom", "");
+    setIfDifferent(tabList.style, "left", "");
+    setIfDifferent(tabList.style, "right", "");
+    setIfDifferent(tabList.style, "width", "");
+    setIfDifferent(tabList.style, "height", "");
+    setIfDifferent(tabList.style, "zIndex", "");
+    setIfDifferent(tabList.style, "flexDirection", "");
+    setIfDifferent(tabList.style, "overflow", "");
+    setIfDifferent(tabList.style, "overflowX", "");
+    setIfDifferent(tabList.style, "overflowY", "");
+    setIfDifferent(tabList.style, "borderTop", "");
+    setIfDifferent(tabList.style, "borderRight", "");
+    setIfDifferent(tabList.style, "borderBottom", "");
+    setIfDifferent(tabList.style, "borderLeft", "");
+    return;
+  }
   setIfDifferent(tabList.style, "position", "fixed");
   setIfDifferent(tabList.style, "top", SAFE_TOP);
   setIfDifferent(tabList.style, "bottom", SAFE_BOTTOM);
+  setIfDifferent(tabList.style, "height", "");
   setIfDifferent(tabList.style, "zIndex", PIN_Z_INDEX);
   setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
-  setIfDifferent(tabList.style, "pointerEvents", "auto");
   if (side === "right") {
     setIfDifferent(tabList.style, "right", "0");
     setIfDifferent(tabList.style, "left", "");
@@ -2068,6 +2150,9 @@ function applyPinnedTabListChrome(tabList, side) {
     setIfDifferent(tabList.style, "left", "0");
     setIfDifferent(tabList.style, "right", "");
   }
+  setIfDifferent(tabList.style, "flexDirection", "column");
+  setIfDifferent(tabList.style, "overflowY", "auto");
+  setIfDifferent(tabList.style, "overflowX", "hidden");
   if (innerBorderSide === "right") {
     setIfDifferent(tabList.style, "borderRight", INNER_BORDER);
     setIfDifferent(tabList.style, "borderLeft", "none");
@@ -2084,9 +2169,15 @@ function clearPinnedTabListChrome(tabList) {
   setIfDifferent(tabList.style, "bottom", "");
   setIfDifferent(tabList.style, "left", "");
   setIfDifferent(tabList.style, "right", "");
+  setIfDifferent(tabList.style, "height", "");
   setIfDifferent(tabList.style, "zIndex", "");
   setIfDifferent(tabList.style, "pointerEvents", "");
   setIfDifferent(tabList.style, "width", `${TAB_LIST_WIDTH_PX}px`);
+  setIfDifferent(tabList.style, "flexDirection", "column");
+  setIfDifferent(tabList.style, "overflowY", "auto");
+  setIfDifferent(tabList.style, "overflowX", "hidden");
+  setIfDifferent(tabList.style, "borderTop", "");
+  setIfDifferent(tabList.style, "borderBottom", "");
   setIfDifferent(tabList.style, "borderLeft", "");
   setIfDifferent(tabList.style, "borderRight", "");
 }
@@ -2102,7 +2193,6 @@ function pinTabList(tabList) {
       _pinSpacer = document.createElement("div");
       _pinSpacer.className = TAB_LIST_SPACER_CLASS;
       _pinSpacer.setAttribute("aria-hidden", "true");
-      setIfDifferent(_pinSpacer.style, "width", `${TAB_LIST_WIDTH_PX}px`);
       setIfDifferent(_pinSpacer.style, "flexShrink", "0");
     }
     if (_pinSpacer.parentElement !== parent) {
@@ -2118,8 +2208,9 @@ function pinTabList(tabList) {
     applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
     removeOrphanTabListsFromHost(tabList);
   }
+  syncSpacerForLocation(_pinSpacer, getDrawerLocation());
   applyPinnedTabListChrome(tabList, side);
-  if (drawer) {
+  if (drawer && !isHorizontalStrip()) {
     const flexDirection = side === "right" ? "row-reverse" : "row";
     setIfDifferent(drawer.style, "flexDirection", flexDirection);
   }
@@ -2173,7 +2264,7 @@ function destroyPinChrome() {
   }
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
@@ -2182,6 +2273,7 @@ var init_tab_position = __esm(() => {
   init_secondary();
   init_styles();
   init_dock_offset();
+  init_drawer_shell();
 });
 
 // src/dom/host-settings.ts
@@ -3945,9 +4037,15 @@ function teardownMainPin() {
 function scheduleReconcile() {
   if (_state.reconcileRaf !== null)
     return;
+  const wantPinAtSchedule = isTaskbarModeEnabled() && !isMobileViewport();
   commitState(() => ({
     reconcileRaf: requestAnimationFrame(() => {
       commitState(() => ({ reconcileRaf: null }));
+      const wantPinNow = isTaskbarModeEnabled() && !isMobileViewport();
+      if (wantPinNow !== wantPinAtSchedule) {
+        reconcileMainTabListPin();
+        return;
+      }
       if (isMainMirrorActive())
         reconcileMainMirror();
     })
@@ -11205,12 +11303,12 @@ function pinMainMirrorShellTabList(side) {
       _pinSpacer2 = document.createElement("div");
       _pinSpacer2.className = TAB_LIST_SPACER_CLASS;
       _pinSpacer2.setAttribute("aria-hidden", "true");
-      _pinSpacer2.style.width = `${TAB_LIST_WIDTH_PX}px`;
       _pinSpacer2.style.flexShrink = "0";
       _tabListRestoreParent.insertBefore(_pinSpacer2, _tabListRestoreNext);
     }
     host.appendChild(tabList);
   }
+  syncSpacerForLocation(_pinSpacer2, getDrawerLocation());
   applyPinnedTabListChrome(tabList, side);
   return host;
 }

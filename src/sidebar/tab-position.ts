@@ -17,12 +17,24 @@
 
 import { getMainDrawerSide } from '../store'
 import { getMainDrawer, getMainSidebar, getMainPanel } from '../dom/lumiverse'
-import { getSettings, isTaskbarModeEnabled } from '../settings/state'
+import {
+  getDrawerLocation,
+  getSettings,
+  getStripEdge,
+  isHorizontalStrip,
+  isTaskbarModeEnabled,
+} from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
-import { getSecondaryDrawer, getSecondaryTabList, getSecondaryPanel } from './secondary'
+import {
+  getSecondaryDrawer,
+  getSecondaryTabList,
+  getSecondaryPanel,
+  isSecondaryShellLive,
+} from './secondary'
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { updateDockOffsets } from './dock-offset'
+import { syncSpacerForLocation } from './drawer-shell'
 
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
@@ -44,9 +56,18 @@ export const PIN_OWNER_MAIN = 'main'
 /** In-flow placeholder left in the drawer while the tab list is reparented. */
 export const TAB_LIST_SPACER_CLASS = 'sidebar-ux-tab-list-spacer'
 
+/** Host state attrs (S8): written in the same className assignment as the
+ *  pin-host classes — applyPinHostChrome's assignment is wholesale. */
+export const STRIP_AXIS_ATTR = 'data-strip-axis'
+export const STRIP_EDGE_ATTR = 'data-strip-edge'
+export const STRIP_AXIS_HORIZONTAL = 'horizontal'
+export const STRIP_AXIS_VERTICAL = 'vertical'
+
 const PIN_Z_INDEX = '10000'
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
+const SAFE_LEFT = 'env(safe-area-inset-left, 0px)'
+const SAFE_RIGHT = 'env(safe-area-inset-right, 0px)'
 const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
 /** Panel edge facing the chat column (outer-edge / taskbar mode visible).
  *  Same primary-020 token as INNER_BORDER (tab-list ↔ panel chrome). */
@@ -166,26 +187,82 @@ export function destroyMainPinHost(): void {
   sweepStrayPinHosts()
 }
 
-/** Shared fixed-edge chrome for secondary reparent host and main mirror host. */
+/**
+ * S8 zone presence: the secondary half exists only when the second drawer is
+ * enabled, its shell is live AND it has assigned tabs (the list node itself
+ * must exist too — during a mode-switch window the model may still report
+ * presence while the list is absent; the main host then re-chromes full
+ * width and the next presence pass re-splits).
+ */
+function secondaryZonePresent(): boolean {
+  if (!getSettings().secondSidebarEnabled) return false
+  if (!isSecondaryShellLive()) return false
+  if (!hasSecondaryAssignedTabs()) return false
+  return !!getSecondaryTabList()
+}
+
+/**
+ * Sole authority for pin-host geometry (S8 single-writer rule). Complete and
+ * idempotent per call: every property this function owns is written or
+ * cleared on every pass (the className assignment is wholesale — any token
+ * not included is wiped).
+ *
+ * Vertical (Sides): fixed 56px edge column at the drawer's side.
+ * Horizontal (Top/Bottom): fixed full-width strip host; each owner's host
+ * occupies its zone (50% when both drawers have a zone, 100% solo), anchored
+ * to its own drawer's edge and growing inward. The list inside is absolutely
+ * positioned by the list writer; HORIZONTAL_STRIP_CSS owns orientation.
+ */
 function applyPinHostChrome(
   host: HTMLElement,
   side: 'left' | 'right',
   owner: typeof PIN_OWNER_SECONDARY | typeof PIN_OWNER_MAIN,
 ): void {
+  const loc = getDrawerLocation()
+  const horizontal = loc !== 'sides'
+  const edge = horizontal ? getStripEdge() : side
+
   host.className = `${TAB_LIST_PIN_HOST_CLASS} sidebar-ux-side-${side}`
   host.setAttribute('data-pin-owner', owner)
-  setIfDifferent(host.style, 'position', 'fixed')
-  setIfDifferent(host.style, 'top', SAFE_TOP)
-  setIfDifferent(host.style, 'bottom', SAFE_BOTTOM)
-  setIfDifferent(host.style, 'zIndex', PIN_Z_INDEX)
-  setIfDifferent(host.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
-  setIfDifferent(host.style, 'pointerEvents', 'none')
-  if (side === 'right') {
-    setIfDifferent(host.style, 'right', '0')
-    setIfDifferent(host.style, 'left', '')
+  host.setAttribute(STRIP_AXIS_ATTR, horizontal ? STRIP_AXIS_HORIZONTAL : STRIP_AXIS_VERTICAL)
+  if (edge) host.setAttribute(STRIP_EDGE_ATTR, edge)
+
+  const s = host.style
+  setIfDifferent(s, 'position', 'fixed')
+  setIfDifferent(s, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(s, 'pointerEvents', 'none')
+
+  if (horizontal) {
+    setIfDifferent(s, 'height', 'var(--sidebar-ux-strip-h, 56px)')
+    if (edge === 'top') {
+      setIfDifferent(s, 'top', SAFE_TOP)
+      setIfDifferent(s, 'bottom', '')
+    } else {
+      setIfDifferent(s, 'bottom', SAFE_BOTTOM)
+      setIfDifferent(s, 'top', '')
+    }
+    // Both zones split 50/50; solo main gets the full width.
+    const dual = secondaryZonePresent()
+    setIfDifferent(s, 'width', dual ? '50%' : '100%')
+    if (side === 'right') {
+      setIfDifferent(s, 'right', SAFE_RIGHT)
+      setIfDifferent(s, 'left', '')
+    } else {
+      setIfDifferent(s, 'left', SAFE_LEFT)
+      setIfDifferent(s, 'right', '')
+    }
   } else {
-    setIfDifferent(host.style, 'left', '0')
-    setIfDifferent(host.style, 'right', '')
+    setIfDifferent(s, 'top', SAFE_TOP)
+    setIfDifferent(s, 'bottom', SAFE_BOTTOM)
+    setIfDifferent(s, 'height', '')
+    setIfDifferent(s, 'width', `${TAB_LIST_WIDTH_PX}px`)
+    if (side === 'right') {
+      setIfDifferent(s, 'right', '0')
+      setIfDifferent(s, 'left', '')
+    } else {
+      setIfDifferent(s, 'left', '0')
+      setIfDifferent(s, 'right', '')
+    }
   }
 }
 
@@ -317,10 +394,18 @@ export function applyTabListPosition(
   const mainPanel = opts?.mainPanel ?? getMainPanel()
 
   if (mainDrawer && mainTabList) {
-    const mainDefaultFlex = side === 'left' ? 'row-reverse' : 'row'
-    const mainToggledFlex = side === 'left' ? 'row' : 'row-reverse'
-    const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex
-    applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex)
+    // Pin owns main tab-list flex/chrome while active — skip those writes
+    // (the old main branch was unguarded; S8 horizontal + vertical pin both
+    // need the same guard as the secondary branch).
+    const mainPinned =
+      typeof (mainTabList as HTMLElement).classList?.contains === 'function' &&
+      (mainTabList as HTMLElement).classList.contains(TAB_LIST_PINNED_CLASS)
+    if (!mainPinned) {
+      const mainDefaultFlex = side === 'left' ? 'row-reverse' : 'row'
+      const mainToggledFlex = side === 'left' ? 'row' : 'row-reverse'
+      const mainWantFlex = enabled ? mainToggledFlex : mainDefaultFlex
+      applyFlexAndBorder(mainDrawer, mainTabList, mainWantFlex)
+    }
     if (mainPanel) applyPanelChatBorder(mainPanel, side, chatBorder)
   }
 }
@@ -517,7 +602,19 @@ function removeOrphanTabListsFromHost(keep: HTMLElement): void {
 }
 
 /**
- * Shared edge chrome for a pinned tab list (secondary reparent + main mirror).
+ * Shared chrome for a pinned tab list (secondary reparent + main mirror),
+ * axis-aware (S8).
+ *
+ * Horizontal: JS writes ONLY `position: absolute` and clears the vertical
+ * set (top/bottom/left/right/width/height/flex/overflow/borders). The list is
+ * never `fixed` here — a fixed element's containing block is the viewport,
+ * which would span a half-zone list across the whole screen.
+ * HORIZONTAL_STRIP_CSS owns orientation/size/overflow with !important.
+ *
+ * Vertical (Sides): the classic 56px edge column; re-asserts the construction
+ * values (column/56/overflow/borders) so a horizontal → Sides flip is fully
+ * reversible.
+ *
  * Does NOT touch background/padding/gap — those stay at construction values
  * from createDrawerShell so main and secondary look identical.
  */
@@ -525,17 +622,43 @@ export function applyPinnedTabListChrome(
   tabList: HTMLElement,
   side: 'left' | 'right',
 ): void {
+  const loc = getDrawerLocation()
+  const horizontal = loc !== 'sides'
   const innerBorderSide: 'left' | 'right' = side === 'right' ? 'left' : 'right'
 
   tabList.classList.add(TAB_LIST_PINNED_CLASS)
+  setIfDifferent(tabList.style, 'pointerEvents', 'auto')
+
+  if (horizontal) {
+    setIfDifferent(tabList.style, 'position', 'absolute')
+    // Closed set: clear the vertical chrome (CSS re-asserts inset/orientation).
+    setIfDifferent(tabList.style, 'top', '')
+    setIfDifferent(tabList.style, 'bottom', '')
+    setIfDifferent(tabList.style, 'left', '')
+    setIfDifferent(tabList.style, 'right', '')
+    setIfDifferent(tabList.style, 'width', '')
+    setIfDifferent(tabList.style, 'height', '')
+    setIfDifferent(tabList.style, 'zIndex', '')
+    setIfDifferent(tabList.style, 'flexDirection', '')
+    setIfDifferent(tabList.style, 'overflow', '')
+    setIfDifferent(tabList.style, 'overflowX', '')
+    setIfDifferent(tabList.style, 'overflowY', '')
+    setIfDifferent(tabList.style, 'borderTop', '')
+    setIfDifferent(tabList.style, 'borderRight', '')
+    setIfDifferent(tabList.style, 'borderBottom', '')
+    setIfDifferent(tabList.style, 'borderLeft', '')
+    // Dock offsets are a vertical-edge concept; the horizontal host is
+    // full-width and must not shift docks.
+    return
+  }
 
   // Fill the pin host (or viewport edge if no reparent in stub tests).
   setIfDifferent(tabList.style, 'position', 'fixed')
   setIfDifferent(tabList.style, 'top', SAFE_TOP)
   setIfDifferent(tabList.style, 'bottom', SAFE_BOTTOM)
+  setIfDifferent(tabList.style, 'height', '')
   setIfDifferent(tabList.style, 'zIndex', PIN_Z_INDEX)
   setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
-  setIfDifferent(tabList.style, 'pointerEvents', 'auto')
   if (side === 'right') {
     setIfDifferent(tabList.style, 'right', '0')
     setIfDifferent(tabList.style, 'left', '')
@@ -543,6 +666,10 @@ export function applyPinnedTabListChrome(
     setIfDifferent(tabList.style, 'left', '0')
     setIfDifferent(tabList.style, 'right', '')
   }
+  // Construction values (needed after a horizontal phase cleared them).
+  setIfDifferent(tabList.style, 'flexDirection', 'column')
+  setIfDifferent(tabList.style, 'overflowY', 'auto')
+  setIfDifferent(tabList.style, 'overflowX', 'hidden')
 
   if (innerBorderSide === 'right') {
     setIfDifferent(tabList.style, 'borderRight', INNER_BORDER)
@@ -569,10 +696,18 @@ export function clearPinnedTabListChrome(tabList: HTMLElement): void {
   setIfDifferent(tabList.style, 'bottom', '')
   setIfDifferent(tabList.style, 'left', '')
   setIfDifferent(tabList.style, 'right', '')
+  setIfDifferent(tabList.style, 'height', '')
   setIfDifferent(tabList.style, 'zIndex', '')
   setIfDifferent(tabList.style, 'pointerEvents', '')
-  // Restore construction width — do not blank it.
+  // Restore construction width/orientation — do not blank them (a horizontal
+  // phase cleared the vertical set; the in-drawer list must come back as a
+  // 56px column).
   setIfDifferent(tabList.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
+  setIfDifferent(tabList.style, 'flexDirection', 'column')
+  setIfDifferent(tabList.style, 'overflowY', 'auto')
+  setIfDifferent(tabList.style, 'overflowX', 'hidden')
+  setIfDifferent(tabList.style, 'borderTop', '')
+  setIfDifferent(tabList.style, 'borderBottom', '')
   setIfDifferent(tabList.style, 'borderLeft', '')
   setIfDifferent(tabList.style, 'borderRight', '')
 }
@@ -592,7 +727,6 @@ function pinTabList(tabList: HTMLElement): void {
       _pinSpacer = document.createElement('div')
       _pinSpacer.className = TAB_LIST_SPACER_CLASS
       _pinSpacer.setAttribute('aria-hidden', 'true')
-      setIfDifferent(_pinSpacer.style, 'width', `${TAB_LIST_WIDTH_PX}px`)
       setIfDifferent(_pinSpacer.style, 'flexShrink', '0')
     }
     if (_pinSpacer.parentElement !== parent) {
@@ -611,12 +745,18 @@ function pinTabList(tabList: HTMLElement): void {
     removeOrphanTabListsFromHost(tabList)
   }
 
+  // S8: 56px column placeholder on Sides, 0×0 horizontal — UNCONDITIONAL
+  // (covers force re-pins where the list is already on the host, i.e.
+  // location flips while pinned).
+  syncSpacerForLocation(_pinSpacer, getDrawerLocation())
   applyPinnedTabListChrome(tabList, side)
 
   // Tab list is out of flex flow while pinned, but the 56px spacer stays in
   // flow. Orient the drawer so the spacer sits under the outer-edge pin strip
-  // (DOM order is always [spacer, panel]).
-  if (drawer) {
+  // (DOM order is always [spacer, panel]). S8: horizontal neutralizes the
+  // spacer to 0×0, so the drawer flex write is skipped (it would otherwise
+  // fight the horizontal layout).
+  if (drawer && !isHorizontalStrip()) {
     const flexDirection = side === 'right' ? 'row-reverse' : 'row'
     setIfDifferent(drawer.style, 'flexDirection', flexDirection)
   }

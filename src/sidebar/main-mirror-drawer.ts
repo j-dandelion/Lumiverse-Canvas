@@ -18,6 +18,7 @@ import { getMainPanelContent, getMainWrapper, getMainDrawerWidth } from '../dom/
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import {
+  getDrawerLocation,
   getSettings,
   getStripEdge,
   isHideDrawerOpenCloseButtonsEnabled,
@@ -32,6 +33,7 @@ import {
   readUiScale,
   readWidthCssVar,
   restyleShellSide,
+  syncSpacerForLocation,
   type DrawerShell,
 } from './drawer-shell'
 import {
@@ -662,13 +664,15 @@ export function pinMainMirrorShellTabList(side: 'left' | 'right'): HTMLElement |
       _pinSpacer = document.createElement('div')
       _pinSpacer.className = TAB_LIST_SPACER_CLASS
       _pinSpacer.setAttribute('aria-hidden', 'true')
-      _pinSpacer.style.width = `${TAB_LIST_WIDTH_PX}px`
       _pinSpacer.style.flexShrink = '0'
       _tabListRestoreParent.insertBefore(_pinSpacer, _tabListRestoreNext)
     }
     host.appendChild(tabList)
   }
 
+  // S8: 56px column placeholder on Sides, 0×0 horizontal (unconditional —
+  // covers location flips while already pinned).
+  syncSpacerForLocation(_pinSpacer, getDrawerLocation())
   applyPinnedTabListChrome(tabList, side)
   return host
 }
