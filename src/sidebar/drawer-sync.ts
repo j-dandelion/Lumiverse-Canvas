@@ -788,6 +788,9 @@ function refreshSideGeometry(): void {
   // The drawerTab handle is display-gated; a restyle must re-evaluate it
   // (the old remount called this after mount).
   updateDrawerTabVisibility()
+  // S8: a side swap mirrors every zone/host anchor — re-run the location
+  // presentation + geometry pass (idempotent; skip-cache busts on side).
+  void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
 }
 
 /**

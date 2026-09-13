@@ -447,6 +447,15 @@ async function finishDisable(): Promise<void> {
     modelSecondary: afterModel?.secondary.length ?? 0,
     modelSide: afterModel?.side ?? null,
   })
+
+  // S8: the secondary shell is gone and assignments were restored — re-split
+  // the strip zones (main back to full width) after the restore settles.
+  try {
+    const dl = await import('../sidebar/drawer-location')
+    dl.reconcileDrawerLocation()
+  } catch (err) {
+    dwarn('[second-drawer-mode] reconcileDrawerLocation after disable failed:', err)
+  }
 }
 
 // ── Public API ──
@@ -660,6 +669,15 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       modelSecondary: afterModel?.secondary.length ?? 0,
       modelSide: afterModel?.side ?? null,
     })
+
+    // S8: the secondary zone is live again — re-split the strip zones (main
+    // back to 50%) after the restore settles.
+    try {
+      const dl = await import('../sidebar/drawer-location')
+      dl.reconcileDrawerLocation()
+    } catch (err) {
+      dwarn('[second-drawer-mode] reconcileDrawerLocation after enable failed:', err)
+    }
   } else {
     // ── DISABLE ──
     if (!getSettings().secondSidebarEnabled) return

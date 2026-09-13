@@ -7529,6 +7529,1502 @@ var init_mode_profiles = __esm(() => {
   init_state();
 });
 
+// src/tabs/tab-list-dnd.ts
+var exports_tab_list_dnd = {};
+__export(exports_tab_list_dnd, {
+  DRAG_ACTIVATE_DISTANCE_PX: () => DRAG_ACTIVATE_DISTANCE_PX,
+  LONG_PRESS_MS: () => LONG_PRESS_MS,
+  axisCoordinate: () => axisCoordinate,
+  axisMidpoint: () => axisMidpoint,
+  containerAxis: () => containerAxis,
+  domInsertIndexFromVisibleIndex: () => domInsertIndexFromVisibleIndex,
+  dragHitGeometry: () => dragHitGeometry,
+  flipDelta: () => flipDelta,
+  insertIndexFromMidpoints: () => insertIndexFromMidpoints,
+  installTabListDnd: () => installTabListDnd,
+  invalidateDndGeometry: () => invalidateDndGeometry,
+  isDisplayedTabButton: () => isDisplayedTabButton,
+  isDndDragActive: () => isDndDragActive,
+  isLiveTabListDndAllowed: () => isLiveTabListDndAllowed,
+  overlayOverlapsContainer: () => overlayOverlapsContainer,
+  seamChoice: () => seamChoice,
+  settleDestFromButtonRects: () => settleDestFromButtonRects,
+  shouldActivateDragFromDistance: () => shouldActivateDragFromDistance,
+  tearDownTabListDnd: () => tearDownTabListDnd
+});
+function isLiveTabListDndAllowed() {
+  return !isMobileViewport() && !isPointerResizeActive();
+}
+function shouldActivateDragFromDistance(dx, dy, threshold = DRAG_ACTIVATE_DISTANCE_PX) {
+  return Math.sqrt(dx * dx + dy * dy) >= threshold;
+}
+function usesLongPressActivation(pointerType) {
+  return pointerType === "touch" || pointerType === "pen";
+}
+function removeDragContextMenuSuppressor() {
+  if (!_dragContextMenuSuppressor)
+    return;
+  document.removeEventListener("contextmenu", _dragContextMenuSuppressor, true);
+  _dragContextMenuSuppressor = null;
+}
+function containerAxis(el) {
+  if (!el)
+    return "y";
+  let cur = el;
+  while (cur) {
+    const axis = cur.getAttribute?.("data-strip-axis");
+    if (axis === "horizontal")
+      return "x";
+    if (axis === "vertical")
+      return "y";
+    cur = cur.parentElement;
+  }
+  if (el.classList?.contains?.("sidebar-ux-tab-list--pinned") || el.classList?.contains?.(MIRROR_MAIN_CLASS) || el.classList?.contains?.(MIRROR_BOTTOM_CLASS)) {
+    let p3 = el.parentElement;
+    while (p3) {
+      if (p3.getAttribute?.("data-strip-axis") === "horizontal")
+        return "x";
+      p3 = p3.parentElement;
+    }
+  }
+  try {
+    if (typeof getComputedStyle === "function") {
+      const fd = getComputedStyle(el).flexDirection;
+      if (typeof fd === "string" && fd.includes("row"))
+        return "x";
+    }
+  } catch {}
+  return "y";
+}
+function axisMidpoint(rect, axis) {
+  return axis === "x" ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
+}
+function axisCoordinate(geom, axis) {
+  return axis === "x" ? geom.centerX : geom.centerY;
+}
+function seamChoice(centerX, leftRect, rightRect) {
+  const boundary = (leftRect.right + rightRect.left) / 2;
+  return centerX < boundary ? "left" : "right";
+}
+function flipDelta(prev, curr) {
+  return { dx: prev.left - curr.left, dy: prev.top - curr.top };
+}
+function invalidateDndGeometry() {
+  _geometryCache = null;
+  _geomDirty = true;
+}
+function isDndDragActive() {
+  return _drag.phase === "dragging";
+}
+function dndOrderSnapshot() {
+  return {
+    primary: readLivePrimaryTabIds(),
+    secondary: readLiveSecondaryTabIds()
+  };
+}
+function logDndOrder(label, extra = {}) {
+  dlog("[tab-list-dnd]", label, { ...extra, live: dndOrderSnapshot() });
+}
+function injectDndStyles() {
+  if (typeof document === "undefined")
+    return;
+  if (document.getElementById(DND_STYLE_ID))
+    return;
+  const style = document.createElement("style");
+  style.id = DND_STYLE_ID;
+  style.textContent = `
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
+         pointer-events:none so synthetic click targets the real tab under the
+         cursor (document capture suppressor can stop activation). ── */
+    .canvas-tab-list-dnd-overlay-clone {
+      position: fixed;
+      z-index: 13000;
+      pointer-events: none !important;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--lumiverse-border, #333);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
+      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+        0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
+      color: var(--lumiverse-text, #eee);
+      font-family: var(--lumiverse-font-family, sans-serif);
+      opacity: 1 !important;
+      will-change: transform;
+      cursor: grabbing;
+    }
+    /* Defense: never inherit invisible-placeholder opacity onto the float */
+    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
+    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
+      opacity: 1 !important;
+      pointer-events: none !important;
+    }
+
+    /* ── Inner button clone — host CSS-module classes may not reflow the
+         floating clone the same way; force tab-btn layout so icons stay
+         centered (was left-biased after lift). ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      border: none !important;
+      background: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 1px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
+    }
+
+    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
+    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
+      font-weight: 500 !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: 48px !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
+    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      width: 20px !important;
+      height: 20px !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn svg {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn img {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
+    }
+
+    /* ── Source button while being dragged — invisible slot holder (keeps
+         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
+         transition:none while hidden so removing the class does not fade
+         opacity via strip transition:all 0.2s. ── */
+    .canvas-tab-list-dnd-placeholder {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transition: none !important;
+    }
+
+    /* ── While dragging: strip buttons do not receive pointer hits.
+         Overlay is pointer-events:none so the cursor would otherwise
+         :hover the tab underneath (host hover glow/background). Hit-test
+         uses document pointer coords, not elementFromPoint. ── */
+    body.canvas-tab-list-dnd-dragging button[data-tab-id],
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
+      pointer-events: none !important;
+    }
+
+    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
+    .canvas-tab-list-dnd-flipping {
+      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
+    }
+
+    /* ── Drop settle: floating clone eases into its destination slot ── */
+    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
+      transition:
+        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
+        0 0 0 1px var(--lumiverse-border, #333);
+      cursor: default;
+      opacity: 0.92 !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+function isSecondaryButton(btn) {
+  if (btn.classList.contains(MIRROR_BTN_CLASS))
+    return false;
+  if (btn.closest(`.${MIRROR_LIST_CLASS}`))
+    return false;
+  return !!btn.closest(`.${TAB_LIST_CLASS}`);
+}
+function getButtonTabId(btn) {
+  return buttonTabId(btn);
+}
+function isReorderableContainer(el) {
+  if (el.classList.contains(MIRROR_MAIN_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_BOTTOM_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_LIST_CLASS))
+    return true;
+  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
+    return true;
+  }
+  return false;
+}
+function getReorderParent(btn) {
+  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
+    const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
+    return section ?? btn.parentElement;
+  }
+  if (isSecondaryButton(btn)) {
+    const list = btn.closest(`.${TAB_LIST_CLASS}`);
+    if (list && !list.classList.contains(MIRROR_LIST_CLASS))
+      return list;
+  }
+  return null;
+}
+function getDropContainers() {
+  const containers = [];
+  if (getSecondaryWrapper()) {
+    const secList = getSecondaryTabList();
+    if (secList)
+      containers.push({ el: secList, secondary: true, axis: containerAxis(secList) });
+  }
+  const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
+  if (mirrorList) {
+    const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
+    if (main) {
+      containers.push({ el: main, secondary: false, axis: containerAxis(main) });
+    } else {
+      containers.push({ el: mirrorList, secondary: false, axis: containerAxis(mirrorList) });
+    }
+  }
+  return containers;
+}
+function getAllButtonsInContainer(container) {
+  if (container.classList.contains(MIRROR_MAIN_CLASS) || container.classList.contains(MIRROR_BOTTOM_CLASS)) {
+    return Array.from(container.querySelectorAll(`:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`));
+  }
+  if (container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`));
+  }
+  if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+  }
+  return Array.from(container.querySelectorAll("button[data-tab-id]"));
+}
+function isDisplayedTabButton(el) {
+  return el.style?.display !== "none";
+}
+function domInsertIndexFromVisibleIndex(siblingHidden, toVisibleIndex) {
+  const visibleCount = siblingHidden.reduce((n2, hidden) => n2 + (hidden ? 0 : 1), 0);
+  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
+  if (targetVis >= visibleCount) {
+    let lastVisible = -1;
+    for (let i3 = 0;i3 < siblingHidden.length; i3++) {
+      if (!siblingHidden[i3])
+        lastVisible = i3;
+    }
+    return lastVisible + 1;
+  }
+  let seen = 0;
+  for (let i3 = 0;i3 < siblingHidden.length; i3++) {
+    if (siblingHidden[i3])
+      continue;
+    if (seen === targetVis)
+      return i3;
+    seen++;
+  }
+  return siblingHidden.length;
+}
+function getButtonsInContainer(container, _secondary, excludeTabId) {
+  return getAllButtonsInContainer(container).filter((el) => {
+    if (!isDisplayedTabButton(el))
+      return false;
+    if (excludeTabId && getButtonTabId(el) === excludeTabId) {
+      return false;
+    }
+    return true;
+  });
+}
+function buildDraftAndBase() {
+  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
+  const hostSettings = getHostDrawerSettings();
+  const currentAssignments = new Map(getLiveIdAssignments());
+  const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
+  const draftFromHost = createDraft({
+    catalog,
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: healedHidden,
+    drawerSide,
+    assignments: currentAssignments
+  });
+  const livePrimary = readLivePrimaryTabIds();
+  const liveSecondary = readLiveSecondaryTabIds();
+  const draft = alignDraftToLiveVisibleOrder(draftFromHost, livePrimary, liveSecondary);
+  dlog("[tab-list-dnd] draft-built (live order)", {
+    livePrimary,
+    liveSecondary,
+    draftPrimary: draft.primaryIds,
+    draftSecondary: draft.secondaryIds,
+    hidden: [...draft.hiddenIds]
+  });
+  const base = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: healedHidden,
+    drawerSide,
+    assignments: new Map(currentAssignments)
+  };
+  return { draft, base, catalog };
+}
+function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
+  const w3 = Math.max(0, overlayWidth);
+  const h3 = Math.max(0, overlayHeight);
+  return {
+    centerX: overlayTx + w3 / 2,
+    centerY: overlayTy + h3 / 2,
+    left: overlayTx,
+    top: overlayTy,
+    right: overlayTx + w3,
+    bottom: overlayTy + h3
+  };
+}
+function overlayOverlapsContainer(overlay, container, padY = 8, padX = 80) {
+  const overlapsX = overlay.right > container.left - padX && overlay.left < container.right + padX;
+  const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
+  return overlapsX && overlapsY;
+}
+function insertIndexFromMidpoints(y3, midpoints) {
+  for (let i3 = 0;i3 < midpoints.length; i3++) {
+    if (y3 < midpoints[i3])
+      return i3;
+  }
+  return midpoints.length;
+}
+function hitTestDropTarget(geom, dragTabId) {
+  const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
+  const candidates = [];
+  for (const { el: container, secondary, axis } of containers) {
+    const rect = container.getBoundingClientRect();
+    const padY = axis === "x" ? 80 : 8;
+    const padX = axis === "x" ? 8 : 80;
+    if (!overlayOverlapsContainer(geom, rect, padY, padX))
+      continue;
+    const buttons = getButtonsInContainer(container, secondary, dragTabId);
+    let index = 0;
+    if (buttons.length > 0) {
+      const midpoints = buttons.map((btn) => axisMidpoint(btn.getBoundingClientRect(), axis));
+      index = insertIndexFromMidpoints(axisCoordinate(geom, axis), midpoints);
+      dlog("[tab-list-dnd] hit-test", {
+        containerCls: String(container.className || ""),
+        secondary,
+        axis,
+        dragTabId,
+        buttons: buttons.length,
+        midpoints: midpoints.length,
+        centerY: Math.round(geom.centerY),
+        centerX: Math.round(geom.centerX),
+        index
+      });
+    }
+    const containerMidX = rect.left + rect.width / 2;
+    const distX = Math.abs(geom.centerX - containerMidX);
+    candidates.push({ container, index, secondary, axis, rect, distX });
+  }
+  if (candidates.length === 0)
+    return null;
+  const horizontal = candidates.filter((c3) => c3.axis === "x");
+  if (horizontal.length >= 2) {
+    const sorted = [...horizontal].sort((a3, b2) => a3.rect.left - b2.rect.left);
+    const left = sorted[0];
+    const right = sorted[sorted.length - 1];
+    const chosen = seamChoice(geom.centerX, left.rect, right.rect) === "left" ? left : right;
+    return {
+      container: chosen.container,
+      index: chosen.index,
+      secondary: chosen.secondary
+    };
+  }
+  let best = candidates[0];
+  for (const c3 of candidates) {
+    if (c3.distX < best.distX)
+      best = c3;
+  }
+  return { container: best.container, index: best.index, secondary: best.secondary };
+}
+function settleDestFromButtonRects(index, rects, emptyFallback, axis = "y") {
+  if (rects.length === 0)
+    return emptyFallback;
+  if (index >= rects.length) {
+    const last = rects[rects.length - 1];
+    return axis === "x" ? { left: last.left + last.width, top: last.top } : { left: last.left, top: last.top + last.height };
+  }
+  const ref = rects[index];
+  return { left: ref.left, top: ref.top };
+}
+function resolveSettleDestination(dragElement, tabId, target, overlayWidth) {
+  if (dragElement && target && target.container.contains(dragElement)) {
+    const r3 = dragElement.getBoundingClientRect();
+    return { left: r3.left, top: r3.top };
+  }
+  if (target && tabId) {
+    const buttons = getButtonsInContainer(target.container, target.secondary, tabId);
+    const rects = buttons.map((b2) => {
+      const r3 = b2.getBoundingClientRect();
+      return { left: r3.left, top: r3.top, width: r3.width, height: r3.height };
+    });
+    const cr = target.container.getBoundingClientRect();
+    const emptyFallback = {
+      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
+      top: cr.top
+    };
+    return settleDestFromButtonRects(target.index, rects, emptyFallback, containerAxis(target.container));
+  }
+  if (dragElement) {
+    const r3 = dragElement.getBoundingClientRect();
+    return { left: r3.left, top: r3.top };
+  }
+  return null;
+}
+function animateOverlaySettle(overlay, currentTx, currentTy, destLeft, destTop) {
+  const dx = destLeft - currentTx;
+  const dy = destTop - currentTy;
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    return Promise.resolve({ tx: destLeft, ty: destTop });
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done)
+        return;
+      done = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer);
+        _settleTimer = null;
+      }
+      resolve({ tx: destLeft, ty: destTop });
+    };
+    const onEnd = (e3) => {
+      if (e3.target !== overlay)
+        return;
+      if (e3.propertyName && e3.propertyName !== "transform")
+        return;
+      finish();
+    };
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
+    overlay.offsetWidth;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+  });
+}
+function cancelOverlaySettle(overlay) {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer);
+    _settleTimer = null;
+  }
+  if (overlay) {
+    overlay.classList.remove("canvas-tab-list-dnd-overlay-settling");
+  }
+}
+function installDropSlotSpacer(placeholder) {
+  if (!placeholder?.parentElement)
+    return null;
+  const parent = placeholder.parentElement;
+  const rect = placeholder.getBoundingClientRect();
+  const axis = containerAxis(parent);
+  const sizeProps = axis === "x" ? [`width:${Math.max(Math.round(rect.width), 1)}px`, "height:100%"] : [`height:${Math.max(Math.round(rect.height), 1)}px`, "width:100%"];
+  const spacer = document.createElement("div");
+  spacer.className = "canvas-tab-list-dnd-slot-spacer";
+  spacer.setAttribute("aria-hidden", "true");
+  spacer.style.cssText = [
+    ...sizeProps,
+    "flex-shrink:0",
+    "pointer-events:none",
+    "visibility:hidden",
+    "box-sizing:border-box",
+    "margin:0",
+    "padding:0",
+    "border:none"
+  ].join(";");
+  parent.insertBefore(spacer, placeholder.nextSibling);
+  return spacer;
+}
+function removeDropSlotSpacer(spacer) {
+  if (spacer?.isConnected)
+    spacer.remove();
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-slot-spacer"))) {
+      el.remove();
+    }
+  }
+}
+function clearInsertIndicator() {
+  if (_insertIndicatorEl) {
+    _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
+    _insertIndicatorEl = null;
+  }
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-insert-before"))) {
+      el.classList.remove("canvas-tab-list-dnd-insert-before");
+    }
+  }
+}
+function snapshotButtonRects(container) {
+  const rects = new Map;
+  for (const btn of getAllButtonsInContainer(container)) {
+    const id = getButtonTabId(btn);
+    if (id)
+      rects.set(id, btn.getBoundingClientRect());
+  }
+  return rects;
+}
+function mergeRects(into, from) {
+  for (const [k3, v3] of from)
+    into.set(k3, v3);
+}
+function applyFLIP(prevRects, excludeTabId, containers) {
+  const animated = [];
+  const seen = new Set;
+  for (const container of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      if (seen.has(btn))
+        continue;
+      seen.add(btn);
+      const id = getButtonTabId(btn);
+      if (!id || id === excludeTabId || !prevRects.has(id))
+        continue;
+      const prev = prevRects.get(id);
+      const curr = btn.getBoundingClientRect();
+      const { dx, dy } = flipDelta(prev, curr);
+      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5)
+        continue;
+      btn.style.setProperty("transition", "none", "important");
+      btn.style.setProperty("transform", `translate(${dx}px, ${dy}px)`, "important");
+      animated.push(btn);
+    }
+  }
+  if (animated.length === 0)
+    return;
+  document.body.offsetHeight;
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
+      node.style.setProperty("transform", "", "important");
+      node.style.removeProperty("transform");
+    }
+    if (_flipActiveTimer)
+      clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = setTimeout(() => {
+      for (const node of animated) {
+        node.style.removeProperty("transition");
+        node.style.removeProperty("transform");
+      }
+      _flipActiveTimer = null;
+    }, 220);
+  });
+}
+function clearFLIPStyles() {
+  if (_flipActiveTimer) {
+    clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = null;
+  }
+  const containers = _geometryCache?.containers ?? getDropContainers();
+  for (const { el: container } of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      btn.style.removeProperty("transition");
+      btn.style.removeProperty("transform");
+    }
+  }
+}
+function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
+  if (!sourceTabId)
+    return false;
+  if (!isReorderableContainer(container))
+    return false;
+  const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => getButtonTabId(b2) === sourceTabId) ?? null;
+  if (!sourceBtn)
+    return false;
+  const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b2) => b2 !== sourceBtn);
+  const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
+  const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
+  if (insertIdx >= buttonsWithoutSource.length) {
+    if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === null) {
+      return false;
+    }
+    container.appendChild(sourceBtn);
+    return true;
+  }
+  const referenceBtn = buttonsWithoutSource[insertIdx];
+  if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
+    return false;
+  }
+  container.insertBefore(sourceBtn, referenceBtn);
+  return true;
+}
+function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
+  if (!dragElement || !originalParent)
+    return;
+  const parent = dragElement.parentNode;
+  if (parent === originalParent) {
+    if (originalNextSibling) {
+      if (dragElement.nextElementSibling === originalNextSibling)
+        return;
+      originalParent.insertBefore(dragElement, originalNextSibling);
+    } else {
+      if (dragElement.nextElementSibling === null && dragElement.parentNode === originalParent)
+        return;
+      originalParent.insertBefore(dragElement, null);
+    }
+  } else {
+    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+      originalParent.insertBefore(dragElement, originalNextSibling);
+    } else {
+      originalParent.appendChild(dragElement);
+    }
+  }
+}
+function createDragOverlay(sourceBtn) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
+  const clone = sourceBtn.cloneNode(true);
+  clone.classList.remove("canvas-tab-list-dnd-placeholder");
+  clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
+  const rect = sourceBtn.getBoundingClientRect();
+  wrapper.style.width = rect.width + "px";
+  wrapper.style.height = rect.height + "px";
+  wrapper.style.left = "0px";
+  wrapper.style.top = "0px";
+  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+  return wrapper;
+}
+function suppressSyntheticClick(e3) {
+  e3.preventDefault();
+  e3.stopPropagation();
+  e3.stopImmediatePropagation();
+}
+function installClickSuppressor(el) {
+  removeClickSuppressorNow();
+  _clickSuppressor = suppressSyntheticClick;
+  _clickSuppressorEl = el;
+  el.addEventListener("click", _clickSuppressor, true);
+  _docClickSuppressor = suppressSyntheticClick;
+  document.addEventListener("click", _docClickSuppressor, true);
+}
+function scheduleClickSuppressorRemoval() {
+  if (_clickSuppressorTimer !== null)
+    clearTimeout(_clickSuppressorTimer);
+  _clickSuppressorTimer = setTimeout(() => {
+    removeClickSuppressorNow();
+  }, 0);
+}
+function removeClickSuppressorNow() {
+  if (_clickSuppressorTimer !== null) {
+    clearTimeout(_clickSuppressorTimer);
+    _clickSuppressorTimer = null;
+  }
+  if (_clickSuppressor && _clickSuppressorEl) {
+    _clickSuppressorEl.removeEventListener("click", _clickSuppressor, true);
+  }
+  _clickSuppressor = null;
+  _clickSuppressorEl = null;
+  if (_docClickSuppressor) {
+    document.removeEventListener("click", _docClickSuppressor, true);
+    _docClickSuppressor = null;
+  }
+}
+function autoScrollHorizontal(geom) {
+  const containers = _geometryCache?.containers ?? [];
+  const EDGE_PX = 24;
+  const STEP_PX = 14;
+  let scrolling = false;
+  for (const { el, axis } of containers) {
+    if (axis !== "x")
+      continue;
+    const rect = el.getBoundingClientRect();
+    if (geom.centerY < rect.top || geom.centerY > rect.bottom)
+      continue;
+    if (geom.centerX < rect.left || geom.centerX > rect.right)
+      continue;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    if (maxScroll <= 0)
+      continue;
+    if (geom.centerX < rect.left + EDGE_PX) {
+      const next = Math.max(0, el.scrollLeft - STEP_PX);
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next;
+        scrolling = true;
+      }
+    } else if (geom.centerX > rect.right - EDGE_PX) {
+      const next = Math.min(maxScroll, el.scrollLeft + STEP_PX);
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next;
+        scrolling = true;
+      }
+    }
+  }
+  return scrolling;
+}
+function scheduleDragFrame() {
+  if (_rafId !== null)
+    return;
+  _rafId = requestAnimationFrame(() => {
+    _rafId = null;
+    if (_drag.phase !== "dragging")
+      return;
+    if (_geomDirty || !_geometryCache) {
+      _geometryCache = { containers: getDropContainers() };
+      _geomDirty = false;
+    }
+    const geom = dragHitGeometry(_drag.overlayTx, _drag.overlayTy, _drag.overlayWidth || 48, _drag.overlayHeight || 48);
+    if (autoScrollHorizontal(geom)) {
+      scheduleDragFrame();
+    }
+    const target = hitTestDropTarget(geom, _drag.tabId);
+    const prev = _drag.lastDropTarget;
+    const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
+    if (!target) {
+      if (prev) {
+        clearInsertIndicator();
+      }
+      return;
+    }
+    if (!sameTarget) {
+      const isReorderable = isReorderableContainer(target.container);
+      const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
+      dlog("[tab-list-dnd] target change", {
+        tabId: _drag.tabId,
+        index: target.index,
+        secondary: target.secondary,
+        containerCls: String(target.container.className || ""),
+        isReorderable,
+        sourceIsInCanvasList: _drag.sourceIsInCanvasList,
+        fromSecondary: _drag.fromSecondary
+      });
+      if (isReorderable && _drag.sourceIsInCanvasList) {
+        const prevRects = new Map;
+        const flipContainers = [];
+        const sourceParent = _drag.element?.parentElement;
+        if (sourceParent && isReorderableContainer(sourceParent)) {
+          mergeRects(prevRects, snapshotButtonRects(sourceParent));
+          flipContainers.push(sourceParent);
+        }
+        if (prev?.container && prev.container !== sourceParent) {
+          mergeRects(prevRects, snapshotButtonRects(prev.container));
+          if (!flipContainers.includes(prev.container)) {
+            flipContainers.push(prev.container);
+          }
+        }
+        mergeRects(prevRects, snapshotButtonRects(target.container));
+        if (!flipContainers.includes(target.container)) {
+          flipContainers.push(target.container);
+        }
+        const didReorder = reorderCanvasListDOM(target.container, target, _drag.tabId, _drag.element);
+        if (didReorder) {
+          applyFLIP(prevRects, _drag.tabId, flipContainers);
+          _geomDirty = true;
+        }
+      } else if (prevReorderable && !isReorderable && prev) {
+        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
+        clearFLIPStyles();
+        _geomDirty = true;
+      }
+      _drag.lastDropTarget = target;
+    }
+  });
+}
+function startDrag(btn, pointerEvent) {
+  if (!isLiveTabListDndAllowed())
+    return;
+  const tabId = getButtonTabId(btn);
+  if (!tabId) {
+    dlog("[tab-list-dnd] startDrag bail: no tab id", {
+      title: btn.getAttribute("title") || null,
+      cls: String(btn.className || ""),
+      mirrorKey: btn.getAttribute("data-mirror-key") || null
+    });
+    return;
+  }
+  const fromSecondary = isSecondaryButton(btn);
+  const activeAtGestureStart = captureActiveSelection();
+  const element = btn;
+  const originalParent = btn.parentElement;
+  const originalNextSibling = btn.nextElementSibling;
+  const sourceIsInCanvasList = getReorderParent(btn) != null;
+  logDndOrder("start", {
+    tabId,
+    fromSecondary,
+    sourceIsInCanvasList,
+    hasDataTabId: btn.hasAttribute("data-tab-id"),
+    mirrorKey: btn.getAttribute("data-mirror-key") || null,
+    reorderParent: sourceIsInCanvasList ? getReorderParent(btn)?.className : null
+  });
+  const rect = btn.getBoundingClientRect();
+  const offsetX = pointerEvent.clientX - rect.left;
+  const offsetY = pointerEvent.clientY - rect.top;
+  const overlay = createDragOverlay(btn);
+  const overlayInner = overlay.querySelector(".canvas-tab-list-dnd-overlay-clone-btn");
+  btn.classList.add("canvas-tab-list-dnd-placeholder");
+  _geometryCache = { containers: getDropContainers() };
+  _geomDirty = false;
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+  document.body.classList.add("canvas-tab-list-dnd-dragging");
+  removeDragContextMenuSuppressor();
+  const suppressCtx = (e3) => {
+    e3.preventDefault();
+    e3.stopPropagation();
+  };
+  _dragContextMenuSuppressor = suppressCtx;
+  document.addEventListener("contextmenu", suppressCtx, true);
+  installClickSuppressor(btn);
+  const onMove = (ev) => {
+    if (_drag.phase !== "dragging")
+      return;
+    _drag.overlayTx = ev.clientX - _drag.offsetX;
+    _drag.overlayTy = ev.clientY - _drag.offsetY;
+    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`;
+    _pendingPointerX = ev.clientX;
+    _pendingPointerY = ev.clientY;
+    scheduleDragFrame();
+  };
+  const onUp = async (ev) => {
+    ev.preventDefault();
+    if (_drag.phase !== "dragging")
+      return;
+    const capturedTabId = tabId;
+    const capturedFromSecondary = fromSecondary;
+    const capturedActiveSelection = activeAtGestureStart;
+    const capturedTarget = _drag.lastDropTarget;
+    logDndOrder("pointerup", {
+      tabId: capturedTabId,
+      fromSecondary: capturedFromSecondary,
+      target: capturedTarget ? {
+        index: capturedTarget.index,
+        secondary: capturedTarget.secondary,
+        container: capturedTarget.container.className
+      } : null
+    });
+    removeDragContextMenuSuppressor();
+    scheduleClickSuppressorRemoval();
+    detachDragPointerListeners();
+    _drag = {
+      phase: "settling",
+      tabId: capturedTabId,
+      element,
+      fromSecondary: capturedFromSecondary,
+      activeAtGestureStart: capturedActiveSelection,
+      overlay
+    };
+    clearInsertIndicator();
+    let slotSpacer = null;
+    try {
+      if (capturedTarget && capturedTabId) {
+        const crossList = capturedFromSecondary !== capturedTarget.secondary;
+        const dest = resolveSettleDestination(element, capturedTabId, capturedTarget, rect.width);
+        if (dest) {
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top);
+        }
+        if (crossList && capturedFromSecondary) {
+          slotSpacer = installDropSlotSpacer(element);
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        }
+        let moveChrome = { neighborBtn: null, reassertId: null };
+        let secondaryChrome = { neighborBtn: null };
+        if (crossList && !capturedFromSecondary) {
+          moveChrome = await captureMainMirrorMoveChrome(capturedTabId, "secondary");
+          hideMainTabButton(capturedTabId);
+        } else if (crossList && capturedFromSecondary) {
+          secondaryChrome = await captureSecondaryNeighborForMove(capturedTabId);
+        }
+        const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedActiveSelection, capturedTarget);
+        logDndOrder("post-commit-before-cleanup", {
+          tabId: capturedTabId,
+          ok
+        });
+        if (ok && crossList) {
+          try {
+            if (!capturedFromSecondary) {
+              await applyMainMirrorMoveChrome(moveChrome, capturedTabId);
+            } else {
+              await applySecondaryNeighborHandoff(secondaryChrome, capturedTabId);
+            }
+          } catch (err) {
+            dwarn("[tab-list-dnd] post-commit cross-drawer chrome failed:", err);
+          }
+        } else if (!ok) {
+          if (crossList && !capturedFromSecondary) {
+            showMainTabButton(capturedTabId);
+            try {
+              const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
+              mp.reconcileMainTabListPin?.();
+            } catch {}
+          }
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        }
+      } else {
+        restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width);
+        if (dest) {
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top);
+        }
+      }
+    } finally {
+      removeDropSlotSpacer(slotSpacer);
+      cancelOverlaySettle(overlay);
+      cleanupDragVisuals();
+      logDndOrder("cleanup-complete", { tabId: capturedTabId });
+    }
+  };
+  _drag = {
+    phase: "dragging",
+    tabId,
+    element,
+    fromSecondary,
+    activeAtGestureStart,
+    overlay,
+    overlayInner,
+    offsetX,
+    offsetY,
+    overlayTx: rect.left,
+    overlayTy: rect.top,
+    overlayWidth: rect.width,
+    overlayHeight: rect.height,
+    originalParent,
+    originalNextSibling,
+    sourceIsInCanvasList,
+    lastDropTarget: null,
+    moveHandler: onMove,
+    upHandler: onUp
+  };
+  document.addEventListener("pointermove", onMove, { passive: true });
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+function captureActiveSelection() {
+  const world = getHost()?.observe();
+  return {
+    primary: world?.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
+    secondary: world?.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
+  };
+}
+function detachDragPointerListeners() {
+  if (_drag.phase === "dragging") {
+    document.removeEventListener("pointermove", _drag.moveHandler);
+    document.removeEventListener("pointerup", _drag.upHandler);
+    document.removeEventListener("pointercancel", _drag.upHandler);
+  }
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+  if (_rafId !== null) {
+    cancelAnimationFrame(_rafId);
+    _rafId = null;
+  }
+  _geometryCache = null;
+  _geomDirty = false;
+}
+function clearDragState() {
+  detachDragPointerListeners();
+  _drag = { phase: "idle" };
+}
+function cleanupDragVisuals() {
+  clearFLIPStyles();
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const el = _drag.element;
+    el.style.setProperty("transition", "none", "important");
+    el.classList.remove("canvas-tab-list-dnd-placeholder");
+    el.offsetWidth;
+    requestAnimationFrame(() => {
+      el.style.removeProperty("transition");
+    });
+  }
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const overlay = _drag.overlay;
+    document.body.offsetWidth;
+    overlay.remove();
+  }
+  clearInsertIndicator();
+  if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
+  }
+  _drag = { phase: "idle" };
+}
+async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
+  try {
+    const { draft, base } = buildDraftAndBase();
+    dlog("[tab-list-dnd]", "draft-built", {
+      tabId,
+      fromSecondary,
+      target: { index: target.index, secondary: target.secondary },
+      draft: {
+        primary: draft.primaryIds,
+        secondary: draft.secondaryIds
+      },
+      base: { tabOrder: base.tabOrder },
+      live: dndOrderSnapshot()
+    });
+    if (fromSecondary !== target.secondary) {
+      const targetSide = target.secondary ? "secondary" : "primary";
+      const updated2 = moveTabVisible(draft, tabId, targetSide, target.index);
+      const result2 = await commitDraftToOwnedModel(updated2, activeAtGestureStart, { skipChrome: true });
+      dlog("[tab-list-dnd]", "cross-commit-result", {
+        tabId,
+        ok: result2.ok,
+        updated: {
+          primary: updated2.primaryIds,
+          secondary: updated2.secondaryIds
+        },
+        live: dndOrderSnapshot()
+      });
+      if (!result2.ok) {
+        dwarn("[tab-list-dnd] cross-drawer commit failed:", result2.error);
+        return false;
+      }
+      const m4 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+      const modalWasOpen2 = m4.isConfigureTabsModalOpen();
+      m4.refreshConfigureDraftFromLive();
+      dlog("[tab-list-dnd] configure modal sync (cross-drawer)", {
+        modalWasOpen: modalWasOpen2,
+        refreshed: modalWasOpen2
+      });
+      return true;
+    }
+    const listKey = target.secondary ? "secondaryIds" : "primaryIds";
+    const fullList = draft[listKey];
+    if (!fullList.includes(tabId)) {
+      dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
+      return false;
+    }
+    const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
+    if (updated === draft && !isDraftDirty(draft, base)) {
+      return true;
+    }
+    const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
+    dlog("[tab-list-dnd]", "reorder-commit-result", {
+      tabId,
+      ok: result.ok,
+      updated: {
+        primary: updated.primaryIds,
+        secondary: updated.secondaryIds
+      },
+      live: dndOrderSnapshot()
+    });
+    if (!result.ok) {
+      dwarn("[tab-list-dnd] reorder commit failed:", result.error);
+      return false;
+    }
+    const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+    const modalWasOpen = m3.isConfigureTabsModalOpen();
+    m3.refreshConfigureDraftFromLive();
+    dlog("[tab-list-dnd] configure modal sync (reorder)", {
+      modalWasOpen,
+      refreshed: modalWasOpen
+    });
+    return true;
+  } catch (err) {
+    dwarn("[tab-list-dnd] drop failed:", err);
+    return false;
+  }
+}
+function installDragOnButton(btn) {
+  if (_installed.has(btn))
+    return;
+  const tabId = getButtonTabId(btn);
+  if (!tabId) {
+    dlog("[tab-list-dnd] install skip: no tab id", {
+      tag: btn.tagName,
+      cls: String(btn.className || ""),
+      title: btn.getAttribute("title") || null,
+      aria: btn.getAttribute("aria-label") || null,
+      hasDataTabId: btn.hasAttribute("data-tab-id"),
+      mirrorKey: btn.getAttribute("data-mirror-key") || null,
+      parentCls: btn.parentElement ? String(btn.parentElement.className || "") : null
+    });
+    return;
+  }
+  if (isSettingsButton(btn)) {
+    dlog("[tab-list-dnd] install skip: settings", {
+      title: btn.getAttribute("title") || null,
+      cls: String(btn.className || "")
+    });
+    return;
+  }
+  _installed.add(btn);
+  let longPressTimer = null;
+  let dragActivated = false;
+  let armingCancelled = false;
+  let pendingPointerMove = null;
+  let pendingPointerUp = null;
+  let pendingPointerCancel = null;
+  const cleanupPendingListeners = () => {
+    if (pendingPointerMove) {
+      document.removeEventListener("pointermove", pendingPointerMove);
+      pendingPointerMove = null;
+    }
+    if (pendingPointerUp) {
+      document.removeEventListener("pointerup", pendingPointerUp);
+      pendingPointerUp = null;
+    }
+    if (pendingPointerCancel) {
+      document.removeEventListener("pointercancel", pendingPointerCancel);
+      pendingPointerCancel = null;
+    }
+  };
+  const cancelArming = () => {
+    if (longPressTimer != null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    cleanupPendingListeners();
+  };
+  const onPointerDown = (e3) => {
+    if (!_active)
+      return;
+    if (!isLiveTabListDndAllowed())
+      return;
+    if (e3.button !== 0)
+      return;
+    if (_drag.phase !== "idle")
+      return;
+    dlog("[tab-list-dnd] pointerdown arm", {
+      tabId: getButtonTabId(btn),
+      title: btn.getAttribute("title") || btn.getAttribute("aria-label") || null,
+      hasDataTabId: btn.hasAttribute("data-tab-id"),
+      cls: String(btn.className || ""),
+      pointerType: e3.pointerType
+    });
+    dragActivated = false;
+    armingCancelled = false;
+    const startX = e3.clientX;
+    const startY = e3.clientY;
+    const longPress = usesLongPressActivation(e3.pointerType);
+    if (longPress) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        cleanupPendingListeners();
+        if (armingCancelled)
+          return;
+        if (!isLiveTabListDndAllowed())
+          return;
+        dragActivated = true;
+        startDrag(btn, e3);
+      }, LONG_PRESS_MS);
+    }
+    const onMove = (ev) => {
+      if (dragActivated)
+        return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (longPress) {
+        if (shouldActivateDragFromDistance(dx, dy)) {
+          armingCancelled = true;
+          cancelArming();
+        }
+        return;
+      }
+      if (!shouldActivateDragFromDistance(dx, dy))
+        return;
+      dragActivated = true;
+      cleanupPendingListeners();
+      if (!isLiveTabListDndAllowed())
+        return;
+      startDrag(btn, ev);
+    };
+    const onUp = () => {
+      cancelArming();
+    };
+    pendingPointerMove = onMove;
+    pendingPointerUp = onUp;
+    pendingPointerCancel = onUp;
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  };
+  btn.addEventListener("pointerdown", onPointerDown);
+}
+function installTabListDnd() {
+  if (_active)
+    return null;
+  _active = true;
+  dlog("[tab-list-dnd] install: diagnostic build active");
+  injectDndStyles();
+  const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+  for (const btn of existing) {
+    installDragOnButton(btn);
+  }
+  dlog("[tab-list-dnd] install: existing buttons visited", { count: existing.length });
+  _observer = new MutationObserver((mutations) => {
+    for (const mut of mutations) {
+      for (const node of mut.addedNodes) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        if (node.tagName === "BUTTON" && (node.hasAttribute("data-tab-id") || node.classList.contains("sidebar-ux-main-tab-mirror-btn"))) {
+          installDragOnButton(node);
+        }
+        const descendants = node.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+        for (const child of descendants) {
+          installDragOnButton(child);
+        }
+      }
+    }
+  });
+  _observer.observe(document.body, { childList: true, subtree: true });
+  return () => {
+    tearDownTabListDnd();
+  };
+}
+function tearDownTabListDnd() {
+  _active = false;
+  if (_observer) {
+    _observer.disconnect();
+    _observer = null;
+  }
+  if (_drag.phase !== "idle") {
+    removeClickSuppressorNow();
+    removeDragContextMenuSuppressor();
+    detachDragPointerListeners();
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId);
+      _rafId = null;
+    }
+    if (_drag.phase === "dragging" || _drag.phase === "settling") {
+      cancelOverlaySettle(_drag.overlay);
+    }
+    if (_drag.phase === "dragging") {
+      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
+    }
+    cleanupDragVisuals();
+    clearDragState();
+  }
+  if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
+    document.getElementById(DND_STYLE_ID)?.remove();
+  }
+}
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active = false, _observer = null;
+var init_tab_list_dnd = __esm(() => {
+  init_configure_model();
+  init_owned_commit();
+  init_dispatch();
+  init_configure_catalog();
+  init_canvas_hidden();
+  init_hidden_tabs();
+  init_host_settings();
+  init_assignment();
+  init_store();
+  init_secondary();
+  init_buttons();
+  init_mobile_exclusion();
+  init_handles();
+  init_log();
+  init_live_tab_order();
+  _drag = { phase: "idle" };
+  _installed = new WeakSet;
+});
+
+// src/sidebar/drawer-location.ts
+var exports_drawer_location = {};
+__export(exports_drawer_location, {
+  HORIZONTAL_STRIP_CSS: () => HORIZONTAL_STRIP_CSS,
+  __resetDrawerLocationForTest: () => __resetDrawerLocationForTest,
+  applyLocationPresentation: () => applyLocationPresentation,
+  assertLocationApplied: () => assertLocationApplied,
+  clearDrawerLocation: () => clearDrawerLocation,
+  initDrawerLocation: () => initDrawerLocation,
+  mountDrawerLocation: () => mountDrawerLocation,
+  reconcileDrawerLocation: () => reconcileDrawerLocation,
+  restyleShellLocation: () => restyleShellLocation
+});
+function stripEdgeFor(loc) {
+  return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
+}
+function applyLocationPresentation(loc) {
+  if (typeof document === "undefined" || !document.documentElement)
+    return;
+  const root = document.documentElement;
+  const cl = root.classList;
+  if (typeof cl?.toggle === "function") {
+    cl.toggle(LOCATION_CLASS_TOP, loc === "top");
+    cl.toggle(LOCATION_CLASS_BOTTOM, loc === "bottom");
+    cl.toggle(LOCATION_CLASS_SIDES, loc === "sides");
+  }
+  root.style?.setProperty?.(STRIP_HEIGHT_VAR, `${STRIP_HEIGHT_PX}px`);
+  const edge = stripEdgeFor(loc);
+  applyWrapperStripEdge(getSecondaryWrapper(), edge);
+  applyWrapperStripEdge(getMainMirrorWrapper(), edge);
+}
+function restyleShellLocation() {
+  applyLocationPresentation(getDrawerLocation());
+}
+function hideHandles() {
+  const secondary = getSecondaryWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
+  if (secondary?.style)
+    secondary.style.display = "none";
+  const main = getMainMirrorWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
+  if (main?.style)
+    main.style.display = "none";
+}
+function secondaryZonePresent2() {
+  return !!getSettings().secondSidebarEnabled && isSecondaryShellLive() && hasSecondaryAssignedTabs();
+}
+function computeKey(loc) {
+  return [
+    loc,
+    isMobileViewport() ? "mobile" : "desktop",
+    getMainDrawerSide(),
+    getSettings().secondSidebarEnabled ? "1" : "0",
+    isSecondaryShellLive() ? "1" : "0",
+    secondaryZonePresent2() ? "1" : "0"
+  ].join("|");
+}
+function reconcileDrawerLocation(opts) {
+  if (_pending) {
+    _dirty = true;
+    return;
+  }
+  _pending = true;
+  try {
+    runReconcile(opts?.force === true);
+    if (_dirty) {
+      _dirty = false;
+      runReconcile(true);
+    }
+  } finally {
+    _pending = false;
+  }
+}
+function runReconcile(force) {
+  const gen = ++_locGen;
+  const loc = getDrawerLocation();
+  const horizontal = isHorizontalStrip();
+  const key = computeKey(loc);
+  if (!force && key === _lastKey)
+    return;
+  _lastKey = key;
+  applyLocationPresentation(loc);
+  reconcileTabListPin();
+  reconcileMainTabListPin();
+  if (gen !== _locGen)
+    return;
+  if (isDndDragActive())
+    invalidateDndGeometry();
+  updateDrawerTabVisibility();
+  updateMainMirrorDrawerTabVisibility();
+  if (horizontal)
+    hideHandles();
+  updateStripGutters();
+  updateChatReflow();
+}
+function schedulePresenceReconcile() {
+  if (_presenceRaf !== null)
+    return;
+  const run = () => {
+    _presenceRaf = null;
+    reconcileDrawerLocation();
+  };
+  if (typeof requestAnimationFrame === "function") {
+    _presenceRaf = requestAnimationFrame(run);
+  } else {
+    run();
+  }
+}
+function mountDrawerLocation() {
+  initDrawerLocation();
+  reconcileDrawerLocation({ force: true });
+  if (!_unsubModel) {
+    _unsubModel = onModelChanged(() => schedulePresenceReconcile());
+  }
+  return () => {
+    if (_unsubModel) {
+      _unsubModel();
+      _unsubModel = null;
+    }
+    if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_presenceRaf);
+    }
+    _presenceRaf = null;
+  };
+}
+function initDrawerLocation() {
+  injectHorizontalStripStyles();
+  applyLocationPresentation(getDrawerLocation());
+}
+function clearDrawerLocation() {
+  _locGen++;
+  _pending = false;
+  _dirty = false;
+  _lastKey = null;
+  if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_presenceRaf);
+  }
+  _presenceRaf = null;
+  if (_unsubModel) {
+    _unsubModel();
+    _unsubModel = null;
+  }
+  if (typeof document === "undefined" || !document.documentElement)
+    return;
+  const root = document.documentElement;
+  root.classList?.remove?.(LOCATION_CLASS_SIDES);
+  root.classList?.remove?.(LOCATION_CLASS_TOP);
+  root.classList?.remove?.(LOCATION_CLASS_BOTTOM);
+  root.style?.removeProperty?.(STRIP_HEIGHT_VAR);
+  applyWrapperStripEdge(getSecondaryWrapper(), null);
+  applyWrapperStripEdge(getMainMirrorWrapper(), null);
+}
+function __resetDrawerLocationForTest() {
+  clearDrawerLocation();
+  _pending = false;
+  _dirty = false;
+  _lastKey = null;
+}
+function assertLocationApplied(desired) {
+  if (typeof document === "undefined" || !document.documentElement)
+    return true;
+  const cl = document.documentElement.classList;
+  const wantClass = desired === "top" ? LOCATION_CLASS_TOP : desired === "bottom" ? LOCATION_CLASS_BOTTOM : LOCATION_CLASS_SIDES;
+  return cl.contains(wantClass);
+}
+var _pending = false, _dirty = false, _locGen = 0, _lastKey = null, _unsubModel = null, _presenceRaf = null;
+var init_drawer_location = __esm(() => {
+  init_state();
+  init_dispatch();
+  init_assignment();
+  init_store();
+  init_mobile_exclusion();
+  init_styles();
+  init_drawer_shell();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_tab_position();
+  init_main_tab_pin();
+  init_strip_gutter();
+  init_reflow();
+  init_buttons();
+  init_tab_list_dnd();
+});
+
 // src/settings/second-drawer-mode.ts
 var exports_second_drawer_mode = {};
 __export(exports_second_drawer_mode, {
@@ -7808,6 +9304,12 @@ async function finishDisable() {
     modelSecondary: afterModel?.secondary.length ?? 0,
     modelSide: afterModel?.side ?? null
   });
+  try {
+    const dl = await Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location));
+    dl.reconcileDrawerLocation();
+  } catch (err) {
+    dwarn("[second-drawer-mode] reconcileDrawerLocation after disable failed:", err);
+  }
 }
 async function requestSecondDrawerMode(next) {
   if (next) {
@@ -7883,6 +9385,12 @@ async function requestSecondDrawerMode(next) {
       modelSecondary: afterModel?.secondary.length ?? 0,
       modelSide: afterModel?.side ?? null
     });
+    try {
+      const dl = await Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location));
+      dl.reconcileDrawerLocation();
+    } catch (err) {
+      dwarn("[second-drawer-mode] reconcileDrawerLocation after enable failed:", err);
+    }
   } else {
     if (!getSettings().secondSidebarEnabled)
       return;
@@ -8195,10 +9703,10 @@ function injectModalStyles() {
     /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
     .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
       transition:
-        left ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        top ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        box-shadow ${SETTLE_DURATION_MS}ms ease,
-        opacity ${SETTLE_DURATION_MS}ms ease !important;
+        left ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        top ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS2}ms ease,
+        opacity ${SETTLE_DURATION_MS2}ms ease !important;
       box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
       cursor: default;
     }
@@ -8499,10 +10007,10 @@ function detachDragListeners() {
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
 }
-function cancelOverlaySettle() {
-  if (_settleTimer !== null) {
-    clearTimeout(_settleTimer);
-    _settleTimer = null;
+function cancelOverlaySettle2() {
+  if (_settleTimer2 !== null) {
+    clearTimeout(_settleTimer2);
+    _settleTimer2 = null;
   }
   if (_dragOverlay) {
     _dragOverlay.classList.remove("canvas-configure-tabs-overlay-settling");
@@ -8520,7 +10028,7 @@ function resolveConfigureSettleDestination(tabId) {
   }
   return null;
 }
-function animateOverlaySettle(destLeft, destTop) {
+function animateOverlaySettle2(destLeft, destTop) {
   const overlay = _dragOverlay;
   if (!overlay)
     return Promise.resolve();
@@ -8528,7 +10036,7 @@ function animateOverlaySettle(destLeft, destTop) {
   const curTop = parseFloat(overlay.style.top) || 0;
   const dx = destLeft - curLeft;
   const dy = destTop - curTop;
-  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
     overlay.style.left = `${destLeft}px`;
     overlay.style.top = `${destTop}px`;
     return Promise.resolve();
@@ -8540,9 +10048,9 @@ function animateOverlaySettle(destLeft, destTop) {
         return;
       done = true;
       overlay.removeEventListener("transitionend", onEnd);
-      if (_settleTimer !== null) {
-        clearTimeout(_settleTimer);
-        _settleTimer = null;
+      if (_settleTimer2 !== null) {
+        clearTimeout(_settleTimer2);
+        _settleTimer2 = null;
       }
       resolve();
     };
@@ -8559,7 +10067,7 @@ function animateOverlaySettle(destLeft, destTop) {
     overlay.offsetWidth;
     overlay.style.left = `${destLeft}px`;
     overlay.style.top = `${destTop}px`;
-    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+    _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
   });
 }
 function cloneConfigureDraft(d3) {
@@ -8572,8 +10080,8 @@ function cloneConfigureDraft(d3) {
     hiddenIds: new Set(d3.hiddenIds)
   };
 }
-function clearDragState() {
-  cancelOverlaySettle();
+function clearDragState2() {
+  cancelOverlaySettle2();
   stopAutoScroll();
   if (_dragOverlay) {
     _dragOverlay.remove();
@@ -8693,7 +10201,7 @@ function autoScrollFrame() {
 function runHitTestAndReorder(x2, y3) {
   if (!_dragTabId || _settling)
     return;
-  const target_ = hitTestDropTarget(x2, y3);
+  const target_ = hitTestDropTarget2(x2, y3);
   if (!target_)
     return;
   const prev = _lastDropTarget;
@@ -8711,7 +10219,7 @@ function snapshotFLIPRects() {
   }
   return rects;
 }
-function applyFLIP(prevRects, excludeTabId) {
+function applyFLIP2(prevRects, excludeTabId) {
   const animated = [];
   const rows = document.querySelectorAll(".canvas-configure-tabs-row");
   for (const el of rows) {
@@ -8743,7 +10251,7 @@ function applyFLIP(prevRects, excludeTabId) {
     }, 220);
   });
 }
-function createDragOverlay(sourceRow) {
+function createDragOverlay2(sourceRow) {
   const overlay = sourceRow.cloneNode(true);
   overlay.className = "canvas-configure-tabs-overlay-clone";
   const rect = sourceRow.getBoundingClientRect();
@@ -8757,7 +10265,7 @@ function createDragOverlay(sourceRow) {
   document.body.appendChild(overlay);
   return overlay;
 }
-function hitTestDropTarget(x2, y3) {
+function hitTestDropTarget2(x2, y3) {
   const lists = document.querySelectorAll(".canvas-configure-tabs-list");
   for (const list of lists) {
     const listRect = list.getBoundingClientRect();
@@ -8800,7 +10308,7 @@ function performDragMove(tabId, toSide, toIndex) {
   }
   _dragFromSide = toSide;
   renderModal(_draftRef, _catalogRef, null, false);
-  applyFLIP(prevRects, tabId);
+  applyFLIP2(prevRects, tabId);
   for (const r3 of document.querySelectorAll(".canvas-configure-tabs-row")) {
     if (r3.getAttribute("data-tab-id") === tabId) {
       r3.classList.add("row-dragging");
@@ -8813,7 +10321,7 @@ function cancelDrag(opts) {
   if (revert && _dragDraftSnapshot) {
     _draftRef = cloneConfigureDraft(_dragDraftSnapshot);
   }
-  clearDragState();
+  clearDragState2();
   if (revert && _draftRef) {
     renderModal(_draftRef, _catalogRef, null, false);
   }
@@ -8922,7 +10430,7 @@ function ConfigureTabsModalInner(props) {
           _dragOffsetX = ev.clientX - rowRect.left;
           _dragOffsetY = ev.clientY - rowRect.top;
           sourceRow.classList.add("row-dragging");
-          _dragOverlay = createDragOverlay(sourceRow);
+          _dragOverlay = createDragOverlay2(sourceRow);
         }
       }
       if (_dragOverlay) {
@@ -8942,11 +10450,11 @@ function ConfigureTabsModalInner(props) {
         if (_dragActive && _dragOverlay && _dragTabId) {
           const dest = resolveConfigureSettleDestination(_dragTabId);
           if (dest) {
-            await animateOverlaySettle(dest.left, dest.top);
+            await animateOverlaySettle2(dest.left, dest.top);
           }
         }
       } finally {
-        clearDragState();
+        clearDragState2();
         autoCommit();
       }
     };
@@ -9436,10 +10944,10 @@ function unmountModal() {
   _modalContainer = null;
   _draftRef = null;
   _baseSnapshotRef = null;
-  clearDragState();
+  clearDragState2();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer2 = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -10533,6 +12041,7 @@ function refreshSideGeometry() {
   } catch {}
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
+  Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location)).then((m3) => m3.reconcileDrawerLocation()).catch(() => {});
 }
 async function applyCanvasSideChange(desired, opts) {
   const gen = ++_sideApplyGen;
@@ -10930,7 +12439,7 @@ function getMainMirrorWidthVar() {
   return MAIN_MIRROR_WIDTH_VAR;
 }
 function isMainMirrorActive() {
-  return _active;
+  return _active2;
 }
 function isCanvasMainOpen() {
   return _open && isMainMirrorActive();
@@ -10959,17 +12468,17 @@ function applyMainMirrorDrawer(enabled, opts) {
     return;
   }
   const side = getMainDrawerSide();
-  if (_active && _shell && _mountedSide === side && !opts?.force) {
+  if (_active2 && _shell && _mountedSide === side && !opts?.force) {
     ensureHostContentParked();
     return;
   }
-  if (_active && _shell && !opts?.force) {
+  if (_active2 && _shell && !opts?.force) {
     restyleMainShellSide(side);
     ensureHostContentParked();
     syncDrawerTabSettings();
     return;
   }
-  if (_active && opts?.force) {
+  if (_active2 && opts?.force) {
     const wasOpen = _open;
     teardownMainMirror({ keepWidthVar: true });
     mountMainMirror({ initialOpen: opts?.initialOpen ?? wasOpen });
@@ -10984,7 +12493,7 @@ function reconcileMainMirrorDrawer(opts) {
     force: false,
     initialOpen: opts?.initialOpen
   });
-  if (opts?.initialOpen !== undefined && _active && !_open && opts.initialOpen) {
+  if (opts?.initialOpen !== undefined && _active2 && !_open && opts.initialOpen) {
     openCanvasMainDrawer();
   }
 }
@@ -11014,7 +12523,7 @@ function applyMainMirrorRestoredWidth(widthPx) {
   }
 }
 function restyleMainShellSide(side) {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   const w3 = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420);
   restyleShellSide(_shell.wrapper, side);
@@ -11024,7 +12533,7 @@ function restyleMainShellSide(side) {
   bumpReflow();
 }
 function openCanvasMainDrawer() {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   ensureHostContentParked();
   if (_open) {
@@ -11045,7 +12554,7 @@ function openCanvasMainDrawer() {
   mobileExclusionAfterToggle(true);
 }
 function closeCanvasMainDrawer() {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   if (!_open)
     return;
@@ -11085,7 +12594,7 @@ function setCanvasMainTitle(text) {
     _shell.title.textContent = text || "Drawer";
 }
 function onMainMirrorTabActivated(title, opts) {
-  if (!_active)
+  if (!_active2)
     return;
   if (title)
     setCanvasMainTitle(title);
@@ -11111,7 +12620,7 @@ function __resetMainMirrorForTest() {
   teardownMainMirror();
 }
 function updateMainMirrorDrawerTabVisibility() {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   const horizontal = isHorizontalStrip();
   _shell.drawerTab.style.display = horizontal || !isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
@@ -11120,7 +12629,7 @@ function injectMainMirrorMobileStyles() {
   injectStyles("sidebar-ux-main-mirror-mobile", MAIN_MIRROR_MOBILE_CSS);
 }
 function syncMainMirrorToViewport() {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   try {
     if (isMobileViewport()) {
@@ -11279,7 +12788,7 @@ function mountMainMirror(opts) {
     injectMainMirrorMobileStyles();
   document.body.appendChild(_shell.wrapper);
   sweepOrphanMainMirrorWrappers();
-  _active = true;
+  _active2 = true;
   _open = opts.initialOpen;
   _mountedSide = side;
   if (_open) {
@@ -11367,7 +12876,7 @@ function resolveHostPanelContent() {
   return document.querySelector(`[${CONTENT_MARK_ATTR}]`);
 }
 function ensureHostContentParked() {
-  if (!_shell || !_active)
+  if (!_shell || !_active2)
     return;
   const slot = _shell.content;
   const hostContent = resolveHostPanelContent();
@@ -11521,13 +13030,13 @@ function teardownMainMirror(opts) {
   document.getElementById("sidebar-ux-main-mirror-mobile")?.remove();
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
-  _active = false;
+  _active2 = false;
   _open = false;
   _desktopWidth = null;
   _mountedSide = null;
   bumpReflow();
 }
-var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _desktopWidth = null;
+var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active2 = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _desktopWidth = null;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
   init_state();
@@ -12798,1502 +14307,6 @@ var init_main_persist = __esm(() => {
   init_main_mirror_drawer();
   init_persist_polling();
   PANEL_BODY_HIDE_SELECTOR = '[class*="_panelContent_"],' + "[data-canvas-main-panel-content]," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content," + ".sidebar-ux-main-mirror-wrapper .sidebar-ux-panel-content > *";
-});
-
-// src/tabs/tab-list-dnd.ts
-var exports_tab_list_dnd = {};
-__export(exports_tab_list_dnd, {
-  DRAG_ACTIVATE_DISTANCE_PX: () => DRAG_ACTIVATE_DISTANCE_PX,
-  LONG_PRESS_MS: () => LONG_PRESS_MS,
-  axisCoordinate: () => axisCoordinate,
-  axisMidpoint: () => axisMidpoint,
-  containerAxis: () => containerAxis,
-  domInsertIndexFromVisibleIndex: () => domInsertIndexFromVisibleIndex,
-  dragHitGeometry: () => dragHitGeometry,
-  flipDelta: () => flipDelta,
-  insertIndexFromMidpoints: () => insertIndexFromMidpoints,
-  installTabListDnd: () => installTabListDnd,
-  invalidateDndGeometry: () => invalidateDndGeometry,
-  isDisplayedTabButton: () => isDisplayedTabButton,
-  isDndDragActive: () => isDndDragActive,
-  isLiveTabListDndAllowed: () => isLiveTabListDndAllowed,
-  overlayOverlapsContainer: () => overlayOverlapsContainer,
-  seamChoice: () => seamChoice,
-  settleDestFromButtonRects: () => settleDestFromButtonRects,
-  shouldActivateDragFromDistance: () => shouldActivateDragFromDistance,
-  tearDownTabListDnd: () => tearDownTabListDnd
-});
-function isLiveTabListDndAllowed() {
-  return !isMobileViewport() && !isPointerResizeActive();
-}
-function shouldActivateDragFromDistance(dx, dy, threshold = DRAG_ACTIVATE_DISTANCE_PX) {
-  return Math.sqrt(dx * dx + dy * dy) >= threshold;
-}
-function usesLongPressActivation(pointerType) {
-  return pointerType === "touch" || pointerType === "pen";
-}
-function removeDragContextMenuSuppressor() {
-  if (!_dragContextMenuSuppressor)
-    return;
-  document.removeEventListener("contextmenu", _dragContextMenuSuppressor, true);
-  _dragContextMenuSuppressor = null;
-}
-function containerAxis(el) {
-  if (!el)
-    return "y";
-  let cur = el;
-  while (cur) {
-    const axis = cur.getAttribute?.("data-strip-axis");
-    if (axis === "horizontal")
-      return "x";
-    if (axis === "vertical")
-      return "y";
-    cur = cur.parentElement;
-  }
-  if (el.classList?.contains?.("sidebar-ux-tab-list--pinned") || el.classList?.contains?.(MIRROR_MAIN_CLASS) || el.classList?.contains?.(MIRROR_BOTTOM_CLASS)) {
-    let p3 = el.parentElement;
-    while (p3) {
-      if (p3.getAttribute?.("data-strip-axis") === "horizontal")
-        return "x";
-      p3 = p3.parentElement;
-    }
-  }
-  try {
-    if (typeof getComputedStyle === "function") {
-      const fd = getComputedStyle(el).flexDirection;
-      if (typeof fd === "string" && fd.includes("row"))
-        return "x";
-    }
-  } catch {}
-  return "y";
-}
-function axisMidpoint(rect, axis) {
-  return axis === "x" ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
-}
-function axisCoordinate(geom, axis) {
-  return axis === "x" ? geom.centerX : geom.centerY;
-}
-function seamChoice(centerX, leftRect, rightRect) {
-  const boundary = (leftRect.right + rightRect.left) / 2;
-  return centerX < boundary ? "left" : "right";
-}
-function flipDelta(prev, curr) {
-  return { dx: prev.left - curr.left, dy: prev.top - curr.top };
-}
-function invalidateDndGeometry() {
-  _geometryCache = null;
-  _geomDirty = true;
-}
-function isDndDragActive() {
-  return _drag.phase === "dragging";
-}
-function dndOrderSnapshot() {
-  return {
-    primary: readLivePrimaryTabIds(),
-    secondary: readLiveSecondaryTabIds()
-  };
-}
-function logDndOrder(label, extra = {}) {
-  dlog("[tab-list-dnd]", label, { ...extra, live: dndOrderSnapshot() });
-}
-function injectDndStyles() {
-  if (typeof document === "undefined")
-    return;
-  if (document.getElementById(DND_STYLE_ID))
-    return;
-  const style = document.createElement("style");
-  style.id = DND_STYLE_ID;
-  style.textContent = `
-    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
-         pointer-events:none so synthetic click targets the real tab under the
-         cursor (document capture suppressor can stop activation). ── */
-    .canvas-tab-list-dnd-overlay-clone {
-      position: fixed;
-      z-index: 13000;
-      pointer-events: none !important;
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--lumiverse-border, #333);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
-      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
-        0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
-      color: var(--lumiverse-text, #eee);
-      font-family: var(--lumiverse-font-family, sans-serif);
-      opacity: 1 !important;
-      will-change: transform;
-      cursor: grabbing;
-    }
-    /* Defense: never inherit invisible-placeholder opacity onto the float */
-    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
-    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
-      opacity: 1 !important;
-      pointer-events: none !important;
-    }
-
-    /* ── Inner button clone — host CSS-module classes may not reflow the
-         floating clone the same way; force tab-btn layout so icons stay
-         centered (was left-biased after lift). ── */
-    .canvas-tab-list-dnd-overlay-clone-btn {
-      border: none !important;
-      background: none !important;
-      box-shadow: none !important;
-      outline: none !important;
-      width: 100% !important;
-      height: 100% !important;
-      flex-shrink: 0 !important;
-      display: flex !important;
-      flex-direction: column !important;
-      align-items: center !important;
-      justify-content: center !important;
-      gap: 1px !important;
-      padding: 0 !important;
-      margin: 0 !important;
-      box-sizing: border-box !important;
-    }
-
-    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
-    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
-    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
-      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
-      font-weight: 500 !important;
-      line-height: 1 !important;
-      text-align: center !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-      white-space: nowrap !important;
-      max-width: 48px !important;
-      flex-shrink: 0 !important;
-    }
-
-    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
-    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      flex-shrink: 0 !important;
-      width: 20px !important;
-      height: 20px !important;
-    }
-    .canvas-tab-list-dnd-overlay-clone-btn svg {
-      width: 20px !important;
-      height: 20px !important;
-      flex-shrink: 0 !important;
-      display: block !important;
-    }
-    .canvas-tab-list-dnd-overlay-clone-btn img {
-      width: 20px !important;
-      height: 20px !important;
-      flex-shrink: 0 !important;
-      display: block !important;
-    }
-
-    /* ── Source button while being dragged — invisible slot holder (keeps
-         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
-         transition:none while hidden so removing the class does not fade
-         opacity via strip transition:all 0.2s. ── */
-    .canvas-tab-list-dnd-placeholder {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      transition: none !important;
-    }
-
-    /* ── While dragging: strip buttons do not receive pointer hits.
-         Overlay is pointer-events:none so the cursor would otherwise
-         :hover the tab underneath (host hover glow/background). Hit-test
-         uses document pointer coords, not elementFromPoint. ── */
-    body.canvas-tab-list-dnd-dragging button[data-tab-id],
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
-      pointer-events: none !important;
-    }
-
-    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
-    .canvas-tab-list-dnd-flipping {
-      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
-    }
-
-    /* ── Drop settle: floating clone eases into its destination slot ── */
-    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
-      transition:
-        transform ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
-        box-shadow ${SETTLE_DURATION_MS2}ms ease,
-        opacity ${SETTLE_DURATION_MS2}ms ease !important;
-      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
-        0 0 0 1px var(--lumiverse-border, #333);
-      cursor: default;
-      opacity: 0.92 !important;
-    }
-  `;
-  document.head.appendChild(style);
-}
-function isSecondaryButton(btn) {
-  if (btn.classList.contains(MIRROR_BTN_CLASS))
-    return false;
-  if (btn.closest(`.${MIRROR_LIST_CLASS}`))
-    return false;
-  return !!btn.closest(`.${TAB_LIST_CLASS}`);
-}
-function getButtonTabId(btn) {
-  return buttonTabId(btn);
-}
-function isReorderableContainer(el) {
-  if (el.classList.contains(MIRROR_MAIN_CLASS))
-    return true;
-  if (el.classList.contains(MIRROR_BOTTOM_CLASS))
-    return true;
-  if (el.classList.contains(MIRROR_LIST_CLASS))
-    return true;
-  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
-    return true;
-  }
-  return false;
-}
-function getReorderParent(btn) {
-  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
-    const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
-    return section ?? btn.parentElement;
-  }
-  if (isSecondaryButton(btn)) {
-    const list = btn.closest(`.${TAB_LIST_CLASS}`);
-    if (list && !list.classList.contains(MIRROR_LIST_CLASS))
-      return list;
-  }
-  return null;
-}
-function getDropContainers() {
-  const containers = [];
-  if (getSecondaryWrapper()) {
-    const secList = getSecondaryTabList();
-    if (secList)
-      containers.push({ el: secList, secondary: true, axis: containerAxis(secList) });
-  }
-  const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
-  if (mirrorList) {
-    const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
-    if (main) {
-      containers.push({ el: main, secondary: false, axis: containerAxis(main) });
-    } else {
-      containers.push({ el: mirrorList, secondary: false, axis: containerAxis(mirrorList) });
-    }
-  }
-  return containers;
-}
-function getAllButtonsInContainer(container) {
-  if (container.classList.contains(MIRROR_MAIN_CLASS) || container.classList.contains(MIRROR_BOTTOM_CLASS)) {
-    return Array.from(container.querySelectorAll(`:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`));
-  }
-  if (container.classList.contains(MIRROR_LIST_CLASS)) {
-    return Array.from(container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`));
-  }
-  if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
-    return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
-  }
-  return Array.from(container.querySelectorAll("button[data-tab-id]"));
-}
-function isDisplayedTabButton(el) {
-  return el.style?.display !== "none";
-}
-function domInsertIndexFromVisibleIndex(siblingHidden, toVisibleIndex) {
-  const visibleCount = siblingHidden.reduce((n2, hidden) => n2 + (hidden ? 0 : 1), 0);
-  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
-  if (targetVis >= visibleCount) {
-    let lastVisible = -1;
-    for (let i3 = 0;i3 < siblingHidden.length; i3++) {
-      if (!siblingHidden[i3])
-        lastVisible = i3;
-    }
-    return lastVisible + 1;
-  }
-  let seen = 0;
-  for (let i3 = 0;i3 < siblingHidden.length; i3++) {
-    if (siblingHidden[i3])
-      continue;
-    if (seen === targetVis)
-      return i3;
-    seen++;
-  }
-  return siblingHidden.length;
-}
-function getButtonsInContainer(container, _secondary, excludeTabId) {
-  return getAllButtonsInContainer(container).filter((el) => {
-    if (!isDisplayedTabButton(el))
-      return false;
-    if (excludeTabId && getButtonTabId(el) === excludeTabId) {
-      return false;
-    }
-    return true;
-  });
-}
-function buildDraftAndBase() {
-  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
-  const hostSettings = getHostDrawerSettings();
-  const currentAssignments = new Map(getLiveIdAssignments());
-  const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t3) => t3.id));
-  const draftFromHost = createDraft({
-    catalog,
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: healedHidden,
-    drawerSide,
-    assignments: currentAssignments
-  });
-  const livePrimary = readLivePrimaryTabIds();
-  const liveSecondary = readLiveSecondaryTabIds();
-  const draft = alignDraftToLiveVisibleOrder(draftFromHost, livePrimary, liveSecondary);
-  dlog("[tab-list-dnd] draft-built (live order)", {
-    livePrimary,
-    liveSecondary,
-    draftPrimary: draft.primaryIds,
-    draftSecondary: draft.secondaryIds,
-    hidden: [...draft.hiddenIds]
-  });
-  const base = {
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: healedHidden,
-    drawerSide,
-    assignments: new Map(currentAssignments)
-  };
-  return { draft, base, catalog };
-}
-function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
-  const w3 = Math.max(0, overlayWidth);
-  const h4 = Math.max(0, overlayHeight);
-  return {
-    centerX: overlayTx + w3 / 2,
-    centerY: overlayTy + h4 / 2,
-    left: overlayTx,
-    top: overlayTy,
-    right: overlayTx + w3,
-    bottom: overlayTy + h4
-  };
-}
-function overlayOverlapsContainer(overlay, container, padY = 8, padX = 80) {
-  const overlapsX = overlay.right > container.left - padX && overlay.left < container.right + padX;
-  const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
-  return overlapsX && overlapsY;
-}
-function insertIndexFromMidpoints(y3, midpoints) {
-  for (let i3 = 0;i3 < midpoints.length; i3++) {
-    if (y3 < midpoints[i3])
-      return i3;
-  }
-  return midpoints.length;
-}
-function hitTestDropTarget2(geom, dragTabId) {
-  const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
-  const candidates = [];
-  for (const { el: container, secondary, axis } of containers) {
-    const rect = container.getBoundingClientRect();
-    const padY = axis === "x" ? 80 : 8;
-    const padX = axis === "x" ? 8 : 80;
-    if (!overlayOverlapsContainer(geom, rect, padY, padX))
-      continue;
-    const buttons = getButtonsInContainer(container, secondary, dragTabId);
-    let index = 0;
-    if (buttons.length > 0) {
-      const midpoints = buttons.map((btn) => axisMidpoint(btn.getBoundingClientRect(), axis));
-      index = insertIndexFromMidpoints(axisCoordinate(geom, axis), midpoints);
-      dlog("[tab-list-dnd] hit-test", {
-        containerCls: String(container.className || ""),
-        secondary,
-        axis,
-        dragTabId,
-        buttons: buttons.length,
-        midpoints: midpoints.length,
-        centerY: Math.round(geom.centerY),
-        centerX: Math.round(geom.centerX),
-        index
-      });
-    }
-    const containerMidX = rect.left + rect.width / 2;
-    const distX = Math.abs(geom.centerX - containerMidX);
-    candidates.push({ container, index, secondary, axis, rect, distX });
-  }
-  if (candidates.length === 0)
-    return null;
-  const horizontal = candidates.filter((c3) => c3.axis === "x");
-  if (horizontal.length >= 2) {
-    const sorted = [...horizontal].sort((a3, b2) => a3.rect.left - b2.rect.left);
-    const left = sorted[0];
-    const right = sorted[sorted.length - 1];
-    const chosen = seamChoice(geom.centerX, left.rect, right.rect) === "left" ? left : right;
-    return {
-      container: chosen.container,
-      index: chosen.index,
-      secondary: chosen.secondary
-    };
-  }
-  let best = candidates[0];
-  for (const c3 of candidates) {
-    if (c3.distX < best.distX)
-      best = c3;
-  }
-  return { container: best.container, index: best.index, secondary: best.secondary };
-}
-function settleDestFromButtonRects(index, rects, emptyFallback, axis = "y") {
-  if (rects.length === 0)
-    return emptyFallback;
-  if (index >= rects.length) {
-    const last = rects[rects.length - 1];
-    return axis === "x" ? { left: last.left + last.width, top: last.top } : { left: last.left, top: last.top + last.height };
-  }
-  const ref = rects[index];
-  return { left: ref.left, top: ref.top };
-}
-function resolveSettleDestination(dragElement, tabId, target, overlayWidth) {
-  if (dragElement && target && target.container.contains(dragElement)) {
-    const r3 = dragElement.getBoundingClientRect();
-    return { left: r3.left, top: r3.top };
-  }
-  if (target && tabId) {
-    const buttons = getButtonsInContainer(target.container, target.secondary, tabId);
-    const rects = buttons.map((b2) => {
-      const r3 = b2.getBoundingClientRect();
-      return { left: r3.left, top: r3.top, width: r3.width, height: r3.height };
-    });
-    const cr = target.container.getBoundingClientRect();
-    const emptyFallback = {
-      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
-      top: cr.top
-    };
-    return settleDestFromButtonRects(target.index, rects, emptyFallback, containerAxis(target.container));
-  }
-  if (dragElement) {
-    const r3 = dragElement.getBoundingClientRect();
-    return { left: r3.left, top: r3.top };
-  }
-  return null;
-}
-function animateOverlaySettle2(overlay, currentTx, currentTy, destLeft, destTop) {
-  const dx = destLeft - currentTx;
-  const dy = destTop - currentTy;
-  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
-    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    return Promise.resolve({ tx: destLeft, ty: destTop });
-  }
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done)
-        return;
-      done = true;
-      overlay.removeEventListener("transitionend", onEnd);
-      if (_settleTimer2 !== null) {
-        clearTimeout(_settleTimer2);
-        _settleTimer2 = null;
-      }
-      resolve({ tx: destLeft, ty: destTop });
-    };
-    const onEnd = (e3) => {
-      if (e3.target !== overlay)
-        return;
-      if (e3.propertyName && e3.propertyName !== "transform")
-        return;
-      finish();
-    };
-    overlay.addEventListener("transitionend", onEnd);
-    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
-    overlay.offsetWidth;
-    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
-  });
-}
-function cancelOverlaySettle2(overlay) {
-  if (_settleTimer2 !== null) {
-    clearTimeout(_settleTimer2);
-    _settleTimer2 = null;
-  }
-  if (overlay) {
-    overlay.classList.remove("canvas-tab-list-dnd-overlay-settling");
-  }
-}
-function installDropSlotSpacer(placeholder) {
-  if (!placeholder?.parentElement)
-    return null;
-  const parent = placeholder.parentElement;
-  const rect = placeholder.getBoundingClientRect();
-  const axis = containerAxis(parent);
-  const sizeProps = axis === "x" ? [`width:${Math.max(Math.round(rect.width), 1)}px`, "height:100%"] : [`height:${Math.max(Math.round(rect.height), 1)}px`, "width:100%"];
-  const spacer = document.createElement("div");
-  spacer.className = "canvas-tab-list-dnd-slot-spacer";
-  spacer.setAttribute("aria-hidden", "true");
-  spacer.style.cssText = [
-    ...sizeProps,
-    "flex-shrink:0",
-    "pointer-events:none",
-    "visibility:hidden",
-    "box-sizing:border-box",
-    "margin:0",
-    "padding:0",
-    "border:none"
-  ].join(";");
-  parent.insertBefore(spacer, placeholder.nextSibling);
-  return spacer;
-}
-function removeDropSlotSpacer(spacer) {
-  if (spacer?.isConnected)
-    spacer.remove();
-  if (typeof document !== "undefined") {
-    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-slot-spacer"))) {
-      el.remove();
-    }
-  }
-}
-function clearInsertIndicator() {
-  if (_insertIndicatorEl) {
-    _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
-    _insertIndicatorEl = null;
-  }
-  if (typeof document !== "undefined") {
-    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-insert-before"))) {
-      el.classList.remove("canvas-tab-list-dnd-insert-before");
-    }
-  }
-}
-function snapshotButtonRects(container) {
-  const rects = new Map;
-  for (const btn of getAllButtonsInContainer(container)) {
-    const id = getButtonTabId(btn);
-    if (id)
-      rects.set(id, btn.getBoundingClientRect());
-  }
-  return rects;
-}
-function mergeRects(into, from) {
-  for (const [k3, v3] of from)
-    into.set(k3, v3);
-}
-function applyFLIP2(prevRects, excludeTabId, containers) {
-  const animated = [];
-  const seen = new Set;
-  for (const container of containers) {
-    for (const btn of getAllButtonsInContainer(container)) {
-      if (seen.has(btn))
-        continue;
-      seen.add(btn);
-      const id = getButtonTabId(btn);
-      if (!id || id === excludeTabId || !prevRects.has(id))
-        continue;
-      const prev = prevRects.get(id);
-      const curr = btn.getBoundingClientRect();
-      const { dx, dy } = flipDelta(prev, curr);
-      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5)
-        continue;
-      btn.style.setProperty("transition", "none", "important");
-      btn.style.setProperty("transform", `translate(${dx}px, ${dy}px)`, "important");
-      animated.push(btn);
-    }
-  }
-  if (animated.length === 0)
-    return;
-  document.body.offsetHeight;
-  requestAnimationFrame(() => {
-    for (const node of animated) {
-      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
-      node.style.setProperty("transform", "", "important");
-      node.style.removeProperty("transform");
-    }
-    if (_flipActiveTimer)
-      clearTimeout(_flipActiveTimer);
-    _flipActiveTimer = setTimeout(() => {
-      for (const node of animated) {
-        node.style.removeProperty("transition");
-        node.style.removeProperty("transform");
-      }
-      _flipActiveTimer = null;
-    }, 220);
-  });
-}
-function clearFLIPStyles() {
-  if (_flipActiveTimer) {
-    clearTimeout(_flipActiveTimer);
-    _flipActiveTimer = null;
-  }
-  const containers = _geometryCache?.containers ?? getDropContainers();
-  for (const { el: container } of containers) {
-    for (const btn of getAllButtonsInContainer(container)) {
-      btn.style.removeProperty("transition");
-      btn.style.removeProperty("transform");
-    }
-  }
-}
-function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
-  if (!sourceTabId)
-    return false;
-  if (!isReorderableContainer(container))
-    return false;
-  const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => getButtonTabId(b2) === sourceTabId) ?? null;
-  if (!sourceBtn)
-    return false;
-  const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b2) => b2 !== sourceBtn);
-  const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
-  const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
-  if (insertIdx >= buttonsWithoutSource.length) {
-    if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === null) {
-      return false;
-    }
-    container.appendChild(sourceBtn);
-    return true;
-  }
-  const referenceBtn = buttonsWithoutSource[insertIdx];
-  if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
-    return false;
-  }
-  container.insertBefore(sourceBtn, referenceBtn);
-  return true;
-}
-function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
-  if (!dragElement || !originalParent)
-    return;
-  const parent = dragElement.parentNode;
-  if (parent === originalParent) {
-    if (originalNextSibling) {
-      if (dragElement.nextElementSibling === originalNextSibling)
-        return;
-      originalParent.insertBefore(dragElement, originalNextSibling);
-    } else {
-      if (dragElement.nextElementSibling === null && dragElement.parentNode === originalParent)
-        return;
-      originalParent.insertBefore(dragElement, null);
-    }
-  } else {
-    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
-      originalParent.insertBefore(dragElement, originalNextSibling);
-    } else {
-      originalParent.appendChild(dragElement);
-    }
-  }
-}
-function createDragOverlay2(sourceBtn) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
-  const clone = sourceBtn.cloneNode(true);
-  clone.classList.remove("canvas-tab-list-dnd-placeholder");
-  clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
-  const rect = sourceBtn.getBoundingClientRect();
-  wrapper.style.width = rect.width + "px";
-  wrapper.style.height = rect.height + "px";
-  wrapper.style.left = "0px";
-  wrapper.style.top = "0px";
-  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
-  return wrapper;
-}
-function suppressSyntheticClick(e3) {
-  e3.preventDefault();
-  e3.stopPropagation();
-  e3.stopImmediatePropagation();
-}
-function installClickSuppressor(el) {
-  removeClickSuppressorNow();
-  _clickSuppressor = suppressSyntheticClick;
-  _clickSuppressorEl = el;
-  el.addEventListener("click", _clickSuppressor, true);
-  _docClickSuppressor = suppressSyntheticClick;
-  document.addEventListener("click", _docClickSuppressor, true);
-}
-function scheduleClickSuppressorRemoval() {
-  if (_clickSuppressorTimer !== null)
-    clearTimeout(_clickSuppressorTimer);
-  _clickSuppressorTimer = setTimeout(() => {
-    removeClickSuppressorNow();
-  }, 0);
-}
-function removeClickSuppressorNow() {
-  if (_clickSuppressorTimer !== null) {
-    clearTimeout(_clickSuppressorTimer);
-    _clickSuppressorTimer = null;
-  }
-  if (_clickSuppressor && _clickSuppressorEl) {
-    _clickSuppressorEl.removeEventListener("click", _clickSuppressor, true);
-  }
-  _clickSuppressor = null;
-  _clickSuppressorEl = null;
-  if (_docClickSuppressor) {
-    document.removeEventListener("click", _docClickSuppressor, true);
-    _docClickSuppressor = null;
-  }
-}
-function autoScrollHorizontal(geom) {
-  const containers = _geometryCache?.containers ?? [];
-  const EDGE_PX = 24;
-  const STEP_PX = 14;
-  let scrolling = false;
-  for (const { el, axis } of containers) {
-    if (axis !== "x")
-      continue;
-    const rect = el.getBoundingClientRect();
-    if (geom.centerY < rect.top || geom.centerY > rect.bottom)
-      continue;
-    if (geom.centerX < rect.left || geom.centerX > rect.right)
-      continue;
-    const maxScroll = el.scrollWidth - el.clientWidth;
-    if (maxScroll <= 0)
-      continue;
-    if (geom.centerX < rect.left + EDGE_PX) {
-      const next = Math.max(0, el.scrollLeft - STEP_PX);
-      if (next !== el.scrollLeft) {
-        el.scrollLeft = next;
-        scrolling = true;
-      }
-    } else if (geom.centerX > rect.right - EDGE_PX) {
-      const next = Math.min(maxScroll, el.scrollLeft + STEP_PX);
-      if (next !== el.scrollLeft) {
-        el.scrollLeft = next;
-        scrolling = true;
-      }
-    }
-  }
-  return scrolling;
-}
-function scheduleDragFrame() {
-  if (_rafId !== null)
-    return;
-  _rafId = requestAnimationFrame(() => {
-    _rafId = null;
-    if (_drag.phase !== "dragging")
-      return;
-    if (_geomDirty || !_geometryCache) {
-      _geometryCache = { containers: getDropContainers() };
-      _geomDirty = false;
-    }
-    const geom = dragHitGeometry(_drag.overlayTx, _drag.overlayTy, _drag.overlayWidth || 48, _drag.overlayHeight || 48);
-    if (autoScrollHorizontal(geom)) {
-      scheduleDragFrame();
-    }
-    const target = hitTestDropTarget2(geom, _drag.tabId);
-    const prev = _drag.lastDropTarget;
-    const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
-    if (!target) {
-      if (prev) {
-        clearInsertIndicator();
-      }
-      return;
-    }
-    if (!sameTarget) {
-      const isReorderable = isReorderableContainer(target.container);
-      const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
-      dlog("[tab-list-dnd] target change", {
-        tabId: _drag.tabId,
-        index: target.index,
-        secondary: target.secondary,
-        containerCls: String(target.container.className || ""),
-        isReorderable,
-        sourceIsInCanvasList: _drag.sourceIsInCanvasList,
-        fromSecondary: _drag.fromSecondary
-      });
-      if (isReorderable && _drag.sourceIsInCanvasList) {
-        const prevRects = new Map;
-        const flipContainers = [];
-        const sourceParent = _drag.element?.parentElement;
-        if (sourceParent && isReorderableContainer(sourceParent)) {
-          mergeRects(prevRects, snapshotButtonRects(sourceParent));
-          flipContainers.push(sourceParent);
-        }
-        if (prev?.container && prev.container !== sourceParent) {
-          mergeRects(prevRects, snapshotButtonRects(prev.container));
-          if (!flipContainers.includes(prev.container)) {
-            flipContainers.push(prev.container);
-          }
-        }
-        mergeRects(prevRects, snapshotButtonRects(target.container));
-        if (!flipContainers.includes(target.container)) {
-          flipContainers.push(target.container);
-        }
-        const didReorder = reorderCanvasListDOM(target.container, target, _drag.tabId, _drag.element);
-        if (didReorder) {
-          applyFLIP2(prevRects, _drag.tabId, flipContainers);
-          _geomDirty = true;
-        }
-      } else if (prevReorderable && !isReorderable && prev) {
-        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
-        clearFLIPStyles();
-        _geomDirty = true;
-      }
-      _drag.lastDropTarget = target;
-    }
-  });
-}
-function startDrag(btn, pointerEvent) {
-  if (!isLiveTabListDndAllowed())
-    return;
-  const tabId = getButtonTabId(btn);
-  if (!tabId) {
-    dlog("[tab-list-dnd] startDrag bail: no tab id", {
-      title: btn.getAttribute("title") || null,
-      cls: String(btn.className || ""),
-      mirrorKey: btn.getAttribute("data-mirror-key") || null
-    });
-    return;
-  }
-  const fromSecondary = isSecondaryButton(btn);
-  const activeAtGestureStart = captureActiveSelection();
-  const element = btn;
-  const originalParent = btn.parentElement;
-  const originalNextSibling = btn.nextElementSibling;
-  const sourceIsInCanvasList = getReorderParent(btn) != null;
-  logDndOrder("start", {
-    tabId,
-    fromSecondary,
-    sourceIsInCanvasList,
-    hasDataTabId: btn.hasAttribute("data-tab-id"),
-    mirrorKey: btn.getAttribute("data-mirror-key") || null,
-    reorderParent: sourceIsInCanvasList ? getReorderParent(btn)?.className : null
-  });
-  const rect = btn.getBoundingClientRect();
-  const offsetX = pointerEvent.clientX - rect.left;
-  const offsetY = pointerEvent.clientY - rect.top;
-  const overlay = createDragOverlay2(btn);
-  const overlayInner = overlay.querySelector(".canvas-tab-list-dnd-overlay-clone-btn");
-  btn.classList.add("canvas-tab-list-dnd-placeholder");
-  _geometryCache = { containers: getDropContainers() };
-  _geomDirty = false;
-  document.body.style.userSelect = "none";
-  document.body.style.cursor = "grabbing";
-  document.body.classList.add("canvas-tab-list-dnd-dragging");
-  removeDragContextMenuSuppressor();
-  const suppressCtx = (e3) => {
-    e3.preventDefault();
-    e3.stopPropagation();
-  };
-  _dragContextMenuSuppressor = suppressCtx;
-  document.addEventListener("contextmenu", suppressCtx, true);
-  installClickSuppressor(btn);
-  const onMove = (ev) => {
-    if (_drag.phase !== "dragging")
-      return;
-    _drag.overlayTx = ev.clientX - _drag.offsetX;
-    _drag.overlayTy = ev.clientY - _drag.offsetY;
-    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`;
-    _pendingPointerX = ev.clientX;
-    _pendingPointerY = ev.clientY;
-    scheduleDragFrame();
-  };
-  const onUp = async (ev) => {
-    ev.preventDefault();
-    if (_drag.phase !== "dragging")
-      return;
-    const capturedTabId = tabId;
-    const capturedFromSecondary = fromSecondary;
-    const capturedActiveSelection = activeAtGestureStart;
-    const capturedTarget = _drag.lastDropTarget;
-    logDndOrder("pointerup", {
-      tabId: capturedTabId,
-      fromSecondary: capturedFromSecondary,
-      target: capturedTarget ? {
-        index: capturedTarget.index,
-        secondary: capturedTarget.secondary,
-        container: capturedTarget.container.className
-      } : null
-    });
-    removeDragContextMenuSuppressor();
-    scheduleClickSuppressorRemoval();
-    detachDragPointerListeners();
-    _drag = {
-      phase: "settling",
-      tabId: capturedTabId,
-      element,
-      fromSecondary: capturedFromSecondary,
-      activeAtGestureStart: capturedActiveSelection,
-      overlay
-    };
-    clearInsertIndicator();
-    let slotSpacer = null;
-    try {
-      if (capturedTarget && capturedTabId) {
-        const crossList = capturedFromSecondary !== capturedTarget.secondary;
-        const dest = resolveSettleDestination(element, capturedTabId, capturedTarget, rect.width);
-        if (dest) {
-          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
-          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
-          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
-        }
-        if (crossList && capturedFromSecondary) {
-          slotSpacer = installDropSlotSpacer(element);
-          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        }
-        let moveChrome = { neighborBtn: null, reassertId: null };
-        let secondaryChrome = { neighborBtn: null };
-        if (crossList && !capturedFromSecondary) {
-          moveChrome = await captureMainMirrorMoveChrome(capturedTabId, "secondary");
-          hideMainTabButton(capturedTabId);
-        } else if (crossList && capturedFromSecondary) {
-          secondaryChrome = await captureSecondaryNeighborForMove(capturedTabId);
-        }
-        const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedActiveSelection, capturedTarget);
-        logDndOrder("post-commit-before-cleanup", {
-          tabId: capturedTabId,
-          ok
-        });
-        if (ok && crossList) {
-          try {
-            if (!capturedFromSecondary) {
-              await applyMainMirrorMoveChrome(moveChrome, capturedTabId);
-            } else {
-              await applySecondaryNeighborHandoff(secondaryChrome, capturedTabId);
-            }
-          } catch (err) {
-            dwarn("[tab-list-dnd] post-commit cross-drawer chrome failed:", err);
-          }
-        } else if (!ok) {
-          if (crossList && !capturedFromSecondary) {
-            showMainTabButton(capturedTabId);
-            try {
-              const mp = await Promise.resolve().then(() => (init_main_tab_pin(), exports_main_tab_pin));
-              mp.reconcileMainTabListPin?.();
-            } catch {}
-          }
-          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        }
-      } else {
-        restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width);
-        if (dest) {
-          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
-          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
-          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
-        }
-      }
-    } finally {
-      removeDropSlotSpacer(slotSpacer);
-      cancelOverlaySettle2(overlay);
-      cleanupDragVisuals();
-      logDndOrder("cleanup-complete", { tabId: capturedTabId });
-    }
-  };
-  _drag = {
-    phase: "dragging",
-    tabId,
-    element,
-    fromSecondary,
-    activeAtGestureStart,
-    overlay,
-    overlayInner,
-    offsetX,
-    offsetY,
-    overlayTx: rect.left,
-    overlayTy: rect.top,
-    overlayWidth: rect.width,
-    overlayHeight: rect.height,
-    originalParent,
-    originalNextSibling,
-    sourceIsInCanvasList,
-    lastDropTarget: null,
-    moveHandler: onMove,
-    upHandler: onUp
-  };
-  document.addEventListener("pointermove", onMove, { passive: true });
-  document.addEventListener("pointerup", onUp);
-  document.addEventListener("pointercancel", onUp);
-}
-function captureActiveSelection() {
-  const world = getHost()?.observe();
-  return {
-    primary: world?.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
-    secondary: world?.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
-  };
-}
-function detachDragPointerListeners() {
-  if (_drag.phase === "dragging") {
-    document.removeEventListener("pointermove", _drag.moveHandler);
-    document.removeEventListener("pointerup", _drag.upHandler);
-    document.removeEventListener("pointercancel", _drag.upHandler);
-  }
-  document.body.style.userSelect = "";
-  document.body.style.cursor = "";
-  if (_rafId !== null) {
-    cancelAnimationFrame(_rafId);
-    _rafId = null;
-  }
-  _geometryCache = null;
-  _geomDirty = false;
-}
-function clearDragState2() {
-  detachDragPointerListeners();
-  _drag = { phase: "idle" };
-}
-function cleanupDragVisuals() {
-  clearFLIPStyles();
-  if (_drag.phase === "dragging" || _drag.phase === "settling") {
-    const el = _drag.element;
-    el.style.setProperty("transition", "none", "important");
-    el.classList.remove("canvas-tab-list-dnd-placeholder");
-    el.offsetWidth;
-    requestAnimationFrame(() => {
-      el.style.removeProperty("transition");
-    });
-  }
-  if (_drag.phase === "dragging" || _drag.phase === "settling") {
-    const overlay = _drag.overlay;
-    document.body.offsetWidth;
-    overlay.remove();
-  }
-  clearInsertIndicator();
-  if (typeof document !== "undefined") {
-    document.body.classList.remove("canvas-tab-list-dnd-dragging");
-  }
-  _drag = { phase: "idle" };
-}
-async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
-  try {
-    const { draft, base } = buildDraftAndBase();
-    dlog("[tab-list-dnd]", "draft-built", {
-      tabId,
-      fromSecondary,
-      target: { index: target.index, secondary: target.secondary },
-      draft: {
-        primary: draft.primaryIds,
-        secondary: draft.secondaryIds
-      },
-      base: { tabOrder: base.tabOrder },
-      live: dndOrderSnapshot()
-    });
-    if (fromSecondary !== target.secondary) {
-      const targetSide = target.secondary ? "secondary" : "primary";
-      const updated2 = moveTabVisible(draft, tabId, targetSide, target.index);
-      const result2 = await commitDraftToOwnedModel(updated2, activeAtGestureStart, { skipChrome: true });
-      dlog("[tab-list-dnd]", "cross-commit-result", {
-        tabId,
-        ok: result2.ok,
-        updated: {
-          primary: updated2.primaryIds,
-          secondary: updated2.secondaryIds
-        },
-        live: dndOrderSnapshot()
-      });
-      if (!result2.ok) {
-        dwarn("[tab-list-dnd] cross-drawer commit failed:", result2.error);
-        return false;
-      }
-      const m4 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
-      const modalWasOpen2 = m4.isConfigureTabsModalOpen();
-      m4.refreshConfigureDraftFromLive();
-      dlog("[tab-list-dnd] configure modal sync (cross-drawer)", {
-        modalWasOpen: modalWasOpen2,
-        refreshed: modalWasOpen2
-      });
-      return true;
-    }
-    const listKey = target.secondary ? "secondaryIds" : "primaryIds";
-    const fullList = draft[listKey];
-    if (!fullList.includes(tabId)) {
-      dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
-      return false;
-    }
-    const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
-    if (updated === draft && !isDraftDirty(draft, base)) {
-      return true;
-    }
-    const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
-    dlog("[tab-list-dnd]", "reorder-commit-result", {
-      tabId,
-      ok: result.ok,
-      updated: {
-        primary: updated.primaryIds,
-        secondary: updated.secondaryIds
-      },
-      live: dndOrderSnapshot()
-    });
-    if (!result.ok) {
-      dwarn("[tab-list-dnd] reorder commit failed:", result.error);
-      return false;
-    }
-    const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
-    const modalWasOpen = m3.isConfigureTabsModalOpen();
-    m3.refreshConfigureDraftFromLive();
-    dlog("[tab-list-dnd] configure modal sync (reorder)", {
-      modalWasOpen,
-      refreshed: modalWasOpen
-    });
-    return true;
-  } catch (err) {
-    dwarn("[tab-list-dnd] drop failed:", err);
-    return false;
-  }
-}
-function installDragOnButton(btn) {
-  if (_installed.has(btn))
-    return;
-  const tabId = getButtonTabId(btn);
-  if (!tabId) {
-    dlog("[tab-list-dnd] install skip: no tab id", {
-      tag: btn.tagName,
-      cls: String(btn.className || ""),
-      title: btn.getAttribute("title") || null,
-      aria: btn.getAttribute("aria-label") || null,
-      hasDataTabId: btn.hasAttribute("data-tab-id"),
-      mirrorKey: btn.getAttribute("data-mirror-key") || null,
-      parentCls: btn.parentElement ? String(btn.parentElement.className || "") : null
-    });
-    return;
-  }
-  if (isSettingsButton(btn)) {
-    dlog("[tab-list-dnd] install skip: settings", {
-      title: btn.getAttribute("title") || null,
-      cls: String(btn.className || "")
-    });
-    return;
-  }
-  _installed.add(btn);
-  let longPressTimer = null;
-  let dragActivated = false;
-  let armingCancelled = false;
-  let pendingPointerMove = null;
-  let pendingPointerUp = null;
-  let pendingPointerCancel = null;
-  const cleanupPendingListeners = () => {
-    if (pendingPointerMove) {
-      document.removeEventListener("pointermove", pendingPointerMove);
-      pendingPointerMove = null;
-    }
-    if (pendingPointerUp) {
-      document.removeEventListener("pointerup", pendingPointerUp);
-      pendingPointerUp = null;
-    }
-    if (pendingPointerCancel) {
-      document.removeEventListener("pointercancel", pendingPointerCancel);
-      pendingPointerCancel = null;
-    }
-  };
-  const cancelArming = () => {
-    if (longPressTimer != null) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    cleanupPendingListeners();
-  };
-  const onPointerDown = (e3) => {
-    if (!_active2)
-      return;
-    if (!isLiveTabListDndAllowed())
-      return;
-    if (e3.button !== 0)
-      return;
-    if (_drag.phase !== "idle")
-      return;
-    dlog("[tab-list-dnd] pointerdown arm", {
-      tabId: getButtonTabId(btn),
-      title: btn.getAttribute("title") || btn.getAttribute("aria-label") || null,
-      hasDataTabId: btn.hasAttribute("data-tab-id"),
-      cls: String(btn.className || ""),
-      pointerType: e3.pointerType
-    });
-    dragActivated = false;
-    armingCancelled = false;
-    const startX = e3.clientX;
-    const startY = e3.clientY;
-    const longPress = usesLongPressActivation(e3.pointerType);
-    if (longPress) {
-      longPressTimer = setTimeout(() => {
-        longPressTimer = null;
-        cleanupPendingListeners();
-        if (armingCancelled)
-          return;
-        if (!isLiveTabListDndAllowed())
-          return;
-        dragActivated = true;
-        startDrag(btn, e3);
-      }, LONG_PRESS_MS);
-    }
-    const onMove = (ev) => {
-      if (dragActivated)
-        return;
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      if (longPress) {
-        if (shouldActivateDragFromDistance(dx, dy)) {
-          armingCancelled = true;
-          cancelArming();
-        }
-        return;
-      }
-      if (!shouldActivateDragFromDistance(dx, dy))
-        return;
-      dragActivated = true;
-      cleanupPendingListeners();
-      if (!isLiveTabListDndAllowed())
-        return;
-      startDrag(btn, ev);
-    };
-    const onUp = () => {
-      cancelArming();
-    };
-    pendingPointerMove = onMove;
-    pendingPointerUp = onUp;
-    pendingPointerCancel = onUp;
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-    document.addEventListener("pointercancel", onUp);
-  };
-  btn.addEventListener("pointerdown", onPointerDown);
-}
-function installTabListDnd() {
-  if (_active2)
-    return null;
-  _active2 = true;
-  dlog("[tab-list-dnd] install: diagnostic build active");
-  injectDndStyles();
-  const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
-  for (const btn of existing) {
-    installDragOnButton(btn);
-  }
-  dlog("[tab-list-dnd] install: existing buttons visited", { count: existing.length });
-  _observer = new MutationObserver((mutations) => {
-    for (const mut of mutations) {
-      for (const node of mut.addedNodes) {
-        if (!(node instanceof HTMLElement))
-          continue;
-        if (node.tagName === "BUTTON" && (node.hasAttribute("data-tab-id") || node.classList.contains("sidebar-ux-main-tab-mirror-btn"))) {
-          installDragOnButton(node);
-        }
-        const descendants = node.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
-        for (const child of descendants) {
-          installDragOnButton(child);
-        }
-      }
-    }
-  });
-  _observer.observe(document.body, { childList: true, subtree: true });
-  return () => {
-    tearDownTabListDnd();
-  };
-}
-function tearDownTabListDnd() {
-  _active2 = false;
-  if (_observer) {
-    _observer.disconnect();
-    _observer = null;
-  }
-  if (_drag.phase !== "idle") {
-    removeClickSuppressorNow();
-    removeDragContextMenuSuppressor();
-    detachDragPointerListeners();
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId);
-      _rafId = null;
-    }
-    if (_drag.phase === "dragging" || _drag.phase === "settling") {
-      cancelOverlaySettle2(_drag.overlay);
-    }
-    if (_drag.phase === "dragging") {
-      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
-    }
-    cleanupDragVisuals();
-    clearDragState2();
-  }
-  if (typeof document !== "undefined") {
-    document.body.classList.remove("canvas-tab-list-dnd-dragging");
-    document.getElementById(DND_STYLE_ID)?.remove();
-  }
-}
-var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
-var init_tab_list_dnd = __esm(() => {
-  init_configure_model();
-  init_owned_commit();
-  init_dispatch();
-  init_configure_catalog();
-  init_canvas_hidden();
-  init_hidden_tabs();
-  init_host_settings();
-  init_assignment();
-  init_store();
-  init_secondary();
-  init_buttons();
-  init_mobile_exclusion();
-  init_handles();
-  init_log();
-  init_live_tab_order();
-  _drag = { phase: "idle" };
-  _installed = new WeakSet;
-});
-
-// src/sidebar/drawer-location.ts
-var exports_drawer_location = {};
-__export(exports_drawer_location, {
-  HORIZONTAL_STRIP_CSS: () => HORIZONTAL_STRIP_CSS,
-  __resetDrawerLocationForTest: () => __resetDrawerLocationForTest,
-  applyLocationPresentation: () => applyLocationPresentation,
-  assertLocationApplied: () => assertLocationApplied,
-  clearDrawerLocation: () => clearDrawerLocation,
-  initDrawerLocation: () => initDrawerLocation,
-  mountDrawerLocation: () => mountDrawerLocation,
-  reconcileDrawerLocation: () => reconcileDrawerLocation,
-  restyleShellLocation: () => restyleShellLocation
-});
-function stripEdgeFor(loc) {
-  return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
-}
-function applyLocationPresentation(loc) {
-  if (typeof document === "undefined" || !document.documentElement)
-    return;
-  const root = document.documentElement;
-  const cl = root.classList;
-  if (typeof cl?.toggle === "function") {
-    cl.toggle(LOCATION_CLASS_TOP, loc === "top");
-    cl.toggle(LOCATION_CLASS_BOTTOM, loc === "bottom");
-    cl.toggle(LOCATION_CLASS_SIDES, loc === "sides");
-  }
-  root.style?.setProperty?.(STRIP_HEIGHT_VAR, `${STRIP_HEIGHT_PX}px`);
-  const edge = stripEdgeFor(loc);
-  applyWrapperStripEdge(getSecondaryWrapper(), edge);
-  applyWrapperStripEdge(getMainMirrorWrapper(), edge);
-}
-function restyleShellLocation() {
-  applyLocationPresentation(getDrawerLocation());
-}
-function hideHandles() {
-  const secondary = getSecondaryWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
-  if (secondary?.style)
-    secondary.style.display = "none";
-  const main = getMainMirrorWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
-  if (main?.style)
-    main.style.display = "none";
-}
-function secondaryZonePresent2() {
-  return !!getSettings().secondSidebarEnabled && isSecondaryShellLive() && hasSecondaryAssignedTabs();
-}
-function computeKey(loc) {
-  return [
-    loc,
-    isMobileViewport() ? "mobile" : "desktop",
-    getMainDrawerSide(),
-    getSettings().secondSidebarEnabled ? "1" : "0",
-    isSecondaryShellLive() ? "1" : "0",
-    secondaryZonePresent2() ? "1" : "0"
-  ].join("|");
-}
-function reconcileDrawerLocation(opts) {
-  if (_pending) {
-    _dirty = true;
-    return;
-  }
-  _pending = true;
-  try {
-    runReconcile(opts?.force === true);
-    if (_dirty) {
-      _dirty = false;
-      runReconcile(true);
-    }
-  } finally {
-    _pending = false;
-  }
-}
-function runReconcile(force) {
-  const gen = ++_locGen;
-  const loc = getDrawerLocation();
-  const horizontal = isHorizontalStrip();
-  const key = computeKey(loc);
-  if (!force && key === _lastKey)
-    return;
-  _lastKey = key;
-  applyLocationPresentation(loc);
-  reconcileTabListPin();
-  reconcileMainTabListPin();
-  if (gen !== _locGen)
-    return;
-  if (isDndDragActive())
-    invalidateDndGeometry();
-  updateDrawerTabVisibility();
-  updateMainMirrorDrawerTabVisibility();
-  if (horizontal)
-    hideHandles();
-  updateStripGutters();
-  updateChatReflow();
-}
-function schedulePresenceReconcile() {
-  if (_presenceRaf !== null)
-    return;
-  const run = () => {
-    _presenceRaf = null;
-    reconcileDrawerLocation();
-  };
-  if (typeof requestAnimationFrame === "function") {
-    _presenceRaf = requestAnimationFrame(run);
-  } else {
-    run();
-  }
-}
-function mountDrawerLocation() {
-  initDrawerLocation();
-  reconcileDrawerLocation({ force: true });
-  if (!_unsubModel) {
-    _unsubModel = onModelChanged(() => schedulePresenceReconcile());
-  }
-  return () => {
-    if (_unsubModel) {
-      _unsubModel();
-      _unsubModel = null;
-    }
-    if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(_presenceRaf);
-    }
-    _presenceRaf = null;
-  };
-}
-function initDrawerLocation() {
-  injectHorizontalStripStyles();
-  applyLocationPresentation(getDrawerLocation());
-}
-function clearDrawerLocation() {
-  _locGen++;
-  _pending = false;
-  _dirty = false;
-  _lastKey = null;
-  if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_presenceRaf);
-  }
-  _presenceRaf = null;
-  if (_unsubModel) {
-    _unsubModel();
-    _unsubModel = null;
-  }
-  if (typeof document === "undefined" || !document.documentElement)
-    return;
-  const root = document.documentElement;
-  root.classList?.remove?.(LOCATION_CLASS_SIDES);
-  root.classList?.remove?.(LOCATION_CLASS_TOP);
-  root.classList?.remove?.(LOCATION_CLASS_BOTTOM);
-  root.style?.removeProperty?.(STRIP_HEIGHT_VAR);
-  applyWrapperStripEdge(getSecondaryWrapper(), null);
-  applyWrapperStripEdge(getMainMirrorWrapper(), null);
-}
-function __resetDrawerLocationForTest() {
-  clearDrawerLocation();
-  _pending = false;
-  _dirty = false;
-  _lastKey = null;
-}
-function assertLocationApplied(desired) {
-  if (typeof document === "undefined" || !document.documentElement)
-    return true;
-  const cl = document.documentElement.classList;
-  const wantClass = desired === "top" ? LOCATION_CLASS_TOP : desired === "bottom" ? LOCATION_CLASS_BOTTOM : LOCATION_CLASS_SIDES;
-  return cl.contains(wantClass);
-}
-var _pending = false, _dirty = false, _locGen = 0, _lastKey = null, _unsubModel = null, _presenceRaf = null;
-var init_drawer_location = __esm(() => {
-  init_state();
-  init_dispatch();
-  init_assignment();
-  init_store();
-  init_mobile_exclusion();
-  init_styles();
-  init_drawer_shell();
-  init_main_mirror_drawer();
-  init_secondary();
-  init_tab_position();
-  init_main_tab_pin();
-  init_strip_gutter();
-  init_reflow();
-  init_buttons();
-  init_tab_list_dnd();
 });
 
 // src/sidebar/mobile-exclusion.ts
@@ -15762,6 +15775,7 @@ function mountSecondarySidebar(options) {
   syncDrawerTabSettings();
   syncPanelHeaderFromMain2();
   mountResizeHandles();
+  Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location)).then((m3) => m3.reconcileDrawerLocation()).catch(() => {});
 }
 function tearDownSecondarySidebar() {
   applyTabListPin(false, { force: true });
@@ -15871,6 +15885,7 @@ function tearDownSecondarySidebar() {
   });
   stopPanelHeaderObservers();
   resetPanelHeaderSyncCache();
+  Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location)).then((m3) => m3.reconcileDrawerLocation()).catch(() => {});
 }
 var PUZZLE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`, _secondarySidebarOpen = false, _secondaryWrapper = null, _secondaryDrawer = null, _reassignDraining = false, _reassignQueued = false, _reassignQueuedOpts, _reassignWaiters;
 var init_secondary = __esm(() => {

@@ -787,6 +787,9 @@ export function mountSecondarySidebar(options?: { initialWidth?: number; initial
   // this, the secondary handle disappears for the rest of the session
   // whenever the wrapper is recreated (e.g. after a drawer-side flip).
   mountResizeHandles()
+  // S8: the secondary zone may have just appeared — re-split the strip zones
+  // (main expands to 50%/100% depending on presence).
+  void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
 }
 
 /**
@@ -1010,4 +1013,6 @@ export function tearDownSecondarySidebar(): void {
   // would otherwise leak across the on→off→on cycle).
   _stopPanelHeaderObservers()
   resetPanelHeaderSyncCache()
+  // S8: the secondary zone is gone — main strip expands back to full width.
+  void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
 }
