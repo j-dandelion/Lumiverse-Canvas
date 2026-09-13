@@ -125,6 +125,28 @@ const stubWindow: any = {
   assert(clearIdx > cleanupIdx, 'setup.ts clears the host bridge AFTER cleanupAll()')
 }
 
+// ── 1b: S8 drawer-location teardown + feature-order wiring ──
+{
+  const { alwaysCleanups, FEATURES } = await import('../registry')
+  const { clearDrawerLocation } = await import('../../sidebar/drawer-location')
+  assert(
+    alwaysCleanups().includes(clearDrawerLocation),
+    'alwaysCleanups() includes clearDrawerLocation',
+  )
+  const locIdx = FEATURES.findIndex((f) => f.id === 'drawerLocation')
+  const pinIdx = FEATURES.findIndex((f) => f.id === 'moveControlsToOuterEdge')
+  assert(locIdx >= 0, 'FEATURES contains drawerLocationFeature')
+  assert(locIdx < pinIdx, 'drawerLocationFeature registers immediately before tabPositionFeature')
+  const locFeature = FEATURES[locIdx]
+  assert(locFeature.unconditional === true, 'drawerLocationFeature is unconditional')
+  assert(
+    typeof locFeature.init === 'function'
+    && typeof locFeature.mount === 'function'
+    && typeof locFeature.apply === 'function',
+    'drawerLocationFeature has init/mount/apply',
+  )
+}
+
 // ── 3: the post-teardown mirror reconcile is gated on mirror liveness ──
 // tearDownSecondarySidebar's trailing reconcile exists to refresh the mirror
 // strip when the second drawer is toggled OFF mid-session. On extension
@@ -138,6 +160,32 @@ const stubWindow: any = {
   const guarded =
     /const mirror = await import\('\.\/main-mirror-drawer'\)[\s\S]*?if \(mirror\.isMainMirrorActive\(\)\) m\.reconcileMainTabListPin\(\)/.test(src)
   assert(guarded, 'tearDownSecondarySidebar only reconciles the mirror while it is active')
+}
+
+// ── 4: S8 stand-down + no-force apply on the taskbar/tabPosition features ──
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/features/registry.ts'), 'utf8')
+  const standDowns = (src.match(/prev\.drawerLocation !== next\.drawerLocation/g) || []).length
+  assert(standDowns >= 2, 'location-changed stand-down guards in tabPosition + taskbar features')
+
+  const taskbarBlock = src.slice(
+    src.indexOf('const taskbarModeFeature'),
+    src.indexOf('/** Hide drawer open/close buttons'),
+  )
+  assert(
+    taskbarBlock.includes('applyMainTabListPin(chrome)'),
+    'taskbar apply: main pin without { force: true }',
+  )
+  assert(
+    taskbarBlock.includes('applyTabListPin(chrome)'),
+    'taskbar apply: secondary pin without { force: true }',
+  )
+  assert(
+    !/applyMainTabListPin\(chrome, \{ force: true \}\)/.test(taskbarBlock),
+    'taskbar apply: no force remount on auto-enable',
+  )
 }
 
 console.log(`PASS: ${passed}`)

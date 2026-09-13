@@ -18,6 +18,8 @@ Two separate systems own different surfaces. Do not merge them.
 
 Mobile (≤600px): both clear / no-op.
 
+**S8 Drawer location (Top/Bottom):** L/R strip reserves are dropped (`isHorizontalStrip()` gates the `mainStrip`/`secStrip` terms) and the Landing gutter vars are cleared — the strip reserve is owned by `HORIZONTAL_STRIP_CSS` as a `margin-top`/`margin-bottom` on the chat column and `[data-component="LandingPage"]`, so it also applies on mobile where `updateChatReflow` early-returns. Free-floating drag/drop geometry for the strip is handled by `tabs/tab-list-dnd.ts` (see [tabs.md](tabs.md)).
+
 ---
 
 ## Strip gutters (`src/sidebar/strip-gutter.ts`)

@@ -82,6 +82,14 @@ The loop wraps placement in `setSuppressAutoActivation`, and `finalizeAssignToSe
 - A dev-server restart prints `[WS] Closed: 1001` + reconnect at the top of every fresh console — not a Canvas issue.
 - Backend API gaps (404s on `preset-bindings`, `personaFolders`, etc.) are host-app issues, unrelated to Canvas.
 
-## 11. Debugging workflow that found all of the above
+## 11. S8 Drawer-location traps (single-writer geometry)
+
+- **One geometry author.** `sidebar/tab-position.ts` owns all strip host/list geometry, zone split, spacers and chrome. `drawer-location.ts` must stay presentation/orchestration only — a second writer is the S1 #7/#8 bug class. Host state lives in `data-strip-axis` / `data-strip-edge` plus `sidebar-ux-side-*`; `applyPinHostChrome`'s `className` assignment is wholesale, so any token not written there is wiped on the next reconcile.
+- **Never `fixed` + `width:100%` on a half-zone list.** A `position: fixed` element's containing block is the viewport; the horizontal list is `position:absolute; inset:0` inside the fixed zone host. The renderer writes inline `flex-direction: column`, `overflow-x: hidden`, `width: 100%` — only `!important` CSS (`HORIZONTAL_STRIP_CSS`) beats it, and `clearPinnedTabListChrome` must clear the full set in both axes while the Sides branch re-asserts column/56px/borders.
+- **No force remount on auto-enable.** Selecting Top/Bottom forces `taskbarMode` + `moveControlsToOuterEdge`; on that diff the tabPosition/taskbar features stand down (`prev.drawerLocation !== next.drawerLocation`) and `drawerLocationFeature` reconciles, so the shells are never force-remounted. `taskbarModeFeature.apply`'s pin calls deliberately have no `{force:true}`; the late `scheduleReconcile` rAF re-checks the effective pin gate at execution.
+- **Spacers sync unconditionally.** The secondary and main 56px pin spacers are created inside the reparent branch, but `syncSpacerForLocation` must run on every force re-pin (including when the list is already on the host) — `0×0` horizontal, `56px` sides. Skipping the already-pinned case leaves a 56px column inside the horizontal layout.
+- **Presence is not location.** Zone presence (`secondSidebarEnabled && shell live && tabs present`) must re-split the host even when the location is unchanged; the reconcile skip-cache includes presence + shell liveness. During a mode-switch window the main host re-chromes full width and the next presence pass re-splits.
+
+## 12. Debugging workflow that found all of the above
 
 Instrument the *decision points* (open gates, heal, adoption, restore clicks) with `dlog`, deploy, and have the user paste the console slice around one repro. Absence of a log line is itself evidence: the mirror key changed with **no** `[main-mirror] click` and **no** `healed/seeded` log → the setter is a direct `commitState` path (`activateMainMirrorFromRestore` / `adoptMainMirrorNeighbor`). `closeSecondarySidebar` logs a 3-frame caller stack to answer "who closed it".

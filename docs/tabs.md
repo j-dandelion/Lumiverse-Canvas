@@ -174,3 +174,28 @@ automatically on toggle hide, swap side, and drag-end (not mid-drag).
 | Mid-drag | No draft commit; the previous committed state is unchanged. If drag-tab and drop-tab change order, only the final drop commits. |
 | Close modal (X / Escape) | No special behavior — regular draft-based close dialog applies. |
 | Enable/disable second drawer | No special behavior — full mode-switch dialog. |
+
+## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
+
+Live strip DnD reorders within a list and moves tabs across drawers; the commit
+path (`performDrop` → owned model) is axis-agnostic — all work is geometry.
+
+- **Supported surface:** fine-pointer desktop only. `isLiveTabListDndAllowed()` =
+  `!isMobileViewport() && !isPointerResizeActive()` — ≤600px **and** coarse-pointer
+  (touch/pen) devices are no-ops, matching the resize-handle policy. Configure
+  Tabs modal DnD remains available on those devices.
+- **Axis resolution (S8):** `containerAxis(el)` is token-first — `data-strip-axis`
+  on the element or nearest ancestor (written by the strip geometry writer) — then
+  a horizontal class token, then a guarded `getComputedStyle` row check, default
+  `'y'`. Resolved once when the drag geometry cache is built.
+- **Horizontal (Top/Bottom):** insertion uses X midpoints/center; overlay hit pads
+  swap by axis; adjacent zones select by the zone-edge seam (the Settings dock
+  makes nearest-center wrong; exact tie → secondary); FLIP inverts with
+  `translate(dx, dy)`; the drop-slot spacer holds width + full height; edge
+  auto-scroll self-schedules from the drag rAF (a stationary pointer keeps
+  scrolling) and stops via the phase guard on drop/cancel.
+- **Invalidation:** `invalidateDndGeometry()` (cache = null) is called from
+  `reconcileDrawerLocation()` mid-drag and from viewport-cross handlers.
+- **Exports kept for tests:** `containerAxis`, `axisMidpoint`, `axisCoordinate`,
+  `seamChoice`, `flipDelta`, `settleDestFromButtonRects(..., axis?)` — the
+  existing 3-arg call sites and signatures stay byte-identical.

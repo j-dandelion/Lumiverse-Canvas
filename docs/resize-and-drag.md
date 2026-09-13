@@ -60,6 +60,8 @@ Vertical drag repositioning for drawer tabs (main + secondary).
 
 **Bidirectional mirror**: When `mirrorCompactPosition` is on, dragging the secondary also moves the main via `onLiveUpdate`. The style observer on the main fires and writes back to the secondary (idempotent).
 
+**S8 Drawer location:** while Top/Bottom is active the edge handles are hidden and there is no panel row to position — `drawerTabDragFeature.apply` / `mount` skip the override writes, and `drawer-sync` skips the vertical-position mirror and clears any stale `marginTop` on both edge handles (cache reset so returning to Sides re-applies). Resize handles are unaffected (panels keep their side and width in every mode).
+
 ### Utility Functions
 
 - `pxToClampedVh(deltaPx, viewportHeight, currentVh, min, max)` — convert pixel delta to clamped vh

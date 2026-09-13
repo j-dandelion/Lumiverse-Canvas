@@ -39,6 +39,19 @@ Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... 
 
 **Why not reparent the host sidebar mount:** the main sidebar is host-owned React. Moving `[data-spindle-mount="sidebar"]` would fight reconciliation. Instead Canvas hides host chrome and portals only the panel content node.
 
+### Drawer location (S8: Sides | Top | Bottom)
+
+`drawerLocation` moves **only the tab lists**. Panels keep their left/right side and slide in horizontally; width, resize, animation and persistence are identical in every mode.
+
+- **One always-visible horizontal strip** pinned to the selected viewport edge, full width, safe-area aware. Two zones → each list occupies its half (50%) anchored to its own drawer's edge and growing inward; solo/empty secondary → the main zone takes 100%. Side swaps mirror the zones automatically.
+- **Single geometry writer:** `sidebar/tab-position.ts` owns every host/list geometry write (`applyPinHostChrome` writes `data-strip-axis` / `data-strip-edge` + zone anchors in the same wholesale className assignment; `applyPinnedTabListChrome` / `clearPinnedTabListChrome` own the list chrome and full reversal). `sidebar/drawer-location.ts` is presentation/orchestration only: html classes + `--sidebar-ux-strip-h`, shell wrapper edge offsets, handle visibility, consumer knobs, presence subscription, `reconcileDrawerLocation()` (sync + coalesced + generation-guarded), `clearDrawerLocation()`.
+- **CSS:** `HORIZONTAL_STRIP_CSS` (in `sidebar/styles.ts`) owns orientation/size/borders/overflow with `!important` (beats the renderer's inline `column` / `overflowX:hidden` / `width:100%`), zone anchoring (`justify-content` on the main section, `margin-left:auto` first-child so a right-anchored scroller stays reachable), Settings dock at the cluster's inner end, edge-aware active indicator, and the chat/Landing top/bottom reserve. Strip math: 4px + 48px + 4px = 56px.
+- **Presence:** zone presence = `secondSidebarEnabled && isSecondaryShellLive() && hasSecondaryAssignedTabs()` (+ list node). The main host re-chromes unconditionally; when the zone collapses it goes back to full width. Reconciles are triggered by the `onModelChanged` presence subscription plus explicit calls at shell mount/teardown, mode switches, viewport crosses and side swaps.
+- **Taskbar auto-enable:** selecting Top/Bottom forces `taskbarMode` + `moveControlsToOuterEdge` (normalize invariant); the panel locks those two rows while horizontal and renders the hide-handles row inert-but-checked. Edge handles are hidden on both platforms (the strip is the reopen affordance).
+- **Mobile:** `isMobileViewport() && !isHorizontalStrip()` preserves Sides-mobile byte-for-byte; horizontal mobile pins the strip like desktop (full-bleed panels unchanged).
+- **DnD:** horizontal reorder/move including cross-seam drawer moves and edge auto-scroll; fine-pointer desktop only (≤600px and coarse-pointer devices are no-ops, same policy as resize handles).
+- **Boundaries:** never write strip geometry outside `tab-position.ts`; the horizontal list is `position:absolute` inside the fixed zone host — never `fixed` + `width:100%`; `stripPinnedOn` (dock offset) and the reflow L/R strip reserves gate on `!isHorizontalStrip()`.
+
 ## DOM Construction (`secondary.tsx`)
 
 `createSecondarySidebar(options?)` builds the entire DOM tree programmatically:

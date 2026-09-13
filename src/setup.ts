@@ -183,6 +183,8 @@ export function setup(ctx: SpindleFrontendContext) {
     document.getElementById('canvas-ux-secondary-mobile')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-desktop')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-mobile')?.remove()
+    // S8: horizontal strip chrome (injected by drawer-location init).
+    document.getElementById('sidebar-ux-location-horizontal')?.remove()
   })
 
   // Cancel any pending debounced layout save on teardown so the timer

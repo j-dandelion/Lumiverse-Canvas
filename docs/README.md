@@ -27,6 +27,7 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 ### Key Types
 - `LayoutState` — persisted drawer state (`types.ts`)
 - `CanvasSettings` — all user-togglable settings (`types.ts`)
+- `DrawerLocation` — `'sides' | 'top' | 'bottom'`; Top/Bottom pins one horizontal tab strip per zone to the viewport edge (`types.ts`)
 - `FullCanvasSettings` — `Required<CanvasSettings>` with all fields non-optional (`settings/state.ts`)
 - `CanvasFeature` — feature lifecycle hooks (`features/registry.ts`)
 - `DrawerTab` — store's tab entry with `id`, `title`, `root`, `iconSvg` (`store/index.ts`)
@@ -41,6 +42,8 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `src/features/registry.ts` — feature registry (add new features here)
 - `src/sidebar/secondary.tsx` — secondary sidebar DOM construction + `reassignSecondaryTabsFromModel`
 - `src/sidebar/secondary-drawer.ts` — secondary drawer state machine
+- `src/sidebar/drawer-location.ts` — Drawer location presentation/orchestration: html classes + `--sidebar-ux-strip-h`, shell edge offsets, handle visibility, consumer knobs, presence subscription, `reconcileDrawerLocation()` fan-out, `clearDrawerLocation()` (never writes strip geometry)
+- `src/sidebar/tab-position.ts` — the single strip-geometry writer: pin host chrome (`data-strip-axis`/`data-strip-edge`, zone split), list chrome + clear, spacer sync
 - `src/sidebar/main-tab-pin.ts` — main-mirror pin: exclusive active key, `userPicked` guard, neighbor handoff
 - `src/tabs/assignment.ts` — owned-model facade (TabKey-keyed)
 - `src/slash/runtime.ts` — slash command runtime wiring

@@ -70,6 +70,8 @@ On mobile, the CSS variable `--sidebar-ux-secondary-w` is overwritten to match t
 
 Additionally, a `resize` listener keeps the CSS variable and wrapper transform in sync on mobile when the user drags the viewport (matchMedia only fires once per boundary crossing).
 
+**S8 Drawer location:** both cross directions also call `reconcileDrawerLocation()` and `invalidateDndGeometry()`. A horizontal strip (Top/Bottom) **pins on mobile too** — the central gate is `isMobileViewport() && !isHorizontalStrip()`, so Sides-mobile keeps the S6 no-pin behavior byte-for-byte while Top/Bottom behaves like desktop (strip visible, panels full-bleed, edge handles hidden).
+
 ## Drawer Width on Mobile
 
 - `_updateDrawerWidth()`: On mobile, forces `drawer.style.width = 'calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)'`. On desktop, restores `var(--sidebar-ux-secondary-w, 420px)`.

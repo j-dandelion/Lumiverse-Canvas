@@ -31,6 +31,7 @@ Canvas persists the full UI state (drawer open/close, widths, tab assignments, s
     "persistDrawerOpenState": true,
     "persistDrawerWidth": true,
     "slashCommandsEnabled": true,
+    "drawerLocation": "sides",
     "debugMode": false,
     ...
   }

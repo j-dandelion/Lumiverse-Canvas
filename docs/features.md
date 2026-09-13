@@ -35,6 +35,7 @@ interface CanvasFeature {
 | `persistDrawerOpenStateFeature` | `persistDrawerOpenState` | Cancels in-flight save when open facet turns off |
 | `persistDrawerWidthFeature` | `persistDrawerWidth` | Cancels in-flight save when width facet turns off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
+| `drawerLocationFeature` | `drawerLocation` | Sides (default) / Top / Bottom. Presentation + presence subscription + the single reconcile fan-out for the horizontal strip (init runs before any pin chrome); unconditional |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `taskbarModeFeature` | `taskbarMode` | Taskbar mode: pin tab strips when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `taskbarMode`) |
@@ -55,6 +56,8 @@ These fire on extension disable regardless of toggle state:
 - `unmountToastSurface` — removes the slash toast Preact root
 - `cancelApplyLayoutInterval` — disconnects the layout restore observer
 - `slashAlwaysCleanup` — detaches the slash runtime if active
+- `clearTabListPosition` — reverses the host-drawer inline flex/borders (outer-edge writes)
+- `clearDrawerLocation` — removes the location html classes + `--sidebar-ux-strip-h` and restores the shell wrapper safe-area offsets (idempotent; also in the feature teardown)
 
 ## Settings System
 
@@ -69,10 +72,12 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 - `persistSettings()` — debounced (100ms) SAVE_LAYOUT IPC
 - `cancelSettingsSave()` — cancel pending debounce
 
-**Dependency chain (normalize):**
-- `hideDrawerOpenCloseButtons` → `taskbarMode` → `moveControlsToOuterEdge`
-- Normalize cascades: outer-edge off → taskbar off → hide off. `dragAndDropDrawerTabs` is NOT cascaded (S7 removed the cascade) — the toggle is its only gate.
-- Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode; `isDragAndDropDrawerTabsEnabled(s)` = the toggle alone (S7).
+**Dependency chain (normalize, order matters):**
+1. `drawerLocation` enum coercion (unknown → `sides`)
+2. Location invariant: `top`/`bottom` force `moveControlsToOuterEdge` + `taskbarMode` ON (never forces them off on Sides)
+3. `hideDrawerOpenCloseButtons` requires `taskbarMode` (must run after #2 so a location flip does not clear `hide`)
+- `dragAndDropDrawerTabs` is NOT cascaded (S7 removed the cascade) — the toggle is its only gate.
+- Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode; `isDragAndDropDrawerTabsEnabled(s)` = the toggle alone (S7); `isHorizontalStrip(s)` / `getDrawerLocation(s)` / `getStripEdge(s)` for Drawer location.
 
 ### Settings Panel (`settings/panel.ts`)
 
@@ -81,7 +86,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 **Sections:**
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
-3. **Drawers** — moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
 4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
 5. **Debug** — debugMode
 

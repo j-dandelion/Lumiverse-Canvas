@@ -45,6 +45,12 @@ import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
 import { applyTabListPosition, applyTabListPin, clearTabListPosition, reconcileTabListPin } from '../sidebar/tab-position'
 import { applyMainTabListPin, reconcileMainTabListPin, teardownMainPin } from '../sidebar/main-tab-pin'
+import {
+  clearDrawerLocation,
+  initDrawerLocation,
+  mountDrawerLocation,
+  reconcileDrawerLocation,
+} from '../sidebar/drawer-location'
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
@@ -381,6 +387,38 @@ const slashFeature: CanvasFeature = _slashImpl.feature
  *  cleanup chain via alwaysCleanups(). */
 export function slashAlwaysCleanup(): void { _slashImpl.alwaysCleanup() }
 
+/**
+ * S8 Drawer location (Sides | Top | Bottom).
+ *
+ * Registered immediately BEFORE tabPositionFeature so the html location
+ * classes + --sidebar-ux-strip-h exist before any pin chrome in the same
+ * settings diff. `unconditional`: the classes/var must be right before any
+ * mount, even at the default 'sides'.
+ *
+ * On a location-changed diff the legacy geometry features STAND DOWN (they
+ * compare prev/next.drawerLocation) so reconcileDrawerLocation is the only
+ * geometry pass — this is what keeps the taskbar auto-enable from
+ * force-remounting the shells.
+ */
+const drawerLocationFeature: CanvasFeature = {
+  id: 'drawerLocation',
+  unconditional: true,
+  init() {
+    // Classes + strip-height var + HORIZONTAL_STRIP_CSS before any mount.
+    initDrawerLocation()
+  },
+  mount() {
+    // Presentation + presence subscription; the returned teardown
+    // unsubscribes (clearDrawerLocation also handles it idempotently).
+    return mountDrawerLocation()
+  },
+  apply(prev, next) {
+    if (prev.drawerLocation === next.drawerLocation) return
+    // Authoritative pass for the diff (sync + coalesced).
+    reconcileDrawerLocation({ force: true })
+  },
+}
+
 /** Tab list position: moves the column of tab buttons to the screen-edge
  *  side of the secondary sidebar when enabled. No mount needed — the
  *  effect is applied by createSecondarySidebar / mountSecondarySidebar /
@@ -395,6 +433,9 @@ const tabPositionFeature: CanvasFeature = {
   },
   apply(prev, next) {
     if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge) return
+    // S8: a location flip auto-enables outer-edge in the same diff — stand
+    // down; drawerLocationFeature.reconcileDrawerLocation owns that pass.
+    if (prev.drawerLocation !== next.drawerLocation) return
     applyTabListPosition(next.moveControlsToOuterEdge)
     // S1 gate inversion: outer-edge is an input to the taskbar-chrome gate
     // (isTaskbarModeEnabled = taskbarMode && outer-edge). The taskbarMode
@@ -445,14 +486,19 @@ const taskbarModeFeature: CanvasFeature = {
       updateChatReflow()
     }
   },
-  apply(_prev, next) {
+  apply(prev, next) {
+    // S8: a location flip auto-enables taskbar chrome in the same diff —
+    // stand down (no force remount); drawerLocationFeature reconciles.
+    if (prev.drawerLocation !== next.drawerLocation) return
     const chrome = isTaskbarModeEnabled(next)
     // Main mirror PIN is taskbar chrome (tabs pinned vs riding with panel).
     // Ownership (drawer shell + host hide) is unconditional — applyMainTabListPin
     // keeps the shell when chrome is off and only tears down the pin.
-    applyMainTabListPin(chrome, { force: true })
+    // S8: no {force:true} on the apply path — a chrome toggle must not
+    // remount the shell (auto-enable already avoids it via stand-down).
+    applyMainTabListPin(chrome)
     // Secondary edge-strip pin + gutters are also taskbar chrome.
-    applyTabListPin(chrome, { force: true })
+    applyTabListPin(chrome)
     updateDrawerTabVisibility()
     if (chrome) {
       updateStripGutters()
@@ -517,6 +563,10 @@ export const FEATURES: readonly CanvasFeature[] = [
   persistDrawerOpenStateFeature,
   persistDrawerWidthFeature,
   slashFeature,
+  // S8: location presentation must run before any pin chrome in the same diff
+  // (html classes + strip var + HORIZONTAL_STRIP_CSS), and it reconciles the
+  // whole strip geometry on a location change.
+  drawerLocationFeature,
   tabPositionFeature,
   taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,
@@ -535,5 +585,9 @@ export function alwaysCleanups(): Teardown[] {
     // without this reset a disable while outer-edge was on left the vanilla
     // tab strip flipped to the outer edge (2026-09-12 teardown report).
     clearTabListPosition,
+    // S8: location classes/var + shell edge offsets must reset even when the
+    // drawer-location feature never mounted. Idempotent (also in the feature
+    // teardown) — runs before feature teardowns in the FIFO chain.
+    clearDrawerLocation,
   ]
 }

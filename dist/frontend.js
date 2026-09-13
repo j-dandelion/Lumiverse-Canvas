@@ -18633,7 +18633,8 @@ function alwaysCleanups() {
   return [
     unmountToastSurface,
     slashAlwaysCleanup,
-    clearTabListPosition
+    clearTabListPosition,
+    clearDrawerLocation
   ];
 }
 var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISABLE_MOBILE_ID = "sidebar-ux-shadow-disable-mobile", shadowDisableCss = (media, width) => `
@@ -18642,7 +18643,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -18658,6 +18659,7 @@ var init_registry = __esm(() => {
   init_toast();
   init_tab_position();
   init_main_tab_pin();
+  init_drawer_location();
   init_strip_gutter();
   init_buttons();
   init_main_mirror_drawer();
@@ -18801,6 +18803,21 @@ var init_registry = __esm(() => {
   persistDrawerWidthFeature = makeLayoutFacetFeature("persistDrawerWidth");
   _slashImpl = makeSlashFeature(attachSlashRuntime);
   slashFeature = _slashImpl.feature;
+  drawerLocationFeature = {
+    id: "drawerLocation",
+    unconditional: true,
+    init() {
+      initDrawerLocation();
+    },
+    mount() {
+      return mountDrawerLocation();
+    },
+    apply(prev, next) {
+      if (prev.drawerLocation === next.drawerLocation)
+        return;
+      reconcileDrawerLocation({ force: true });
+    }
+  };
   tabPositionFeature = {
     id: "moveControlsToOuterEdge",
     init() {
@@ -18808,6 +18825,8 @@ var init_registry = __esm(() => {
     },
     apply(prev, next) {
       if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge)
+        return;
+      if (prev.drawerLocation !== next.drawerLocation)
         return;
       applyTabListPosition(next.moveControlsToOuterEdge);
       reconcileTabListPin();
@@ -18832,10 +18851,12 @@ var init_registry = __esm(() => {
         updateChatReflow();
       };
     },
-    apply(_prev, next) {
+    apply(prev, next) {
+      if (prev.drawerLocation !== next.drawerLocation)
+        return;
       const chrome = isTaskbarModeEnabled(next);
-      applyMainTabListPin(chrome, { force: true });
-      applyTabListPin(chrome, { force: true });
+      applyMainTabListPin(chrome);
+      applyTabListPin(chrome);
       updateDrawerTabVisibility();
       if (chrome) {
         updateStripGutters();
@@ -18888,6 +18909,7 @@ var init_registry = __esm(() => {
     persistDrawerOpenStateFeature,
     persistDrawerWidthFeature,
     slashFeature,
+    drawerLocationFeature,
     tabPositionFeature,
     taskbarModeFeature,
     hideDrawerOpenCloseButtonsFeature,
@@ -20738,6 +20760,7 @@ function setup(ctx) {
     document.getElementById("canvas-ux-secondary-mobile")?.remove();
     document.getElementById("sidebar-ux-shadow-disable-desktop")?.remove();
     document.getElementById("sidebar-ux-shadow-disable-mobile")?.remove();
+    document.getElementById("sidebar-ux-location-horizontal")?.remove();
   });
   registerCleanup(cancelLayoutSave);
   mountSettingsPanel(ctx);
