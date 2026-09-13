@@ -134,8 +134,13 @@ const body = new FakeEl()
   querySelectorAll: () => [],
 }
 
-const { ensureMainPinHost, destroyMainPinHost, applyPinnedTabListChrome, clearPinnedTabListChrome } =
-  await import('../tab-position')
+const {
+  ensureMainPinHost,
+  destroyMainPinHost,
+  applyPinnedTabListChrome,
+  clearPinnedTabListChrome,
+  applyTabListPin,
+} = await import('../tab-position')
 
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
@@ -232,6 +237,7 @@ describe('list chrome writer (WS3)', () => {
   beforeEach(() => {
     loc = 'sides'
     presence = false
+    mobile = false
     dockCalls = 0
   })
 
@@ -264,6 +270,24 @@ describe('list chrome writer (WS3)', () => {
     expect(list.style.borderRight).toBe('1px solid var(--lumiverse-primary-020)')
     expect(list.style.borderLeft).toBe('none')
     expect(dockCalls).toBe(1)
+  })
+
+  test('horizontal mobile pins; Sides-mobile force-unpins (S6 preserved)', () => {
+    // Horizontal mobile: the gate no longer force-unpins.
+    mobile = true
+    loc = 'top'
+    presence = true
+    const list = freshList()
+    secondaryList = list
+    applyTabListPin(true, { force: true })
+    expect(list.classList.contains('sidebar-ux-tab-list--pinned')).toBe(true)
+    expect(list.style.position).toBe('absolute')
+
+    // Back to Sides on mobile: force-unpin clears the pin state.
+    loc = 'sides'
+    applyTabListPin(true, { force: true })
+    expect(list.classList.contains('sidebar-ux-tab-list--pinned')).toBe(false)
+    expect(list.style.position).toBe('')
   })
 
   test('clear: full property reset + construction restore', () => {

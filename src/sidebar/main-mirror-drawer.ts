@@ -22,6 +22,7 @@ import {
   getSettings,
   getStripEdge,
   isHideDrawerOpenCloseButtonsEnabled,
+  isHorizontalStrip,
   isTaskbarModeEnabled,
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
@@ -384,8 +385,13 @@ export function __resetMainMirrorForTest(): void {
  *  the toggle while the OTHER drawer is open. Desktop behavior unchanged. */
 export function updateMainMirrorDrawerTabVisibility(): void {
   if (!_shell || !_active) return
+  // S8: horizontal strips hide the edge handle on both platforms (the strip
+  // is the reopen affordance); otherwise S6 mobile keeps it visible.
+  const horizontal = isHorizontalStrip()
   _shell.drawerTab.style.display =
-    !isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled() ? 'none' : 'flex'
+    horizontal || (!isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled())
+      ? 'none'
+      : 'flex'
 }
 
 /** S6: mobile horizontal-tab-list + full-bleed CSS for the main shell
@@ -613,7 +619,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
 
   // S6: pin chrome is desktop taskbar visual only — on mobile the list
   // rides inside the full-bleed drawer (horizontal @media CSS).
-  if (!mobile) pinShellTabList(side)
+  // S8: Top/Bottom pins on mobile too (the strip is the tab surface).
+  if (!mobile || isHorizontalStrip()) pinShellTabList(side)
 
   applyTabListPosition(getSettings().moveControlsToOuterEdge, {
     mainDrawer: _shell.drawer,

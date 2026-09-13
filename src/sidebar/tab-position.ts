@@ -483,7 +483,9 @@ export function isTabListPinned(tabList?: Element | null): boolean {
  * On mobile, always force-unpins (clears styles + restores parent).
  */
 export function reconcileTabListPin(): void {
-  if (isMobileViewport()) {
+  // S8: mobile keeps the Sides force-unpin (byte-for-byte S6 behavior); a
+  // horizontal strip PINS on mobile too (the strip is the tab surface).
+  if (isMobileViewport() && !isHorizontalStrip()) {
     applyTabListPin(false, { force: true })
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
@@ -518,8 +520,9 @@ export function applyTabListPin(
   enabled: boolean,
   opts?: { force?: boolean },
 ): void {
-  if (isMobileViewport()) {
-    // Never pin on mobile; still clear pin if present (viewport cross-down).
+  // S8: on mobile, Sides never pins (still clears pin state on cross-down);
+  // horizontal mobile pins like desktop.
+  if (isMobileViewport() && !isHorizontalStrip()) {
     if (enabled && !opts?.force) return
     const el = getSecondaryTabList() ?? getPinnedTabList()
     if (el?.classList?.contains(TAB_LIST_PINNED_CLASS) || _pinHost || _pinSpacer) {

@@ -27,7 +27,10 @@ import {
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
-import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
+import {
+  isHideDrawerOpenCloseButtonsEnabled,
+  isHorizontalStrip,
+} from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
@@ -714,6 +717,13 @@ export function updateDrawerTabVisibility(): void {
   if (!drawerTab) return
 
   const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === 'secondary')
+
+  // S8: Top/Bottom hides the edge handle on both platforms — the strip is
+  // the reopen affordance (and the handle would overlap it).
+  if (isHorizontalStrip()) {
+    drawerTab.style.display = 'none'
+    return
+  }
 
   // Mobile: never apply hide setting; clear any stale desktop inline hide.
   if (_isMobileViewport()) {

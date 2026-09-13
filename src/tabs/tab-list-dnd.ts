@@ -76,6 +76,7 @@ import {
   buttonTabId,
 } from './buttons'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { isPointerResizeActive } from '../resize/handles'
 import { dlog, dwarn } from '../debug/log'
 import {
   readLivePrimaryTabIds,
@@ -83,11 +84,15 @@ import {
 } from './live-tab-order'
 
 /**
- * Live drawer tab-list DnD is desktop-only.
+ * Live drawer tab-list DnD is fine-pointer desktop only.
  * Configure Tabs modal drag is separate and remains available on mobile.
+ *
+ * S8: ≤600px AND coarse-pointer devices (tablets/touch) are no-ops — the
+ * same policy as resize handles (isPointerResizeActive), and consistent
+ * with the "mobile DnD off" decision. Fine-pointer desktop is supported.
  */
 export function isLiveTabListDndAllowed(): boolean {
-  return !isMobileViewport()
+  return !isMobileViewport() && !isPointerResizeActive()
 }
 
 /**

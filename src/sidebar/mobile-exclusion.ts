@@ -320,6 +320,9 @@ export function startMobileExclusion(): () => void {
       void import('./tab-position').then((m) => m.reconcileTabListPin())
       void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
     }
+    // S8: re-run the location presentation after a crossing (horizontal
+    // pins on mobile too; Sides-mobile restores the S6 no-pin layout).
+    void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
     // Re-evaluate drawer-tab visibility on viewport cross so desktop↔mobile
     // transitions clear any stale inline display:none from the hide setting.
     void import('../tabs/buttons').then((m) => m.updateDrawerTabVisibility())

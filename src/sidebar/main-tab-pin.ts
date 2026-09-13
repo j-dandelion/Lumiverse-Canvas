@@ -15,7 +15,7 @@
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
-import { getSettings, isTaskbarModeEnabled } from '../settings/state'
+import { getSettings, isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { isMobileViewport } from './mobile-exclusion'
 import {
   applyMainMirrorDrawer,
@@ -88,7 +88,9 @@ export function applyMainTabListPin(
   enabled: boolean,
   opts?: { force?: boolean },
 ): void {
-  if (isMobileViewport()) {
+  // S8: Sides-mobile keeps the S6 semantics (mount + unpin in place); a
+  // horizontal strip pins on mobile too.
+  if (isMobileViewport() && !isHorizontalStrip()) {
     // Mount/keep the shell; if a desktop phase left the pin on (cross-down),
     // unpin in place so the list rides in the full-bleed drawer.
     applyMainMirrorDrawer(true, { force: false })
@@ -158,7 +160,8 @@ function unpinMainMirrorForChromeOff(): void {
  * the drawer.
  */
 export function reconcileMainTabListPin(): void {
-  if (isMobileViewport()) {
+  // S8: Sides-mobile keeps the S6 unpin path; horizontal mobile pins.
+  if (isMobileViewport() && !isHorizontalStrip()) {
     applyMainTabListPin(false)
     void import('./strip-gutter').then((m) => m.updateStripGutters())
     return
@@ -224,17 +227,22 @@ export function teardownMainPin(): void {
   destroyMainPinHost()
 }
 
+/** S8 effective main-pin gate: taskbar chrome, except Sides-mobile (S6). */
+function effectivePinGate(): boolean {
+  return isTaskbarModeEnabled() && (!isMobileViewport() || isHorizontalStrip())
+}
+
 /** rAF-coalesced reconcile: pin chrome + renderer (twin chrome deltas). */
 function scheduleReconcile(): void {
   if (_state.reconcileRaf !== null) return
   // S8: snapshot the effective pin gate at schedule time. The rAF runs late
   // (after React commits); a location/taskbar/viewport flip in the same frame
   // must not apply stale chrome — re-run the full gate when it moved.
-  const wantPinAtSchedule = isTaskbarModeEnabled() && !isMobileViewport()
+  const wantPinAtSchedule = effectivePinGate()
   commitState(() => ({
     reconcileRaf: requestAnimationFrame(() => {
       commitState(() => ({ reconcileRaf: null }))
-      const wantPinNow = isTaskbarModeEnabled() && !isMobileViewport()
+      const wantPinNow = effectivePinGate()
       if (wantPinNow !== wantPinAtSchedule) {
         reconcileMainTabListPin()
         return

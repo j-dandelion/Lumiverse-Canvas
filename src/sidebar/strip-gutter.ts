@@ -9,7 +9,7 @@
 
 import { injectStyles } from '../debug/styles'
 import { getMainDrawerSide } from '../store'
-import { isTaskbarModeEnabled } from '../settings/state'
+import { isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { TAB_LIST_WIDTH_PX } from './styles'
@@ -133,6 +133,12 @@ export function clearStripGutters(): void {
  * presence. Does not read open-drawer widths.
  */
 export function updateStripGutters(): void {
+  // S8: Top/Bottom has no left/right strip gutter on any platform — the
+  // Landing/chat top-bottom reserve is CSS-owned (HORIZONTAL_STRIP_CSS).
+  if (isHorizontalStrip()) {
+    clearStripGutterVars()
+    return
+  }
   if (isMobileViewport()) {
     clearStripGutterVars()
     return
