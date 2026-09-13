@@ -263,6 +263,17 @@ _pinHosts.length = 0
 clearStripGutters()
 assertEqual(d11.style.left, '', 'T11b: clearStripGutters releases the dock offset')
 
+// T12: S8 horizontal strip host never shifts a dock — it occupies the
+// top/bottom edge, not the left/right edge.
+resetAll()
+const d12 = makeDock('left')
+const h12 = makePinHost('left')
+h12.setAttribute('data-strip-axis', 'horizontal')
+h12.setAttribute('data-strip-edge', 'top')
+setDockInset('left', 420)
+updateDockOffsets()
+assertEqual(d12.style.left, '', 'T12: horizontal strip host does not offset the dock')
+
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)
 process.exit(failed > 0 ? 1 : 0)

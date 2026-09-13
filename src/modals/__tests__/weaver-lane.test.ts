@@ -213,6 +213,7 @@ mock.module('../../sidebar/styles', () => ({
 
 mock.module('../../settings/state', () => ({
   isTaskbarModeEnabled: () => _taskbarMode,
+  isHorizontalStrip: () => false,
 }))
 
 mock.module('../../sidebar/strip-gutter', () => ({
@@ -453,6 +454,23 @@ assertEqual(_closeSecondaryCalls, 0, 'host path: no secondary close')
 assertEqual(_closeMainMirrorCalls, 0, 'host path: no mirror close')
 assertEqual(_hostCloseDrawerCalls, 1, 'second off + no taskbar: host closeDrawer once')
 t9()
+
+// ── S8: horizontal strip host → top/bottom insets, no L/R ──
+reset()
+_taskbarMode = true
+_stripGutters = { left: 0, right: 0 }
+const horizHost = makePinHost('left', 56)
+horizHost.setAttribute('data-strip-axis', 'horizontal')
+horizHost.setAttribute('data-strip-edge', 'top')
+horizHost.offsetHeight = 56
+horizHost.getBoundingClientRect = () => ({
+  width: 1280, height: 56, top: 0, left: 0, right: 1280, bottom: 56,
+})
+const hi = computeWeaverStripInsets()
+assertEqual(hi.left, 0, 'horizontal strip: left inset 0')
+assertEqual(hi.right, 0, 'horizontal strip: right inset 0')
+assertEqual(hi.top, 56, 'horizontal strip: top inset 56')
+assertEqual(hi.bottom, 0, 'horizontal strip: bottom inset 0')
 
 // ── Summary ──
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

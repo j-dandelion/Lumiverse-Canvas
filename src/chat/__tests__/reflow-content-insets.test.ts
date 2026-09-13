@@ -60,7 +60,7 @@ class StubElement {
 // ── Mock all reflow module dependencies ──
 
 // State shared between mocks
-const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0, mirrorActive: false, canvasMainOpen: false, mainPinActive: false }
+const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0, mirrorActive: false, canvasMainOpen: false, mainPinActive: false, horizontal: false }
 
 mock.module('../../sidebar/mobile-exclusion', () => ({
   isMobileViewport: () => state.mobile,
@@ -87,6 +87,7 @@ mock.module('../../sidebar/main-tab-pin', () => ({
 
 mock.module('../../settings/state', () => ({
   isTaskbarModeEnabled: () => state.taskbarMode,
+  isHorizontalStrip: () => state.horizontal,
   getSettings: () => ({ taskbarMode: state.taskbarMode }),
 }))
 
@@ -145,6 +146,7 @@ function reset() {
   state.mirrorActive = false
   state.canvasMainOpen = false
   state.mainPinActive = false
+  state.horizontal = false
   _appElStyle = {}
 }
 
@@ -274,6 +276,19 @@ _publishedR = ''
 publishContentLaneInsets()
 assertEqual(_publishedL, '0px', 'mobile publish: left var = 0px')
 assertEqual(_publishedR, '0px', 'mobile publish: right var = 0px')
+
+// ── Test 13: S8 horizontal strip → no left/right reserve ──
+// Top/Bottom reserves the strip on the top/bottom edge via CSS; the L/R
+// lane contract must not add a phantom 56px column.
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = true
+state.mirrorActive = true
+state.mainPinActive = true
+state.horizontal = true
+assertEqual(computeContentLaneInsets().left, 0, 'horizontal: left = 0 (no L/R strip reserve)')
+assertEqual(computeContentLaneInsets().right, 0, 'horizontal: right = 0 (no L/R strip reserve)')
 
 // ── Summary ──
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

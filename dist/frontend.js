@@ -1186,6 +1186,8 @@ function stripPinnedOn(side) {
   const hosts = document.querySelectorAll(PIN_HOST_SEL);
   for (const host of Array.from(hosts)) {
     const el = host;
+    if (el.getAttribute?.("data-strip-axis") === "horizontal")
+      continue;
     const s = el.classList.contains(SIDE_LEFT_CLASS) ? "left" : "right";
     if (s === side)
       return true;
@@ -10395,7 +10397,15 @@ function _runSyncDrawerTabSettings() {
   const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0;
   const mainMarginStyle = mainDrawerTab.style.marginTop;
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
-  if (_lastKnownVerticalPos !== posVh) {
+  const horizontalLocation = isHorizontalStrip();
+  if (horizontalLocation) {
+    if (drawerTab?.style.marginTop)
+      drawerTab.style.marginTop = "";
+    const mainMirrorTabH = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+    if (mainMirrorTabH?.style.marginTop)
+      mainMirrorTabH.style.marginTop = "";
+    _lastKnownVerticalPos = null;
+  } else if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings();
     const effectiveMainVh = settings.mainDrawerTabOverrideVh !== undefined ? settings.mainDrawerTabOverrideVh : posVh;
     if (settings.mirrorCompactPosition) {
@@ -11589,10 +11599,10 @@ function computeContentLaneInsets() {
   const mirrorActive = isMainMirrorActive();
   const mainOpen = mirrorActive ? isCanvasMainOpen() : isMainDrawerOpen();
   const mainDrawerW = mainOpen ? mirrorActive ? parseFloat(document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR)) || 420 : getMainDrawerWidth() : 0;
-  const mainStrip = !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0;
+  const mainStrip = !isHorizontalStrip() && !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0;
   const secOpen = isSecondarySidebarOpen();
   const secDrawerW = secOpen ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420 : 0;
-  const secStrip = !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
+  const secStrip = !isHorizontalStrip() && !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
   const leftMargin = Math.max(mainSide === "left" ? mainStrip : secStrip, mainSide === "left" ? mainOpen ? Math.max(0, mainDrawerW - dock.left) : 0 : secOpen ? Math.max(0, secDrawerW - dock.left) : 0);
   const rightMargin = Math.max(mainSide === "right" ? mainStrip : secStrip, mainSide === "right" ? mainOpen ? Math.max(0, mainDrawerW - dock.right) : 0 : secOpen ? Math.max(0, secDrawerW - dock.right) : 0);
   return { left: leftMargin, right: rightMargin };
@@ -18411,10 +18421,14 @@ var init_drawer_tab_position = __esm(() => {
         });
         registerCleanup(teardown);
       }
-      applyDrawerTabPosition(getSettings(), getMainDrawerTab(), getSecondaryDrawerTab());
+      if (!isHorizontalStrip()) {
+        applyDrawerTabPosition(getSettings(), getMainDrawerTab(), getSecondaryDrawerTab());
+      }
     },
     apply(prev, next) {
       if (prev.drawerTabDrag === next.drawerTabDrag && prev.mainDrawerTabOverrideVh === next.mainDrawerTabOverrideVh && prev.secondaryDrawerTabOverrideVh === next.secondaryDrawerTabOverrideVh)
+        return;
+      if (isHorizontalStrip(next))
         return;
       applyDrawerTabPosition(next, getMainDrawerTab(), getSecondaryDrawerTab());
     }
@@ -19888,8 +19902,10 @@ function clearWeaverInsetVars() {
 function measurePinStripInsets() {
   let left = 0;
   let right = 0;
+  let top = 0;
+  let bottom = 0;
   if (typeof document === "undefined" || typeof window === "undefined") {
-    return { left, right };
+    return { left, right, top, bottom };
   }
   const vw = document.documentElement.clientWidth || window.innerWidth || 0;
   const cap = TAB_LIST_WIDTH_PX + 8;
@@ -19897,11 +19913,20 @@ function measurePinStripInsets() {
     const style = window.getComputedStyle?.(el);
     if (style && (style.display === "none" || style.visibility === "hidden"))
       continue;
-    const w3 = el.offsetWidth;
-    if (w3 < 8)
-      continue;
     const rect = el.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1)
+      continue;
+    if (el.getAttribute?.("data-strip-axis") === "horizontal") {
+      const edge = el.getAttribute?.("data-strip-edge");
+      const h4 = Math.min(el.offsetHeight || rect.height, cap);
+      if (edge === "top")
+        top = Math.max(top, h4);
+      else if (edge === "bottom")
+        bottom = Math.max(bottom, h4);
+      continue;
+    }
+    const w3 = el.offsetWidth;
+    if (w3 < 8)
       continue;
     const mid = rect.left + rect.width / 2;
     const strip = Math.min(w3, cap);
@@ -19910,25 +19935,31 @@ function measurePinStripInsets() {
     else
       right = Math.max(right, strip);
   }
-  return { left, right };
+  return { left, right, top, bottom };
 }
 function computeWeaverStripInsets() {
+  const zero = { left: 0, right: 0, top: 0, bottom: 0 };
   if (typeof document === "undefined")
-    return { left: 0, right: 0 };
-  if (isMobileViewport())
-    return { left: 0, right: 0 };
+    return zero;
+  if (isMobileViewport() && !isHorizontalStrip())
+    return zero;
   if (!isTaskbarModeEnabled())
-    return { left: 0, right: 0 };
+    return zero;
+  const horizontal = isHorizontalStrip();
   let gutters = { left: 0, right: 0 };
-  try {
-    gutters = computeStripGutters();
-  } catch (err) {
-    dwarn("[weaver-lane] computeStripGutters failed:", err);
+  if (!horizontal) {
+    try {
+      gutters = computeStripGutters();
+    } catch (err) {
+      dwarn("[weaver-lane] computeStripGutters failed:", err);
+    }
   }
   const live = measurePinStripInsets();
   return {
     left: Math.max(gutters.left, live.left),
-    right: Math.max(gutters.right, live.right)
+    right: Math.max(gutters.right, live.right),
+    top: live.top,
+    bottom: live.bottom
   };
 }
 function applyLaneGeometry(dialog) {
@@ -19942,8 +19973,8 @@ function applyLaneGeometry(dialog) {
   }
   setImportant(dialog, "position", "fixed");
   setImportant(dialog, "inset", "unset");
-  setImportant(dialog, "top", "0px");
-  setImportant(dialog, "bottom", "0px");
+  setImportant(dialog, "top", `${insets.top}px`);
+  setImportant(dialog, "bottom", `${insets.bottom}px`);
   setImportant(dialog, "left", `${insets.left}px`);
   setImportant(dialog, "right", `${insets.right}px`);
   setImportant(dialog, "width", "auto");

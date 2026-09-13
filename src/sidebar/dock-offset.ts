@@ -62,6 +62,9 @@ function stripPinnedOn(side: 'left' | 'right'): boolean {
   const hosts = document.querySelectorAll(PIN_HOST_SEL)
   for (const host of Array.from(hosts)) {
     const el = host as HTMLElement
+    // S8: horizontal hosts are full-width top/bottom strips — they do not
+    // occupy a vertical edge, so dock panels must stay flush.
+    if (el.getAttribute?.('data-strip-axis') === 'horizontal') continue
     const s = el.classList.contains(SIDE_LEFT_CLASS) ? 'left' : 'right'
     if (s === side) return true
   }

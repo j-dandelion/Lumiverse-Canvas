@@ -57,7 +57,7 @@ import {
 } from './main-mirror-drawer'
 import { getTabAssignments } from '../tabs/assignment'
 import { registerCleanup } from '../sidebar/cleanup'
-import { getSettings } from '../settings/state'
+import { getSettings, isHorizontalStrip } from '../settings/state'
 import { applyTabListPosition, reconcileTabListPin } from './tab-position'
 import { tagMainSidebarButtons } from '../chat/tag-buttons'
 import { addSecondaryTabButton, removeSecondaryTabButton, updateDrawerTabVisibility, findMainTabButton, hideMainTabButton } from '../tabs/buttons'
@@ -529,7 +529,16 @@ function _runSyncDrawerTabSettings(): void {
   const mainMarginStyle = mainDrawerTab.style.marginTop
   const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0
 
-  if (_lastKnownVerticalPos !== posVh) {
+  // S8: while Top/Bottom both edge handles are hidden — the vertical
+  // position mirror is inert. Skip the writes, clear any stale marginTop a
+  // Sides phase wrote, and reset the cache so returning to Sides re-applies.
+  const horizontalLocation = isHorizontalStrip()
+  if (horizontalLocation) {
+    if (drawerTab?.style.marginTop) drawerTab.style.marginTop = ''
+    const mainMirrorTabH = mainMirrorWrapper?.querySelector('.sidebar-ux-drawer-tab') as HTMLElement | null
+    if (mainMirrorTabH?.style.marginTop) mainMirrorTabH.style.marginTop = ''
+    _lastKnownVerticalPos = null
+  } else if (_lastKnownVerticalPos !== posVh) {
     const settings = getSettings()
 
     // Canvas drag overrides take precedence over the host position

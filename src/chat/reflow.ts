@@ -42,7 +42,7 @@ export const CONTENT_INSET_R_VAR = '--sidebar-ux-content-inset-r'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { isTaskbarModeEnabled } from '../settings/state'
+import { isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 import { isMainTabListPinActive } from '../sidebar/main-tab-pin'
@@ -133,8 +133,10 @@ export function computeContentLaneInsets(): { left: number; right: number } {
   // overlays content like the secondary drawerTab (no reserve). Keying on
   // mirrorActive (the old gate) would phantom-reserve 56px for every closed
   // drawer with taskbarMode off.
+  // S8: Top/Bottom reserves the strip on the top/bottom edge (CSS-owned) —
+  // never as a left/right margin.
   const mainStrip =
-    !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0
+    !isHorizontalStrip() && !mainOpen && isMainTabListPinActive() ? TAB_LIST_WIDTH_PX : 0
 
   // Secondary is opposite main. Open → live width; taskbar mode closed with
   // a secondary pin strip → reserve strip so content does not sit under buttons.
@@ -143,7 +145,9 @@ export function computeContentLaneInsets(): { left: number; right: number } {
     ? parseFloat(document.documentElement.style.getPropertyValue(SECONDARY_WIDTH_VAR)) || 420
     : 0
   const secStrip =
-    !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0
+    !isHorizontalStrip() && !secOpen && isTaskbarModeEnabled() && getSecondaryTabList()
+      ? TAB_LIST_WIDTH_PX
+      : 0
 
   // Per side: reserve the pinned strip (if any) plus any open-drawer overhang
   // past the dock inset. The App's padding already reserves the dock width.
