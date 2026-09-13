@@ -14,6 +14,7 @@ import {
   mergeCanvasSettings,
   normalizeCanvasSettingsFields,
   type CanvasSettings,
+  type DrawerLocation,
 } from '../types'
 import { setDebug, dlog } from '../debug/log'
 import {
@@ -104,6 +105,20 @@ export function isDragAndDropDrawerTabsEnabled(
   // the mirror strip is always the primary mid-drag surface; mobile is a
   // no-op inside tab-list-dnd (≤600px). The toggle is the only gate.
   return !!s.dragAndDropDrawerTabs
+}
+
+/** Where the drawer tab lists live ('sides' | 'top' | 'bottom'). */
+export function getDrawerLocation(
+  s: FullCanvasSettings = _settings,
+): DrawerLocation {
+  return s.drawerLocation
+}
+
+/** True when the tab lists are pinned to the top/bottom viewport edge. */
+export function isHorizontalStrip(
+  s: FullCanvasSettings = _settings,
+): boolean {
+  return getDrawerLocation(s) !== 'sides'
 }
 
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {

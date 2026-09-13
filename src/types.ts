@@ -31,6 +31,15 @@ export interface LayoutState {
 }
 
 /**
+ * Where the drawer tab lists live. Panels always keep their left/right side
+ * and slide in/out horizontally in every mode; this only moves the tab
+ * buttons. `'top' | 'bottom'` pins one always-visible horizontal strip to
+ * that viewport edge (requires taskbar chrome — auto-enabled by the
+ * normalization invariant).
+ */
+export type DrawerLocation = 'sides' | 'top' | 'bottom'
+
+/**
  * Canvas user-facing settings. Every field is optional on disk so old
  * layouts (or partial writes) still load; defaults come from
  * `mergeCanvasSettings`. Group order mirrors the settings panel UI.
@@ -51,6 +60,14 @@ export interface CanvasSettings {
   // host main-drawer showTabLabels setting (no Canvas override).
 
   // --- Drawers ---
+  /** Where the drawer tab lists live: `'sides'` (default) keeps the
+   *  vertical tab columns beside their panel; `'top'` / `'bottom'` pin one
+   *  always-visible horizontal strip to that viewport edge while panels
+   *  still slide in from their own side. Selecting top/bottom forces
+   *  `moveControlsToOuterEdge` + `taskbarMode` on (normalize invariant);
+   *  returning to sides leaves them on. */
+  drawerLocation?: DrawerLocation
+
   /** Move the tab-button column to the screen-edge side of the secondary
    *  sidebar (desktop/tablet only). The border stays between the tab list
    *  and the panel; the resize handle stays on the chat-facing edge.
@@ -145,6 +162,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   resizeSidebars: true,
   mirrorCompactPosition: true,
   // Drawers
+  drawerLocation: 'sides',
   moveControlsToOuterEdge: false,
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
@@ -180,16 +198,35 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  * requires taskbarMode (the edge button is the only reopen affordance
  * without a pin strip). Idempotent — safe to call after already-normalized
  * settings.
+ *
+ * S8 (Drawer location) cascades — ORDER MATTERS:
+ *   1. Enum coercion: corrupt/unknown `drawerLocation` → `'sides'`.
+ *   2. Location invariant: `'top' | 'bottom'` forces `moveControlsToOuterEdge`
+ *      + `taskbarMode` on. Never forces them off (returning to Sides leaves
+ *      the user's taskbar chrome as-is).
+ *   3. `hideDrawerOpenCloseButtons` requires taskbarMode (must run AFTER the
+ *      location invariant, so `{hide:true, taskbar:false, location:'top'}`
+ *      keeps `hide`).
+ * Idempotent — safe to call after already-normalized settings.
  */
 export function normalizeCanvasSettingsFields(
   s: Required<CanvasSettings>,
 ): Required<CanvasSettings> {
   let out = s
-  // Cascade 2: hide requires taskbar mode
+  // Cascade 1: enum coercion (corrupt disk values)
+  if (out.drawerLocation !== 'top' && out.drawerLocation !== 'bottom') {
+    out = { ...out, drawerLocation: 'sides' }
+  }
+  // Cascade 2: drawer location invariant — horizontal strips need the
+  // taskbar chrome (outer-edge tab controls + pinned strips).
+  if (out.drawerLocation !== 'sides') {
+    out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true }
+  }
+  // Cascade 3: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false }
   }
-  // Cascade 3 (drag requires taskbar mode) REMOVED in S7 — the toggle is
+  // Cascade 4 (drag requires taskbar mode) REMOVED in S7 — the toggle is
   // the only gate; see isDragAndDropDrawerTabsEnabled.
   return out
 }

@@ -24,16 +24,35 @@
 // The "live-apply" effect chain runs through applySettings below.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
-import { getSettings, setSettings, setPanelRefresh, type FullCanvasSettings } from '../settings/state'
+import {
+  getSettings,
+  setSettings,
+  setPanelRefresh,
+  isHorizontalStrip,
+  type FullCanvasSettings,
+} from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
+import { isLoadInProgress } from '../persist/layout-load'
 
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
 // Lumiverse's own CSS modules. The class definitions are injected once
 // when the panel is first built.
-import { buildSettingRow, buildToggleControl } from './render'
+import { buildSettingRow, buildToggleControl, buildSegmentedControl } from './render'
+
+// Dynamic hint strings (the Drawer-location locks swap them in refresh()).
+const MOVE_CONTROLS_HINT =
+  'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".'
+const TASKBAR_HINT =
+  'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.'
+const HIDE_BUTTONS_HINT =
+  'Hides the small button that open/closes the drawer. Requires "Taskbar mode".'
+const HIDE_BUTTONS_INERT_HINT =
+  'Handles are hidden while tabs are pinned to the top/bottom edge.'
+const LOCATION_LOCK_HINT =
+  'Required by Drawer location: Top/Bottom. Switch to Sides to change.'
 
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
@@ -134,30 +153,47 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
+    /* Host-style segmented control (Lumiverse SettingsModal .segmented). */
     .sidebar-ux-panel-segmented {
-      display: inline-flex;
+      display: flex;
       flex-shrink: 0;
+      min-width: 168px;
+      border-radius: 8px;
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
       border: 1px solid var(--lumiverse-border);
-      border-radius: 6px;
       overflow: hidden;
-      background: var(--lumiverse-fill, rgba(0,0,0,0.15));
     }
     .sidebar-ux-panel-segmented-btn {
-      padding: 4px 10px;
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      flex: 1;
+      padding: 7px 12px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
       font-family: inherit;
+      text-align: center;
       color: var(--lumiverse-text-muted);
       background: transparent;
       border: none;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
+      transition: all 0.15s ease;
     }
     .sidebar-ux-panel-segmented-btn:not(:last-child) {
       border-right: 1px solid var(--lumiverse-border);
     }
+    .sidebar-ux-panel-segmented-btn:hover:not(:disabled) {
+      color: var(--lumiverse-text);
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
+    }
     .sidebar-ux-panel-segmented-btn-active {
-      background: var(--lumiverse-primary);
-      color: white;
+      background: var(--lumiverse-primary-020, rgba(255,255,255,0.08));
+      color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-segmented-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .sidebar-ux-panel-segmented-btn:focus-visible {
+      outline: 2px solid var(--lumiverse-primary);
+      outline-offset: -2px;
     }
   `)
 }
@@ -264,15 +300,37 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   // --- Section: Drawers ---
   const secSidebars = section('Drawers')
 
+  // Drawer location is the first Drawers row: it drives the taskbar locks
+  // below. Disabled while the settings load is in flight so a pre-hydration
+  // pick cannot be silently overwritten by the load.
+  const drawerLocation = buildSegmentedControl(
+    [
+      { value: 'sides' as const, label: 'Sides' },
+      { value: 'top' as const, label: 'Top' },
+      { value: 'bottom' as const, label: 'Bottom' },
+    ],
+    getSettings().drawerLocation,
+    (v) => setSettings({ drawerLocation: v }),
+  )
+  drawerLocation.root.setAttribute('aria-label', 'Drawer location')
+  drawerLocation.setDisabled(isLoadInProgress())
+  secSidebars.appendChild(buildSettingRow({
+    label: 'Drawer location',
+    hint: 'Tabs pinned to the top/bottom edge; panels still slide from their side. Requires Taskbar mode (turned on automatically).',
+    control: drawerLocation.root,
+  }))
+
   const moveControlsToOuter = makeToggle(
     () => getSettings().moveControlsToOuterEdge,
     (v) => setSettings({ moveControlsToOuterEdge: v })
   )
-  secSidebars.appendChild(buildSettingRow({
+  const moveControlsRow = buildSettingRow({
     label: 'Move tab controls to outer edge',
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".',
+    hint: MOVE_CONTROLS_HINT,
     control: moveControlsToOuter.btn,
-  }))
+  })
+  secSidebars.appendChild(moveControlsRow)
+  const moveControlsHint = moveControlsRow.querySelector('.sidebar-ux-panel-row-hint')
 
   const taskbarMode = makeToggle(
     () => getSettings().taskbarMode,
@@ -281,11 +339,12 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   const taskbarModeRow = buildSettingRow({
     label: 'Taskbar mode',
-    hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.',
+    hint: TASKBAR_HINT,
     control: taskbarMode.btn,
     disabled: !getSettings().moveControlsToOuterEdge,
   })
   secSidebars.appendChild(taskbarModeRow)
+  const taskbarModeHint = taskbarModeRow.querySelector('.sidebar-ux-panel-row-hint')
 
   const hideDrawerTabToggle = makeToggle(
     () => getSettings().hideDrawerOpenCloseButtons,
@@ -294,11 +353,12 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   )
   const hideDrawerTabToggleRow = buildSettingRow({
     label: 'Hide drawer open/close buttons',
-    hint: 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".',
+    hint: HIDE_BUTTONS_HINT,
     control: hideDrawerTabToggle.btn,
     disabled: !getSettings().taskbarMode,
   })
   secSidebars.appendChild(hideDrawerTabToggleRow)
+  const hideDrawerTabHint = hideDrawerTabToggleRow.querySelector('.sidebar-ux-panel-row-hint')
 
   const dragAndDropDrawerTabs = makeToggle(
     () => getSettings().dragAndDropDrawerTabs,
@@ -416,20 +476,52 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     debugMode.refresh()
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
-    // taskbarMode requires moveControlsToOuterEdge (strip on screen edge).
+
+    // Drawer location: sync selection; disabled while the settings load is
+    // in flight (the load overwrites pre-hydration picks).
+    drawerLocation.refresh(getSettings().drawerLocation)
+    drawerLocation.setDisabled(isLoadInProgress())
+
+    // Horizontal strip (Top/Bottom) locks the taskbar chrome rows on:
+    // normalize forces moveControlsToOuterEdge + taskbarMode while active.
+    const horizontal = isHorizontalStrip()
+
+    // moveControlsToOuterEdge locked while horizontal.
     {
-      const d = !getSettings().moveControlsToOuterEdge
+      const d = horizontal
+      moveControlsToOuter.btn.disabled = d
+      moveControlsToOuter.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      moveControlsRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      if (moveControlsHint) moveControlsHint.textContent = d ? LOCATION_LOCK_HINT : MOVE_CONTROLS_HINT
+    }
+    // taskbarMode requires moveControlsToOuterEdge (strip on screen edge) and
+    // is locked while horizontal.
+    {
+      const d = horizontal || !getSettings().moveControlsToOuterEdge
       taskbarMode.btn.disabled = d
       taskbarMode.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       taskbarModeRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      if (taskbarModeHint) taskbarModeHint.textContent = horizontal ? LOCATION_LOCK_HINT : TASKBAR_HINT
     }
     // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs
     // no longer does — toggle-only gate, see isDragAndDropDrawerTabsEnabled).
+    // While horizontal the handles are hidden unconditionally, so the row is
+    // rendered inert and checked regardless of the stored value.
     {
-      const d = !getSettings().taskbarMode
-      hideDrawerTabToggle.btn.disabled = d
-      hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
-      hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      if (horizontal) {
+        hideDrawerTabToggle.btn.disabled = true
+        hideDrawerTabToggle.btn.style.cursor = 'not-allowed'
+        hideDrawerTabToggle.btn.classList.add('sidebar-ux-panel-toggle-on')
+        hideDrawerTabToggle.btn.setAttribute('aria-checked', 'true')
+        hideDrawerTabToggleRow.classList.add('sidebar-ux-panel-row-disabled')
+        if (hideDrawerTabHint) hideDrawerTabHint.textContent = HIDE_BUTTONS_INERT_HINT
+      } else {
+        const d = !getSettings().taskbarMode
+        hideDrawerTabToggle.btn.disabled = d
+        hideDrawerTabToggle.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+        hideDrawerTabToggleRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+        if (hideDrawerTabHint) hideDrawerTabHint.textContent = HIDE_BUTTONS_HINT
+      }
     }
     // compact gated by second-drawer master toggle (resizeSidebars is always-on).
     for (const row of [compact]) {

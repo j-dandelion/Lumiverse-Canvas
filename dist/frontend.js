@@ -101,6 +101,12 @@ var init_boot_diag = __esm(() => {
 // src/types.ts
 function normalizeCanvasSettingsFields(s) {
   let out = s;
+  if (out.drawerLocation !== "top" && out.drawerLocation !== "bottom") {
+    out = { ...out, drawerLocation: "sides" };
+  }
+  if (out.drawerLocation !== "sides") {
+    out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true };
+  }
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
   }
@@ -138,6 +144,7 @@ var init_types = __esm(() => {
     secondSidebarEnabled: true,
     resizeSidebars: true,
     mirrorCompactPosition: true,
+    drawerLocation: "sides",
     moveControlsToOuterEdge: false,
     taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
@@ -14366,6 +14373,7 @@ var exports_state = {};
 __export(exports_state, {
   cancelSettingsSave: () => cancelSettingsSave,
   flushSettingsSave: () => flushSettingsSave,
+  getDrawerLocation: () => getDrawerLocation,
   getDualLayoutSlot: () => getDualLayoutSlot,
   getLastLoadedLayout: () => getLastLoadedLayout,
   getSettings: () => getSettings,
@@ -14374,6 +14382,7 @@ __export(exports_state, {
   hydrateSettings: () => hydrateSettings,
   isDragAndDropDrawerTabsEnabled: () => isDragAndDropDrawerTabsEnabled,
   isHideDrawerOpenCloseButtonsEnabled: () => isHideDrawerOpenCloseButtonsEnabled,
+  isHorizontalStrip: () => isHorizontalStrip,
   isTaskbarModeEnabled: () => isTaskbarModeEnabled,
   normalizeCanvasSettings: () => normalizeCanvasSettings,
   persistSettings: () => persistSettings,
@@ -14434,6 +14443,12 @@ function isHideDrawerOpenCloseButtonsEnabled(s3 = _settings) {
 }
 function isDragAndDropDrawerTabsEnabled(s3 = _settings) {
   return !!s3.dragAndDropDrawerTabs;
+}
+function getDrawerLocation(s3 = _settings) {
+  return s3.drawerLocation;
+}
+function isHorizontalStrip(s3 = _settings) {
+  return getDrawerLocation(s3) !== "sides";
 }
 function hydrateSettings(raw) {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));
@@ -18295,6 +18310,76 @@ function buildSettingRow(args) {
   row.appendChild(args.control);
   return row;
 }
+function buildSegmentedControl(options, value, onChange) {
+  const root = document.createElement("div");
+  root.className = "sidebar-ux-panel-segmented";
+  root.setAttribute("role", "radiogroup");
+  let current = value;
+  const entries = [];
+  const render = () => {
+    for (const { btn, value: v3 } of entries) {
+      const active = v3 === current;
+      btn.classList.toggle("sidebar-ux-panel-segmented-btn-active", active);
+      btn.setAttribute("aria-checked", String(active));
+      btn.tabIndex = active ? 0 : -1;
+    }
+  };
+  const select = (next) => {
+    if (next === current)
+      return;
+    current = next;
+    render();
+    onChange(next);
+  };
+  options.forEach((opt, i3) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sidebar-ux-panel-segmented-btn";
+    btn.setAttribute("role", "radio");
+    btn.textContent = opt.label;
+    btn.addEventListener("click", () => {
+      if (btn.disabled)
+        return;
+      select(opt.value);
+    });
+    btn.addEventListener("keydown", (ev) => {
+      const forward = ev.key === "ArrowRight" || ev.key === "ArrowDown";
+      const backward = ev.key === "ArrowLeft" || ev.key === "ArrowUp";
+      if (!forward && !backward)
+        return;
+      ev.preventDefault();
+      const dir = forward ? 1 : -1;
+      let next = i3;
+      for (let step = 0;step < options.length; step++) {
+        next = (next + dir + options.length) % options.length;
+        const candidate = entries[next];
+        if (!candidate || !candidate.btn.disabled)
+          break;
+      }
+      const target = entries[next];
+      if (!target || target.btn.disabled)
+        return;
+      target.btn.focus();
+      select(target.value);
+    });
+    entries.push({ btn, value: opt.value });
+    root.appendChild(btn);
+  });
+  render();
+  return {
+    root,
+    refresh(next) {
+      current = next;
+      render();
+    },
+    setDisabled(disabled) {
+      for (const { btn } of entries) {
+        btn.disabled = disabled;
+        btn.setAttribute("aria-disabled", String(disabled));
+      }
+    }
+  };
+}
 function buildToggleControl(value, onChange, disabled) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -18405,30 +18490,47 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
+    /* Host-style segmented control (Lumiverse SettingsModal .segmented). */
     .sidebar-ux-panel-segmented {
-      display: inline-flex;
+      display: flex;
       flex-shrink: 0;
+      min-width: 168px;
+      border-radius: 8px;
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
       border: 1px solid var(--lumiverse-border);
-      border-radius: 6px;
       overflow: hidden;
-      background: var(--lumiverse-fill, rgba(0,0,0,0.15));
     }
     .sidebar-ux-panel-segmented-btn {
-      padding: 4px 10px;
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      flex: 1;
+      padding: 7px 12px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
       font-family: inherit;
+      text-align: center;
       color: var(--lumiverse-text-muted);
       background: transparent;
       border: none;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
+      transition: all 0.15s ease;
     }
     .sidebar-ux-panel-segmented-btn:not(:last-child) {
       border-right: 1px solid var(--lumiverse-border);
     }
+    .sidebar-ux-panel-segmented-btn:hover:not(:disabled) {
+      color: var(--lumiverse-text);
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
+    }
     .sidebar-ux-panel-segmented-btn-active {
-      background: var(--lumiverse-primary);
-      color: white;
+      background: var(--lumiverse-primary-020, rgba(255,255,255,0.08));
+      color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-segmented-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .sidebar-ux-panel-segmented-btn:focus-visible {
+      outline: 2px solid var(--lumiverse-primary);
+      outline-offset: -2px;
     }
   `);
 }
@@ -18488,28 +18590,44 @@ function buildSettingsPanelDOM() {
     control: persistWidth.btn
   }));
   const secSidebars = section("Drawers");
-  const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
+  const drawerLocation = buildSegmentedControl([
+    { value: "sides", label: "Sides" },
+    { value: "top", label: "Top" },
+    { value: "bottom", label: "Bottom" }
+  ], getSettings().drawerLocation, (v3) => setSettings({ drawerLocation: v3 }));
+  drawerLocation.root.setAttribute("aria-label", "Drawer location");
+  drawerLocation.setDisabled(isLoadInProgress());
   secSidebars.appendChild(buildSettingRow({
-    label: "Move tab controls to outer edge",
-    hint: 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".',
-    control: moveControlsToOuter.btn
+    label: "Drawer location",
+    hint: "Tabs pinned to the top/bottom edge; panels still slide from their side. Requires Taskbar mode (turned on automatically).",
+    control: drawerLocation.root
   }));
+  const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
+  const moveControlsRow = buildSettingRow({
+    label: "Move tab controls to outer edge",
+    hint: MOVE_CONTROLS_HINT,
+    control: moveControlsToOuter.btn
+  });
+  secSidebars.appendChild(moveControlsRow);
+  const moveControlsHint = moveControlsRow.querySelector(".sidebar-ux-panel-row-hint");
   const taskbarMode = makeToggle(() => getSettings().taskbarMode, (v3) => setSettings({ taskbarMode: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
   const taskbarModeRow = buildSettingRow({
     label: "Taskbar mode",
-    hint: 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.',
+    hint: TASKBAR_HINT,
     control: taskbarMode.btn,
     disabled: !getSettings().moveControlsToOuterEdge
   });
   secSidebars.appendChild(taskbarModeRow);
+  const taskbarModeHint = taskbarModeRow.querySelector(".sidebar-ux-panel-row-hint");
   const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().taskbarMode });
   const hideDrawerTabToggleRow = buildSettingRow({
     label: "Hide drawer open/close buttons",
-    hint: 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".',
+    hint: HIDE_BUTTONS_HINT,
     control: hideDrawerTabToggle.btn,
     disabled: !getSettings().taskbarMode
   });
   secSidebars.appendChild(hideDrawerTabToggleRow);
+  const hideDrawerTabHint = hideDrawerTabToggleRow.querySelector(".sidebar-ux-panel-row-hint");
   const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }));
   const dragAndDropDrawerTabsRow = buildSettingRow({
     label: "Drag and drop drawer tabs",
@@ -18583,17 +18701,42 @@ function buildSettingsPanelDOM() {
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
+    drawerLocation.refresh(getSettings().drawerLocation);
+    drawerLocation.setDisabled(isLoadInProgress());
+    const horizontal = isHorizontalStrip();
     {
-      const d3 = !getSettings().moveControlsToOuterEdge;
+      const d3 = horizontal;
+      moveControlsToOuter.btn.disabled = d3;
+      moveControlsToOuter.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      moveControlsRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+      if (moveControlsHint)
+        moveControlsHint.textContent = d3 ? LOCATION_LOCK_HINT : MOVE_CONTROLS_HINT;
+    }
+    {
+      const d3 = horizontal || !getSettings().moveControlsToOuterEdge;
       taskbarMode.btn.disabled = d3;
       taskbarMode.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       taskbarModeRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+      if (taskbarModeHint)
+        taskbarModeHint.textContent = horizontal ? LOCATION_LOCK_HINT : TASKBAR_HINT;
     }
     {
-      const d3 = !getSettings().taskbarMode;
-      hideDrawerTabToggle.btn.disabled = d3;
-      hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+      if (horizontal) {
+        hideDrawerTabToggle.btn.disabled = true;
+        hideDrawerTabToggle.btn.style.cursor = "not-allowed";
+        hideDrawerTabToggle.btn.classList.add("sidebar-ux-panel-toggle-on");
+        hideDrawerTabToggle.btn.setAttribute("aria-checked", "true");
+        hideDrawerTabToggleRow.classList.add("sidebar-ux-panel-row-disabled");
+        if (hideDrawerTabHint)
+          hideDrawerTabHint.textContent = HIDE_BUTTONS_INERT_HINT;
+      } else {
+        const d3 = !getSettings().taskbarMode;
+        hideDrawerTabToggle.btn.disabled = d3;
+        hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+        hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+        if (hideDrawerTabHint)
+          hideDrawerTabHint.textContent = HIDE_BUTTONS_HINT;
+      }
     }
     for (const row of [compact]) {
       const d3 = !getSettings().secondSidebarEnabled;
@@ -18634,11 +18777,12 @@ function applySettings(prev, next) {
     feature.apply(prev, next, _settingsPanelCtx);
   }
 }
-var _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
+var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
 var init_panel = __esm(() => {
   init_state();
   init_log();
   init_registry();
+  init_layout_load();
 });
 
 // src/frontend.ts

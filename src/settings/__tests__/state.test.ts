@@ -11,6 +11,8 @@ import {
   isTaskbarModeEnabled,
   isHideDrawerOpenCloseButtonsEnabled,
   isDragAndDropDrawerTabsEnabled,
+  getDrawerLocation,
+  isHorizontalStrip,
 } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
@@ -337,6 +339,69 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
   const noLegacy = mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
   assertEqual(noLegacy.taskbarMode, true, 'migration: new key alone works')
+}
+
+// --- S8: Drawer location — coercion, invariant, ordering ---
+{
+  const defaults = mergeCanvasSettings({})
+  assertEqual(defaults.drawerLocation, 'sides', 'drawerLocation defaults to sides')
+  assertEqual(getDrawerLocation(defaults), 'sides', 'getDrawerLocation returns sides by default')
+  assertEqual(isHorizontalStrip(defaults), false, 'isHorizontalStrip false by default')
+
+  // Corrupt values coerce to sides (enum coercion is the first cascade).
+  for (const bad of ['TOp', 'TOP', 'left', 'right', '', 42, null, true, {}]) {
+    const coerced = normalizeCanvasSettings(
+      mergeCanvasSettings({ drawerLocation: bad } as any),
+    )
+    assertEqual(
+      coerced.drawerLocation,
+      'sides',
+      `corrupt drawerLocation ${JSON.stringify(bad)} coerces to sides`,
+    )
+  }
+
+  // top/bottom force taskbar chrome on.
+  const top = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'top' }))
+  assertEqual(top.drawerLocation, 'top', 'top is kept')
+  assertEqual(top.taskbarMode, true, 'top forces taskbarMode on')
+  assertEqual(top.moveControlsToOuterEdge, true, 'top forces moveControlsToOuterEdge on')
+  assertEqual(isTaskbarModeEnabled(top), true, 'top → effective taskbar gate on')
+  assertEqual(isHorizontalStrip(top), true, 'isHorizontalStrip true for top')
+
+  const bottom = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'bottom' }))
+  assertEqual(bottom.drawerLocation, 'bottom', 'bottom is kept')
+  assertEqual(bottom.taskbarMode, true, 'bottom forces taskbarMode on')
+  assertEqual(bottom.moveControlsToOuterEdge, true, 'bottom forces outer-edge on')
+  assertEqual(isHorizontalStrip(bottom), true, 'isHorizontalStrip true for bottom')
+
+  // Ordering: the location invariant runs BEFORE the hide cascade, so a
+  // hide:true + taskbar:false + location:top blob keeps hide (the invariant
+  // turns taskbar on first).
+  const ordering = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    hideDrawerOpenCloseButtons: true,
+    taskbarMode: false,
+    moveControlsToOuterEdge: false,
+  }))
+  assertEqual(ordering.hideDrawerOpenCloseButtons, true, 'hide survives the location invariant (ordering)')
+  assertEqual(ordering.taskbarMode, true, 'ordering: taskbar forced on')
+  assertEqual(isHideDrawerOpenCloseButtonsEnabled(ordering), true, 'ordering: effective hide gate on')
+
+  // Returning to sides leaves the forced taskbar flags on (never forces off).
+  const back = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'sides',
+    taskbarMode: true,
+    moveControlsToOuterEdge: true,
+  }))
+  assertEqual(back.drawerLocation, 'sides', 'sides kept')
+  assertEqual(back.taskbarMode, true, 'sides leaves taskbarMode on')
+  assertEqual(back.moveControlsToOuterEdge, true, 'sides leaves moveControlsToOuterEdge on')
+  assertEqual(isHorizontalStrip(back), false, 'isHorizontalStrip false after returning to sides')
+
+  // Explicit sides never turns an existing taskbar choice off.
+  const sidesOnly = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'sides' }))
+  assertEqual(sidesOnly.taskbarMode, false, 'sides alone does not force taskbarMode')
+  assertEqual(sidesOnly.moveControlsToOuterEdge, false, 'sides alone does not force outer-edge')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
