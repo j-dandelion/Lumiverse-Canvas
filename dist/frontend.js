@@ -1014,8 +1014,156 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     width: 100% !important;
   }
 }
+`, LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", HORIZONTAL_STRIP_CSS;
+var init_styles = __esm(() => {
+  HORIZONTAL_STRIP_CSS = `
+/* List fills the fixed zone host absolutely (never fixed + width:100% —
+   a fixed element's containing block is the viewport, which would span a
+   half-zone list across the whole screen). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
+  position: absolute !important;
+  inset: 0 !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  width: auto !important;
+  height: 100% !important;
+  padding: 4px 8px !important;
+  gap: 2px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  border-left: none !important;
+  pointer-events: auto !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list::-webkit-scrollbar,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+}
+
+/* Main strip's inner section: row + fills the zone. Cluster anchoring lives
+   on the SECTION (not the outer list) via the host's drawer-side class. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-main,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  min-height: auto !important;
+  height: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  gap: 2px !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::-webkit-scrollbar,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::-webkit-scrollbar {
+  display: none !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-main,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
+  justify-content: flex-start !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
+  justify-content: flex-end !important;
+}
+/* Right-anchored clusters: margin-auto keeps the overflowing start
+   reachable by the scroller (justify-content:flex-end alone clips it). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child {
+  margin-left: auto !important;
+}
+
+/* Secondary list (buttons are direct children): anchor to the drawer edge. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left > .sidebar-ux-tab-list {
+  justify-content: flex-start !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
+  justify-content: flex-end !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child {
+  margin-left: auto !important;
+}
+
+/* Settings dock: inline at the cluster's inner end, separator facing the
+   buttons. Right-side hosts order it before the main section (inner = left). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  border-top: none !important;
+  gap: 2px !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+  margin-left: 4px !important;
+  padding-left: 4px !important;
+  border-left: 1px solid var(--lumiverse-primary-020) !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+  order: -1 !important;
+  margin-right: 4px !important;
+  padding-right: 4px !important;
+  border-right: 1px solid var(--lumiverse-primary-020) !important;
+}
+
+/* Active indicator on the panel-facing side: top-edge strip -> bottom inset,
+   bottom-edge strip -> top inset. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
+  box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+  border-radius: 8px 8px 0 0 !important;
+}
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
+  box-shadow: inset 0 3px 0 var(--lumiverse-primary) !important;
+  border-radius: 0 0 8px 8px !important;
+}
+
+/* Chat + Landing top/bottom reserve. CSS-owned so it works with the
+   L/R-only reflow contract and on mobile (reflow early-returns there). */
+html.${LOCATION_CLASS_TOP} [class*="_chatColumn_"] {
+  margin-top: var(--sidebar-ux-strip-h, 56px) !important;
+}
+html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumn_"] {
+  margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
+}
+html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
+  margin-top: var(--sidebar-ux-strip-h, 56px) !important;
+}
+html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"] {
+  margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
+}
 `;
-var init_styles = () => {};
+});
 
 // src/sidebar/dock-offset.ts
 function getDockInsets() {
@@ -1229,6 +1377,19 @@ function closedTransformPx(side, widthPx) {
   const w = Math.ceil(widthPx) + 1;
   return side === "left" ? -w : w;
 }
+function applyWrapperStripEdge(wrapper, edge) {
+  if (!wrapper)
+    return;
+  const safeTop = "env(safe-area-inset-top, 0px)";
+  const safeBottom = "env(safe-area-inset-bottom, 0px)";
+  const strip = "var(--sidebar-ux-strip-h, 56px)";
+  const top = edge === "top" ? `calc(${safeTop} + ${strip})` : safeTop;
+  const bottom = edge === "bottom" ? `calc(${safeBottom} + ${strip})` : safeBottom;
+  if (wrapper.style.top !== top)
+    wrapper.style.top = top;
+  if (wrapper.style.bottom !== bottom)
+    wrapper.style.bottom = bottom;
+}
 function readWidthCssVar(varName, fallback = 420) {
   try {
     const style = document.documentElement?.style;
@@ -1258,6 +1419,7 @@ function createDrawerShell(options) {
     fullViewportWidth = false,
     title: titleText = "Drawer",
     drawerTabDisplay = "none",
+    stripEdge = null,
     onDrawerTabClick,
     onHeaderClose
   } = options;
@@ -1281,6 +1443,7 @@ function createDrawerShell(options) {
     transform: ${initWrapperTransform};
     ${side === "left" ? `left: 0; flex-direction: row-reverse;` : `right: 0; flex-direction: row;`};
   `;
+  applyWrapperStripEdge(wrapper, stripEdge);
   injectDrawerTabStyles();
   const drawerTab = document.createElement("button");
   drawerTab.className = "sidebar-ux-drawer-tab";
@@ -10975,6 +11138,7 @@ function mountMainMirror(opts) {
     fullViewportWidth: mobile,
     initialOpen: opts.initialOpen,
     title: "Drawer",
+    stripEdge: getStripEdge(),
     drawerTabDisplay: hideTab ? "none" : "flex",
     onDrawerTabClick: () => {
       if (_open)
@@ -11215,6 +11379,7 @@ function teardownMainMirror(opts) {
     const handles = _shell.drawer.querySelectorAll(".sidebar-ux-resize-handle");
     for (const h4 of Array.from(handles))
       h4.remove();
+    cancelWrapperAnimation(_shell.wrapper);
     _shell.wrapper.remove();
     _shell = null;
   }
@@ -13680,6 +13845,7 @@ function createSecondarySidebar(options) {
     fullViewportWidth: onMobile,
     title: "Second drawer",
     drawerTabDisplay: "none",
+    stripEdge: getStripEdge(),
     onDrawerTabClick: () => {
       if (_secondarySidebarOpen)
         closeSecondarySidebar();
@@ -14065,6 +14231,7 @@ function tearDownSecondarySidebar() {
       dwarn("[tabmove] teardown: unregisterContainer unavailable — tabs mapped to " + `"${CANVAS_SECONDARY_CONTAINER_ID}" may not heal until the page reloads`);
     }
     _secondaryWrapper.querySelector(".sidebar-ux-resize-handle")?.remove();
+    cancelWrapperAnimation(_secondaryWrapper);
     _secondaryWrapper.remove();
     _secondaryWrapper = null;
   }
@@ -14378,6 +14545,7 @@ __export(exports_state, {
   getLastLoadedLayout: () => getLastLoadedLayout,
   getSettings: () => getSettings,
   getSingleLayoutSlot: () => getSingleLayoutSlot,
+  getStripEdge: () => getStripEdge,
   hydrateModeLayoutSlots: () => hydrateModeLayoutSlots,
   hydrateSettings: () => hydrateSettings,
   isDragAndDropDrawerTabsEnabled: () => isDragAndDropDrawerTabsEnabled,
@@ -14449,6 +14617,10 @@ function getDrawerLocation(s3 = _settings) {
 }
 function isHorizontalStrip(s3 = _settings) {
   return getDrawerLocation(s3) !== "sides";
+}
+function getStripEdge(s3 = _settings) {
+  const loc = getDrawerLocation(s3);
+  return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
 }
 function hydrateSettings(raw) {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));

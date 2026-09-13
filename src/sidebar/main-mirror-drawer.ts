@@ -17,9 +17,14 @@
 import { getMainPanelContent, getMainWrapper, getMainDrawerWidth } from '../dom/lumiverse'
 import { clampSidebarWidth } from '../dom/clamp'
 import { getMainDrawerSide, isMainDrawerOpen } from '../store'
-import { getSettings, isHideDrawerOpenCloseButtonsEnabled, isTaskbarModeEnabled } from '../settings/state'
+import {
+  getSettings,
+  getStripEdge,
+  isHideDrawerOpenCloseButtonsEnabled,
+  isTaskbarModeEnabled,
+} from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
-import { animateWrapper } from './animation'
+import { animateWrapper, cancelWrapperAnimation } from './animation'
 import {
   closedTransformPx,
   createDrawerShell,
@@ -568,6 +573,8 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     fullViewportWidth: mobile,
     initialOpen: opts.initialOpen,
     title: 'Drawer',
+    // S8: reserve the horizontal strip edge at construction (no boot flash).
+    stripEdge: getStripEdge(),
     // When hide is on, show the edge toggle only for reopening (none = no chrome).
     drawerTabDisplay: hideTab ? 'none' : 'flex',
     onDrawerTabClick: () => {
@@ -881,6 +888,9 @@ export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   if (_shell) {
     const handles = _shell.drawer.querySelectorAll('.sidebar-ux-resize-handle')
     for (const h of Array.from(handles)) h.remove()
+    // S8 reliability: a mid-flight open/close animation must not keep
+    // writing transforms to a detached wrapper.
+    cancelWrapperAnimation(_shell.wrapper)
     _shell.wrapper.remove()
     _shell = null
   }

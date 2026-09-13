@@ -82,7 +82,8 @@ class StubElement {
   },
 }
 
-const { createDrawerShell, restyleShellSide } = await import('../drawer-shell')
+const { createDrawerShell, restyleShellSide, applyWrapperStripEdge, syncSpacerForLocation } =
+  await import('../drawer-shell')
 
 {
   const secondary = createDrawerShell({
@@ -188,6 +189,62 @@ const { createDrawerShell, restyleShellSide } = await import('../drawer-shell')
     pinned.drawer.style.getPropertyValue('flex-direction') === 'row',
     'restyleShellSide pinned left → outer-edge row',
   )
+}
+
+// ── S8 Drawer location: wrapper strip-edge reserve + spacer sync ──
+{
+  const TOP_EXPR = 'calc(env(safe-area-inset-top, 0px) + var(--sidebar-ux-strip-h, 56px))'
+  const BOTTOM_EXPR = 'calc(env(safe-area-inset-bottom, 0px) + var(--sidebar-ux-strip-h, 56px))'
+
+  const top = createDrawerShell({
+    owner: 'secondary',
+    side: 'right',
+    widthCssVar: '--w',
+    stripEdge: 'top',
+  })
+  assert(top.wrapper.style.top === TOP_EXPR, 'stripEdge top: wrapper top reserves the strip')
+  assert(
+    top.wrapper.style.bottom === 'env(safe-area-inset-bottom, 0px)',
+    'stripEdge top: wrapper bottom stays safe-area',
+  )
+
+  const bottom = createDrawerShell({
+    owner: 'main',
+    side: 'left',
+    widthCssVar: '--w',
+    stripEdge: 'bottom',
+  })
+  assert(bottom.wrapper.style.bottom === BOTTOM_EXPR, 'stripEdge bottom: wrapper bottom reserves the strip')
+  assert(
+    bottom.wrapper.style.top === 'env(safe-area-inset-top, 0px)',
+    'stripEdge bottom: wrapper top stays safe-area',
+  )
+
+  const sides = createDrawerShell({ owner: 'secondary', side: 'left', widthCssVar: '--w' })
+  assert(sides.wrapper.style.top === 'env(safe-area-inset-top, 0px)', 'sides: plain safe-area top')
+  assert(sides.wrapper.style.bottom === 'env(safe-area-inset-bottom, 0px)', 'sides: plain safe-area bottom')
+
+  // Runtime flip in place (drawer-location.restyleShellLocation path).
+  applyWrapperStripEdge(sides.wrapper as any, 'top')
+  assert(sides.wrapper.style.top === TOP_EXPR, 'applyWrapperStripEdge flips to top in place')
+  applyWrapperStripEdge(sides.wrapper as any, 'bottom')
+  assert(sides.wrapper.style.bottom === BOTTOM_EXPR, 'applyWrapperStripEdge flips to bottom in place')
+  applyWrapperStripEdge(sides.wrapper as any, null)
+  assert(sides.wrapper.style.top === 'env(safe-area-inset-top, 0px)', 'applyWrapperStripEdge null restores top')
+  assert(sides.wrapper.style.bottom === 'env(safe-area-inset-bottom, 0px)', 'applyWrapperStripEdge null restores bottom')
+
+  // Spacer neutralization: 56px column placeholder on Sides, 0×0 horizontal.
+  const spacer = new StubElement()
+  syncSpacerForLocation(spacer as any, 'sides')
+  assert(spacer.style.width === '56px', 'spacer sides: width 56px')
+  assert(spacer.style.height === 'auto', 'spacer sides: height auto')
+  syncSpacerForLocation(spacer as any, 'top')
+  assert(spacer.style.width === '0px', 'spacer top: width 0')
+  assert(spacer.style.height === '0px', 'spacer top: height 0')
+  syncSpacerForLocation(spacer as any, 'bottom')
+  assert(spacer.style.width === '0px', 'spacer bottom: width 0')
+  syncSpacerForLocation(spacer as any, 'sides')
+  assert(spacer.style.width === '56px', 'spacer back to sides: width 56px restored')
 }
 
 if (failed > 0) {

@@ -25,7 +25,7 @@ import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } 
 import { requestHostTabToMain, CANVAS_SECONDARY_CONTAINER_ID } from '../tabs/host-tab-location'
 import { restoreDomPlacedBuiltInToMain } from '../tabs/dom-placed-builtin'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
-import { animateWrapper } from './animation'
+import { animateWrapper, cancelWrapperAnimation } from './animation'
 import { SECONDARY_WIDTH_VAR } from './styles'
 import {
   applyTabListPin,
@@ -33,7 +33,7 @@ import {
   getPinnedTabList,
   reconcileTabListPin,
 } from './tab-position'
-import { getSettings } from '../settings/state'
+import { getSettings, getStripEdge } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { liveIdForKey } from '../tabs/identity'
 import type { TabKey } from '../core/model'
@@ -174,6 +174,8 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
     fullViewportWidth: onMobile,
     title: 'Second drawer',
     drawerTabDisplay: 'none',
+    // S8: reserve the horizontal strip edge at construction (no boot flash).
+    stripEdge: getStripEdge(),
     onDrawerTabClick: () => {
       if (_secondarySidebarOpen) closeSecondarySidebar()
       else openSecondarySidebar()
@@ -971,6 +973,8 @@ export function tearDownSecondarySidebar(): void {
     // whenever the second drawer is toggled off in taskbar mode (and nothing
     // re-adds it until re-enable).
     _secondaryWrapper.querySelector('.sidebar-ux-resize-handle')?.remove()
+    // S8 reliability: stop a mid-flight wrapper animation before detaching.
+    cancelWrapperAnimation(_secondaryWrapper)
     _secondaryWrapper.remove()
     _secondaryWrapper = null
   }

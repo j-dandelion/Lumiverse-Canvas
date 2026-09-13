@@ -121,6 +121,14 @@ export function isHorizontalStrip(
   return getDrawerLocation(s) !== 'sides'
 }
 
+/** Strip edge while horizontal ('top' | 'bottom'), null on Sides. */
+export function getStripEdge(
+  s: FullCanvasSettings = _settings,
+): 'top' | 'bottom' | null {
+  const loc = getDrawerLocation(s)
+  return loc === 'top' ? 'top' : loc === 'bottom' ? 'bottom' : null
+}
+
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null))
 }

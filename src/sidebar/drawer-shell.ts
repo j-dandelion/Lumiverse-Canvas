@@ -8,8 +8,12 @@
 
 import { clampSidebarWidth } from '../dom/clamp'
 import { injectDrawerTabStyles } from './styles'
+import type { DrawerLocation } from '../types'
 
 export type DrawerShellOwner = 'main' | 'secondary'
+
+/** Horizontal strip edge while Drawer location is Top/Bottom. */
+export type StripEdge = 'top' | 'bottom'
 
 export interface DrawerShellOptions {
   /** Which Canvas drawer this shell belongs to. */
@@ -30,6 +34,12 @@ export interface DrawerShellOptions {
   title?: string
   /** Initial drawer-tab display (secondary starts as 'none'). */
   drawerTabDisplay?: string
+  /**
+   * S8 Drawer location: reserve the horizontal strip height at this wrapper
+   * edge (top/bottom). Callers resolve it from getDrawerLocation() so this
+   * leaf never imports settings.
+   */
+  stripEdge?: StripEdge | null
   onDrawerTabClick?: () => void
   onHeaderClose?: () => void
 }
@@ -63,6 +73,47 @@ export interface DrawerShell {
 export function closedTransformPx(side: 'left' | 'right', widthPx: number): number {
   const w = Math.ceil(widthPx) + 1
   return side === 'left' ? -w : w
+}
+
+/**
+ * S8 Drawer location: wrapper top/bottom offsets. Sides = plain safe-area
+ * insets; Top/Bottom reserve `--sidebar-ux-strip-h` at that edge so the
+ * strip never covers the panel header. Shared by shell construction and the
+ * runtime flip (drawer-location.restyleShellLocation).
+ */
+export function applyWrapperStripEdge(
+  wrapper: HTMLElement | null,
+  edge: StripEdge | null,
+): void {
+  if (!wrapper) return
+  const safeTop = 'env(safe-area-inset-top, 0px)'
+  const safeBottom = 'env(safe-area-inset-bottom, 0px)'
+  const strip = 'var(--sidebar-ux-strip-h, 56px)'
+  const top = edge === 'top' ? `calc(${safeTop} + ${strip})` : safeTop
+  const bottom = edge === 'bottom' ? `calc(${safeBottom} + ${strip})` : safeBottom
+  if (wrapper.style.top !== top) wrapper.style.top = top
+  if (wrapper.style.bottom !== bottom) wrapper.style.bottom = bottom
+}
+
+/**
+ * S8: sync a pin spacer's in-flow size to the drawer location. Sides keeps
+ * the 56px column placeholder (node kept as restore anchor); horizontal
+ * neutralizes it to 0×0 (the list is absolutely positioned inside the strip
+ * host, so no in-flow width may remain). Called unconditionally from both
+ * pin paths on every reconcile/flip.
+ */
+export function syncSpacerForLocation(
+  spacer: HTMLElement | null,
+  location: DrawerLocation,
+): void {
+  if (!spacer) return
+  if (location === 'sides') {
+    if (spacer.style.width !== '56px') spacer.style.width = '56px'
+    if (spacer.style.height !== 'auto') spacer.style.height = 'auto'
+  } else {
+    if (spacer.style.width !== '0px') spacer.style.width = '0px'
+    if (spacer.style.height !== '0px') spacer.style.height = '0px'
+  }
 }
 
 /** Read width from a CSS var with fallback. */
@@ -121,6 +172,7 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
     fullViewportWidth = false,
     title: titleText = 'Drawer',
     drawerTabDisplay = 'none',
+    stripEdge = null,
     onDrawerTabClick,
     onHeaderClose,
   } = options
@@ -170,6 +222,9 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
       ? `left: 0; flex-direction: row-reverse;`
       : `right: 0; flex-direction: row;`};
   `
+  // S8: resolve the strip reserve at construction (no boot flash when the
+  // persisted location is Top/Bottom). Runtime flips restyle in place.
+  applyWrapperStripEdge(wrapper, stripEdge)
 
   injectDrawerTabStyles()
 
