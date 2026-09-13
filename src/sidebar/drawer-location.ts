@@ -50,6 +50,7 @@ import { reconcileMainTabListPin } from './main-tab-pin'
 import { updateStripGutters } from './strip-gutter'
 import { updateChatReflow } from '../chat/reflow'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
+import { invalidateDndGeometry, isDndDragActive } from '../tabs/tab-list-dnd'
 
 // ── Module state ──
 
@@ -179,6 +180,9 @@ function runReconcile(force: boolean): void {
 
   // A teardown/fresh reconcile during the fan-out supersedes this pass.
   if (gen !== _locGen) return
+
+  // S8: mid-drag layout churn invalidates cached DnD container geometry.
+  if (isDndDragActive()) invalidateDndGeometry()
 
   // 3. Handles + consumers (axis-aware in the consumer modules).
   updateDrawerTabVisibility()

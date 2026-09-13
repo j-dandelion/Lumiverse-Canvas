@@ -18,6 +18,7 @@ let side: 'left' | 'right' = 'left'
 const calls: string[] = []
 let modelCb: (() => void) | null = null
 let reentrantOnce = false
+let dragActive = false
 let modRef: { reconcileDrawerLocation: (opts?: { force?: boolean }) => void } | null = null
 
 // Force the synchronous presence path (no rAF in this harness).
@@ -105,6 +106,11 @@ mock.module('../../debug/styles', () => ({
   injectStyles: () => {},
 }))
 
+mock.module('../../tabs/tab-list-dnd', () => ({
+  isDndDragActive: () => dragActive,
+  invalidateDndGeometry: () => calls.push('invalidateDnd'),
+}))
+
 // ── Minimal DOM stubs ──
 
 class FakeStyle {
@@ -184,6 +190,7 @@ function resetState() {
   side = 'left'
   calls.length = 0
   reentrantOnce = false
+  dragActive = false
   secWrapper.handle!.style.display = 'flex'
   mainWrapper.handle!.style.display = 'flex'
 }
@@ -208,6 +215,17 @@ describe('drawer-location presentation (WS2)', () => {
     expect(calls).toContain('mainHandles')
     expect(calls).toContain('gutters')
     expect(calls).toContain('reflow')
+    // Idle: no DnD cache invalidation.
+    expect(calls).not.toContain('invalidateDnd')
+  })
+
+  test('reconcile mid-drag invalidates cached DnD geometry', () => {
+    initDrawerLocation()
+    reconcileDrawerLocation({ force: true })
+    calls.length = 0
+    dragActive = true
+    reconcileDrawerLocation({ force: true })
+    expect(calls).toContain('invalidateDnd')
   })
 
   test('Top: classes, wrapper offsets and handles', () => {

@@ -323,6 +323,8 @@ export function startMobileExclusion(): () => void {
     // S8: re-run the location presentation after a crossing (horizontal
     // pins on mobile too; Sides-mobile restores the S6 no-pin layout).
     void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
+    // S8: a crossing mid-drag invalidates the cached DnD geometry.
+    void import('../tabs/tab-list-dnd').then((m) => m.invalidateDndGeometry()).catch(() => {})
     // Re-evaluate drawer-tab visibility on viewport cross so desktop↔mobile
     // transitions clear any stale inline display:none from the hide setting.
     void import('../tabs/buttons').then((m) => m.updateDrawerTabVisibility())
