@@ -120,6 +120,9 @@ class StubElement {
     }
   }
   querySelector(sel: string): StubElement | null {
+    if (sel.includes('sidebar-ux-drawer-tab')) {
+      return this.children.find(c => c.className.includes('sidebar-ux-drawer-tab')) ?? null
+    }
     if (sel.includes('sidebar-ux-tab-list')) {
       for (const c of this.children) {
         if (c.className.includes('sidebar-ux-tab-list')) return c
@@ -664,6 +667,58 @@ async function runS6Tests(): Promise<void> {
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 1200
   await settle()
+
+  // ── S6.d: the main edge toggle is never hidden by the DESKTOP hide
+  //     setting on mobile — the taskbar pin strip is not mounted there, so
+  //     the toggle is the only reopen affordance (secondary parity). ──
+  const { setSettings } = await import('../../settings/state')
+  const { updateMainMirrorDrawerTabVisibility } = mainMirrorModule
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentD = new StubElement()
+  fakeContentD.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentD)
+  try {
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true, hideDrawerOpenCloseButtons: true })
+    applyMainMirrorDrawer(true)
+    const wrapperD = mainMirrorModule.getMainMirrorWrapper() as any
+    const tabD = wrapperD?.querySelector('.sidebar-ux-drawer-tab')
+    assert(!!tabD, 'S6.d0: main edge toggle exists on mobile mount')
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d1: mobile mount keeps the main edge toggle visible with hide ON',
+    )
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d2: mobile update keeps the main edge toggle visible with hide ON',
+    )
+    // Desktop: the setting hides the toggle again.
+    ;(globalThis as any).window.innerWidth = 1200
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'none',
+      'S6.d3: desktop update hides the toggle with hide ON',
+    )
+    // Desktop, hide OFF: visible.
+    setSettings({ hideDrawerOpenCloseButtons: false })
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d4: desktop hide OFF shows the toggle',
+    )
+  } finally {
+    // Module state — restore defaults so nothing leaks past this file.
+    setSettings({ taskbarMode: false, moveControlsToOuterEdge: false, hideDrawerOpenCloseButtons: false })
+    applyMainMirrorDrawer(false)
+    setFakeHostContent(null)
+    __resetMainMirrorForTest()
+    ;(globalThis as any).window.innerWidth = 1200
+    await settle()
+  }
 
   console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
   if (failed > 0) process.exit(1)

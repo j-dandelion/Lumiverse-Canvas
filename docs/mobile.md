@@ -118,6 +118,61 @@ CSS in `styles.ts` restructures the secondary tab list on mobile:
 - Active indicator: bottom underline instead of left border
 - Bottom border on the tab list
 
+### Main shell strip (S7 renderer structure)
+
+The main mirror strip is host-shaped: the renderer
+(`ensureMirrorListStructure`, `main-renderer.ts`) wraps the buttons in
+`.sidebar-ux-tab-list-main` (scrollable) + `.sidebar-ux-tab-list-bottom`
+(Settings dock) and forces **inline `flex-direction: column`** on both for the
+desktop edge strip. `MAIN_MIRROR_MOBILE_CSS` must flip **both inner sections**
+to rows on mobile, size mirror buttons (renderer writes `width: 100%` inline),
+and give the Settings dock the host `.sidebarBottom` mobile chrome
+(`border-left` separator, no top border). Horizontalizing only the outer
+`.sidebar-ux-tab-list` leaves every button stacked vertically.
+
+## Mobile exclusion is interactive, not just visual
+
+The mutual-exclusion body classes also gate interaction:
+
+- While the secondary is open, the entire main shell (`.sidebar-ux-main-mirror-wrapper`
+  and all descendants) gets `pointer-events: none !important` — the drawer
+  re-enables `pointer-events: auto` inline, and off-screen/stacked chrome could
+  otherwise receive taps.
+- Symmetric rule for the secondary shell while the main drawer is open.
+- Both Canvas edge handles use the class `.sidebar-ux-drawer-tab`
+  (hyphenated). The host's camelCase `[class*="drawerTab"]` selector does NOT
+  match it — the secondary-open hide rule must name the Canvas class explicitly.
+
+## Host drawer side effects while Canvas owns the surface
+
+Canvas pre-activates built-in tabs by clicking host main tab buttons
+(`hostBtn.click()`, `builtin-move.ts`). The host's `handleTabClick` calls
+`openDrawer()` as a side effect, so the **headless host main drawer opens and
+closes during normal second-drawer placement**. Two guards are required while
+the Canvas main shell is active:
+
+1. `main-persist`'s wrapper class observer ignores host `wrapperOpen` churn
+   entirely (`isMainMirrorActive()` gate). Otherwise it treats the programmatic
+   open as a user open: `enforceExclusionOnOpen('primary')` closes the second
+   drawer and `setMobileOpenClass('primary', true)` stamps the primary-open
+   class (which switches on the inert-shell rules).
+2. The host mobile backdrop (rendered as a **sibling** of the host wrapper,
+   z 9991 > Canvas shells' 9990) is hidden via `injectHostHideStyles` —
+   scoped with `div:has(> [class*="_wrapper_"] [data-spindle-mount="sidebar"]) > [class*="_backdrop_"]`
+   so unrelated `_backdrop_` modal layers are untouched. Without it the
+   backdrop sits over the Canvas drawers and swallows every tap.
+
+## Active-tab taps do not toggle-close on mobile
+
+Tapping the active tab toggles the drawer closed on desktop (parity between
+the secondary and the main mirror). On mobile the drawer is full-bleed, so the
+rightmost tab row overlaps the opposite drawer's edge-handle position at the
+same screen edge. The surprise close exposed the other handle under the user's
+finger, and the follow-up tap opened the wrong drawer (live report
+2026-09-12). Both toggle-close paths are gated off on mobile
+(`tabs/buttons.ts` secondary buttons, `main-renderer.ts` mirror buttons); the
+header X and the edge handles remain the mobile close affordances.
+
 ## Mobile-Specific Behavior in Other Modules
 
 - `assignToSecondary`: does not auto-open secondary drawer on mobile
@@ -125,6 +180,9 @@ CSS in `styles.ts` restructures the secondary tab list on mobile:
 - `placementFirstMoveByLiveId` (right-click "Move to …", both context menus): does not auto-open the destination drawer on mobile — desktop keeps the open-so-the-move-is-visible behavior
 - `activation-handoff`: Part C (destination activation) is skipped on mobile
 - `applyTabListPosition`: no-op on mobile (CSS forces layout)
+- drawer edge toggles (`updateDrawerTabVisibility`, `updateMainMirrorDrawerTabVisibility`): the `hideDrawerOpenCloseButtons` setting is **desktop-only**. The mobile shell never mounts the taskbar pin strip, so the edge toggle is the only main-drawer reopen affordance; hiding it stranded the main drawer (live report 2026-09-12). Body classes still hide the inactive toggle while the other drawer is open.
+- active-tab toggle-close: disabled on mobile for both drawers (see above)
 - `resize/handles`: no handles on mobile
 - `chat/reflow`: complete no-op on mobile
 - `main-persist/restoreMainDrawerFromDom`: skips width override on mobile
+- `main-persist` wrapper class observer: ignores host `wrapperOpen` churn while the Canvas main shell is active (programmatic pre-activation opens; see above)

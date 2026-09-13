@@ -78,9 +78,29 @@ export const SECONDARY_MOBILE_CSS = `
     display: none !important;
     pointer-events: none !important;
   }
-  /* Hide main's drawerTab when secondary is open on mobile */
-  body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
+  /* Hide main's drawerTab when secondary is open on mobile.
+     The Canvas shell's handle class is .sidebar-ux-drawer-tab (hyphenated),
+     which does NOT contain the host camelCase substring drawerTab — the
+     [class*="drawerTab"] selector only covers the host chrome. Match the
+     Canvas class explicitly or the main edge toggle stays visible over the
+     open secondary. */
+  body.canvas-ux-mobile-secondary-open [class*="drawerTab"],
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-drawer-tab {
     display: none !important;
+    pointer-events: none !important;
+  }
+  /* Mutual exclusion must be interactive too, not just visual. The drawer
+     re-enables pointer-events:auto inline, and while the main shell is
+     covered/stacked behind the open secondary a tap on the exposed edge
+     could still hit main-shell chrome and open the main drawer. Make the
+     whole covered shell inert (descendants included). */
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-main-mirror-wrapper,
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-main-mirror-wrapper * {
+    pointer-events: none !important;
+  }
+  /* Symmetric: the secondary shell is inert while the main drawer is open. */
+  body.canvas-ux-mobile-primary-open .sidebar-ux-secondary-wrapper,
+  body.canvas-ux-mobile-primary-open .sidebar-ux-secondary-wrapper * {
     pointer-events: none !important;
   }
     /* Host main drawer on mobile: oversize by 1px to match the +1px oversize
@@ -135,6 +155,7 @@ export const MAIN_MIRROR_MOBILE_CSS = `
   .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     width: 100% !important;
     flex-direction: row !important;
+    align-items: center !important;
     overflow-x: auto !important;
     overflow-y: hidden !important;
     scrollbar-width: none !important;
@@ -144,9 +165,59 @@ export const MAIN_MIRROR_MOBILE_CSS = `
     border-left: none !important;
     border-right: none !important;
     padding: 6px 8px !important;
+    gap: 2px !important;
   }
   .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
     display: none !important;
+  }
+  /* S7 host-shaped strip: [ .sidebar-ux-tab-list-main, .sidebar-ux-tab-list-bottom ]
+     live INSIDE the list, each forced to inline flex-direction: column by
+     the renderer (ensureMirrorListStructure, main-renderer.ts) for the desktop
+     vertical layout. Without flipping them here the outer row has a single
+     column child and every button still stacks vertically on mobile. Class
+     names are literal (main-renderer imports styles — no cycle). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
+    flex-direction: row !important;
+    align-items: center !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    min-height: auto !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    gap: 2px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Settings dock inline at the row end (host .sidebarBottom mobile rules). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-shrink: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    padding-left: 4px !important;
+    margin-left: 4px !important;
+    border-top: none !important;
+    border-left: 1px solid var(--lumiverse-primary-020) !important;
+    gap: 2px !important;
+  }
+  /* The renderer writes width: 100% inline on every mirror button (correct
+     for the desktop vertical strip). In the mobile row that would stretch
+     each button to the full scroller width — pin the host mobile geometry. */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+    padding: 6px 4px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled {
+    width: 52px !important;
+    height: 48px !important;
   }
   /* Active tab: bottom underline on mobile. Must beat the desktop
      .sidebar-ux-side-left/right inset rules → same shape as the

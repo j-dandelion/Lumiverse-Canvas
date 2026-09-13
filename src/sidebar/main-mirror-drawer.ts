@@ -366,13 +366,19 @@ export function __resetMainMirrorForTest(): void {
 }
 
 /** Update the main mirror's drawer edge toggle visibility based on settings.
- *  No-op when no shell. S6: applies on mobile too (secondary parity — the
- *  body-class CSS in SECONDARY_MOBILE_CSS/MAIN_MIRROR_MOBILE_CSS hides the
- *  toggle while the OTHER drawer is open; this controls the setting-driven
- *  hide). */
+ *  No-op when no shell.
+ *
+ *  Mobile parity with the secondary (`tabs/buttons.ts`
+ *  updateDrawerTabVisibility): the hide setting is DESKTOP-ONLY. On mobile the
+ *  taskbar pin strip is never mounted (mountMainMirror skips pinShellTabList;
+ *  reconcileMainTabListPin unpins), so this edge toggle is the only reopen
+ *  affordance for the main drawer — hiding it strands the drawer. The
+ *  body-class CSS in SECONDARY_MOBILE_CSS/MAIN_MIRROR_MOBILE_CSS still hides
+ *  the toggle while the OTHER drawer is open. Desktop behavior unchanged. */
 export function updateMainMirrorDrawerTabVisibility(): void {
   if (!_shell || !_active) return
-  _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? 'none' : 'flex'
+  _shell.drawerTab.style.display =
+    !isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled() ? 'none' : 'flex'
 }
 
 /** S6: mobile horizontal-tab-list + full-bleed CSS for the main shell
@@ -464,6 +470,21 @@ function injectHostHideStyles(): void {
       pointer-events: none !important;
     }
     /*
+     * Host mobile backdrop: ViewportDrawer renders a full-screen backdrop as
+     * a SIBLING of the wrapper while its drawer state is open (z 9991 > the
+     * Canvas shells' 9990), so the wrapper-hide rules above never covered it.
+     * Canvas's pre-activation clicks (hostBtn.click() → host
+     * handleTabClick → openDrawer()) open the headless host drawer as a
+     * side effect, and the backdrop then sat OVER the Canvas drawers,
+     * swallowing every tap (live-verify follow-up 2026-09-12). Hide it,
+     * scoped through the parent that also holds the real main wrapper so
+     * unrelated _backdrop_ modal layers are untouched.
+     */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} div:has(> [class*="_wrapper_"] [data-spindle-mount="sidebar"]) > [class*="_backdrop_"] {
+      display: none !important;
+      pointer-events: none !important;
+    }
+    /*
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
      *
@@ -529,9 +550,12 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
     }
   }
 
-  // Compute initial drawer-tab display: hide requires taskbar mode
-  // (without the pinned strip the edge toggle is the only reopen affordance).
-  const hideTab = isHideDrawerOpenCloseButtonsEnabled()
+  // Compute initial drawer-tab display: hide is desktop-only. It requires
+  // taskbar mode (without the pinned strip the edge toggle is the only reopen
+  // affordance) — and mobile never mounts the strip, so the setting must not
+  // hide the toggle there either (secondary parity: updateDrawerTabVisibility
+  // ignores the setting on mobile).
+  const hideTab = !mobile && isHideDrawerOpenCloseButtonsEnabled()
 
   _shell = createDrawerShell({
     owner: 'main',

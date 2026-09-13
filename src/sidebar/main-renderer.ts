@@ -511,6 +511,13 @@ export function renderMainMirrorTabs(): void {
 // Interaction (click / contextmenu) — replaces onMirrorClick
 // ---------------------------------------------------------------------------
 
+/** Local mobile check (avoids a static import cycle with mobile-exclusion →
+ *  secondary; same pattern as tabs/buttons.ts). */
+function _isMobileRenderer(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false
+  return window.matchMedia('(max-width: 600px)').matches
+}
+
 function onMirrorClick(ev: Event): void {
   ev.preventDefault()
   ev.stopPropagation()
@@ -546,8 +553,14 @@ function onMirrorClick(ev: Event): void {
   // Toggle-close parity: compare against the MODEL active — never a parallel
   // mirror key (that machinery is gone). Falls through when closed so a
   // closed-drawer click on the active tab opens (secondary parity).
+  //
+  // Mobile: active-tab taps do NOT toggle-close. The main shell is
+  // full-bleed there, so its rightmost tab row sits where the opposite
+  // drawer's handle appears when this drawer closes — a follow-up tap landed
+  // on that handle (live report 2026-09-12, tap-diag). The X button + edge
+  // handles remain the mobile close affordances.
   const model = getModel()
-  if (isCanvasMainOpen() && model != null && model.active.primary === key) {
+  if (isCanvasMainOpen() && !_isMobileRenderer() && model != null && model.active.primary === key) {
     dlog('[main-renderer] click → close (active tab)', { title, key })
     closeCanvasMainDrawer()
     return

@@ -1053,12 +1053,26 @@ function _initObservers(drawer: HTMLElement): void {
   // toggle `wrapperOpen`. S3: this observer now serves ONLY the mobile
   // exclusion hooks — host-state persistence flows through the owned
   // model (dispatch), not host-DOM observation.
+  //
+  // S6 shell truth (live-verify follow-up 2026-09-12): while the Canvas main
+  // shell owns the surface, the host wrapper is HEADLESS. Canvas's own
+  // pre-activation clicks (`hostBtn.click()` in builtin-move) run the host's
+  // `handleTabClick → openDrawer()` as a side effect, which flips
+  // `wrapperOpen`. Reacting to that here closed the second drawer and
+  // stamped `canvas-ux-mobile-primary-open` for a drawer the user never
+  // opened (the host mobile backdrop then swallowed taps over the secondary).
+  // Shell open/close paths call setMobileOpenClass themselves, so ignore
+  // host class churn entirely while the shell is active.
   _classObserver = new MutationObserver((mutations) => {
     if (_stopped) return
     for (const m of mutations) {
       if (m.type === 'attributes' && m.attributeName === 'class') {
         // Mobile exclusion: detect closed→open transition
         if (wrapper) {
+          if (isMainMirrorActive()) {
+            dlog('[main-persist] classObserver: shell owns surface — host wrapper class ignored')
+            break
+          }
           const isOpen = readWrapperOpen(wrapper)
           enforceExclusionOnOpen('primary')
           setMobileOpenClass('primary', isOpen)

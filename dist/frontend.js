@@ -856,9 +856,29 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     display: none !important;
     pointer-events: none !important;
   }
-  /* Hide main's drawerTab when secondary is open on mobile */
-  body.canvas-ux-mobile-secondary-open [class*="drawerTab"] {
+  /* Hide main's drawerTab when secondary is open on mobile.
+     The Canvas shell's handle class is .sidebar-ux-drawer-tab (hyphenated),
+     which does NOT contain the host camelCase substring drawerTab — the
+     [class*="drawerTab"] selector only covers the host chrome. Match the
+     Canvas class explicitly or the main edge toggle stays visible over the
+     open secondary. */
+  body.canvas-ux-mobile-secondary-open [class*="drawerTab"],
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-drawer-tab {
     display: none !important;
+    pointer-events: none !important;
+  }
+  /* Mutual exclusion must be interactive too, not just visual. The drawer
+     re-enables pointer-events:auto inline, and while the main shell is
+     covered/stacked behind the open secondary a tap on the exposed edge
+     could still hit main-shell chrome and open the main drawer. Make the
+     whole covered shell inert (descendants included). */
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-main-mirror-wrapper,
+  body.canvas-ux-mobile-secondary-open .sidebar-ux-main-mirror-wrapper * {
+    pointer-events: none !important;
+  }
+  /* Symmetric: the secondary shell is inert while the main drawer is open. */
+  body.canvas-ux-mobile-primary-open .sidebar-ux-secondary-wrapper,
+  body.canvas-ux-mobile-primary-open .sidebar-ux-secondary-wrapper * {
     pointer-events: none !important;
   }
     /* Host main drawer on mobile: oversize by 1px to match the +1px oversize
@@ -907,6 +927,7 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list {
     width: 100% !important;
     flex-direction: row !important;
+    align-items: center !important;
     overflow-x: auto !important;
     overflow-y: hidden !important;
     scrollbar-width: none !important;
@@ -916,9 +937,59 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     border-left: none !important;
     border-right: none !important;
     padding: 6px 8px !important;
+    gap: 2px !important;
   }
   .sidebar-ux-main-mirror-wrapper > .sidebar-ux-drawer > .sidebar-ux-tab-list::-webkit-scrollbar {
     display: none !important;
+  }
+  /* S7 host-shaped strip: [ .sidebar-ux-tab-list-main, .sidebar-ux-tab-list-bottom ]
+     live INSIDE the list, each forced to inline flex-direction: column by
+     the renderer (ensureMirrorListStructure, main-renderer.ts) for the desktop
+     vertical layout. Without flipping them here the outer row has a single
+     column child and every button still stacks vertically on mobile. Class
+     names are literal (main-renderer imports styles — no cycle). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
+    flex-direction: row !important;
+    align-items: center !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    min-height: auto !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    gap: 2px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::-webkit-scrollbar {
+    display: none !important;
+  }
+  /* Settings dock inline at the row end (host .sidebarBottom mobile rules). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-shrink: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    padding-left: 4px !important;
+    margin-left: 4px !important;
+    border-top: none !important;
+    border-left: 1px solid var(--lumiverse-primary-020) !important;
+    gap: 2px !important;
+  }
+  /* The renderer writes width: 100% inline on every mirror button (correct
+     for the desktop vertical strip). In the mobile row that would stretch
+     each button to the full scroller width — pin the host mobile geometry. */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+    padding: 6px 4px !important;
+  }
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled {
+    width: 52px !important;
+    height: 48px !important;
   }
   /* Active tab: bottom underline on mobile. Must beat the desktop
      .sidebar-ux-side-left/right inset rules → same shape as the
@@ -3474,6 +3545,11 @@ function renderMainMirrorTabs() {
     hidden: model.hidden.length
   });
 }
+function _isMobileRenderer() {
+  if (typeof window === "undefined" || !window.matchMedia)
+    return false;
+  return window.matchMedia("(max-width: 600px)").matches;
+}
 function onMirrorClick(ev) {
   ev.preventDefault();
   ev.stopPropagation();
@@ -3497,7 +3573,7 @@ function onMirrorClick(ev) {
     return;
   }
   const model = getModel();
-  if (isCanvasMainOpen() && model != null && model.active.primary === key) {
+  if (isCanvasMainOpen() && !_isMobileRenderer() && model != null && model.active.primary === key) {
     dlog("[main-renderer] click → close (active tab)", { title, key });
     closeCanvasMainDrawer();
     return;
@@ -9491,7 +9567,8 @@ function addSecondaryTabButton(tab) {
   btn.addEventListener("click", () => {
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        closeSecondarySidebar();
+        if (!_isMobileViewport())
+          closeSecondarySidebar();
       } else {
         showSecondaryTab(tab.id);
       }
@@ -10738,7 +10815,7 @@ function __resetMainMirrorForTest() {
 function updateMainMirrorDrawerTabVisibility() {
   if (!_shell || !_active)
     return;
-  _shell.drawerTab.style.display = isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
+  _shell.drawerTab.style.display = !isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
 }
 function injectMainMirrorMobileStyles() {
   injectStyles("sidebar-ux-main-mirror-mobile", MAIN_MIRROR_MOBILE_CSS);
@@ -10801,6 +10878,21 @@ function injectHostHideStyles() {
       pointer-events: none !important;
     }
     /*
+     * Host mobile backdrop: ViewportDrawer renders a full-screen backdrop as
+     * a SIBLING of the wrapper while its drawer state is open (z 9991 > the
+     * Canvas shells' 9990), so the wrapper-hide rules above never covered it.
+     * Canvas's pre-activation clicks (hostBtn.click() → host
+     * handleTabClick → openDrawer()) open the headless host drawer as a
+     * side effect, and the backdrop then sat OVER the Canvas drawers,
+     * swallowing every tap (live-verify follow-up 2026-09-12). Hide it,
+     * scoped through the parent that also holds the real main wrapper so
+     * unrelated _backdrop_ modal layers are untouched.
+     */
+    html.${CANVAS_MAIN_ACTIVE_CLASS} div:has(> [class*="_wrapper_"] [data-spindle-mount="sidebar"]) > [class*="_backdrop_"] {
+      display: none !important;
+      pointer-events: none !important;
+    }
+    /*
      * Host panelContent parked in the Canvas shell fills the content slot
      * like a secondary-drawer tab root — in normal flow, not position:fixed.
      *
@@ -10860,7 +10952,7 @@ function mountMainMirror(opts) {
       seedW = undefined;
     }
   }
-  const hideTab = isHideDrawerOpenCloseButtonsEnabled();
+  const hideTab = !mobile && isHideDrawerOpenCloseButtonsEnabled();
   _shell = createDrawerShell({
     owner: "main",
     side,
@@ -12242,6 +12334,10 @@ function _initObservers(drawer) {
     for (const m3 of mutations) {
       if (m3.type === "attributes" && m3.attributeName === "class") {
         if (wrapper) {
+          if (isMainMirrorActive()) {
+            dlog("[main-persist] classObserver: shell owns surface — host wrapper class ignored");
+            break;
+          }
           const isOpen = readWrapperOpen(wrapper);
           enforceExclusionOnOpen("primary");
           setMobileOpenClass("primary", isOpen);
