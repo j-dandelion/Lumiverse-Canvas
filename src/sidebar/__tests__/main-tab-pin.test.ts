@@ -1024,6 +1024,64 @@ function reset(): void {
   shutdownModel()
 }
 
+// M8d (live report 2026-09-14): Sides mode + taskbar chrome (pinned strip).
+// The pin must orient the drawer so the 56px spacer sits on the OUTER
+// (screen-edge) side: side-right → row-reverse, side-left → row. Before the
+// fix, pinMainMirrorShellTabList only touched the list; while pinned,
+// applyTabListPosition deliberately skips the drawer flex and restyleShellSide
+// is not reached on a location flip, so the previous (unpinned) flex survived
+// ('row' for the default right side): the spacer sat on the inner side and the
+// panel rode 56px under the pin strip with a gap. Toggling outer-edge off/on
+// masked it by running applyTabListPosition while temporarily unpinned.
+// Horizontal skips the write (spacer neutralized to 0×0) — the Sides pin must
+// re-assert it.
+{
+  reset()
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', true))
+  const host = new FakeHost([makeLiveTab(PROFILE, 'profile')])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  // Boot in Sides with taskbar chrome on (pinned strip).
+  hydrateSettings({ drawerLocation: 'sides', taskbarMode: true, moveControlsToOuterEdge: true })
+  bootstrap(model, host)
+  await flush()
+  reconcileMainTabListPin()
+
+  const shellDrawer = getMainMirrorDrawer() as unknown as StubElement | null
+  assert(!!shellDrawer, 'M8d: main shell drawer mounted')
+
+  // The stale state the real app carries into a Top→Sides flip: while pinned,
+  // applyTabListPosition deliberately skips the drawer flex and restyleShellSide
+  // is not called on a location flip (same side) — so the mount/horizontal
+  // value survives. Side-right default (controls in the inner drawer) is 'row';
+  // the pinned orientation must be 'row-reverse' (spacer on the outer edge).
+  shellDrawer!.style.flexDirection = 'row'
+
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8d: Sides pin writes the outer-edge drawer flex (side-right)',
+  )
+
+  // Re-pinning (already pinned) re-asserts it too — idempotent.
+  shellDrawer!.style.flexDirection = 'row'
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8d: re-pin re-asserts the pinned flex',
+  )
+
+  hydrateSettings(null)
+  shutdownModel()
+}
+
 // M9: Settings mirrors into bottom dock with separator chrome (host .sidebarBottom)
 {
   reset()

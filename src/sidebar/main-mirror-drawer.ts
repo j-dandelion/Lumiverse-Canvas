@@ -681,6 +681,21 @@ export function pinMainMirrorShellTabList(side: 'left' | 'right'): HTMLElement |
   // covers location flips while already pinned).
   syncSpacerForLocation(_pinSpacer, getDrawerLocation())
   applyPinnedTabListChrome(tabList, side)
+
+  // S8: Sides pinned — the 56px spacer is in flow and must sit on the outer
+  // (screen-edge) side: side-right → row-reverse, side-left → row. Same
+  // contract as the secondary pinTabList / restyleShellSide. Horizontal
+  // neutralizes the spacer to 0×0, so skip the write there (it would fight
+  // the horizontal layout). Without this a location flip (Top→Sides) left
+  // the drawer at its unpinned flex — the panel rode 56px under the pin
+  // strip with a gap on the inner side (live report 2026-09-14; toggling
+  // outer-edge off/on masked it by running applyTabListPosition unpinned).
+  if (!isHorizontalStrip()) {
+    const wantFlex = side === 'right' ? 'row-reverse' : 'row'
+    if (_shell.drawer.style.flexDirection !== wantFlex) {
+      _shell.drawer.style.flexDirection = wantFlex
+    }
+  }
   return host
 }
 

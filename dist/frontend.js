@@ -12868,6 +12868,12 @@ function pinMainMirrorShellTabList(side) {
   }
   syncSpacerForLocation(_pinSpacer2, getDrawerLocation());
   applyPinnedTabListChrome(tabList, side);
+  if (!isHorizontalStrip()) {
+    const wantFlex = side === "right" ? "row-reverse" : "row";
+    if (_shell.drawer.style.flexDirection !== wantFlex) {
+      _shell.drawer.style.flexDirection = wantFlex;
+    }
+  }
   return host;
 }
 function unpinMainMirrorShellTabList() {
