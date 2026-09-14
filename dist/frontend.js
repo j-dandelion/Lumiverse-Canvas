@@ -11721,6 +11721,21 @@ function isHostedBrowserContext() {
     return false;
   }
 }
+function convergeModelToHostSide(hostSide) {
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
+    const modelSide = m3.getModel()?.side;
+    if (!modelSide || modelSide === hostSide)
+      return;
+    if (Date.now() - _lastCanvasSwapMs < 800) {
+      dlog("[drawer-sync] host side change ignored — recent Canvas swap", { hostSide, modelSide });
+      return;
+    }
+    dlog("[drawer-sync] host side change detected — unifying via Canvas", { hostSide, modelSide });
+    return m3.dispatch({ t: "swapSides" }).catch((err) => {
+      dwarn("[drawer-sync] host side unify dispatch failed:", err);
+    });
+  });
+}
 function startHostSideWatcher() {
   if (_hostWatcherStarted)
     return;
@@ -11739,19 +11754,7 @@ function startHostSideWatcher() {
     if (hostSide === _lastSeenHostSide)
       return;
     _lastSeenHostSide = hostSide;
-    const currentModelSide = getMainDrawerSide();
-    if (hostSide === currentModelSide)
-      return;
-    if (Date.now() - _lastCanvasSwapMs < 800) {
-      dlog("[drawer-sync] host side change ignored — recent Canvas swap", { hostSide, currentModelSide });
-      return;
-    }
-    dlog("[drawer-sync] host side change detected — unifying via Canvas", { hostSide, currentModelSide });
-    Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
-      m3.dispatch({ t: "swapSides" }).catch((err) => {
-        dwarn("[drawer-sync] host side unify dispatch failed:", err);
-      });
-    });
+    convergeModelToHostSide(hostSide);
   }, 500);
   _hostSideWatcher.unref?.();
   registerCleanup(() => stopHostSideWatcher());
@@ -11998,6 +12001,7 @@ function checkSideChanged() {
       secondDrawerEnabled: getSettings().secondSidebarEnabled
     });
     applyCanvasSideChange(currentSide, { syncHost: false });
+    convergeModelToHostSide(currentSide);
   } else {
     _lastKnownSide = currentSide;
     syncDrawerTabSettings();

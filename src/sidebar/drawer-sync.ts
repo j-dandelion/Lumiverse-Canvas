@@ -21,7 +21,10 @@
 // 500ms host-settings watcher that detect a main drawer side flip
 // (Canvas swap, boot restore, or Lumiverse's own "Drawer side" setting)
 // and apply it as CSS-only geometry: applyCanvasSideChange restyles both
-// Canvas shells in place — no remount, no container churn (S4).
+// Canvas shells in place — no remount, no container churn (S4). A
+// host-driven flip must also converge the OWNED MODEL as it happens
+// (`convergeModelToHostSide`, S8 #2) — otherwise reconcile's model→host
+// diffSide writes the stale side back on the next dispatch.
 //
 // startTabRegistrationWatcher — 3s poll that re-tags main sidebar
 // buttons (catches post-MutationObserver registrations) and removes
@@ -218,10 +221,49 @@ function isHostedBrowserContext(): boolean {
 }
 
 /**
+ * Host-driven side flip → adopt the host side into the owned model (S8 #2).
+ *
+ * The host DOM flip is authoritative ONLY for flips that did not originate
+ * from a Canvas apply: `applyCanvasSideChange` stamps `_lastKnownSide` before
+ * the host wrapper can flip, so a Canvas-caused flip never reaches the
+ * changed-side call site, and the model already carries the desired side
+ * (this helper no-ops on `modelSide === hostSide`).
+ *
+ * The model MUST converge before the next reconcile: reconcile's `diffSide`
+ * (recon/reconcile.ts) is model→host, so a stale model side is written back
+ * to the host on the next dispatch (opening a tab) and the strip snaps back
+ * to the old edge — the S8 live-walk reset. `getMainDrawerSide()` cannot be
+ * used for this decision: it is DOM-first and already reflects the host flip
+ * by the time any callback runs, so the old check silently no-opped.
+ *
+ * Callers: `checkSideChanged` (host wrapper MO — immediate) and
+ * `startHostSideWatcher` (500ms store poll — fallback; the host-settings
+ * fiber-walk cache can lag the flip by up to CACHE_TTL_MS).
+ */
+function convergeModelToHostSide(hostSide: 'left' | 'right'): void {
+  void import('../recon/dispatch').then((m) => {
+    const modelSide = m.getModel()?.side
+    if (!modelSide || modelSide === hostSide) return
+    // Ignore the echo of our own Canvas swap (model already flipping to hostSide).
+    if (Date.now() - _lastCanvasSwapMs < 800) {
+      dlog('[drawer-sync] host side change ignored — recent Canvas swap', { hostSide, modelSide })
+      return
+    }
+    dlog('[drawer-sync] host side change detected — unifying via Canvas', { hostSide, modelSide })
+    // Two sides: one swap from the differing model side reaches hostSide.
+    return m.dispatch({ t: 'swapSides' }).catch((err: unknown) => {
+      dwarn('[drawer-sync] host side unify dispatch failed:', err)
+    })
+  })
+}
+
+/**
  * Host Settings side watcher — makes Lumiverse's Drawer side identical to
  * the Canvas side. On boot, prefer the model and write the host to match.
- * When the USER flips Lumiverse's own setting, unify via a Canvas swap.
- * The 800ms guard after a Canvas swap suppresses the echo path.
+ * When the USER flips Lumiverse's own setting, unify via a Canvas swap
+ * (`convergeModelToHostSide` — compares against the OWNED MODEL, not the
+ * DOM, or the flip is never detected). The 800ms guard after a Canvas swap
+ * suppresses the echo path.
  */
 export function startHostSideWatcher(): void {
   if (_hostWatcherStarted) return
@@ -239,20 +281,9 @@ export function startHostSideWatcher(): void {
     if (!hostSide) return
     if (hostSide === _lastSeenHostSide) return
     _lastSeenHostSide = hostSide
-    const currentModelSide = getMainDrawerSide()
-    if (hostSide === currentModelSide) return
-    // Ignore the echo of our own Canvas swap (model already flipping to hostSide).
-    if (Date.now() - _lastCanvasSwapMs < 800) {
-      dlog('[drawer-sync] host side change ignored — recent Canvas swap', { hostSide, currentModelSide })
-      return
-    }
-    dlog('[drawer-sync] host side change detected — unifying via Canvas', { hostSide, currentModelSide })
-    void import('../recon/dispatch').then((m) => {
-      // swapSides toggles; since hostSide !== currentModelSide, one swap reaches hostSide
-      m.dispatch({ t: 'swapSides' } as unknown as Parameters<typeof m.dispatch>[0]).catch((err) => {
-        dwarn('[drawer-sync] host side unify dispatch failed:', err)
-      })
-    })
+    // Compare against the OWNED MODEL inside the helper — the DOM side
+    // already matches the flipped wrapper here (S8 #2).
+    convergeModelToHostSide(hostSide)
   }, 500)
   // unref so a pending poll never keeps the process alive in tests; the
   // browser ignores the method (timers are numbers there).
@@ -656,9 +687,10 @@ export function syncSecondaryTabLabels(forceShow?: boolean): void {
  *    shells are already restyled; this handler only stamps + light-syncs.
  *  - Host-driven flip (Lumiverse "Drawer side" setting): the host DOM
  *    class flips FIRST. The shells lag → restyle via applyCanvasSideChange
- *    with syncHost:false — pure geometry, NO _lastSeenHostSide stamp, so
- *    the 500ms host watcher still observes the change and converges the
- *    model (dispatch swapSides → diffSide → host.setSide no-op).
+ *    with syncHost:false — pure geometry, NO _lastSeenHostSide stamp. The
+ *    owned model converges immediately via convergeModelToHostSide (S8 #2);
+ *    the 500ms host watcher remains the fallback for missed flips
+ *    (dispatch swapSides → diffSide → host.setSide no-op).
  */
 export function checkSideChanged(): void {
   const currentSide = getMainDrawerSide()
@@ -680,6 +712,12 @@ export function checkSideChanged(): void {
       secondDrawerEnabled: getSettings().secondSidebarEnabled,
     })
     void applyCanvasSideChange(currentSide, { syncHost: false })
+    // S8 #2: adopt the host-driven flip into the owned model NOW. Relying on
+    // the 500ms host watcher alone races the user's next dispatch (opening a
+    // tab): while the model still holds the old side, reconcile's diffSide
+    // (model→host) writes it back and the strip snaps back. See
+    // convergeModelToHostSide.
+    convergeModelToHostSide(currentSide)
   } else {
     // Same side (override settle echo) — just light-sync + stamp.
     _lastKnownSide = currentSide
