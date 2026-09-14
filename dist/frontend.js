@@ -107,6 +107,12 @@ function normalizeCanvasSettingsFields(s) {
   if (out.drawerLocation !== "sides") {
     out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true };
   }
+  {
+    const p = out.sidesChromePrefs;
+    if (p != null && (typeof p !== "object" || typeof p.taskbarMode !== "boolean" || typeof p.moveControlsToOuterEdge !== "boolean")) {
+      out = { ...out, sidesChromePrefs: null };
+    }
+  }
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
   }
@@ -145,6 +151,7 @@ var init_types = __esm(() => {
     resizeSidebars: true,
     mirrorCompactPosition: true,
     drawerLocation: "sides",
+    sidesChromePrefs: null,
     moveControlsToOuterEdge: false,
     taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
@@ -16298,6 +16305,22 @@ function setSettings(patch) {
     const v3 = patch[key];
     if (v3 !== undefined)
       next[key] = v3;
+  }
+  const chromeTouched = patch.taskbarMode !== undefined || patch.moveControlsToOuterEdge !== undefined;
+  if (next.drawerLocation === "sides" && chromeTouched) {
+    next.sidesChromePrefs = {
+      taskbarMode: !!next.taskbarMode,
+      moveControlsToOuterEdge: !!next.moveControlsToOuterEdge
+    };
+  }
+  if (prev.drawerLocation !== "sides" && next.drawerLocation === "sides") {
+    const prefs = next.sidesChromePrefs ?? {
+      taskbarMode: DEFAULT_CANVAS_SETTINGS.taskbarMode,
+      moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge
+    };
+    next.taskbarMode = prefs.taskbarMode;
+    next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge;
+    next.sidesChromePrefs = { ...prefs };
   }
   _settings = normalizeCanvasSettings(next);
   setDebug(_settings.debugMode);

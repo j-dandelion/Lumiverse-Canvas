@@ -7,6 +7,8 @@ function assert(cond: unknown, msg: string) {
 
 import {
   getSettings,
+  hydrateSettings,
+  setSettings,
   normalizeCanvasSettings,
   isTaskbarModeEnabled,
   isHideDrawerOpenCloseButtonsEnabled,
@@ -387,7 +389,8 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(ordering.taskbarMode, true, 'ordering: taskbar forced on')
   assertEqual(isHideDrawerOpenCloseButtonsEnabled(ordering), true, 'ordering: effective hide gate on')
 
-  // Returning to sides leaves the forced taskbar flags on (never forces off).
+  // Normalize alone never forces the flags off on Sides (setSettings owns the
+  // restore — see the S8 excursion block below).
   const back = normalizeCanvasSettings(mergeCanvasSettings({
     drawerLocation: 'sides',
     taskbarMode: true,
@@ -402,6 +405,77 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   const sidesOnly = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'sides' }))
   assertEqual(sidesOnly.taskbarMode, false, 'sides alone does not force taskbarMode')
   assertEqual(sidesOnly.moveControlsToOuterEdge, false, 'sides alone does not force outer-edge')
+}
+
+// --- S8: Sides taskbar/outer-edge prefs survive a Top/Bottom excursion ---
+// Top/Bottom force both flags on (normalize invariant). setSettings records
+// the user's Sides values in `sidesChromePrefs` on an explicit toggle and
+// restores them when the location returns to sides.
+{
+  // Explicit on/on while on Sides, round-tripped through Top.
+  hydrateSettings(null)
+  assertEqual(getSettings().drawerLocation, 'sides', 'excursion: starts on sides')
+  assertEqual(getSettings().sidesChromePrefs, null, 'excursion: no snapshot until an explicit toggle')
+  setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  const snap = getSettings().sidesChromePrefs
+  assertEqual(snap?.taskbarMode, true, 'excursion: on/on toggle recorded')
+  assertEqual(snap?.moveControlsToOuterEdge, true, 'excursion: on/on toggle recorded (outer)')
+  setSettings({ drawerLocation: 'top' })
+  assertEqual(getSettings().taskbarMode, true, 'excursion: top forces taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'excursion: top forces outer on')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().drawerLocation, 'sides', 'excursion: back on sides')
+  assertEqual(getSettings().taskbarMode, true, 'excursion: restores taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'excursion: restores outer on')
+
+  // Explicit off/off while on Sides, round-tripped through Bottom.
+  hydrateSettings(null)
+  setSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  setSettings({ drawerLocation: 'bottom' })
+  assertEqual(getSettings().taskbarMode, true, 'excursion: bottom forces taskbar on')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'excursion: restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'excursion: restores outer off')
+
+  // Legacy blob (no snapshot) last saved while horizontal: the forced values
+  // are not trustworthy, so the return to Sides falls back to the defaults
+  // instead of leaving them on (the reported bug).
+  hydrateSettings({ drawerLocation: 'top', taskbarMode: true, moveControlsToOuterEdge: true })
+  assertEqual(getSettings().sidesChromePrefs, null, 'legacy: no snapshot')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'legacy: falls back to default taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'legacy: falls back to default outer off')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'legacy: fallback recorded')
+
+  // Persisted snapshot (reload while horizontal) is honored over defaults.
+  hydrateSettings({
+    drawerLocation: 'bottom',
+    taskbarMode: true,
+    moveControlsToOuterEdge: true,
+    sidesChromePrefs: { taskbarMode: false, moveControlsToOuterEdge: true },
+  })
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'persisted snapshot: restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'persisted snapshot: restores outer on')
+
+  // Corrupt snapshot shape is dropped by normalize → defaults fallback.
+  const corrupt = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: { taskbarMode: 'yes', moveControlsToOuterEdge: 1 } as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(corrupt.sidesChromePrefs, null, 'corrupt snapshot dropped to null')
+  const corrupt2 = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: 'nope' as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(corrupt2.sidesChromePrefs, null, 'non-object snapshot dropped to null')
+
+  // A plain explicit toggle on Sides alone (without a location change)
+  // keeps the record current for the next excursion.
+  hydrateSettings(null)
+  setSettings({ moveControlsToOuterEdge: true })
+  assertEqual(getSettings().sidesChromePrefs?.moveControlsToOuterEdge, true, 'toggle records outer on')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'toggle records taskbar default off')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

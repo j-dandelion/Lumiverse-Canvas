@@ -74,7 +74,7 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 
 **Dependency chain (normalize, order matters):**
 1. `drawerLocation` enum coercion (unknown → `sides`)
-2. Location invariant: `top`/`bottom` force `moveControlsToOuterEdge` + `taskbarMode` ON (never forces them off on Sides)
+2. Location invariant: `top`/`bottom` force `moveControlsToOuterEdge` + `taskbarMode` ON. Normalize never forces them off — the Sides restore lives in `setSettings` (needs prev/next): an explicit chrome toggle while on Sides records `sidesChromePrefs`, and a horizontal → sides location change restores it (defaults when the record is absent, e.g. a legacy blob last saved while horizontal).
 3. `hideDrawerOpenCloseButtons` requires `taskbarMode` (must run after #2 so a location flip does not clear `hide`)
 - `dragAndDropDrawerTabs` is NOT cascaded (S7 removed the cascade) — the toggle is its only gate.
 - Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode; `isDragAndDropDrawerTabsEnabled(s)` = the toggle alone (S7); `isHorizontalStrip(s)` / `getDrawerLocation(s)` / `getStripEdge(s)` for Drawer location.

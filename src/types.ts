@@ -65,8 +65,18 @@ export interface CanvasSettings {
    *  always-visible horizontal strip to that viewport edge while panels
    *  still slide in from their own side. Selecting top/bottom forces
    *  `moveControlsToOuterEdge` + `taskbarMode` on (normalize invariant);
-   *  returning to sides leaves them on. */
+   *  returning to sides restores the user's Sides values from
+   *  `sidesChromePrefs` (see `setSettings`). */
   drawerLocation?: DrawerLocation
+
+  /** Internal bookkeeping (never a user-facing toggle): the user's
+   *  `taskbarMode` + `moveControlsToOuterEdge` values while on Sides.
+   *  Top/Bottom force both on (`normalizeCanvasSettingsFields` invariant),
+   *  so a plain setting flip would bake the forced values in; this snapshot
+   *  lets the return to Sides restore the user's prefs. `null` = no explicit
+   *  Sides choice recorded yet (legacy blob) → restore the defaults.
+   *  Written by `setSettings` on an explicit chrome toggle while on Sides. */
+  sidesChromePrefs?: { taskbarMode: boolean; moveControlsToOuterEdge: boolean } | null
 
   /** Move the tab-button column to the screen-edge side of the secondary
    *  sidebar (desktop/tablet only). The border stays between the tab list
@@ -163,6 +173,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   // Drawers
   drawerLocation: 'sides',
+  sidesChromePrefs: null,
   moveControlsToOuterEdge: false,
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
@@ -202,8 +213,10 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  * S8 (Drawer location) cascades — ORDER MATTERS:
  *   1. Enum coercion: corrupt/unknown `drawerLocation` → `'sides'`.
  *   2. Location invariant: `'top' | 'bottom'` forces `moveControlsToOuterEdge`
- *      + `taskbarMode` on. Never forces them off (returning to Sides leaves
- *      the user's taskbar chrome as-is).
+ *      + `taskbarMode` on. Never forces them off — the Sides restore lives in
+ *      `setSettings` (it needs prev/next, this function has only one state).
+ *   2b. `sidesChromePrefs` shape validation (corrupt persisted bookkeeping →
+ *      null, so the Sides restore falls back to defaults).
  *   3. `hideDrawerOpenCloseButtons` requires taskbarMode (must run AFTER the
  *      location invariant, so `{hide:true, taskbar:false, location:'top'}`
  *      keeps `hide`).
@@ -221,6 +234,19 @@ export function normalizeCanvasSettingsFields(
   // taskbar chrome (outer-edge tab controls + pinned strips).
   if (out.drawerLocation !== 'sides') {
     out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true }
+  }
+  // Cascade 2b: sidesChromePrefs shape validation. Persisted bookkeeping —
+  // a corrupt shape is dropped to null (the Sides restore then uses defaults).
+  {
+    const p = out.sidesChromePrefs as unknown
+    if (
+      p != null
+      && (typeof p !== 'object'
+        || typeof (p as { taskbarMode?: unknown }).taskbarMode !== 'boolean'
+        || typeof (p as { moveControlsToOuterEdge?: unknown }).moveControlsToOuterEdge !== 'boolean')
+    ) {
+      out = { ...out, sidesChromePrefs: null }
+    }
   }
   // Cascade 3: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {

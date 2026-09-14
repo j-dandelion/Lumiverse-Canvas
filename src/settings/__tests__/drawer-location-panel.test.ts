@@ -206,30 +206,54 @@ describe('drawer location panel (WS1)', () => {
     expect(control(dndRow).disabled).toBe(false)
   })
 
-  test('returning to Sides unlocks rows and restores the stored hide value', () => {
+  test('returning to Sides restores the pre-excursion Sides flags (defaults when unset)', () => {
     const root = mountPanel()
     const group = root.querySelector('.sidebar-ux-panel-segmented')!
-    group.children[2].click() // Bottom
+    group.children[2].click() // Bottom (forces taskbar chrome on)
     group.children[0].click() // Sides
 
     const s = getSettings()
     expect(s.drawerLocation).toBe('sides')
-    // Returning to sides leaves the auto-enabled flags on.
-    expect(s.taskbarMode).toBe(true)
-    expect(s.moveControlsToOuterEdge).toBe(true)
+    // No explicit Sides choice was recorded before the excursion, so the
+    // horizontal-forced values are NOT carried back — defaults (off/off).
+    expect(s.taskbarMode).toBe(false)
+    expect(s.moveControlsToOuterEdge).toBe(false)
 
     const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
     const taskbarRow = rowByLabel(root, 'Taskbar mode')
     const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
     expect(control(moveRow).disabled).toBe(false)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
-    expect(control(taskbarRow).disabled).toBe(false)
+    // Taskbar requires outer-edge (now off) → locked off again.
+    expect(control(taskbarRow).disabled).toBe(true)
+    expect(taskbarRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
     expect(hint(moveRow).textContent).toContain('Moves the list of tab buttons')
     expect(hint(taskbarRow).textContent).toContain('Pins tab buttons to the screen edge')
-    // Stored hide value is false, so the row shows off + enabled (taskbar on).
+    // Hide requires taskbar → off + disabled with the normal hint.
     expect(control(hideRow).getAttribute('aria-checked')).toBe('false')
-    expect(control(hideRow).disabled).toBe(false)
+    expect(control(hideRow).disabled).toBe(true)
     expect(hint(hideRow).textContent).toContain('Hides the small button')
+  })
+
+  test('returning to Sides restores flags the user explicitly enabled on Sides', () => {
+    const root = mountPanel()
+    const group = root.querySelector('.sidebar-ux-panel-segmented')!
+    const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
+    const taskbarRow = rowByLabel(root, 'Taskbar mode')
+    // Record a deliberate on/on choice while on Sides.
+    control(moveRow).click()
+    control(taskbarRow).click()
+    expect(getSettings().moveControlsToOuterEdge).toBe(true)
+    expect(getSettings().taskbarMode).toBe(true)
+
+    group.children[1].click() // Top
+    group.children[0].click() // Sides
+    const s = getSettings()
+    expect(s.drawerLocation).toBe('sides')
+    expect(s.taskbarMode).toBe(true)
+    expect(s.moveControlsToOuterEdge).toBe(true)
+    expect(control(moveRow).disabled).toBe(false)
+    expect(control(taskbarRow).disabled).toBe(false)
   })
 
   test('arrow keys move the radio selection', () => {

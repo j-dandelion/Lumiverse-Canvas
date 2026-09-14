@@ -11,6 +11,7 @@
 //
 
 import {
+  DEFAULT_CANVAS_SETTINGS,
   mergeCanvasSettings,
   normalizeCanvasSettingsFields,
   type CanvasSettings,
@@ -140,6 +141,32 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     const v = patch[key]
     if (v !== undefined) (next as Record<string, unknown>)[key] = v
   }
+
+  // S8 (Drawer location): Top/Bottom force taskbar chrome on via the
+  // normalize invariant, which would otherwise bake the forced values in.
+  // Keep the user's actual Sides values in `sidesChromePrefs` and restore
+  // them on the way back:
+  //   - explicit chrome toggle while on Sides → record the new values
+  //   - horizontal → sides → restore the record (defaults when none exists,
+  //     e.g. a legacy blob last saved while horizontal)
+  const chromeTouched =
+    patch.taskbarMode !== undefined || patch.moveControlsToOuterEdge !== undefined
+  if (next.drawerLocation === 'sides' && chromeTouched) {
+    next.sidesChromePrefs = {
+      taskbarMode: !!next.taskbarMode,
+      moveControlsToOuterEdge: !!next.moveControlsToOuterEdge,
+    }
+  }
+  if (prev.drawerLocation !== 'sides' && next.drawerLocation === 'sides') {
+    const prefs = next.sidesChromePrefs ?? {
+      taskbarMode: DEFAULT_CANVAS_SETTINGS.taskbarMode,
+      moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
+    }
+    next.taskbarMode = prefs.taskbarMode
+    next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge
+    next.sidesChromePrefs = { ...prefs }
+  }
+
   _settings = normalizeCanvasSettings(next)
   setDebug(_settings.debugMode)
   applySettings(prev, _settings)
