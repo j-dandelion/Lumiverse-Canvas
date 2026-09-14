@@ -1118,8 +1118,14 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-rig
   margin-left: auto !important;
 }
 
-/* Settings dock: inline at the cluster's inner end, separator facing the
-   buttons. Right-side hosts order it before the main section (inner = left). */
+/* Settings dock: pinned to the drawer-side screen edge (outer end), tabs grow
+   inward from it. The dock comes BEFORE the tabs on a left-side host
+   (order:-1 — the DOM order is [main, bottom]) and AFTER them on a right-side
+   host (plain DOM order), so it always sits flush against the host's outer
+   edge instead of the cluster's inner end (which was mid-bar whenever both
+   zones were present — live feedback 2026-09-14). The divider always faces
+   the tabs; the opposite-side spacing/border is cleared so only one divider
+   can win (the S6 mobile sheet writes left-side values at lower specificity). */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
   display: flex !important;
@@ -1133,16 +1139,23 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
-  margin-left: 4px !important;
-  padding-left: 4px !important;
-  border-left: 1px solid var(--lumiverse-primary-020) !important;
-}
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
   order: -1 !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: none !important;
   margin-right: 4px !important;
   padding-right: 4px !important;
   border-right: 1px solid var(--lumiverse-primary-020) !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+  order: 0 !important;
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  border-right: none !important;
+  margin-left: 4px !important;
+  padding-left: 4px !important;
+  border-left: 1px solid var(--lumiverse-primary-020) !important;
 }
 
 /* Active indicator on the panel-facing side: top-edge strip -> bottom inset,

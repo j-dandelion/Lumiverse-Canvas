@@ -345,3 +345,40 @@ describe('HORIZONTAL_STRIP_CSS right-anchor scrollability (S8 regression)', () =
     expect(autoMarginRules.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+// Live feedback 2026-09-14: in Top/Bottom mode the Settings dock sat at the
+// cluster's INNER end — with both zones present that is the middle of the
+// bar. It must instead sit flush against the drawer-side screen edge with
+// the tabs growing inward and the divider facing them. The dock is visually
+// BEFORE the tabs on a left-side host (order:-1; DOM order is [main,
+// bottom]) and AFTER them on a right-side host (plain order).
+describe('HORIZONTAL_STRIP_CSS settings dock placement (live feedback 2026-09-14)', () => {
+  const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .filter((b) => b.trim().length > 0)
+
+  const dockBlock = (side: 'left' | 'right') =>
+    blocks.find(
+      (b) =>
+        b.includes(`sidebar-ux-side-${side}`) && b.includes('sidebar-ux-tab-list-bottom'),
+    ) ?? ''
+
+  test('left-side dock is ordered before the tabs, divider facing them', () => {
+    const rule = dockBlock('left')
+    expect(rule).toContain('order: -1')
+    expect(rule).toContain('border-right: 1px solid')
+    // Inner-side values cleared so the S6 mobile sheet cannot re-add them.
+    expect(rule).toContain('border-left: none')
+    expect(rule).toContain('margin-left: 0')
+    expect(rule).toContain('padding-left: 0')
+  })
+
+  test('right-side dock stays at the edge, divider facing the tabs', () => {
+    const rule = dockBlock('right')
+    expect(rule).toContain('order: 0')
+    expect(rule).toContain('border-left: 1px solid')
+    expect(rule).toContain('border-right: none')
+    expect(rule).toContain('margin-right: 0')
+    expect(rule).toContain('padding-right: 0')
+  })
+})
