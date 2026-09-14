@@ -142,6 +142,8 @@ const {
   applyTabListPin,
 } = await import('../tab-position')
 
+const { HORIZONTAL_STRIP_CSS } = await import('../styles')
+
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const SAFE_LEFT = 'env(safe-area-inset-left, 0px)'
@@ -305,5 +307,41 @@ describe('list chrome writer (WS3)', () => {
     expect(list.style.flexDirection).toBe('column')
     expect(list.style.borderLeft).toBe('')
     expect(list.style.borderRight).toBe('')
+  })
+})
+
+// S8 regression (live bug 2026-09-13): the right-side horizontal strip was
+// scroll-locked. `justify-content: flex-end` on a scroll container pushes the
+// overflow past the inline-start edge, which is not part of the scrollable
+// region — scrollWidth collapses to clientWidth, max scrollLeft is 0, and the
+// earliest tabs get clipped and are unreachable. Right-anchoring must instead
+// come from `margin-left: auto` on the first item (+ flex-start), which
+// absorbs only positive free space: anchored while the tabs fit, fully
+// scrollable once they overflow.
+describe('HORIZONTAL_STRIP_CSS right-anchor scrollability (S8 regression)', () => {
+  // Rule blocks only — strip comments so the explanatory text cannot satisfy
+  // or fail the assertions.
+  const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .filter((b) => b.trim().length > 0)
+
+  test('right-side scroller rules use flex-start, never flex-end', () => {
+    const rightAnchorRules = blocks.filter(
+      (b) => b.includes('sidebar-ux-side-right') && b.includes('justify-content'),
+    )
+    // Both horizontal scrollers (main section + secondary outer list).
+    expect(rightAnchorRules.length).toBeGreaterThanOrEqual(2)
+    for (const rule of rightAnchorRules) {
+      expect(rule).not.toContain('flex-end')
+      expect(rule).toContain('flex-start')
+    }
+  })
+
+  test('right-side clusters keep the margin-left:auto anchor', () => {
+    const autoMarginRules = blocks.filter(
+      (b) => b.includes('sidebar-ux-side-right') && b.includes('margin-left: auto'),
+    )
+    // One per scroller variant (inner main section + direct-child list).
+    expect(autoMarginRules.length).toBeGreaterThanOrEqual(2)
   })
 })

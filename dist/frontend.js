@@ -1088,10 +1088,16 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-lef
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
-  justify-content: flex-end !important;
+  justify-content: flex-start !important;
 }
-/* Right-anchored clusters: margin-auto keeps the overflowing start
-   reachable by the scroller (justify-content:flex-end alone clips it). */
+/* Right-anchored clusters: anchor with margin-left:auto on the first
+   item, NEVER justify-content:flex-end on the scroller. flex-end pushes
+   the overflow past the inline-start edge, which is not part of the
+   scrollable region — scrollWidth collapses to clientWidth and the
+   earliest tabs become unreachable (live bug 2026-09-13, right-side main
+   drawer is the host default). The auto margin absorbs only POSITIVE free
+   space: it right-anchors while the tabs fit and resolves to 0 once they
+   overflow, leaving flex-start with a fully reachable scroll range. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child {
   margin-left: auto !important;
@@ -1102,9 +1108,10 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left >
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
+/* Same flex-start + auto-margin anchoring as the main section above. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
-  justify-content: flex-end !important;
+  justify-content: flex-start !important;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child {
