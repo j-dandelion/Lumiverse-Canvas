@@ -209,8 +209,9 @@ function secondaryZonePresent(): boolean {
  *
  * Vertical (Sides): fixed 56px edge column at the drawer's side.
  * Horizontal (Top/Bottom): fixed full-width strip host; each owner's host
- * occupies its zone (50% when both drawers have a zone, 100% solo), anchored
- * to its own drawer's edge and growing inward. The list inside is absolutely
+ * occupies its zone (50%+1px overlap when both drawers have a zone — the +1px
+ * prevents a device-pixel seam at fractional zoom; 100% solo), anchored to
+ * its own drawer's edge and growing inward. The list inside is absolutely
  * positioned by the list writer; HORIZONTAL_STRIP_CSS owns orientation.
  */
 function applyPinHostChrome(
@@ -241,9 +242,17 @@ function applyPinHostChrome(
       setIfDifferent(s, 'bottom', SAFE_BOTTOM)
       setIfDifferent(s, 'top', '')
     }
-    // Both zones split 50/50; solo main gets the full width.
+    // Both zones split 50/50; solo main gets the full width. The +1px per
+    // half makes the two fixed zone layers overlap at the seam: at fractional
+    // browser zoom / device scale a 50% half lands on a fractional device
+    // pixel and the compositor can round the two layers apart, leaving a
+    // 1-device-px column where the page background shows through as a
+    // divider in the middle of the strip (live bug 2026-09-14: 90% Firefox
+    // zoom, 715 CSS px = 637.5 device px). The list backgrounds are opaque
+    // and identical, so the overlap paints invisibly; the tabs stay anchored
+    // to their own outer edge.
     const dual = secondaryZonePresent()
-    setIfDifferent(s, 'width', dual ? '50%' : '100%')
+    setIfDifferent(s, 'width', dual ? 'calc(50% + 1px)' : '100%')
     if (side === 'right') {
       setIfDifferent(s, 'right', SAFE_RIGHT)
       setIfDifferent(s, 'left', '')

@@ -1925,7 +1925,7 @@ function applyPinHostChrome(host, side, owner) {
       setIfDifferent(s, "top", "");
     }
     const dual = secondaryZonePresent();
-    setIfDifferent(s, "width", dual ? "50%" : "100%");
+    setIfDifferent(s, "width", dual ? "calc(50% + 1px)" : "100%");
     if (side === "right") {
       setIfDifferent(s, "right", SAFE_RIGHT);
       setIfDifferent(s, "left", "");
