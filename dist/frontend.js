@@ -19134,7 +19134,7 @@ function injectPanelStyles() {
       padding: 10px 12px;
       border: 1px solid var(--lumiverse-border);
       border-radius: 8px;
-      background: var(--lumiverse-bg-050);
+      background: var(--lumiverse-surface);
       margin-bottom: 6px;
       transition: opacity 0.15s ease;
     }
