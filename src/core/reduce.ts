@@ -13,10 +13,16 @@ function insertAt(list: readonly TabKey[], key: TabKey, index: number): TabKey[]
 }
 
 function toggleHidden(hidden: readonly TabKey[], key: TabKey, hide: boolean): readonly TabKey[] {
-  const has = hidden.includes(key)
-  if (hide && !has) return [...hidden, key]
-  if (!hide && has) return hidden.filter(k => k !== key)
-  return hidden
+  return toggleMembership(hidden, key, hide)
+}
+
+/** Generic membership toggle — the shared list mutation behind the
+ *  `hidden` and OS `closed` sets. */
+function toggleMembership(list: readonly TabKey[], key: TabKey, add: boolean): readonly TabKey[] {
+  const has = list.includes(key)
+  if (add && !has) return [...list, key]
+  if (!add && has) return list.filter(k => k !== key)
+  return list
 }
 
 function applyMove(model: LayoutModel, key: TabKey, to: Side, index: number, activateDest: boolean): LayoutModel {
@@ -127,6 +133,40 @@ function applySetHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutM
   return next
 }
 
+/**
+ * OS-mode window close (spec D3/D9/D17): membership in the model's closed
+ * set. Unlike hide, closing the ACTIVE window leaves its drawer with NO
+ * active window (D17 — a closed window is not auto-succeeded; nothing is
+ * focused until the user opens one). Identity-preserving for no-op rounds.
+ */
+function applySetClosed(model: LayoutModel, key: TabKey, closed: boolean): LayoutModel {
+  if (!keyExists(model, key)) return model
+
+  const nextClosed = toggleMembership(model.closed, key, closed)
+  const membershipChanged = nextClosed !== model.closed
+  const activeAffected = closed
+    && (model.active.primary === key || model.active.secondary === key)
+  if (!membershipChanged && !activeAffected) return model
+
+  let next: LayoutModel = membershipChanged ? { ...model, closed: nextClosed } : model
+  // D17: no neighbor replacement — a closed active window leaves nothing
+  // focused (the drawer collapses to the strip via the collapse predicate).
+  if (closed && model.active.primary === key) {
+    next = { ...next, active: { ...next.active, primary: null } }
+  }
+  if (closed && model.active.secondary === key) {
+    next = { ...next, active: { ...next.active, secondary: null } }
+  }
+  return next
+}
+
+/** OS-mode minimize (D4/D17): clear the drawer's active window — the panel
+ *  parks, the strip button stays, nothing is focused. Identity-preserving. */
+function applyDeactivate(model: LayoutModel, side: Side): LayoutModel {
+  if (model.active[side] == null) return model
+  return { ...model, active: { ...model.active, [side]: null } }
+}
+
 function applyActivate(model: LayoutModel, key: TabKey, side: Side): LayoutModel {
   const list = listForSide(model, side)
   if (!list.includes(key)) return model
@@ -162,15 +202,19 @@ function applySyncActive(
   secondary: TabKey | null,
 ): LayoutModel {
   let next = model
+  // OS mode (F2-adjacent): a CLOSED window must never be adopted as active —
+  // host-driven activation (extension/keyboard paths) of a closed tab would
+  // desync the derivation (active implies open). Same guard as hidden.
+  const closed = (m: LayoutModel, k: TabKey): boolean => m.closed.includes(k)
   if (primary !== null && next.active.primary !== primary) {
     const list = listForSide(next, 'primary')
-    if (list.includes(primary) && !isHidden(next, primary)) {
+    if (list.includes(primary) && !isHidden(next, primary) && !closed(next, primary)) {
       next = { ...next, active: { ...next.active, primary } }
     }
   }
   if (secondary !== null && next.active.secondary !== secondary) {
     const list = listForSide(next, 'secondary')
-    if (list.includes(secondary) && !isHidden(next, secondary)) {
+    if (list.includes(secondary) && !isHidden(next, secondary) && !closed(next, secondary)) {
       next = { ...next, active: { ...next.active, secondary } }
     }
   }
@@ -365,8 +409,12 @@ export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
       return applyReorder(model, intent.key, intent.side, intent.index)
     case 'setHidden':
       return applySetHidden(model, intent.key, intent.hidden)
+    case 'setClosed':
+      return applySetClosed(model, intent.key, intent.closed)
     case 'activate':
       return applyActivate(model, intent.key, intent.side)
+    case 'deactivate':
+      return applyDeactivate(model, intent.side)
     case 'syncActive':
       return applySyncActive(model, intent.primary, intent.secondary)
     case 'setDrawer':

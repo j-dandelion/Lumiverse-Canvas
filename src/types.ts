@@ -102,6 +102,26 @@ export interface CanvasSettings {
    *  control when taskbar mode is off. */
   hideDrawerOpenCloseButtons?: boolean
 
+  /** OS mode (desktop only, default off): window-style tab/panel lifecycle —
+   *  each visible tab is a window that is open (displayed/active),
+   *  minimized (parked, strip button stays), or closed (strip button
+   *  hidden; the per-drawer Start menu is its only return path). Requires
+   *  the taskbar chrome: enabling OS mode forces `taskbarMode` +
+   *  `moveControlsToOuterEdge` on (normalize invariant — same pattern as
+   *  top/bottom `drawerLocation`); disabling OS mode restores the pre-OS
+   *  values from `osChromePrefs`. Persists via the dedicated OS layout
+   *  slots (`osSingleLayout` / `osDualLayout`) so OS edits never touch the
+   *  non-OS slots. No-op on mobile (≤600px). */
+  osMode?: boolean
+
+  /** Internal bookkeeping (never a user-facing toggle): the user's
+   *  `taskbarMode` + `moveControlsToOuterEdge` values before OS mode was
+   *  enabled, restored when OS mode is disabled. `null` = no explicit OS
+   *  choice recorded yet (legacy blob) → restore the defaults. Written by
+   *  `setSettings` on an explicit OS enable. Same pattern as
+   *  `sidesChromePrefs`. */
+  osChromePrefs?: { taskbarMode: boolean; moveControlsToOuterEdge: boolean } | null
+
   /** Drag-and-drop to reorder drawer tabs within a list or move them
    *  between primary and secondary. Mouse: distance-based lift (~6px);
    *  touch/pen: long-press. Taskbar-agnostic (S7: the Canvas main shell is
@@ -177,6 +197,8 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   moveControlsToOuterEdge: false,
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
+  osMode: false,
+  osChromePrefs: null,
   dragAndDropDrawerTabs: true,
   drawerShadowsDesktop: true,
   drawerShadowsMobile: false,
@@ -217,8 +239,14 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  *      `setSettings` (it needs prev/next, this function has only one state).
  *   2b. `sidesChromePrefs` shape validation (corrupt persisted bookkeeping →
  *      null, so the Sides restore falls back to defaults).
+ *   2c. OS-mode invariant: `osMode: true` forces `taskbarMode` +
+ *      `moveControlsToOuterEdge` on (window chrome needs the pinned strips).
+ *      Never forces them off — the pre-OS restore lives in `setSettings`
+ *      (it needs prev/next; this function has only one state).
+ *   2d. `osChromePrefs` shape validation (corrupt persisted bookkeeping →
+ *      null, so the OS-disable restore falls back to defaults).
  *   3. `hideDrawerOpenCloseButtons` requires taskbarMode (must run AFTER the
- *      location invariant, so `{hide:true, taskbar:false, location:'top'}`
+ *      location + OS invariants, so `{osMode:true, hide:true, taskbar:false}`
  *      keeps `hide`).
  * Idempotent — safe to call after already-normalized settings.
  */
@@ -246,6 +274,24 @@ export function normalizeCanvasSettingsFields(
         || typeof (p as { moveControlsToOuterEdge?: unknown }).moveControlsToOuterEdge !== 'boolean')
     ) {
       out = { ...out, sidesChromePrefs: null }
+    }
+  }
+  // Cascade 2c: OS-mode invariant — window chrome (panel headers, taskbar
+  // strips, Start buttons) is built on the taskbar pin path, so OS mode
+  // requires the full taskbar chrome pair, same as top/bottom locations.
+  if (out.osMode) {
+    out = { ...out, taskbarMode: true, moveControlsToOuterEdge: true }
+  }
+  // Cascade 2d: osChromePrefs shape validation (see cascade 2b rationale).
+  {
+    const p = out.osChromePrefs as unknown
+    if (
+      p != null
+      && (typeof p !== 'object'
+        || typeof (p as { taskbarMode?: unknown }).taskbarMode !== 'boolean'
+        || typeof (p as { moveControlsToOuterEdge?: unknown }).moveControlsToOuterEdge !== 'boolean')
+    ) {
+      out = { ...out, osChromePrefs: null }
     }
   }
   // Cascade 3: hide requires taskbar mode

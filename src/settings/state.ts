@@ -46,8 +46,20 @@ let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
 // at boot from the loaded blob. The mode-switch path (second-drawer-mode.ts)
 // writes the slot of the mode being LEFT, then restores the slot of the mode
 // being ENTERED into the owned model.
+//
+// OS mode (2026-09-14, spec §3.2) adds the OS variants of the same slots:
+//   - `_osSingleLayout` — the layout while OS mode is on, second drawer off.
+//   - `_osDualLayout`   — the layout while OS mode is on, second drawer on.
+// While OS mode is on, the non-OS slots are FROZEN (OS edits never touch
+// them; disable restores the saved non-OS slot — D12 slot-wins) and the
+// active mode's OS slot receives the live serialization. Symmetrically,
+// while OS is off the OS slots stay frozen from the last OS session.
+// The OS closed-set lives in the model (`model.closed`, re-keyed from the
+// blob's `closedTabIds` by buildModelFromLayout) — no separate hydration.
 let _singleLayout: any = null
 let _dualLayout: any = null
+let _osSingleLayout: any = null
+let _osDualLayout: any = null
 
 export function getSettings(): FullCanvasSettings { return _settings }
 export function setLastLoadedLayout(layout: any): void { _lastLoadedLayout = layout }
@@ -57,16 +69,29 @@ export function getSingleLayoutSlot(): any { return _singleLayout }
 export function setSingleLayoutSlot(layout: any): void { _singleLayout = layout }
 export function getDualLayoutSlot(): any { return _dualLayout }
 export function setDualLayoutSlot(layout: any): void { _dualLayout = layout }
+export function getOsSingleLayoutSlot(): any { return _osSingleLayout }
+export function setOsSingleLayoutSlot(layout: any): void { _osSingleLayout = layout }
+export function getOsDualLayoutSlot(): any { return _osDualLayout }
+export function setOsDualLayoutSlot(layout: any): void { _osDualLayout = layout }
 
 /**
  * Read the persisted `singleLayout` / `dualLayout` profile slots out of a
  * loaded layout blob. Called at boot (setup.ts) after hydration so mode
  * switches restore the layout of the other mode even across reloads.
+ *
+ * OS slots hydrate the same way. The OS closed-set is model state
+ * (`model.closed`) and re-keys from the blob inside buildModelFromLayout —
+ * nothing to hydrate separately here.
  */
 export function hydrateModeLayoutSlots(layout: any): void {
   if (layout && typeof layout === 'object') {
     if (layout.dualLayout !== undefined) _dualLayout = layout.dualLayout
     if (layout.singleLayout !== undefined) _singleLayout = layout.singleLayout
+    if (layout.osDualLayout !== undefined) _osDualLayout = layout.osDualLayout
+    if (layout.osSingleLayout !== undefined) _osSingleLayout = layout.osSingleLayout
+    // Note: the OS closed-set is NOT hydrated here — it lives in the model
+    // (`model.closed`) and is re-keyed from the blob's `closedTabIds` by
+    // buildModelFromLayout when the model bootstraps from the slot.
     // Diagnostic: which mode profiles survived the load — the durable
     // single/dual layouts that mode toggles restore across hard refresh
     // and server restart.
@@ -75,6 +100,8 @@ export function hydrateModeLayoutSlots(layout: any): void {
       singleTabs: Array.isArray(_singleLayout?.tabOrder) ? _singleLayout.tabOrder.length : 0,
       dualSlot: _dualLayout != null,
       dualTabs: Array.isArray(_dualLayout?.detachedTabs) ? _dualLayout.detachedTabs.length : 0,
+      osSingleSlot: _osSingleLayout != null,
+      osDualSlot: _osDualLayout != null,
       drawerSide: layout.drawerSide ?? null,
     })
   }
@@ -91,6 +118,17 @@ export function isTaskbarModeEnabled(
   s: FullCanvasSettings = _settings,
 ): boolean {
   return !!s.taskbarMode && !!s.moveControlsToOuterEdge
+}
+
+/**
+ * OS-mode gate (spec §3.4). This is the DATA gate — the OS state model
+ * (closed-set persistence, slot writing) keys off `osMode` alone, because
+ * the normalization invariant keeps taskbarMode forced on while osMode is
+ * on. Chrome consumers compose this with `isTaskbarModeEnabled()` and the
+ * mobile check themselves (chrome gating ≠ data gating).
+ */
+export function isOsModeEnabled(s: FullCanvasSettings = _settings): boolean {
+  return !!s.osMode
 }
 
 export function isHideDrawerOpenCloseButtonsEnabled(
@@ -165,6 +203,28 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     next.taskbarMode = prefs.taskbarMode
     next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge
     next.sidesChromePrefs = { ...prefs }
+  }
+
+  // OS mode: snapshot the pre-OS chrome values on enable, restore them on
+  // disable. Same pattern as sidesChromePrefs: the normalize invariant
+  // (osMode forces taskbarMode + moveControlsToOuterEdge on) would otherwise
+  // bake the forced values in, so the user's prior choice lives in
+  // `osChromePrefs`. Restore happens BEFORE normalization — a top/bottom
+  // `drawerLocation` re-forces taskbar on afterwards, which is correct.
+  if (patch.osMode === true && prev.osMode !== true) {
+    next.osChromePrefs = {
+      taskbarMode: !!prev.taskbarMode,
+      moveControlsToOuterEdge: !!prev.moveControlsToOuterEdge,
+    }
+  }
+  if (patch.osMode === false && prev.osMode === true) {
+    const prefs = next.osChromePrefs ?? {
+      taskbarMode: DEFAULT_CANVAS_SETTINGS.taskbarMode,
+      moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
+    }
+    next.taskbarMode = prefs.taskbarMode
+    next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge
+    next.osChromePrefs = { ...prefs }
   }
 
   _settings = normalizeCanvasSettings(next)

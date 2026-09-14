@@ -33,7 +33,7 @@ import {
   getPinnedTabList,
   reconcileTabListPin,
 } from './tab-position'
-import { getSettings, getStripEdge } from '../settings/state'
+import { getSettings, getStripEdge, isOsModeEnabled } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { liveIdForKey } from '../tabs/identity'
 import type { TabKey } from '../core/model'
@@ -398,6 +398,11 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
       const preferredLive = opts?.activateKey
         ? liveIdForFacadeKey(opts.activateKey, tabs)
         : getActiveSecondaryTabId()
+      // F2 gate (spec AR): while OS mode is on, active:null is INTENTIONAL
+      // (all windows minimized/closed) — the first-placed fallback would
+      // silently un-minimize a window at boot/restore. Only the persisted
+      // preferred tab may auto-display; no fallback below it.
+      const osNoFallback = isOsModeEnabled()
       if (secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds)) {
         dlog(`[secondary] open loop: all ${modelSecondaryKeys.length} secondary tabs already placed; skipping`)
         // Empty-content restore: a just-clicked pinned tab has ALREADY
@@ -405,10 +410,14 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
         // nothing runs. When the tail does run, the preferred value is the
         // tracked/activateKey tab, never an arbitrary first tab.
         if (isSecondarySidebarOpen() && tailCanShow && listIds.length > 0) {
-          const target = preferredLive && listIds.includes(preferredLive) ? preferredLive : listIds[0]!
-          dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
-          setActiveSecondaryTabId(target)
-          activateSecondaryTab(target)
+          const target = preferredLive && listIds.includes(preferredLive)
+            ? preferredLive
+            : osNoFallback ? null : listIds[0]!
+          if (target) {
+            dlog(`[secondary] open loop: showing "${target}" (placed, no active)`)
+            setActiveSecondaryTabId(target)
+            activateSecondaryTab(target)
+          }
         }
         setSuppressAutoActivation(false)
         return
@@ -445,12 +454,17 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
       // finalize's showSecondaryTabDisplay is gated on !deferActivation.
       // tailCanShow already excludes the displayed-click case (display truth);
       // preferredLive keeps the tracked/boot-restore tab as the target instead
-      // of blindly showing the first placed tab.
+      // of blindly showing the first placed tab. F2 gate: OS mode never
+      // falls back to the first placed tab (active:null is intentional).
       if (isSecondarySidebarOpen() && tailCanShow && placed.length > 0) {
-        const target = preferredLive && placed.includes(preferredLive) ? preferredLive : placed[0]!
-        dlog(`[secondary] open loop: showing "${target}"${preferredLive && preferredLive !== target ? ' (preferred missing)' : ''}`)
-        setActiveSecondaryTabId(target)
-        activateSecondaryTab(target)
+        const target = preferredLive && placed.includes(preferredLive)
+          ? preferredLive
+          : osNoFallback ? null : placed[0]!
+        if (target) {
+          dlog(`[secondary] open loop: showing "${target}"${preferredLive && preferredLive !== target ? ' (preferred missing)' : ''}`)
+          setActiveSecondaryTabId(target)
+          activateSecondaryTab(target)
+        }
       }
     },
   )

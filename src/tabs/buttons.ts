@@ -30,6 +30,7 @@ import { getSettings } from '../settings/state'
 import {
   isHideDrawerOpenCloseButtonsEnabled,
   isHorizontalStrip,
+  isOsModeEnabled,
 } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
@@ -399,14 +400,18 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.addEventListener('click', () => {
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        // Mobile: active-tab taps must NOT toggle-close. The secondary is
-        // full-bleed there, so its rightmost tab row sits exactly where the
-        // main drawer's edge handle appears as soon as the drawer closes —
-        // the follow-up tap landed on that handle and opened main (live
-        // report 2026-09-12, tap-diag trace). The X button + edge handles
-        // remain the mobile close affordances. Desktop keeps toggle-close
-        // parity with the main mirror.
-        if (!_isMobileViewport()) closeSecondarySidebar()
+        // OS mode (D4, spec §4.3): clicking the displayed window's strip
+        // button MINIMIZES it — deactivate + collapse (the action provides
+        // the animation + persist + reflow); the strip button stays.
+        // Lazy-import avoids the load-order cycle (this module ←
+        // os/panel-chrome ← os/actions ← dispatch).
+        if (!_isMobileViewport()) {
+          if (isOsModeEnabled()) {
+            void import('../os/actions').then((m) => m.minimizeWindowByLiveId(tab.id, 'secondary'))
+          } else {
+            closeSecondarySidebar()
+          }
+        }
       } else {
         // Persistence of the activation is handled inside showSecondaryTab →
         // setActiveSecondaryTabId (the unified tracked-active choke point).
@@ -591,6 +596,9 @@ export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): vo
   for (const btn of buttons) {
     const tid = btn.getAttribute('data-tab-id') || ''
     // Pair against the full strip so multi-instance siblings are not all hidden.
+    // OS mode (D3): the CALLER merges the model's closed set (resolved to
+    // live ids) into `hiddenIds` — see os/panel-chrome.refreshOsVisibility —
+    // so closed strip buttons hide through the same path.
     if (isTabIdHidden(tid, hiddenIds, liveIds)) {
       btn.style.display = 'none'
     } else {

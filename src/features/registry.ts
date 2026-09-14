@@ -29,9 +29,12 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
-import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled, isTaskbarModeEnabled } from '../settings/state'
+import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled, isTaskbarModeEnabled, isOsModeEnabled } from '../settings/state'
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
-import { setDebug } from '../debug/log'
+import { setDebug, dlog, dwarn } from '../debug/log'
+import { applyOsModeChange } from '../os/os-mode'
+import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
+import { mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -550,6 +553,44 @@ const dragAndDropDrawerTabsFeature: CanvasFeature = {
   },
 }
 
+/** OS mode (2026-09-14, spec §4.8): registered AFTER the taskbar chrome
+ *  features so its apply() runs downstream of the chrome it builds on.
+ *  Layer scope so far: the enable/disable slot orchestration (seed on
+ *  first enable, slot-wins non-OS restore on disable) + the panel-header
+ *  chrome (minimize button injection + X→close-window interception).
+ *  The Start menu mounts in a later step — this feature's hooks extend
+ *  in place. */
+const osModeFeature: CanvasFeature = {
+  id: 'osMode',
+  mount() {
+    // Boot with osMode on: hydrate ran in setup; mount the chrome.
+    if (!isOsModeEnabled()) return
+    mountPanelChrome()
+    mountStartMenu()
+    return () => {
+      teardownPanelChrome()
+      teardownStartMenu()
+    }
+  },
+  apply(prev, next) {
+    if (prev.osMode !== next.osMode) {
+      void applyOsModeChange(prev, next).catch((err) => {
+        dwarn('[os] apply change failed:', err instanceof Error ? err.message : err)
+      })
+    }
+    // Chrome follows the OS gate (both directions; idempotent).
+    if (isOsModeEnabled(next)) {
+      if (!isOsModeEnabled(prev)) {
+        mountPanelChrome()
+        mountStartMenu()
+      }
+    } else {
+      teardownPanelChrome()
+      teardownStartMenu()
+    }
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -570,6 +611,8 @@ export const FEATURES: readonly CanvasFeature[] = [
   tabPositionFeature,
   taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,
+  // OS mode depends on the taskbar chrome being applied first (§4.8).
+  osModeFeature,
   dragAndDropDrawerTabsFeature,
   drawerTabDragFeature,
 ]

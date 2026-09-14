@@ -53,6 +53,10 @@ const HIDE_BUTTONS_INERT_HINT =
   'Handles are hidden while tabs are pinned to the top/bottom edge.'
 const LOCATION_LOCK_HINT =
   'Required by Drawer location: Top/Bottom. Switch to Sides to change.'
+const OS_MODE_HINT =
+  'Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode. Desktop only.'
+const OS_MODE_TASKBAR_LOCK_HINT =
+  'Required by OS mode. Disable OS mode to change taskbar settings.'
 
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
@@ -346,6 +350,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   secSidebars.appendChild(taskbarModeRow)
   const taskbarModeHint = taskbarModeRow.querySelector('.sidebar-ux-panel-row-hint')
 
+  const osMode = makeToggle(
+    () => getSettings().osMode,
+    (v) => setSettings({ osMode: v }),
+  )
+  const osModeRow = buildSettingRow({
+    label: 'OS mode',
+    hint: OS_MODE_HINT,
+    control: osMode.btn,
+  })
+  secSidebars.appendChild(osModeRow)
+
   const hideDrawerTabToggle = makeToggle(
     () => getSettings().hideDrawerOpenCloseButtons,
     (v) => setSettings({ hideDrawerOpenCloseButtons: v }),
@@ -465,6 +480,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     master.refresh()
     moveControlsToOuter.refresh()
     taskbarMode.refresh()
+    osMode.refresh()
     hideDrawerTabToggle.refresh()
     dragAndDropDrawerTabs.refresh()
     resizeSidebars.refresh()
@@ -486,22 +502,35 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     // normalize forces moveControlsToOuterEdge + taskbarMode while active.
     const horizontal = isHorizontalStrip()
 
-    // moveControlsToOuterEdge locked while horizontal.
+    // moveControlsToOuterEdge locked while horizontal, or while OS mode is on
+    // (the OS invariant forces it on — inverse gate, spec §8).
     {
-      const d = horizontal
+      const os = getSettings().osMode
+      const d = horizontal || os
       moveControlsToOuter.btn.disabled = d
       moveControlsToOuter.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       moveControlsRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
-      if (moveControlsHint) moveControlsHint.textContent = d ? LOCATION_LOCK_HINT : MOVE_CONTROLS_HINT
+      if (moveControlsHint) {
+        moveControlsHint.textContent = horizontal
+          ? LOCATION_LOCK_HINT
+          : os ? OS_MODE_TASKBAR_LOCK_HINT : MOVE_CONTROLS_HINT
+      }
     }
     // taskbarMode requires moveControlsToOuterEdge (strip on screen edge) and
-    // is locked while horizontal.
+    // is locked while horizontal — or while OS mode is on (OS mode forces it
+    // on; disable OS mode first). The osModeRow hint states the force-enable
+    // consequence while horizontal (where taskbar is already forced).
     {
-      const d = horizontal || !getSettings().moveControlsToOuterEdge
+      const os = getSettings().osMode
+      const d = horizontal || os || !getSettings().moveControlsToOuterEdge
       taskbarMode.btn.disabled = d
       taskbarMode.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       taskbarModeRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
-      if (taskbarModeHint) taskbarModeHint.textContent = horizontal ? LOCATION_LOCK_HINT : TASKBAR_HINT
+      if (taskbarModeHint) {
+        taskbarModeHint.textContent = horizontal
+          ? LOCATION_LOCK_HINT
+          : os ? OS_MODE_TASKBAR_LOCK_HINT : TASKBAR_HINT
+      }
     }
     // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs
     // no longer does — toggle-only gate, see isDragAndDropDrawerTabsEnabled).

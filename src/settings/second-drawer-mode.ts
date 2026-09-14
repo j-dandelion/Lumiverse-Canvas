@@ -40,6 +40,12 @@ import {
   setDualLayoutSlot,
 } from './state'
 import {
+  getActiveSingleSlot,
+  getActiveDualSlot,
+  setActiveSingleSlot,
+  setActiveDualSlot,
+} from '../os/os-mode'
+import {
   cancelLayoutSave,
 } from '../persist/layout-load'
 import { hasDetachedTabs, seedDualLayoutFromLive } from '../layout/snapshot'
@@ -332,7 +338,10 @@ async function finishDisable(): Promise<void> {
   //    slot in the layout blob (dispatch.ts:buildPersistedBlob).
   const dualSnapshot = snapshotOwnedModelLayout()
   if (dualSnapshot) {
-    setDualLayoutSlot(dualSnapshot)
+    // F6: OS-aware routing — an OS session writes osDualLayout (the non-OS
+    // slots are frozen during the session; clobbering them would leak OS
+    // state into the layout the user returns to on OS disable).
+    setActiveDualSlot(dualSnapshot)
     dlog('[second-drawer-mode] saved dual layout slot:', {
       tabs: dualSnapshot.detachedTabs?.length ?? 0,
     })
@@ -346,7 +355,7 @@ async function finishDisable(): Promise<void> {
   //    host button DOM loses it here post-teardown) — so it beats
   //    buildSingleLayoutFromLiveHost. The host walk stays the fallback for
   //    headless/test seams where no model exists.
-  let singleLayout = getSingleLayoutSlot()
+  let singleLayout = getActiveSingleSlot()
   if (!singleLayout) {
     const fallbackHost = getHost()
     const fallbackModel = getModel()
@@ -509,8 +518,8 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // each mode uses. Verifies "Enable second drawer loads the dual layout
     // (and disable loads the single layout)". Single-slot tabs live in
     // tabOrder (all-primary); dual-slot tabs in detachedTabs.
-    const switchDualSlot = getDualLayoutSlot()
-    const switchSingleSlot = getSingleLayoutSlot()
+    const switchDualSlot = getActiveDualSlot()
+    const switchSingleSlot = getActiveSingleSlot()
     dlog('[second-drawer-mode] switching to dual', {
       singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
         ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length
@@ -545,7 +554,7 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
         (key) => hostNow.resolve(key),
         CANVAS_VERSION,
       )
-      setSingleLayoutSlot(singleSnapshot)
+      setActiveSingleSlot(singleSnapshot)
       dlog('[second-drawer-mode] saved single layout slot:', {
         primary: singleSnapshot.tabOrder?.length ?? 0,
         hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0,
@@ -561,7 +570,7 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // Must happen BEFORE setSettings so secondSidebarFeature.apply sees the
     // seeded state (not stale pre-dual layout with a ghost secondary).
     const layoutBefore = getLastLoadedLayout()
-    const dualSlotBefore = getDualLayoutSlot()
+    const dualSlotBefore = getActiveDualSlot()
     if (
       !hasDetachedTabs(layoutBefore) &&
       !hasDetachedTabs(dualSlotBefore)
@@ -600,7 +609,7 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
       cancelSettingsSave()
       cancelLayoutSave()
       const host = getHost()
-      const dualSlot = getDualLayoutSlot()
+      const dualSlot = getActiveDualSlot()
       const restoreSource = [dualSlot]
         .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
       if (restoreSource && host) {
@@ -684,8 +693,8 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
 
     // Diagnostic: switching to single-drawer mode — the dual layout is
     // saved to its slot below, then the single layout slot is restored.
-    const switchSingleSlot = getSingleLayoutSlot()
-    const switchDualSlot = getDualLayoutSlot()
+    const switchSingleSlot = getActiveSingleSlot()
+    const switchDualSlot = getActiveDualSlot()
     dlog('[second-drawer-mode] switching to single', {
       singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
         ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length

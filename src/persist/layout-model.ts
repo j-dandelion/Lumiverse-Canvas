@@ -21,6 +21,10 @@ export interface LegacyLayout {
   detachedTabs?: StoredTab[]
   tabOrder?: string[]
   hiddenTabIds?: string[]
+  /** OS-mode closed-set — live tab ids (resolved from the model's closed
+   *  TabKeys). Present in the active serialization and the OS slots; the
+   *  non-OS slots carry it only as an empty array while OS is off. */
+  closedTabIds?: string[]
   drawerSide?: 'left' | 'right'
 }
 
@@ -95,6 +99,17 @@ export function buildModelFromLayout(
     }
   }
 
+  // OS-mode closed-set (spec §3.3) → closed TabKeys. Unresolvable ids are
+  // dropped (GC at boot — spec §3.4: ghosts of deleted/renamed tabs never
+  // survive a restore pass). Same healing rules as the hidden set.
+  const closed: TabKey[] = []
+  for (const storedId of (layout.closedTabIds ?? [])) {
+    const key = resolveStoredId(storedId, findKey)
+    if (key && (primary.includes(key) || secondary.includes(key)) && !closed.includes(key)) {
+      closed.push(key)
+    }
+  }
+
   // Active tabs
   const activePrimaryCandidate = layout.primary?.tabId
     ? resolveStoredId(layout.primary.tabId, findKey)
@@ -102,10 +117,10 @@ export function buildModelFromLayout(
   const activeSecondaryCandidate = layout.secondary?.activeTabId
     ? resolveStoredId(layout.secondary.activeTabId, findKey)
     : null
-  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate)
+  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate) && !closed.includes(activePrimaryCandidate)
     ? activePrimaryCandidate
     : null
-  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate)
+  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate) && !closed.includes(activeSecondaryCandidate)
     ? activeSecondaryCandidate
     : null
 
@@ -120,6 +135,7 @@ export function buildModelFromLayout(
     primary,
     secondary,
     hidden,
+    closed,
     active: {
       primary: activePrimary ?? null,
       secondary: activeSecondary ?? null,
@@ -160,6 +176,7 @@ export function serializeModelToSingleLayout(
     // live ids exactly like a dual serialization's tabOrder.
     tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
     hiddenTabIds: model.hidden.map(key => resolve(key)).filter(Boolean) as string[],
+    closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
     drawerSide: model.side,
   }
 }
@@ -220,6 +237,7 @@ export function serializeModelToLayout(
     detachedTabs,
     tabOrder,
     hiddenTabIds,
+    closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
     drawerSide: model.side,
   }
 }

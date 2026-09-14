@@ -33,6 +33,8 @@ import {
   parseExtensionKey,
 } from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
+import { isOsModeEnabled } from '../settings/state'
+import { minimizeWindowByLiveId } from '../os/actions'
 import { isHidden, visibleKeys } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
 import { isShowTabLabels } from './drawer-sync'
@@ -387,11 +389,13 @@ export function renderMainMirrorTabs(): void {
   const activeKey = model.active.primary
 
   // Never-hide-all guard (WORKFLOW gotcha): if EVERY regular primary key is
-  // hidden, keep the first visible so the strip never renders empty.
+  // hidden, keep the first visible so the strip never renders empty. OS
+  // mode suspends the guard: all windows minimized/closed → an empty strip
+  // is the correct collapsed-drawer look (D7), the Start button remains.
   const regularKeys = model.primary
   const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length
   const forceVisibleKey: TabKey | null =
-    regularKeys.length > 0 && hiddenCount >= regularKeys.length
+    regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled()
       ? regularKeys[0]!
       : null
 
@@ -420,7 +424,9 @@ export function renderMainMirrorTabs(): void {
 
     // Hidden from the MODEL (exact TabKey match; multi-instance siblings
     // have distinct keys — more precise than the live-id pairing path).
-    const hidden = isHidden(model, key) && key !== forceVisibleKey
+    // OS mode (D3): closed windows hide their strip button the same way —
+    // membership in model.closed (the Start menu keeps listing them, D6).
+    const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey
     mirror.style.display = hidden ? 'none' : ''
 
     // Active from the MODEL — open-only highlight; never host tabBtnActive.
@@ -554,6 +560,11 @@ function onMirrorClick(ev: Event): void {
   // mirror key (that machinery is gone). Falls through when closed so a
   // closed-drawer click on the active tab opens (secondary parity).
   //
+  // OS mode (D4, spec §4.3): clicking the displayed window's strip button
+  // MINIMIZES it — deactivate the active window + collapse the drawer
+  // (the action's setDrawer close provides animation + persist + reflow);
+  // the strip button stays. Non-OS keeps the toggle-close behavior.
+  //
   // Mobile: active-tab taps do NOT toggle-close. The main shell is
   // full-bleed there, so its rightmost tab row sits where the opposite
   // drawer's handle appears when this drawer closes — a follow-up tap landed
@@ -561,6 +572,14 @@ function onMirrorClick(ev: Event): void {
   // handles remain the mobile close affordances.
   const model = getModel()
   if (isCanvasMainOpen() && !_isMobileRenderer() && model != null && model.active.primary === key) {
+    if (isOsModeEnabled()) {
+      const liveId = twin.liveId ?? mirror.getAttribute('data-tab-id')
+      if (liveId) {
+        dlog('[main-renderer] click → minimize (OS mode, active tab)', { title, key })
+        void minimizeWindowByLiveId(liveId, 'primary')
+        return
+      }
+    }
     dlog('[main-renderer] click → close (active tab)', { title, key })
     closeCanvasMainDrawer()
     return

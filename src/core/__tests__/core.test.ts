@@ -402,6 +402,51 @@ function test_setHidden() {
 test_setHidden()
 
 // ═══════════════════════════════════════════════════════════════════
+// setClosed intent (2026-09-14, OS mode): membership in the model's
+// closed set. Unlike setHidden, closing the ACTIVE window leaves its
+// drawer with NO active (D17 — a closed window is not auto-succeeded).
+// ═══════════════════════════════════════════════════════════════════
+
+function test_setClosed() {
+  const m = modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: PRESETS,
+  })
+
+  // Closing a non-active window: membership only.
+  const c = reduce(m, { t: 'setClosed', key: PROFILE, closed: true })
+  assert(c.closed.includes(PROFILE), 'setClosed adds to closed')
+  assert(c.primary.includes(PROFILE), 'closed tab stays in list')
+  assertEqual(c.active.primary, PRESETS, 'closing a non-active window keeps the active')
+
+  // Closing the ACTIVE window: D17 — no neighbor replacement, nothing focused.
+  const closedActive = reduce(m, { t: 'setClosed', key: PRESETS, closed: true })
+  assert(closedActive.closed.includes(PRESETS), 'setClosed(active) adds to closed')
+  assertEqual(closedActive.active.primary, null, 'closing the active window clears active (D17 — NOT neighbor replacement)')
+
+  // Un-close restores nothing by itself (opening is an explicit activate).
+  const unclosed = reduce(closedActive, { t: 'setClosed', key: PRESETS, closed: false })
+  assert(!unclosed.closed.includes(PRESETS), 'setClosed false removes from closed')
+  assertEqual(unclosed.active.primary, null, 'un-close does not re-activate')
+
+  // Identity no-ops: redundant close/un-close and unknown keys.
+  const closedOnce = reduce(m, { t: 'setClosed', key: PROFILE, closed: true })
+  const closedTwice = reduce(closedOnce, { t: 'setClosed', key: PROFILE, closed: true })
+  assert(closedTwice === closedOnce, 'redundant close is identity (dispatch no-op gate)')
+  assert(reduce(m, { t: 'setClosed', key: builtinKey('nonexistent'), closed: true }) === m, 'setClosed unknown key identity no-op')
+  const deact = reduce(m, { t: 'deactivate', side: 'primary' })
+  assert(reduce(deact, { t: 'deactivate', side: 'primary' }) === deact, 'redundant deactivate is identity')
+
+  // Deactivate intent: clears active, keeps membership everywhere.
+  const deactivated = reduce(m, { t: 'deactivate', side: 'primary' })
+  assertEqual(deactivated.active.primary, null, 'deactivate clears the active window (minimize)')
+  assertEqual(deactivated.closed.length, m.closed.length, 'deactivate does not touch the closed set')
+  assertEqual(deactivated.primary.length, m.primary.length, 'deactivate keeps placement')
+}
+
+test_setClosed()
+
+// ═══════════════════════════════════════════════════════════════════
 // activate intent
 // ═══════════════════════════════════════════════════════════════════
 

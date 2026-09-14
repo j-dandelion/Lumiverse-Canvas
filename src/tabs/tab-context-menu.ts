@@ -16,7 +16,7 @@
 
 import { getTabSidebar } from '../tabs/assignment'
 import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
-import { getSettings } from '../settings/state'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 import { injectStyles } from '../debug/styles'
 import { dlog } from '../debug/log'
 import { isShowTabLabels, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
@@ -128,6 +128,26 @@ export function showAssignmentMenu(
       })
     })
     _contextMenu.appendChild(moveItem)
+  }
+
+  // 5. OS-mode window operations (D14, spec §4.3): Minimize + Close — shown
+  // for any visible strip button while OS mode is on. The actions' no-op
+  // guards cover the edge cases (minimize on an already-parked window,
+  // close-of-minimized = membership only; closing the displayed window
+  // collapses the drawer per D7). Lazy-import avoids the load-order cycle
+  // (this module ← os/panel-chrome ← os/actions → dispatch).
+  if (isOsModeEnabled()) {
+    const divider = createDivider()
+    _contextMenu.appendChild(divider)
+    const minimizeItem = createAssignmentContextMenuItem('Minimize', () => {
+      const side: 'primary' | 'secondary' = currentSidebar === 'secondary' ? 'secondary' : 'primary'
+      void import('../os/actions').then((m) => m.minimizeWindowByLiveId(tabId, side))
+    })
+    _contextMenu.appendChild(minimizeItem)
+    const closeItem = createAssignmentContextMenuItem('Close', () => {
+      void import('../os/actions').then((m) => m.closeWindowByLiveId(tabId))
+    })
+    _contextMenu.appendChild(closeItem)
   }
 
   _contextMenu.style.left = `${x}px`

@@ -9,6 +9,10 @@ export interface LayoutModel {
   readonly primary: readonly TabKey[]
   readonly secondary: readonly TabKey[]
   readonly hidden: readonly TabKey[]
+  /** OS-mode closed-set (TabKeys, same keying as `hidden`). Membership is
+   *  OS-mode-specific: only meaningful while `osMode` is on, and the boot
+   *  model hydrates it from the loaded blob's `closedTabIds`. */
+  readonly closed: readonly TabKey[]
   readonly active: {
     readonly primary: TabKey | null
     readonly secondary: TabKey | null
@@ -83,6 +87,7 @@ export function createEmptyModel(side: DrawerSide = 'left'): LayoutModel {
     primary: [],
     secondary: [],
     hidden: [],
+    closed: [],
     active: { primary: null, secondary: null },
     drawers: {
       primary: { open: false, width: 420 },

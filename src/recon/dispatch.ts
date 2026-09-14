@@ -7,7 +7,7 @@ import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
 import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
 import { saveLayoutToDisk } from '../persist/layout-repo'
-import { getSingleLayoutSlot, getDualLayoutSlot } from '../settings/state'
+import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 let _host: HostPort | null = null
@@ -350,11 +350,14 @@ let _lastPersistedLayout: string | null = null
 /**
  * The layout blob written to disk: the active model serialization plus the
  * durable single/dual mode profiles (top-level `singleLayout` / `dualLayout`
- * fields, hydrated back at boot by hydrateModeLayoutSlots).
+ * fields, hydrated back at boot by hydrateModeLayoutSlots) and the OS-mode
+ * variants (`osSingleLayout` / `osDualLayout`).
  */
 export type PersistedLayout = LegacyLayout & {
   dualLayout?: LegacyLayout | null
   singleLayout?: LegacyLayout | null
+  osDualLayout?: LegacyLayout | null
+  osSingleLayout?: LegacyLayout | null
 }
 
 /**
@@ -376,14 +379,26 @@ export function snapshotOwnedModelLayout(): LegacyLayout | null {
  * when the model still holds secondary tabs (the disable fallback where no
  * single layout existed to restore), we must NOT clobber the stored single
  * profile with a dual serialization. `model.secondary.length > 0` ⟺ dual.
+ *
+ * OS mode (spec §3.2): while OS mode is on, the non-OS slots are FROZEN at
+ * their stored values — OS edits (closed windows, nullable active) must
+ * never leak into them (D12: disable restores the saved non-OS slot,
+ * slot-wins). The active mode's OS slot receives the live serialization
+ * (which carries `closedTabIds` from the model — serializeModelToLayout
+ * stamps it unconditionally; the OS closed-set lives in the model). While
+ * OS is off, the OS slots pass through their stored values — symmetric
+ * freezing from the last OS session.
  */
 function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string | null): PersistedLayout {
   const layout = serializeModelToLayout(model, resolve, _version)
   const isDual = model.secondary.length > 0
+  const os = isOsModeEnabled()
   return {
     ...layout,
-    dualLayout: isDual ? layout : getDualLayoutSlot(),
-    singleLayout: isDual ? getSingleLayoutSlot() : layout,
+    dualLayout: os ? getDualLayoutSlot() : isDual ? layout : getDualLayoutSlot(),
+    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : layout,
+    osDualLayout: isDual ? (os ? layout : getOsDualLayoutSlot()) : getOsDualLayoutSlot(),
+    osSingleLayout: isDual ? getOsSingleLayoutSlot() : (os ? layout : getOsSingleLayoutSlot()),
   }
 }
 

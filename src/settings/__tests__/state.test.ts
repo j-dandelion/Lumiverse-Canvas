@@ -478,5 +478,73 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'toggle records taskbar default off')
 }
 
+// --- OS mode (cascade 2c/2d + osChromePrefs bookkeeping) ---
+{
+  // Defaults.
+  assertEqual(settings.osMode, false, 'osMode defaults to false')
+  assertEqual(settings.osChromePrefs, null, 'osChromePrefs defaults to null')
+
+  // Cascade 2c: osMode forces the full taskbar chrome pair on (same pattern
+  // as top/bottom drawerLocation).
+  const osForced = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    taskbarMode: false,
+    moveControlsToOuterEdge: false,
+  }))
+  assertEqual(osForced.taskbarMode, true, 'osMode forces taskbarMode on')
+  assertEqual(osForced.moveControlsToOuterEdge, true, 'osMode forces outer-edge on')
+
+  // Cascade 3 order: hide stays valid when OS mode forced taskbar on.
+  const osHide = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    hideDrawerOpenCloseButtons: true,
+    taskbarMode: false,
+  }))
+  assertEqual(osHide.hideDrawerOpenCloseButtons, true, 'hide survives OS-forced taskbar')
+
+  // Cascade 2d: corrupt osChromePrefs shapes drop to null.
+  const osCorrupt = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    osChromePrefs: { taskbarMode: 'yes' } as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(osCorrupt.osChromePrefs, null, 'corrupt osChromePrefs dropped to null')
+  const osCorrupt2 = normalizeCanvasSettings(mergeCanvasSettings({
+    osChromePrefs: 'nope' as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(osCorrupt2.osChromePrefs, null, 'non-object osChromePrefs dropped to null')
+
+  // setSettings: enable snapshots the pre-OS chrome values, then the
+  // normalize invariant forces them on.
+  hydrateSettings(null)
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osMode, true, 'osMode enabled')
+  assertEqual(getSettings().taskbarMode, true, 'enable forces taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'enable forces outer on')
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, false, 'enable snapshots pre-OS taskbar (false)')
+  assertEqual(getSettings().osChromePrefs?.moveControlsToOuterEdge, false, 'enable snapshots pre-OS outer (false)')
+
+  // Disable restores the pre-OS values (recorded, like sidesChromePrefs).
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'disable restores pre-OS taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'disable restores pre-OS outer off')
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, false, 'disable keeps the snapshot recorded')
+
+  // Disable while horizontal re-forces taskbar on (location invariant wins).
+  hydrateSettings({ drawerLocation: 'top', taskbarMode: true, moveControlsToOuterEdge: true })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, true, 'enable on top/bottom snapshots forced-true')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'disable while horizontal: location keeps taskbar on')
+
+  // Enable with a real user choice to restore: taskbar on, outer off (valid
+  // S1 state) is preserved through the OS excursion.
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'enable forces outer on from S1 state')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'S1 restore: taskbar back on')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'S1 state: outer back off')
+}
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

@@ -24,7 +24,7 @@ import { getMainDrawerWidth } from '../dom/lumiverse'
 import type { HostPort } from '../host/port'
 import { bootstrapFromLayout, flush as flushOwnedModel } from '../recon/dispatch'
 import { restoreMainDrawerFromDom } from '../sidebar/main-persist'
-import { getSettings } from '../settings/state'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 
 /**
  * Build a durable single-drawer layout from the CURRENT live host state.
@@ -95,10 +95,20 @@ export async function restoreSingleModeLayout(
     // Main drawer open/active from the slot's primary state. The saved
     // active tab id may be stale (hidden/unknown) — fall back to the first
     // visible host tab rather than crashing.
+    //
+    // F2 gate (spec AR): while OS mode is on, a slot with NO saved active
+    // tab is INTENTIONAL (all windows minimized/closed — no displayed
+    // window) — do not pick a fallback tab. The drawer restores open with
+    // an empty content area (the user reopens windows from the strip /
+    // Start menu). Non-OS keeps the fallback (vanilla always has an active).
     const open = !!slot.primary?.open
     let tabId: string | null = slot.primary?.tabId ?? null
-    if (tabId && !isTabKnownAndVisible(tabId)) tabId = pickSafeFallbackTabId()
-    if (open && !tabId) tabId = pickSafeFallbackTabId()
+    if (tabId && !isTabKnownAndVisible(tabId)) {
+      // OS mode: a stale saved tab (gone/hidden) restores NO active — never
+      // a fallback pick (F2: active:null is intentional in OS mode).
+      tabId = isOsModeEnabled() ? null : pickSafeFallbackTabId()
+    }
+    if (open && !tabId && !isOsModeEnabled()) tabId = pickSafeFallbackTabId()
     // Restore the slot's saved main width when width persistence is on
     // (review batch 2). Passing undefined made the mode switch keep the live
     // width, and the next shell-truth host sync then overwrote the slot.
