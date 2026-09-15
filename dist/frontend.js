@@ -1035,7 +1035,7 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     width: 100% !important;
   }
 }
-`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_ANCHOR_CLASS = "sidebar-ux-strip-anchor", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS;
+`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS;
 var init_styles = __esm(() => {
   HORIZONTAL_STRIP_CSS = `
 /* List fills the fixed zone host absolutely (never fixed + width:100% —
@@ -1108,21 +1108,37 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
   justify-content: flex-start !important;
 }
-/* Right-anchored clusters: anchor with margin-left:auto on the first
-   VISIBLE item (the STRIP_ANCHOR_CLASS marker — stamped by the strip
-   writers), NEVER justify-content:flex-end on the scroller. flex-end pushes
-   the overflow past the inline-start edge, which is not part of the
-   scrollable region — scrollWidth collapses to clientWidth and the
-   earliest tabs become unreachable (live bug 2026-09-13, right-side main
-   drawer is the host default). The auto margin absorbs only POSITIVE free
-   space: it right-anchors while the tabs fit and resolves to 0 once they
-   overflow, leaving flex-start with a fully reachable scroll range.
-   Class-based (not :first-child): a hidden first button (Configure-hidden /
-   OS-mode closed) has no box, so an auto margin on it is inert and the
-   cluster left-aligns (live bug 2026-09-14 — closing a window exposed it). */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS},
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS} {
-  margin-left: auto !important;
+/* Right-anchored clusters (2026-09-15, final form): a zero-width
+   pseudo-element is ALWAYS the first flex item and absorbs the positive free
+   space with margin-left:auto — NEVER justify-content:flex-end on the
+   scroller. flex-end pushes the overflow past the inline-start edge, which
+   is not part of the scrollable region — scrollWidth collapses to
+   clientWidth and the earliest tabs become unreachable (live bug 2026-09-13,
+   right-side main drawer is the host default). The auto margin absorbs only
+   POSITIVE free space: it right-anchors while the tabs fit and resolves to 0
+   once they overflow, leaving flex-start with a fully reachable scroll range.
+   The anchor is a PSEUDO, not a class on a button: button-identity stamping
+   (first visible / skip hidden / re-stamp after add-remove-reorder) broke
+   three times in three days — a hidden first button (2026-09-14), a removed
+   or mid-drag reparented anchor button (2026-09-15), and finally the DnD
+   drop-slot placeholder being excluded, so the overlay settled on the
+   un-anchored slot while the post-commit real button jumped to the anchored
+   one (2026-09-15). The pseudo exists in EVERY state — hidden/removed/
+   reparented buttons, empty lists, placeholder slot holders — so no JS
+   participant and no lifecycle remain. Fit-case geometry is pixel-identical
+   to the old class marker (verified in-browser); under overflow the pseudo's
+   own flex gap adds 2px of leading space, harmless. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::before,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::before {
+  content: '' !important;
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  border: none !important;
+  pointer-events: none !important;
 }
 
 /* Secondary list (buttons are direct children): anchor to the drawer edge. */
@@ -1130,14 +1146,29 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left >
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-/* Same flex-start + auto-margin anchoring as the main section above. */
+/* Explicit flex-start on the right-side scrollers too — the anchor is the
+   pseudo's auto margin below; the scroller itself must never be flex-end
+   (S8 #1 scroll-lock). */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS},
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS} {
-  margin-left: auto !important;
+/* Same pseudo spacer for the leaf scroller: the secondary list, and the
+   outer main-mirror list in the legacy flat fallback (buttons as direct
+   children). On the structured outer list the section's flex-grow consumes
+   the free space first, so the auto margin here is inert (probe-verified:
+   dock and section positions unchanged). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list::before,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list::before {
+  content: '' !important;
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  border: none !important;
+  pointer-events: none !important;
 }
 
 /* Settings dock: pinned to the drawer-side screen edge (outer end), tabs grow
@@ -3896,7 +3927,6 @@ function renderMainMirrorTabs() {
   const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
   const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
   let insertBefore = mainSection.firstChild;
-  let anchorStamped = false;
   for (const key of regularKeys) {
     const twin = twinForKey(key);
     const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
@@ -3913,12 +3943,6 @@ function renderMainMirrorTabs() {
     }
     const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey;
     mirror.style.display = hidden ? "none" : "";
-    if (!hidden && !anchorStamped) {
-      mirror.classList.add(STRIP_ANCHOR_CLASS);
-      anchorStamped = true;
-    } else {
-      mirror.classList.remove(STRIP_ANCHOR_CLASS);
-    }
     const showActive = open && activeKey === key && !hidden;
     mirror.classList.toggle("sidebar-ux-tab-active", showActive);
     const labeled = resolveMirrorLabeled(twin.btn, false);
@@ -4115,7 +4139,6 @@ var init_main_renderer = __esm(() => {
   init_main_mirror_drawer();
   init_buttons();
   init_log();
-  init_styles();
 });
 
 // src/sidebar/main-tab-pin.ts
@@ -8421,7 +8444,6 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
   const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => getButtonTabId(b2) === sourceTabId) ?? null;
   if (!sourceBtn)
     return false;
-  const sourceParent = sourceBtn.parentElement;
   const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b2) => b2 !== sourceBtn);
   const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
   const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
@@ -8430,8 +8452,6 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
       return false;
     }
     container.appendChild(sourceBtn);
-    restampStripAnchor(sourceParent);
-    restampStripAnchor(container);
     return true;
   }
   const referenceBtn = buttonsWithoutSource[insertIdx];
@@ -8439,14 +8459,11 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
     return false;
   }
   container.insertBefore(sourceBtn, referenceBtn);
-  restampStripAnchor(sourceParent);
-  restampStripAnchor(container);
   return true;
 }
 function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
   if (!dragElement || !originalParent)
     return;
-  const fromParent = dragElement.parentNode;
   const parent = dragElement.parentNode;
   if (parent === originalParent) {
     if (originalNextSibling) {
@@ -8465,8 +8482,6 @@ function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling
       originalParent.appendChild(dragElement);
     }
   }
-  restampStripAnchor(fromParent);
-  restampStripAnchor(originalParent);
 }
 function createDragOverlay(sourceBtn) {
   const wrapper = document.createElement("div");
@@ -8824,7 +8839,6 @@ function cleanupDragVisuals() {
     el.style.setProperty("transition", "none", "important");
     el.classList.remove("canvas-tab-list-dnd-placeholder");
     el.offsetWidth;
-    restampStripAnchor(el.parentElement);
     requestAnimationFrame(() => {
       el.style.removeProperty("transition");
     });
@@ -11427,7 +11441,6 @@ __export(exports_buttons, {
   removeSecondaryTabButton: () => removeSecondaryTabButton,
   reorderHostMainTabButtons: () => reorderHostMainTabButtons,
   reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
-  restampStripAnchor: () => restampStripAnchor,
   secondaryTabButtonsReady: () => secondaryTabButtonsReady,
   showAllMainTabButtons: () => showAllMainTabButtons,
   showMainTabButton: () => showMainTabButton,
@@ -11684,13 +11697,11 @@ function addSecondaryTabButton(tab) {
   } else {
     tabList.appendChild(btn);
   }
-  restampStripAnchor(tabList);
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
 function removeSecondaryTabButton(tabId) {
   const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   btn?.remove();
-  restampStripAnchor(getSecondaryTabList());
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
 function findNeighborSecondaryButtonFor(tabId) {
@@ -11742,7 +11753,6 @@ function reorderSecondaryTabButtons(ids) {
       tabList.appendChild(btn);
     }
   }
-  restampStripAnchor(tabList);
 }
 function reorderHostMainTabButtons(ids) {
   const sidebar = getMainSidebar();
@@ -11770,23 +11780,6 @@ function applyHiddenTabIdsToSecondary(hiddenIds) {
       btn.style.display = "none";
     } else {
       btn.style.display = "";
-    }
-  }
-  restampStripAnchor(tabList);
-}
-function restampStripAnchor(list) {
-  if (!list)
-    return;
-  const buttons = Array.from(list.querySelectorAll("button[data-tab-id]"));
-  let stamped = false;
-  for (const btn of buttons) {
-    const cl = btn.classList;
-    const isPlaceholder = !!cl?.contains?.("canvas-tab-list-dnd-placeholder");
-    if (!isPlaceholder && btn.style.display !== "none" && !stamped) {
-      cl?.add?.(STRIP_ANCHOR_CLASS);
-      stamped = true;
-    } else {
-      cl?.remove?.(STRIP_ANCHOR_CLASS);
     }
   }
 }
@@ -11914,7 +11907,6 @@ var init_buttons = __esm(() => {
   init_log();
   init_drawer_sync();
   init_secondary();
-  init_styles();
   init_state();
   init_assignment();
   init_tab_context_menu();

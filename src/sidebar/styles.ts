@@ -244,19 +244,6 @@ export const LOCATION_CLASS_SIDES = 'sidebar-ux-location-sides'
 export const LOCATION_CLASS_TOP = 'sidebar-ux-location-top'
 export const LOCATION_CLASS_BOTTOM = 'sidebar-ux-location-bottom'
 
-/**
- * Right-anchor marker (S8 #1). The horizontally right-anchored strip clusters
- * anchor with `margin-left: auto` on the FIRST VISIBLE button — a class, not
- * `:first-child`: the CSS `:first-child` matches by DOM position regardless
- * of `display`, so a HIDDEN first button (Configure-hidden, or an OS-mode
- * CLOSED window whose button hides per D3) made the auto margin inert and the
- * cluster fell back to `flex-start` (right-side icons aligned left — live bug
- * 2026-09-14, first hit the moment a window was closed). The strip writers
- * stamp this class: main-renderer's render loop (main strip) and
- * buttons.applyHiddenTabIdsToSecondary (secondary strip).
- */
-export const STRIP_ANCHOR_CLASS = 'sidebar-ux-strip-anchor'
-
 /** Horizontal strip height: 4px padding + 48px button + 4px padding. */
 export const STRIP_HEIGHT_PX = 56
 
@@ -346,21 +333,37 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main {
   justify-content: flex-start !important;
 }
-/* Right-anchored clusters: anchor with margin-left:auto on the first
-   VISIBLE item (the STRIP_ANCHOR_CLASS marker — stamped by the strip
-   writers), NEVER justify-content:flex-end on the scroller. flex-end pushes
-   the overflow past the inline-start edge, which is not part of the
-   scrollable region — scrollWidth collapses to clientWidth and the
-   earliest tabs become unreachable (live bug 2026-09-13, right-side main
-   drawer is the host default). The auto margin absorbs only POSITIVE free
-   space: it right-anchors while the tabs fit and resolves to 0 once they
-   overflow, leaving flex-start with a fully reachable scroll range.
-   Class-based (not :first-child): a hidden first button (Configure-hidden /
-   OS-mode closed) has no box, so an auto margin on it is inert and the
-   cluster left-aligns (live bug 2026-09-14 — closing a window exposed it). */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS},
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS} {
-  margin-left: auto !important;
+/* Right-anchored clusters (2026-09-15, final form): a zero-width
+   pseudo-element is ALWAYS the first flex item and absorbs the positive free
+   space with margin-left:auto — NEVER justify-content:flex-end on the
+   scroller. flex-end pushes the overflow past the inline-start edge, which
+   is not part of the scrollable region — scrollWidth collapses to
+   clientWidth and the earliest tabs become unreachable (live bug 2026-09-13,
+   right-side main drawer is the host default). The auto margin absorbs only
+   POSITIVE free space: it right-anchors while the tabs fit and resolves to 0
+   once they overflow, leaving flex-start with a fully reachable scroll range.
+   The anchor is a PSEUDO, not a class on a button: button-identity stamping
+   (first visible / skip hidden / re-stamp after add-remove-reorder) broke
+   three times in three days — a hidden first button (2026-09-14), a removed
+   or mid-drag reparented anchor button (2026-09-15), and finally the DnD
+   drop-slot placeholder being excluded, so the overlay settled on the
+   un-anchored slot while the post-commit real button jumped to the anchored
+   one (2026-09-15). The pseudo exists in EVERY state — hidden/removed/
+   reparented buttons, empty lists, placeholder slot holders — so no JS
+   participant and no lifecycle remain. Fit-case geometry is pixel-identical
+   to the old class marker (verified in-browser); under overflow the pseudo's
+   own flex gap adds 2px of leading space, harmless. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::before,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main::before {
+  content: '' !important;
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  border: none !important;
+  pointer-events: none !important;
 }
 
 /* Secondary list (buttons are direct children): anchor to the drawer edge. */
@@ -368,14 +371,29 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left >
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-/* Same flex-start + auto-margin anchoring as the main section above. */
+/* Explicit flex-start on the right-side scrollers too — the anchor is the
+   pseudo's auto margin below; the scroller itself must never be flex-end
+   (S8 #1 scroll-lock). */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS},
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS} {
-  margin-left: auto !important;
+/* Same pseudo spacer for the leaf scroller: the secondary list, and the
+   outer main-mirror list in the legacy flat fallback (buttons as direct
+   children). On the structured outer list the section's flex-grow consumes
+   the free space first, so the auto margin here is inert (probe-verified:
+   dock and section positions unchanged). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list::before,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list::before {
+  content: '' !important;
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  border: none !important;
+  pointer-events: none !important;
 }
 
 /* Settings dock: pinned to the drawer-side screen edge (outer end), tabs grow

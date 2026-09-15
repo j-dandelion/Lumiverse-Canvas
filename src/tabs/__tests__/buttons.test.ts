@@ -630,7 +630,6 @@ import {
   addSecondaryTabButton,
   findMainTabButton,
   removeSecondaryTabButton,
-  restampStripAnchor,
 } from '../buttons'
 
 // Factory for tab list stubs used by reorder/hide tests.
@@ -978,66 +977,6 @@ function makeListStub(initialButtons: Array<{
     !items[1]?.classList?.contains?.('sidebar-ux-main-tab-mirror-btn'),
     'B28e.e: middle button is not a mirror orphan',
   )
-
-  __setSecondaryWrapperForTest(null)
-}
-
-// ============================================================
-// B29: S8 strip-anchor lifecycle — the right-anchor class must follow
-// STRUCTURAL mutations (add / remove / reorder), not just visibility.
-// Live bug 2026-09-15: a cross-drawer DnD moving the anchor-carrying first
-// secondary tab out of the second drawer left no button carrying the class
-// → the right-side strip cluster fell back to flex-start (left-aligned).
-// ============================================================
-{
-  const listStub = makeListStub([
-    { id: 'tab-a', style: {} },
-    { id: 'tab-b', style: {} },
-    { id: 'tab-c', style: {} },
-  ])
-  const wrapper = {
-    querySelector(sel: string) {
-      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
-      return null
-    },
-    querySelectorAll() { return [] },
-  }
-  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
-
-  restampStripAnchor(listStub as unknown as HTMLElement)
-  let items = listStub.children as any[]
-  assert(items[0].classList.contains('sidebar-ux-strip-anchor'), 'B29.a: anchor seeded on the first button')
-  assert(!items[1].classList.contains('sidebar-ux-strip-anchor'), 'B29.b: only one button carries the anchor')
-
-  // Remove the first button (the DnD cross-drawer move-out) → the next
-  // visible button inherits the anchor.
-  removeSecondaryTabButton('tab-a')
-  items = listStub.children as any[]
-  assertEqual(items.length, 2, 'B29.c: first button removed')
-  assert(items[0].classList.contains('sidebar-ux-strip-anchor'), 'B29.d: anchor follows the removal')
-  assert(!items[1].classList.contains('sidebar-ux-strip-anchor'), 'B29.e: still exactly one anchor')
-
-  // Hidden leading button → restamp skips it (the 2026-09-14 close case).
-  items[0].style.display = 'none'
-  restampStripAnchor(listStub as unknown as HTMLElement)
-  assert(items[1].classList.contains('sidebar-ux-strip-anchor'), 'B29.f: anchor skips a hidden first button')
-  assert(!items[0].classList.contains('sidebar-ux-strip-anchor'), 'B29.g: hidden button loses the anchor')
-
-  // Reorder → the new leading VISIBLE button inherits (restamped inline).
-  reorderSecondaryTabButtons(['tab-b'])
-  items = listStub.children as any[]
-  assertEqual(items[0]?._id ?? items[0]?.getAttribute?.('data-tab-id'), 'tab-c', 'B29.h: reorder moved tab-b to the end')
-  assert(items[0].classList.contains('sidebar-ux-strip-anchor'), 'B29.i: reorder restamps the new lead')
-  assert(!items[1].classList.contains('sidebar-ux-strip-anchor'), 'B29.j: hidden tab-b lost the anchor')
-
-  // Mid-drag placeholder (opacity:0 slot holder) is NEVER an anchor
-  // candidate — the DnD reparents it across lists mid-drag; the anchor must
-  // move to the next visible button instead (live bug 2026-09-15 mid-drag).
-  items[1].style.display = ''
-  items[0].classList.add('canvas-tab-list-dnd-placeholder')
-  restampStripAnchor(listStub as unknown as HTMLElement)
-  assert(!items[0].classList.contains('sidebar-ux-strip-anchor'), 'B29.k: placeholder never carries the anchor')
-  assert(items[1].classList.contains('sidebar-ux-strip-anchor'), 'B29.l: anchor moves past the mid-drag placeholder')
 
   __setSecondaryWrapperForTest(null)
 }

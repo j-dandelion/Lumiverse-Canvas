@@ -327,9 +327,11 @@ describe('list chrome writer (WS3)', () => {
 // overflow past the inline-start edge, which is not part of the scrollable
 // region — scrollWidth collapses to clientWidth, max scrollLeft is 0, and the
 // earliest tabs get clipped and are unreachable. Right-anchoring must instead
-// come from `margin-left: auto` on the first item (+ flex-start), which
-// absorbs only positive free space: anchored while the tabs fit, fully
-// scrollable once they overflow.
+// come from `margin-left: auto` (+ flex-start), which absorbs only positive
+// free space: anchored while the tabs fit, fully scrollable once they
+// overflow. 2026-09-15: the auto margin lives on an always-present `::before`
+// pseudo spacer, not on a button (button-identity stamping broke repeatedly —
+// hidden button, removed button, DnD placeholder exclusion).
 describe('HORIZONTAL_STRIP_CSS right-anchor scrollability (S8 regression)', () => {
   // Rule blocks only — strip comments so the explanatory text cannot satisfy
   // or fail the assertions.
@@ -349,12 +351,25 @@ describe('HORIZONTAL_STRIP_CSS right-anchor scrollability (S8 regression)', () =
     }
   })
 
-  test('right-side clusters keep the margin-left:auto anchor', () => {
-    const autoMarginRules = blocks.filter(
-      (b) => b.includes('sidebar-ux-side-right') && b.includes('margin-left: auto'),
+  test('right-side clusters anchor via the always-present pseudo spacer', () => {
+    const pseudoRules = blocks.filter(
+      (b) => b.includes('sidebar-ux-side-right') && b.includes('::before'),
     )
-    // One per scroller variant (inner main section + direct-child list).
-    expect(autoMarginRules.length).toBeGreaterThanOrEqual(2)
+    // One per scroller variant (inner main section + leaf list).
+    expect(pseudoRules.length).toBeGreaterThanOrEqual(2)
+    for (const rule of pseudoRules) {
+      expect(rule).toContain("content: ''")
+      expect(rule).toContain('margin: 0 0 0 auto')
+    }
+  })
+
+  // 2026-09-15 (final form): the anchor is CSS-only. The button-identity
+  // lifecycle (STRIP_ANCHOR_CLASS / restampStripAnchor) is retired — it broke
+  // three times in three days (hidden first button, removed button, DnD
+  // placeholder exclusion) and the last one settled the drop overlay on the
+  // un-anchored slot.
+  test('the button-identity anchor lifecycle is retired', () => {
+    expect(HORIZONTAL_STRIP_CSS).not.toContain('sidebar-ux-strip-anchor')
   })
 })
 

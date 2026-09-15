@@ -27,7 +27,6 @@ import {
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
-import { STRIP_ANCHOR_CLASS } from '../sidebar/styles'
 import {
   isHideDrawerOpenCloseButtonsEnabled,
   isHorizontalStrip,
@@ -455,9 +454,6 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   } else {
     tabList.appendChild(btn)
   }
-  // Structural mutation → re-evaluate the S8 strip anchor (the new button
-  // may be the first visible when leading tabs are hidden).
-  restampStripAnchor(tabList)
   // Taskbar pin tracks secondary assignment count — re-evaluate after first tab.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
@@ -469,11 +465,6 @@ export function removeSecondaryTabButton(tabId: string): void {
     getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ??
     getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`)
   btn?.remove()
-  // Structural mutation → re-evaluate the S8 strip anchor. Without this, a
-  // cross-drawer DnD moving the anchor-carrying first secondary tab out left
-  // NO button carrying the class and the right-side cluster fell back to
-  // flex-start (left-aligned — live bug 2026-09-15).
-  restampStripAnchor(getSecondaryTabList())
   // Last tab removed: unpin empty secondary strip under taskbar mode.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
 }
@@ -548,9 +539,6 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
       tabList.appendChild(btn)
     }
   }
-  // Structural mutation → re-evaluate the S8 strip anchor (the leading
-  // visible button may have changed).
-  restampStripAnchor(tabList)
 }
 
 /**
@@ -615,43 +603,6 @@ export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): vo
       btn.style.display = 'none'
     } else {
       btn.style.display = ''
-    }
-  }
-  // Visibility changed → re-evaluate the strip anchor (S8 right-anchor).
-  restampStripAnchor(tabList)
-}
-
-/**
- * Re-stamp the S8 right-anchor class on a strip's first VISIBLE tab button
- * (clearing it from the rest). The horizontal right-anchored cluster hangs
- * its `margin-left:auto` on this class, so it MUST be re-evaluated after
- * every structural mutation of the list (add / remove / reorder) AND every
- * visibility change, or the anchor is left on a removed/hidden button and
- * the cluster falls back to `flex-start` → left-aligned:
- *   - hidden first button (OS close / Configure hide) — the 2026-09-14 live bug;
- *   - a cross-drawer DnD moving the anchor-carrying first tab out of the
- *     second drawer (removeSecondaryTabButton) — the 2026-09-15 live bug.
- * Buttons only (data-tab-id): the OS Start button is order-managed, never an
- * anchor candidate. Idempotent, cheap (lists are ≤ a few dozen buttons).
- */
-export function restampStripAnchor(list: HTMLElement | null): void {
-  if (!list) return
-  const buttons = Array.from(
-    list.querySelectorAll('button[data-tab-id]'),
-  ) as HTMLElement[]
-  let stamped = false
-  for (const btn of buttons) {
-    const cl = btn.classList
-    // Mid-drag placeholder (opacity:0 slot holder) is NEVER an anchor
-    // candidate: the DnD reparents it across lists mid-drag, so it would
-    // otherwise carry the anchor into the target list and leave the source
-    // list anchor-less (live bug 2026-09-15: strip left-aligned mid-drag).
-    const isPlaceholder = !!cl?.contains?.('canvas-tab-list-dnd-placeholder')
-    if (!isPlaceholder && btn.style.display !== 'none' && !stamped) {
-      cl?.add?.(STRIP_ANCHOR_CLASS)
-      stamped = true
-    } else {
-      cl?.remove?.(STRIP_ANCHOR_CLASS)
     }
   }
 }

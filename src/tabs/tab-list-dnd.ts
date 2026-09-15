@@ -74,7 +74,6 @@ import {
   hideMainTabButton,
   showMainTabButton,
   buttonTabId,
-  restampStripAnchor,
 } from './buttons'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { isPointerResizeActive } from '../resize/handles'
@@ -1244,12 +1243,6 @@ function reorderCanvasListDOM(
         ) ?? null
   if (!sourceBtn) return false
 
-  // S8 anchor lifecycle: the mid-drag reparent below moves the anchor-carrying
-  // button out of the SOURCE list and into this container — re-stamp both
-  // after the mutation or the source strip falls back to flex-start
-  // (left-aligned mid-drag — live bug 2026-09-15).
-  const sourceParent = sourceBtn.parentElement
-
   // target.index is among *visible* siblings only (hit-test skips
   // display:none). Map to a real DOM insert so hidden slots stay put and
   // mid-drag order matches commit's reorderWithinVisible.
@@ -1273,8 +1266,6 @@ function reorderCanvasListDOM(
       return false
     }
     container.appendChild(sourceBtn)
-    restampStripAnchor(sourceParent)
-    restampStripAnchor(container)
     return true
   }
 
@@ -1286,8 +1277,6 @@ function reorderCanvasListDOM(
     return false
   }
   container.insertBefore(sourceBtn, referenceBtn)
-  restampStripAnchor(sourceParent)
-  restampStripAnchor(container)
   return true
 }
 
@@ -1301,11 +1290,6 @@ function restoreSourceButtonDOM(
   originalNextSibling: HTMLElement | null,
 ): void {
   if (!dragElement || !originalParent) return
-
-  // S8 anchor lifecycle: capture the pre-restore parent so both lists are
-  // re-stamped after the move back (mid-drag parking may have carried the
-  // anchor class into the other list).
-  const fromParent = dragElement.parentNode as HTMLElement | null
 
   // If the source is already in its original parent at the right position, skip
   const parent = dragElement.parentNode
@@ -1328,8 +1312,6 @@ function restoreSourceButtonDOM(
       originalParent.appendChild(dragElement)
     }
   }
-  restampStripAnchor(fromParent)
-  restampStripAnchor(originalParent)
 }
 
 // ── Drag implementation ──
@@ -1919,12 +1901,6 @@ function cleanupDragVisuals(): void {
     el.classList.remove('canvas-tab-list-dnd-placeholder')
     // Commit the un-hidden, non-transitioning style before overlay removal.
     void el.offsetWidth
-    // S8 anchor lifecycle: the placeholder class is gone — the element is a
-    // valid anchor candidate again. This is the final authority for the
-    // post-drop / post-cancel state (mid-drag restamps deliberately skipped
-    // placeholder buttons; without this pass the anchor could be left on a
-    // neighbor while the restored button sits first — live bug 2026-09-15).
-    restampStripAnchor(el.parentElement)
     requestAnimationFrame(() => {
       el.style.removeProperty('transition')
     })
