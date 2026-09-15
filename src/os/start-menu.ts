@@ -264,8 +264,17 @@ function attachMenuDismiss(): void {
 
 // ── Start buttons ────────────────────────────────────────────────────────────
 
+/**
+ * Start button markup. Chrome is CSS-owned:
+ * `.sidebar-ux-tab-list button[data-canvas-os-start]` in
+ * `sidebar/styles.ts` (OS_START_BUTTON_CSS) mirrors the Options/Settings dock
+ * button — same 48px row, radius, transition and hover background. NEVER
+ * inline geometry here: inline styles beat the sheet AND the mobile /
+ * horizontal size overrides. The glyph is the only intended difference
+ * (20px icon box, same as the mirror's forced icon size).
+ */
 function startButtonHtml(): string {
-  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`
+  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`
 }
 
 /**

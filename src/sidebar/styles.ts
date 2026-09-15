@@ -63,6 +63,15 @@ export const SECONDARY_MOBILE_CSS = `
     width: 52px !important;
     height: 48px !important;
   }
+  /* OS Start button parity: the mobile row pins the same 52×48 geometry
+     (the base OS_START_BUTTON_CSS width:100% would stretch the row). */
+  .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0;
+    flex-shrink: 0;
+    padding: 6px 4px !important;
+  }
   /* Active tab: bottom underline on mobile. Must match
      .sidebar-ux-side-left specificity and use !important —
      desktop rules set inset 3px/–3px with !important and
@@ -215,6 +224,16 @@ export const MAIN_MIRROR_MOBILE_CSS = `
     flex-shrink: 0 !important;
     padding: 6px 4px !important;
   }
+  /* OS Start button parity — same mobile row geometry (base width:100% would
+     stretch the row). Kept as a separate rule so the mirror selector above
+     stays a stable convention anchor (mobile-active-tab-css test). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+    padding: 6px 4px !important;
+  }
   .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
@@ -292,11 +311,15 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
   display: none !important;
 }
 
-/* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%. */
+/* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
+   and the OS Start button's base width:100% (OS_START_BUTTON_CSS) — a row
+   must never stretch it. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start] {
   width: 48px !important;
   height: 48px !important;
   min-width: 48px !important;
@@ -463,6 +486,60 @@ html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
 html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"] {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
+`
+
+/**
+ * OS-mode Start button (src/os/start-menu.ts) — injected into the Canvas tab
+ * strip; visual parity with the Options/Settings dock button. The declarations
+ * are the host `.tabBtn` chrome (ViewportDrawer.module.css:207-231) as
+ * reproduced by the Canvas mirror group in injectDrawerTabStyles below:
+ * full-width 48px row, 8px radius, transparent until hover, `all .2s ease`,
+ * hover `--lumiverse-primary-015` + text color. The glyph is the only
+ * intended difference (20px icon box, same as the mirror's forced icon size).
+ *
+ * Hook: the `data-canvas-os-start` attribute (already the menu's identity) —
+ * deliberately NOT `.sidebar-ux-main-tab-mirror-btn`: the renderer's
+ * stale-drop (main-renderer.ts), DnD install (tab-list-dnd.ts) and
+ * live-order scan (live-tab-order.ts) all treat that class as a real tab
+ * (delete / drag / phantom-count the Start button).
+ *
+ * Row modes must re-pin the size with !important — the base `width: 100%`
+ * stretches a flex row (HORIZONTAL_STRIP_CSS and the two *_MOBILE_CSS carry
+ * the overrides).
+ */
+export const OS_START_BUTTON_CSS = `
+  .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 100%;
+    height: 48px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+    box-sizing: border-box;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start]:hover {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+    border-radius: 8px;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start] > svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    transition: color 0.2s ease;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start]:hover > svg {
+    color: var(--lumiverse-text);
+  }
 `
 
 /** Inject the horizontal strip stylesheet once (idempotent by id). */
@@ -675,6 +752,11 @@ export function injectDrawerTabStyles(): void {
       flex-shrink: 0;
     }
   `)
+
+  // OS-mode Start button parity (see OS_START_BUTTON_CSS above). Base chrome
+  // only; the mobile / horizontal sheets below (and HORIZONTAL_STRIP_CSS)
+  // re-pin the row geometry with !important.
+  injectStyles('sidebar-ux-os-start-button', OS_START_BUTTON_CSS)
 
   // Closed-drawer shadow suppression: when the secondary drawer is off-screen
   // (translateX ≠ 0), its box-shadow must not bleed into the viewport —

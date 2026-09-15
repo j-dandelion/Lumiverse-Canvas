@@ -790,6 +790,7 @@ function injectDrawerTabStyles() {
       flex-shrink: 0;
     }
   `);
+  injectStyles("sidebar-ux-os-start-button", OS_START_BUTTON_CSS);
   injectStyles("sidebar-ux-shadow-close-suppress", `
     .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
       box-shadow: none !important;
@@ -868,6 +869,15 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
+  }
+  /* OS Start button parity: the mobile row pins the same 52×48 geometry
+     (the base OS_START_BUTTON_CSS width:100% would stretch the row). */
+  .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0;
+    flex-shrink: 0;
+    padding: 6px 4px !important;
   }
   /* Active tab: bottom underline on mobile. Must match
      .sidebar-ux-side-left specificity and use !important —
@@ -1015,6 +1025,16 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     flex-shrink: 0 !important;
     padding: 6px 4px !important;
   }
+  /* OS Start button parity — same mobile row geometry (base width:100% would
+     stretch the row). Kept as a separate rule so the mirror selector above
+     stays a stable convention anchor (mobile-active-tab-css test). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 52px !important;
+    height: 48px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+    padding: 6px 4px !important;
+  }
   .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
@@ -1035,7 +1055,40 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     width: 100% !important;
   }
 }
-`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS;
+`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS, OS_START_BUTTON_CSS = `
+  .sidebar-ux-tab-list button[data-canvas-os-start] {
+    width: 100%;
+    height: 48px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+    box-sizing: border-box;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start]:hover {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+    border-radius: 8px;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start] > svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    transition: color 0.2s ease;
+  }
+  .sidebar-ux-tab-list button[data-canvas-os-start]:hover > svg {
+    color: var(--lumiverse-text);
+  }
+`;
 var init_styles = __esm(() => {
   HORIZONTAL_STRIP_CSS = `
 /* List fills the fixed zone host absolutely (never fixed + width:100% —
@@ -1067,11 +1120,15 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
   display: none !important;
 }
 
-/* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%. */
+/* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
+   and the OS Start button's base width:100% (OS_START_BUTTON_CSS) — a row
+   must never stretch it. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn {
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start] {
   width: 48px !important;
   height: 48px !important;
   min-width: 48px !important;
@@ -17112,7 +17169,7 @@ function attachMenuDismiss() {
   };
 }
 function startButtonHtml() {
-  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`;
+  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`;
 }
 async function ensureStartButtonForSide(side) {
   const list = side === "primary" ? await getMainMirrorList() : getSecondaryTabList();
