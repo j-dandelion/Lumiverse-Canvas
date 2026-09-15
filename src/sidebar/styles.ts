@@ -244,6 +244,19 @@ export const LOCATION_CLASS_SIDES = 'sidebar-ux-location-sides'
 export const LOCATION_CLASS_TOP = 'sidebar-ux-location-top'
 export const LOCATION_CLASS_BOTTOM = 'sidebar-ux-location-bottom'
 
+/**
+ * Right-anchor marker (S8 #1). The horizontally right-anchored strip clusters
+ * anchor with `margin-left: auto` on the FIRST VISIBLE button — a class, not
+ * `:first-child`: the CSS `:first-child` matches by DOM position regardless
+ * of `display`, so a HIDDEN first button (Configure-hidden, or an OS-mode
+ * CLOSED window whose button hides per D3) made the auto margin inert and the
+ * cluster fell back to `flex-start` (right-side icons aligned left — live bug
+ * 2026-09-14, first hit the moment a window was closed). The strip writers
+ * stamp this class: main-renderer's render loop (main strip) and
+ * buttons.applyHiddenTabIdsToSecondary (secondary strip).
+ */
+export const STRIP_ANCHOR_CLASS = 'sidebar-ux-strip-anchor'
+
 /** Horizontal strip height: 4px padding + 48px button + 4px padding. */
 export const STRIP_HEIGHT_PX = 56
 
@@ -334,15 +347,19 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-rig
   justify-content: flex-start !important;
 }
 /* Right-anchored clusters: anchor with margin-left:auto on the first
-   item, NEVER justify-content:flex-end on the scroller. flex-end pushes
+   VISIBLE item (the STRIP_ANCHOR_CLASS marker — stamped by the strip
+   writers), NEVER justify-content:flex-end on the scroller. flex-end pushes
    the overflow past the inline-start edge, which is not part of the
    scrollable region — scrollWidth collapses to clientWidth and the
    earliest tabs become unreachable (live bug 2026-09-13, right-side main
    drawer is the host default). The auto margin absorbs only POSITIVE free
    space: it right-anchors while the tabs fit and resolves to 0 once they
-   overflow, leaving flex-start with a fully reachable scroll range. */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child {
+   overflow, leaving flex-start with a fully reachable scroll range.
+   Class-based (not :first-child): a hidden first button (Configure-hidden /
+   OS-mode closed) has no box, so an auto margin on it is inert and the
+   cluster left-aligns (live bug 2026-09-14 — closing a window exposed it). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS},
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS} {
   margin-left: auto !important;
 }
 
@@ -356,8 +373,8 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child {
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS},
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS} {
   margin-left: auto !important;
 }
 

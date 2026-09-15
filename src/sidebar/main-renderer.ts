@@ -51,6 +51,7 @@ import {
   deriveShortName,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
+import { STRIP_ANCHOR_CLASS } from './styles'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -401,6 +402,13 @@ export function renderMainMirrorTabs(): void {
 
   // Built-in / extension tabs: scrollable top section in MODEL order.
   let insertBefore: ChildNode | null = mainSection.firstChild
+  // S8 right-anchor marker: the FIRST VISIBLE button carries the class the
+  // horizontal right-side strip anchors its `margin-left:auto` on. A hidden
+  // first button (Configure-hidden or an OS-mode closed window) has no box,
+  // so :first-child-based anchoring went inert and the cluster left-aligned
+  // (live bug 2026-09-14). Stamped here — this loop is the single writer of
+  // the main strip's button visibility.
+  let anchorStamped = false
   for (const key of regularKeys) {
     const twin = twinForKey(key)
     const mirror = ensureMirrorButton(mainSection, list, key, insertBefore)
@@ -428,6 +436,14 @@ export function renderMainMirrorTabs(): void {
     // membership in model.closed (the Start menu keeps listing them, D6).
     const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey
     mirror.style.display = hidden ? 'none' : ''
+
+    // S8 anchor: first VISIBLE button only (cleared from the rest each pass).
+    if (!hidden && !anchorStamped) {
+      mirror.classList.add(STRIP_ANCHOR_CLASS)
+      anchorStamped = true
+    } else {
+      mirror.classList.remove(STRIP_ANCHOR_CLASS)
+    }
 
     // Active from the MODEL — open-only highlight; never host tabBtnActive.
     const showActive = open && activeKey === key && !hidden

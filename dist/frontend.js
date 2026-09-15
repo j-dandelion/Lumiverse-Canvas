@@ -1035,7 +1035,7 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     width: 100% !important;
   }
 }
-`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS;
+`, LOCATION_CLASS_SIDES = "sidebar-ux-location-sides", LOCATION_CLASS_TOP = "sidebar-ux-location-top", LOCATION_CLASS_BOTTOM = "sidebar-ux-location-bottom", STRIP_ANCHOR_CLASS = "sidebar-ux-strip-anchor", STRIP_HEIGHT_PX = 56, STRIP_HEIGHT_VAR = "--sidebar-ux-strip-h", HORIZONTAL_STRIP_CSS;
 var init_styles = __esm(() => {
   HORIZONTAL_STRIP_CSS = `
 /* List fills the fixed zone host absolutely (never fixed + width:100% —
@@ -1109,15 +1109,19 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-rig
   justify-content: flex-start !important;
 }
 /* Right-anchored clusters: anchor with margin-left:auto on the first
-   item, NEVER justify-content:flex-end on the scroller. flex-end pushes
+   VISIBLE item (the STRIP_ANCHOR_CLASS marker — stamped by the strip
+   writers), NEVER justify-content:flex-end on the scroller. flex-end pushes
    the overflow past the inline-start edge, which is not part of the
    scrollable region — scrollWidth collapses to clientWidth and the
    earliest tabs become unreachable (live bug 2026-09-13, right-side main
    drawer is the host default). The auto margin absorbs only POSITIVE free
    space: it right-anchors while the tabs fit and resolves to 0 once they
-   overflow, leaving flex-start with a fully reachable scroll range. */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button:first-child {
+   overflow, leaving flex-start with a fully reachable scroll range.
+   Class-based (not :first-child): a hidden first button (Configure-hidden /
+   OS-mode closed) has no box, so an auto margin on it is inert and the
+   cluster left-aligns (live bug 2026-09-14 — closing a window exposed it). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS},
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-main > button.${STRIP_ANCHOR_CLASS} {
   margin-left: auto !important;
 }
 
@@ -1131,8 +1135,8 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list {
   justify-content: flex-start !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button:first-child {
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS},
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right > .sidebar-ux-tab-list > button.${STRIP_ANCHOR_CLASS} {
   margin-left: auto !important;
 }
 
@@ -3892,6 +3896,7 @@ function renderMainMirrorTabs() {
   const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
   const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
   let insertBefore = mainSection.firstChild;
+  let anchorStamped = false;
   for (const key of regularKeys) {
     const twin = twinForKey(key);
     const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
@@ -3908,6 +3913,12 @@ function renderMainMirrorTabs() {
     }
     const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey;
     mirror.style.display = hidden ? "none" : "";
+    if (!hidden && !anchorStamped) {
+      mirror.classList.add(STRIP_ANCHOR_CLASS);
+      anchorStamped = true;
+    } else {
+      mirror.classList.remove(STRIP_ANCHOR_CLASS);
+    }
     const showActive = open && activeKey === key && !hidden;
     mirror.classList.toggle("sidebar-ux-tab-active", showActive);
     const labeled = resolveMirrorLabeled(twin.btn, false);
@@ -4104,6 +4115,7 @@ var init_main_renderer = __esm(() => {
   init_main_mirror_drawer();
   init_buttons();
   init_log();
+  init_styles();
 });
 
 // src/sidebar/main-tab-pin.ts
@@ -8409,6 +8421,7 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
   const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b2) => getButtonTabId(b2) === sourceTabId) ?? null;
   if (!sourceBtn)
     return false;
+  const sourceParent = sourceBtn.parentElement;
   const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b2) => b2 !== sourceBtn);
   const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
   const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
@@ -8417,6 +8430,8 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
       return false;
     }
     container.appendChild(sourceBtn);
+    restampStripAnchor(sourceParent);
+    restampStripAnchor(container);
     return true;
   }
   const referenceBtn = buttonsWithoutSource[insertIdx];
@@ -8424,11 +8439,14 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
     return false;
   }
   container.insertBefore(sourceBtn, referenceBtn);
+  restampStripAnchor(sourceParent);
+  restampStripAnchor(container);
   return true;
 }
 function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
   if (!dragElement || !originalParent)
     return;
+  const fromParent = dragElement.parentNode;
   const parent = dragElement.parentNode;
   if (parent === originalParent) {
     if (originalNextSibling) {
@@ -8447,6 +8465,8 @@ function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling
       originalParent.appendChild(dragElement);
     }
   }
+  restampStripAnchor(fromParent);
+  restampStripAnchor(originalParent);
 }
 function createDragOverlay(sourceBtn) {
   const wrapper = document.createElement("div");
@@ -8804,6 +8824,7 @@ function cleanupDragVisuals() {
     el.style.setProperty("transition", "none", "important");
     el.classList.remove("canvas-tab-list-dnd-placeholder");
     el.offsetWidth;
+    restampStripAnchor(el.parentElement);
     requestAnimationFrame(() => {
       el.style.removeProperty("transition");
     });
@@ -11406,6 +11427,7 @@ __export(exports_buttons, {
   removeSecondaryTabButton: () => removeSecondaryTabButton,
   reorderHostMainTabButtons: () => reorderHostMainTabButtons,
   reorderSecondaryTabButtons: () => reorderSecondaryTabButtons,
+  restampStripAnchor: () => restampStripAnchor,
   secondaryTabButtonsReady: () => secondaryTabButtonsReady,
   showAllMainTabButtons: () => showAllMainTabButtons,
   showMainTabButton: () => showMainTabButton,
@@ -11662,11 +11684,13 @@ function addSecondaryTabButton(tab) {
   } else {
     tabList.appendChild(btn);
   }
+  restampStripAnchor(tabList);
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
 function removeSecondaryTabButton(tabId) {
   const btn = getSecondaryTabList()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`) ?? getSecondaryWrapper()?.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   btn?.remove();
+  restampStripAnchor(getSecondaryTabList());
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
 function findNeighborSecondaryButtonFor(tabId) {
@@ -11718,6 +11742,7 @@ function reorderSecondaryTabButtons(ids) {
       tabList.appendChild(btn);
     }
   }
+  restampStripAnchor(tabList);
 }
 function reorderHostMainTabButtons(ids) {
   const sidebar = getMainSidebar();
@@ -11745,6 +11770,23 @@ function applyHiddenTabIdsToSecondary(hiddenIds) {
       btn.style.display = "none";
     } else {
       btn.style.display = "";
+    }
+  }
+  restampStripAnchor(tabList);
+}
+function restampStripAnchor(list) {
+  if (!list)
+    return;
+  const buttons = Array.from(list.querySelectorAll("button[data-tab-id]"));
+  let stamped = false;
+  for (const btn of buttons) {
+    const cl = btn.classList;
+    const isPlaceholder = !!cl?.contains?.("canvas-tab-list-dnd-placeholder");
+    if (!isPlaceholder && btn.style.display !== "none" && !stamped) {
+      cl?.add?.(STRIP_ANCHOR_CLASS);
+      stamped = true;
+    } else {
+      cl?.remove?.(STRIP_ANCHOR_CLASS);
     }
   }
 }
@@ -11872,6 +11914,7 @@ var init_buttons = __esm(() => {
   init_log();
   init_drawer_sync();
   init_secondary();
+  init_styles();
   init_state();
   init_assignment();
   init_tab_context_menu();
