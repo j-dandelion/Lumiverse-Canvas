@@ -209,9 +209,14 @@ function secondaryZonePresent(): boolean {
  *
  * Vertical (Sides): fixed 56px edge column at the drawer's side.
  * Horizontal (Top/Bottom): fixed full-width strip host; each owner's host
- * occupies its zone (50%+1px overlap when both drawers have a zone — the +1px
- * prevents a device-pixel seam at fractional zoom; 100% solo), anchored to
- * its own drawer's edge and growing inward. The list inside is absolutely
+ * occupies its zone (100% solo), anchored to its own drawer's edge and
+ * growing inward. Dual zones overlap by exactly 1px — ONLY the left/edge
+ * zone carries the +1px; the right zone is exactly 50%. Both halves carrying
+ * +1px (the original S8 #4 form) produced a 2px double-painted band that is
+ * visible as a seam line under non-opaque theme backgrounds (live report
+ * 2026-09-15). The remaining 1px prevents the device-pixel gap at fractional
+ * zoom (live bug 2026-09-14: 90% Firefox zoom, 715 CSS px = 637.5 device px)
+ * while halving the painted overlap. The list inside is absolutely
  * positioned by the list writer; HORIZONTAL_STRIP_CSS owns orientation.
  */
 function applyPinHostChrome(
@@ -242,17 +247,17 @@ function applyPinHostChrome(
       setIfDifferent(s, 'bottom', SAFE_BOTTOM)
       setIfDifferent(s, 'top', '')
     }
-    // Both zones split 50/50; solo main gets the full width. The +1px per
-    // half makes the two fixed zone layers overlap at the seam: at fractional
-    // browser zoom / device scale a 50% half lands on a fractional device
-    // pixel and the compositor can round the two layers apart, leaving a
-    // 1-device-px column where the page background shows through as a
-    // divider in the middle of the strip (live bug 2026-09-14: 90% Firefox
-    // zoom, 715 CSS px = 637.5 device px). The list backgrounds are opaque
-    // and identical, so the overlap paints invisibly; the tabs stay anchored
-    // to their own outer edge.
+    // Dual zones: left/edge-anchored host is calc(50% + 1px), right host is
+    // exactly 50% — the pair overlaps by exactly 1px. The +1px (on ONE side
+    // only) keeps the union covered when a 50% half lands on a fractional
+    // device pixel and the compositor rounds the two fixed layers apart
+    // (live bug 2026-09-14: 90% Firefox zoom, 715 CSS px = 637.5 device px).
+    // Putting +1px on BOTH halves doubled the overlap to 2px, which paints
+    // as a visible darker seam band under non-opaque theme backgrounds
+    // (live report 2026-09-15, user-verified fix: right host exactly 50%).
     const dual = secondaryZonePresent()
-    setIfDifferent(s, 'width', dual ? 'calc(50% + 1px)' : '100%')
+    const dualWidth = side === 'left' ? 'calc(50% + 1px)' : '50%'
+    setIfDifferent(s, 'width', dual ? dualWidth : '100%')
     if (side === 'right') {
       setIfDifferent(s, 'right', SAFE_RIGHT)
       setIfDifferent(s, 'left', '')

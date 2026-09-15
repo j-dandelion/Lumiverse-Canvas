@@ -169,19 +169,18 @@ function resolveClosedLiveIds(): Set<string> {
 // ── Visibility refresh (model-driven) ────────────────────────────────────────
 
 /**
- * One refresh pass for the model-driven OS chrome:
- *   1. Secondary strip: the model's closed set (resolved to live ids)
- *      MERGES into the effective hidden set — closed windows hide through
- *      the same applicator as Configure-hidden (D3), so a re-opened
- *      window un-hides through the same path (the show branch). The main
- *      strip handles `model.closed` in the renderer.
- *   2. Header chrome: minimize/X presence per displayed-window state (D17).
+ * Re-apply the secondary strip's effective hidden set (eye-hidden + the OS
+ * closed set) WITHOUT touching header chrome. No-op when OS mode is off (the
+ * closed set is empty by invariant, and the plain applicator stays
+ * refreshOsVisibility's job).
  *
- * Runs on every model commit while OS mode is on. In non-OS mode the
- * closed set is empty by invariant, so the merge is a no-op and the call
- * degrades to the plain hidden applicator (harmless).
+ * Exported for the placement-drain tail (`reassignSecondaryTabsFromModel`):
+ * buttons created after the last model commit would otherwise keep a closed
+ * window's strip button visible until the next commit (live report
+ * 2026-09-15: `presets` showed after enabling the second drawer although it
+ * was in the entering slot's closed set).
  */
-function refreshOsVisibility(): void {
+export function reapplyOsClosedVisibility(): void {
   if (!isOsModeEnabled()) return
   try {
     closedLiveIdsCache = resolveClosedLiveIds()
@@ -194,8 +193,23 @@ function refreshOsVisibility(): void {
       ),
     )
   } catch (err) {
-    dwarn('[os] refresh visibility failed:', err instanceof Error ? err.message : err)
+    dwarn('[os] reapply closed visibility failed:', err instanceof Error ? err.message : err)
   }
+}
+
+/**
+ * One refresh pass for the model-driven OS chrome:
+ *   1. Secondary strip: the model's closed set (resolved to live ids)
+ *      MERGES into the effective hidden set — closed windows hide through
+ *      the same applicator as Configure-hidden (D3), so a re-opened
+ *      window un-hides through the same path (the show branch). The main
+ *      strip handles `model.closed` in the renderer.
+ *   2. Header chrome: minimize/X presence per displayed-window state (D17).
+ *
+ * Runs on every model commit while OS mode is on.
+ */
+function refreshOsVisibility(): void {
+  reapplyOsClosedVisibility()
   ensureChromeBoth()
 }
 

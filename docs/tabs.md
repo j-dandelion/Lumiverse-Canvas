@@ -39,6 +39,20 @@ Right-click "Move to second drawer" no longer dispatches a model intent first. T
 
 Built-in placement: `requestTabLocation` to the container is an allowlist silent no-op for most built-ins in this runtime, and `store.moveTabTo` is missing — the `via=dom` fallback (registry root reparent) is the real path; `via=bridge` works for allowlisted tabs.
 
+### Context menus (two surfaces)
+
+- **Main drawer** — Lumiverse's own ContextMenu (a direct host-tab right-click, or
+  the mirror button's forwarded synthetic event, `main-renderer.onMirrorContextMenu`).
+  Canvas injects into it (`context-menu/index.ts`): "Move to second drawer"/"Move to
+  main drawer" (the move item is gated on the second drawer being enabled) plus
+  **Minimize + Close** while OS mode is on (spec D14). The OS pair is injected only
+  when the menu carries tab-menu wording (labels toggle / "Configure tabs") so a
+  foreign body portal never gets a destructive Close; each injected click dismisses
+  the host menu with an `Escape` keydown.
+- **Second drawer** — Canvas-owned `.canvas-tab-context-menu`
+  (`tabs/tab-context-menu.ts`): labels toggle, Configure tabs, Move to …, and the
+  same OS Minimize/Close pair.
+
 ## Button Management (`tabs/buttons.ts`)
 
 ### Main Sidebar

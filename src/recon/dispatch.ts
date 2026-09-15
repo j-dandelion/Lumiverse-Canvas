@@ -20,6 +20,19 @@ let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
 /**
+ * Warm-restore persistence gate override (2026-09-15). `reconcileAndPersist`
+ * refuses to write while `_pendingLayout` is armed so a partial boot model is
+ * never persisted over the stored layout. A warm MODE-SWITCH restore (second
+ * drawer enable/disable, OS disable) has the opposite failure mode: if the
+ * entering slot carries an unresolvable key, `_pendingLayout` blocks the write
+ * indefinitely and a reload restores the stale top-level layout — the restored
+ * second-drawer tabs vanish (live bug 2026-09-15). Those restores set this flag
+ * (via `bootstrapFromLayout(..., { persistWhilePending: true })`), so the
+ * resolved live model IS written immediately while the retry window keeps
+ * merging late-resolving keys. Boot never sets it.
+ */
+let _persistResolvedWhilePending = false
+/**
  * True once the user changed drawer geometry / hidden state / side inside the
  * pending-restore window. `mergeResolvedInto` then keeps the USER's copies
  * instead of re-adopting the rebuilt (layout) ones — a late-resolving tab
@@ -236,6 +249,11 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       if (Date.now() > _restoreDeadline) {
         dlog('[dispatch] pending-layout restore aborted (retry window expired)')
         _pendingLayout = null
+        // Persist is NOT forced here: the abort can run while `_model` is
+        // still partial (or empty), and only the hasTabs-guarded commit path
+        // may write. Clear the warm-restore override too — it exists only
+        // while the retry window is open.
+        _persistResolvedWhilePending = false
         return
       }
       const rebuilt = buildModelFromLayout(
@@ -327,6 +345,7 @@ export function shutdown(): void {
   _model = null
   _version = 'unknown'
   _pendingLayout = null
+  _persistResolvedWhilePending = false
   _restoringPending = false
   _restoreDeadline = 0
   _pendingWindowUserState = false
@@ -482,7 +501,11 @@ async function reconcileAndPersist(model: LayoutModel, generation = _generation)
   // its pre-React empty bootstrap boundary. The readiness callback will retry
   // the restore once live tab identities exist.
   const hasTabs = model.primary.length > 0 || model.secondary.length > 0
-  if (generation === _generation && _host === host && _pendingLayout === null && hasTabs) {
+  // `hasTabs` still guards empty writes on every path. The pending gate opens
+  // only for warm restores that opted in (`_persistResolvedWhilePending`) —
+  // see the flag's doc comment.
+  const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending
+  if (generation === _generation && _host === host && persistAllowed && hasTabs) {
     persistModel(model)
   }
   return model
@@ -1021,6 +1044,7 @@ export function bootstrapFromLayout(
   layout: unknown,
   host: HostPort,
   version?: string,
+  opts?: { persistWhilePending?: boolean },
 ): void {
   let model = buildModelFromLayout(layout as any, (id) => host.findKey(id))
   if (pendingLayoutTabCount(layout) === 0) {
@@ -1042,9 +1066,21 @@ export function bootstrapFromLayout(
   const expected = pendingLayoutTabCount(layout)
   const resolved = model.primary.length + model.secondary.length
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS
+  // Warm restores (mode switch / OS disable) opt into persisting the resolved
+  // model while the retry window is open — the entering slot must not strand
+  // the live layout on disk (see _persistResolvedWhilePending). Boot calls
+  // without the option: the retry window owns persistence.
+  _persistResolvedWhilePending = opts?.persistWhilePending === true
   _pendingLayout = layout != null && resolved < expected
     ? layout
     : null
+  if (_pendingLayout !== null) {
+    dlog('[dispatch] pending-layout armed', {
+      expected,
+      resolved,
+      persistWhilePending: _persistResolvedWhilePending,
+    })
+  }
   bootstrap(model, host, version)
 
   // Diagnostic: boot restore summary — what the saved layout asked for vs

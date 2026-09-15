@@ -541,6 +541,19 @@ export function reassignSecondaryTabsFromModel(opts?: ReassignSecondaryOpts): Pr
       current = _reassignQueuedOpts
       _reassignQueuedOpts = undefined
     }
+    // OS mode: buttons created at the tail of the placement loop missed the
+    // model-commit refreshOsVisibility pass — re-apply the closed-set hide
+    // once the drain has settled (live report 2026-09-15: a closed window's
+    // strip button stayed visible until the next commit). Lazy import avoids
+    // the secondary ↔ panel-chrome static cycle.
+    if (isOsModeEnabled()) {
+      try {
+        const osChrome = await import('../os/panel-chrome')
+        osChrome.reapplyOsClosedVisibility()
+      } catch (err) {
+        dwarn('[secondary] OS closed-visibility re-apply failed:', err)
+      }
+    }
     _reassignDraining = false
     dlog(`[secondary] reassign drain settled (${runs} run${runs === 1 ? '' : 's'})`)
     for (const resolve of _reassignWaiters.splice(0)) resolve()

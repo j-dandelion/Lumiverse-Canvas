@@ -195,7 +195,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.style.right).toBe('')
   })
 
-  test('horizontal bottom dual (right side): 50%+1px anchored right', () => {
+  test('horizontal bottom dual (right side): exactly 50%, anchored right', () => {
     loc = 'bottom'
     presence = true
     shellLive = true
@@ -204,21 +204,28 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.getAttribute('data-strip-edge')).toBe('bottom')
     expect(host.style.bottom).toBe(SAFE_BOTTOM)
     expect(host.style.top).toBe('')
-    expect(host.style.width).toBe('calc(50% + 1px)')
+    // Right/opposite-edge zone is EXACTLY 50% — the +1px lives on the left
+    // zone only (1px total overlap; see the asymmetric-rule test below).
+    expect(host.style.width).toBe('50%')
     expect(host.style.right).toBe(SAFE_RIGHT)
     expect(host.style.left).toBe('')
   })
 
-  test('dual zone halves overlap by 1px (device-pixel seam guard)', () => {
+  test('dual zone overlap is exactly 1px: left host +1px, right host exactly 50%', () => {
     // Live bug 2026-09-14: at 90% Firefox zoom each 50% fixed half rounded to
     // a fractional device pixel and a 1-device-px column of page background
-    // showed through at the seam as a divider. Both halves must grow 1px
-    // inward so the union can never leave that column uncovered.
+    // showed through at the seam as a divider — an overlap is needed.
+    // Live report 2026-09-15: BOTH halves carrying calc(50% + 1px) doubled
+    // the overlap to 2px, which painted as a visible seam band under
+    // non-opaque theme backgrounds. Minimal form: exactly one host carries
+    // the +1px (the left/edge-anchored zone); the right zone stays 50%.
     loc = 'top'
     presence = true
     secondaryList = freshList()
-    const host = ensureMainPinHost('left')!
-    expect(host.style.width).toBe('calc(50% + 1px)')
+    const left = ensureMainPinHost('left')!
+    expect(left.style.width).toBe('calc(50% + 1px)')
+    const right = ensureMainPinHost('right')!
+    expect(right.style.width).toBe('50%')
   })
 
   test('dual collapses to solo when the secondary zone disappears', () => {

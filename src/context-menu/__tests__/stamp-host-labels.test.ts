@@ -75,6 +75,7 @@ mock.module('../../tabs/assignment', () => ({
 }))
 mock.module('../../settings/state', () => ({
   getSettings: () => ({ secondSidebarEnabled: true }),
+  isOsModeEnabled: () => false,
 }))
 mock.module('../../tabs/tab-context-menu', () => ({
   hideAssignmentMenu: () => {},

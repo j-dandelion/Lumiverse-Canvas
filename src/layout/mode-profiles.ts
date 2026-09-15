@@ -86,7 +86,12 @@ export async function restoreSingleModeLayout(
   host: HostPort,
 ): Promise<{ ok: boolean; reason?: string }> {
   try {
-    bootstrapFromLayout(slot, host, CANVAS_VERSION)
+    // Warm mid-session restore (second-drawer mode switch, OS disable):
+    // persist the resolved model even when the slot carries an unresolvable
+    // key. Without this the pending-restore gate blocks the write and a
+    // reload restores the stale top-level layout — the restored second-drawer
+    // tabs vanish (live bug 2026-09-15). Boot keeps the plain retry window.
+    bootstrapFromLayout(slot, host, CANVAS_VERSION, { persistWhilePending: true })
     await flushOwnedModel()
   } catch (err) {
     return { ok: false, reason: `bootstrap: ${err instanceof Error ? err.message : String(err)}` }

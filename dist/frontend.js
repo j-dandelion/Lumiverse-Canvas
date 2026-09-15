@@ -2106,7 +2106,8 @@ function applyPinHostChrome(host, side, owner) {
       setIfDifferent(s, "top", "");
     }
     const dual = secondaryZonePresent();
-    setIfDifferent(s, "width", dual ? "calc(50% + 1px)" : "100%");
+    const dualWidth = side === "left" ? "calc(50% + 1px)" : "50%";
+    setIfDifferent(s, "width", dual ? dualWidth : "100%");
     if (side === "right") {
       setIfDifferent(s, "right", SAFE_RIGHT);
       setIfDifferent(s, "left", "");
@@ -5740,6 +5741,7 @@ function enqueueHostSync(host, generation) {
       if (Date.now() > _restoreDeadline) {
         dlog("[dispatch] pending-layout restore aborted (retry window expired)");
         _pendingLayout = null;
+        _persistResolvedWhilePending = false;
         return;
       }
       const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
@@ -5808,6 +5810,7 @@ function shutdown() {
   _model = null;
   _version = "unknown";
   _pendingLayout = null;
+  _persistResolvedWhilePending = false;
   _restoringPending = false;
   _restoreDeadline = 0;
   _pendingWindowUserState = false;
@@ -5886,7 +5889,8 @@ async function reconcileAndPersist(model, generation = _generation) {
     model = { ...model, side: report.modelSideCorrection };
   }
   const hasTabs = model.primary.length > 0 || model.secondary.length > 0;
-  if (generation === _generation && _host === host && _pendingLayout === null && hasTabs) {
+  const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending;
+  if (generation === _generation && _host === host && persistAllowed && hasTabs) {
     persistModel(model);
   }
   return model;
@@ -6162,7 +6166,7 @@ async function placementFirstMoveByLiveId(liveId, target) {
     await applyMainMirrorMoveChrome(chrome, liveId);
   }
 }
-function bootstrapFromLayout(layout, host, version) {
+function bootstrapFromLayout(layout, host, version, opts) {
   let model = buildModelFromLayout(layout, (id) => host.findKey(id));
   if (pendingLayoutTabCount(layout) === 0) {
     const observed = host.observe();
@@ -6175,7 +6179,15 @@ function bootstrapFromLayout(layout, host, version) {
   const expected = pendingLayoutTabCount(layout);
   const resolved = model.primary.length + model.secondary.length;
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
+  _persistResolvedWhilePending = opts?.persistWhilePending === true;
   _pendingLayout = layout != null && resolved < expected ? layout : null;
+  if (_pendingLayout !== null) {
+    dlog("[dispatch] pending-layout armed", {
+      expected,
+      resolved,
+      persistWhilePending: _persistResolvedWhilePending
+    });
+  }
   bootstrap(model, host, version);
   const savedLayout = layout ?? {};
   dlog("[dispatch] boot restore", {
@@ -6258,7 +6270,7 @@ function bootPlacementDone() {
 function flush() {
   return _queue;
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _persistResolvedWhilePending = false, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -7814,7 +7826,7 @@ function buildSingleLayoutFromLiveHost() {
 }
 async function restoreSingleModeLayout(slot, host) {
   try {
-    bootstrapFromLayout(slot, host, CANVAS_VERSION);
+    bootstrapFromLayout(slot, host, CANVAS_VERSION, { persistWhilePending: true });
     await flush();
   } catch (err) {
     return { ok: false, reason: `bootstrap: ${err instanceof Error ? err.message : String(err)}` };
@@ -15954,6 +15966,188 @@ var init_store = __esm(() => {
   init_drawer_observer();
 });
 
+// src/os/panel-chrome.ts
+var exports_panel_chrome = {};
+__export(exports_panel_chrome, {
+  mountPanelChrome: () => mountPanelChrome,
+  reapplyOsClosedVisibility: () => reapplyOsClosedVisibility,
+  teardownPanelChrome: () => teardownPanelChrome
+});
+function minimizeButtonHtml() {
+  return `<button type="button" aria-label="Minimize" title="Minimize" ${MINIMIZE_ATTR}="1" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>`;
+}
+function resolveHeaderSurface(side) {
+  const wrapper = side === "primary" ? getMainMirrorWrapper() : getSecondaryWrapper();
+  const header = wrapper?.querySelector(".sidebar-ux-panel-header");
+  if (!header || !header.isConnected)
+    return null;
+  const closeBtn = header.querySelector(".sidebar-ux-close-btn");
+  const actions = header.querySelector(`.${HEADER_ACTIONS_CLASS}`);
+  if (!closeBtn || !actions)
+    return null;
+  return { header, closeBtn, actions };
+}
+function setHeaderHidden(el, hidden) {
+  if (hidden)
+    el.setAttribute(HIDDEN_ATTR, "1");
+  else
+    el.removeAttribute(HIDDEN_ATTR);
+}
+function clearTitle(header) {
+  const title = header.querySelector(".sidebar-ux-panel-title");
+  if (title)
+    title.textContent = "";
+}
+function ensureChromeForSide(side) {
+  const surface = resolveHeaderSurface(side);
+  if (!surface)
+    return;
+  ensureHeaderObserved(surface.header);
+  const displayed = getDisplayedLiveId(side);
+  if (side === "primary") {
+    setCanvasMainNoActive(!displayed);
+  } else if (!displayed) {
+    clearTitle(surface.header);
+  }
+  setHeaderHidden(surface.closeBtn, !displayed);
+  let minBtn = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
+  if (displayed && !minBtn) {
+    const template = document.createElement("template");
+    template.innerHTML = minimizeButtonHtml().trim();
+    minBtn = template.content.firstElementChild;
+    surface.actions.insertBefore(minBtn, surface.closeBtn);
+    minBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const liveId = getDisplayedLiveId(side);
+      if (!liveId)
+        return;
+      minimizeWindowByLiveId(liveId, side);
+    });
+    dlog("[os] header chrome: minimize button injected", { side });
+  }
+  if (minBtn)
+    setHeaderHidden(minBtn, !displayed);
+}
+function resolveClosedLiveIds() {
+  const host = getHost();
+  const model = getModel();
+  if (!host || !model)
+    return new Set;
+  const out = new Set;
+  for (const key of model.closed) {
+    const liveId = host.resolve(key);
+    if (liveId)
+      out.add(liveId);
+  }
+  return out;
+}
+function reapplyOsClosedVisibility() {
+  if (!isOsModeEnabled())
+    return;
+  try {
+    closedLiveIdsCache = resolveClosedLiveIds();
+    applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds(), ...closedLiveIdsCache])));
+  } catch (err) {
+    dwarn("[os] reapply closed visibility failed:", err instanceof Error ? err.message : err);
+  }
+}
+function refreshOsVisibility() {
+  reapplyOsClosedVisibility();
+  ensureChromeBoth();
+}
+function ensureHeaderObserved(header) {
+  if (!_headerObserver || _observedHeaders.has(header))
+    return;
+  _headerObserver.observe(header, { childList: true });
+  _observedHeaders.add(header);
+}
+function scheduleEnsure() {
+  if (_ensureRaf)
+    return;
+  _ensureRaf = requestAnimationFrame(() => {
+    _ensureRaf = 0;
+    ensureChromeBoth();
+  });
+}
+function ensureChromeBoth() {
+  ensureChromeForSide("primary");
+  if (isOsModeEnabled())
+    ensureChromeForSide("secondary");
+}
+function mountPanelChrome() {
+  if (_active3)
+    return;
+  _active3 = true;
+  setPanelHeaderCloseHandler((side) => {
+    if (!isOsModeEnabled())
+      return false;
+    const liveId = getDisplayedLiveId(side);
+    if (!liveId)
+      return false;
+    dlog("[os] header X intercepted → close window", { side, liveId });
+    closeWindowByLiveId(liveId);
+    return true;
+  });
+  if (typeof MutationObserver !== "undefined") {
+    _headerObserver = new MutationObserver(scheduleEnsure);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
+  }
+  if (!_unsubModelChanged2) {
+    _unsubModelChanged2 = onModelChanged(refreshOsVisibility);
+  }
+  ensureChromeBoth();
+  refreshOsVisibility();
+  dlog("[os] panel chrome mounted");
+}
+function teardownPanelChrome() {
+  if (!_active3)
+    return;
+  _active3 = false;
+  setPanelHeaderCloseHandler(null);
+  if (typeof window !== "undefined") {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
+  }
+  _headerObserver?.disconnect();
+  _headerObserver = null;
+  _observedHeaders = new WeakSet;
+  if (_ensureRaf) {
+    cancelAnimationFrame(_ensureRaf);
+    _ensureRaf = 0;
+  }
+  _unsubModelChanged2?.();
+  _unsubModelChanged2 = null;
+  closedLiveIdsCache = new Set;
+  for (const side of ["primary", "secondary"]) {
+    const surface = resolveHeaderSurface(side);
+    if (!surface)
+      continue;
+    surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove();
+    surface.closeBtn.removeAttribute(HIDDEN_ATTR);
+  }
+  setCanvasMainNoActive(false);
+  applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
+  dlog("[os] panel chrome unmounted");
+}
+var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged2 = null;
+var init_panel_chrome = __esm(() => {
+  init_drawer_shell();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_host_settings();
+  init_state();
+  init_actions();
+  init_dispatch();
+  init_buttons();
+  init_canvas_hidden();
+  init_log();
+  _observedHeaders = new WeakSet;
+  closedLiveIdsCache = new Set;
+  Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(teardownPanelChrome));
+});
+
 // src/sidebar/secondary.tsx
 var exports_secondary = {};
 __export(exports_secondary, {
@@ -16198,6 +16392,14 @@ function reassignSecondaryTabsFromModel(opts) {
       _reassignQueued = false;
       current = _reassignQueuedOpts;
       _reassignQueuedOpts = undefined;
+    }
+    if (isOsModeEnabled()) {
+      try {
+        const osChrome = await Promise.resolve().then(() => (init_panel_chrome(), exports_panel_chrome));
+        osChrome.reapplyOsClosedVisibility();
+      } catch (err) {
+        dwarn("[secondary] OS closed-visibility re-apply failed:", err);
+      }
     }
     _reassignDraining = false;
     dlog(`[secondary] reassign drain settled (${runs} run${runs === 1 ? "" : "s"})`);
@@ -17029,179 +17231,6 @@ var init_state = __esm(() => {
   _settings = mergeCanvasSettings(null);
 });
 
-// src/os/panel-chrome.ts
-function minimizeButtonHtml() {
-  return `<button type="button" aria-label="Minimize" title="Minimize" ${MINIMIZE_ATTR}="1" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>`;
-}
-function resolveHeaderSurface(side) {
-  const wrapper = side === "primary" ? getMainMirrorWrapper() : getSecondaryWrapper();
-  const header = wrapper?.querySelector(".sidebar-ux-panel-header");
-  if (!header || !header.isConnected)
-    return null;
-  const closeBtn = header.querySelector(".sidebar-ux-close-btn");
-  const actions = header.querySelector(`.${HEADER_ACTIONS_CLASS}`);
-  if (!closeBtn || !actions)
-    return null;
-  return { header, closeBtn, actions };
-}
-function setHeaderHidden(el, hidden) {
-  if (hidden)
-    el.setAttribute(HIDDEN_ATTR, "1");
-  else
-    el.removeAttribute(HIDDEN_ATTR);
-}
-function clearTitle(header) {
-  const title = header.querySelector(".sidebar-ux-panel-title");
-  if (title)
-    title.textContent = "";
-}
-function ensureChromeForSide(side) {
-  const surface = resolveHeaderSurface(side);
-  if (!surface)
-    return;
-  ensureHeaderObserved(surface.header);
-  const displayed = getDisplayedLiveId(side);
-  if (side === "primary") {
-    setCanvasMainNoActive(!displayed);
-  } else if (!displayed) {
-    clearTitle(surface.header);
-  }
-  setHeaderHidden(surface.closeBtn, !displayed);
-  let minBtn = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
-  if (displayed && !minBtn) {
-    const template = document.createElement("template");
-    template.innerHTML = minimizeButtonHtml().trim();
-    minBtn = template.content.firstElementChild;
-    surface.actions.insertBefore(minBtn, surface.closeBtn);
-    minBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const liveId = getDisplayedLiveId(side);
-      if (!liveId)
-        return;
-      minimizeWindowByLiveId(liveId, side);
-    });
-    dlog("[os] header chrome: minimize button injected", { side });
-  }
-  if (minBtn)
-    setHeaderHidden(minBtn, !displayed);
-}
-function resolveClosedLiveIds() {
-  const host = getHost();
-  const model = getModel();
-  if (!host || !model)
-    return new Set;
-  const out = new Set;
-  for (const key of model.closed) {
-    const liveId = host.resolve(key);
-    if (liveId)
-      out.add(liveId);
-  }
-  return out;
-}
-function refreshOsVisibility() {
-  if (!isOsModeEnabled())
-    return;
-  try {
-    closedLiveIdsCache = resolveClosedLiveIds();
-    applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds(), ...closedLiveIdsCache])));
-  } catch (err) {
-    dwarn("[os] refresh visibility failed:", err instanceof Error ? err.message : err);
-  }
-  ensureChromeBoth();
-}
-function ensureHeaderObserved(header) {
-  if (!_headerObserver || _observedHeaders.has(header))
-    return;
-  _headerObserver.observe(header, { childList: true });
-  _observedHeaders.add(header);
-}
-function scheduleEnsure() {
-  if (_ensureRaf)
-    return;
-  _ensureRaf = requestAnimationFrame(() => {
-    _ensureRaf = 0;
-    ensureChromeBoth();
-  });
-}
-function ensureChromeBoth() {
-  ensureChromeForSide("primary");
-  if (isOsModeEnabled())
-    ensureChromeForSide("secondary");
-}
-function mountPanelChrome() {
-  if (_active3)
-    return;
-  _active3 = true;
-  setPanelHeaderCloseHandler((side) => {
-    if (!isOsModeEnabled())
-      return false;
-    const liveId = getDisplayedLiveId(side);
-    if (!liveId)
-      return false;
-    dlog("[os] header X intercepted → close window", { side, liveId });
-    closeWindowByLiveId(liveId);
-    return true;
-  });
-  if (typeof MutationObserver !== "undefined") {
-    _headerObserver = new MutationObserver(scheduleEnsure);
-  }
-  if (typeof window !== "undefined") {
-    window.addEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
-  }
-  if (!_unsubModelChanged2) {
-    _unsubModelChanged2 = onModelChanged(refreshOsVisibility);
-  }
-  ensureChromeBoth();
-  refreshOsVisibility();
-  dlog("[os] panel chrome mounted");
-}
-function teardownPanelChrome() {
-  if (!_active3)
-    return;
-  _active3 = false;
-  setPanelHeaderCloseHandler(null);
-  if (typeof window !== "undefined") {
-    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
-  }
-  _headerObserver?.disconnect();
-  _headerObserver = null;
-  _observedHeaders = new WeakSet;
-  if (_ensureRaf) {
-    cancelAnimationFrame(_ensureRaf);
-    _ensureRaf = 0;
-  }
-  _unsubModelChanged2?.();
-  _unsubModelChanged2 = null;
-  closedLiveIdsCache = new Set;
-  for (const side of ["primary", "secondary"]) {
-    const surface = resolveHeaderSurface(side);
-    if (!surface)
-      continue;
-    surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove();
-    surface.closeBtn.removeAttribute(HIDDEN_ATTR);
-  }
-  setCanvasMainNoActive(false);
-  applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
-  dlog("[os] panel chrome unmounted");
-}
-var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged2 = null;
-var init_panel_chrome = __esm(() => {
-  init_drawer_shell();
-  init_main_mirror_drawer();
-  init_secondary();
-  init_host_settings();
-  init_state();
-  init_actions();
-  init_dispatch();
-  init_buttons();
-  init_canvas_hidden();
-  init_log();
-  _observedHeaders = new WeakSet;
-  closedLiveIdsCache = new Set;
-  Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(teardownPanelChrome));
-});
-
 // src/os/start-menu.ts
 function deriveStartMenuEntries(side, model, resolve) {
   const keys = side === "primary" ? model.primary : model.secondary;
@@ -17461,13 +17490,27 @@ function scheduleEnsureButtons() {
     }
   });
 }
+function installShellCreatedListener() {
+  if (typeof window === "undefined" || _onShellCreated !== null)
+    return;
+  _onShellCreated = () => scheduleEnsureButtons();
+  window.addEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
+}
+function removeShellCreatedListener() {
+  if (_onShellCreated && typeof window !== "undefined") {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
+  }
+  _onShellCreated = null;
+}
 function mountStartMenu() {
   if (!isOsModeEnabled())
     return;
+  installShellCreatedListener();
   scheduleEnsureButtons();
   dlog("[os] start menu chrome mounted");
 }
 function teardownStartMenu() {
+  removeShellCreatedListener();
   if (_buttonRaf) {
     cancelAnimationFrame(_buttonRaf);
     _buttonRaf = 0;
@@ -17481,13 +17524,14 @@ function teardownStartMenu() {
   }
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu, _menuOpenFor = null, _buttonRaf = 0, _unsubDocListeners = null;
+var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu, _menuOpenFor = null, _buttonRaf = 0, _unsubDocListeners = null, _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
   init_state();
   init_actions();
   init_secondary();
+  init_drawer_shell();
   init_log();
 });
 
@@ -20859,28 +20903,23 @@ function stopObserver() {
     _observer2 = null;
   }
 }
-function injectCanvasItem(menu, info) {
-  if (menu.dataset.canvasLabelsSynced !== "1") {
-    stampHostTabLabelsMenuItem(menu);
-    menu.dataset.canvasLabelsSynced = "1";
-  }
-  let label;
-  let targetSidebar;
-  if (info.currentSidebar === "secondary") {
-    label = "Move to main drawer";
-    targetSidebar = "primary";
-  } else {
-    label = "Move to second drawer";
-    targetSidebar = "secondary";
-  }
-  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`);
-  if (targetSidebar === "secondary" && !getSettings().secondSidebarEnabled) {
-    dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`);
-    return;
-  }
+function appendMenuDivider(menu) {
   const divider = document.createElement("div");
   divider.style.cssText = "height:1px;margin:4px 8px;background:var(--lumiverse-border)";
   menu.appendChild(divider);
+}
+function dismissHostMenu() {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+}
+function menuLooksLikeTabMenu(menu) {
+  const norm = (t3) => (t3 ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const buttons = Array.from(menu.querySelectorAll("button"));
+  return buttons.some((b2) => {
+    const t3 = norm(b2.textContent);
+    return t3 === "hide tab labels" || t3 === "show tab labels" || t3 === "configure tabs";
+  });
+}
+function appendCanvasMenuItem(menu, label, onClick) {
   const refBtn = menu.querySelector("button");
   const btn = document.createElement("button");
   btn.type = "button";
@@ -20921,16 +20960,52 @@ function injectCanvasItem(menu, info) {
   });
   btn.addEventListener("click", (e3) => {
     e3.stopPropagation();
-    dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`);
-    placementFirstMoveByLiveId(info.tabId, targetSidebar).catch((err) => {
-      dwarn("[tabmove] context-menu placement-first move failed:", err);
-      dispatchMoveByLiveId(info.tabId, false).catch((err2) => {
-        dwarn("[tabmove] context-menu dispatchMoveByLiveId fallback also failed:", err2);
-      });
-    });
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    onClick();
+    dismissHostMenu();
   });
   menu.appendChild(btn);
+  return btn;
+}
+function injectCanvasItem(menu, info) {
+  if (menu.dataset.canvasLabelsSynced !== "1") {
+    stampHostTabLabelsMenuItem(menu);
+    menu.dataset.canvasLabelsSynced = "1";
+  }
+  let label;
+  let targetSidebar;
+  if (info.currentSidebar === "secondary") {
+    label = "Move to main drawer";
+    targetSidebar = "primary";
+  } else {
+    label = "Move to second drawer";
+    targetSidebar = "secondary";
+  }
+  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`);
+  const canShowMove = targetSidebar === "primary" || getSettings().secondSidebarEnabled;
+  if (canShowMove) {
+    appendMenuDivider(menu);
+    appendCanvasMenuItem(menu, label, () => {
+      dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`);
+      placementFirstMoveByLiveId(info.tabId, targetSidebar).catch((err) => {
+        dwarn("[tabmove] context-menu placement-first move failed:", err);
+        dispatchMoveByLiveId(info.tabId, false).catch((err2) => {
+          dwarn("[tabmove] context-menu dispatchMoveByLiveId fallback also failed:", err2);
+        });
+      });
+    });
+  } else {
+    dwarn(`[tabmove] injectCanvasItem: move ABORTED — secondSidebarEnabled=false, move not injected for tabId="${info.tabId}"`);
+  }
+  if (isOsModeEnabled() && menuLooksLikeTabMenu(menu)) {
+    const side = info.currentSidebar;
+    appendMenuDivider(menu);
+    appendCanvasMenuItem(menu, "Minimize", () => {
+      Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(info.tabId, side)).catch((err) => dwarn("[os] context-menu minimize failed:", err));
+    });
+    appendCanvasMenuItem(menu, "Close", () => {
+      Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.closeWindowByLiveId(info.tabId)).catch((err) => dwarn("[os] context-menu close failed:", err));
+    });
+  }
   clampMenuToViewport(menu);
 }
 var _contextMenuListenersActive = false;

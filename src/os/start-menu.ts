@@ -26,6 +26,7 @@ import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
+import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { dlog } from '../debug/log'
 
@@ -366,15 +367,42 @@ function scheduleEnsureButtons(): void {
 
 // ── Feature hooks ────────────────────────────────────────────────────────────
 
+/** Shell-created re-ensure wiring (idempotent; test-visible). */
+let _onShellCreated: (() => void) | null = null
+
+/**
+ * Subscribe the Start-button ensure to `canvas:drawer-shell-created`.
+ * A shell mount (second-drawer enable, side remount, viewport cross) replaces
+ * the strip with no OS-mode setting diff — without this the secondary Start
+ * button is missing after `requestSecondDrawerMode(true)` while OS mode is
+ * already on (live report 2026-09-15; panel-chrome consumes the same signal).
+ * Idempotent: repeated calls keep exactly one listener.
+ */
+export function installShellCreatedListener(): void {
+  if (typeof window === 'undefined' || _onShellCreated !== null) return
+  _onShellCreated = () => scheduleEnsureButtons()
+  window.addEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated)
+}
+
+/** Remove the shell-created listener (teardown; safe when never installed). */
+export function removeShellCreatedListener(): void {
+  if (_onShellCreated && typeof window !== 'undefined') {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated)
+  }
+  _onShellCreated = null
+}
+
 /** Mount the Start buttons (feature mount / runtime enable). */
 export function mountStartMenu(): void {
   if (!isOsModeEnabled()) return
+  installShellCreatedListener()
   scheduleEnsureButtons()
   dlog('[os] start menu chrome mounted')
 }
 
 /** Teardown: remove buttons + docks + any open menu (feature unmount / disable). */
 export function teardownStartMenu(): void {
+  removeShellCreatedListener()
   if (_buttonRaf) {
     cancelAnimationFrame(_buttonRaf)
     _buttonRaf = 0
