@@ -18,6 +18,14 @@
  * dismisses; entries derive on every open (never stale). The menu anchors
  * to the invoking button's viewport rect, opening away from the screen edge
  * with viewport clamping (§4.4.3).
+ *
+ * Motion (§4.4.3): the surface scales about the invoking button's center (an
+ * external transform-origin) while fading — grows out of the button on open,
+ * collapses back into it on close. Interruptible: a close mid-open continues
+ * from the captured visual state instead of popping. Reduced-motion / no-WAAPI
+ * environments take the instant path. The menu is a <body> child under the
+ * host UI zoom, so every rendered rect is converted to layout px (see
+ * start-menu-motion.ts for the coordinate contract).
  */
 
 import type { Side } from '../core/model'
@@ -29,6 +37,15 @@ import { getSecondaryTabList } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { dlog } from '../debug/log'
+import {
+  canAnimateMenu,
+  captureMenuVisualState,
+  computeGrowthOrigin,
+  getUiScale,
+  playMenuIn,
+  playMenuOut,
+  prefersReducedMotion,
+} from './start-menu-motion'
 
 const START_ATTR = 'data-canvas-os-start'
 const MENU_ID = 'canvas-os-start-menu'
@@ -38,8 +55,18 @@ const MENU_ID = 'canvas-os-start-menu'
  *  insert before it via the shared leaf helper. */
 const TAB_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
-let _menu: HTMLElement | null
+let _menu: HTMLElement | null = null
 let _menuOpenFor: Side | null = null
+/** Invoking button — the close animation's anchor. Cleared on hide. */
+let _menuButton: HTMLElement | null = null
+/** Pending position rAF (identity-guarded against a superseded open). */
+let _menuRaf = 0
+/** Open-animation handle (cancelled when a close starts). */
+let _menuAnim: Animation | null = null
+/** False until the position rAF reveals the menu (hide-before-reveal → instant). */
+let _menuRevealed = false
+/** In-flight close: the menu stays in the DOM while it animates out. */
+let _closing: { menu: HTMLElement; anim: Animation | null } | null = null
 let _buttonRaf = 0
 let _unsubDocListeners: (() => void) | null = null
 
@@ -187,53 +214,149 @@ function buildMenu(side: Side): HTMLElement | null {
   return menu
 }
 
+/** Cancel the pending menu-position rAF (if any). */
+function cancelMenuRaf(): void {
+  if (_menuRaf) {
+    cancelAnimationFrame(_menuRaf)
+    _menuRaf = 0
+  }
+}
+
+/** Cancel an in-flight close animation and drop its menu immediately. */
+function cancelClosing(): void {
+  if (!_closing) return
+  const { menu, anim } = _closing
+  _closing = null
+  if (anim) {
+    anim.onfinish = null
+    anim.cancel()
+  }
+  menu.remove()
+}
+
+/**
+ * Dismiss a menu whose invoking button left the DOM (shell remount, side
+ * change, second-drawer disable): a body-level menu must not outlive its
+ * anchor. Runs from the ensure pass — the same signal that recreates the
+ * strip — because those remounts carry no OS-setting diff.
+ */
+function reconcileStartMenuPresence(): void {
+  if (_menu && (!_menuButton || !_menuButton.isConnected)) {
+    hideStartMenu({ immediate: true })
+  }
+}
+
 /** Open the menu for a drawer, anchored to the invoking button. Idempotent:
  *  clicking a drawer's own Start button while its menu is open toggles. */
 function openStartMenu(side: Side, button: HTMLElement): void {
-  if (_menuOpenFor === side) {
+  // Same-side toggle — only while the menu is genuinely open on a live
+  // button. A shell remount can leave a stale open flag + dead anchor; then
+  // the click must open a fresh menu, not try to close the orphan.
+  if (_menuOpenFor === side && _menuButton?.isConnected) {
     hideStartMenu()
     return
   }
-  hideStartMenu()
+  hideStartMenu({ immediate: true })
   const menu = buildMenu(side)
   if (!menu) return
   document.body.appendChild(menu)
   _menu = menu
   _menuOpenFor = side
+  _menuButton = button
+  _menuRevealed = false
   button.setAttribute('aria-expanded', 'true')
 
   // Position: open AWAY from the screen edge — above bottom-anchored
   // buttons, below top-strip buttons; clamp into the viewport (8px gutters).
+  // The menu is a body child under the host's UI zoom: rects and window.inner*
+  // are RENDERED px while inline left/top are LAYOUT px — clamp in rendered
+  // space, assign divided by the scale (context-menu/index.ts pattern).
   const rect = button.getBoundingClientRect()
   menu.style.visibility = 'hidden'
-  requestAnimationFrame(() => {
-    if (!_menu) return
-    const mRect = _menu.getBoundingClientRect()
+  cancelMenuRaf()
+  _menuRaf = requestAnimationFrame(() => {
+    _menuRaf = 0
+    if (_menu !== menu) return // stale rAF from a superseded open
+    const mRect = menu.getBoundingClientRect()
+    const uiScale = getUiScale()
     const openUpward = rect.bottom > window.innerHeight / 2
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8))
-    const top = Math.max(8, Math.min(
+    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8))
+    const renderedTop = Math.max(8, Math.min(
       openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8,
       window.innerHeight - mRect.height - 8,
     ))
-    _menu.style.left = `${left}px`
-    _menu.style.top = `${top}px`
-    _menu.style.visibility = ''
-    ;(_menu.querySelector('[role="menuitem"]') as HTMLElement | null)?.focus()
+    menu.style.left = `${renderedLeft / uiScale}px`
+    menu.style.top = `${renderedTop / uiScale}px`
+    menu.style.visibility = ''
+    _menuRevealed = true
+    // Grow out of the button: origin at its center, external to the box.
+    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, mRect, uiScale))
+    ;(menu.querySelector('[role="menuitem"]') as HTMLElement | null)?.focus()
   })
   attachMenuDismiss()
   dlog('[os] start menu open', { side })
 }
 
-/** Hide the open menu (idempotent). */
-export function hideStartMenu(): void {
+/**
+ * Hide the open menu (idempotent). Animated by default: the surface fades
+ * while shrinking toward the invoking button; the node is removed when the
+ * animation settles. `immediate` skips the motion (teardown, dead anchor,
+ * pre-reveal hide, reduced-motion, no WAAPI) — used wherever a visible exit
+ * would be wrong.
+ */
+export function hideStartMenu(opts?: { immediate?: boolean }): void {
   _unsubDocListeners?.()
   _unsubDocListeners = null
-  _menu?.remove()
-  _menu = null
   for (const btn of document.querySelectorAll(`button[${START_ATTR}]`)) {
     btn.setAttribute('aria-expanded', 'false')
   }
+
+  const menu = _menu
+  const button = _menuButton
+  const revealed = _menuRevealed
+  const side = _menuOpenFor
+  _menu = null
   _menuOpenFor = null
+  _menuButton = null
+  _menuRevealed = false
+  cancelMenuRaf()
+
+  // Focus must not stay on a surface that is leaving the DOM.
+  const active = document.activeElement as HTMLElement | null
+  if (menu && active && menu.contains(active)) {
+    if (button?.isConnected) button.focus()
+    else active.blur()
+  }
+
+  const animatable = menu !== null && canAnimateMenu(menu) && !prefersReducedMotion()
+  if (!menu || opts?.immediate || !animatable || !revealed || !button || !button.isConnected) {
+    _menuAnim?.cancel()
+    _menuAnim = null
+    menu?.remove()
+    cancelClosing()
+    if (menu) dlog('[os] start menu close', { side, immediate: true })
+    return
+  }
+
+  // Capture the current visual state BEFORE cancelling the open animation:
+  // getComputedStyle sees the animated values, while getBoundingClientRect
+  // would fold its transform into the rects measured below. Cancel first,
+  // then measure the settled layout so the shrink target is the true button.
+  const from = captureMenuVisualState(menu)
+  _menuAnim?.cancel()
+  _menuAnim = null
+  const origin = computeGrowthOrigin(
+    button.getBoundingClientRect(),
+    menu.getBoundingClientRect(),
+    getUiScale(),
+  )
+  menu.style.pointerEvents = 'none'
+  const anim = playMenuOut(menu, origin, from, () => {
+    menu.remove()
+    if (_closing?.menu === menu) _closing = null
+  })
+  if (anim) _closing = { menu, anim }
+  dlog('[os] start menu close', { side, immediate: false })
 }
 
 /** Outside-click + Escape dismissal while the menu is open. */
@@ -348,6 +471,9 @@ function scheduleEnsureButtons(): void {
   if (_buttonRaf) return
   _buttonRaf = requestAnimationFrame(async () => {
     _buttonRaf = 0
+    // A remounted shell can strand an open menu on a dead anchor; the ensure
+    // pass is the one place that always runs after a remount.
+    reconcileStartMenuPresence()
     await ensureStartButtonForSide('primary')
     if (isOsModeEnabled()) {
       if (getSettings().secondSidebarEnabled) {
@@ -359,7 +485,7 @@ function scheduleEnsureButtons(): void {
         const list = getSecondaryTabList()
         list?.querySelector(`button[${START_ATTR}]`)?.remove()
         list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove()
-        if (_menuOpenFor === 'secondary') hideStartMenu()
+        if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })
       }
     }
   })
@@ -407,7 +533,7 @@ export function teardownStartMenu(): void {
     cancelAnimationFrame(_buttonRaf)
     _buttonRaf = 0
   }
-  hideStartMenu()
+  hideStartMenu({ immediate: true })
   for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
     btn.remove()
   }

@@ -34,7 +34,7 @@ import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
 import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
-import { mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -419,6 +419,9 @@ const drawerLocationFeature: CanvasFeature = {
     if (prev.drawerLocation === next.drawerLocation) return
     // Authoritative pass for the diff (sync + coalesced).
     reconcileDrawerLocation({ force: true })
+    // Spec §4.5: a floating Start menu cannot survive the strip moving
+    // underneath it — dismiss before the geometry settles.
+    hideStartMenu({ immediate: true })
   },
 }
 

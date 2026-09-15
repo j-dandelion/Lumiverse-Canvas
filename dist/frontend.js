@@ -17224,6 +17224,104 @@ var init_state = __esm(() => {
   _settings = mergeCanvasSettings(null);
 });
 
+// src/os/start-menu-motion.ts
+function getUiScale() {
+  if (typeof document === "undefined" || !document.documentElement)
+    return 1;
+  if (typeof getComputedStyle !== "function")
+    return 1;
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale");
+    const n2 = parseFloat(raw);
+    return Number.isFinite(n2) && n2 > 0 ? n2 : 1;
+  } catch {
+    return 1;
+  }
+}
+function computeGrowthOrigin(button, menu, uiScale = 1) {
+  const s3 = Number.isFinite(uiScale) && uiScale > 0 ? uiScale : 1;
+  return {
+    x: (button.left + button.width / 2 - menu.left) / s3,
+    y: (button.top + button.height / 2 - menu.top) / s3
+  };
+}
+function canAnimateMenu(menu) {
+  return typeof menu.animate === "function";
+}
+function prefersReducedMotion() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  } catch {
+    return false;
+  }
+}
+function captureMenuVisualState(menu) {
+  const settled = { opacity: "1", transform: "scale(1)" };
+  if (typeof getComputedStyle !== "function")
+    return settled;
+  try {
+    const cs = getComputedStyle(menu);
+    return {
+      opacity: cs.opacity || "1",
+      transform: cs.transform && cs.transform !== "none" ? cs.transform : "scale(1)"
+    };
+  } catch {
+    return settled;
+  }
+}
+function playMenuIn(menu, origin) {
+  if (!canAnimateMenu(menu) || prefersReducedMotion())
+    return null;
+  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
+  return menu.animate([
+    { opacity: 0, transform: `scale(${START_MENU_SCALE})` },
+    { opacity: 1, transform: "scale(1)" }
+  ], { duration: START_MENU_OPEN_MS, easing: START_MENU_EASE_OUT, fill: "both" });
+}
+function playMenuOut(menu, origin, from, onDone) {
+  if (!canAnimateMenu(menu) || prefersReducedMotion()) {
+    onDone();
+    return null;
+  }
+  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
+  let finished = false;
+  let timer = null;
+  let anim = null;
+  const finish = () => {
+    if (finished)
+      return;
+    finished = true;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    onDone();
+  };
+  timer = setTimeout(finish, CLOSE_FALLBACK_MS);
+  anim = menu.animate([
+    { opacity: from.opacity, transform: from.transform },
+    { opacity: 0, transform: `scale(${START_MENU_SCALE})` }
+  ], { duration: START_MENU_CLOSE_MS, easing: START_MENU_EASE_IN, fill: "both" });
+  anim.onfinish = () => {
+    anim.onfinish = null;
+    finish();
+  };
+  anim.oncancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return anim;
+}
+var START_MENU_OPEN_MS = 150, START_MENU_CLOSE_MS = 120, START_MENU_SCALE = 0.92, START_MENU_EASE_OUT = "cubic-bezier(0.215, 0.61, 0.355, 1)", START_MENU_EASE_IN = "cubic-bezier(0.4, 0, 1, 1)", CLOSE_FALLBACK_MS;
+var init_start_menu_motion = __esm(() => {
+  CLOSE_FALLBACK_MS = START_MENU_CLOSE_MS + 100;
+});
+
 // src/os/start-menu.ts
 function deriveStartMenuEntries(side, model, resolve) {
   const keys = side === "primary" ? model.primary : model.secondary;
@@ -17336,45 +17434,110 @@ function buildMenu(side) {
   }
   return menu;
 }
+function cancelMenuRaf() {
+  if (_menuRaf) {
+    cancelAnimationFrame(_menuRaf);
+    _menuRaf = 0;
+  }
+}
+function cancelClosing() {
+  if (!_closing)
+    return;
+  const { menu, anim } = _closing;
+  _closing = null;
+  if (anim) {
+    anim.onfinish = null;
+    anim.cancel();
+  }
+  menu.remove();
+}
+function reconcileStartMenuPresence() {
+  if (_menu && (!_menuButton || !_menuButton.isConnected)) {
+    hideStartMenu({ immediate: true });
+  }
+}
 function openStartMenu(side, button) {
-  if (_menuOpenFor === side) {
+  if (_menuOpenFor === side && _menuButton?.isConnected) {
     hideStartMenu();
     return;
   }
-  hideStartMenu();
+  hideStartMenu({ immediate: true });
   const menu = buildMenu(side);
   if (!menu)
     return;
   document.body.appendChild(menu);
   _menu = menu;
   _menuOpenFor = side;
+  _menuButton = button;
+  _menuRevealed = false;
   button.setAttribute("aria-expanded", "true");
   const rect = button.getBoundingClientRect();
   menu.style.visibility = "hidden";
-  requestAnimationFrame(() => {
-    if (!_menu)
+  cancelMenuRaf();
+  _menuRaf = requestAnimationFrame(() => {
+    _menuRaf = 0;
+    if (_menu !== menu)
       return;
-    const mRect = _menu.getBoundingClientRect();
+    const mRect = menu.getBoundingClientRect();
+    const uiScale = getUiScale();
     const openUpward = rect.bottom > window.innerHeight / 2;
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
-    const top = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
-    _menu.style.left = `${left}px`;
-    _menu.style.top = `${top}px`;
-    _menu.style.visibility = "";
-    _menu.querySelector('[role="menuitem"]')?.focus();
+    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
+    const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
+    menu.style.left = `${renderedLeft / uiScale}px`;
+    menu.style.top = `${renderedTop / uiScale}px`;
+    menu.style.visibility = "";
+    _menuRevealed = true;
+    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, mRect, uiScale));
+    menu.querySelector('[role="menuitem"]')?.focus();
   });
   attachMenuDismiss();
   dlog("[os] start menu open", { side });
 }
-function hideStartMenu() {
+function hideStartMenu(opts) {
   _unsubDocListeners?.();
   _unsubDocListeners = null;
-  _menu?.remove();
-  _menu = null;
   for (const btn of document.querySelectorAll(`button[${START_ATTR}]`)) {
     btn.setAttribute("aria-expanded", "false");
   }
+  const menu = _menu;
+  const button = _menuButton;
+  const revealed = _menuRevealed;
+  const side = _menuOpenFor;
+  _menu = null;
   _menuOpenFor = null;
+  _menuButton = null;
+  _menuRevealed = false;
+  cancelMenuRaf();
+  const active = document.activeElement;
+  if (menu && active && menu.contains(active)) {
+    if (button?.isConnected)
+      button.focus();
+    else
+      active.blur();
+  }
+  const animatable = menu !== null && canAnimateMenu(menu) && !prefersReducedMotion();
+  if (!menu || opts?.immediate || !animatable || !revealed || !button || !button.isConnected) {
+    _menuAnim?.cancel();
+    _menuAnim = null;
+    menu?.remove();
+    cancelClosing();
+    if (menu)
+      dlog("[os] start menu close", { side, immediate: true });
+    return;
+  }
+  const from = captureMenuVisualState(menu);
+  _menuAnim?.cancel();
+  _menuAnim = null;
+  const origin = computeGrowthOrigin(button.getBoundingClientRect(), menu.getBoundingClientRect(), getUiScale());
+  menu.style.pointerEvents = "none";
+  const anim = playMenuOut(menu, origin, from, () => {
+    menu.remove();
+    if (_closing?.menu === menu)
+      _closing = null;
+  });
+  if (anim)
+    _closing = { menu, anim };
+  dlog("[os] start menu close", { side, immediate: false });
 }
 function attachMenuDismiss() {
   const onDocMousedown = (ev) => {
@@ -17469,6 +17632,7 @@ function scheduleEnsureButtons() {
     return;
   _buttonRaf = requestAnimationFrame(async () => {
     _buttonRaf = 0;
+    reconcileStartMenuPresence();
     await ensureStartButtonForSide("primary");
     if (isOsModeEnabled()) {
       if (getSettings().secondSidebarEnabled) {
@@ -17478,7 +17642,7 @@ function scheduleEnsureButtons() {
         list?.querySelector(`button[${START_ATTR}]`)?.remove();
         list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove();
         if (_menuOpenFor === "secondary")
-          hideStartMenu();
+          hideStartMenu({ immediate: true });
       }
     }
   });
@@ -17508,7 +17672,7 @@ function teardownStartMenu() {
     cancelAnimationFrame(_buttonRaf);
     _buttonRaf = 0;
   }
-  hideStartMenu();
+  hideStartMenu({ immediate: true });
   for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
     btn.remove();
   }
@@ -17517,7 +17681,7 @@ function teardownStartMenu() {
   }
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu, _menuOpenFor = null, _buttonRaf = 0, _unsubDocListeners = null, _onShellCreated = null;
+var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
@@ -17526,6 +17690,7 @@ var init_start_menu = __esm(() => {
   init_secondary();
   init_drawer_shell();
   init_log();
+  init_start_menu_motion();
 });
 
 // src/debug/fiber-scan.ts
@@ -20018,6 +20183,7 @@ var init_registry = __esm(() => {
       if (prev.drawerLocation === next.drawerLocation)
         return;
       reconcileDrawerLocation({ force: true });
+      hideStartMenu({ immediate: true });
     }
   };
   tabPositionFeature = {
