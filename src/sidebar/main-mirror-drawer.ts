@@ -63,6 +63,8 @@ import { updateChatReflow } from '../chat/reflow'
 import { mountResizeHandles } from '../resize/handles'
 import { syncDrawerTabSettings } from './drawer-sync'
 import { resetPanelHeaderSyncCache, syncPanelHeaderFromMain } from './panel-header-sync'
+import { handlePanelHeaderClose } from '../os/header-close'
+import { setDrawerCommandHandler } from '../os/drawer-command'
 
 export { MAIN_MIRROR_WIDTH_VAR }
 
@@ -322,6 +324,24 @@ function clearMainMirrorActiveHighlights(): void {
 
 export function setCanvasMainTitle(text: string): void {
   if (_shell?.title) _shell.title.textContent = text || 'Drawer'
+}
+
+/**
+ * D17 parking: no displayed window → no header title, no stale parked
+ * content. The attribute (sheet rule, `display:none !important`) hides the
+ * content slot without touching the parked host DOM; the title is cleared
+ * directly because the renderer only ever writes titles for an active key.
+ * The next activation render restores the title; clearing the attribute
+ * never restores it (the renderer owns it).
+ */
+export function setCanvasMainNoActive(noActive: boolean): void {
+  if (!_shell) return
+  if (noActive) {
+    _shell.wrapper.setAttribute('data-canvas-os-no-active', '1')
+    _shell.title.textContent = ''
+  } else {
+    _shell.wrapper.removeAttribute('data-canvas-os-no-active')
+  }
 }
 
 /** Called after mirror tab click to open + title. Content already in shell. */
@@ -589,7 +609,11 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
       if (_open) closeCanvasMainDrawer()
       else openCanvasMainDrawer()
     },
-    onHeaderClose: () => closeCanvasMainDrawer(),
+    onHeaderClose: () => {
+      // OS mode (D2/D9): the X closes the displayed window. The OS policy
+      // is installed by os/panel-chrome; when unset/OS off, plain close.
+      if (!handlePanelHeaderClose('primary')) closeCanvasMainDrawer()
+    },
   })
 
   // Shell content is a flex column host for reparented host panelContent
@@ -608,6 +632,16 @@ function mountMainMirror(opts: { initialOpen: boolean }): void {
   _active = true
   _open = opts.initialOpen
   _mountedSide = side
+
+  // Shell command seam (os/drawer-command.ts): OS actions (X/minimize/D19
+  // open) must command the shell directly — the model→host setDrawer write
+  // for primary is suppressed while the shell owns the surface.
+  setDrawerCommandHandler((commandSide, open) => {
+    if (commandSide !== 'primary' || !_active || !_shell) return false
+    if (open) openCanvasMainDrawer()
+    else closeCanvasMainDrawer()
+    return true
+  })
 
   if (_open) {
     document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS)
@@ -950,6 +984,7 @@ export function teardownMainMirror(opts?: { keepWidthVar?: boolean }): void {
   document.getElementById('sidebar-ux-main-mirror-mobile')?.remove()
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS)
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
+  setDrawerCommandHandler(null)
   _active = false
   _open = false
   // A desktop width captured for a cross-up must not survive teardown: the

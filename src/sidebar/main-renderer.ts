@@ -34,7 +34,7 @@ import {
 } from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
 import { isOsModeEnabled } from '../settings/state'
-import { minimizeWindowByLiveId } from '../os/actions'
+import { minimizeWindowByLiveId, openWindowInDrawerByLiveId } from '../os/actions'
 import { isHidden, visibleKeys } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
 import { isShowTabLabels } from './drawer-sync'
@@ -583,6 +583,20 @@ function onMirrorClick(ev: Event): void {
     dlog('[main-renderer] click → close (active tab)', { title, key })
     closeCanvasMainDrawer()
     return
+  }
+
+  // OS mode (D4): clicking a minimized/closed window's strip button routes
+  // through the window-state action — one proven path for D19 auto-open,
+  // host content activation, and chrome convergence. The ad-hoc activate
+  // path below is the non-OS flow (and cannot recover the main content: the
+  // primary diffActive is model-derived).
+  if (isOsModeEnabled() && key && !key.startsWith('__')) {
+    const osLiveId = twin.liveId ?? mirror.getAttribute('data-tab-id') ?? null
+    if (osLiveId) {
+      dlog('[main-renderer] click → OS open window', { title, key })
+      void openWindowInDrawerByLiveId(osLiveId, 'primary').catch(() => {})
+      return
+    }
   }
 
   // Q1: direct host twin click (instant content — the queue's diffActive

@@ -10,23 +10,38 @@
  *     the action itself collapses the drawer body (D7 — the action's
  *     setDrawer close provides animation + persist + reflow).
  *
- * The X→close interception is a document-level capture listener (the
- * production-proven configure-intercept pattern): immune to host React
- * re-renders by construction, removed on teardown. The minimize button is
- * INJECTED into both headers — the main header is host React DOM
- * (`_panelHeader_`), the secondary header is Canvas-owned shell DOM —
- * with a MutationObserver re-ensuring presence (spike F5: injection
- * survives tab switches; the observer covers wholesale header rewrites).
+ * SURFACE OWNERSHIP. Both visible headers are Canvas-owned: the main
+ * drawer is the `sidebar-ux-main-mirror-wrapper` shell (the host main
+ * drawer is force-hidden while Canvas owns the surface —
+ * main-mirror-drawer.ts `injectHostHideStyles`), and the secondary is the
+ * secondary shell. Resolve headers through those shells only; host
+ * `_panelHeader_` DOM is invisible and must never receive chrome. The
+ * minimize button is INJECTED into the shell's header actions cluster; the
+ * X is a shell-owned listener routed through `os/header-close.ts` (a
+ * document-capture override cannot preempt a target-phase listener that was
+ * registered first).
+ *
+ * Lifecycle. `ensureChromeForSide` is idempotent and re-runs on every model
+ * commit, on mutations of each resolved header (base-subtree rewrites), and
+ * on `canvas:drawer-shell-created` (shell remounts replace the header with
+ * no model change to piggyback on).
  *
  * When the drawer has NO displayed window (active null), both header
- * buttons hide — there is nothing to minimize or close (D17).
+ * buttons hide — there is nothing to minimize or close (D17). Hiding uses
+ * the `data-canvas-os-hidden` attribute (a sheet rule), never inline
+ * `display`, so the shell buttons' own chrome survives teardown.
  */
 
-import { getMainPanelHeader } from '../dom/lumiverse'
+import { HEADER_ACTIONS_CLASS, DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
+import {
+  getMainMirrorWrapper,
+  setCanvasMainNoActive,
+} from '../sidebar/main-mirror-drawer'
 import { getSecondaryWrapper } from '../sidebar/secondary'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { isOsModeEnabled } from '../settings/state'
-import { closeWindowByLiveId, minimizeWindowByLiveId } from './actions'
+import { closeWindowByLiveId, getDisplayedLiveId, minimizeWindowByLiveId } from './actions'
+import { setPanelHeaderCloseHandler } from './header-close'
 import { getHost, getModel, onModelChanged } from '../recon/dispatch'
 import {
   applyHiddenTabIdsToSecondary,
@@ -38,10 +53,11 @@ import {
 import { dlog, dwarn } from '../debug/log'
 
 const MINIMIZE_ATTR = 'data-canvas-os-minimize'
+const HIDDEN_ATTR = 'data-canvas-os-hidden'
 
 let _active = false
-let _clickHandler: ((e: MouseEvent) => void) | null = null
 let _headerObserver: MutationObserver | null = null
+let _observedHeaders = new WeakSet<HTMLElement>()
 let _ensureRaf = 0
 
 /** Injected minimize-button markup — mirrors the shell's close button. */
@@ -49,98 +65,90 @@ function minimizeButtonHtml(): string {
   return `<button type="button" aria-label="Minimize" title="Minimize" ${MINIMIZE_ATTR}="1" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>`
 }
 
-// ── Header resolution ────────────────────────────────────────────────────────
+// ── Header surface resolution (Canvas shells only) ───────────────────────────
+
+interface HeaderSurface {
+  header: HTMLElement
+  closeBtn: HTMLButtonElement
+  actions: HTMLElement
+}
 
 /**
- * Resolve a header element to its drawer side, or null when it is not an
- * OS-relevant header. The main header is the host React `_panelHeader_`;
- * the secondary header is the Canvas shell's `sidebar-ux-panel-header`.
+ * Resolve the side's VISIBLE header surface:
+ *   - primary   → the Canvas main mirror shell's header,
+ *   - secondary → the Canvas secondary shell's header.
+ * Canvas-owned class selectors (stable hooks), never host CSS-module
+ * hashes. Returns null while a shell is unmounted (teardown / boot race).
  */
-function resolveHeaderSide(header: HTMLElement | null): 'primary' | 'secondary' | null {
-  const mainHeader = getMainPanelHeader()
-  if (mainHeader && (header === mainHeader || mainHeader.contains(header))) return 'primary'
-  const secondaryWrapper = getSecondaryWrapper()
-  const secondaryHeader = secondaryWrapper?.querySelector('.sidebar-ux-panel-header') as HTMLElement | null
-  if (secondaryHeader && (header === secondaryHeader || secondaryHeader.contains(header))) return 'secondary'
-  return null
+function resolveHeaderSurface(
+  side: 'primary' | 'secondary',
+): HeaderSurface | null {
+  const wrapper =
+    side === 'primary' ? getMainMirrorWrapper() : getSecondaryWrapper()
+  const header = wrapper?.querySelector('.sidebar-ux-panel-header') as HTMLElement | null
+  if (!header || !header.isConnected) return null
+  const closeBtn = header.querySelector('.sidebar-ux-close-btn') as HTMLButtonElement | null
+  const actions = header.querySelector(`.${HEADER_ACTIONS_CLASS}`) as HTMLElement | null
+  if (!closeBtn || !actions) return null
+  return { header, closeBtn, actions }
 }
+
+function setHeaderHidden(el: HTMLElement, hidden: boolean): void {
+  if (hidden) el.setAttribute(HIDDEN_ATTR, '1')
+  else el.removeAttribute(HIDDEN_ATTR)
+}
+
+/** D17: clear the stale header title when nothing is displayed. */
+function clearTitle(header: HTMLElement): void {
+  const title = header.querySelector('.sidebar-ux-panel-title') as HTMLElement | null
+  if (title) title.textContent = ''
+}
+
+// ── Injection + presence (D17) ────────────────────────────────────────────────
 
 /**
- * Resolve the drawer-side's DISPLAYED window as a live id (null = none).
- * The model's active is TabKey-keyed; the host resolves to the live id.
- */
-function resolveDisplayedLiveId(side: 'primary' | 'secondary'): string | null {
-  const host = getHost()
-  const model = getModel()
-  const key = model?.active[side] ?? null
-  if (!host || !key) return null
-  return host.resolve(key)
-}
-
-/**
- * Resolve the close button inside a header. Order: aria-label/title/class
- * containing "close" (case-insensitive), then the LAST button (the X is
- * conventionally rightmost). DebugMode logs the pick (see the ensure pass)
- * so a wrong match surfaces in a bug report instead of misfiring silently.
- */
-function findCloseButton(header: HTMLElement): HTMLButtonElement | null {
-  const buttons = Array.from(header.querySelectorAll('button')) as HTMLButtonElement[]
-  const byLabel = buttons.find(b => /close/i.test(
-    b.getAttribute('aria-label') || b.title || b.className || '',
-  ))
-  return byLabel ?? buttons[buttons.length - 1] ?? null
-}
-
-// ── Injection ────────────────────────────────────────────────────────────────
-
-function resolveHeaderForSide(side: 'primary' | 'secondary'): HTMLElement | null {
-  if (side === 'primary') return getMainPanelHeader()
-  const wrapper = getSecondaryWrapper()
-  return (wrapper?.querySelector('.sidebar-ux-panel-header') as HTMLElement | null) ?? null
-}
-
-/**
- * Ensure the minimize button exists in the side's header, sits left of the
- * close button, and is wired to the minimize action. Also toggles both
- * header buttons by displayed-window presence (D17: nothing to minimize
- * or close when nothing is displayed). Idempotent per side.
+ * Ensure the minimize button exists in the side's actions cluster, sits
+ * left of the close button, and is wired to the minimize action. Also
+ * toggles both header buttons by displayed-window presence (D17: nothing
+ * to minimize or close when nothing is displayed). Idempotent per side.
  */
 function ensureChromeForSide(side: 'primary' | 'secondary'): void {
-  const header = resolveHeaderForSide(side)
-  if (!header || !header.isConnected) return
+  const surface = resolveHeaderSurface(side)
+  if (!surface) return
+  ensureHeaderObserved(surface.header)
 
-  const displayed = resolveDisplayedLiveId(side)
-  const closeBtn = findCloseButton(header)
-  if (!closeBtn) {
-    dlog('[os] header chrome: no close button found', { side })
-    return
+  const displayed = getDisplayedLiveId(side)
+  // D17 parking: no displayed window → no header title and no stale parked
+  // content (the drawer can still be manually reopened via the edge toggle,
+  // D16). Primary hides its content slot through the shell attribute; both
+  // sides clear the stale title (the next activation restores it).
+  if (side === 'primary') {
+    setCanvasMainNoActive(!displayed)
+  } else if (!displayed) {
+    clearTitle(surface.header)
   }
+  // Existence parity with the close button: stale injections survive
+  // rewrites; hide keeps them invisible until the next ensure pass.
+  setHeaderHidden(surface.closeBtn, !displayed)
 
-  // X hidden when nothing is displayed (D17); the capture interception
-  // handles the repurpose, so no listener surgery on the host button.
-  closeBtn.style.display = displayed ? '' : 'none'
-
-  // Minimize button: ensure-inject before the close button.
-  let minBtn = header.querySelector(`button[${MINIMIZE_ATTR}]`) as HTMLButtonElement | null
+  let minBtn = surface.actions.querySelector(
+    `button[${MINIMIZE_ATTR}]`,
+  ) as HTMLButtonElement | null
   if (displayed && !minBtn) {
     const template = document.createElement('template')
     template.innerHTML = minimizeButtonHtml().trim()
     minBtn = template.content.firstElementChild as HTMLButtonElement
-    closeBtn.parentElement?.insertBefore(minBtn, closeBtn)
+    surface.actions.insertBefore(minBtn, surface.closeBtn)
     minBtn.addEventListener('click', (ev) => {
       ev.preventDefault()
       ev.stopPropagation()
-      const liveId = resolveDisplayedLiveId(side)
+      const liveId = getDisplayedLiveId(side)
       if (!liveId) return
       void minimizeWindowByLiveId(liveId, side)
     })
     dlog('[os] header chrome: minimize button injected', { side })
   }
-  if (minBtn) {
-    // Existence parity with the close button (stale injections survive
-    // header rewrites; hide keeps them invisible until the observer pass).
-    minBtn.style.display = displayed ? 'flex' : 'none'
-  }
+  if (minBtn) setHeaderHidden(minBtn, !displayed)
 }
 
 /** Resolved closed-set live ids (refreshed on every model change). */
@@ -165,7 +173,8 @@ function resolveClosedLiveIds(): Set<string> {
  *   1. Secondary strip: the model's closed set (resolved to live ids)
  *      MERGES into the effective hidden set — closed windows hide through
  *      the same applicator as Configure-hidden (D3), so a re-opened
- *      window un-hides through the same path (the show branch).
+ *      window un-hides through the same path (the show branch). The main
+ *      strip handles `model.closed` in the renderer.
  *   2. Header chrome: minimize/X presence per displayed-window state (D17).
  *
  * Runs on every model commit while OS mode is on. In non-OS mode the
@@ -190,33 +199,18 @@ function refreshOsVisibility(): void {
   ensureChromeBoth()
 }
 
-// ── X interception (capture) ─────────────────────────────────────────────────
+// ── Observer + lifecycle ─────────────────────────────────────────────────────
 
-function onCaptureClick(ev: MouseEvent): void {
-  if (!isOsModeEnabled()) return
-  const target = ev.target
-  if (!(target instanceof Element)) return
-  const side = resolveHeaderSide(target.closest('.sidebar-ux-panel-header, [class*="_panelHeader_"]') as HTMLElement | null)
-  if (!side) return
-  const header = resolveHeaderForSide(side)
-  if (!header) return
-  const btn = target.closest('button') as HTMLButtonElement | null
-  if (!btn || !header.contains(btn)) return
-  if (btn.hasAttribute(MINIMIZE_ATTR)) return // minimize button handles itself
-  const closeBtn = findCloseButton(header)
-  if (!closeBtn || btn !== closeBtn) return
-  // D2/D9: X = close the DISPLAYED window (the action collapses the drawer
-  // when the displayed window closes).
-  const liveId = resolveDisplayedLiveId(side)
-  if (!liveId) return
-  ev.preventDefault()
-  ev.stopPropagation()
-  ev.stopImmediatePropagation()
-  dlog('[os] header X intercepted → close window', { side, liveId })
-  void closeWindowByLiveId(liveId)
+/**
+ * Observe a resolved header (base childList) so a header rewrite re-ensures
+ * injection. WeakSet-guarded: a remounted header is observed on the next
+ * pass, and the old node is garbage without bookkeeping.
+ */
+function ensureHeaderObserved(header: HTMLElement): void {
+  if (!_headerObserver || _observedHeaders.has(header)) return
+  _headerObserver.observe(header, { childList: true })
+  _observedHeaders.add(header)
 }
-
-// ── Observer (header rewrites re-ensure injection) ──────────────────────────
 
 function scheduleEnsure(): void {
   if (_ensureRaf) return
@@ -231,21 +225,6 @@ function ensureChromeBoth(): void {
   if (isOsModeEnabled()) ensureChromeForSide('secondary')
 }
 
-function ensureObservers(): void {
-  if (_headerObserver || typeof MutationObserver === 'undefined') return
-  _headerObserver = new MutationObserver(scheduleEnsure)
-  for (const side of ['primary', 'secondary'] as const) {
-    const header = resolveHeaderForSide(side)
-    if (header?.isConnected) {
-      _headerObserver.observe(header, { childList: true })
-    }
-  }
-  // The secondary header mounts late (drawer enable / side flips) — the
-  // observe set above covers the headers present at mount; the feature's
-  // apply() path and the capture-click path re-ensure the rest, and the
-  // next mountPanelChrome() call re-arms the observer for new headers.
-}
-
 // ── Feature hooks ────────────────────────────────────────────────────────────
 
 /** Model-change subscription (refresh pass id; detached on teardown). */
@@ -255,14 +234,27 @@ let _unsubModelChanged: (() => void) | null = null
 export function mountPanelChrome(): void {
   if (_active) return
   _active = true
-  _clickHandler = onCaptureClick
-  document.addEventListener('click', _clickHandler, true)
+  // X→close policy (D2/D9): the Canvas shells own their header buttons and
+  // call back through the header-close seam (no document interception).
+  setPanelHeaderCloseHandler((side) => {
+    if (!isOsModeEnabled()) return false
+    const liveId = getDisplayedLiveId(side)
+    if (!liveId) return false
+    dlog('[os] header X intercepted → close window', { side, liveId })
+    void closeWindowByLiveId(liveId)
+    return true
+  })
+  if (typeof MutationObserver !== 'undefined') {
+    _headerObserver = new MutationObserver(scheduleEnsure)
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure)
+  }
   // Model-driven refresh: every commit re-applies closed-set hiding (the
   // secondary applicator takes the merged set) + header chrome presence.
   if (!_unsubModelChanged) {
     _unsubModelChanged = onModelChanged(refreshOsVisibility)
   }
-  ensureObservers()
   ensureChromeBoth()
   refreshOsVisibility()
   dlog('[os] panel chrome mounted')
@@ -272,12 +264,13 @@ export function mountPanelChrome(): void {
 export function teardownPanelChrome(): void {
   if (!_active) return
   _active = false
-  if (_clickHandler) {
-    document.removeEventListener('click', _clickHandler, true)
-    _clickHandler = null
+  setPanelHeaderCloseHandler(null)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure)
   }
   _headerObserver?.disconnect()
   _headerObserver = null
+  _observedHeaders = new WeakSet()
   if (_ensureRaf) {
     cancelAnimationFrame(_ensureRaf)
     _ensureRaf = 0
@@ -286,12 +279,14 @@ export function teardownPanelChrome(): void {
   _unsubModelChanged = null
   closedLiveIdsCache = new Set()
   for (const side of ['primary', 'secondary'] as const) {
-    const header = resolveHeaderForSide(side)
-    if (!header) continue
-    header.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove()
-    const closeBtn = findCloseButton(header)
-    if (closeBtn) closeBtn.style.display = ''
+    const surface = resolveHeaderSurface(side)
+    if (!surface) continue
+    surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove()
+    surface.closeBtn.removeAttribute(HIDDEN_ATTR)
   }
+  // Un-hide the primary content slot (the drawer may be open with a window
+  // displayed in non-OS mode; the attribute must not survive the teardown).
+  setCanvasMainNoActive(false)
   // Restore the secondary strip: re-run the plain hidden applicator so
   // closed-hidden buttons reappear in non-OS mode (the closed set is gone).
   void applyHiddenTabIdsToSecondary(

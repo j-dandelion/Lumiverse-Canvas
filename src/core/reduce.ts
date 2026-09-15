@@ -335,7 +335,18 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
       // where the mirror drives clicks) must not be adopted as this side's
       // active — otherwise the moved tab becomes the primary active key and
       // the main mirror loses its highlight entirely (activeKeys: []).
-      if (isActive && tab.location === side && !isHidden(next, tab.key)) {
+      //
+      // OS mode (same guard as applySyncActive): a CLOSED window must never
+      // be re-adopted as active by a host sync. The secondary tracked active
+      // deliberately survives close (reopen memory), so without this guard
+      // the next host-sync resurrects the closed key into model.active —
+      // undoing the X/minimize while the strip button stays hidden.
+      if (
+        isActive &&
+        tab.location === side &&
+        !isHidden(next, tab.key) &&
+        !next.closed.includes(tab.key)
+      ) {
         return tab.key
       }
     }

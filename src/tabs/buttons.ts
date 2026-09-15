@@ -398,20 +398,21 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.appendChild(labelSpan)
 
   btn.addEventListener('click', () => {
+    // OS mode (D4/D19, spec §4.3): every strip click is a window-state
+    // toggle — model-derived displayed predicate (minimize) or open/restore
+    // (auto-opens a closed drawer, converges tracked + model active, clicks
+    // the content active). The tracked active deliberately survives an OS
+    // minimize as reopen memory, so it must NOT be the predicate here.
+    // Lazy-import avoids the load-order cycle (this module ← os/panel-chrome
+    // ← os/actions ← dispatch).
+    if (isOsModeEnabled() && !_isMobileViewport()) {
+      void import('../os/actions').then((m) => m.toggleWindowByLiveId(tab.id, 'secondary'))
+      return
+    }
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        // OS mode (D4, spec §4.3): clicking the displayed window's strip
-        // button MINIMIZES it — deactivate + collapse (the action provides
-        // the animation + persist + reflow); the strip button stays.
-        // Lazy-import avoids the load-order cycle (this module ←
-        // os/panel-chrome ← os/actions ← dispatch).
-        if (!_isMobileViewport()) {
-          if (isOsModeEnabled()) {
-            void import('../os/actions').then((m) => m.minimizeWindowByLiveId(tab.id, 'secondary'))
-          } else {
-            closeSecondarySidebar()
-          }
-        }
+        // Non-OS toggle-close parity (mobile: active-tab taps do nothing).
+        if (!_isMobileViewport()) closeSecondarySidebar()
       } else {
         // Persistence of the activation is handled inside showSecondaryTab →
         // setActiveSecondaryTabId (the unified tracked-active choke point).

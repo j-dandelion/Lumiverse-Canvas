@@ -758,6 +758,29 @@ export function injectDrawerTabStyles(): void {
   // re-pin the row geometry with !important.
   injectStyles('sidebar-ux-os-start-button', OS_START_BUTTON_CSS)
 
+  // Panel-header actions cluster + OS chrome hide (os/panel-chrome.ts). The
+  // cluster keeps the minimize button adjacent to the X under the header's
+  // `space-between`; the hidden attribute (a sheet rule, not inline display)
+  // hides both buttons when no window is displayed (D17) without clobbering
+  // the shell buttons' own chrome when OS chrome unmounts.
+  injectStyles('sidebar-ux-os-header-actions', `
+    .sidebar-ux-panel-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .sidebar-ux-panel-header [data-canvas-os-hidden] {
+      display: none !important;
+    }
+    /* D17 parking: no displayed window → no stale parked content when the
+       drawer is (re)opened via the edge toggle. Keep the parked host DOM —
+       this is display suppression, never unmount (spec §4.6). */
+    .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active] .sidebar-ux-panel-content {
+      display: none !important;
+    }
+  `)
+
   // Closed-drawer shadow suppression: when the secondary drawer is off-screen
   // (translateX ≠ 0), its box-shadow must not bleed into the viewport —
   // even with the +1px overshoot, shadow spread can extend 4–24px past the

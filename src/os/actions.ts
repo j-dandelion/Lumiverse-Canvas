@@ -22,7 +22,22 @@
 import type { Side } from '../core/model'
 import { dispatch, dispatchBatch, dispatchMoveByLiveId, getHost, getModel } from '../recon/dispatch'
 import { isOsModeEnabled } from '../settings/state'
+import { commandDrawerOpen } from './drawer-command'
 import { dlog } from '../debug/log'
+
+/**
+ * The drawer's DISPLAYED window as a live id (null = nothing displayed).
+ * The model's active is TabKey-keyed; the host resolves to the live id.
+ * Single source for the header chrome's presence checks (D17) and the
+ * close policy (D2/D9) — panel-chrome + the header-close seam both use it.
+ */
+export function getDisplayedLiveId(side: Side): string | null {
+  const host = getHost()
+  const model = getModel()
+  const key = model?.active[side] ?? null
+  if (!host || !key) return null
+  return host.resolve(key)
+}
 
 /**
  * Close a window: strip button hides; the Start menu keeps listing it.
@@ -47,10 +62,15 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
     return dispatch({ t: 'setClosed', key, closed: true })
   }
   // D17 + D7: closing the displayed window → no active → collapse.
-  return dispatchBatch([
+  const result = dispatchBatch([
     { t: 'setClosed', key, closed: true },
     { t: 'setDrawer', side, open: false },
   ])
+  // The primary shell is the only writer of its open state (the model→host
+  // setDrawer write is suppressed — live-verify #1 echo guard); command it
+  // directly. No-op when the shell doesn't own the side.
+  commandDrawerOpen(side, false)
+  return result
 }
 
 /**
@@ -72,10 +92,14 @@ export function minimizeWindowByLiveId(liveId: string, side: Side): Promise<void
     dlog('[os] minimizeWindow: not the drawer active — no-op', { liveId, side })
     return Promise.resolve()
   }
-  return dispatchBatch([
+  const result = dispatchBatch([
     { t: 'deactivate', side },
     { t: 'setDrawer', side, open: false },
   ])
+  // Primary shell command (see closeWindowByLiveId): the model write alone
+  // cannot collapse the shell-owned primary drawer.
+  commandDrawerOpen(side, false)
+  return result
 }
 
 /**
@@ -112,10 +136,13 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   const activate = livesInTarget || model.active[sourceSide] === key || isClosed
 
   // D19: auto-open the target drawer when it is closed (width omitted —
-  // applySetDrawer keeps the drawer's saved width).
-  const openDrawer: Promise<void> = model.drawers[side].open
-    ? Promise.resolve()
-    : dispatch({ t: 'setDrawer', side, open: true })
+  // applySetDrawer keeps the drawer's saved width). Primary is shell-owned:
+  // the model write is suppressed, so command the shell directly too.
+  const drawerClosed = !model.drawers[side].open
+  const openDrawer: Promise<void> = drawerClosed
+    ? dispatch({ t: 'setDrawer', side, open: true })
+    : Promise.resolve()
+  if (drawerClosed) commandDrawerOpen(side, true)
 
   // D13: cross-drawer move first (no focus during the move).
   const move = livesInTarget
@@ -132,5 +159,45 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
       ])
     : Promise.resolve()
 
-  return openDrawer.then(() => move).then(() => open)
+  return openDrawer
+    .then(() => move)
+    .then(() => open)
+    .then(() => {
+      // CONTENT SWITCH (D6). A model-only activation does not move the host
+      // content: on the primary side reconcile's diffActive is MODEL-derived
+      // (observe() reads model.active.primary while the mirror owns the
+      // surface), so nothing clicks the host twin; on the secondary the
+      // tracked active still equals the tab after an OS minimize (reopen
+      // memory), so reconcile's diffActive is a no-op too. Click through the
+      // host port — primary = host twin click, secondary = showSecondaryTab
+      // (silent: the model activation was dispatched above). Idempotent when
+      // the tab is already host-active; skipped for a minimized arrival
+      // (D13).
+      if (activate) void host.activate(side, liveId)
+    })
+}
+
+/**
+ * D4 strip-click toggle: minimize the drawer's DISPLAYED window, otherwise
+ * open/restore it (cross-drawer move per D13, closed-drawer auto-open per
+ * D19).
+ *
+ * The MODEL's active is the predicate. The secondary drawer's tracked active
+ * (getActiveSecondaryTabId) deliberately survives OS minimize/close as
+ * reopen memory, so a tracked-based predicate makes every post-minimize
+ * strip click a no-op minimize and never reopens the window.
+ */
+export function toggleWindowByLiveId(liveId: string, side: Side): Promise<void> {
+  if (!isOsModeEnabled()) return Promise.resolve()
+  const host = getHost()
+  const model = getModel()
+  const key = host?.findKey(liveId)
+  if (!host || !model || !key) {
+    dlog('[os] toggleWindow: unresolved key', { liveId, side })
+    return Promise.resolve()
+  }
+  const displayed = model.drawers[side].open && model.active[side] === key
+  return displayed
+    ? minimizeWindowByLiveId(liveId, side)
+    : openWindowInDrawerByLiveId(liveId, side)
 }

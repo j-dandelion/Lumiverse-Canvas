@@ -688,6 +688,40 @@ function test_syncFromHost() {
   })
   assertEqual(movedActiveCleared.active.primary, null, 'syncFromHost clears primary active when the flagged tab moved to the other side')
 
+  // OS mode closed-guard: a CLOSED window must never be re-adopted as active
+  // by a host sync. The secondary tracked active deliberately survives close
+  // (reopen memory), so the observed world keeps flagging the closed key
+  // active — without the guard, the next host-sync resurrects it into
+  // model.active and undoes the X/minimize (strip button stays hidden).
+  const CLOSED_WINDOW = builtinKey('closed-window')
+  const closedActiveRejected = reduce({
+    ...modelWith({
+      primary: [PROFILE],
+      secondary: [CLOSED_WINDOW],
+      activePrimary: PROFILE,
+      activeSecondary: null,
+    }),
+    closed: [CLOSED_WINDOW],
+  }, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PROFILE, liveId: 'profile', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+        { key: CLOSED_WINDOW, liveId: 'closed-window', isBuiltin: true, location: 'secondary', isHidden: false, isActiveInPrimary: false, isActiveInSecondary: true, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: true,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    },
+  })
+  assertEqual(
+    closedActiveRejected.active.secondary,
+    null,
+    'syncFromHost does not re-adopt a closed window as active (OS closed-guard)',
+  )
+
   // Remove gone tabs
   const gone = reduce(m, {
     t: 'syncFromHost',

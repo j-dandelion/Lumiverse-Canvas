@@ -20,15 +20,29 @@ const fake: {
   osMode: boolean
   model: any
   findKey: (id: string) => string | null
+  resolveMap: Record<string, string>
   dispatches: any[]
   moveCalls: Array<{ liveId: string; activateDest: boolean }>
+  drawerCommands: Array<{ side: string; open: boolean }>
+  activations: Array<{ side: string; id: string }>
 } = {
   osMode: true,
   model: null,
   findKey: () => null,
+  resolveMap: {},
   dispatches: [],
   moveCalls: [],
+  drawerCommands: [],
+  activations: [],
 }
+
+// The drawer command seam is a real leaf (not mocked): install a recording
+// handler so the shell-command sides of close/minimize/open are assertable.
+import { setDrawerCommandHandler } from '../drawer-command'
+setDrawerCommandHandler((side, open) => {
+  fake.drawerCommands.push({ side, open })
+  return true
+})
 
 mock.module('../../recon/dispatch', () => ({
   dispatch: (intent: any) => { fake.dispatches.push(intent); return Promise.resolve() },
@@ -37,7 +51,14 @@ mock.module('../../recon/dispatch', () => ({
     fake.moveCalls.push({ liveId, activateDest })
     return Promise.resolve()
   },
-  getHost: () => ({ findKey: (id: string) => fake.findKey(id) }),
+  getHost: () => ({
+    findKey: (id: string) => fake.findKey(id),
+    resolve: (key: string) => fake.resolveMap[key] ?? null,
+    activate: (side: string, id: string) => {
+      fake.activations.push({ side, id })
+      return Promise.resolve('ok')
+    },
+  }),
   getModel: () => fake.model,
 }))
 mock.module('../../settings/state', () => ({
@@ -45,13 +66,22 @@ mock.module('../../settings/state', () => ({
 }))
 
 // Module under test — imports AFTER mocks (repo convention).
-const { closeWindowByLiveId, minimizeWindowByLiveId, openWindowInDrawerByLiveId } = await import('../actions')
+const {
+  closeWindowByLiveId,
+  minimizeWindowByLiveId,
+  openWindowInDrawerByLiveId,
+  toggleWindowByLiveId,
+  getDisplayedLiveId,
+} = await import('../actions')
 
 function fresh(model: any) {
   fake.dispatches.length = 0
   fake.moveCalls.length = 0
+  fake.drawerCommands.length = 0
+  fake.activations.length = 0
   fake.osMode = true
   fake.model = model
+  fake.resolveMap = {}
 }
 
 const KEY = 'builtin:weaver'
@@ -78,6 +108,9 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.key, KEY, 'close resolves the live id to its key')
   assertEqual(fake.dispatches[1]?.t, 'setDrawer', 'close of displayed → drawer collapses (D7)')
   assertEqual(fake.dispatches[1]?.open, false, 'collapse → open:false')
+  assertEqual(fake.drawerCommands.length, 1, 'close of displayed commands the shell chrome')
+  assertEqual(fake.drawerCommands[0]?.side, 'primary', 'shell command targets the closed side')
+  assertEqual(fake.drawerCommands[0]?.open, false, 'shell command collapses the drawer')
 }
 {
   // Closing a MINIMIZED window: membership only — no drawer collapse.
@@ -88,6 +121,7 @@ const baseModel = () => ({
   assertEqual(fake.dispatches.length, 1, 'close of a minimized window → single setClosed')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'minimized close → setClosed only')
   assertEqual(fake.dispatches[0]?.key, KEY, 'minimized close resolves the key')
+  assertEqual(fake.drawerCommands.length, 0, 'minimized close leaves the drawer chrome alone (D16)')
 }
 {
   // Closing a window that lives in the secondary drawer collapses the
@@ -98,6 +132,7 @@ const baseModel = () => ({
   await closeWindowByLiveId('weaver:2')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'secondary-resident close: setClosed')
   assertEqual(fake.dispatches[1]?.side, 'secondary', 'secondary-resident close collapses the SECONDARY drawer')
+  assertEqual(fake.drawerCommands[0]?.side, 'secondary', 'shell command is offered the secondary side (real handler declines it)')
 }
 {
   fresh(baseModel())
@@ -122,6 +157,8 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.side, 'primary', 'deactivate targets the drawer side')
   assertEqual(fake.dispatches[1]?.t, 'setDrawer', 'minimize collapses the drawer (D7)')
   assertEqual(fake.dispatches[1]?.open, false, 'collapse → open:false')
+  assertEqual(fake.drawerCommands.length, 1, 'minimize commands the shell chrome')
+  assertEqual(fake.drawerCommands[0]?.open, false, 'shell command collapses on minimize')
 }
 {
   fresh(baseModel())
@@ -148,6 +185,10 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'open: first un-close')
   assertEqual(fake.dispatches[0]?.closed, false, 'open: closed:false')
   assertEqual(fake.dispatches[1]?.t, 'activate', 'open: then activate')
+  assertEqual(fake.drawerCommands.length, 0, 'open with the drawer already open → no shell command')
+  assertEqual(fake.activations.length, 1, 'primary activation clicks the host content (diffActive is model-derived)')
+  assertEqual(fake.activations[0]?.side, 'primary', 'content activation targets the primary side')
+  assertEqual(fake.activations[0]?.id, 'weaver:2', 'content activation uses the resolved live id')
 }
 {
   // D19: closed target drawer auto-opens first.
@@ -163,6 +204,10 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.open, true, 'D19: setDrawer open:true')
   assertEqual(fake.dispatches[1]?.t, 'setClosed', 'open after the drawer opens')
   assertEqual(fake.dispatches[2]?.t, 'activate', 'activate last')
+  assertEqual(fake.drawerCommands.length, 1, 'D19 commands the shell (primary is shell-owned)')
+  assertEqual(fake.drawerCommands[0]?.open, true, 'D19 shell command opens the drawer')
+  assertEqual(fake.activations.length, 1, 'D19 open clicks the host content')
+  assertEqual(fake.activations[0]?.id, 'weaver:2', 'D19 content activation uses the launched live id')
 }
 {
   // D13: cross-drawer, active in source → move (no focus during move) + open.
@@ -179,6 +224,8 @@ const baseModel = () => ({
   assertEqual(fake.dispatches.length, 2, 'D13: open batch after the move')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'un-close first')
   assertEqual(fake.dispatches[1]?.t, 'activate', 'activate in the target drawer')
+  assertEqual(fake.activations.length, 1, 'secondary activation clicks its content (tracked active is stale-equal)')
+  assertEqual(fake.activations[0]?.side, 'secondary', 'secondary content activation targets the secondary side')
 }
 {
   // D13 state preservation: minimized in source arrives minimized — move
@@ -196,6 +243,7 @@ const baseModel = () => ({
   assertEqual(fake.moveCalls[0]?.activateDest, false, 'D13: minimized move keeps no focus')
   assertEqual(fake.dispatches.length, 1, 'D13 minimized: only the D19 drawer-open, no open batch')
   assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D13 minimized: the only dispatch is the drawer-open')
+  assertEqual(fake.activations.length, 0, 'D13 minimized arrival does not activate content')
 }
 {
   // D13 + closed: a closed tab in the other drawer moves and launches fresh.
@@ -214,6 +262,8 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D19 fires before the open batch')
   assertEqual(fake.dispatches[1]?.t, 'setClosed', 'launch fresh: un-close')
   assertEqual(fake.dispatches[2]?.t, 'activate', 'launch fresh: displayed')
+  assertEqual(fake.activations.length, 1, 'secondary launch clicks its content too')
+  assertEqual(fake.activations[0]?.side, 'secondary', 'secondary launch activation targets the secondary side')
 }
 {
   // OS off → nothing.
@@ -223,6 +273,92 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'primary')
   assertEqual(fake.dispatches.length, 0, 'open with OS off → no dispatch')
   assertEqual(fake.moveCalls.length, 0, 'open with OS off → no move')
+  assertEqual(fake.activations.length, 0, 'open with OS off → no content activation')
+}
+
+// ── toggleWindowByLiveId (D4 strip click: model-derived toggle) ──
+{
+  // Drawer open + this tab displayed → minimize.
+  fresh(baseModel())
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await toggleWindowByLiveId('weaver:2', 'primary')
+  assertEqual(fake.dispatches[0]?.t, 'deactivate', 'displayed toggle → minimize (deactivate first)')
+}
+{
+  // Minimized (model active null) → open/restore.
+  fresh({
+    ...baseModel(),
+    active: { primary: null, secondary: 'builtin:sec' },
+  })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await toggleWindowByLiveId('weaver:2', 'primary')
+  assertEqual(fake.dispatches[0]?.t, 'setClosed', 'minimized toggle → open (un-close first)')
+  assertEqual(fake.dispatches[1]?.t, 'activate', 'minimized toggle → activate')
+  assertEqual(fake.activations.length, 1, 'minimized toggle clicks the content')
+}
+{
+  // Drawer manually closed via the edge toggle (D16) while the model still
+  // has the tab displayed → toggle must OPEN, not minimize.
+  fresh({
+    ...baseModel(),
+    drawers: {
+      primary: { open: false, width: 420 },
+      secondary: { open: false, width: 420 },
+    },
+  })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await toggleWindowByLiveId('weaver:2', 'primary')
+  assertEqual(
+    fake.dispatches.some((d: any) => d.t === 'deactivate'),
+    false,
+    'closed-drawer toggle does not minimize (model.open false)',
+  )
+  assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'closed-drawer toggle auto-opens (D19)')
+}
+{
+  // Secondary stale-tracked case: the tracked active survives an OS minimize
+  // as reopen memory, so the model predicate must drive the toggle.
+  fresh({
+    ...baseModel(),
+    primary: ['builtin:other'],
+    secondary: [KEY],
+    active: { primary: 'builtin:other', secondary: null },
+  })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await toggleWindowByLiveId('weaver:2', 'secondary')
+  assertEqual(
+    fake.dispatches.some((d: any) => d.t === 'activate' && d.side === 'secondary'),
+    true,
+    'stale-tracked toggle reopens (model predicate, not tracked)',
+  )
+  assertEqual(fake.activations[0]?.side, 'secondary', 'stale-tracked reopen clicks secondary content')
+}
+{
+  fresh(baseModel())
+  fake.osMode = false
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await toggleWindowByLiveId('weaver:2', 'primary')
+  assertEqual(fake.dispatches.length, 0, 'toggle with OS off → no dispatch')
+}
+
+// ── getDisplayedLiveId (D17 presence + D2/D9 close policy source) ──
+{
+  fresh(baseModel())
+  fake.resolveMap = { [KEY]: 'weaver:2', 'builtin:sec': 'sec:1' }
+  assertEqual(getDisplayedLiveId('primary'), 'weaver:2', 'displayed primary resolves the active key to its live id')
+  assertEqual(getDisplayedLiveId('secondary'), 'sec:1', 'displayed secondary resolves independently')
+}
+{
+  // OS minimize/close nulls the model active (D17): nothing displayed.
+  fresh({ ...baseModel(), active: { primary: null, secondary: null } })
+  fake.resolveMap = { [KEY]: 'weaver:2' }
+  assertEqual(getDisplayedLiveId('primary'), null, 'null active → nothing displayed')
+}
+{
+  // Unresolvable key (host identity not ready) → nothing displayed.
+  fresh(baseModel())
+  fake.resolveMap = {}
+  assertEqual(getDisplayedLiveId('primary'), null, 'unresolved active key → null')
 }
 
 console.log('---')

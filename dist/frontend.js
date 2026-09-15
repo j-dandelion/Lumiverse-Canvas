@@ -791,6 +791,23 @@ function injectDrawerTabStyles() {
     }
   `);
   injectStyles("sidebar-ux-os-start-button", OS_START_BUTTON_CSS);
+  injectStyles("sidebar-ux-os-header-actions", `
+    .sidebar-ux-panel-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .sidebar-ux-panel-header [data-canvas-os-hidden] {
+      display: none !important;
+    }
+    /* D17 parking: no displayed window → no stale parked content when the
+       drawer is (re)opened via the edge toggle. Keep the parked host DOM —
+       this is display suppression, never unmount (spec §4.6). */
+    .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active] .sidebar-ux-panel-content {
+      display: none !important;
+    }
+  `);
   injectStyles("sidebar-ux-shadow-close-suppress", `
     .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
       box-shadow: none !important;
@@ -1690,8 +1707,11 @@ function createDrawerShell(options) {
   if (onHeaderClose) {
     closeBtn.addEventListener("click", onHeaderClose);
   }
+  const headerActions = document.createElement("div");
+  headerActions.className = HEADER_ACTIONS_CLASS;
+  headerActions.appendChild(closeBtn);
   header.appendChild(title);
-  header.appendChild(closeBtn);
+  header.appendChild(headerActions);
   const content = document.createElement("div");
   content.className = "sidebar-ux-panel-content";
   content.style.cssText = `
@@ -1713,6 +1733,11 @@ function createDrawerShell(options) {
   drawer.appendChild(panel);
   wrapper.appendChild(drawerTab);
   wrapper.appendChild(drawer);
+  if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+    try {
+      window.dispatchEvent(new CustomEvent(DRAWER_SHELL_CREATED_EVENT, { detail: { owner } }));
+    } catch {}
+  }
   return {
     wrapper,
     drawerTab,
@@ -1721,6 +1746,7 @@ function createDrawerShell(options) {
     panel,
     header,
     title,
+    headerActions,
     closeBtn,
     content,
     side,
@@ -1773,7 +1799,7 @@ function restyleShellSide(wrapper, side) {
     }
   }
 }
-var FULL_BLEED_WIDTH_EXPR = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)", CANVAS_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`, VANILLA_MAIN_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>`;
+var HEADER_ACTIONS_CLASS = "sidebar-ux-panel-header-actions", DRAWER_SHELL_CREATED_EVENT = "canvas:drawer-shell-created", FULL_BLEED_WIDTH_EXPR = "calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) + 1px)", CANVAS_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>`, VANILLA_MAIN_DRAWER_TAB_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>`;
 var init_drawer_shell = __esm(() => {
   init_styles();
 });
@@ -2887,7 +2913,7 @@ function applySyncFromHost(model, observed) {
   const adoptActive = (side) => {
     for (const tab of observed.tabs) {
       const isActive = side === "primary" ? tab.isActiveInPrimary : tab.isActiveInSecondary;
-      if (isActive && tab.location === side && !isHidden(next, tab.key)) {
+      if (isActive && tab.location === side && !isHidden(next, tab.key) && !next.closed.includes(tab.key)) {
         return tab.key;
       }
     }
@@ -3696,13 +3722,38 @@ var init_layout_repo = __esm(() => {
   _pendingSaves = new Map;
 });
 
+// src/os/drawer-command.ts
+function setDrawerCommandHandler(handler) {
+  _handler = handler;
+}
+function commandDrawerOpen(side, open) {
+  if (!_handler)
+    return false;
+  try {
+    return _handler(side, open);
+  } catch {
+    return false;
+  }
+}
+var _handler = null;
+
 // src/os/actions.ts
 var exports_actions = {};
 __export(exports_actions, {
   closeWindowByLiveId: () => closeWindowByLiveId,
+  getDisplayedLiveId: () => getDisplayedLiveId,
   minimizeWindowByLiveId: () => minimizeWindowByLiveId,
-  openWindowInDrawerByLiveId: () => openWindowInDrawerByLiveId
+  openWindowInDrawerByLiveId: () => openWindowInDrawerByLiveId,
+  toggleWindowByLiveId: () => toggleWindowByLiveId
 });
+function getDisplayedLiveId(side) {
+  const host = getHost();
+  const model = getModel();
+  const key = model?.active[side] ?? null;
+  if (!host || !key)
+    return null;
+  return host.resolve(key);
+}
 function closeWindowByLiveId(liveId) {
   if (!isOsModeEnabled())
     return Promise.resolve();
@@ -3719,10 +3770,12 @@ function closeWindowByLiveId(liveId) {
   if (!wasDisplayed) {
     return dispatch({ t: "setClosed", key, closed: true });
   }
-  return dispatchBatch([
+  const result = dispatchBatch([
     { t: "setClosed", key, closed: true },
     { t: "setDrawer", side, open: false }
   ]);
+  commandDrawerOpen(side, false);
+  return result;
 }
 function minimizeWindowByLiveId(liveId, side) {
   if (!isOsModeEnabled())
@@ -3738,10 +3791,12 @@ function minimizeWindowByLiveId(liveId, side) {
     dlog("[os] minimizeWindow: not the drawer active — no-op", { liveId, side });
     return Promise.resolve();
   }
-  return dispatchBatch([
+  const result = dispatchBatch([
     { t: "deactivate", side },
     { t: "setDrawer", side, open: false }
   ]);
+  commandDrawerOpen(side, false);
+  return result;
 }
 function openWindowInDrawerByLiveId(liveId, side) {
   if (!isOsModeEnabled())
@@ -3757,13 +3812,32 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
   const sourceSide = side === "primary" ? "secondary" : "primary";
   const activate = livesInTarget || model.active[sourceSide] === key || isClosed;
-  const openDrawer = model.drawers[side].open ? Promise.resolve() : dispatch({ t: "setDrawer", side, open: true });
+  const drawerClosed = !model.drawers[side].open;
+  const openDrawer = drawerClosed ? dispatch({ t: "setDrawer", side, open: true }) : Promise.resolve();
+  if (drawerClosed)
+    commandDrawerOpen(side, true);
   const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false);
   const open = activate ? dispatchBatch([
     { t: "setClosed", key, closed: false },
     { t: "activate", key, side }
   ]) : Promise.resolve();
-  return openDrawer.then(() => move).then(() => open);
+  return openDrawer.then(() => move).then(() => open).then(() => {
+    if (activate)
+      host.activate(side, liveId);
+  });
+}
+function toggleWindowByLiveId(liveId, side) {
+  if (!isOsModeEnabled())
+    return Promise.resolve();
+  const host = getHost();
+  const model = getModel();
+  const key = host?.findKey(liveId);
+  if (!host || !model || !key) {
+    dlog("[os] toggleWindow: unresolved key", { liveId, side });
+    return Promise.resolve();
+  }
+  const displayed = model.drawers[side].open && model.active[side] === key;
+  return displayed ? minimizeWindowByLiveId(liveId, side) : openWindowInDrawerByLiveId(liveId, side);
 }
 var init_actions = __esm(() => {
   init_dispatch();
@@ -4102,6 +4176,14 @@ function onMirrorClick(ev) {
     dlog("[main-renderer] click → close (active tab)", { title, key });
     closeCanvasMainDrawer();
     return;
+  }
+  if (isOsModeEnabled() && key && !key.startsWith("__")) {
+    const osLiveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
+    if (osLiveId) {
+      dlog("[main-renderer] click → OS open window", { title, key });
+      openWindowInDrawerByLiveId(osLiveId, "primary").catch(() => {});
+      return;
+    }
   }
   if (twin.btn && twin.btn.isConnected) {
     try {
@@ -11714,15 +11796,14 @@ function addSecondaryTabButton(tab) {
   labelSpan.style.cssText = showLabels ? `opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease` : `display:none;visibility:hidden;opacity:0;height:0;min-height:0;margin-top:0;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`;
   btn.appendChild(labelSpan);
   btn.addEventListener("click", () => {
+    if (isOsModeEnabled() && !_isMobileViewport()) {
+      Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.toggleWindowByLiveId(tab.id, "secondary"));
+      return;
+    }
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        if (!_isMobileViewport()) {
-          if (isOsModeEnabled()) {
-            Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(tab.id, "secondary"));
-          } else {
-            closeSecondarySidebar();
-          }
-        }
+        if (!_isMobileViewport())
+          closeSecondarySidebar();
       } else {
         showSecondaryTab(tab.id);
       }
@@ -12769,6 +12850,21 @@ var init_panel_header_sync = __esm(() => {
   init_cleanup();
 });
 
+// src/os/header-close.ts
+function setPanelHeaderCloseHandler(handler) {
+  _handler2 = handler;
+}
+function handlePanelHeaderClose(side) {
+  if (!_handler2)
+    return false;
+  try {
+    return _handler2(side);
+  } catch {
+    return false;
+  }
+}
+var _handler2 = null;
+
 // src/sidebar/main-mirror-drawer.ts
 var exports_main_mirror_drawer = {};
 __export(exports_main_mirror_drawer, {
@@ -12793,6 +12889,7 @@ __export(exports_main_mirror_drawer, {
   pinMainMirrorShellTabList: () => pinMainMirrorShellTabList,
   reconcileMainMirrorDrawer: () => reconcileMainMirrorDrawer,
   restyleMainShellSide: () => restyleMainShellSide,
+  setCanvasMainNoActive: () => setCanvasMainNoActive,
   setCanvasMainTitle: () => setCanvasMainTitle,
   syncMainMirrorToViewport: () => syncMainMirrorToViewport,
   teardownMainMirror: () => teardownMainMirror,
@@ -12956,6 +13053,16 @@ function clearMainMirrorActiveHighlights() {
 function setCanvasMainTitle(text) {
   if (_shell?.title)
     _shell.title.textContent = text || "Drawer";
+}
+function setCanvasMainNoActive(noActive) {
+  if (!_shell)
+    return;
+  if (noActive) {
+    _shell.wrapper.setAttribute("data-canvas-os-no-active", "1");
+    _shell.title.textContent = "";
+  } else {
+    _shell.wrapper.removeAttribute("data-canvas-os-no-active");
+  }
 }
 function onMainMirrorTabActivated(title, opts) {
   if (!_active2)
@@ -13142,7 +13249,10 @@ function mountMainMirror(opts) {
       else
         openCanvasMainDrawer();
     },
-    onHeaderClose: () => closeCanvasMainDrawer()
+    onHeaderClose: () => {
+      if (!handlePanelHeaderClose("primary"))
+        closeCanvasMainDrawer();
+    }
   });
   _shell.content.style.display = "flex";
   _shell.content.style.flexDirection = "column";
@@ -13155,6 +13265,15 @@ function mountMainMirror(opts) {
   _active2 = true;
   _open = opts.initialOpen;
   _mountedSide = side;
+  setDrawerCommandHandler((commandSide, open) => {
+    if (commandSide !== "primary" || !_active2 || !_shell)
+      return false;
+    if (open)
+      openCanvasMainDrawer();
+    else
+      closeCanvasMainDrawer();
+    return true;
+  });
   if (_open) {
     document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS);
     _shell.drawerTab.classList.add("sidebar-ux-drawer-tab--active");
@@ -13400,6 +13519,7 @@ function teardownMainMirror(opts) {
   document.getElementById("sidebar-ux-main-mirror-mobile")?.remove();
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
+  setDrawerCommandHandler(null);
   _active2 = false;
   _open = false;
   _desktopWidth = null;
@@ -15861,7 +15981,10 @@ function createSecondarySidebar(options) {
       else
         openSecondarySidebar();
     },
-    onHeaderClose: () => closeSecondarySidebar()
+    onHeaderClose: () => {
+      if (!handlePanelHeaderClose("secondary"))
+        closeSecondarySidebar();
+    }
   });
   try {
     const wSpindle = getHostBridge();
@@ -16785,65 +16908,58 @@ var init_state = __esm(() => {
 function minimizeButtonHtml() {
   return `<button type="button" aria-label="Minimize" title="Minimize" ${MINIMIZE_ATTR}="1" style="width:32px;height:32px;flex-shrink:0;background:transparent;border:none;border-radius:8px;color:var(--lumiverse-text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s ease, color 0.15s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>`;
 }
-function resolveHeaderSide(header) {
-  const mainHeader = getMainPanelHeader();
-  if (mainHeader && (header === mainHeader || mainHeader.contains(header)))
-    return "primary";
-  const secondaryWrapper = getSecondaryWrapper();
-  const secondaryHeader = secondaryWrapper?.querySelector(".sidebar-ux-panel-header");
-  if (secondaryHeader && (header === secondaryHeader || secondaryHeader.contains(header)))
-    return "secondary";
-  return null;
-}
-function resolveDisplayedLiveId(side) {
-  const host = getHost();
-  const model = getModel();
-  const key = model?.active[side] ?? null;
-  if (!host || !key)
+function resolveHeaderSurface(side) {
+  const wrapper = side === "primary" ? getMainMirrorWrapper() : getSecondaryWrapper();
+  const header = wrapper?.querySelector(".sidebar-ux-panel-header");
+  if (!header || !header.isConnected)
     return null;
-  return host.resolve(key);
+  const closeBtn = header.querySelector(".sidebar-ux-close-btn");
+  const actions = header.querySelector(`.${HEADER_ACTIONS_CLASS}`);
+  if (!closeBtn || !actions)
+    return null;
+  return { header, closeBtn, actions };
 }
-function findCloseButton(header) {
-  const buttons = Array.from(header.querySelectorAll("button"));
-  const byLabel = buttons.find((b2) => /close/i.test(b2.getAttribute("aria-label") || b2.title || b2.className || ""));
-  return byLabel ?? buttons[buttons.length - 1] ?? null;
+function setHeaderHidden(el, hidden) {
+  if (hidden)
+    el.setAttribute(HIDDEN_ATTR, "1");
+  else
+    el.removeAttribute(HIDDEN_ATTR);
 }
-function resolveHeaderForSide(side) {
-  if (side === "primary")
-    return getMainPanelHeader();
-  const wrapper = getSecondaryWrapper();
-  return wrapper?.querySelector(".sidebar-ux-panel-header") ?? null;
+function clearTitle(header) {
+  const title = header.querySelector(".sidebar-ux-panel-title");
+  if (title)
+    title.textContent = "";
 }
 function ensureChromeForSide(side) {
-  const header = resolveHeaderForSide(side);
-  if (!header || !header.isConnected)
+  const surface = resolveHeaderSurface(side);
+  if (!surface)
     return;
-  const displayed = resolveDisplayedLiveId(side);
-  const closeBtn = findCloseButton(header);
-  if (!closeBtn) {
-    dlog("[os] header chrome: no close button found", { side });
-    return;
+  ensureHeaderObserved(surface.header);
+  const displayed = getDisplayedLiveId(side);
+  if (side === "primary") {
+    setCanvasMainNoActive(!displayed);
+  } else if (!displayed) {
+    clearTitle(surface.header);
   }
-  closeBtn.style.display = displayed ? "" : "none";
-  let minBtn = header.querySelector(`button[${MINIMIZE_ATTR}]`);
+  setHeaderHidden(surface.closeBtn, !displayed);
+  let minBtn = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
   if (displayed && !minBtn) {
     const template = document.createElement("template");
     template.innerHTML = minimizeButtonHtml().trim();
     minBtn = template.content.firstElementChild;
-    closeBtn.parentElement?.insertBefore(minBtn, closeBtn);
+    surface.actions.insertBefore(minBtn, surface.closeBtn);
     minBtn.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      const liveId = resolveDisplayedLiveId(side);
+      const liveId = getDisplayedLiveId(side);
       if (!liveId)
         return;
       minimizeWindowByLiveId(liveId, side);
     });
     dlog("[os] header chrome: minimize button injected", { side });
   }
-  if (minBtn) {
-    minBtn.style.display = displayed ? "flex" : "none";
-  }
+  if (minBtn)
+    setHeaderHidden(minBtn, !displayed);
 }
 function resolveClosedLiveIds() {
   const host = getHost();
@@ -16869,34 +16985,11 @@ function refreshOsVisibility() {
   }
   ensureChromeBoth();
 }
-function onCaptureClick(ev) {
-  if (!isOsModeEnabled())
+function ensureHeaderObserved(header) {
+  if (!_headerObserver || _observedHeaders.has(header))
     return;
-  const target = ev.target;
-  if (!(target instanceof Element))
-    return;
-  const side = resolveHeaderSide(target.closest('.sidebar-ux-panel-header, [class*="_panelHeader_"]'));
-  if (!side)
-    return;
-  const header = resolveHeaderForSide(side);
-  if (!header)
-    return;
-  const btn = target.closest("button");
-  if (!btn || !header.contains(btn))
-    return;
-  if (btn.hasAttribute(MINIMIZE_ATTR))
-    return;
-  const closeBtn = findCloseButton(header);
-  if (!closeBtn || btn !== closeBtn)
-    return;
-  const liveId = resolveDisplayedLiveId(side);
-  if (!liveId)
-    return;
-  ev.preventDefault();
-  ev.stopPropagation();
-  ev.stopImmediatePropagation();
-  dlog("[os] header X intercepted → close window", { side, liveId });
-  closeWindowByLiveId(liveId);
+  _headerObserver.observe(header, { childList: true });
+  _observedHeaders.add(header);
 }
 function scheduleEnsure() {
   if (_ensureRaf)
@@ -16911,27 +17004,29 @@ function ensureChromeBoth() {
   if (isOsModeEnabled())
     ensureChromeForSide("secondary");
 }
-function ensureObservers2() {
-  if (_headerObserver || typeof MutationObserver === "undefined")
-    return;
-  _headerObserver = new MutationObserver(scheduleEnsure);
-  for (const side of ["primary", "secondary"]) {
-    const header = resolveHeaderForSide(side);
-    if (header?.isConnected) {
-      _headerObserver.observe(header, { childList: true });
-    }
-  }
-}
 function mountPanelChrome() {
   if (_active3)
     return;
   _active3 = true;
-  _clickHandler = onCaptureClick;
-  document.addEventListener("click", _clickHandler, true);
+  setPanelHeaderCloseHandler((side) => {
+    if (!isOsModeEnabled())
+      return false;
+    const liveId = getDisplayedLiveId(side);
+    if (!liveId)
+      return false;
+    dlog("[os] header X intercepted → close window", { side, liveId });
+    closeWindowByLiveId(liveId);
+    return true;
+  });
+  if (typeof MutationObserver !== "undefined") {
+    _headerObserver = new MutationObserver(scheduleEnsure);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
+  }
   if (!_unsubModelChanged2) {
     _unsubModelChanged2 = onModelChanged(refreshOsVisibility);
   }
-  ensureObservers2();
   ensureChromeBoth();
   refreshOsVisibility();
   dlog("[os] panel chrome mounted");
@@ -16940,12 +17035,13 @@ function teardownPanelChrome() {
   if (!_active3)
     return;
   _active3 = false;
-  if (_clickHandler) {
-    document.removeEventListener("click", _clickHandler, true);
-    _clickHandler = null;
+  setPanelHeaderCloseHandler(null);
+  if (typeof window !== "undefined") {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
   }
   _headerObserver?.disconnect();
   _headerObserver = null;
+  _observedHeaders = new WeakSet;
   if (_ensureRaf) {
     cancelAnimationFrame(_ensureRaf);
     _ensureRaf = 0;
@@ -16954,19 +17050,20 @@ function teardownPanelChrome() {
   _unsubModelChanged2 = null;
   closedLiveIdsCache = new Set;
   for (const side of ["primary", "secondary"]) {
-    const header = resolveHeaderForSide(side);
-    if (!header)
+    const surface = resolveHeaderSurface(side);
+    if (!surface)
       continue;
-    header.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove();
-    const closeBtn = findCloseButton(header);
-    if (closeBtn)
-      closeBtn.style.display = "";
+    surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`)?.remove();
+    surface.closeBtn.removeAttribute(HIDDEN_ATTR);
   }
+  setCanvasMainNoActive(false);
   applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
   dlog("[os] panel chrome unmounted");
 }
-var MINIMIZE_ATTR = "data-canvas-os-minimize", _active3 = false, _clickHandler = null, _headerObserver = null, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged2 = null;
+var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged2 = null;
 var init_panel_chrome = __esm(() => {
+  init_drawer_shell();
+  init_main_mirror_drawer();
   init_secondary();
   init_host_settings();
   init_state();
@@ -16975,6 +17072,7 @@ var init_panel_chrome = __esm(() => {
   init_buttons();
   init_canvas_hidden();
   init_log();
+  _observedHeaders = new WeakSet;
   closedLiveIdsCache = new Set;
   Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(teardownPanelChrome));
 });
@@ -20792,7 +20890,7 @@ init_host_settings();
 init_drawer_sync();
 init_log();
 var _interceptActive = false;
-var _clickHandler2 = null;
+var _clickHandler = null;
 function normalizeMenuLabel(text) {
   return (text ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
@@ -20806,7 +20904,7 @@ function startConfigureTabsIntercept() {
   if (_interceptActive)
     return;
   _interceptActive = true;
-  _clickHandler2 = (e3) => {
+  _clickHandler = (e3) => {
     if (!_interceptActive)
       return;
     const menu = findLumiverseContextMenu();
@@ -20847,15 +20945,15 @@ function startConfigureTabsIntercept() {
       dwarn("[configure-intercept] Failed to open configure modal:", err);
     });
   };
-  document.addEventListener("click", _clickHandler2, true);
+  document.addEventListener("click", _clickHandler, true);
 }
 function stopConfigureTabsIntercept() {
   if (!_interceptActive)
     return;
   _interceptActive = false;
-  if (_clickHandler2) {
-    document.removeEventListener("click", _clickHandler2, true);
-    _clickHandler2 = null;
+  if (_clickHandler) {
+    document.removeEventListener("click", _clickHandler, true);
+    _clickHandler = null;
   }
 }
 function dismissHostContextMenu() {

@@ -34,6 +34,7 @@ import {
   reconcileTabListPin,
 } from './tab-position'
 import { getSettings, getStripEdge, isOsModeEnabled } from '../settings/state'
+import { handlePanelHeaderClose } from '../os/header-close'
 import { dlog, dwarn } from '../debug/log'
 import { liveIdForKey } from '../tabs/identity'
 import type { TabKey } from '../core/model'
@@ -180,7 +181,11 @@ export function createSecondarySidebar(options?: { initialWidth?: number; initia
       if (_secondarySidebarOpen) closeSecondarySidebar()
       else openSecondarySidebar()
     },
-    onHeaderClose: () => closeSecondarySidebar(),
+    onHeaderClose: () => {
+      // OS mode (D2/D9): the X closes the displayed window. The OS policy
+      // is installed by os/panel-chrome; when unset/OS off, plain close.
+      if (!handlePanelHeaderClose('secondary')) closeSecondarySidebar()
+    },
   })
 
   // NOTE: Do NOT register the container here — shell.content is still

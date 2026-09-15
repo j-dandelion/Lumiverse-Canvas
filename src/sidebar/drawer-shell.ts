@@ -19,6 +19,22 @@ export type DrawerShellOwner = 'main' | 'secondary'
 /** Horizontal strip edge while Drawer location is Top/Bottom. */
 export type StripEdge = 'top' | 'bottom'
 
+/**
+ * Panel-header actions cluster (flex row holding the close button + any
+ * injected OS chrome). Without it, a third direct child of the header would
+ * be centered by the header's `justify-content: space-between`.
+ */
+export const HEADER_ACTIONS_CLASS = 'sidebar-ux-panel-header-actions'
+
+/**
+ * Dispatched on `window` when a shell is constructed. OS panel chrome
+ * (os/panel-chrome.ts) re-ensures on it: a shell remount (viewport cross,
+ * taskbar toggle, drawer enable) replaces the header with no model change
+ * to piggyback on. The rAF-deferred ensure runs after the owner's
+ * appendChild (same task), so the header is connected by then.
+ */
+export const DRAWER_SHELL_CREATED_EVENT = 'canvas:drawer-shell-created'
+
 export interface DrawerShellOptions {
   /** Which Canvas drawer this shell belongs to. */
   owner: DrawerShellOwner
@@ -56,6 +72,8 @@ export interface DrawerShell {
   panel: HTMLElement
   header: HTMLElement
   title: HTMLElement
+  /** Flex cluster holding the close button (+ injected OS minimize). */
+  headerActions: HTMLElement
   closeBtn: HTMLElement
   content: HTMLElement
   side: 'left' | 'right'
@@ -338,8 +356,15 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
     closeBtn.addEventListener('click', onHeaderClose)
   }
 
+  // Actions cluster: header keeps `space-between` (title ↔ cluster) while
+  // OS chrome (os/panel-chrome.ts) can insert a minimize button adjacent to
+  // the X without landing in the center gap.
+  const headerActions = document.createElement('div')
+  headerActions.className = HEADER_ACTIONS_CLASS
+  headerActions.appendChild(closeBtn)
+
   header.appendChild(title)
-  header.appendChild(closeBtn)
+  header.appendChild(headerActions)
 
   const content = document.createElement('div')
   content.className = 'sidebar-ux-panel-content'
@@ -364,6 +389,19 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
   wrapper.appendChild(drawerTab)
   wrapper.appendChild(drawer)
 
+  // OS panel chrome re-ensures on this signal (shell remounts replace the
+  // header without a model change). Guarded — test shims may not provide
+  // window/CustomEvent.
+  if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent(DRAWER_SHELL_CREATED_EVENT, { detail: { owner } }),
+      )
+    } catch {
+      /* non-browser environment */
+    }
+  }
+
   return {
     wrapper,
     drawerTab,
@@ -372,6 +410,7 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
     panel,
     header,
     title,
+    headerActions,
     closeBtn,
     content,
     side,
