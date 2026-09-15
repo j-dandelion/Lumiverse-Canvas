@@ -32,7 +32,8 @@
  * the settings toggle.
  */
 
-import { getHost, getModel, snapshotOwnedModelLayout } from '../recon/dispatch'
+import { getHost, getModel, dispatchBatch, snapshotOwnedModelLayout } from '../recon/dispatch'
+import type { Intent } from '../core/intents'
 import { cancelLayoutSave } from '../persist/layout-load'
 import { restoreSingleModeLayout } from '../layout/mode-profiles'
 import type { LegacyLayout } from '../persist/layout-model'
@@ -150,6 +151,17 @@ export async function applyOsModeChange(
       } else {
         dlog('[os] disable: non-OS slot restored', { mode: dual ? 'dual' : 'single' })
       }
+    }
+    // Invariant: OS mode off ⇒ model.closed empty. A successful slot restore
+    // bootstraps from a non-OS slot (which carries no closedTabIds), but a
+    // missing/empty slot or a partial restore leaves the live closed-set —
+    // and with the Start menu gone those windows would stay hidden forever
+    // (no reopen path). Clear any survivors through the ordinary model path.
+    const after = getModel()
+    if (after && after.closed.length > 0) {
+      dlog('[os] disable: clearing residual closed windows', { closed: after.closed.length })
+      const reopen: Intent[] = after.closed.map((key) => ({ t: 'setClosed', key, closed: false }))
+      await dispatchBatch(reopen)
     }
   }
 }

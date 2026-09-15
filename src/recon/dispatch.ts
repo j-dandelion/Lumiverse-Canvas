@@ -388,17 +388,26 @@ export function snapshotOwnedModelLayout(): LegacyLayout | null {
  * stamps it unconditionally; the OS closed-set lives in the model). While
  * OS is off, the OS slots pass through their stored values — symmetric
  * freezing from the last OS session.
+ *
+ * Invariant (2026-09-15): OS mode off ⇒ the closed-set is NOT durable state.
+ * `model.closed` should already be empty (os/os-mode.ts clears residual
+ * membership on disable), but this is the persistence backstop: a leftover
+ * membership must never be written into the top-level blob or a non-OS mode
+ * slot, where a reload would hydrate hidden windows with no Start menu to
+ * reopen them. The OS slots keep their stored `closedTabIds` untouched.
  */
 function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string | null): PersistedLayout {
   const layout = serializeModelToLayout(model, resolve, _version)
   const isDual = model.secondary.length > 0
   const os = isOsModeEnabled()
+  // Non-OS serialization: closedTabIds only survive while OS mode is on.
+  const base: LegacyLayout = os ? layout : { ...layout, closedTabIds: [] }
   return {
-    ...layout,
-    dualLayout: os ? getDualLayoutSlot() : isDual ? layout : getDualLayoutSlot(),
-    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : layout,
-    osDualLayout: isDual ? (os ? layout : getOsDualLayoutSlot()) : getOsDualLayoutSlot(),
-    osSingleLayout: isDual ? getOsSingleLayoutSlot() : (os ? layout : getOsSingleLayoutSlot()),
+    ...base,
+    dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
+    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
+    osDualLayout: isDual ? (os ? base : getOsDualLayoutSlot()) : getOsDualLayoutSlot(),
+    osSingleLayout: isDual ? getOsSingleLayoutSlot() : (os ? base : getOsSingleLayoutSlot()),
   }
 }
 
@@ -1069,6 +1078,10 @@ export function bootstrapFromLayout(
     && !model.secondary.includes(primaryBootKey)
       ? host.resolve(primaryBootKey)
       : null
+  // Captured before the async pass: a partial restore's pending merge may
+  // still ADD secondary keys, so the removal sweep below must be skipped
+  // until the model is complete (see the sweep call).
+  const restorePending = _pendingLayout !== null
   _bootPlacementPass = (async () => {
     // Secondary placement visual gate (2026-09, live-verify #5 final): this
     // pass serializes secondary placements and can outlive the main restore
@@ -1096,6 +1109,22 @@ export function bootstrapFromLayout(
         setActiveWhenReady: false,
         activateKey: model.active.secondary ?? null,
       })
+      // Removal half (2026-09-15): a slot restore that moves a tab
+      // secondary→primary — OS-mode disable, any layout restore — leaves the
+      // host button in the secondary shell. Reconcile cannot see the
+      // divergence (observe() derives location from the model-derived
+      // assignment facade), so without this sweep the tab renders in both the
+      // main mirror strip and the secondary strip and neither duplicate can
+      // load content. Placement is model-driven; removal is this sweep.
+      // Skipped on a partial restore: the pending merge may still add
+      // secondary keys, which the sweep would wrongly unassign.
+      if (!restorePending) {
+        try {
+          await m.unassignSecondaryTabsNotInModel()
+        } catch (err) {
+          dwarn('[bootstrap] unassignSecondaryTabsNotInModel failed:', err)
+        }
+      }
       if (primaryBootLiveId === null) return
       // Boot-placement primary re-assert (2026-09): each builtin assign
       // force-activates the tab in the HOST main drawer (lazy panel-data

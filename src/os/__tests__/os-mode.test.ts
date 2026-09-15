@@ -20,7 +20,7 @@ import { mock } from 'bun:test'
 // ── Fakes captured by the mock modules below ──
 const fake: {
   osMode: boolean
-  model: { secondary: unknown[] } | null
+  model: { secondary: unknown[]; closed: string[] } | null
   snapshot: Record<string, unknown> | null
   host: object | null
   osSingle: Record<string, unknown> | null
@@ -30,9 +30,10 @@ const fake: {
   secondSidebarEnabled: boolean
   restoreCalls: Array<{ slot: unknown; host: unknown }>
   restoreResult: { ok: boolean; reason?: string }
+  batchCalls: Array<Array<{ t: string; key: string; closed: boolean }>>
 } = {
   osMode: false,
-  model: { secondary: [] },
+  model: { secondary: [], closed: [] },
   snapshot: null,
   host: {},
   osSingle: null,
@@ -42,12 +43,17 @@ const fake: {
   secondSidebarEnabled: false,
   restoreCalls: [],
   restoreResult: { ok: true },
+  batchCalls: [],
 }
 
 mock.module('../../recon/dispatch', () => ({
   getHost: () => fake.host,
   getModel: () => fake.model,
   snapshotOwnedModelLayout: () => fake.snapshot,
+  dispatchBatch: (intents: Array<{ t: string; key: string; closed: boolean }>) => {
+    fake.batchCalls.push(intents)
+    return Promise.resolve()
+  },
 }))
 mock.module('../../persist/layout-load', () => ({
   cancelLayoutSave: () => {},
@@ -80,6 +86,7 @@ function fresh() {
   fake.restoreResult = { ok: true }
   fake.osSingle = null
   fake.osDual = null
+  fake.batchCalls.length = 0
 }
 
 function tab(id: string, sidebar: 'primary' | 'secondary') {
@@ -89,7 +96,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 // ── Enable (D11: seed all-open) ──
 {
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('b', 'primary')], tabOrder: ['a', 'b'], closedTabIds: [] }
   await applyOsModeChange({ osMode: false }, { osMode: true })
   assert(fake.osSingle !== null, 'enable (single) seeds the osSingle slot')
@@ -107,7 +114,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 }
 {
   fresh()
-  fake.model = { secondary: [tab('s', 'secondary')] }
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
   await applyOsModeChange({ osMode: false }, { osMode: true })
   assert(fake.osDual !== null, 'enable (dual model) seeds the osDual slot')
@@ -126,7 +133,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 // ── Disable (D12 slot-wins restore) ──
 {
   fresh()
-  fake.model = { secondary: [tab('s', 'secondary')] }
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: ['s'] }
   fake.secondSidebarEnabled = true
   fake.dualSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
@@ -144,7 +151,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 }
 {
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
   fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
@@ -156,7 +163,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 {
   // Missing/empty slot → no restore, no throw.
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = null
   fake.secondSidebarEnabled = false
   fake.singleSlot = null
@@ -167,7 +174,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 {
   // Empty slot (no tabs) → no restore (first-enable + immediate disable).
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
   fake.singleSlot = { detachedTabs: [], tabOrder: [] }
@@ -178,7 +185,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 {
   // No host (boot/teardown edge) → no restore, no throw.
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
   fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
@@ -189,7 +196,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 {
   // Restore failure degrades to a logged partial (no throw).
   fresh()
-  fake.model = { secondary: [] }
+  fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
   fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
@@ -200,6 +207,39 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
     await applyOsModeChange({ osMode: true }, { osMode: false })
   } catch { threw = true }
   assertEqual(threw, false, 'restore failure does not throw (degrades to log)')
+}
+
+// ── Disable invariant: OS off ⇒ model.closed empty (2026-09-15) ──
+// A missing/empty non-OS slot performs no restore, so the live OS closed-set
+// survives — and with the Start menu gone those windows would stay hidden
+// forever. The disable must clear any residual membership through the model.
+{
+  fresh()
+  fake.model = { secondary: [], closed: ['builtin:loom', 'builtin:Hone'] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: ['a'] }
+  fake.secondSidebarEnabled = false
+  fake.singleSlot = null
+  fake.host = {}
+  await applyOsModeChange({ osMode: true }, { osMode: false })
+  assertEqual(fake.restoreCalls.length, 0, 'no slot → no restore')
+  assertEqual(fake.batchCalls.length, 1, 'residual closed keys are cleared via one batch')
+  assertEqual(fake.batchCalls[0]?.length, 2, 'one setClosed intent per closed key')
+  assert(
+    (fake.batchCalls[0] ?? []).every((i) => i.t === 'setClosed' && i.closed === false),
+    'clear intents use setClosed(closed:false)',
+  )
+}
+{
+  // No residual closed keys → no clear dispatch (successful restore path).
+  fresh()
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.secondSidebarEnabled = false
+  fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  fake.host = {}
+  await applyOsModeChange({ osMode: true }, { osMode: false })
+  assertEqual(fake.restoreCalls.length, 1, 'clean restore still runs')
+  assertEqual(fake.batchCalls.length, 0, 'no closed survivors → no clear batch')
 }
 
 console.log('---')

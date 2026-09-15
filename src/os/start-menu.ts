@@ -26,10 +26,16 @@ import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
+import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { dlog } from '../debug/log'
 
 const START_ATTR = 'data-canvas-os-start'
 const MENU_ID = 'canvas-os-start-menu'
+/** Secondary Start dock: carries the main-drawer dock chrome (divider + 8px
+ *  gap + bottom anchor) so the separator is owned by the container, not the
+ *  button. Must stay the LAST child of the secondary tab list — tab writers
+ *  insert before it via the shared leaf helper. */
+const TAB_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
 let _menu: HTMLElement | null
 let _menuOpenFor: Side | null = null
@@ -280,7 +286,9 @@ function startButtonHtml(): string {
 /**
  * Ensure the side's Start button exists in the right slot (idempotent):
  *   - Sides, main mirror → the bottom dock, beneath the settings button (D10).
- *   - Sides, secondary → the strip's end (no settings dock there).
+ *   - Sides, secondary → its own bottom dock (same `.sidebar-ux-tab-list-bottom`
+ *     chrome as the main drawer's Settings dock: divider + 8px gap, anchored
+ *     to the strip end). The divider is therefore NOT part of the button.
  *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end, adjacent to
  *     the settings dock (S8 #3 order trick: the dock's side is order-owned;
  *     Start takes the outermost slot: left/upper drawer → -2, right/lower → 2).
@@ -295,12 +303,26 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
     template.innerHTML = startButtonHtml().trim()
     btn = template.content.firstElementChild as HTMLButtonElement
   }
-  if (!btn.parentElement) {
-    const dock = side === 'primary'
-      ? (list.querySelector('.sidebar-ux-tab-list-bottom') as HTMLElement | null)
-      : null
-    if (dock) dock.appendChild(btn)
-    else list.appendChild(btn)
+  if (side === 'primary') {
+    if (!btn.parentElement) {
+      const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null
+      if (dock) dock.appendChild(btn)
+      else list.appendChild(btn)
+    }
+  } else {
+    // Secondary: wrap the Start in its own dock so the divider matches the
+    // main drawer's Settings dock exactly (container border, not button).
+    let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`) as HTMLElement | null
+    if (!dock) {
+      dock = document.createElement('div')
+      dock.className = `${TAB_LIST_BOTTOM_CLASS} ${SECONDARY_START_DOCK_CLASS}`
+      list.appendChild(dock)
+    }
+    if (btn.parentElement !== dock) dock.appendChild(btn)
+    // Self-heal ordering: a late host registration can append a tab button
+    // after the dock; tab writers use appendSecondaryTabNode, this is the
+    // belt-and-braces for anything that slipped through.
+    if (dock.nextElementSibling) list.appendChild(dock)
   }
   if (isHorizontalStrip()) {
     const drawerLeft = getMainDrawerSide() === 'left'
@@ -330,10 +352,12 @@ function scheduleEnsureButtons(): void {
       if (getSettings().secondSidebarEnabled) {
         await ensureStartButtonForSide('secondary')
       } else {
-        // Second drawer disabled mid-session: the Start button leaves with
-        // the strip (F6 companion — the enable path re-ensures on demand).
+        // Second drawer disabled mid-session: the Start button (and its dock)
+        // leave with the strip (F6 companion — the enable path re-ensures on
+        // demand).
         const list = getSecondaryTabList()
         list?.querySelector(`button[${START_ATTR}]`)?.remove()
+        list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove()
         if (_menuOpenFor === 'secondary') hideStartMenu()
       }
     }
@@ -349,7 +373,7 @@ export function mountStartMenu(): void {
   dlog('[os] start menu chrome mounted')
 }
 
-/** Teardown: remove buttons + any open menu (feature unmount / disable). */
+/** Teardown: remove buttons + docks + any open menu (feature unmount / disable). */
 export function teardownStartMenu(): void {
   if (_buttonRaf) {
     cancelAnimationFrame(_buttonRaf)
@@ -358,6 +382,11 @@ export function teardownStartMenu(): void {
   hideStartMenu()
   for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
     btn.remove()
+  }
+  // Remove the secondary Start docks too — an empty dock would leave a stray
+  // divider line in the strip.
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    dock.remove()
   }
   dlog('[os] start menu chrome unmounted')
 }

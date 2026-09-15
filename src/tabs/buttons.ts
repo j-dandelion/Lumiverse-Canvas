@@ -35,6 +35,7 @@ import {
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
+import { appendSecondaryTabNode } from './secondary-start-dock'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
@@ -453,7 +454,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   if (insertBefore && insertBefore.parentNode === tabList) {
     tabList.insertBefore(btn, insertBefore)
   } else {
-    tabList.appendChild(btn)
+    appendSecondaryTabNode(tabList, btn)
   }
   // Taskbar pin tracks secondary assignment count — re-evaluate after first tab.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
@@ -534,10 +535,10 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
   for (const id of desired) {
     const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`) as HTMLElement | null
     if (btn) {
-      // appendChild moves an existing node to the end of the parent's
-      // children list. Iterating ids in order and appending each yields
-      // the desired sequence.
-      tabList.appendChild(btn)
+      // appendSecondaryTabNode moves an existing node to the end of the tab
+      // order (before the Start dock). Iterating ids in order yields the
+      // desired sequence.
+      appendSecondaryTabNode(tabList, btn)
     }
   }
 }

@@ -409,3 +409,69 @@ describe('HORIZONTAL_STRIP_CSS settings dock placement (live feedback 2026-09-14
     expect(rule).toContain('padding-right: 0')
   })
 })
+
+// Live bug 2026-09-15: the Top/Bottom strip reserve put margin-top/bottom
+// on `_chatColumn_` ALONE. The host `.body` is a flex ROW, so a cross-axis
+// margin does not reduce the column's height — the column became
+// 100% + 56px and the host's `overflow: clip` cut off the composer (TOP) or
+// the composer sat under the strip (BOTTOM). The reserve must also land on
+// `_chatColumnInner_` (a column-flex child with default flex-shrink), which
+// shrinks to 100% - 56 and keeps the composer inside the visible lane.
+describe('HORIZONTAL_STRIP_CSS chat top/bottom reserve (live bug 2026-09-15)', () => {
+  const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .filter((b) => b.trim().length > 0)
+
+  test('inner reserve exists for BOTH edges (the composer fix)', () => {
+    const innerRule = blocks.find((b) => b.includes('_chatColumnInner_')) ?? ''
+    expect(innerRule).toContain('sidebar-ux-location-top')
+    expect(innerRule).toContain('sidebar-ux-location-bottom')
+    expect(innerRule).toContain('margin-bottom: var(--sidebar-ux-strip-h, 56px) !important')
+  })
+
+  // Theme Studio "strong" overrides compile to :where(base) + 2 :not(#id)
+  // guards with !important — an unguarded Canvas rule loses on specificity
+  // and the reserve silently disappears (verified against a live TS project
+  // that sets a strong margin-bottom on _chatColumnInner_). The guards are
+  // inert for matching; they exist purely as the 2-ID authority tier.
+  test('reserve rules carry the authority specificity tier', () => {
+    const owned = blocks.filter(
+      (b) => b.includes('_chatColumn_') || b.includes('_chatColumnInner_'),
+    )
+    expect(owned.length).toBeGreaterThanOrEqual(3)
+    for (const rule of owned) {
+      expect(rule).toContain(':not(#__theme_studio_authority_a__)')
+      expect(rule).toContain(':not(#__theme_studio_authority_b__)')
+    }
+  })
+
+  test('outer chat rules are retained (top margin pushes past the strip)', () => {
+    const outerRules = blocks.filter(
+      (b) => b.includes('_chatColumn_') && !b.includes('_chatColumnInner_'),
+    )
+    const topRule = outerRules.find((b) => b.includes('sidebar-ux-location-top')) ?? ''
+    const bottomRule = outerRules.find((b) => b.includes('sidebar-ux-location-bottom')) ?? ''
+    expect(topRule).toContain('margin-top: var(--sidebar-ux-strip-h, 56px) !important')
+    expect(bottomRule).toContain('margin-bottom: var(--sidebar-ux-strip-h, 56px) !important')
+  })
+})
+
+// 2026-09-15: the OS Start in the second drawer lives in a
+// `.sidebar-ux-tab-list-bottom` dock (exactly like the main drawer's Settings
+// dock), so the generic dock rules above own its divider in Top/Bottom — no
+// Start-specific border rules exist any more. This guards against
+// reintroducing button chrome for the divider.
+describe('HORIZONTAL_STRIP_CSS Start divider is dock-owned (2026-09-15)', () => {
+  test('no Start-specific divider rules remain', () => {
+    const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('}')
+      .filter((b) => b.trim().length > 0)
+    const startRules = blocks.filter((b) => b.includes('data-canvas-os-start'))
+    expect(startRules.length).toBe(1) // the 48x48 sizing rule only
+    for (const rule of startRules) {
+      expect(rule).not.toContain('border-top')
+      expect(rule).not.toContain('border-right')
+      expect(rule).not.toContain('border-left')
+    }
+  })
+})

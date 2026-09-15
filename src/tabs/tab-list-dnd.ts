@@ -75,6 +75,7 @@ import {
   showMainTabButton,
   buttonTabId,
 } from './buttons'
+import { appendSecondaryTabNode, getSecondaryStartDock } from './secondary-start-dock'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { isPointerResizeActive } from '../resize/handles'
 import { dlog, dwarn } from '../debug/log'
@@ -1259,13 +1260,18 @@ function reorderCanvasListDOM(
 
   if (insertIdx >= buttonsWithoutSource.length) {
     // After last sibling (no trailing hidden after last visible, or empty).
+    // The secondary list's OS Start dock sits after the tab order, so a
+    // source already immediately before it is also "already last".
+    const endDock = getSecondaryStartDock(container)
     if (
       sourceBtn.parentElement === container &&
-      sourceBtn.nextElementSibling === null
+      (sourceBtn.nextElementSibling === null || sourceBtn.nextElementSibling === endDock)
     ) {
       return false
     }
-    container.appendChild(sourceBtn)
+    // Secondary list: never append past the OS Start dock (the divider must
+    // stay below the tab order). Mirror sections have no dock child.
+    appendSecondaryTabNode(container, sourceBtn)
     return true
   }
 

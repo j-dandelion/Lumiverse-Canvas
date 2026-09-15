@@ -72,6 +72,23 @@ export const SECONDARY_MOBILE_CSS = `
     flex-shrink: 0;
     padding: 6px 4px !important;
   }
+  /* OS Start dock on the mobile Sides row (this sheet turns the list into a
+     row): same inline treatment as the main mirror's Settings dock — no top
+     border, divider on the tab-facing left edge, 4px gaps. Top/Bottom keeps
+     the HORIZONTAL_STRIP_CSS dock rules (location-scoped, more specific). */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-shrink: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    padding-left: 4px !important;
+    margin-left: 4px !important;
+    border-top: none !important;
+    border-left: 1px solid var(--lumiverse-primary-020) !important;
+    gap: 2px !important;
+  }
   /* Active tab: bottom underline on mobile. Must match
      .sidebar-ux-side-left specificity and use !important —
      desktop rules set inset 3px/–3px with !important and
@@ -473,11 +490,35 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
 }
 
 /* Chat + Landing top/bottom reserve. CSS-owned so it works with the
-   L/R-only reflow contract and on mobile (reflow early-returns there). */
-html.${LOCATION_CLASS_TOP} [class*="_chatColumn_"] {
+   L/R-only reflow contract and on mobile (reflow early-returns there).
+
+   Host structure: .body is a flex ROW (height:100%) whose child
+   .chatColumn has height:100%. A cross-axis margin on a row flex item does
+   NOT reduce its height, so the column becomes 100% + 56px and the host's
+   overflow:clip cuts the bottom 56px — the composer. The reserve therefore
+   also lands on .chatColumnInner (a column-flex child with default
+   flex-shrink): margin-bottom:56 shrinks it to 100% - 56, which lifts the
+   composer above the strip in BOTTOM mode and (combined with the outer top
+   margin) makes the inner exactly fill the visible lane in TOP mode.
+   User-confirmed local fix (2026-09-15) productized; only CSS-owned so it
+   applies on mobile too where updateChatReflow early-returns.
+
+   SPECIFICITY: the selectors carry the :not(#__theme_studio_authority_a/b__)
+   guards. They are INERT for matching (no element carries those ids), but they
+   add the 2-ID authority tier used by Theme Studio's "strong" overrides
+   (:where(base):not(#a):not(#b)), whose !important rules would otherwise
+   beat Canvas on specificity and drop the reserve (verified against a live
+   Theme Studio project that sets a strong margin-bottom on
+   _chatColumnInner_). Keep the guards on every rule that owns the reserve —
+   an unguarded rule loses to a themed override even with !important. */
+html.${LOCATION_CLASS_TOP} [class*="_chatColumn_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-top: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumn_"] {
+html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumn_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
+  margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
+}
+html.${LOCATION_CLASS_TOP} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__),
+html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
 html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
@@ -842,7 +883,11 @@ injectStyles('canvas-moved-active-toggle', `
       display: none;
     }
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list-bottom,
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-bottom {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-bottom,
+    /* Secondary drawer's OS Start dock (unpinned fallback — the pinned case
+       already matches the host selector above): same divider chrome as the
+       main drawer's Settings dock, owned by the container, not the button. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list-bottom {
       flex-shrink: 0;
       display: flex;
       flex-direction: column;

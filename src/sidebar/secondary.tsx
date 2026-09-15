@@ -298,6 +298,40 @@ export function secondaryTabsAllPlaced(
 }
 
 /**
+ * Pure guard for unassignSecondaryTabsNotInModel: which live buttons in the
+ * secondary list does the model NO LONGER place in the secondary drawer?
+ *
+ * The placement half of a layout restore is model-driven
+ * (reassignSecondaryTabsFromModel); the REMOVAL half is not — a slot restore
+ * that moves a tab secondary→primary (OS-mode disable, any layout restore)
+ * leaves the host button in the secondary shell. Reconcile cannot see the
+ * divergence: `observe()` derives each tab's location from the assignment
+ * facade (the MODEL), so `placeTab` never runs for the stale side. Result:
+ * the tab renders in both the main mirror strip and the secondary strip, and
+ * neither duplicate can load content (the host button is not in the main
+ * sidebar, so `host.activate('primary')` degrades).
+ *
+ * A live id whose key cannot be resolved (null) is LEFT ALONE — unassigning
+ * an unknown button is worse than a stale one, and the caller cannot reason
+ * about it.
+ */
+export function secondaryTabsToUnassign(
+  modelSecondaryKeys: readonly string[],
+  listLiveIds: readonly string[],
+  findKey: (liveId: string) => string | null,
+): string[] {
+  const wanted = new Set(modelSecondaryKeys)
+  const out: string[] = []
+  for (const liveId of listLiveIds) {
+    const key = findKey(liveId)
+    if (key === null) continue
+    if (wanted.has(key)) continue
+    out.push(liveId)
+  }
+  return out
+}
+
+/**
  * True when at least one placed secondary root is actually displayed
  * (carries data-canvas-active; the CSS shows only
  * `[data-canvas-moved][data-canvas-active]` roots). The tracked cell is
@@ -512,6 +546,51 @@ export function reassignSecondaryTabsFromModel(opts?: ReassignSecondaryOpts): Pr
     for (const resolve of _reassignWaiters.splice(0)) resolve()
   })()
   return drain
+}
+
+/**
+ * Removal half of a layout restore: unassign live secondary buttons the
+ * restored model no longer places in the secondary drawer (see
+ * `secondaryTabsToUnassign` for the failure mode this fixes — OS-mode
+ * disable leaving duplicate dead strip buttons). Serial, idempotent, and
+ * no-op when the second drawer is disabled / the shell is absent.
+ *
+ * Call only after a COMPLETE restore (`bootstrapFromLayout`'s placement pass
+ * skips it while the pending-layout merge can still add secondary keys).
+ */
+export async function unassignSecondaryTabsNotInModel(): Promise<void> {
+  if (!getSettings().secondSidebarEnabled) return
+  if (!isSecondaryShellLive()) return
+  const list = getSecondaryTabList()
+  if (!list) return
+  const dispatch = await import('../recon/dispatch')
+  const host = dispatch.getHost()
+  const model = dispatch.getModel()
+  if (!host || !model) return
+  // model.secondary === [] is a valid sweep target: every secondary button
+  // is then stale (the restore moved them all back to primary).
+  const liveIds: string[] = []
+  for (const btn of Array.from(list.children) as HTMLElement[]) {
+    if (btn.tagName !== 'BUTTON') continue
+    if (btn.hasAttribute('data-canvas-os-start')) continue
+    const id = btn.getAttribute('data-tab-id')
+    if (id) liveIds.push(id)
+  }
+  const stale = secondaryTabsToUnassign(
+    model.secondary,
+    liveIds,
+    (liveId) => host.findKey(liveId),
+  )
+  if (stale.length === 0) return
+  dlog('[secondary] unassign sweep: stale secondary buttons', { stale, modelSecondary: model.secondary.length })
+  const { unassignFromSecondary } = await import('./secondary-drawer')
+  for (const liveId of stale) {
+    try {
+      await unassignFromSecondary(liveId)
+    } catch (err) {
+      dwarn('[secondary] unassign sweep: failed for', liveId, err)
+    }
+  }
 }
 
 /**

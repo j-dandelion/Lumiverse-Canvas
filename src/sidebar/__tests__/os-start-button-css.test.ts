@@ -80,6 +80,34 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(block, 'height: 20px', 'glyph box height')
 }
 
+// ── 3b. Start divider is DOCK-owned, never button chrome (live report 2026-09-15) ──
+// The main drawer's separator is the settings dock container's border-top.
+// The second drawer's Start therefore lives in its own
+// `.sidebar-ux-tab-list-bottom` dock (class `sidebar-ux-secondary-start-dock`),
+// so the divider matches the main drawer exactly. It must NOT be a border on
+// the Start button.
+{
+  assert(!OS_START_BUTTON_CSS.includes(
+    `.sidebar-ux-tab-list > ${START_SEL}`,
+  ), 'the divider must not be drawn as Start button chrome')
+  const src = readFileSync(join(process.cwd(), 'src/os/start-menu.ts'), 'utf8')
+  const dockSrc = readFileSync(
+    join(process.cwd(), 'src/tabs/secondary-start-dock.ts'),
+    'utf8',
+  )
+  assertIncludes(
+    dockSrc,
+    "export const SECONDARY_START_DOCK_CLASS = 'sidebar-ux-secondary-start-dock'",
+    'secondary Start dock class is the structural hook',
+  )
+  assertIncludes(src, '`${TAB_LIST_BOTTOM_CLASS} ${SECONDARY_START_DOCK_CLASS}`',
+    'the dock reuses the main drawer dock class (identical chrome)')
+  assertIncludes(dockSrc, 'export function getSecondaryStartDock',
+    'tab writers resolve the dock so it stays last')
+  assertIncludes(dockSrc, 'export function appendSecondaryTabNode',
+    'tab appends must insert BEFORE the dock, never past the divider')
+}
+
 // ── 4. Horizontal strip: 48×48, never the base width:100% ──
 {
   const idx = HORIZONTAL_STRIP_CSS.indexOf(`[data-canvas-os-start]`)
@@ -101,6 +129,19 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(SECONDARY_MOBILE_CSS, 'height: 48px !important', 'secondary mobile height')
   assertIncludes(MAIN_MIRROR_MOBILE_CSS, START_SEL, 'main mobile must size Start')
   assertIncludes(MAIN_MIRROR_MOBILE_CSS, 'width: 52px !important', 'main mobile width')
+  // The mobile Sides list is a ROW — the Start dock must fall inline after
+  // the tabs with its divider on the tab-facing left edge (same treatment as
+  // the main mirror's dock), never a button border.
+  assertIncludes(
+    SECONDARY_MOBILE_CSS,
+    '.sidebar-ux-secondary-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom',
+    'secondary mobile must dock the Start inline (row layout)',
+  )
+  assertIncludes(
+    SECONDARY_MOBILE_CSS,
+    'border-left: 1px solid var(--lumiverse-primary-020) !important',
+    'mobile Start dock divider uses the dock separator token',
+  )
 }
 
 // ── 6. Source pin: no bespoke inline geometry, no mirror class ──

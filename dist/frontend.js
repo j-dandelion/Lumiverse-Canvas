@@ -842,7 +842,11 @@ function injectDrawerTabStyles() {
       display: none;
     }
     .sidebar-ux-tab-list-pin-host .sidebar-ux-tab-list-bottom,
-    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-bottom {
+    .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list-bottom,
+    /* Secondary drawer's OS Start dock (unpinned fallback — the pinned case
+       already matches the host selector above): same divider chrome as the
+       main drawer's Settings dock, owned by the container, not the button. */
+    .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list-bottom {
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
@@ -895,6 +899,23 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
     min-width: 0;
     flex-shrink: 0;
     padding: 6px 4px !important;
+  }
+  /* OS Start dock on the mobile Sides row (this sheet turns the list into a
+     row): same inline treatment as the main mirror's Settings dock — no top
+     border, divider on the tab-facing left edge, 4px gaps. Top/Bottom keeps
+     the HORIZONTAL_STRIP_CSS dock rules (location-scoped, more specific). */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-shrink: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    padding-left: 4px !important;
+    margin-left: 4px !important;
+    border-top: none !important;
+    border-left: 1px solid var(--lumiverse-primary-020) !important;
+    gap: 2px !important;
   }
   /* Active tab: bottom underline on mobile. Must match
      .sidebar-ux-side-left specificity and use !important —
@@ -1299,11 +1320,35 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
 }
 
 /* Chat + Landing top/bottom reserve. CSS-owned so it works with the
-   L/R-only reflow contract and on mobile (reflow early-returns there). */
-html.${LOCATION_CLASS_TOP} [class*="_chatColumn_"] {
+   L/R-only reflow contract and on mobile (reflow early-returns there).
+
+   Host structure: .body is a flex ROW (height:100%) whose child
+   .chatColumn has height:100%. A cross-axis margin on a row flex item does
+   NOT reduce its height, so the column becomes 100% + 56px and the host's
+   overflow:clip cuts the bottom 56px — the composer. The reserve therefore
+   also lands on .chatColumnInner (a column-flex child with default
+   flex-shrink): margin-bottom:56 shrinks it to 100% - 56, which lifts the
+   composer above the strip in BOTTOM mode and (combined with the outer top
+   margin) makes the inner exactly fill the visible lane in TOP mode.
+   User-confirmed local fix (2026-09-15) productized; only CSS-owned so it
+   applies on mobile too where updateChatReflow early-returns.
+
+   SPECIFICITY: the selectors carry the :not(#__theme_studio_authority_a/b__)
+   guards. They are INERT for matching (no element carries those ids), but they
+   add the 2-ID authority tier used by Theme Studio's "strong" overrides
+   (:where(base):not(#a):not(#b)), whose !important rules would otherwise
+   beat Canvas on specificity and drop the reserve (verified against a live
+   Theme Studio project that sets a strong margin-bottom on
+   _chatColumnInner_). Keep the guards on every rule that owns the reserve —
+   an unguarded rule loses to a themed override even with !important. */
+html.${LOCATION_CLASS_TOP} [class*="_chatColumn_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-top: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumn_"] {
+html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumn_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
+  margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
+}
+html.${LOCATION_CLASS_TOP} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__),
+html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
 html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
@@ -5787,12 +5832,13 @@ function buildPersistedBlob(model, resolve) {
   const layout = serializeModelToLayout(model, resolve, _version);
   const isDual = model.secondary.length > 0;
   const os = isOsModeEnabled();
+  const base = os ? layout : { ...layout, closedTabIds: [] };
   return {
-    ...layout,
-    dualLayout: os ? getDualLayoutSlot() : isDual ? layout : getDualLayoutSlot(),
-    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : layout,
-    osDualLayout: isDual ? os ? layout : getOsDualLayoutSlot() : getOsDualLayoutSlot(),
-    osSingleLayout: isDual ? getOsSingleLayoutSlot() : os ? layout : getOsSingleLayoutSlot()
+    ...base,
+    dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
+    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
+    osDualLayout: isDual ? os ? base : getOsDualLayoutSlot() : getOsDualLayoutSlot(),
+    osSingleLayout: isDual ? getOsSingleLayoutSlot() : os ? base : getOsSingleLayoutSlot()
   };
 }
 function persistModel(model) {
@@ -6144,6 +6190,7 @@ function bootstrapFromLayout(layout, host, version) {
   });
   const primaryBootKey = model.active.primary;
   const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
+  const restorePending = _pendingLayout !== null;
   _bootPlacementPass = (async () => {
     let gate = null;
     let gateReleased = false;
@@ -6168,6 +6215,13 @@ function bootstrapFromLayout(layout, host, version) {
         setActiveWhenReady: false,
         activateKey: model.active.secondary ?? null
       });
+      if (!restorePending) {
+        try {
+          await m.unassignSecondaryTabsNotInModel();
+        } catch (err) {
+          dwarn("[bootstrap] unassignSecondaryTabsNotInModel failed:", err);
+        }
+      }
       if (primaryBootLiveId === null)
         return;
       const reassertPrimary = async () => {
@@ -7942,6 +7996,12 @@ async function applyOsModeChange(prev, next) {
         dlog("[os] disable: non-OS slot restored", { mode: dual ? "dual" : "single" });
       }
     }
+    const after = getModel();
+    if (after && after.closed.length > 0) {
+      dlog("[os] disable: clearing residual closed windows", { closed: after.closed.length });
+      const reopen = after.closed.map((key) => ({ t: "setClosed", key, closed: false }));
+      await dispatchBatch(reopen);
+    }
   }
 }
 var init_os_mode = __esm(() => {
@@ -7951,6 +8011,19 @@ var init_os_mode = __esm(() => {
   init_state();
   init_log();
 });
+
+// src/tabs/secondary-start-dock.ts
+function getSecondaryStartDock(list) {
+  return list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
+}
+function appendSecondaryTabNode(list, node) {
+  const dock = getSecondaryStartDock(list);
+  if (dock)
+    list.insertBefore(node, dock);
+  else
+    list.appendChild(node);
+}
+var SECONDARY_START_DOCK_CLASS = "sidebar-ux-secondary-start-dock";
 
 // src/tabs/tab-list-dnd.ts
 var exports_tab_list_dnd = {};
@@ -8587,10 +8660,11 @@ function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
   const siblingHidden = buttonsWithoutSource.map((b2) => !isDisplayedTabButton(b2));
   const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
   if (insertIdx >= buttonsWithoutSource.length) {
-    if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === null) {
+    const endDock = getSecondaryStartDock(container);
+    if (sourceBtn.parentElement === container && (sourceBtn.nextElementSibling === null || sourceBtn.nextElementSibling === endDock)) {
       return false;
     }
-    container.appendChild(sourceBtn);
+    appendSecondaryTabNode(container, sourceBtn);
     return true;
   }
   const referenceBtn = buttonsWithoutSource[insertIdx];
@@ -11833,7 +11907,7 @@ function addSecondaryTabButton(tab) {
   if (insertBefore && insertBefore.parentNode === tabList) {
     tabList.insertBefore(btn, insertBefore);
   } else {
-    tabList.appendChild(btn);
+    appendSecondaryTabNode(tabList, btn);
   }
   Promise.resolve().then(() => (init_tab_position(), exports_tab_position)).then((m3) => m3.reconcileTabListPin());
 }
@@ -11888,7 +11962,7 @@ function reorderSecondaryTabButtons(ids) {
   for (const id of desired) {
     const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
     if (btn) {
-      tabList.appendChild(btn);
+      appendSecondaryTabNode(tabList, btn);
     }
   }
 }
@@ -15905,10 +15979,12 @@ __export(exports_secondary, {
   reassignSecondaryTabsFromModel: () => reassignSecondaryTabsFromModel,
   restyleSecondaryShellSide: () => restyleSecondaryShellSide,
   secondaryTabsAllPlaced: () => secondaryTabsAllPlaced,
+  secondaryTabsToUnassign: () => secondaryTabsToUnassign,
   setSecondarySidebarOpen: () => setSecondarySidebarOpen,
   stopPanelHeaderObservers: () => stopPanelHeaderObservers,
   syncPanelHeaderFromMain: () => syncPanelHeaderFromMain2,
   tearDownSecondarySidebar: () => tearDownSecondarySidebar,
+  unassignSecondaryTabsNotInModel: () => unassignSecondaryTabsNotInModel,
   unmountSecondarySidebar: () => unmountSecondarySidebar
 });
 function syncPanelHeaderFromMain2() {
@@ -16024,6 +16100,19 @@ function secondaryTabsAllPlaced(modelSecondaryKeys, tabs, listIds) {
     return liveId === null || present.has(liveId);
   });
 }
+function secondaryTabsToUnassign(modelSecondaryKeys, listLiveIds, findKey) {
+  const wanted = new Set(modelSecondaryKeys);
+  const out = [];
+  for (const liveId of listLiveIds) {
+    const key = findKey(liveId);
+    if (key === null)
+      continue;
+    if (wanted.has(key))
+      continue;
+    out.push(liveId);
+  }
+  return out;
+}
 function secondaryHasDisplayedRoot() {
   const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
   return !!content?.querySelector("[data-canvas-moved][data-canvas-active]");
@@ -16116,6 +16205,42 @@ function reassignSecondaryTabsFromModel(opts) {
       resolve();
   })();
   return drain;
+}
+async function unassignSecondaryTabsNotInModel() {
+  if (!getSettings().secondSidebarEnabled)
+    return;
+  if (!isSecondaryShellLive())
+    return;
+  const list = getSecondaryTabList();
+  if (!list)
+    return;
+  const dispatch2 = await Promise.resolve().then(() => (init_dispatch(), exports_dispatch));
+  const host = dispatch2.getHost();
+  const model = dispatch2.getModel();
+  if (!host || !model)
+    return;
+  const liveIds = [];
+  for (const btn of Array.from(list.children)) {
+    if (btn.tagName !== "BUTTON")
+      continue;
+    if (btn.hasAttribute("data-canvas-os-start"))
+      continue;
+    const id = btn.getAttribute("data-tab-id");
+    if (id)
+      liveIds.push(id);
+  }
+  const stale = secondaryTabsToUnassign(model.secondary, liveIds, (liveId) => host.findKey(liveId));
+  if (stale.length === 0)
+    return;
+  dlog("[secondary] unassign sweep: stale secondary buttons", { stale, modelSecondary: model.secondary.length });
+  const { unassignFromSecondary: unassignFromSecondary2 } = await Promise.resolve().then(() => (init_secondary_drawer(), exports_secondary_drawer));
+  for (const liveId of stale) {
+    try {
+      await unassignFromSecondary2(liveId);
+    } catch (err) {
+      dwarn("[secondary] unassign sweep: failed for", liveId, err);
+    }
+  }
 }
 function persistSecondaryDrawerOpen(open) {
   Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
@@ -17281,12 +17406,25 @@ async function ensureStartButtonForSide(side) {
     template.innerHTML = startButtonHtml().trim();
     btn = template.content.firstElementChild;
   }
-  if (!btn.parentElement) {
-    const dock = side === "primary" ? list.querySelector(".sidebar-ux-tab-list-bottom") : null;
-    if (dock)
+  if (side === "primary") {
+    if (!btn.parentElement) {
+      const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`);
+      if (dock)
+        dock.appendChild(btn);
+      else
+        list.appendChild(btn);
+    }
+  } else {
+    let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
+    if (!dock) {
+      dock = document.createElement("div");
+      dock.className = `${TAB_LIST_BOTTOM_CLASS} ${SECONDARY_START_DOCK_CLASS}`;
+      list.appendChild(dock);
+    }
+    if (btn.parentElement !== dock)
       dock.appendChild(btn);
-    else
-      list.appendChild(btn);
+    if (dock.nextElementSibling)
+      list.appendChild(dock);
   }
   if (isHorizontalStrip()) {
     const drawerLeft = getMainDrawerSide() === "left";
@@ -17316,6 +17454,7 @@ function scheduleEnsureButtons() {
       } else {
         const list = getSecondaryTabList();
         list?.querySelector(`button[${START_ATTR}]`)?.remove();
+        list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove();
         if (_menuOpenFor === "secondary")
           hideStartMenu();
       }
@@ -17337,9 +17476,12 @@ function teardownStartMenu() {
   for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
     btn.remove();
   }
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    dock.remove();
+  }
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", _menu, _menuOpenFor = null, _buttonRaf = 0, _unsubDocListeners = null;
+var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu, _menuOpenFor = null, _buttonRaf = 0, _unsubDocListeners = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
