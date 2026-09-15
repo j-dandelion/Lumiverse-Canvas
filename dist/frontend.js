@@ -4209,27 +4209,20 @@ function onMirrorClick(ev) {
     }
     return;
   }
-  const model = getModel();
-  if (isCanvasMainOpen() && !_isMobileRenderer() && model != null && model.active.primary === key) {
-    if (isOsModeEnabled()) {
-      const liveId2 = twin.liveId ?? mirror.getAttribute("data-tab-id");
-      if (liveId2) {
-        dlog("[main-renderer] click → minimize (OS mode, active tab)", { title, key });
-        minimizeWindowByLiveId(liveId2, "primary");
-        return;
-      }
-    }
-    dlog("[main-renderer] click → close (active tab)", { title, key });
-    closeCanvasMainDrawer();
-    return;
-  }
   if (isOsModeEnabled() && key && !key.startsWith("__")) {
     const osLiveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
     if (osLiveId) {
-      dlog("[main-renderer] click → OS open window", { title, key });
-      openWindowInDrawerByLiveId(osLiveId, "primary").catch(() => {});
+      dlog("[main-renderer] click → OS window toggle", { title, key });
+      toggleWindowByLiveId(osLiveId, "primary").catch(() => {});
       return;
     }
+  }
+  const model = getModel();
+  const activeTabClose = !_isMobileRenderer() || isTaskbarModeEnabled();
+  if (isCanvasMainOpen() && activeTabClose && model != null && model.active.primary === key) {
+    dlog("[main-renderer] click → close (active tab)", { title, key });
+    closeCanvasMainDrawer();
+    return;
   }
   if (twin.btn && twin.btn.isConnected) {
     try {
@@ -11882,13 +11875,13 @@ function addSecondaryTabButton(tab) {
   labelSpan.style.cssText = showLabels ? `opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease` : `display:none;visibility:hidden;opacity:0;height:0;min-height:0;margin-top:0;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`;
   btn.appendChild(labelSpan);
   btn.addEventListener("click", () => {
-    if (isOsModeEnabled() && !_isMobileViewport()) {
+    if (isOsModeEnabled()) {
       Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.toggleWindowByLiveId(tab.id, "secondary"));
       return;
     }
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        if (!_isMobileViewport())
+        if (!_isMobileViewport() || isTaskbarModeEnabled())
           closeSecondarySidebar();
       } else {
         showSecondaryTab(tab.id);

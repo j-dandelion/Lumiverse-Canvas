@@ -33,8 +33,8 @@ import {
   parseExtensionKey,
 } from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
-import { isOsModeEnabled } from '../settings/state'
-import { minimizeWindowByLiveId, openWindowInDrawerByLiveId } from '../os/actions'
+import { isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
+import { toggleWindowByLiveId } from '../os/actions'
 import { isHidden, visibleKeys } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
 import { isShowTabLabels } from './drawer-sync'
@@ -556,47 +556,39 @@ function onMirrorClick(ev: Event): void {
     return
   }
 
-  // Toggle-close parity: compare against the MODEL active — never a parallel
-  // mirror key (that machinery is gone). Falls through when closed so a
-  // closed-drawer click on the active tab opens (secondary parity).
-  //
-  // OS mode (D4, spec §4.3): clicking the displayed window's strip button
-  // MINIMIZES it — deactivate the active window + collapse the drawer
-  // (the action's setDrawer close provides animation + persist + reflow);
-  // the strip button stays. Non-OS keeps the toggle-close behavior.
+  // OS mode (D4, spec §4.3): every regular strip click is the window-state
+  // toggle through the one action — the MODEL displayed predicate decides
+  // minimize (this window displayed) vs open/restore (minimized or closed;
+  // D19 auto-open + host content activation included). Runs on mobile too:
+  // tab-tap minimize parity with the header "–" and desktop. The previous
+  // mobile gate belonged to the non-OS toggle-close rule below, which keeps
+  // its own gate.
+  if (isOsModeEnabled() && key && !key.startsWith('__')) {
+    const osLiveId = twin.liveId ?? mirror.getAttribute('data-tab-id') ?? null
+    if (osLiveId) {
+      dlog('[main-renderer] click → OS window toggle', { title, key })
+      void toggleWindowByLiveId(osLiveId, 'primary').catch(() => {})
+      return
+    }
+  }
+
+  // Non-OS toggle-close parity: compare against the MODEL active — never a
+  // parallel mirror key (that machinery is gone). Falls through when closed
+  // so a closed-drawer click on the active tab opens (secondary parity).
   //
   // Mobile: active-tab taps do NOT toggle-close. The main shell is
   // full-bleed there, so its rightmost tab row sits where the opposite
   // drawer's handle appears when this drawer closes — a follow-up tap landed
   // on that handle (live report 2026-09-12, tap-diag). The X button + edge
-  // handles remain the mobile close affordances.
+  // handles remain the mobile close affordances. EXCEPT in effective taskbar
+  // mode: the pinned strip keeps the drawer reopenable, and the user asked
+  // for tap-close parity there (2026-09-15, both strips).
   const model = getModel()
-  if (isCanvasMainOpen() && !_isMobileRenderer() && model != null && model.active.primary === key) {
-    if (isOsModeEnabled()) {
-      const liveId = twin.liveId ?? mirror.getAttribute('data-tab-id')
-      if (liveId) {
-        dlog('[main-renderer] click → minimize (OS mode, active tab)', { title, key })
-        void minimizeWindowByLiveId(liveId, 'primary')
-        return
-      }
-    }
+  const activeTabClose = !_isMobileRenderer() || isTaskbarModeEnabled()
+  if (isCanvasMainOpen() && activeTabClose && model != null && model.active.primary === key) {
     dlog('[main-renderer] click → close (active tab)', { title, key })
     closeCanvasMainDrawer()
     return
-  }
-
-  // OS mode (D4): clicking a minimized/closed window's strip button routes
-  // through the window-state action — one proven path for D19 auto-open,
-  // host content activation, and chrome convergence. The ad-hoc activate
-  // path below is the non-OS flow (and cannot recover the main content: the
-  // primary diffActive is model-derived).
-  if (isOsModeEnabled() && key && !key.startsWith('__')) {
-    const osLiveId = twin.liveId ?? mirror.getAttribute('data-tab-id') ?? null
-    if (osLiveId) {
-      dlog('[main-renderer] click → OS open window', { title, key })
-      void openWindowInDrawerByLiveId(osLiveId, 'primary').catch(() => {})
-      return
-    }
   }
 
   // Q1: direct host twin click (instant content — the queue's diffActive

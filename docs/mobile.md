@@ -164,16 +164,45 @@ the Canvas main shell is active:
    so unrelated `_backdrop_` modal layers are untouched. Without it the
    backdrop sits over the Canvas drawers and swallows every tap.
 
-## Active-tab taps do not toggle-close on mobile
+## Active-tab taps do not toggle-close on plain mobile
 
 Tapping the active tab toggles the drawer closed on desktop (parity between
 the secondary and the main mirror). On mobile the drawer is full-bleed, so the
 rightmost tab row overlaps the opposite drawer's edge-handle position at the
 same screen edge. The surprise close exposed the other handle under the user's
 finger, and the follow-up tap opened the wrong drawer (live report
-2026-09-12). Both toggle-close paths are gated off on mobile
-(`tabs/buttons.ts` secondary buttons, `main-renderer.ts` mirror buttons); the
-header X and the edge handles remain the mobile close affordances.
+2026-09-12). Both non-OS toggle-close paths are therefore gated off on plain
+mobile (`tabs/buttons.ts` secondary buttons, `main-renderer.ts` mirror
+buttons); the header X and the edge handles remain the mobile close
+affordances.
+
+### Taskbar-mode exception: active-tab tap closes the drawer on mobile
+
+When **effective taskbar mode** is on (`taskbarMode && moveControlsToOuterEdge`
+— the `isTaskbarModeEnabled()` gate), the active-tab toggle-close is live on
+mobile on both strips (user request 2026-09-15; same round as the OS-mode
+parity below). The pinned strip keeps the drawer reopenable after the panel
+closes, so the S6 no-op's rationale does not hold. On Sides-mobile the strip
+still lives inside the drawer, so the close hides it and the edge handle
+reopens; the tap remains a deliberate close affordance there.
+
+### OS-mode exception: tab tap minimizes on mobile too
+
+While OS mode is on, every regular tab-strip click routes through the D4
+window-state toggle (`os/actions.toggleWindowByLiveId`) on every viewport —
+desktop and mobile. Tapping the displayed window's tab minimizes it, exactly
+like the header "–" button. The non-OS tap-swap rationale above does not apply:
+OS mode is an explicit desktop-style window model where minimizing is the
+primary tap affordance, and the header chrome already behaves this way on
+mobile.
+
+On mobile Sides the minimize collapses the full-bleed drawer (the strip lives
+inside the drawer; the edge handle reopens to the parked state per D17). On
+Top/Bottom the pinned strip remains visible and the same tap re-expands the
+window. Routing the whole click through the toggle also fixes the
+closed-drawer case: re-tapping an OS-closed window's button now runs the full
+D19 action (un-close + activate) instead of the legacy `showSecondaryTab`
+path, which left the window in `model.closed`.
 
 ## Mobile-Specific Behavior in Other Modules
 
@@ -183,7 +212,7 @@ header X and the edge handles remain the mobile close affordances.
 - `activation-handoff`: Part C (destination activation) is skipped on mobile
 - `applyTabListPosition`: no-op on mobile (CSS forces layout)
 - drawer edge toggles (`updateDrawerTabVisibility`, `updateMainMirrorDrawerTabVisibility`): the `hideDrawerOpenCloseButtons` setting is **desktop-only**. The mobile shell never mounts the taskbar pin strip, so the edge toggle is the only main-drawer reopen affordance; hiding it stranded the main drawer (live report 2026-09-12). Body classes still hide the inactive toggle while the other drawer is open.
-- active-tab toggle-close: disabled on mobile for both drawers (see above)
+- active-tab toggle-close: disabled on plain mobile for both drawers. Live exceptions: effective taskbar mode (`isTaskbarModeEnabled()`) closes the drawer; OS mode routes the tab tap through the D4 window toggle (minimize) on every viewport (see above)
 - `resize/handles`: no handles on mobile
 - `chat/reflow`: complete no-op on mobile
 - `main-persist/restoreMainDrawerFromDom`: skips width override on mobile

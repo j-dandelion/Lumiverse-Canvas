@@ -63,26 +63,45 @@ function assert(cond: unknown, msg: string) {
 // drawer is full-bleed, so its rightmost tab row sits exactly where the
 // opposite drawer's edge handle appears on close — the same tap region then
 // opens the other drawer (live report 2026-09-12). Both toggle-close paths
-// must be gated off on mobile; the X button + handles remain the close
+// must be gated off on plain mobile; the X button + handles remain the close
 // affordances.
+//
+// Exceptions (both user-requested):
+//   - OS mode (2026-09-15): every strip click is the D4 window-state toggle on
+//     EVERY viewport — tapping the displayed window's tab minimizes it.
+//   - Effective taskbar mode (2026-09-15): the mobile gate is lifted too — the
+//     pinned strip keeps the drawer reopenable, so the tap-toggle-close is
+//     live on both strips.
 {
   const buttons = readFileSync(join(process.cwd(), 'src/tabs/buttons.ts'), 'utf8')
-  // OS mode (2026-09-15): the strip click routes through the OS window-state
-  // toggle at the top of the handler, gated off on mobile; the non-OS
-  // toggle-close keeps its own !mobile gate. Both conventions are matched
-  // structurally.
   assert(
-    buttons.includes('if (isOsModeEnabled() && !_isMobileViewport())'),
-    'secondary OS strip toggle is gated off on mobile',
+    buttons.includes('if (isOsModeEnabled()) {'),
+    'secondary OS strip toggle is NOT mobile-gated (D4 tab-tap parity)',
   )
   assert(
-    /if \(!_isMobileViewport\(\)\) closeSecondarySidebar\(\)/.test(buttons),
-    'secondary active-tab close is gated off on mobile',
+    !buttons.includes('isOsModeEnabled() && !_isMobileViewport()'),
+    'the S6 #5 mobile gate must not return to the OS strip toggle',
+  )
+  assert(
+    /if \(!_isMobileViewport\(\) \|\| isTaskbarModeEnabled\(\)\) closeSecondarySidebar\(\)/.test(buttons),
+    'secondary non-OS active-tab close is gated off on plain mobile (taskbar exception)',
   )
   const renderer = readFileSync(join(process.cwd(), 'src/sidebar/main-renderer.ts'), 'utf8')
   assert(
-    renderer.includes('isCanvasMainOpen() && !_isMobileRenderer()'),
-    'main mirror active-tab toggle-close is gated off on mobile',
+    renderer.includes('toggleWindowByLiveId(osLiveId,'),
+    'main mirror OS strip clicks route through the D4 toggle (all viewports)',
+  )
+  assert(
+    !renderer.includes('isOsModeEnabled() && !_isMobileRenderer()'),
+    'the main OS strip toggle is not mobile-gated',
+  )
+  assert(
+    renderer.includes('const activeTabClose = !_isMobileRenderer() || isTaskbarModeEnabled()'),
+    'main non-OS active-tab close is gated off on plain mobile (taskbar exception)',
+  )
+  assert(
+    renderer.includes('isCanvasMainOpen() && activeTabClose'),
+    'the main close branch consumes the mobile/taskbar predicate',
   )
   assert(
     renderer.includes('function _isMobileRenderer()'),

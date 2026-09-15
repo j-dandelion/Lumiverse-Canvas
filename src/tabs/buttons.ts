@@ -31,6 +31,7 @@ import {
   isHideDrawerOpenCloseButtonsEnabled,
   isHorizontalStrip,
   isOsModeEnabled,
+  isTaskbarModeEnabled,
 } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
@@ -402,18 +403,24 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     // OS mode (D4/D19, spec §4.3): every strip click is a window-state
     // toggle — model-derived displayed predicate (minimize) or open/restore
     // (auto-opens a closed drawer, converges tracked + model active, clicks
-    // the content active). The tracked active deliberately survives an OS
-    // minimize as reopen memory, so it must NOT be the predicate here.
+    // the content active). Runs on mobile too: tab-tap minimize parity with
+    // the header "–" and desktop (the non-OS mobile no-toggle-close guard
+    // below is a separate rule). The tracked active deliberately survives an
+    // OS minimize as reopen memory, so it must NOT be the predicate here.
     // Lazy-import avoids the load-order cycle (this module ← os/panel-chrome
     // ← os/actions ← dispatch).
-    if (isOsModeEnabled() && !_isMobileViewport()) {
+    if (isOsModeEnabled()) {
       void import('../os/actions').then((m) => m.toggleWindowByLiveId(tab.id, 'secondary'))
       return
     }
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        // Non-OS toggle-close parity (mobile: active-tab taps do nothing).
-        if (!_isMobileViewport()) closeSecondarySidebar()
+        // Non-OS toggle-close parity: desktop always closes. Mobile keeps the
+        // S6 no-op (full-bleed drawer; the rightmost tab overlaps the opposite
+        // handle — live report 2026-09-12) EXCEPT in effective taskbar mode:
+        // the pinned strip keeps the drawer reopenable, and the user asked for
+        // tap-close parity there (2026-09-15, both strips).
+        if (!_isMobileViewport() || isTaskbarModeEnabled()) closeSecondarySidebar()
       } else {
         // Persistence of the activation is handled inside showSecondaryTab →
         // setActiveSecondaryTabId (the unified tracked-active choke point).

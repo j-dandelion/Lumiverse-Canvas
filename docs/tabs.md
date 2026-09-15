@@ -66,7 +66,7 @@ Built-in placement: `requestTabLocation` to the container is an allowlist silent
 
 ### Secondary Sidebar
 
-- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu)
+- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu). While OS mode is on the click handler is the D4 window-state toggle (`os/actions.toggleWindowByLiveId`) on every viewport — displayed window → minimize, minimized/closed → open/restore. Non-OS, tapping the active tab toggle-closes the drawer; on mobile that path requires effective taskbar mode (plain mobile is a no-op — see `docs/mobile.md`)
 - `removeSecondaryTabButton(tabId)` — removes the button
 - `showSecondaryTab(tabId)` — activates a tab by setting `data-canvas-active` on the matching root, updating header title, toggling `sidebar-ux-tab-active` class on buttons
 - `updateDrawerTabVisibility()` — shows/hides the drawer tab button based on whether any tabs are assigned

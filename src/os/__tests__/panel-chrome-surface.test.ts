@@ -132,9 +132,9 @@ const tabButtons = read('src/tabs/buttons.ts')
 {
   assertIncludes(actions, 'host.activate(side, liveId)',
     'activation clicks the host content on both sides (reconcile cannot detect it)')
-  assertIncludes(mainRenderer, 'openWindowInDrawerByLiveId(osLiveId,',
-    'OS strip clicks route through the window-state action (one path for D19/content/chrome)')
-  assertIncludes(mainRenderer, "dlog('[main-renderer] click → OS open window'",
+  assertIncludes(mainRenderer, 'toggleWindowByLiveId(osLiveId,',
+    'OS strip clicks route through the one window-state toggle (every viewport)')
+  assertIncludes(mainRenderer, "dlog('[main-renderer] click → OS window toggle'",
     'the OS route is explicit and diagnosable')
   assertIncludes(actions, "host.activate(side, liveId)",
     'secondary activation clicks its content too (tracked active is stale-equal after a minimize)')
