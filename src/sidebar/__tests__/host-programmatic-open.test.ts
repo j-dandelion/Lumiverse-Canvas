@@ -67,8 +67,12 @@ function assert(cond: unknown, msg: string) {
 // affordances.
 {
   const buttons = readFileSync(join(process.cwd(), 'src/tabs/buttons.ts'), 'utf8')
+  // OS mode (2026-09-14) inserted an OS-minimize branch INSIDE the same
+  // !mobile gate: desktop active-tab taps minimize the window (OS mode) or
+  // toggle-close (non-OS); the mobile gate itself is unchanged — both
+  // branches stay inside it. The convention is matched structurally.
   assert(
-    buttons.includes('if (!_isMobileViewport()) closeSecondarySidebar()'),
+    /if \(!_isMobileViewport\(\)\) \{\s*\n\s*if \(isOsModeEnabled\(\)\) \{[\s\S]*?\} else \{\s*\n\s*closeSecondarySidebar\(\)/.test(buttons),
     'secondary active-tab close is gated off on mobile',
   )
   const renderer = readFileSync(join(process.cwd(), 'src/sidebar/main-renderer.ts'), 'utf8')
