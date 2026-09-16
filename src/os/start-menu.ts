@@ -9,11 +9,12 @@
  *     trick — single geometry authority stays in tab-position.ts).
  *   - the **menu**: the full tab inventory — BOTH drawers, hidden and closed
  *     tabs included — alphabetized by title (case-insensitive) with a state
- *     glyph (D18: ● open, – minimized, ○ closed) and the tab's store icon.
- *     Clicking routes through the window-state actions, targeting the entry's
- *     OWN drawer: closed → launch fresh, minimized → restore, open → focus;
- *     a hidden tab is un-hidden first so its strip button returns (D19
- *     auto-opens a closed target drawer). The launcher is deliberately
+ *     mark (D18 direction: filled dot = open, hollow circle = minimized, no
+ *     mark = closed) and the tab's icon. Clicking routes through the
+ *     window-state actions, targeting the entry's OWN drawer: closed → launch
+ *     fresh, minimized → restore, open → focus; a hidden tab is un-hidden
+ *     first so its strip button returns (D19 auto-opens a closed target
+ *     drawer). The launcher is deliberately
  *     drawer-agnostic — it never moves a tab between drawers (D13 override
  *     for this surface; a move would be destructive from an all-tabs menu).
  *
@@ -36,9 +37,11 @@ import { getModel, getHost } from '../recon/dispatch'
 import { getDrawerTabs } from '../store'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { openWindowInDrawerByLiveId } from './actions'
-import { getSecondaryTabList } from '../sidebar/secondary'
+import { getSecondaryTabList, PUZZLE_ICON_SVG } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
+import { BUILTIN_ICON_SVGS } from '../tabs/builtin-icons'
+import { injectStartMenuStyles, START_MENU_STYLE_ID } from './start-menu-styles'
 import { dlog } from '../debug/log'
 import {
   canAnimateMenu,
@@ -86,6 +89,60 @@ export interface StartMenuEntry {
   state: 'open' | 'minimized' | 'closed'
 }
 
+// ── Icon resolution (fixes the empty-icon bug) ───────────────────────────────
+
+/** Canvas's placeholder for icon-less extension tabs (strip fallback). */
+function isPlaceholderIcon(svg: Element): boolean {
+  return (
+    svg.classList.contains('lucide-puzzle') ||
+    svg.outerHTML === PUZZLE_ICON_SVG
+  )
+}
+
+/**
+ * Clone the live tab button's icon. The observer facade zeroes the store's
+ * `iconSvg` (`src/store/index.ts`), so the rendered button is the primary
+ * source — and the host-sanitized one. Placeholder puzzle glyphs count as a
+ * miss so the monogram fallback stays reachable.
+ */
+export function extractButtonIcon(
+  root?: HTMLElement | null,
+): { svg?: string; url?: string } {
+  if (!root || typeof root.querySelector !== 'function') return {}
+  const svg = root.querySelector('svg')
+  if (svg && !isPlaceholderIcon(svg)) return { svg: svg.outerHTML }
+  const url = root.querySelector('img')?.getAttribute('src') ?? undefined
+  return url ? { url } : {}
+}
+
+/** `profile:2` → `profile`; extension addresses (`ext:foo`) pass through. */
+export function builtinBaseId(liveId: string): string {
+  return liveId.replace(/:\d+$/, '')
+}
+
+/** First code point of a title, uppercased — the monogram fallback. */
+export function entryMonogram(title: string): string {
+  const first = Array.from(title.trim())[0]
+  return first ? first.toUpperCase() : '?'
+}
+
+/**
+ * Per-entry icon resolution order (plan §3.5): live button → store fields →
+ * built-in map. An empty result means the render-time monogram is used.
+ */
+export function resolveEntryIcon(
+  tab: { iconSvg?: string; iconUrl?: string; root?: HTMLElement | null } | undefined,
+  liveId: string,
+): { svg?: string; url?: string } {
+  const dom = extractButtonIcon(tab?.root)
+  if (dom.svg) return { svg: dom.svg }
+  if (dom.url) return { url: dom.url }
+  if (tab?.iconSvg) return { svg: tab.iconSvg }
+  if (tab?.iconUrl) return { url: tab.iconUrl }
+  const builtin = BUILTIN_ICON_SVGS[builtinBaseId(liveId)]
+  return builtin ? { svg: builtin } : {}
+}
+
 /**
  * Derive the Start menu entries: every tab of BOTH drawers — hidden and
  * closed included — alphabetized by title (case-insensitive, stable tie-break
@@ -121,12 +178,13 @@ export function deriveStartMenuEntries(
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
       const tab = tabs.get(liveId)
+      const icon = resolveEntryIcon(tab, liveId)
       out.push({
         liveId,
         side,
         title: tab?.title ?? key,
-        iconSvg: tab?.iconSvg,
-        iconUrl: tab?.iconUrl,
+        iconSvg: icon.svg,
+        iconUrl: icon.url,
         state,
       })
     }
@@ -138,9 +196,29 @@ export function deriveStartMenuEntries(
   return out
 }
 
-/** D18 state glyphs: ● open, – minimized, ○ closed. */
-export function glyphFor(state: StartMenuEntry['state']): string {
-  return state === 'open' ? '●' : state === 'minimized' ? '–' : '○'
+/** Human-readable state names for the accessible name (single i18n point). */
+export const STATE_LABEL: Record<StartMenuEntry['state'], string> = {
+  open: 'open',
+  minimized: 'minimized',
+  closed: 'closed',
+}
+
+/** Hover action verb per state — what the click will do. */
+export const STATE_VERB: Record<StartMenuEntry['state'], string> = {
+  open: 'Focus',
+  minimized: 'Restore',
+  closed: 'Launch',
+}
+
+/**
+ * Designed state marks (user direction 2026-09-15): open = filled dot with a
+ * soft halo, minimized = hollow circle, closed = NO mark at all (the window is
+ * on no strip). `currentColor` keeps the shapes readable in forced-colors.
+ */
+export const STATE_MARK_SVG: Record<StartMenuEntry['state'], string> = {
+  open: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="4" fill="currentColor"/><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/></svg>',
+  minimized: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="5.25" stroke="currentColor" stroke-width="1.5"/></svg>',
+  closed: '',
 }
 
 // ── Menu DOM ─────────────────────────────────────────────────────────────────
@@ -148,43 +226,40 @@ export function glyphFor(state: StartMenuEntry['state']): string {
 function createMenuEntry(entry: StartMenuEntry): HTMLElement {
   const item = document.createElement('button')
   item.type = 'button'
+  item.className = 'canvas-os-start-menu__item'
   item.setAttribute('role', 'menuitem')
   item.setAttribute('data-os-state', entry.state)
-  item.style.cssText = `
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 12px;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    color: var(--lumiverse-text);
-    cursor: pointer;
-    text-align: left;
-    font-size: calc(13px * var(--lumiverse-font-scale, 1));
-  `
-  const icon = document.createElement('span')
-  icon.style.cssText = 'width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;'
-  if (entry.iconSvg) icon.innerHTML = entry.iconSvg
-  else if (entry.iconUrl) {
-    const img = document.createElement('img')
-    img.src = entry.iconUrl
-    img.alt = ''
-    img.width = 20
-    img.height = 20
-    img.style.borderRadius = '2px'
-    icon.appendChild(img)
-  }
-  item.appendChild(icon)
+  item.setAttribute('aria-label', `${entry.title} — ${STATE_LABEL[entry.state]}`)
+
+  const rail = document.createElement('span')
+  rail.className = 'canvas-os-start-menu__rail'
+  rail.setAttribute('aria-hidden', 'true')
+
+  const tile = document.createElement('span')
+  tile.className = 'canvas-os-start-menu__tile'
+  tile.setAttribute('aria-hidden', 'true')
+  renderEntryIcon(tile, entry)
+
   const label = document.createElement('span')
-  label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+  label.className = 'canvas-os-start-menu__label'
   label.textContent = entry.title
-  item.appendChild(label)
-  const glyph = document.createElement('span')
-  glyph.textContent = glyphFor(entry.state)
-  glyph.style.cssText = 'color:var(--lumiverse-text-muted);flex-shrink:0;'
-  item.appendChild(glyph)
+
+  const status = document.createElement('span')
+  status.className = 'canvas-os-start-menu__status'
+  status.setAttribute('aria-hidden', 'true')
+  const markSvg = STATE_MARK_SVG[entry.state]
+  if (markSvg) {
+    const mark = document.createElement('span')
+    mark.className = 'canvas-os-start-menu__mark'
+    mark.innerHTML = markSvg
+    status.appendChild(mark)
+  }
+  const verb = document.createElement('span')
+  verb.className = 'canvas-os-start-menu__verb'
+  verb.textContent = STATE_VERB[entry.state]
+  status.appendChild(verb)
+
+  item.append(rail, tile, label, status)
   item.addEventListener('click', () => {
     hideStartMenu()
     // Route to the entry's OWN drawer: the menu is drawer-agnostic, and a
@@ -194,44 +269,97 @@ function createMenuEntry(entry: StartMenuEntry): HTMLElement {
   return item
 }
 
+/**
+ * Fill a tile with the entry icon: resolved SVG → `<img>` → monogram.
+ * The tile is decorative (`aria-hidden`); the label carries the name.
+ */
+export function renderEntryIcon(
+  tile: HTMLElement,
+  entry: Pick<StartMenuEntry, 'iconSvg' | 'iconUrl' | 'title'>,
+): void {
+  if (entry.iconSvg) {
+    tile.innerHTML = entry.iconSvg
+    return
+  }
+  if (entry.iconUrl) {
+    const img = document.createElement('img')
+    img.src = entry.iconUrl
+    img.alt = ''
+    img.width = 16
+    img.height = 16
+    tile.appendChild(img)
+    return
+  }
+  tile.textContent = entryMonogram(entry.title)
+  tile.classList.add('canvas-os-start-menu__tile--monogram')
+}
+
+/** Header strip: brand glyph + deck label + window count (chrome, not content). */
+function createHeader(count: number): HTMLElement {
+  const header = document.createElement('div')
+  header.className = 'canvas-os-start-menu__header'
+  header.setAttribute('role', 'presentation')
+  header.setAttribute('aria-hidden', 'true')
+  const brand = document.createElement('span')
+  brand.className = 'canvas-os-start-menu__brand'
+  brand.innerHTML = START_GLYPH_SVG
+  const title = document.createElement('span')
+  title.className = 'canvas-os-start-menu__title'
+  title.textContent = 'Windows'
+  const countEl = document.createElement('span')
+  countEl.className = 'canvas-os-start-menu__count'
+  countEl.textContent = count === 1 ? '1 window' : `${count} windows`
+  header.append(brand, title, countEl)
+  return header
+}
+
+/** Empty-state row (spec §4.4.3): "where did my tabs go?" in one glance. */
+function createEmptyState(): HTMLElement {
+  const empty = document.createElement('div')
+  empty.className = 'canvas-os-start-menu__empty'
+  empty.setAttribute('role', 'presentation')
+  const glyph = document.createElement('span')
+  glyph.className = 'canvas-os-start-menu__empty-glyph'
+  glyph.setAttribute('aria-hidden', 'true')
+  glyph.innerHTML = START_GLYPH_SVG
+  const title = document.createElement('span')
+  title.className = 'canvas-os-start-menu__empty-title'
+  title.textContent = 'No windows'
+  const hint = document.createElement('span')
+  hint.className = 'canvas-os-start-menu__empty-hint'
+  hint.textContent = 'Open a tab to add a window here'
+  empty.append(glyph, title, hint)
+  return empty
+}
+
 /** Build the (drawer-agnostic) menu surface; the caller positions it. */
 function buildMenu(): HTMLElement | null {
   const host = getHost()
   const model = getModel()
   if (!host || !model) return null
   const entries = deriveStartMenuEntries(model, (key) => host.resolve(key))
+  injectStartMenuStyles()
   const menu = document.createElement('div')
   menu.id = MENU_ID
+  menu.className = 'canvas-os-start-menu'
   menu.setAttribute('role', 'menu')
   menu.setAttribute('aria-label', 'Start menu')
-  menu.style.cssText = `
-    position: fixed;
-    z-index: 2147483600;
-    display: flex;
-    flex-direction: column;
-    min-width: 220px;
-    max-width: 320px;
-    max-height: min(60vh, 420px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    background: var(--lumiverse-surface, #1a1a1e);
-    border: 1px solid var(--lumiverse-primary-015, rgba(255,255,255,0.15));
-    border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    padding: 6px;
-    gap: 2px;
-  `
   if (entries.length === 0) {
-    // Empty-state row (spec §4.4.3): "where did my tabs go?" in one glance.
-    const empty = document.createElement('div')
-    empty.setAttribute('role', 'presentation')
-    empty.style.cssText = 'padding:14px 12px;color:var(--lumiverse-text-muted);font-size:calc(12px * var(--lumiverse-font-scale, 1));'
-    empty.textContent = 'No windows'
-    menu.appendChild(empty)
+    menu.appendChild(createEmptyState())
+    return menu
   }
+  menu.appendChild(createHeader(entries.length))
+  const divider = document.createElement('div')
+  divider.className = 'canvas-os-start-menu__divider'
+  divider.setAttribute('role', 'separator')
+  menu.appendChild(divider)
+  const list = document.createElement('div')
+  list.className = 'canvas-os-start-menu__list'
+  list.setAttribute('role', 'presentation')
   for (const entry of entries) {
-    menu.appendChild(createMenuEntry(entry))
+    list.appendChild(createMenuEntry(entry))
   }
+  menu.appendChild(list)
   return menu
 }
 
@@ -421,6 +549,9 @@ function attachMenuDismiss(): void {
 
 // ── Start buttons ────────────────────────────────────────────────────────────
 
+/** 4-pane launcher mark — shared by the Start button and the menu header. */
+const START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>'
+
 /**
  * Start button markup. Chrome is CSS-owned:
  * `.sidebar-ux-tab-list button[data-canvas-os-start]` in
@@ -431,7 +562,7 @@ function attachMenuDismiss(): void {
  * (20px icon box, same as the mirror's forced icon size).
  */
 function startButtonHtml(): string {
-  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`
+  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`
 }
 
 /**
@@ -567,5 +698,8 @@ export function teardownStartMenu(): void {
   for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
     dock.remove()
   }
+  // The menu stylesheet is only needed while OS-mode Start chrome exists.
+  // Never remove it in hideStartMenu — the close animation still needs it.
+  document.getElementById(START_MENU_STYLE_ID)?.remove()
   dlog('[os] start menu chrome unmounted')
 }

@@ -114,3 +114,36 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
 **Rule:** a completed layout restore must reconcile secondary assignment in BOTH directions. `sidebar/secondary.tsx` exports the pure `secondaryTabsToUnassign(...)` + the serial `unassignSecondaryTabsNotInModel()` sweep (uses the proven `unassignFromSecondary` path: content root back to main, main button unhidden, active cleared, drawer auto-closed when empty). `bootstrapFromLayout`'s placement pass calls it after `reassignSecondaryTabsFromModel`, **skipped while `_pendingLayout !== null`** (a partial restore's pending merge can still add secondary keys the sweep would wrongly unassign). Do not move the sweep before the placement drain, and do not run it during a partial restore.
 
 **Invariant — OS off ⇒ `model.closed` empty.** A successful slot restore bootstraps from a non-OS slot (no `closedTabIds`), but a missing/empty slot or a partial restore leaves the live closed-set; the Start menu is torn down on disable, so those windows would stay hidden forever. `applyOsModeChange`'s disable branch clears any residual membership via `dispatchBatch(setClosed…false)`, and `buildPersistedBlob` is the persistence backstop: when `!isOsModeEnabled()` the non-OS serialization gets `closedTabIds: []` (the OS slots keep their stored values). Never persist the OS closed-set into a non-OS slot or the top-level blob.
+
+## 15. Start-menu visual layer ("Command Deck", 2026-09-15)
+
+- **The observer's `iconSvg` is always empty.** `getDrawerTabs()` prefers the
+  observer facade, which hard-codes `iconSvg: ''` (`store/index.ts`) — filling
+  the tile straight from the entry leaves every row blank. Resolve from the live
+  button first (`tab.root.querySelector('svg')` — also the host-sanitized
+  source), then the store fields, then `BUILTIN_ICON_SVGS`, then a monogram
+  (`os/start-menu.ts` `resolveEntryIcon`).
+- **Puzzle glyphs are placeholders, not icons.** Both the host (lucide
+  `lucide-puzzle`) and Canvas (`PUZZLE_ICON_SVG`, the strip's fallback) render
+  the puzzle for icon-less tabs. If extraction accepts it, the monogram branch
+  is unreachable and the real fallback never shows — treat both as a miss.
+- **`--lumiverse-fill` is black-15, not white.** In the default dark theme it
+  composites to ~1.01:1 on `--lumiverse-bg-deep`: the tab context menu's hover
+  is effectively invisible there. The Start menu deliberately uses
+  `--lumiverse-bg-hover` for hover and `--lumiverse-primary-020` for pressed
+  (deviation recorded in the plan).
+- **Never size the menu with raw `vw`/`vh`.** It is a `body > *` child under
+  `body > * { zoom: var(--lumiverse-ui-scale) }` (host reset): width is
+  `calc((100vw - 16px) / var(--lumiverse-ui-scale, 1))` and max-height
+  `calc(min(60vh, 420px) / …)`, or the box overflows at zoom > 1.
+- **State marks are user-directed:** `●` filled dot (open), `○` hollow circle
+  (minimized), **no mark node at all** (closed). Do not reintroduce the old `–`
+  bar or a closed ring: `STATE_MARK_SVG.closed` is `''` and `createMenuEntry`
+  appends the mark only when the SVG is non-empty.
+- **Sheet lifecycle:** inject in `buildMenu` (`injectStyles` is idempotent),
+  remove in `teardownStartMenu` + the `setup.ts` cleanup sweep. Removing it in
+  `hideStartMenu` would strip the styles mid-close-animation.
+- **Test-harness footer:** the visual-pins file must keep `FAILED: ${failed}` +
+  `process.exitCode = 1` (the runner only fails on non-zero exit /
+  `FAILED: [1-9]`); import only leaf modules so `bun run` does not drag the
+  store/dispatch graph.

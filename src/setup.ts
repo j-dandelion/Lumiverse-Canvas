@@ -180,6 +180,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // the styles persist in <head> after disable — orphaned but inert.
   registerCleanup(() => {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
+    document.getElementById('canvas-os-start-menu-styles')?.remove()
     document.getElementById('sidebar-ux-reflow')?.remove()
     // The reflow sheet owns margins + the chat-shadow attr on the host chat
     // element; removing the sheet alone would leave both stranded.

@@ -10,11 +10,25 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     failed++
   }
 }
+function assert(cond: unknown, message: string) {
+  if (!cond) {
+    console.error(`FAIL: ${message}`)
+    failed++
+  }
+}
 
 import {
+  builtinBaseId,
   deriveStartMenuEntries,
-  glyphFor,
+  entryMonogram,
+  extractButtonIcon,
+  resolveEntryIcon,
+  STATE_LABEL,
+  STATE_MARK_SVG,
+  STATE_VERB,
 } from '../start-menu'
+import { BUILTIN_ICON_SVGS } from '../../tabs/builtin-icons'
+import { PUZZLE_ICON_SVG } from '../../sidebar/secondary'
 
 const KEY_A = 'builtin:a'
 const KEY_B = 'builtin:b'
@@ -133,10 +147,90 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(empty.length, 0, 'no tabs → no entries')
 }
 
-// ── glyphFor (D18) ──
-assertEqual(glyphFor('open'), '●', 'open glyph')
-assertEqual(glyphFor('minimized'), '–', 'minimized glyph')
-assertEqual(glyphFor('closed'), '○', 'closed glyph')
+// ── State contract (user direction 2026-09-15: ● open / ○ minimized / none closed) ──
+assertEqual(
+  Object.keys(STATE_LABEL).sort().join(','),
+  'closed,minimized,open',
+  'labels cover exactly the three states',
+)
+assertEqual(STATE_VERB.open, 'Focus', 'open verb')
+assertEqual(STATE_VERB.minimized, 'Restore', 'minimized verb')
+assertEqual(STATE_VERB.closed, 'Launch', 'closed verb')
+assert(
+  STATE_MARK_SVG.open.includes('fill="currentColor"') &&
+    STATE_MARK_SVG.open.includes('r="4"'),
+  'open mark is a filled dot',
+)
+assert(
+  STATE_MARK_SVG.minimized.includes('stroke="currentColor"') &&
+    !STATE_MARK_SVG.minimized.includes('fill="currentColor"'),
+  'minimized mark is a hollow circle',
+)
+assertEqual(STATE_MARK_SVG.closed, '', 'closed has no mark at all')
+
+// ── Icon resolution (plan §3.5) ──
+assertEqual(builtinBaseId('profile:2'), 'profile', 'builtin suffix stripped')
+assertEqual(builtinBaseId('ext:foo'), 'ext:foo', 'extension address passes through')
+assertEqual(builtinBaseId('ext:foo:2'), 'ext:foo', 'numeric suffix drift stripped')
+assertEqual(entryMonogram('alpha'), 'A', 'monogram uppercases')
+assertEqual(entryMonogram('  '), '?', 'empty title guarded')
+assertEqual(entryMonogram('🧵 loom'), '🧵', 'non-ascii first code point')
+
+const stubSvg = (outerHTML: string, classes: string[] = []) =>
+  ({ outerHTML, classList: { contains: (c: string) => classes.includes(c) } }) as unknown as Element
+const stubRoot = (opts: { svg?: Element; img?: string }) =>
+  ({
+    querySelector: (sel: string) =>
+      sel === 'svg'
+        ? opts.svg ?? null
+        : sel === 'img' && opts.img
+          ? { getAttribute: (attr: string) => (attr === 'src' ? opts.img : null) }
+          : null,
+  }) as unknown as HTMLElement
+
+assertEqual(
+  extractButtonIcon(stubRoot({ svg: stubSvg('<svg data-x="1"></svg>') })).svg,
+  '<svg data-x="1"></svg>',
+  'live button svg cloned',
+)
+assertEqual(
+  extractButtonIcon(
+    stubRoot({ svg: stubSvg('<svg class="lucide lucide-puzzle"></svg>', ['lucide-puzzle']) }),
+  ).svg,
+  undefined,
+  'host puzzle placeholder is a miss',
+)
+assertEqual(
+  extractButtonIcon(stubRoot({ svg: stubSvg(PUZZLE_ICON_SVG) })).svg,
+  undefined,
+  'canvas puzzle placeholder is a miss',
+)
+assertEqual(
+  extractButtonIcon(stubRoot({ img: 'https://x/i.png' })).url,
+  'https://x/i.png',
+  'live button img url cloned',
+)
+assertEqual(extractButtonIcon(undefined).svg, undefined, 'missing root is a miss')
+assertEqual(
+  resolveEntryIcon({ iconSvg: '<svg id="s"/>' }, 'ext:foo').svg,
+  '<svg id="s"/>',
+  'store svg used when the live button yields nothing',
+)
+assertEqual(
+  resolveEntryIcon(undefined, 'profile').svg,
+  BUILTIN_ICON_SVGS.profile,
+  'builtin map fallback',
+)
+assertEqual(
+  resolveEntryIcon({}, 'profile:2').svg,
+  BUILTIN_ICON_SVGS.profile,
+  'builtin suffix resolves through the map',
+)
+assertEqual(
+  resolveEntryIcon({}, 'ext:unknown').svg,
+  undefined,
+  'unknown extension falls through to the monogram',
+)
 
 console.log('---')
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -17638,6 +17638,291 @@ var init_state = __esm(() => {
   _settings = mergeCanvasSettings(null);
 });
 
+// src/os/start-menu-styles.ts
+function injectStartMenuStyles() {
+  injectStyles(START_MENU_STYLE_ID, START_MENU_CSS);
+}
+var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
+  .canvas-os-start-menu {
+    --csm-row-h: 40px;
+    --csm-tile: 28px;
+    --csm-status-w: calc(58px * var(--lumiverse-font-scale, 1));
+
+    position: fixed; /* left/top/visibility inline (layout px, /uiScale contract) */
+    z-index: 2147483600;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    width: min(320px, calc((100vw - 16px) / var(--lumiverse-ui-scale, 1)));
+    max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
+    overflow: hidden;
+    padding: 4px;
+    background: var(--lumiverse-bg-deep, var(--lumiverse-surface, #1a1a1e));
+    border: 1px solid var(--lumiverse-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    color: var(--lumiverse-text);
+    font-family: inherit;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  }
+
+  /* Glass — the context menu's recipe, coarse-pointer gated like the base. */
+  @media not (pointer: coarse) {
+    body[data-glass] .canvas-os-start-menu {
+      background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
+      backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+    }
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    height: 30px;
+    padding: 0 9px;
+  }
+  .canvas-os-start-menu__brand {
+    display: flex;
+    width: 14px;
+    height: 14px;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__brand svg { width: 14px; height: 14px; display: block; }
+  .canvas-os-start-menu__title {
+    flex: 1;
+    min-width: 0;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__count {
+    flex-shrink: 0;
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
+    color: var(--lumiverse-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Divider — context-menu token parity ─────────────────────────────── */
+  .canvas-os-start-menu__divider {
+    flex-shrink: 0;
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--lumiverse-border);
+  }
+
+  /* ── List ────────────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* ── Item — context-menu geometry (vertical padding 6px fits the tile) ── */
+  button.canvas-os-start-menu__item {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: var(--csm-row-h);
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--lumiverse-text);
+    font-family: inherit;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  button.canvas-os-start-menu__item:hover {
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+  }
+  button.canvas-os-start-menu__item:active {
+    background: var(--lumiverse-primary-020);
+  }
+  button.canvas-os-start-menu__item:focus-visible {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: -2px;
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+  }
+
+  /* State rail — running windows pin to the rail. */
+  .canvas-os-start-menu__rail {
+    flex-shrink: 0;
+    width: 3px;
+    height: 16px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__rail {
+    background: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__rail {
+    background: var(--lumiverse-text-muted);
+  }
+
+  /* Icon tile — a container, never a state channel at rest. */
+  .canvas-os-start-menu__tile {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--csm-tile);
+    height: var(--csm-tile);
+    overflow: hidden;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+  .canvas-os-start-menu__tile > svg,
+  .canvas-os-start-menu__tile > img {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+  .canvas-os-start-menu__tile > img { border-radius: 3px; object-fit: contain; }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__tile {
+    background: var(--lumiverse-primary-010, var(--lumiverse-primary-015));
+    color: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
+    box-shadow: inset 0 0 0 1px var(--lumiverse-border-hover);
+    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__tile {
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--lumiverse-text);
+  }
+  .canvas-os-start-menu__tile--monogram {
+    font-size: calc(12px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Label */
+  .canvas-os-start-menu__label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Status slot — mark at rest, action verb on hover/focus (opacity only).
+     Closed entries have no mark node at all; the slot is just the verb's home. */
+  .canvas-os-start-menu__status {
+    position: relative;
+    flex-shrink: 0;
+    width: var(--csm-status-w);
+    height: 18px;
+    overflow: hidden;
+  }
+  .canvas-os-start-menu__mark,
+  .canvas-os-start-menu__verb {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    transition: opacity 150ms ease;
+  }
+  .canvas-os-start-menu__mark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__mark > svg { width: 18px; height: 18px; display: block; }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__mark {
+    color: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__mark {
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__verb {
+    opacity: 0;
+    color: var(--lumiverse-text-muted);
+    font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__verb {
+    color: var(--lumiverse-primary-text, var(--lumiverse-primary));
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__mark,
+  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__mark {
+    opacity: 0;
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__verb,
+  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__verb {
+    opacity: 1;
+  }
+
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 20px 12px 22px;
+    text-align: center;
+  }
+  .canvas-os-start-menu__empty-glyph {
+    display: flex;
+    width: 24px;
+    height: 24px;
+    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
+  }
+  .canvas-os-start-menu__empty-glyph svg { width: 24px; height: 24px; }
+  .canvas-os-start-menu__empty-title {
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    color: var(--lumiverse-text);
+  }
+  .canvas-os-start-menu__empty-hint {
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
+    color: var(--lumiverse-text-muted);
+  }
+
+  /* ── Touch ───────────────────────────────────────────────────────────── */
+  @media (pointer: coarse) {
+    .canvas-os-start-menu { --csm-row-h: 46px; --csm-status-w: 18px; }
+    .canvas-os-start-menu__verb { display: none; }
+  }
+
+  /* Reduced motion — WAAPI handles open/close in JS. */
+  @media (prefers-reduced-motion: reduce) {
+    .canvas-os-start-menu__item,
+    .canvas-os-start-menu__rail,
+    .canvas-os-start-menu__tile,
+    .canvas-os-start-menu__mark,
+    .canvas-os-start-menu__verb { transition: none; }
+  }
+
+  /* Forced colors — outline focus survives; the closed tile's inset shadow does not. */
+  @media (forced-colors: active) {
+    button.canvas-os-start-menu__item:focus-visible {
+      outline: 2px solid ButtonBorder;
+      outline-offset: -2px;
+    }
+    .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
+      box-shadow: none;
+      border: 1px solid ButtonBorder;
+    }
+  }
+`;
+var init_start_menu_styles = () => {};
+
 // src/os/start-menu-motion.ts
 function getUiScale() {
   if (typeof document === "undefined" || !document.documentElement)
@@ -17727,6 +18012,38 @@ var init_start_menu_motion = __esm(() => {
 });
 
 // src/os/start-menu.ts
+function isPlaceholderIcon(svg) {
+  return svg.classList.contains("lucide-puzzle") || svg.outerHTML === PUZZLE_ICON_SVG;
+}
+function extractButtonIcon(root) {
+  if (!root || typeof root.querySelector !== "function")
+    return {};
+  const svg = root.querySelector("svg");
+  if (svg && !isPlaceholderIcon(svg))
+    return { svg: svg.outerHTML };
+  const url = root.querySelector("img")?.getAttribute("src") ?? undefined;
+  return url ? { url } : {};
+}
+function builtinBaseId(liveId) {
+  return liveId.replace(/:\d+$/, "");
+}
+function entryMonogram(title) {
+  const first = Array.from(title.trim())[0];
+  return first ? first.toUpperCase() : "?";
+}
+function resolveEntryIcon(tab, liveId) {
+  const dom = extractButtonIcon(tab?.root);
+  if (dom.svg)
+    return { svg: dom.svg };
+  if (dom.url)
+    return { url: dom.url };
+  if (tab?.iconSvg)
+    return { svg: tab.iconSvg };
+  if (tab?.iconUrl)
+    return { url: tab.iconUrl };
+  const builtin = BUILTIN_ICON_SVGS[builtinBaseId(liveId)];
+  return builtin ? { svg: builtin } : {};
+}
 function deriveStartMenuEntries(model, resolve) {
   const tabs = new Map(getDrawerTabs().map((t3) => [t3.id, t3]));
   const seen = new Set;
@@ -17741,12 +18058,13 @@ function deriveStartMenuEntries(model, resolve) {
       seen.add(liveId);
       const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
       const tab = tabs.get(liveId);
+      const icon = resolveEntryIcon(tab, liveId);
       out.push({
         liveId,
         side,
         title: tab?.title ?? key,
-        iconSvg: tab?.iconSvg,
-        iconUrl: tab?.iconUrl,
+        iconSvg: icon.svg,
+        iconUrl: icon.url,
         state
       });
     }
@@ -17754,55 +18072,94 @@ function deriveStartMenuEntries(model, resolve) {
   out.sort((a3, b2) => a3.title.localeCompare(b2.title, undefined, { sensitivity: "base" }) || a3.liveId.localeCompare(b2.liveId));
   return out;
 }
-function glyphFor(state) {
-  return state === "open" ? "●" : state === "minimized" ? "–" : "○";
-}
 function createMenuEntry(entry) {
   const item = document.createElement("button");
   item.type = "button";
+  item.className = "canvas-os-start-menu__item";
   item.setAttribute("role", "menuitem");
   item.setAttribute("data-os-state", entry.state);
-  item.style.cssText = `
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 12px;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    color: var(--lumiverse-text);
-    cursor: pointer;
-    text-align: left;
-    font-size: calc(13px * var(--lumiverse-font-scale, 1));
-  `;
-  const icon = document.createElement("span");
-  icon.style.cssText = "width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;";
-  if (entry.iconSvg)
-    icon.innerHTML = entry.iconSvg;
-  else if (entry.iconUrl) {
-    const img = document.createElement("img");
-    img.src = entry.iconUrl;
-    img.alt = "";
-    img.width = 20;
-    img.height = 20;
-    img.style.borderRadius = "2px";
-    icon.appendChild(img);
-  }
-  item.appendChild(icon);
+  item.setAttribute("aria-label", `${entry.title} — ${STATE_LABEL[entry.state]}`);
+  const rail = document.createElement("span");
+  rail.className = "canvas-os-start-menu__rail";
+  rail.setAttribute("aria-hidden", "true");
+  const tile = document.createElement("span");
+  tile.className = "canvas-os-start-menu__tile";
+  tile.setAttribute("aria-hidden", "true");
+  renderEntryIcon(tile, entry);
   const label = document.createElement("span");
-  label.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+  label.className = "canvas-os-start-menu__label";
   label.textContent = entry.title;
-  item.appendChild(label);
-  const glyph = document.createElement("span");
-  glyph.textContent = glyphFor(entry.state);
-  glyph.style.cssText = "color:var(--lumiverse-text-muted);flex-shrink:0;";
-  item.appendChild(glyph);
+  const status = document.createElement("span");
+  status.className = "canvas-os-start-menu__status";
+  status.setAttribute("aria-hidden", "true");
+  const markSvg = STATE_MARK_SVG[entry.state];
+  if (markSvg) {
+    const mark = document.createElement("span");
+    mark.className = "canvas-os-start-menu__mark";
+    mark.innerHTML = markSvg;
+    status.appendChild(mark);
+  }
+  const verb = document.createElement("span");
+  verb.className = "canvas-os-start-menu__verb";
+  verb.textContent = STATE_VERB[entry.state];
+  status.appendChild(verb);
+  item.append(rail, tile, label, status);
   item.addEventListener("click", () => {
     hideStartMenu();
     openWindowInDrawerByLiveId(entry.liveId, entry.side);
   });
   return item;
+}
+function renderEntryIcon(tile, entry) {
+  if (entry.iconSvg) {
+    tile.innerHTML = entry.iconSvg;
+    return;
+  }
+  if (entry.iconUrl) {
+    const img = document.createElement("img");
+    img.src = entry.iconUrl;
+    img.alt = "";
+    img.width = 16;
+    img.height = 16;
+    tile.appendChild(img);
+    return;
+  }
+  tile.textContent = entryMonogram(entry.title);
+  tile.classList.add("canvas-os-start-menu__tile--monogram");
+}
+function createHeader(count) {
+  const header = document.createElement("div");
+  header.className = "canvas-os-start-menu__header";
+  header.setAttribute("role", "presentation");
+  header.setAttribute("aria-hidden", "true");
+  const brand = document.createElement("span");
+  brand.className = "canvas-os-start-menu__brand";
+  brand.innerHTML = START_GLYPH_SVG;
+  const title = document.createElement("span");
+  title.className = "canvas-os-start-menu__title";
+  title.textContent = "Windows";
+  const countEl = document.createElement("span");
+  countEl.className = "canvas-os-start-menu__count";
+  countEl.textContent = count === 1 ? "1 window" : `${count} windows`;
+  header.append(brand, title, countEl);
+  return header;
+}
+function createEmptyState() {
+  const empty = document.createElement("div");
+  empty.className = "canvas-os-start-menu__empty";
+  empty.setAttribute("role", "presentation");
+  const glyph = document.createElement("span");
+  glyph.className = "canvas-os-start-menu__empty-glyph";
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.innerHTML = START_GLYPH_SVG;
+  const title = document.createElement("span");
+  title.className = "canvas-os-start-menu__empty-title";
+  title.textContent = "No windows";
+  const hint = document.createElement("span");
+  hint.className = "canvas-os-start-menu__empty-hint";
+  hint.textContent = "Open a tab to add a window here";
+  empty.append(glyph, title, hint);
+  return empty;
 }
 function buildMenu() {
   const host = getHost();
@@ -17810,37 +18167,28 @@ function buildMenu() {
   if (!host || !model)
     return null;
   const entries = deriveStartMenuEntries(model, (key) => host.resolve(key));
+  injectStartMenuStyles();
   const menu = document.createElement("div");
   menu.id = MENU_ID;
+  menu.className = "canvas-os-start-menu";
   menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", "Start menu");
-  menu.style.cssText = `
-    position: fixed;
-    z-index: 2147483600;
-    display: flex;
-    flex-direction: column;
-    min-width: 220px;
-    max-width: 320px;
-    max-height: min(60vh, 420px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    background: var(--lumiverse-surface, #1a1a1e);
-    border: 1px solid var(--lumiverse-primary-015, rgba(255,255,255,0.15));
-    border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    padding: 6px;
-    gap: 2px;
-  `;
   if (entries.length === 0) {
-    const empty = document.createElement("div");
-    empty.setAttribute("role", "presentation");
-    empty.style.cssText = "padding:14px 12px;color:var(--lumiverse-text-muted);font-size:calc(12px * var(--lumiverse-font-scale, 1));";
-    empty.textContent = "No windows";
-    menu.appendChild(empty);
+    menu.appendChild(createEmptyState());
+    return menu;
   }
+  menu.appendChild(createHeader(entries.length));
+  const divider = document.createElement("div");
+  divider.className = "canvas-os-start-menu__divider";
+  divider.setAttribute("role", "separator");
+  menu.appendChild(divider);
+  const list = document.createElement("div");
+  list.className = "canvas-os-start-menu__list";
+  list.setAttribute("role", "presentation");
   for (const entry of entries) {
-    menu.appendChild(createMenuEntry(entry));
+    list.appendChild(createMenuEntry(entry));
   }
+  menu.appendChild(list);
   return menu;
 }
 function cancelMenuRaf() {
@@ -17987,7 +18335,7 @@ function attachMenuDismiss() {
   };
 }
 function startButtonHtml() {
-  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></button>`;
+  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`;
 }
 async function ensureStartButtonForSide(side) {
   const list = side === "primary" ? await getMainMirrorList() : getSecondaryTabList();
@@ -18083,9 +18431,10 @@ function teardownStartMenu() {
   for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
     dock.remove();
   }
+  document.getElementById(START_MENU_STYLE_ID)?.remove();
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _onShellCreated = null;
+var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
@@ -18093,8 +18442,25 @@ var init_start_menu = __esm(() => {
   init_actions();
   init_secondary();
   init_drawer_shell();
+  init_builtin_icons();
+  init_start_menu_styles();
   init_log();
   init_start_menu_motion();
+  STATE_LABEL = {
+    open: "open",
+    minimized: "minimized",
+    closed: "closed"
+  };
+  STATE_VERB = {
+    open: "Focus",
+    minimized: "Restore",
+    closed: "Launch"
+  };
+  STATE_MARK_SVG = {
+    open: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="4" fill="currentColor"/><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/></svg>',
+    minimized: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="5.25" stroke="currentColor" stroke-width="1.5"/></svg>',
+    closed: ""
+  };
 });
 
 // src/debug/fiber-scan.ts
@@ -22606,6 +22972,7 @@ function setup(ctx) {
   });
   registerCleanup(() => {
     document.getElementById("canvas-ux-context-menu-styles")?.remove();
+    document.getElementById("canvas-os-start-menu-styles")?.remove();
     document.getElementById("sidebar-ux-reflow")?.remove();
     clearChatMargins();
     document.getElementById("canvas-ux-secondary-mobile")?.remove();
