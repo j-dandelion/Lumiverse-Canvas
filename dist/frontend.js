@@ -13996,9 +13996,10 @@ function injectReflowStyles() {
        element's background layer, BELOW its content, so bubbles/composer
        cover the shadow — underneath on the z axis. The 60px/-60px inset form
        mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
-       falloff. The attr is set by updateChatReflow only on desktop, Sides
-       location, drawerShadowsDesktop on, chat column present, drawer open on
-       that side; clearChatMargins drops it (mobile / feature off / disable). */
+       falloff. The attr is set by updateChatReflow only on desktop,
+       drawerShadowsDesktop on, chat column present, drawer open on that side
+       (all drawer locations — Top/Bottom keeps the side panel geometry);
+       clearChatMargins drops it (mobile / feature off / disable). */
     @media (min-width: 601px) {
       html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer {
         box-shadow: none !important;
@@ -14064,7 +14065,7 @@ function scheduleReflow() {
 function syncChatShadowAttr(insets) {
   const root = document.documentElement;
   const sides = [];
-  if (getChatColumn() && getSettings().drawerShadowsDesktop && !isHorizontalStrip()) {
+  if (getChatColumn() && getSettings().drawerShadowsDesktop) {
     if (insets.openLeft)
       sides.push("left");
     if (insets.openRight)
