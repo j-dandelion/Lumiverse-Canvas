@@ -135,8 +135,8 @@ assertIncludes(motion, '--lumiverse-ui-scale', 'ui-scale coordinate contract is 
 // ── 7. Approved adjacent fixes ──
 assertIncludes(
   registry,
-  "import { hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'",
-  'registry imports the Start-menu dismissal',
+  "import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'",
+  'registry imports the Start-menu dismissal + the secondary-setting apply hook',
 )
 assertIncludes(
   registry,

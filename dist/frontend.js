@@ -168,6 +168,7 @@ var init_types = __esm(() => {
     taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
     osMode: false,
+    osSecondaryStartMenu: false,
     coreTabsHidden: false,
     osForcedSingleDrawer: false,
     osChromePrefs: null,
@@ -18491,6 +18492,14 @@ async function getMainMirrorList() {
   const m3 = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
   return m3.getMainMirrorTabList();
 }
+function removeSecondaryStartChrome() {
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    dock.remove();
+  }
+  getSecondaryTabList()?.querySelector(`button[${START_ATTR}]`)?.remove();
+  if (_menuOpenFor === "secondary")
+    hideStartMenu({ immediate: true });
+}
 function scheduleEnsureButtons() {
   if (_buttonRaf)
     return;
@@ -18499,14 +18508,10 @@ function scheduleEnsureButtons() {
     reconcileStartMenuPresence();
     await ensureStartButtonForSide("primary");
     if (isOsModeEnabled()) {
-      if (getSettings().secondSidebarEnabled) {
+      if (getSettings().secondSidebarEnabled && getSettings().osSecondaryStartMenu) {
         await ensureStartButtonForSide("secondary");
       } else {
-        const list = getSecondaryTabList();
-        list?.querySelector(`button[${START_ATTR}]`)?.remove();
-        list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove();
-        if (_menuOpenFor === "secondary")
-          hideStartMenu({ immediate: true });
+        removeSecondaryStartChrome();
       }
     }
   });
@@ -18528,7 +18533,16 @@ function mountStartMenu() {
     return;
   installShellCreatedListener();
   scheduleEnsureButtons();
+  Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(teardownStartMenu));
   dlog("[os] start menu chrome mounted");
+}
+function applySecondaryStartMenuChange(enabled) {
+  if (!isOsModeEnabled())
+    return;
+  if (enabled)
+    scheduleEnsureButtons();
+  else
+    removeSecondaryStartChrome();
 }
 function teardownStartMenu() {
   removeShellCreatedListener();
@@ -18546,7 +18560,7 @@ function teardownStartMenu() {
   document.getElementById(START_MENU_STYLE_ID)?.remove();
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>', _onShellCreated = null;
+var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
@@ -20889,7 +20903,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, osSecondaryStartMenuFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -21179,6 +21193,14 @@ var init_registry = __esm(() => {
       }
     }
   };
+  osSecondaryStartMenuFeature = {
+    id: "osSecondaryStartMenu",
+    apply(prev, next) {
+      if (prev.osSecondaryStartMenu === next.osSecondaryStartMenu)
+        return;
+      applySecondaryStartMenuChange(next.osSecondaryStartMenu);
+    }
+  };
   FEATURES = [
     debugFeature,
     chatReflowFeature,
@@ -21195,6 +21217,7 @@ var init_registry = __esm(() => {
     taskbarModeFeature,
     hideDrawerOpenCloseButtonsFeature,
     osModeFeature,
+    osSecondaryStartMenuFeature,
     dragAndDropDrawerTabsFeature,
     drawerTabDragFeature
   ];
@@ -21545,6 +21568,15 @@ function buildSettingsPanelDOM() {
     control: osMode.btn
   });
   secSidebars.appendChild(osModeRow);
+  const osSecondaryStart = makeToggle(() => getSettings().osSecondaryStartMenu, (v3) => setSettings({ osSecondaryStartMenu: v3 }), { disabled: () => !getSettings().osMode || !getSettings().secondSidebarEnabled });
+  const osSecondaryStartRow = buildSettingRow({
+    label: "Start menu in the second drawer",
+    hint: OS_SECONDARY_START_HINT,
+    control: osSecondaryStart.btn,
+    disabled: !getSettings().osMode || !getSettings().secondSidebarEnabled
+  });
+  secSidebars.appendChild(osSecondaryStartRow);
+  const osSecondaryStartHint = osSecondaryStartRow.querySelector(".sidebar-ux-panel-row-hint");
   const coreTabsHidden = makeToggle(() => getSettings().coreTabsHidden, (v3) => setSettings({ coreTabsHidden: v3 }), { disabled: () => !!getSettings().osMode });
   const coreTabsHiddenRow = buildSettingRow({
     label: "Core tabs can be hidden",
@@ -21627,6 +21659,7 @@ function buildSettingsPanelDOM() {
     moveControlsToOuter.refresh();
     taskbarMode.refresh();
     osMode.refresh();
+    osSecondaryStart.refresh();
     coreTabsHidden.refresh();
     hideDrawerTabToggle.refresh();
     dragAndDropDrawerTabs.refresh();
@@ -21669,6 +21702,15 @@ function buildSettingsPanelDOM() {
       coreTabsHiddenRow.classList.toggle("sidebar-ux-panel-row-disabled", os);
       if (coreTabsHiddenHint) {
         coreTabsHiddenHint.textContent = os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT;
+      }
+    }
+    {
+      const d3 = !getSettings().osMode || !getSettings().secondSidebarEnabled;
+      osSecondaryStart.btn.disabled = d3;
+      osSecondaryStart.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      osSecondaryStartRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+      if (osSecondaryStartHint) {
+        osSecondaryStartHint.textContent = d3 ? OS_SECONDARY_START_LOCK_HINT : OS_SECONDARY_START_HINT;
       }
     }
     {
@@ -21737,7 +21779,7 @@ function applySettings(prev, next) {
     feature.apply(prev, next, _settingsPanelCtx);
   }
 }
-var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", OS_MODE_HINT = "Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode; on mobile it uses single-drawer mode.", OS_MODE_TASKBAR_LOCK_HINT = "Required by OS mode. Disable OS mode to change taskbar settings.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SECOND_DRAWER_HINT = "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.", SECOND_DRAWER_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
+var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", OS_MODE_HINT = "Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode; on mobile it uses single-drawer mode.", OS_MODE_TASKBAR_LOCK_HINT = "Required by OS mode. Disable OS mode to change taskbar settings.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", OS_SECONDARY_START_HINT = "OS mode only: shows the Start button in the second drawer's strip. Off by default — the main drawer's Start menu still lists every window, so nothing becomes unreachable.", OS_SECONDARY_START_LOCK_HINT = "Requires OS mode and the second drawer. Turn both on to use it.", SECOND_DRAWER_HINT = "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.", SECOND_DRAWER_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
 var init_panel = __esm(() => {
   init_state();
   init_log();

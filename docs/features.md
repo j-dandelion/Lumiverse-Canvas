@@ -40,6 +40,7 @@ interface CanvasFeature {
 | `taskbarModeFeature` | `taskbarMode` | Taskbar mode: pin tab strips when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `taskbarMode`) |
 | `osModeFeature` | `osMode` | OS mode: window lifecycle (open / minimized / closed), per-drawer Start menus, OS-specific layout slots, panel-header minimize/X chrome. Live on mobile (single-drawer force). Requires the taskbar chrome (normalize forces `taskbarMode` + outer edge + `coreTabsHidden` on; `setSettings` snapshots the pre-OS values in `osChromePrefs` and restores them on disable) |
+| `osSecondaryStartMenuFeature` | `osSecondaryStartMenu` | Second-drawer OS Start chrome is opt-in (default off): gates the secondary Start button/dock ensure and live-applies the removal. The main drawer's Start menu still lists every window from both drawers |
 | `dragAndDropDrawerTabsFeature` | `dragAndDropDrawerTabs` | Drag-and-drop to reorder/move drawer tabs — mouse distance-based, touch long-press (taskbar-agnostic since S7 — toggle-only gate; desktop only) |
 | `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs (vertical vh of open/close edge control) |
 
@@ -80,6 +81,7 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 2e. `osForcedSingleDrawer` boolean coercion (corrupt disk value → false).
 3. `hideDrawerOpenCloseButtons` requires `taskbarMode` (must run after #2 so a location flip does not clear `hide`)
 - `dragAndDropDrawerTabs` is NOT cascaded (S7 removed the cascade) — the toggle is its only gate.
+- `osSecondaryStartMenu` is NOT cascaded and NOT snapshotted into `osChromePrefs`: a plain persistent preference (default off) that survives OS off/on; the panel row is locked while OS mode is off or the second drawer is disabled.
 - Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode; `isDragAndDropDrawerTabsEnabled(s)` = the toggle alone (S7); `isHorizontalStrip(s)` / `getDrawerLocation(s)` / `getStripEdge(s)` for Drawer location.
 
 ### Settings Panel (`settings/panel.ts`)
@@ -89,7 +91,7 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 **Sections:**
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
-3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), osMode, coreTabsHidden (unlocks the Configure eye for core tabs; locked on while OS mode forces it), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), osMode, osSecondaryStartMenu (OS mode only: opt-in Start button in the second drawer; row locked while OS mode is off or the second drawer is disabled), coreTabsHidden (unlocks the Configure eye for core tabs; locked on while OS mode forces it), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
 4. **Second drawer** — secondSidebarEnabled (master; locked off while OS mode is on and the viewport is mobile — `os/os-mode.syncOsMobileDrawerMode` restores the user's dual layout when OS mode turns off or the viewport leaves mobile), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
 5. **Debug** — debugMode
 

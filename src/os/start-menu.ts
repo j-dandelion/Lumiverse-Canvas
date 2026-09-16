@@ -6,7 +6,11 @@
  *     strip: Sides mode → the main mirror's bottom dock BENEATH the settings
  *     button (D10), the secondary strip's end; Top/Bottom mode → the OUTER
  *     (screen-edge) end of each strip via CSS `order` (the S8 #3 dock-order
- *     trick — single geometry authority stays in tab-position.ts).
+ *     trick — single geometry authority stays in tab-position.ts). The
+ *     SECONDARY button is opt-in via the `osSecondaryStartMenu` setting
+ *     (default off): the main drawer's Start menu still lists every window
+ *     from both drawers, so the secondary chrome is a convenience, never the
+ *     only return path.
  *   - the **menu**: the full tab inventory — BOTH drawers, hidden and closed
  *     tabs included — alphabetized by title (case-insensitive) with a state
  *     mark (D18 direction: filled dot = open, hollow circle = minimized, no
@@ -549,8 +553,8 @@ function attachMenuDismiss(): void {
 
 // ── Start buttons ────────────────────────────────────────────────────────────
 
-/** 4-pane launcher mark — shared by the Start button and the menu header. */
-const START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>'
+/** Nine-dot launcher mark — shared by the Start button and the menu header. */
+const START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>'
 
 /**
  * Start button markup. Chrome is CSS-owned:
@@ -575,6 +579,9 @@ function startButtonHtml(): string {
  *     (HORIZONTAL_STRIP_CSS keys on the wrapper's sidebar-ux-side-* class:
  *     left → -1 first, right → 1 last), so an in-place side flip re-orders
  *     without re-running this ensure. No inline order is kept.
+ *
+ * The SECONDARY side is gated by the callers on `osSecondaryStartMenu`
+ * (default off); this ensure itself is placement-only.
  */
 async function ensureStartButtonForSide(side: Side): Promise<void> {
   const list = side === 'primary' ? await getMainMirrorList() : getSecondaryTabList()
@@ -623,6 +630,24 @@ async function getMainMirrorList(): Promise<HTMLElement | null> {
   return m.getMainMirrorTabList()
 }
 
+/**
+ * Remove the second drawer's Start chrome: its button and its dock (the dock
+ * carries the divider, so an empty dock must not survive). Idempotent.
+ *
+ * The dock is removed DOCUMENT-WIDE because a pinned list can carry a live
+ * dock while `getSecondaryTabList()` resolves a remounting in-wrapper list —
+ * the class is unique to the secondary Start, so this cannot hit the primary.
+ * The BUTTON is only queried through `getSecondaryTabList()`: a document-wide
+ * button query would remove the primary Start too.
+ */
+function removeSecondaryStartChrome(): void {
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    dock.remove()
+  }
+  getSecondaryTabList()?.querySelector(`button[${START_ATTR}]`)?.remove()
+  if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })
+}
+
 function scheduleEnsureButtons(): void {
   if (_buttonRaf) return
   _buttonRaf = requestAnimationFrame(async () => {
@@ -632,16 +657,13 @@ function scheduleEnsureButtons(): void {
     reconcileStartMenuPresence()
     await ensureStartButtonForSide('primary')
     if (isOsModeEnabled()) {
-      if (getSettings().secondSidebarEnabled) {
+      if (getSettings().secondSidebarEnabled && getSettings().osSecondaryStartMenu) {
         await ensureStartButtonForSide('secondary')
       } else {
-        // Second drawer disabled mid-session: the Start button (and its dock)
-        // leave with the strip (F6 companion — the enable path re-ensures on
-        // demand).
-        const list = getSecondaryTabList()
-        list?.querySelector(`button[${START_ATTR}]`)?.remove()
-        list?.querySelector(`.${SECONDARY_START_DOCK_CLASS}`)?.remove()
-        if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })
+        // `osSecondaryStartMenu` off (default), or the second drawer disabled
+        // mid-session: the Start button (and its dock) leave with the strip
+        // (F6 companion — the enable path re-ensures on demand).
+        removeSecondaryStartChrome()
       }
     }
   })
@@ -679,7 +701,28 @@ export function mountStartMenu(): void {
   if (!isOsModeEnabled()) return
   installShellCreatedListener()
   scheduleEnsureButtons()
+  // Self-cleanup registration (extension disable regardless of toggle): a
+  // RUNTIME OS enable mounts this chrome through apply() with no feature
+  // teardown, so without this the buttons/listener would survive disable
+  // (teardownStartMenu is idempotent — the boot-mount path may also have
+  // registered it). LAZY import: start-menu sits in a load cycle
+  // (registry → start-menu → … → registry), so a top-level registerCleanup
+  // can run while cleanup.ts is still initializing (TDZ). Same pattern as
+  // panel-chrome (`os/panel-chrome.ts`).
+  void import('../sidebar/cleanup').then((m) => m.registerCleanup(teardownStartMenu))
   dlog('[os] start menu chrome mounted')
+}
+
+/**
+ * Live-apply the `osSecondaryStartMenu` setting (feature apply). OS chrome
+ * only exists while OS mode is on; the boot / OS-enable path reads the
+ * setting inside the ensure pass, so there is nothing to do when OS mode is
+ * off.
+ */
+export function applySecondaryStartMenuChange(enabled: boolean): void {
+  if (!isOsModeEnabled()) return
+  if (enabled) scheduleEnsureButtons()
+  else removeSecondaryStartChrome()
 }
 
 /** Teardown: remove buttons + docks + any open menu (feature unmount / disable). */

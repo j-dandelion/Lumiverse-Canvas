@@ -61,6 +61,10 @@ const CORE_TABS_HIDDEN_HINT =
   'Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.'
 const CORE_TABS_HIDDEN_OS_LOCK_HINT =
   'Required by OS mode. Disable OS mode to change.'
+const OS_SECONDARY_START_HINT =
+  "OS mode only: shows the Start button in the second drawer's strip. Off by default — the main drawer's Start menu still lists every window, so nothing becomes unreachable."
+const OS_SECONDARY_START_LOCK_HINT =
+  'Requires OS mode and the second drawer. Turn both on to use it.'
 const SECOND_DRAWER_HINT =
   'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.'
 const SECOND_DRAWER_OS_MOBILE_HINT =
@@ -383,6 +387,20 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   })
   secSidebars.appendChild(osModeRow)
 
+  const osSecondaryStart = makeToggle(
+    () => getSettings().osSecondaryStartMenu,
+    (v) => setSettings({ osSecondaryStartMenu: v }),
+    { disabled: () => !getSettings().osMode || !getSettings().secondSidebarEnabled },
+  )
+  const osSecondaryStartRow = buildSettingRow({
+    label: 'Start menu in the second drawer',
+    hint: OS_SECONDARY_START_HINT,
+    control: osSecondaryStart.btn,
+    disabled: !getSettings().osMode || !getSettings().secondSidebarEnabled,
+  })
+  secSidebars.appendChild(osSecondaryStartRow)
+  const osSecondaryStartHint = osSecondaryStartRow.querySelector('.sidebar-ux-panel-row-hint')
+
   const coreTabsHidden = makeToggle(
     () => getSettings().coreTabsHidden,
     (v) => setSettings({ coreTabsHidden: v }),
@@ -518,6 +536,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     moveControlsToOuter.refresh()
     taskbarMode.refresh()
     osMode.refresh()
+    osSecondaryStart.refresh()
     coreTabsHidden.refresh()
     hideDrawerTabToggle.refresh()
     dragAndDropDrawerTabs.refresh()
@@ -579,6 +598,19 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       coreTabsHiddenRow.classList.toggle('sidebar-ux-panel-row-disabled', os)
       if (coreTabsHiddenHint) {
         coreTabsHiddenHint.textContent = os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT
+      }
+    }
+    // osSecondaryStartMenu: OS chrome only — locked while OS mode is off
+    // (there is no Start chrome without it) or while the second drawer is
+    // disabled (no strip to place it on; covers the OS+mobile forced
+    // single-drawer state).
+    {
+      const d = !getSettings().osMode || !getSettings().secondSidebarEnabled
+      osSecondaryStart.btn.disabled = d
+      osSecondaryStart.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      osSecondaryStartRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      if (osSecondaryStartHint) {
+        osSecondaryStartHint.textContent = d ? OS_SECONDARY_START_LOCK_HINT : OS_SECONDARY_START_HINT
       }
     }
     // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs

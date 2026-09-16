@@ -34,7 +34,7 @@ import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
 import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
-import { hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
@@ -598,6 +598,19 @@ const osModeFeature: CanvasFeature = {
   },
 }
 
+/** OS secondary Start menu (default off): the second drawer's Start button +
+ *  menu are opt-in. The main drawer's Start menu always lists every window
+ *  from both drawers, so hiding the secondary chrome never strands a window.
+ *  Registered after osModeFeature so a same-diff OS enable mounts the Start
+ *  chrome before this feature removes/re-adds the secondary half. */
+const osSecondaryStartMenuFeature: CanvasFeature = {
+  id: 'osSecondaryStartMenu',
+  apply(prev, next) {
+    if (prev.osSecondaryStartMenu === next.osSecondaryStartMenu) return
+    applySecondaryStartMenuChange(next.osSecondaryStartMenu)
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -620,6 +633,8 @@ export const FEATURES: readonly CanvasFeature[] = [
   hideDrawerOpenCloseButtonsFeature,
   // OS mode depends on the taskbar chrome being applied first (§4.8).
   osModeFeature,
+  // OS secondary Start chrome: downstream of the OS mount pipeline.
+  osSecondaryStartMenuFeature,
   dragAndDropDrawerTabsFeature,
   drawerTabDragFeature,
 ]

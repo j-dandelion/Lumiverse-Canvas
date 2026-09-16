@@ -118,6 +118,16 @@ export interface CanvasSettings {
    *  single-drawer mode while OS mode is on (see `osForcedSingleDrawer`). */
   osMode?: boolean
 
+  /** User preference (default off): show the OS-mode Start button — and its
+   *  menu — in the second drawer's strip. OS mode only (there is no Start
+   *  chrome without it) and requires the second drawer; the first drawer's
+   *  Start menu always lists every window from both drawers, so a hidden
+   *  secondary Start never strands a window. A plain persistent preference:
+   *  never forced by the OS invariant and never snapshotted into
+   *  `osChromePrefs`; the panel row is locked while OS mode is off or the
+   *  second drawer is disabled. */
+  osSecondaryStartMenu?: boolean
+
   /** When on, the Configure Tabs eye toggle is unlocked for core built-in
    *  tabs (`CORE_HIDE_LOCKED`) and closing one in OS mode also marks it
    *  hidden. OS mode requires it (normalize forces it true) because a
@@ -221,6 +231,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
   osMode: false,
+  osSecondaryStartMenu: false,
   coreTabsHidden: false,
   osForcedSingleDrawer: false,
   osChromePrefs: null,
