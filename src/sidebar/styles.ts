@@ -25,6 +25,16 @@ export const CANVAS_MAIN_OPEN_CLASS = 'sidebar-ux-canvas-main-open'
 /** Secondary tab-strip width in px (construction, pin, spacer, reflow). */
 export const TAB_LIST_WIDTH_PX = 56
 
+/**
+ * Tab-strip surface — the drawer shell's inline tab-list background
+ * (`sidebar/drawer-shell.ts`). The OS Start menu surface uses the same
+ * constant so the menu blends with the strip it opens from (user request
+ * 2026-09-16). Single source of truth: change the formula HERE only; a source
+ * pin asserts both consumers reference it.
+ */
+export const TAB_STRIP_BACKGROUND =
+  'color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep))'
+
 // Mobile CSS — scoped to @media (max-width: 600px). Restructures the
 // secondary sidebar to match Lumiverse's main sidebar mobile pattern:
 // full-width drawer, horizontal tab bar, bottom indicator, mutual

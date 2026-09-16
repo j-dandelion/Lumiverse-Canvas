@@ -868,7 +868,7 @@ function injectDrawerTabStyles() {
     }
   `);
 }
-var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "--sidebar-ux-main-mirror-w", CANVAS_MAIN_ACTIVE_CLASS = "sidebar-ux-canvas-main-active", CANVAS_MAIN_OPEN_CLASS = "sidebar-ux-canvas-main-open", TAB_LIST_WIDTH_PX = 56, SECONDARY_MOBILE_CSS = `
+var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "--sidebar-ux-main-mirror-w", CANVAS_MAIN_ACTIVE_CLASS = "sidebar-ux-canvas-main-active", CANVAS_MAIN_OPEN_CLASS = "sidebar-ux-canvas-main-open", TAB_LIST_WIDTH_PX = 56, TAB_STRIP_BACKGROUND = "color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep))", SECONDARY_MOBILE_CSS = `
 @media (max-width: 600px) {
   .sidebar-ux-secondary-wrapper > .sidebar-ux-drawer {
     flex-direction: column !important;
@@ -3217,7 +3217,7 @@ function createDrawerShell(options) {
     overflow-y: auto;
     scrollbar-width: none;
     border-${side === "right" ? "right" : "left"}: 1px solid var(--lumiverse-primary-020);
-    background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
+    background: ${TAB_STRIP_BACKGROUND};
   `;
   const panel = document.createElement("div");
   panel.className = "sidebar-ux-panel";
@@ -17755,7 +17755,10 @@ var init_state = __esm(() => {
 function injectStartMenuStyles() {
   injectStyles(START_MENU_STYLE_ID, START_MENU_CSS);
 }
-var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
+var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS;
+var init_start_menu_styles = __esm(() => {
+  init_styles();
+  START_MENU_CSS = `
   .canvas-os-start-menu {
     --csm-row-h: 40px;
     --csm-tile: 28px;
@@ -17770,7 +17773,7 @@ var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
     max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
     overflow: hidden;
     padding: 4px;
-    background: var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e));
+    background: ${TAB_STRIP_BACKGROUND};
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -17792,7 +17795,7 @@ var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
      same surface token as the base. */
   @media not (pointer: coarse) {
     body[data-glass] .canvas-os-start-menu {
-      background: color-mix(in srgb, var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e)) 80%, transparent);
+      background: color-mix(in srgb, ${TAB_STRIP_BACKGROUND} 80%, transparent);
       backdrop-filter: blur(var(--lcs-glass-blur, 8px));
     }
   }
@@ -18044,7 +18047,7 @@ var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
     }
   }
 `;
-var init_start_menu_styles = () => {};
+});
 
 // src/os/start-menu-motion.ts
 function getUiScale() {

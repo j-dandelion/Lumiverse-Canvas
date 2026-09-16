@@ -6,8 +6,9 @@
 //     shadow stack, divider, glass recipe,
 //   - the deliberate deviations recorded in the plan
 //     (`~/Documents/plans/2026-09-15-canvas-start-menu-visual-overhaul.md`):
-//     `--lumiverse-card-bg` surface (user request 2026-09-16; the base menu
-//     uses the darker `--lumiverse-bg-deep`), visible hover token (the base
+//     surface is the tab strip's own `TAB_STRIP_BACKGROUND` (user request
+//     2026-09-16; `sidebar/styles.ts` shared constant — the menu must match
+//     the strip it opens from), visible hover token (the base
 //     `--lumiverse-fill` is black-15), zoom-safe viewport sizing, state marks
 //     ● open / ○ minimized / none closed,
 //   - DOM wiring: class hooks, `data-os-state`, the icon fallback chain and
@@ -39,8 +40,10 @@ function assertIncludes(haystack: string, needle: string, msg: string) {
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { START_MENU_CSS, START_MENU_STYLE_ID } from '../start-menu-styles'
+import { TAB_STRIP_BACKGROUND } from '../../sidebar/styles'
 
 const src = readFileSync(join(process.cwd(), 'src/os/start-menu.ts'), 'utf8')
+const shellSrc = readFileSync(join(process.cwd(), 'src/sidebar/drawer-shell.ts'), 'utf8')
 
 /** Extract the declaration block starting at `needle` up to its closing brace. */
 function blockOf(css: string, needle: string): string {
@@ -55,10 +58,9 @@ function blockOf(css: string, needle: string): string {
   assert(root !== '', 'menu root rule exists')
   assertIncludes(
     root,
-    'background: var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e))',
-    'surface token is card-bg with the surface fallback',
+    `background: ${TAB_STRIP_BACKGROUND}`,
+    'surface is the shared tab-strip background',
   )
-  assert(!root.includes('--lumiverse-bg-deep'), 'deep surface token replaced')
   assertIncludes(root, 'border: 1px solid var(--lumiverse-border)', 'border parity')
   assertIncludes(root, 'border-radius: 10px', '10px radius parity')
   assertIncludes(
@@ -67,6 +69,15 @@ function blockOf(css: string, needle: string): string {
     'shadow stack parity',
   )
   assertIncludes(root, 'padding: 4px', 'surface padding parity')
+}
+{
+  // Parity: the strip itself must reference the same shared constant (not a
+  // duplicated literal), so the menu and the strip can never drift.
+  assertIncludes(
+    shellSrc,
+    'background: ${TAB_STRIP_BACKGROUND}',
+    'strip background uses the shared constant',
+  )
 }
 {
   // Directional drop shadow: an upward-opening menu must not cast its shadow
@@ -138,12 +149,13 @@ function blockOf(css: string, needle: string): string {
   )
 }
 {
-  // Glass — the context-menu recipe, coarse-pointer gated; same surface token.
+  // Glass — the context-menu recipe, coarse-pointer gated; derives from the
+  // same tab-strip surface as the base.
   assertIncludes(START_MENU_CSS, 'body[data-glass] .canvas-os-start-menu {', 'glass hook')
   assertIncludes(START_MENU_CSS, '@media not (pointer: coarse)', 'glass coarse-pointer gate')
   assertIncludes(START_MENU_CSS, 'backdrop-filter: blur(var(--lcs-glass-blur, 8px))', 'glass blur token')
   const glass = blockOf(START_MENU_CSS, 'body[data-glass] .canvas-os-start-menu {')
-  assertIncludes(glass, 'var(--lumiverse-card-bg', 'glass derives from the menu surface token')
+  assertIncludes(glass, TAB_STRIP_BACKGROUND, 'glass derives from the strip surface')
 }
 
 // ── 3. Anatomy hooks + interaction states ───────────────────────────────────

@@ -11,6 +11,7 @@ import {
   injectDrawerTabStyles,
   LOCATION_CLASS_BOTTOM,
   LOCATION_CLASS_TOP,
+  TAB_STRIP_BACKGROUND,
 } from './styles'
 import type { DrawerLocation } from '../types'
 
@@ -293,7 +294,7 @@ export function createDrawerShell(options: DrawerShellOptions): DrawerShell {
     overflow-y: auto;
     scrollbar-width: none;
     border-${side === 'right' ? 'right' : 'left'}: 1px solid var(--lumiverse-primary-020);
-    background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
+    background: ${TAB_STRIP_BACKGROUND};
   `
 
   const panel = document.createElement('div')
