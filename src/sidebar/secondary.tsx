@@ -25,7 +25,8 @@ import { showMainTabButton, findSafeFallbackButton, updateDrawerTabVisibility } 
 import { requestHostTabToMain, CANVAS_SECONDARY_CONTAINER_ID } from '../tabs/host-tab-location'
 import { restoreDomPlacedBuiltInToMain } from '../tabs/dom-placed-builtin'
 import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './mobile-exclusion'
-import { animateWrapper, cancelWrapperAnimation } from './animation'
+import { cancelWrapperAnimation } from './animation'
+import { animateDrawerClose, animateDrawerOpen } from './panel-motion'
 import { SECONDARY_WIDTH_VAR } from './styles'
 import {
   applyTabListPin,
@@ -122,6 +123,9 @@ export function unmountSecondarySidebar(): void {
   applyTabListPin(false, { force: true })
   if (_secondaryWrapper) {
     const oldWrapper = _secondaryWrapper
+    // Stop any in-flight motion before the node leaves the document (a
+    // settling close must not write styles/transform afterwards).
+    cancelWrapperAnimation(oldWrapper)
     _secondaryWrapper = null
     // Unregister BEFORE removal while the element is still attached. The
     // host's unregister commit cleans the portalled roots (removeChild)
@@ -662,11 +666,17 @@ export function openSecondarySidebar() {
     dlog('[secondary] openSecondarySidebar:BAIL no-wrapper')
     return
   }
+  const drawer = _secondaryDrawer
+  if (!drawer) {
+    dlog('[secondary] openSecondarySidebar:BAIL no-drawer')
+    return
+  }
   dlog('[secondary] openSecondarySidebar:opening', { mobile: isMobileViewport() })
   // On mobile, close the other sidebar first
   enforceExclusionOnOpen('secondary')
-  // Animate wrapper to translateX(0) — both drawerTab and drawer slide in as one unit
-  animateWrapper(wrapper, 0)
+  // Sides: both drawerTab and drawer slide in as one unit. Top/Bottom: rail
+  // bloom (structural wrapper snap + panel motion).
+  animateDrawerOpen(wrapper, drawer, 'secondary')
   _secondarySidebarOpen = true
   wrapper.dataset.drawerOpen = 'true'
   markDrawerOpenState(true)
@@ -700,10 +710,11 @@ export function closeSecondarySidebar(options?: { silent?: boolean }): void {
     caller: new Error('close callstack').stack?.split('\n').slice(1, 4).join(' | '),
   })
   if (!_secondaryWrapper || !_secondaryDrawer) return
-  // Animate wrapper back to its closed transform — direction-aware via
-  // getClosedTransformPx: secondary on the right closes at +width, on the
-  // left at -width.
-  animateWrapper(_secondaryWrapper!, getClosedTransformPx())
+  // Sides: slide back to the closed transform — direction-aware via
+  // getClosedTransformPx (right closes at +width, left at -width).
+  // Top/Bottom: rail bloom; the helper is idempotent, so a duplicate close
+  // never falls through to the 350ms slide.
+  animateDrawerClose(_secondaryWrapper, _secondaryDrawer, getClosedTransformPx(), 'secondary')
   _secondarySidebarOpen = false
   _secondaryWrapper.dataset.drawerOpen = 'false'
   markDrawerOpenState(false)
@@ -781,6 +792,9 @@ export function getClosedTransformPx(): number {
  */
 export function restyleSecondaryShellSide(side: 'left' | 'right'): void {
   if (!_secondaryWrapper || !_secondaryWrapper.isConnected) return
+  // An in-flight bloom carries the OLD origin/closed transform — settle it
+  // before restyling (side swap is a hard geometry change).
+  cancelWrapperAnimation(_secondaryWrapper)
   restyleShellSide(_secondaryWrapper, side)
   _secondaryWrapper.style.transform = _secondarySidebarOpen
     ? 'translateX(0)'

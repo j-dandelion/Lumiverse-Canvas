@@ -26,7 +26,8 @@ import {
   isTaskbarModeEnabled,
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
-import { animateWrapper, cancelWrapperAnimation } from './animation'
+import { cancelWrapperAnimation } from './animation'
+import { animateDrawerClose, animateDrawerOpen } from './panel-motion'
 import {
   closedTransformPx,
   createDrawerShell,
@@ -237,6 +238,8 @@ export function applyMainMirrorRestoredWidth(widthPx: number): void {
   if (!(w > 0)) return
   document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${w}px`)
   if (_shell && !_open) {
+    // A settling close would write the OLD width's closed transform after us.
+    cancelWrapperAnimation(_shell.wrapper)
     _shell.wrapper.style.transform = `translateX(${closedTransformPx(_shell.side, w)}px)`
   }
 }
@@ -251,6 +254,9 @@ export function applyMainMirrorRestoredWidth(widthPx: number): void {
 export function restyleMainShellSide(side: 'left' | 'right'): void {
   if (!_shell || !_active) return
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
+  // An in-flight bloom carries the OLD origin/closed transform — settle it
+  // before restyling (spec: side swap is a hard geometry change).
+  cancelWrapperAnimation(_shell.wrapper)
   restyleShellSide(_shell.wrapper, side)
   _shell.side = side
   _mountedSide = side
@@ -272,8 +278,8 @@ export function openCanvasMainDrawer(): void {
   _open = true
   document.documentElement.classList.add(CANVAS_MAIN_OPEN_CLASS)
   _shell.drawerTab.classList.add('sidebar-ux-drawer-tab--active')
-  // Content is a child of the shell — one animateWrapper moves chrome + content.
-  animateWrapper(_shell.wrapper, 0)
+  // Content is a child of the shell — the panel motion moves chrome + content.
+  animateDrawerOpen(_shell.wrapper, _shell.drawer, 'primary')
   void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin()).catch((err) => { dwarn(`[main-mirror] reconcileMainTabListPin failed: ${err}`) })
   bumpReflow()
   persistCanvasMainOpenState()
@@ -286,7 +292,7 @@ export function closeCanvasMainDrawer(): void {
   const side = _shell.side
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)
   dlog(`[main-mirror] close side=${side} closedTx=${closedTransformPx(side, w)}`)
-  animateWrapper(_shell.wrapper, closedTransformPx(side, w))
+  animateDrawerClose(_shell.wrapper, _shell.drawer, closedTransformPx(side, w), 'primary')
   _open = false
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS)
   _shell.drawerTab.classList.remove('sidebar-ux-drawer-tab--active')
@@ -432,6 +438,9 @@ function injectMainMirrorMobileStyles(): void {
  */
 export function syncMainMirrorToViewport(): void {
   if (!_shell || !_active) return
+  // Viewport crossing rewrites width + transform; a live motion would settle
+  // against the old geometry (or fight the new transform).
+  cancelWrapperAnimation(_shell.wrapper)
   try {
     if (isMobileViewport()) {
       // A desktop shell crossing down needs the mobile stylesheet: it is

@@ -38,6 +38,7 @@ import {
   setCanvasMainNoActive,
 } from '../sidebar/main-mirror-drawer'
 import { getSecondaryWrapper } from '../sidebar/secondary'
+import { isPanelAnimating, whenPanelMotionSettles } from '../sidebar/animation'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { isOsModeEnabled } from '../settings/state'
 import { closeWindowByLiveId, getDisplayedLiveId, minimizeWindowByLiveId } from './actions'
@@ -104,6 +105,29 @@ function clearTitle(header: HTMLElement): void {
   if (title) title.textContent = ''
 }
 
+/**
+ * Run the D17 parking (`apply`) once the side's close motion has settled.
+ * The chrome pass can run BEFORE the close command starts the animation
+ * (model commit → host setDrawer ordering), so a direct `isPanelAnimating`
+ * check is not enough: re-check on the next frame and otherwise register for
+ * the settle. Callbacks re-check the live state — a reopen may win the race.
+ * (User feedback 2026-09-15: parking mid-fade made the panel content/title
+ * vanish instantly.)
+ */
+function whenPanelParkingReady(side: 'primary' | 'secondary', apply: () => void): void {
+  const wrapper = side === 'primary' ? getMainMirrorWrapper() : getSecondaryWrapper()
+  if (!wrapper) {
+    apply()
+    return
+  }
+  const check = (): void => {
+    if (isPanelAnimating(wrapper)) whenPanelMotionSettles(wrapper, apply)
+    else apply()
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(check)
+  else check()
+}
+
 // ── Injection + presence (D17) ────────────────────────────────────────────────
 
 /**
@@ -123,9 +147,17 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
   // D16). Primary hides its content slot through the shell attribute; both
   // sides clear the stale title (the next activation restores it).
   if (side === 'primary') {
-    setCanvasMainNoActive(!displayed)
+    if (displayed) {
+      setCanvasMainNoActive(false)
+    } else {
+      whenPanelParkingReady('primary', () => {
+        if (!getDisplayedLiveId('primary')) setCanvasMainNoActive(true)
+      })
+    }
   } else if (!displayed) {
-    clearTitle(surface.header)
+    whenPanelParkingReady('secondary', () => {
+      if (!getDisplayedLiveId('secondary')) clearTitle(surface.header)
+    })
   }
   // Existence parity with the close button: stale injections survive
   // rewrites; hide keeps them invisible until the next ensure pass.

@@ -35,6 +35,7 @@ import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
 import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
 import { hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
@@ -417,6 +418,9 @@ const drawerLocationFeature: CanvasFeature = {
   },
   apply(prev, next) {
     if (prev.drawerLocation === next.drawerLocation) return
+    // A live drawer animation targets the old rail/geometry — settle it before
+    // the new layout lands (mixed-axis motion otherwise).
+    cancelAllWrapperAnimations()
     // Authoritative pass for the diff (sync + coalesced).
     reconcileDrawerLocation({ force: true })
     // Spec §4.5: a floating Start menu cannot survive the strip moving

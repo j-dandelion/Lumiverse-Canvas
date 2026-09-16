@@ -160,12 +160,16 @@ const tabButtons = read('src/tabs/buttons.ts')
     'parking is an attribute (display suppression, never unmount)')
   assertIncludes(mainMirror, "_shell.title.textContent = ''",
     'parking clears the stale header title')
-  assertIncludes(panelChrome, 'setCanvasMainNoActive(!displayed)',
-    'chrome applies parking from the displayed-window derivation')
+  assertIncludes(panelChrome, "whenPanelParkingReady('primary'",
+    'chrome defers parking until the close motion settles (content must fade, not vanish)')
+  assertIncludes(panelChrome, "if (!getDisplayedLiveId('primary')) setCanvasMainNoActive(true)",
+    'the deferred parking re-checks the live displayed-window state (reopen race)')
   assertIncludes(panelChrome, 'setCanvasMainNoActive(false)',
     'teardown un-parks the content slot')
   assertIncludes(styles, '[data-canvas-os-no-active]',
     'sheet owns the no-active content hide')
+  assertIncludes(styles, 'data-canvas-panel-animating',
+    'sheet keeps the content visible while a panel motion is in flight')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

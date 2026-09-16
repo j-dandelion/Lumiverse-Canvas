@@ -250,9 +250,11 @@ export function startMobileExclusion(): () => void {
    *  to match the new CSS var so the closed transform stays in sync with
    *  the drawer's actual width. */
   function _updateDrawerWidth(): void {
-   // Stop any in-flight rAF so it can't overwrite the transform we're about to set
-   cancelWrapperAnimation()
    const wrapper = getSecondaryWrapper()
+   // Stop any in-flight motion (translate or rail bloom) so it can't overwrite
+   // the transform/width we're about to set — and so a settling close cannot
+   // write a stale closed transform after the width changed.
+   if (wrapper) cancelWrapperAnimation(wrapper)
    const drawer = wrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
    if (!drawer) return
    if (isMobileViewport()) {

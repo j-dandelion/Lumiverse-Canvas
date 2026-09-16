@@ -20,6 +20,11 @@
  * users and DOM-less environments get the instant path.
  */
 
+import { prefersReducedMotion } from '../dom/motion-prefs'
+
+/** Re-exported for existing consumers/tests (shared `dom/motion-prefs` leaf). */
+export { prefersReducedMotion }
+
 /** Open duration — spec range is 120–150 ms. */
 export const START_MENU_OPEN_MS = 150
 /** Close duration — a touch faster than open (dismissals should feel snappy). */
@@ -86,17 +91,7 @@ export function canAnimateMenu(menu: HTMLElement): boolean {
   return typeof (menu as { animate?: unknown }).animate === 'function'
 }
 
-/** `prefers-reduced-motion: reduce`; false when matchMedia is unavailable. */
-export function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return false
-  }
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches === true
-  } catch {
-    return false
-  }
-}
+
 
 /**
  * Current visual state of a possibly-mid-animation menu. Call BEFORE

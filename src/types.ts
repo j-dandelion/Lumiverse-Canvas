@@ -31,11 +31,13 @@ export interface LayoutState {
 }
 
 /**
- * Where the drawer tab lists live. Panels always keep their left/right side
- * and slide in/out horizontally in every mode; this only moves the tab
- * buttons. `'top' | 'bottom'` pins one always-visible horizontal strip to
- * that viewport edge (requires taskbar chrome — auto-enabled by the
- * normalization invariant).
+ * Where the drawer tab lists live. Panels always keep their left/right side;
+ * `'sides'` slides them in/out horizontally, `'top' | 'bottom'` pins one
+ * always-visible horizontal strip to that viewport edge and blooms the panel
+ * out of the rail instead (wrapper transform snaps structurally; the panel
+ * fades + micro-scales anchored at the strip — see `sidebar/animation.ts`).
+ * This only moves the tab buttons; Top/Bottom requires taskbar chrome
+ * (auto-enabled by the normalization invariant).
  */
 export type DrawerLocation = 'sides' | 'top' | 'bottom'
 
@@ -89,8 +91,9 @@ export interface CanvasSettings {
    *  the drawer. Requires `moveControlsToOuterEdge` (forced off when
    *  outer-edge is off). Secondary: reparents Canvas-owned tab list.
    *  Main: Canvas mirror strip (host React nodes stay in place; clicks
-   *  forward to host buttons). Panels still slide in/out from behind
-   *  the strip. No-op on mobile. */
+   *  forward to host buttons). Sides panels slide in/out from behind the
+   *  strip; Top/Bottom location blooms them out of the rail instead.
+   *  No-op on mobile. */
   taskbarMode?: boolean
 
   /** When on (desktop only, default off), hide the drawer open/close

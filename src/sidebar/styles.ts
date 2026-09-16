@@ -816,8 +816,13 @@ export function injectDrawerTabStyles(): void {
     }
     /* D17 parking: no displayed window → no stale parked content when the
        drawer is (re)opened via the edge toggle. Keep the parked host DOM —
-       this is display suppression, never unmount (spec §4.6). */
-    .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active] .sidebar-ux-panel-content {
+       this is display suppression, never unmount (spec §4.6).
+       The :not([data-canvas-panel-animating]) guard: while a close fade is
+       running the content must stay visible and fade with the panel (feedback
+       2026-09-15 — parking mid-fade made the content vanish instantly). The
+       attribute is set/cleared by sidebar/animation.ts (PANEL_ANIMATING_ATTR;
+       literal here because this module is a leaf on purpose). */
+    .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active]:not([data-canvas-panel-animating]) .sidebar-ux-panel-content {
       display: none !important;
     }
   `)

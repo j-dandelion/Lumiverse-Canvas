@@ -12,7 +12,7 @@ Convenient tweaks and shortcuts to enhance your Lumiverse UI! More at your finge
 - **Center the chat in the visible area**: Prevent panels from covering chat
 - **Second drawer**: Add a second sidebar drawer, move tabs between drawers freely (right click tab -> click move, or enable drag and drop in Canvas settings)
 - **Tabs along screen edge**: Move tab buttons to the other side of the drawer panel
-- **Taskbar mode**: *pin* the tab buttons along the screen edge - only the panel slides in and out. This means you can open a specific tab at any time without opening the drawer first
+- **Taskbar mode**: *pin* the tab buttons along the screen edge - only the panel opens and closes (slide on Sides, a rail bloom on Top/Bottom). This means you can open a specific tab at any time without opening the drawer first
 - **Drag and drop drawer tabs**: Drag and drop tabs to rearrange them without having to open "Configure Tabs" menu (requires taskbar mode)
 - **"Configure Tabs" menu expansion**: Allows customizing tab layout for both single-drawer and dual-drawer mode, all in one place
 - **Hide drawer open/close buttons** setting: They're a bit redundant in taskbar mode, so you have the option to hide them

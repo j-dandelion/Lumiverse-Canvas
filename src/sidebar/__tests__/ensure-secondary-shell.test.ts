@@ -192,6 +192,11 @@ mock.module('../panel-header-sync', () => ({
 
 mock.module('../animation', () => ({
   animateWrapper: () => {},
+  cancelWrapperAnimation: () => {},
+  cancelAllWrapperAnimations: () => {},
+  animatePanelToggle: () => {},
+  computePanelAnchor: () => null,
+  __getPanelAnimState: () => ({ panelRaf: null, panelStart: null }),
 }))
 
 mock.module('../styles', () => ({

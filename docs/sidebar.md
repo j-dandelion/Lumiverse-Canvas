@@ -41,7 +41,7 @@ Shared chrome comes from `createDrawerShell({ owner: 'main' \| 'secondary', ... 
 
 ### Drawer location (S8: Sides | Top | Bottom)
 
-`drawerLocation` moves **only the tab lists**. Panels keep their left/right side and slide in horizontally; width, resize, animation and persistence are identical in every mode.
+`drawerLocation` moves **only the tab lists**. Panels keep their left/right side; Sides slides them in/out horizontally, Top/Bottom runs the **rail bloom** instead (the wrapper transform snaps structurally and the panel fades + micro-scales anchored at the strip edge, emerging from under the rail — see Animation below). Width, resize and persistence are identical in every mode.
 
 - **One always-visible horizontal strip** pinned to the selected viewport edge, full width, safe-area aware. Two zones → each list occupies its half, anchored to its own drawer's edge and growing inward, with an **exactly 1px overlap**: the left/edge host is `calc(50% + 1px)`, the right host is exactly `50%` (the overlap stops a device-pixel seam at fractional zoom from showing the page background as a divider — live bug 2026-09-14; both halves carrying +1px made a 2px double-painted band that was visible as a line under non-opaque backgrounds — live report 2026-09-15). Solo/empty secondary → the main zone takes 100%. Side swaps mirror the zones automatically.
 - **Single geometry writer:** `sidebar/tab-position.ts` owns every host/list geometry write (`applyPinHostChrome` writes `data-strip-axis` / `data-strip-edge` + zone anchors in the same wholesale className assignment; `applyPinnedTabListChrome` / `clearPinnedTabListChrome` own the list chrome and full reversal). `sidebar/drawer-location.ts` is presentation/orchestration only: html classes + `--sidebar-ux-strip-h`, shell wrapper edge offsets, handle visibility, consumer knobs, presence subscription, `reconcileDrawerLocation()` (sync + coalesced + generation-guarded), `clearDrawerLocation()`.
@@ -246,12 +246,17 @@ On mobile (viewport <= 600px):
 - Viewport-cross detection: `matchMedia` listener handles 600px boundary crossing
 - CSS variable sync: `--sidebar-ux-secondary-w` is overwritten on mobile to match `window.innerWidth`
 
-## Animation (`animation.ts`)
+## Animation (`animation.ts` + `panel-motion.ts`)
 
-Open/close animation uses `requestAnimationFrame` with easeOutCubic (350ms):
-- `animateWrapper(wrapper, targetPx)` — start animation
-- `cancelWrapperAnimation()` — cancel in-flight (needed for viewport-cross)
-- No CSS transitions, no counter-translate — the wrapper translates and both tab and drawer move together
+Two mode-routed open/close motions — `sidebar/panel-motion.ts` picks by `isHorizontalStrip()`:
+
+- **Sides** — the original `requestAnimationFrame` translateX slide, easeOutCubic 350ms: `animateWrapper(wrapper, targetPx)`. The wrapper translates and the tab list + drawer move as one unit (no counter-translate, no CSS transitions).
+- **Top/Bottom ("rail bloom")** — the wrapper's translateX is purely structural (snaps to the open slot pre-paint, to the closed slot after the exit) while `animatePanelToggle` drives `.sidebar-ux-drawer` opacity + a rail tuck + 1.5% scale; `.sidebar-ux-panel` resolves last (phase-shifted UI channel): **270ms open / 270ms close** (`PANEL_OPEN_MS`/`PANEL_CLOSE_MS`, user-tuned 2026-09-15), easeOutCubic. The rail (pin host z-index 10000) paints above the wrapper (9990), hiding the tuck; direction is mirrored per edge.
+  - **D17 parking is deferred to the settle:** the wrapper carries `data-canvas-panel-animating` while a motion runs; OS "no displayed window" parking (`setCanvasMainNoActive` → `display:none` on the content slot, plus the title clear) is registered with `whenPanelMotionSettles` instead of applying immediately, and the sheet's content-hide rule is scoped `:not([data-canvas-panel-animating])`. Without this the content/title vanished at the first frame of the close (user feedback 2026-09-15).
+  - **Anchoring (`panel-motion.ts`):** the origin is the *displayed window's strip button* (`computePanelAnchor`, percentages of the drawer box — zoom-safe, may fall outside the box), so the close visibly collapses into that tab and the open grows out of it. The tracker follows the model's per-side active via `onModelChanged` (dynamic import — keeps panel-motion out of the dispatch cycle), keeping the last displayed window for closes.
+  - **No associated button → pure fade:** OS close dismisses the window first, so `os/actions.ts` calls `suppressNextCloseAnchor(side)` (one-shot, guarded on the drawer being open) and the close fades in place with no transform movement. OS *minimize* does not suppress — the button remains, so the panel still collapses toward it. Unanchored opens fall back to the rail center.
+- `cancelWrapperAnimation(wrapper?)` cancels both tweens and resets the bloom's inline styles (restores `pointer-events: auto`); `cancelAllWrapperAnimations()` settles every live wrapper (location flips). `prefers-reduced-motion` skips both animations (instant end states).
+- Inline `will-change` exists only for the bloom's duration — a persistent `will-change: transform` would make the drawer a containing block for fixed descendants.
 
 ## Panel Header Sync (`panel-header-sync.ts`)
 

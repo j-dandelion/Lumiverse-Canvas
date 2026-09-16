@@ -63,6 +63,10 @@ mock.module('../../recon/dispatch', () => ({
 }))
 mock.module('../../settings/state', () => ({
   isOsModeEnabled: () => fake.osMode,
+  // panel-motion (imported by actions) reads the drawer location; this suite
+  // is about the action layer, so the motion router stays inert.
+  isHorizontalStrip: () => false,
+  getStripEdge: () => null,
 }))
 
 // Module under test — imports AFTER mocks (repo convention).

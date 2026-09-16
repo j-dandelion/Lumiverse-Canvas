@@ -22,6 +22,7 @@
 import type { Side } from '../core/model'
 import { dispatch, dispatchBatch, dispatchMoveByLiveId, getHost, getModel } from '../recon/dispatch'
 import { isOsModeEnabled } from '../settings/state'
+import { suppressNextCloseAnchor } from '../sidebar/panel-motion'
 import { commandDrawerOpen } from './drawer-command'
 import { dlog } from '../debug/log'
 
@@ -62,6 +63,12 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
     return dispatch({ t: 'setClosed', key, closed: true })
   }
   // D17 + D7: closing the displayed window → no active → collapse.
+  // The close animation must NOT collapse toward the window's strip button:
+  // the button is about to be hidden, and the model commit below is async, so
+  // the anchor resolver would still see it. Fade in place instead (user:
+  // "no associated tab button → fade out without moving"). Guarded on the
+  // drawer being open — a closed drawer has no collapse to animate.
+  if (model.drawers[side].open) suppressNextCloseAnchor(side)
   const result = dispatchBatch([
     { t: 'setClosed', key, closed: true },
     { t: 'setDrawer', side, open: false },
