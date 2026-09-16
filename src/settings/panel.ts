@@ -65,6 +65,10 @@ const OS_SECONDARY_START_HINT =
   "OS mode only: shows the Start button in the second drawer's strip. Off by default — the main drawer's Start menu still lists every window, so nothing becomes unreachable."
 const OS_SECONDARY_START_LOCK_HINT =
   'Requires OS mode and the second drawer. Turn both on to use it.'
+const OS_WINDOW_CONTROLS_HINT =
+  'On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.'
+const OS_WINDOW_CONTROLS_LOCK_HINT =
+  'Requires OS mode. Turn it on to use it.'
 const SECOND_DRAWER_HINT =
   'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.'
 const SECOND_DRAWER_OS_MOBILE_HINT =
@@ -397,6 +401,20 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   })
   secSidebars.appendChild(osModeRow)
 
+  const osWindowControls = makeToggle(
+    () => getSettings().osWindowControls,
+    (v) => setSettings({ osWindowControls: v }),
+    { disabled: () => !getSettings().osMode },
+  )
+  const osWindowControlsRow = buildSettingRow({
+    label: 'Separate minimize and close controls',
+    hint: OS_WINDOW_CONTROLS_HINT,
+    control: osWindowControls.btn,
+    disabled: !getSettings().osMode,
+  })
+  secSidebars.appendChild(osWindowControlsRow)
+  const osWindowControlsHint = osWindowControlsRow.querySelector('.sidebar-ux-panel-row-hint')
+
   const osSecondaryStart = makeToggle(
     () => getSettings().osSecondaryStartMenu,
     (v) => setSettings({ osSecondaryStartMenu: v }),
@@ -546,6 +564,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     moveControlsToOuter.refresh()
     taskbarMode.refresh()
     osMode.refresh()
+    osWindowControls.refresh()
     osSecondaryStart.refresh()
     coreTabsHidden.refresh()
     hideDrawerTabToggle.refresh()
@@ -622,6 +641,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       osSecondaryStartRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
       if (osSecondaryStartHint) {
         osSecondaryStartHint.textContent = d ? OS_SECONDARY_START_LOCK_HINT : OS_SECONDARY_START_HINT
+      }
+    }
+    // osWindowControls: panel-header chrome is OS chrome only — locked while
+    // OS mode is off (there is no OS header without it).
+    {
+      const d = !getSettings().osMode
+      osWindowControls.btn.disabled = d
+      osWindowControls.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      osWindowControlsRow.classList.toggle('sidebar-ux-panel-row-disabled', d)
+      if (osWindowControlsHint) {
+        osWindowControlsHint.textContent = d ? OS_WINDOW_CONTROLS_LOCK_HINT : OS_WINDOW_CONTROLS_HINT
       }
     }
     // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs

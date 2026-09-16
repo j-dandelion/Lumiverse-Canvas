@@ -136,6 +136,15 @@ export interface CanvasSettings {
    *  second drawer is disabled. */
   osSecondaryStartMenu?: boolean
 
+  /** OS mode only (default on): the panel header shows BOTH the injected
+   *  minimize ("–") control and the close ("X"). When off, only the X shows
+   *  and it MINIMIZES the window — vanilla Lumiverse behavior (the strip
+   *  button stays; the window can still be CLOSED from the tab button's
+   *  right-click/long-press menu). A plain persistent preference: never
+   *  forced by the OS invariant and never snapshotted into `osChromePrefs`;
+   *  the panel row is locked while OS mode is off. */
+  osWindowControls?: boolean
+
   /** When on, the Configure Tabs eye toggle is unlocked for core built-in
    *  tabs (`CORE_HIDE_LOCKED`) and closing one in OS mode also marks it
    *  hidden. OS mode requires it (normalize forces it true) because a
@@ -248,6 +257,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   hideDrawerOpenCloseButtons: false,
   osMode: false,
   osSecondaryStartMenu: false,
+  osWindowControls: true,
   coreTabsHidden: false,
   osForcedSingleDrawer: false,
   osChromePrefs: null,

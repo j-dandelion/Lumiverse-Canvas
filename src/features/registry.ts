@@ -33,7 +33,7 @@ import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawe
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
-import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
+import { mountPanelChrome, teardownPanelChrome, applyOsWindowControlsChange } from '../os/panel-chrome'
 import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
@@ -668,6 +668,19 @@ const osSecondaryStartMenuFeature: CanvasFeature = {
   },
 }
 
+/** OS panel-header controls (default on): "- minimizes, X closes" vs the
+ *  vanilla single X that minimizes. OS chrome only — the feature id must stay
+ *  distinct (`applySettings` keys on `feature.id`, so `osModeFeature` never
+ *  sees this diff). Live-apply just re-runs the chrome pass; the X branch
+ *  reads the setting at click time. */
+const osWindowControlsFeature: CanvasFeature = {
+  id: 'osWindowControls',
+  apply(prev, next) {
+    if (prev.osWindowControls === next.osWindowControls) return
+    applyOsWindowControlsChange()
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
@@ -694,6 +707,8 @@ export const FEATURES: readonly CanvasFeature[] = [
   osModeFeature,
   // OS secondary Start chrome: downstream of the OS mount pipeline.
   osSecondaryStartMenuFeature,
+  // OS header controls: same downstream placement (chrome pass only).
+  osWindowControlsFeature,
   dragAndDropDrawerTabsFeature,
   drawerTabDragFeature,
 ]

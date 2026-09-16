@@ -40,7 +40,7 @@ import {
 import { getSecondaryWrapper } from '../sidebar/secondary'
 import { isPanelAnimating, whenPanelMotionSettles } from '../sidebar/animation'
 import { getHostDrawerSettings } from '../dom/host-settings'
-import { isOsModeEnabled } from '../settings/state'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 import { closeWindowByLiveId, getDisplayedLiveId, minimizeWindowByLiveId } from './actions'
 import { setPanelHeaderCloseHandler } from './header-close'
 import { getHost, getModel, onModelChanged } from '../recon/dispatch'
@@ -163,10 +163,15 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
   // rewrites; hide keeps them invisible until the next ensure pass.
   setHeaderHidden(surface.closeBtn, !displayed)
 
+  // The minimize control is opt-out (`osWindowControls`): when off, only the
+  // X shows and the X minimizes (vanilla behavior — see mountPanelChrome's
+  // close-policy branch). Drop a stale injection on toggle-off; never touch
+  // the shell-owned X.
+  const showMinimize = displayed && !!getSettings().osWindowControls
   let minBtn = surface.actions.querySelector(
     `button[${MINIMIZE_ATTR}]`,
   ) as HTMLButtonElement | null
-  if (displayed && !minBtn) {
+  if (showMinimize && !minBtn) {
     const template = document.createElement('template')
     template.innerHTML = minimizeButtonHtml().trim()
     minBtn = template.content.firstElementChild as HTMLButtonElement
@@ -179,6 +184,10 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
       void minimizeWindowByLiveId(liveId, side)
     })
     dlog('[os] header chrome: minimize button injected', { side })
+  }
+  if (!getSettings().osWindowControls && minBtn) {
+    minBtn.remove()
+    minBtn = null
   }
   if (minBtn) setHeaderHidden(minBtn, !displayed)
 }
@@ -271,6 +280,16 @@ function ensureChromeBoth(): void {
   if (isOsModeEnabled()) ensureChromeForSide('secondary')
 }
 
+/**
+ * Live-apply the `osWindowControls` toggle: re-run the chrome pass so the
+ * minimize control appears/disappears without a remount. The X handler reads
+ * the setting per click, so no listener rewire is needed.
+ */
+export function applyOsWindowControlsChange(): void {
+  if (!isOsModeEnabled() || !_active) return
+  ensureChromeBoth()
+}
+
 // ── Feature hooks ────────────────────────────────────────────────────────────
 
 /** Model-change subscription (refresh pass id; detached on teardown). */
@@ -280,14 +299,22 @@ let _unsubModelChanged: (() => void) | null = null
 export function mountPanelChrome(): void {
   if (_active) return
   _active = true
-  // X→close policy (D2/D9): the Canvas shells own their header buttons and
-  // call back through the header-close seam (no document interception).
+  // X policy (D2/D9, osWindowControls): the Canvas shells own their header
+  // buttons and call back through the header-close seam (no document
+  // interception). With osWindowControls ON the X closes the window; OFF it
+  // MINIMIZES (vanilla drawer behavior — the strip button stays), and the
+  // window can still be closed from the tab button's context menu.
   setPanelHeaderCloseHandler((side) => {
     if (!isOsModeEnabled()) return false
     const liveId = getDisplayedLiveId(side)
     if (!liveId) return false
-    dlog('[os] header X intercepted → close window', { side, liveId })
-    void closeWindowByLiveId(liveId)
+    if (getSettings().osWindowControls) {
+      dlog('[os] header X intercepted → close window', { side, liveId })
+      void closeWindowByLiveId(liveId)
+    } else {
+      dlog('[os] header X intercepted → minimize window (osWindowControls off)', { side, liveId })
+      void minimizeWindowByLiveId(liveId, side)
+    }
     return true
   })
   if (typeof MutationObserver !== 'undefined') {
