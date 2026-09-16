@@ -17815,9 +17815,10 @@ function openStartMenu(side, button) {
     const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
     menu.style.left = `${renderedLeft / uiScale}px`;
     menu.style.top = `${renderedTop / uiScale}px`;
+    const placedRect = menu.getBoundingClientRect();
     menu.style.visibility = "";
     _menuRevealed = true;
-    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, mRect, uiScale));
+    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, placedRect, uiScale));
     menu.querySelector('[role="menuitem"]')?.focus();
   });
   attachMenuDismiss();

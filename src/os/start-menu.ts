@@ -287,10 +287,16 @@ function openStartMenu(side: Side, button: HTMLElement): void {
     ))
     menu.style.left = `${renderedLeft / uiScale}px`
     menu.style.top = `${renderedTop / uiScale}px`
+    // Origin from the PLACED box, never the pre-position rect: with auto
+    // insets the fixed menu is measured at its static position (after #root),
+    // which is nowhere near where it is about to be placed. Using it doubled
+    // the origin distance in Bottom mode and the open frame started far too
+    // low (live report 2026-09-15).
+    const placedRect = menu.getBoundingClientRect()
     menu.style.visibility = ''
     _menuRevealed = true
     // Grow out of the button: origin at its center, external to the box.
-    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, mRect, uiScale))
+    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, placedRect, uiScale))
     ;(menu.querySelector('[role="menuitem"]') as HTMLElement | null)?.focus()
   })
   attachMenuDismiss()

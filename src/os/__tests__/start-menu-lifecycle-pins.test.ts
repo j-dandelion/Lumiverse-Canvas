@@ -116,11 +116,21 @@ assert(
 assertIncludes(motion, 'menu.style.transformOrigin', 'origin is applied to the element')
 assertIncludes(motion, 'captureMenuVisualState', 'mid-flight visual state capture exported')
 assertIncludes(motion, '--lumiverse-ui-scale', 'ui-scale coordinate contract is explicit')
-assertIncludes(
-  startMenu,
-  'computeGrowthOrigin(rect, mRect, uiScale)',
-  'open passes the zoom-aware origin for the button anchor',
-)
+{
+  // Live bug 2026-09-15: the origin used the menu's pre-position rect (a fixed
+  // box with auto insets sits at its static position), which doubled the
+  // anchor distance in Bottom mode and the open frame started far too low.
+  const leftIdx = startMenu.indexOf('menu.style.left =')
+  const placedIdx = startMenu.indexOf('const placedRect = menu.getBoundingClientRect()')
+  const playIdx = startMenu.indexOf('computeGrowthOrigin(rect, placedRect, uiScale)')
+  assert(leftIdx >= 0, 'open sets the placed left before measuring')
+  assert(placedIdx > leftIdx, 'origin rect is measured AFTER left/top are set')
+  assert(playIdx > placedIdx, 'open passes the zoom-aware origin for the placed box')
+  assert(
+    !startMenu.includes('computeGrowthOrigin(rect, mRect, uiScale)'),
+    'the pre-position (static) rect must never anchor the growth origin',
+  )
+}
 
 // ── 7. Approved adjacent fixes ──
 assertIncludes(
