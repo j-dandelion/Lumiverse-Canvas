@@ -2,14 +2,12 @@
  * OS-mode Start menu styles ("Command Deck") — visual overhaul, 2026-09-15.
  *
  * Chassis parity with the tab right-click context menu
- * (`src/tabs/tab-context-menu.ts`): same border, 10px radius, shadow stack,
- * 6px item radius, divider margins and `body[data-glass]` recipe.
+ * (`src/tabs/tab-context-menu.ts`): same surface token, border, 10px radius,
+ * shadow stack, 6px item radius, divider margins and `body[data-glass]` recipe.
  * Deliberate deviations (documented in the plan
  * `~/Documents/plans/2026-09-15-canvas-start-menu-visual-overhaul.md`):
- *   - surface is `--lumiverse-bg` at ~90% opacity (user request 2026-09-15;
- *     the base context menu uses the darker `--lumiverse-bg-deep`),
  *   - row hover uses `--lumiverse-bg-hover` (the base `--lumiverse-fill` is
- *     rgba(0,0,0,.15) → ~invisible on a dark surface),
+ *     rgba(0,0,0,.15) → ~invisible on `bg-deep`),
  *   - viewport-relative sizing divides by `--lumiverse-ui-scale` (the menu is a
  *     `body > *` child, so raw vw/vh overflow inside the host zoom layer),
  *   - state marks are `●` open / `○` minimized / none closed.
@@ -39,14 +37,7 @@ export const START_MENU_CSS = `
     max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
     overflow: hidden;
     padding: 4px;
-    /* Surface: --lumiverse-bg at 90% opacity (user request 2026-09-15).
-       The token itself carries alpha (0.95 in the default theme), so the
-       relative-color line pins the alpha to exactly 90% where supported
-       (Chromium/Safari); color-mix is the older-engine fallback and the first
-       declaration is the last-resort opaque fallback. */
-    background: var(--lumiverse-bg, var(--lumiverse-surface, #1a1a1e));
-    background: color-mix(in srgb, var(--lumiverse-bg, var(--lumiverse-surface, #1a1a1e)) 90%, transparent);
-    background: rgb(from var(--lumiverse-bg, var(--lumiverse-surface, #1a1a1e)) r g b / 90%);
+    background: var(--lumiverse-bg-deep, var(--lumiverse-surface, #1a1a1e));
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -55,13 +46,10 @@ export const START_MENU_CSS = `
     font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   }
 
-  /* Glass — the context menu's recipe, coarse-pointer gated like the base.
-     Derives from the same surface token as the menu (slightly more
-     transparent + blur). */
+  /* Glass — the context menu's recipe, coarse-pointer gated like the base. */
   @media not (pointer: coarse) {
     body[data-glass] .canvas-os-start-menu {
-      background: var(--lumiverse-bg, var(--lumiverse-surface, #1a1a1e));
-      background: color-mix(in srgb, var(--lumiverse-bg, var(--lumiverse-surface, #1a1a1e)) 80%, transparent);
+      background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
       backdrop-filter: blur(var(--lcs-glass-blur, 8px));
     }
   }
