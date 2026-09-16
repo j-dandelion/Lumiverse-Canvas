@@ -3748,17 +3748,10 @@ function syncHorizontalSplit() {
   if (typeof document === "undefined" || !document.documentElement?.style)
     return;
   if (!isHorizontalStrip() || !secondaryZonePresent()) {
-    if (document.documentElement.style.getPropertyValue(SPLIT_VAR)) {
-      dlog("[hsplit] sync clear", { horizontal: isHorizontalStrip(), zone: secondaryZonePresent() });
-    }
     clearSplitVar();
     return;
   }
-  const pct = `${computeSplitPct(getSettings().horizontalSplit)}%`;
-  const was = document.documentElement.style.getPropertyValue(SPLIT_VAR);
-  if (was !== pct)
-    dlog("[hsplit] sync", { pct, was });
-  writeSplitVar(pct);
+  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`);
 }
 function setHorizontalSplitPct(pct) {
   if (!Number.isFinite(pct) || pct <= 0 || pct >= 100)
@@ -4140,18 +4133,6 @@ function ensureSplitHandle(host) {
   installSplitHandleInteraction(handle);
   host.appendChild(handle);
   _splitHandle = handle;
-  dlog("[hsplit] handle created", {
-    host: host.className,
-    axis: host.getAttribute?.(STRIP_AXIS_ATTR),
-    handleParent: handle.parentElement?.className
-  });
-  if (typeof requestAnimationFrame === "function") {
-    requestAnimationFrame(() => {
-      try {
-        dlog(`[hsplit] probe ${splitProbe(handle)}`);
-      } catch {}
-    });
-  }
   return handle;
 }
 function removeSplitHandle() {
@@ -4171,7 +4152,7 @@ function installSplitHandleInteraction(handle) {
       return;
     e.preventDefault();
     e.stopPropagation();
-    startSplitDrag(handle, e);
+    startSplitDrag(handle);
   });
   handle.addEventListener("dblclick", (e) => {
     if (!isHorizontalStrip())
@@ -4184,38 +4165,7 @@ function installSplitHandleInteraction(handle) {
     setSettings({ horizontalSplit: 0.5 });
   });
 }
-function rectSnapshot(el) {
-  if (!el?.getBoundingClientRect)
-    return null;
-  const r = el.getBoundingClientRect();
-  return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width) };
-}
-function splitProbe(handle) {
-  const host = _pinHost;
-  const h = rectSnapshot(host);
-  const k = rectSnapshot(handle);
-  let cssW = "?";
-  let inlineW = "?";
-  let hostVis = "?";
-  try {
-    if (host) {
-      const hcs = getComputedStyle(host);
-      cssW = hcs.width;
-      inlineW = host.style.width;
-      hostVis = `${hcs.display}/${hcs.visibility}/${hcs.opacity}`;
-    }
-  } catch {}
-  const varNow = document.documentElement.style.getPropertyValue(SPLIT_VAR);
-  let hPos = "?";
-  let hLine = "?";
-  try {
-    const hcs = getComputedStyle(handle);
-    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}/${hcs.display}/${hcs.visibility}/${hcs.opacity}`;
-    hLine = getComputedStyle(handle, "::after").backgroundColor;
-  } catch {}
-  return `host=[${h?.l ?? "?"},${h?.r ?? "?"}] hostW=${h?.w ?? "?"} cssW=${cssW} inlineW=${inlineW} hostVis=${hostVis} handle=[${k?.l ?? "?"},${k?.r ?? "?"}] hPos=${hPos} line=${hLine} var=${varNow}`;
-}
-function startSplitDrag(handle, _down) {
+function startSplitDrag(handle) {
   if (typeof document === "undefined" || _splitDragging)
     return;
   const root = document.documentElement;
@@ -4226,10 +4176,8 @@ function startSplitDrag(handle, _down) {
   if (!(vw > 0))
     return;
   const preDrag = root.style.getPropertyValue(SPLIT_VAR);
-  dlog(`[hsplit] start side=${side} vw=${Math.round(vw)} downX=${Math.round(_down.clientX)} downY=${Math.round(_down.clientY)} preVar=${preDrag} ${splitProbe(handle)}`);
   _splitDragging = true;
   handle.classList?.add("sidebar-ux-hsplit-handle--active");
-  let moveLogCount = 0;
   if (document.body?.style) {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -4242,7 +4190,6 @@ function startSplitDrag(handle, _down) {
     document.body.appendChild(overlay);
   }
   const finish = (persist) => {
-    dlog(`[hsplit] end persist=${persist} connected=${handle.isConnected} ${splitProbe(handle)}`);
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("pointercancel", onCancel);
@@ -4277,11 +4224,7 @@ function startSplitDrag(handle, _down) {
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0;
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw;
     const boundaryPx = side === "left" ? e.clientX - left : right - e.clientX;
-    const pct = computeSplitPct(boundaryPx / vw, vw);
-    setHorizontalSplitPct(pct);
-    if (++moveLogCount % 5 === 1) {
-      dlog(`[hsplit] move x=${Math.round(e.clientX)} pct=${pct} ${splitProbe(handle)}`);
-    }
+    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw));
   };
   const onUp = () => finish(true);
   const onCancel = () => finish(false);
@@ -4388,7 +4331,6 @@ var init_tab_position = __esm(() => {
   init_styles();
   init_dock_offset();
   init_drawer_shell();
-  init_log();
 });
 
 // src/tabs/core-tabs.ts

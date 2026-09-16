@@ -36,7 +36,6 @@ import {
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { updateDockOffsets } from './dock-offset'
 import { syncSpacerForLocation } from './drawer-shell'
-import { dlog } from '../debug/log'
 
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
@@ -287,16 +286,10 @@ export function syncHorizontalSplit(): void {
   if (_splitDragging) return
   if (typeof document === 'undefined' || !document.documentElement?.style) return
   if (!isHorizontalStrip() || !secondaryZonePresent()) {
-    if (document.documentElement.style.getPropertyValue(SPLIT_VAR)) {
-      dlog('[hsplit] sync clear', { horizontal: isHorizontalStrip(), zone: secondaryZonePresent() })
-    }
     clearSplitVar()
     return
   }
-  const pct = `${computeSplitPct(getSettings().horizontalSplit)}%`
-  const was = document.documentElement.style.getPropertyValue(SPLIT_VAR)
-  if (was !== pct) dlog('[hsplit] sync', { pct, was })
-  writeSplitVar(pct)
+  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`)
 }
 
 /** Live write for the drag (no settings mutation; the drag persists on release). */
@@ -934,11 +927,6 @@ function ensureSplitHandle(host: HTMLElement): HTMLElement | null {
   installSplitHandleInteraction(handle)
   host.appendChild(handle)
   _splitHandle = handle
-  dlog('[hsplit] handle created', {
-    host: host.className,
-    axis: host.getAttribute?.(STRIP_AXIS_ATTR),
-    handleParent: handle.parentElement?.className,
-  })
   return handle
 }
 
@@ -958,7 +946,7 @@ function installSplitHandleInteraction(handle: HTMLElement): void {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     e.preventDefault()
     e.stopPropagation()
-    startSplitDrag(handle, e)
+    startSplitDrag(handle)
   })
   handle.addEventListener('dblclick', (e: MouseEvent) => {
     if (!isHorizontalStrip()) return
@@ -970,41 +958,6 @@ function installSplitHandleInteraction(handle: HTMLElement): void {
   })
 }
 
-/** Debug-only geometry snapshot for the split drag logs. */
-function rectSnapshot(el: HTMLElement | null): { l: number; r: number; w: number } | null {
-  if (!el?.getBoundingClientRect) return null
-  const r = el.getBoundingClientRect()
-  return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width) }
-}
-
-/** Flat one-line geometry probe (Firefox collapses nested console objects). */
-function splitProbe(handle: HTMLElement): string {
-  const host = _pinHost
-  const h = rectSnapshot(host)
-  const k = rectSnapshot(handle)
-  let cssW = '?'
-  let inlineW = '?'
-  try {
-    if (host) {
-      cssW = getComputedStyle(host).width
-      inlineW = host.style.width
-    }
-  } catch {
-    /* stub */
-  }
-  const varNow = document.documentElement.style.getPropertyValue(SPLIT_VAR)
-  let hPos = '?'
-  let hLine = '?'
-  try {
-    const hcs = getComputedStyle(handle)
-    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}`
-    hLine = getComputedStyle(handle, '::after').backgroundColor
-  } catch {
-    /* stub */
-  }
-  return `host=[${h?.l ?? '?'},${h?.r ?? '?'}] hostW=${h?.w ?? '?'} cssW=${cssW} inlineW=${inlineW} handle=[${k?.l ?? '?'},${k?.r ?? '?'}] hPos=${hPos} line=${hLine} var=${varNow}`
-}
-
 /**
  * Pointer drag for the split boundary. The live value goes through
  * `setHorizontalSplitPct` (var only); the setting persists on a clean
@@ -1014,7 +967,7 @@ function splitProbe(handle: HTMLElement): string {
  * resize-handle overlay pattern cannot be reused because a pin-host child
  * has no `.sidebar-ux-drawer` ancestor.
  */
-function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
+function startSplitDrag(handle: HTMLElement): void {
   if (typeof document === 'undefined' || _splitDragging) return
   const root = document.documentElement
   if (!root?.style) return
@@ -1022,11 +975,9 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
   const vw = currentStripWidthPx()
   if (!(vw > 0)) return
   const preDrag = root.style.getPropertyValue(SPLIT_VAR)
-  dlog(`[hsplit] start side=${side} vw=${Math.round(vw)} downX=${Math.round(_down.clientX)} downY=${Math.round(_down.clientY)} preVar=${preDrag} ${splitProbe(handle)}`)
 
   _splitDragging = true
   handle.classList?.add('sidebar-ux-hsplit-handle--active')
-  let moveLogCount = 0
   if (document.body?.style) {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
@@ -1042,7 +993,6 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
   }
 
   const finish = (persist: boolean): void => {
-    dlog(`[hsplit] end persist=${persist} connected=${handle.isConnected} ${splitProbe(handle)}`)
     document.removeEventListener('pointermove', onMove)
     document.removeEventListener('pointerup', onUp)
     document.removeEventListener('pointercancel', onCancel)
@@ -1078,11 +1028,7 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw
     const boundaryPx = side === 'left' ? e.clientX - left : right - e.clientX
-    const pct = computeSplitPct(boundaryPx / vw, vw)
-    setHorizontalSplitPct(pct)
-    if (++moveLogCount % 5 === 1) {
-      dlog(`[hsplit] move x=${Math.round(e.clientX)} pct=${pct} ${splitProbe(handle)}`)
-    }
+    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw))
   }
 
   const onUp = (): void => finish(true)
