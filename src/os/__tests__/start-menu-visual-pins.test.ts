@@ -65,8 +65,8 @@ function blockOf(css: string, needle: string): string {
   assertIncludes(root, 'border-radius: 10px', '10px radius parity')
   assertIncludes(
     root,
-    'box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04)',
-    'shadow stack parity',
+    'box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04)',
+    'softened contained shadow stack (negative spread)',
   )
   assertIncludes(root, 'padding: 4px', 'surface padding parity')
 }
@@ -88,7 +88,7 @@ function blockOf(css: string, needle: string): string {
     'upward shadow rule exists',
   )
   const up = blockOf(START_MENU_CSS, '.canvas-os-start-menu[data-open-upward] {')
-  assertIncludes(up, 'box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5)', 'upward menu mirrors the Y offset')
+  assertIncludes(up, 'box-shadow: 0 -8px 24px -6px rgba(0, 0, 0, 0.45)', 'upward menu mirrors the softened Y offset + spread')
   assertIncludes(src, "toggleAttribute('data-open-upward'", 'open direction is stamped on the menu')
 }
 {

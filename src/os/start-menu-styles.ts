@@ -2,14 +2,17 @@
  * OS-mode Start menu styles ("Command Deck") — visual overhaul, 2026-09-15.
  *
  * Chassis parity with the tab right-click context menu
- * (`src/tabs/tab-context-menu.ts`): same border, 10px radius, shadow stack,
- * 6px item radius, divider margins and `body[data-glass]` recipe.
+ * (`src/tabs/tab-context-menu.ts`): same border, 10px radius, 6px item radius,
+ * divider margins and `body[data-glass]` recipe.
  * Deliberate deviations (documented in the plan
  * `~/Documents/plans/2026-09-15-canvas-start-menu-visual-overhaul.md`):
  *   - surface is the tab strip itself (`TAB_STRIP_BACKGROUND` from
  *     `sidebar/styles.ts` — the drawer shell's `color-mix(primary 6%,
  *     bg-deep)` tab-list formula), not the context menu's surface (user
  *     request 2026-09-16),
+ *   - the shadow stack is softened + contained (negative spread, alpha 0.45)
+ *     vs the context menu's raw 12px/32px cast — user report 2026-09-16:
+ *     "too intense, elongated at one vertical end",
  *   - row hover uses `--lumiverse-bg-hover` (the base `--lumiverse-fill` is
  *     rgba(0,0,0,.15) → ~invisible on a dark surface),
  *   - viewport-relative sizing divides by `--lumiverse-ui-scale` (the menu is a
@@ -45,7 +48,12 @@ export const START_MENU_CSS = `
     background: ${TAB_STRIP_BACKGROUND};
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    /* Softened, contained cast (user report 2026-09-16: "too intense,
+       elongated at one vertical end"). The negative spread keeps the blur
+       from smearing along the anchored edge; the direction mirror below is
+       preserved. Deliberate deviation from the context-menu chassis stack
+       (which has no spread). */
+    box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
     color: var(--lumiverse-text);
     font-family: inherit;
     font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
@@ -55,9 +63,9 @@ export const START_MENU_CSS = `
      The base down-cast shadow paints over the strip the menu opens from; the
      upward variant throws it away from the anchor instead (live report
      2026-09-16). Direction is stamped in JS (data-open-upward); the values
-     mirror the base rule. */
+     mirror the base rule (same softened/contained stack). */
   .canvas-os-start-menu[data-open-upward] {
-    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    box-shadow: 0 -8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
   }
 
   /* Glass — the context-menu recipe, coarse-pointer gated; derives from the
