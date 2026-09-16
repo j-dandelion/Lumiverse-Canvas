@@ -36,6 +36,7 @@ import {
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { updateDockOffsets } from './dock-offset'
 import { syncSpacerForLocation } from './drawer-shell'
+import { dlog } from '../debug/log'
 
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
@@ -286,10 +287,16 @@ export function syncHorizontalSplit(): void {
   if (_splitDragging) return
   if (typeof document === 'undefined' || !document.documentElement?.style) return
   if (!isHorizontalStrip() || !secondaryZonePresent()) {
+    if (document.documentElement.style.getPropertyValue(SPLIT_VAR)) {
+      dlog('[hsplit] sync clear', { horizontal: isHorizontalStrip(), zone: secondaryZonePresent() })
+    }
     clearSplitVar()
     return
   }
-  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`)
+  const pct = `${computeSplitPct(getSettings().horizontalSplit)}%`
+  const was = document.documentElement.style.getPropertyValue(SPLIT_VAR)
+  if (was !== pct) dlog('[hsplit] sync', { pct, was })
+  writeSplitVar(pct)
 }
 
 /** Live write for the drag (no settings mutation; the drag persists on release). */
@@ -385,10 +392,12 @@ function applyPinHostChrome(
     // re-chrome it — the overlay just appears on top). Secondary: the
     // transparent overlay zone ending at the split boundary. The var
     // fallback only applies if the host is chromed before the first sync.
+    // `!important` inline: functional split geometry must outrank stale
+    // theme CSS (live bug 2026-09-16 — see setImportant).
     if (owner === PIN_OWNER_MAIN) {
-      setIfDifferent(s, 'width', '100%')
+      setImportant(s, 'width', '100%')
     } else {
-      setIfDifferent(s, 'width', `var(${SPLIT_VAR}, 50%)`)
+      setImportant(s, 'width', `var(${SPLIT_VAR}, 50%)`)
     }
     if (side === 'right') {
       setIfDifferent(s, 'right', SAFE_RIGHT)
@@ -401,7 +410,7 @@ function applyPinHostChrome(
     setIfDifferent(s, 'top', SAFE_TOP)
     setIfDifferent(s, 'bottom', SAFE_BOTTOM)
     setIfDifferent(s, 'height', '')
-    setIfDifferent(s, 'width', `${TAB_LIST_WIDTH_PX}px`)
+    setImportant(s, 'width', `${TAB_LIST_WIDTH_PX}px`)
     if (side === 'right') {
       setIfDifferent(s, 'right', '0')
       setIfDifferent(s, 'left', '')
@@ -435,6 +444,32 @@ function setIfDifferent(
 ): void {
   if ((el as any)[prop] !== val) {
     (el as any)[prop] = val
+  }
+}
+
+/**
+ * Write a functional-geometry property with `!important` priority. An inline
+ * `!important` sits at the top of the author cascade (it beats even another
+ * sheet `!important`), so stale theme CSS cannot freeze Canvas geometry.
+ * Live bug 2026-09-16: a Theme Studio custom rule
+ * `[class="sidebar-ux-tab-list-pin-host sidebar-ux-side-right"] { width: 50% !important }`
+ * (written for the old 50/50 zone model) overrode the plain inline
+ * `width: var(--sidebar-ux-hsplit, 50%)`, pinning the secondary host at the
+ * fallback while the main lane tracked the var — the functional split moved
+ * but the divider/handle (host's inner edge) stood still.
+ */
+function setImportant(
+  el: CSSStyleDeclaration,
+  prop: string,
+  val: string,
+): void {
+  // Partial test stubs may lack setProperty — fall back to plain assignment.
+  if (typeof el.setProperty !== 'function') {
+    if ((el as any)[prop] !== val) (el as any)[prop] = val
+    return
+  }
+  if ((el as any)[prop] !== val || el.getPropertyPriority?.(prop) !== 'important') {
+    el.setProperty(prop, val, 'important')
   }
 }
 
@@ -899,6 +934,11 @@ function ensureSplitHandle(host: HTMLElement): HTMLElement | null {
   installSplitHandleInteraction(handle)
   host.appendChild(handle)
   _splitHandle = handle
+  dlog('[hsplit] handle created', {
+    host: host.className,
+    axis: host.getAttribute?.(STRIP_AXIS_ATTR),
+    handleParent: handle.parentElement?.className,
+  })
   return handle
 }
 
@@ -930,6 +970,41 @@ function installSplitHandleInteraction(handle: HTMLElement): void {
   })
 }
 
+/** Debug-only geometry snapshot for the split drag logs. */
+function rectSnapshot(el: HTMLElement | null): { l: number; r: number; w: number } | null {
+  if (!el?.getBoundingClientRect) return null
+  const r = el.getBoundingClientRect()
+  return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width) }
+}
+
+/** Flat one-line geometry probe (Firefox collapses nested console objects). */
+function splitProbe(handle: HTMLElement): string {
+  const host = _pinHost
+  const h = rectSnapshot(host)
+  const k = rectSnapshot(handle)
+  let cssW = '?'
+  let inlineW = '?'
+  try {
+    if (host) {
+      cssW = getComputedStyle(host).width
+      inlineW = host.style.width
+    }
+  } catch {
+    /* stub */
+  }
+  const varNow = document.documentElement.style.getPropertyValue(SPLIT_VAR)
+  let hPos = '?'
+  let hLine = '?'
+  try {
+    const hcs = getComputedStyle(handle)
+    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}`
+    hLine = getComputedStyle(handle, '::after').backgroundColor
+  } catch {
+    /* stub */
+  }
+  return `host=[${h?.l ?? '?'},${h?.r ?? '?'}] hostW=${h?.w ?? '?'} cssW=${cssW} inlineW=${inlineW} handle=[${k?.l ?? '?'},${k?.r ?? '?'}] hPos=${hPos} line=${hLine} var=${varNow}`
+}
+
 /**
  * Pointer drag for the split boundary. The live value goes through
  * `setHorizontalSplitPct` (var only); the setting persists on a clean
@@ -947,9 +1022,11 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
   const vw = currentStripWidthPx()
   if (!(vw > 0)) return
   const preDrag = root.style.getPropertyValue(SPLIT_VAR)
+  dlog(`[hsplit] start side=${side} vw=${Math.round(vw)} downX=${Math.round(_down.clientX)} downY=${Math.round(_down.clientY)} preVar=${preDrag} ${splitProbe(handle)}`)
 
   _splitDragging = true
   handle.classList?.add('sidebar-ux-hsplit-handle--active')
+  let moveLogCount = 0
   if (document.body?.style) {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
@@ -965,6 +1042,7 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
   }
 
   const finish = (persist: boolean): void => {
+    dlog(`[hsplit] end persist=${persist} connected=${handle.isConnected} ${splitProbe(handle)}`)
     document.removeEventListener('pointermove', onMove)
     document.removeEventListener('pointerup', onUp)
     document.removeEventListener('pointercancel', onCancel)
@@ -1000,7 +1078,11 @@ function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw
     const boundaryPx = side === 'left' ? e.clientX - left : right - e.clientX
-    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw))
+    const pct = computeSplitPct(boundaryPx / vw, vw)
+    setHorizontalSplitPct(pct)
+    if (++moveLogCount % 5 === 1) {
+      dlog(`[hsplit] move x=${Math.round(e.clientX)} pct=${pct} ${splitProbe(handle)}`)
+    }
   }
 
   const onUp = (): void => finish(true)

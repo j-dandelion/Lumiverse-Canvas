@@ -33,9 +33,15 @@ class FakeClassList {
 
 class FakeStyle {
   private _p: Record<string, string> = {}
+  private _prio: Record<string, string> = {}
   getPropertyValue(k: string) { return this._p[k] ?? '' }
-  setProperty(k: string, v: string) { this._p[k] = v }
-  removeProperty(k: string) { delete this._p[k] }
+  getPropertyPriority(k: string) { return this._prio[k] ?? '' }
+  setProperty(k: string, v: string, priority?: string) {
+    this._p[k] = v
+    if (priority) this._prio[k] = priority
+    else delete this._prio[k]
+  }
+  removeProperty(k: string) { delete this._p[k]; delete this._prio[k] }
   get top() { return this._p['top'] ?? '' }
   set top(v: string) { this._p['top'] = v }
   get bottom() { return this._p['bottom'] ?? '' }
@@ -187,6 +193,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.getAttribute('data-strip-edge')).toBe('left')
     expect(host.className).toContain('sidebar-ux-side-left')
     expect(host.style.width).toBe('56px')
+    expect(host.style.getPropertyPriority('width')).toBe('important')
     expect(host.style.left).toBe('0')
     expect(host.style.right).toBe('')
     expect(host.style.top).toBe(SAFE_TOP)
@@ -220,6 +227,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     // The main host is the full-width painted base surface — presence must
     // never shrink it (the transparent overlay appears on top instead).
     expect(host.style.width).toBe('100%')
+    expect(host.style.getPropertyPriority('width')).toBe('important')
     expect(host.style.zIndex).toBe('10000')
     expect(host.style.right).toBe(SAFE_RIGHT)
     expect(host.style.left).toBe('')
@@ -419,9 +427,11 @@ describe('horizontal split var + overlay (2026-09-16)', () => {
     expect(!!handle).toBe(true)
     expect(handle!.getAttribute('role')).toBe('separator')
     // Secondary overlay host paints above the main base surface and is sized
-    // by the split var.
+    // by the split var. `!important` inline: stale theme CSS with a sheet
+    // `!important` width must not freeze the split (live bug 2026-09-16).
     expect(host.style.zIndex).toBe('10001')
     expect(host.style.width).toBe('var(--sidebar-ux-hsplit, 50%)')
+    expect(host.style.getPropertyPriority('width')).toBe('important')
 
     applyTabListPin(false, { force: true })
     expect(host.children.some((c) => c.className.includes('sidebar-ux-hsplit-handle'))).toBe(false)

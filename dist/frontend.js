@@ -3740,10 +3740,17 @@ function syncHorizontalSplit() {
   if (typeof document === "undefined" || !document.documentElement?.style)
     return;
   if (!isHorizontalStrip() || !secondaryZonePresent()) {
+    if (document.documentElement.style.getPropertyValue(SPLIT_VAR)) {
+      dlog("[hsplit] sync clear", { horizontal: isHorizontalStrip(), zone: secondaryZonePresent() });
+    }
     clearSplitVar();
     return;
   }
-  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`);
+  const pct = `${computeSplitPct(getSettings().horizontalSplit)}%`;
+  const was = document.documentElement.style.getPropertyValue(SPLIT_VAR);
+  if (was !== pct)
+    dlog("[hsplit] sync", { pct, was });
+  writeSplitVar(pct);
 }
 function setHorizontalSplitPct(pct) {
   if (!Number.isFinite(pct) || pct <= 0 || pct >= 100)
@@ -3801,9 +3808,9 @@ function applyPinHostChrome(host, side, owner) {
       setIfDifferent(s, "top", "");
     }
     if (owner === PIN_OWNER_MAIN) {
-      setIfDifferent(s, "width", "100%");
+      setImportant(s, "width", "100%");
     } else {
-      setIfDifferent(s, "width", `var(${SPLIT_VAR}, 50%)`);
+      setImportant(s, "width", `var(${SPLIT_VAR}, 50%)`);
     }
     if (side === "right") {
       setIfDifferent(s, "right", SAFE_RIGHT);
@@ -3816,7 +3823,7 @@ function applyPinHostChrome(host, side, owner) {
     setIfDifferent(s, "top", SAFE_TOP);
     setIfDifferent(s, "bottom", SAFE_BOTTOM);
     setIfDifferent(s, "height", "");
-    setIfDifferent(s, "width", `${TAB_LIST_WIDTH_PX}px`);
+    setImportant(s, "width", `${TAB_LIST_WIDTH_PX}px`);
     if (side === "right") {
       setIfDifferent(s, "right", "0");
       setIfDifferent(s, "left", "");
@@ -3829,6 +3836,16 @@ function applyPinHostChrome(host, side, owner) {
 function setIfDifferent(el, prop, val) {
   if (el[prop] !== val) {
     el[prop] = val;
+  }
+}
+function setImportant(el, prop, val) {
+  if (typeof el.setProperty !== "function") {
+    if (el[prop] !== val)
+      el[prop] = val;
+    return;
+  }
+  if (el[prop] !== val || el.getPropertyPriority?.(prop) !== "important") {
+    el.setProperty(prop, val, "important");
   }
 }
 function applyFlexAndBorder(drawer, tabList, wantFlex) {
@@ -4115,6 +4132,11 @@ function ensureSplitHandle(host) {
   installSplitHandleInteraction(handle);
   host.appendChild(handle);
   _splitHandle = handle;
+  dlog("[hsplit] handle created", {
+    host: host.className,
+    axis: host.getAttribute?.(STRIP_AXIS_ATTR),
+    handleParent: handle.parentElement?.className
+  });
   return handle;
 }
 function removeSplitHandle() {
@@ -4147,6 +4169,34 @@ function installSplitHandleInteraction(handle) {
     setSettings({ horizontalSplit: 0.5 });
   });
 }
+function rectSnapshot(el) {
+  if (!el?.getBoundingClientRect)
+    return null;
+  const r = el.getBoundingClientRect();
+  return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width) };
+}
+function splitProbe(handle) {
+  const host = _pinHost;
+  const h = rectSnapshot(host);
+  const k = rectSnapshot(handle);
+  let cssW = "?";
+  let inlineW = "?";
+  try {
+    if (host) {
+      cssW = getComputedStyle(host).width;
+      inlineW = host.style.width;
+    }
+  } catch {}
+  const varNow = document.documentElement.style.getPropertyValue(SPLIT_VAR);
+  let hPos = "?";
+  let hLine = "?";
+  try {
+    const hcs = getComputedStyle(handle);
+    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}`;
+    hLine = getComputedStyle(handle, "::after").backgroundColor;
+  } catch {}
+  return `host=[${h?.l ?? "?"},${h?.r ?? "?"}] hostW=${h?.w ?? "?"} cssW=${cssW} inlineW=${inlineW} handle=[${k?.l ?? "?"},${k?.r ?? "?"}] hPos=${hPos} line=${hLine} var=${varNow}`;
+}
 function startSplitDrag(handle, _down) {
   if (typeof document === "undefined" || _splitDragging)
     return;
@@ -4158,8 +4208,10 @@ function startSplitDrag(handle, _down) {
   if (!(vw > 0))
     return;
   const preDrag = root.style.getPropertyValue(SPLIT_VAR);
+  dlog(`[hsplit] start side=${side} vw=${Math.round(vw)} downX=${Math.round(_down.clientX)} downY=${Math.round(_down.clientY)} preVar=${preDrag} ${splitProbe(handle)}`);
   _splitDragging = true;
   handle.classList?.add("sidebar-ux-hsplit-handle--active");
+  let moveLogCount = 0;
   if (document.body?.style) {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -4172,6 +4224,7 @@ function startSplitDrag(handle, _down) {
     document.body.appendChild(overlay);
   }
   const finish = (persist) => {
+    dlog(`[hsplit] end persist=${persist} connected=${handle.isConnected} ${splitProbe(handle)}`);
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("pointercancel", onCancel);
@@ -4206,7 +4259,11 @@ function startSplitDrag(handle, _down) {
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0;
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw;
     const boundaryPx = side === "left" ? e.clientX - left : right - e.clientX;
-    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw));
+    const pct = computeSplitPct(boundaryPx / vw, vw);
+    setHorizontalSplitPct(pct);
+    if (++moveLogCount % 5 === 1) {
+      dlog(`[hsplit] move x=${Math.round(e.clientX)} pct=${pct} ${splitProbe(handle)}`);
+    }
   };
   const onUp = () => finish(true);
   const onCancel = () => finish(false);
@@ -4313,6 +4370,7 @@ var init_tab_position = __esm(() => {
   init_styles();
   init_dock_offset();
   init_drawer_shell();
+  init_log();
 });
 
 // src/tabs/core-tabs.ts
@@ -22757,7 +22815,7 @@ function injectWeaverLaneStyles() {
     }
   `);
 }
-function setImportant(el, prop, value) {
+function setImportant2(el, prop, value) {
   el.style.setProperty(prop, value, "important");
 }
 function clearLaneInlineStyles(el) {
@@ -22868,29 +22926,29 @@ function applyLaneGeometry(dialog) {
   } catch (err) {
     dwarn("[weaver-lane] publish weaver inset vars failed:", err);
   }
-  setImportant(dialog, "position", "fixed");
-  setImportant(dialog, "inset", "unset");
-  setImportant(dialog, "top", `${insets.top}px`);
-  setImportant(dialog, "bottom", `${insets.bottom}px`);
-  setImportant(dialog, "left", `${insets.left}px`);
-  setImportant(dialog, "right", `${insets.right}px`);
-  setImportant(dialog, "width", "auto");
-  setImportant(dialog, "height", "auto");
-  setImportant(dialog, "max-width", "none");
-  setImportant(dialog, "max-height", "none");
-  setImportant(dialog, "box-sizing", "border-box");
-  setImportant(dialog, "overflow", "hidden");
-  setImportant(dialog, "display", "flex");
-  setImportant(dialog, "align-items", "center");
-  setImportant(dialog, "justify-content", "center");
+  setImportant2(dialog, "position", "fixed");
+  setImportant2(dialog, "inset", "unset");
+  setImportant2(dialog, "top", `${insets.top}px`);
+  setImportant2(dialog, "bottom", `${insets.bottom}px`);
+  setImportant2(dialog, "left", `${insets.left}px`);
+  setImportant2(dialog, "right", `${insets.right}px`);
+  setImportant2(dialog, "width", "auto");
+  setImportant2(dialog, "height", "auto");
+  setImportant2(dialog, "max-width", "none");
+  setImportant2(dialog, "max-height", "none");
+  setImportant2(dialog, "box-sizing", "border-box");
+  setImportant2(dialog, "overflow", "hidden");
+  setImportant2(dialog, "display", "flex");
+  setImportant2(dialog, "align-items", "center");
+  setImportant2(dialog, "justify-content", "center");
   const shell = dialog.firstElementChild;
   if (shell) {
-    setImportant(shell, "width", "min(100%, 1180px)");
-    setImportant(shell, "max-width", "100%");
-    setImportant(shell, "height", "min(100%, 880px)");
-    setImportant(shell, "max-height", "100%");
-    setImportant(shell, "box-sizing", "border-box");
-    setImportant(shell, "flex", "0 1 auto");
+    setImportant2(shell, "width", "min(100%, 1180px)");
+    setImportant2(shell, "max-width", "100%");
+    setImportant2(shell, "height", "min(100%, 880px)");
+    setImportant2(shell, "max-height", "100%");
+    setImportant2(shell, "box-sizing", "border-box");
+    setImportant2(shell, "flex", "0 1 auto");
   }
 }
 function findWeaverDialog() {
