@@ -676,13 +676,17 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
     expect(rightAnchor).toContain('sidebar-ux-side-right')
   })
 
-  test('divider line is 2px with a strong idle alpha (fractional-zoom visibility)', () => {
-    // Live report 2026-09-16: a 1px `--primary-020` hairline antialiases
-    // away at fractional browser zoom (75%) and over light tab buttons.
+  test('divider line uses the 1px border paint path (fractional-zoom visibility)', () => {
+    // Live report 2026-09-16: a 1px background hairline antialiases to ~half
+    // coverage at fractional browser zoom and washes out over light tab
+    // buttons, while other 1px UI borders stay visible. The divider is a
+    // zero-width pseudo with a 1px border-left, idle primary-020 and
+    // primary-050 on hover/drag.
     const rule = blocks.find(
-      (b) => b.includes('sidebar-ux-hsplit-handle::after') && b.includes('width: 2px'),
+      (b) => b.includes('sidebar-ux-hsplit-handle::after') && b.includes('border-left: 1px solid'),
     ) ?? ''
-    expect(rule).toContain('margin-left: -1px')
-    expect(rule).toContain('background: var(--lumiverse-primary-050')
+    expect(rule).toContain('width: 0')
+    expect(rule).toContain('background: transparent')
+    expect(rule).toContain('border-left: 1px solid var(--lumiverse-primary-020)')
   })
 })
