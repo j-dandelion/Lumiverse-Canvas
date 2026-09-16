@@ -108,6 +108,14 @@ function normalizeCanvasSettingsFields(s) {
     out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true };
   }
   {
+    const raw = out.horizontalSplit;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      out = { ...out, horizontalSplit: 0.5 };
+    } else if (raw < 0.1 || raw > 0.9) {
+      out = { ...out, horizontalSplit: Math.min(0.9, Math.max(0.1, raw)) };
+    }
+  }
+  {
     const p = out.sidesChromePrefs;
     if (p != null && (typeof p !== "object" || typeof p.taskbarMode !== "boolean" || typeof p.moveControlsToOuterEdge !== "boolean")) {
       out = { ...out, sidesChromePrefs: null };
@@ -163,6 +171,7 @@ var init_types = __esm(() => {
     resizeSidebars: true,
     mirrorCompactPosition: true,
     drawerLocation: "sides",
+    horizontalSplit: 0.5,
     sidesChromePrefs: null,
     moveControlsToOuterEdge: false,
     taskbarMode: false,
@@ -1180,6 +1189,99 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list
 }
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
   box-shadow: inset 0 1px 0 var(--lumiverse-primary-020) !important;
+}
+
+/* ── Dual-drawer split (Top/Bottom) ─────────────────────────────────────
+   One full-width painted surface (the main list) + a transparent secondary
+   overlay anchored to its screen edge. The overlay's inner edge is the
+   split, carried by --sidebar-ux-hsplit (a % of the strip; written by
+   tab-position.syncHorizontalSplit). The main lane is padded by the same
+   value so each drawer's tabs stay in their own region — same percentage
+   basis as the fixed host width (viewport), so the edges coincide at any
+   split. Selectors need the owner + axis + location tier to beat the base
+   list rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides
+   pinned list (same data-pin-owner) untouched. */
+
+/* Secondary overlay list: no surface of its own, and the chat-facing
+   separator is suppressed — the main list paints it once, and the token is
+   translucent (double paint would darken the line). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-tab-list {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Main lane: pad the list's secondary-facing side out to the split. The
+   background paints through the padding (full-width surface); max() keeps
+   the plain 8px gutter while there is no zone (var absent/0). The sidebar
+   side classes name the MAIN drawer's side, so the secondary sits opposite:
+   main right → lane starts on the left; main left → lane ends on the right. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list {
+  padding-left: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list {
+  padding-right: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+}
+
+/* Boundary handle: hidden everywhere by default (Sides keeps its pinned
+   list but has no split), shown only on the horizontal secondary host at
+   the overlay's inner edge (physical placement matches the physical host
+   anchoring). 12px grab zone, 1px visual line. */
+[data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+  display: none !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+  display: block !important;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  pointer-events: auto !important;
+  touch-action: none;
+  cursor: col-resize;
+  z-index: 1;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-left > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-left > .sidebar-ux-hsplit-handle {
+  right: -6px;
+  left: auto;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-right > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-right > .sidebar-ux-hsplit-handle {
+  left: -6px;
+  right: auto;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle::after {
+  content: '' !important;
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--lumiverse-primary-020) !important;
+  pointer-events: none;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
+  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+}
+/* Touch/coarse-pointer (and the mobile sheet width): the split still applies
+   but there is no handle — same policy as DnD and the resize handles. */
+@media (max-width: 600px), (pointer: coarse) {
+  [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+    display: none !important;
+  }
 }
 
 /* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
@@ -3494,6 +3596,8 @@ var exports_tab_position = {};
 __export(exports_tab_position, {
   PIN_OWNER_MAIN: () => PIN_OWNER_MAIN,
   PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
+  SPLIT_HANDLE_CLASS: () => SPLIT_HANDLE_CLASS,
+  SPLIT_VAR: () => SPLIT_VAR,
   STRIP_AXIS_ATTR: () => STRIP_AXIS_ATTR,
   STRIP_AXIS_HORIZONTAL: () => STRIP_AXIS_HORIZONTAL,
   STRIP_AXIS_VERTICAL: () => STRIP_AXIS_VERTICAL,
@@ -3510,15 +3614,21 @@ __export(exports_tab_position, {
   applyPinnedTabListChrome: () => applyPinnedTabListChrome,
   applyTabListPin: () => applyTabListPin,
   applyTabListPosition: () => applyTabListPosition,
+  clearHorizontalSplit: () => clearHorizontalSplit,
   clearPinnedTabListChrome: () => clearPinnedTabListChrome,
   clearTabListPosition: () => clearTabListPosition,
+  computeSplitPct: () => computeSplitPct,
   destroyMainPinHost: () => destroyMainPinHost,
   ensureMainPinHost: () => ensureMainPinHost,
+  getHorizontalSplitVar: () => getHorizontalSplitVar,
   getMainPinHost: () => getMainPinHost,
   getPinnedTabList: () => getPinnedTabList,
   getTabListPosition: () => getTabListPosition,
   isTabListPinned: () => isTabListPinned,
-  reconcileTabListPin: () => reconcileTabListPin
+  reconcileTabListPin: () => reconcileTabListPin,
+  setHorizontalSplitDragging: () => setHorizontalSplitDragging,
+  setHorizontalSplitPct: () => setHorizontalSplitPct,
+  syncHorizontalSplit: () => syncHorizontalSplit
 });
 function getPinnedTabList() {
   if (!_pinHost)
@@ -3570,6 +3680,9 @@ function __resetPinStateForTest() {
   _restoreParent = null;
   _restoreNext = null;
   _mainPinHost = null;
+  _splitHandle = null;
+  _splitDragging = false;
+  _splitDragCancel = null;
 }
 function getMainPinHost() {
   return _mainPinHost;
@@ -3604,6 +3717,67 @@ function secondaryZonePresent() {
     return false;
   return !!getSecondaryTabList();
 }
+function currentStripWidthPx() {
+  const rect = _mainPinHost?.getBoundingClientRect?.();
+  if (rect && Number.isFinite(rect.width) && rect.width > 0)
+    return rect.width;
+  if (typeof document !== "undefined" && document.documentElement) {
+    return document.documentElement.clientWidth || 0;
+  }
+  return 0;
+}
+function computeSplitPct(fraction, stripWidthPx = currentStripWidthPx()) {
+  const f = Number.isFinite(fraction) ? fraction : 0.5;
+  const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0;
+  const minPct = px > 0 ? Math.max(8, SPLIT_MIN_SIDE_PX / px * 100) : 8;
+  const maxPct = 100 - minPct;
+  const pct = Math.min(maxPct, Math.max(minPct, f * 100));
+  return Math.round(pct * 100) / 100;
+}
+function syncHorizontalSplit() {
+  if (_splitDragging)
+    return;
+  if (typeof document === "undefined" || !document.documentElement?.style)
+    return;
+  if (!isHorizontalStrip() || !secondaryZonePresent()) {
+    clearSplitVar();
+    return;
+  }
+  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`);
+}
+function setHorizontalSplitPct(pct) {
+  if (!Number.isFinite(pct) || pct <= 0 || pct >= 100)
+    return;
+  writeSplitVar(`${Math.round(pct * 100) / 100}%`);
+}
+function setHorizontalSplitDragging(dragging) {
+  _splitDragging = dragging;
+}
+function getHorizontalSplitVar() {
+  if (typeof document === "undefined" || !document.documentElement?.style)
+    return "";
+  return document.documentElement.style.getPropertyValue(SPLIT_VAR);
+}
+function clearHorizontalSplit() {
+  const cancel = _splitDragCancel;
+  _splitDragCancel = null;
+  _splitDragging = false;
+  cancel?.();
+  clearSplitVar();
+}
+function writeSplitVar(value) {
+  if (typeof document === "undefined" || !document.documentElement?.style)
+    return;
+  const root = document.documentElement;
+  if (root.style.getPropertyValue(SPLIT_VAR) !== value) {
+    root.style.setProperty(SPLIT_VAR, value);
+  }
+}
+function clearSplitVar() {
+  if (typeof document === "undefined" || !document.documentElement?.style)
+    return;
+  document.documentElement.style.removeProperty?.(SPLIT_VAR);
+}
 function applyPinHostChrome(host, side, owner) {
   const loc = getDrawerLocation();
   const horizontal = loc !== "sides";
@@ -3615,7 +3789,7 @@ function applyPinHostChrome(host, side, owner) {
     host.setAttribute(STRIP_EDGE_ATTR, edge);
   const s = host.style;
   setIfDifferent(s, "position", "fixed");
-  setIfDifferent(s, "zIndex", PIN_Z_INDEX);
+  setIfDifferent(s, "zIndex", owner === PIN_OWNER_SECONDARY && horizontal ? PIN_Z_INDEX_SECONDARY : PIN_Z_INDEX);
   setIfDifferent(s, "pointerEvents", "none");
   if (horizontal) {
     setIfDifferent(s, "height", "var(--sidebar-ux-strip-h, 56px)");
@@ -3626,9 +3800,11 @@ function applyPinHostChrome(host, side, owner) {
       setIfDifferent(s, "bottom", SAFE_BOTTOM);
       setIfDifferent(s, "top", "");
     }
-    const dual = secondaryZonePresent();
-    const dualWidth = side === "left" ? "calc(50% + 1px)" : "50%";
-    setIfDifferent(s, "width", dual ? dualWidth : "100%");
+    if (owner === PIN_OWNER_MAIN) {
+      setIfDifferent(s, "width", "100%");
+    } else {
+      setIfDifferent(s, "width", `var(${SPLIT_VAR}, 50%)`);
+    }
     if (side === "right") {
       setIfDifferent(s, "right", SAFE_RIGHT);
       setIfDifferent(s, "left", "");
@@ -3820,6 +3996,7 @@ function ensurePinHost(side) {
   }
   sweepStrayPinHosts();
   applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
+  syncHorizontalSplit();
   return _pinHost;
 }
 function sweepStrayPinHosts() {
@@ -3913,6 +4090,132 @@ function clearPinnedTabListChrome(tabList) {
   setIfDifferent(tabList.style, "borderLeft", "");
   setIfDifferent(tabList.style, "borderRight", "");
 }
+function isCoarsePointer() {
+  try {
+    return typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)")?.matches;
+  } catch {
+    return false;
+  }
+}
+function ensureSplitHandle(host) {
+  if (typeof document === "undefined")
+    return null;
+  if (_splitHandle?.isConnected && _splitHandle.parentElement === host) {
+    return _splitHandle;
+  }
+  _splitHandle?.remove();
+  const handle = document.createElement("div");
+  handle.className = SPLIT_HANDLE_CLASS;
+  handle.setAttribute("data-canvas-hsplit", "");
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.setAttribute("aria-label", "Resize drawer split");
+  if ("tabIndex" in handle)
+    handle.tabIndex = 0;
+  installSplitHandleInteraction(handle);
+  host.appendChild(handle);
+  _splitHandle = handle;
+  return handle;
+}
+function removeSplitHandle() {
+  _splitDragCancel?.();
+  _splitHandle?.remove();
+  _splitHandle = null;
+}
+function installSplitHandleInteraction(handle) {
+  if (typeof handle.addEventListener !== "function")
+    return;
+  handle.addEventListener("pointerdown", (e) => {
+    if (!isHorizontalStrip())
+      return;
+    if (isMobileViewport() || isCoarsePointer())
+      return;
+    if (e.pointerType === "mouse" && e.button !== 0)
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    startSplitDrag(handle, e);
+  });
+  handle.addEventListener("dblclick", (e) => {
+    if (!isHorizontalStrip())
+      return;
+    if (isMobileViewport() || isCoarsePointer())
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    setHorizontalSplitPct(computeSplitPct(0.5));
+    setSettings({ horizontalSplit: 0.5 });
+  });
+}
+function startSplitDrag(handle, _down) {
+  if (typeof document === "undefined" || _splitDragging)
+    return;
+  const root = document.documentElement;
+  if (!root?.style)
+    return;
+  const side = secondarySide();
+  const vw = currentStripWidthPx();
+  if (!(vw > 0))
+    return;
+  const preDrag = root.style.getPropertyValue(SPLIT_VAR);
+  _splitDragging = true;
+  handle.classList?.add("sidebar-ux-hsplit-handle--active");
+  if (document.body?.style) {
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+  let overlay = null;
+  if (document.body) {
+    overlay = document.createElement("div");
+    overlay.setAttribute("data-canvas-hsplit-overlay", "");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:13000;cursor:col-resize;background:transparent;pointer-events:auto;touch-action:none;";
+    document.body.appendChild(overlay);
+  }
+  const finish = (persist) => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("blur", onCancel);
+    overlay?.remove();
+    handle.classList?.remove("sidebar-ux-hsplit-handle--active");
+    if (document.body?.style) {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    _splitDragging = false;
+    _splitDragCancel = null;
+    if (persist && handle.isConnected) {
+      const pct = parseFloat(root.style.getPropertyValue(SPLIT_VAR));
+      if (Number.isFinite(pct)) {
+        setSettings({ horizontalSplit: pct / 100 });
+        syncHorizontalSplit();
+        return;
+      }
+    }
+    if (preDrag)
+      root.style.setProperty(SPLIT_VAR, preDrag);
+    else
+      root.style.removeProperty(SPLIT_VAR);
+  };
+  const onMove = (e) => {
+    if (!handle.isConnected) {
+      finish(false);
+      return;
+    }
+    const rect = _mainPinHost?.getBoundingClientRect?.();
+    const left = rect && Number.isFinite(rect.left) ? rect.left : 0;
+    const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw;
+    const boundaryPx = side === "left" ? e.clientX - left : right - e.clientX;
+    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw));
+  };
+  const onUp = () => finish(true);
+  const onCancel = () => finish(false);
+  _splitDragCancel = onCancel;
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onCancel);
+  window.addEventListener("blur", onCancel);
+}
 function pinTabList(tabList) {
   const drawer = getSecondaryDrawer();
   const panel = getSecondaryPanel();
@@ -3942,6 +4245,8 @@ function pinTabList(tabList) {
   }
   syncSpacerForLocation(_pinSpacer, getDrawerLocation());
   applyPinnedTabListChrome(tabList, side);
+  if (_pinHost)
+    ensureSplitHandle(_pinHost);
   if (drawer && !isHorizontalStrip()) {
     const flexDirection = side === "right" ? "row-reverse" : "row";
     setIfDifferent(drawer.style, "flexDirection", flexDirection);
@@ -3972,6 +4277,7 @@ function unpinTabList(tabList) {
   applyTabListPosition(getSettings().moveControlsToOuterEdge);
 }
 function destroyPinChrome() {
+  removeSplitHandle();
   if (_pinSpacer) {
     _pinSpacer.remove();
     _pinSpacer = null;
@@ -3994,9 +4300,10 @@ function destroyPinChrome() {
     _pinHost.remove();
     _pinHost = null;
   }
+  clearSplitVar();
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _mainPinHost = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
@@ -11003,6 +11310,7 @@ function runReconcile(force) {
   const gen = ++_locGen;
   const loc = getDrawerLocation();
   const horizontal = isHorizontalStrip();
+  syncHorizontalSplit();
   const key = computeKey(loc);
   if (!force && key === _lastKey)
     return;
@@ -11068,6 +11376,7 @@ function clearDrawerLocation() {
     _unsubModel();
     _unsubModel = null;
   }
+  clearHorizontalSplit();
   if (typeof document === "undefined" || !document.documentElement)
     return;
   const root = document.documentElement;
@@ -20917,7 +21226,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, osSecondaryStartMenuFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, osSecondaryStartMenuFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -21098,6 +21407,12 @@ var init_registry = __esm(() => {
       hideStartMenu({ immediate: true });
     }
   };
+  horizontalSplitFeature = {
+    id: "horizontalSplit",
+    apply() {
+      syncHorizontalSplit();
+    }
+  };
   tabPositionFeature = {
     id: "moveControlsToOuterEdge",
     init() {
@@ -21227,6 +21542,7 @@ var init_registry = __esm(() => {
     persistDrawerWidthFeature,
     slashFeature,
     drawerLocationFeature,
+    horizontalSplitFeature,
     tabPositionFeature,
     taskbarModeFeature,
     hideDrawerOpenCloseButtonsFeature,

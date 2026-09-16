@@ -351,6 +351,99 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
   box-shadow: inset 0 1px 0 var(--lumiverse-primary-020) !important;
 }
 
+/* ── Dual-drawer split (Top/Bottom) ─────────────────────────────────────
+   One full-width painted surface (the main list) + a transparent secondary
+   overlay anchored to its screen edge. The overlay's inner edge is the
+   split, carried by --sidebar-ux-hsplit (a % of the strip; written by
+   tab-position.syncHorizontalSplit). The main lane is padded by the same
+   value so each drawer's tabs stay in their own region — same percentage
+   basis as the fixed host width (viewport), so the edges coincide at any
+   split. Selectors need the owner + axis + location tier to beat the base
+   list rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides
+   pinned list (same data-pin-owner) untouched. */
+
+/* Secondary overlay list: no surface of its own, and the chat-facing
+   separator is suppressed — the main list paints it once, and the token is
+   translucent (double paint would darken the line). */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-tab-list {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Main lane: pad the list's secondary-facing side out to the split. The
+   background paints through the padding (full-width surface); max() keeps
+   the plain 8px gutter while there is no zone (var absent/0). The sidebar
+   side classes name the MAIN drawer's side, so the secondary sits opposite:
+   main right → lane starts on the left; main left → lane ends on the right. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list {
+  padding-left: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list {
+  padding-right: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+}
+
+/* Boundary handle: hidden everywhere by default (Sides keeps its pinned
+   list but has no split), shown only on the horizontal secondary host at
+   the overlay's inner edge (physical placement matches the physical host
+   anchoring). 12px grab zone, 1px visual line. */
+[data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+  display: none !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+  display: block !important;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  pointer-events: auto !important;
+  touch-action: none;
+  cursor: col-resize;
+  z-index: 1;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-left > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-left > .sidebar-ux-hsplit-handle {
+  right: -6px;
+  left: auto;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-right > .sidebar-ux-hsplit-handle,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"].sidebar-ux-side-right > .sidebar-ux-hsplit-handle {
+  left: -6px;
+  right: auto;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle::after {
+  content: '' !important;
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--lumiverse-primary-020) !important;
+  pointer-events: none;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
+  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+}
+/* Touch/coarse-pointer (and the mobile sheet width): the split still applies
+   but there is no handle — same policy as DnD and the resize handles. */
+@media (max-width: 600px), (pointer: coarse) {
+  [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle {
+    display: none !important;
+  }
+}
+
 /* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
    and the OS Start button's base width:100% (OS_START_BUTTON_CSS) — a row
    must never stretch it. */

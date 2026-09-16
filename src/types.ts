@@ -71,6 +71,14 @@ export interface CanvasSettings {
    *  `sidesChromePrefs` (see `setSettings`). */
   drawerLocation?: DrawerLocation
 
+  /** Top/Bottom only, dual drawers only: where the boundary between the
+   *  two drawers' strip regions sits, as a fraction of the strip width
+   *  measured from the SECONDARY drawer's screen edge (0.5 = even split).
+   *  Adjusted by dragging the boundary handle; each drawer's tab lane is
+   *  confined to its side. Normalized to [0.1, 0.9] (plus a 64px-per-side
+   *  floor at apply time) so neither dock can be squeezed out. */
+  horizontalSplit?: number
+
   /** Internal bookkeeping (never a user-facing toggle): the user's
    *  `taskbarMode` + `moveControlsToOuterEdge` values while on Sides.
    *  Top/Bottom force both on (`normalizeCanvasSettingsFields` invariant),
@@ -226,6 +234,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   // Drawers
   drawerLocation: 'sides',
+  horizontalSplit: 0.5,
   sidesChromePrefs: null,
   moveControlsToOuterEdge: false,
   taskbarMode: false,
@@ -273,6 +282,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  *   2. Location invariant: `'top' | 'bottom'` forces `moveControlsToOuterEdge`
  *      + `taskbarMode` on. Never forces them off — the Sides restore lives in
  *      `setSettings` (it needs prev/next, this function has only one state).
+ *   2a. `horizontalSplit` numeric coercion + clamp (finite, [0.1, 0.9]).
  *   2b. `sidesChromePrefs` shape validation (corrupt persisted bookkeeping →
  *      null, so the Sides restore falls back to defaults).
  *   2c. OS-mode invariant: `osMode: true` forces `taskbarMode` +
@@ -302,6 +312,19 @@ export function normalizeCanvasSettingsFields(
   // taskbar chrome (outer-edge tab controls + pinned strips).
   if (out.drawerLocation !== 'sides') {
     out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true }
+  }
+  // Cascade 2a: horizontalSplit numeric coercion + clamp. Non-number /
+  // non-finite disk values fall back to the 0.5 default; out-of-range
+  // values clamp to [0.1, 0.9]. (The apply-time 64px-per-side floor is
+  // computed from the viewport in tab-position.syncHorizontalSplit — this
+  // layer only guarantees a finite, sane fraction.)
+  {
+    const raw = out.horizontalSplit as unknown
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      out = { ...out, horizontalSplit: 0.5 }
+    } else if (raw < 0.1 || raw > 0.9) {
+      out = { ...out, horizontalSplit: Math.min(0.9, Math.max(0.1, raw)) }
+    }
   }
   // Cascade 2b: sidesChromePrefs shape validation. Persisted bookkeeping —
   // a corrupt shape is dropped to null (the Sides restore then uses defaults).

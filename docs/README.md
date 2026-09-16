@@ -28,6 +28,7 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `LayoutState` — persisted drawer state (`types.ts`)
 - `CanvasSettings` — all user-togglable settings (`types.ts`)
 - `DrawerLocation` — `'sides' | 'top' | 'bottom'`; Top/Bottom pins one horizontal tab strip per zone to the viewport edge (`types.ts`)
+- `horizontalSplit` — Top/Bottom dual-drawer boundary fraction (0.5 default, normalized 0.1–0.9); dragged via the strip handle, drives `--sidebar-ux-hsplit` (`types.ts` → `sidebar/tab-position.ts`)
 - `FullCanvasSettings` — `Required<CanvasSettings>` with all fields non-optional (`settings/state.ts`)
 - `CanvasFeature` — feature lifecycle hooks (`features/registry.ts`)
 - `DrawerTab` — store's tab entry with `id`, `title`, `root`, `iconSvg` (`store/index.ts`)

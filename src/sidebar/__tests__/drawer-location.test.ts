@@ -81,6 +81,9 @@ mock.module('../tab-position', () => ({
       modRef?.reconcileDrawerLocation()
     }
   },
+  // Split var writer/teardown (2026-09-16) — no geometry in this suite.
+  syncHorizontalSplit: () => calls.push('splitSync'),
+  clearHorizontalSplit: () => calls.push('splitClear'),
 }))
 
 mock.module('../main-tab-pin', () => ({
@@ -265,7 +268,9 @@ describe('drawer-location presentation (WS2)', () => {
     reconcileDrawerLocation({ force: true })
     calls.length = 0
     reconcileDrawerLocation()
-    expect(calls.length).toBe(0)
+    // The split-var sync deliberately runs BEFORE the skip-cache (its
+    // list-node presence is not part of the key); everything else is skipped.
+    expect(calls.filter((c) => c !== 'splitSync').length).toBe(0)
 
     presence = true
     reconcileDrawerLocation()

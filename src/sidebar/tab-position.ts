@@ -23,6 +23,7 @@ import {
   getStripEdge,
   isHorizontalStrip,
   isTaskbarModeEnabled,
+  setSettings,
 } from '../settings/state'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
@@ -64,6 +65,9 @@ export const STRIP_AXIS_HORIZONTAL = 'horizontal'
 export const STRIP_AXIS_VERTICAL = 'vertical'
 
 const PIN_Z_INDEX = '10000'
+/** Horizontal dual mode: the secondary host is a transparent overlay that
+ *  must paint above the main host's full-width strip surface. */
+const PIN_Z_INDEX_SECONDARY = '10001'
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
 const SAFE_LEFT = 'env(safe-area-inset-left, 0px)'
@@ -73,11 +77,36 @@ const INNER_BORDER = '1px solid var(--lumiverse-primary-020)'
  *  Same primary-020 token as INNER_BORDER (tab-list ↔ panel chrome). */
 const CHAT_FACING_BORDER = '1px solid var(--lumiverse-primary-020)'
 
+/**
+ * CSS custom property carrying the Top/Bottom drawer-split position as a
+ * percentage of the strip width, measured from the SECONDARY drawer's
+ * screen edge. Sole writer: `syncHorizontalSplit` / `setHorizontalSplitPct`.
+ * Consumers: the secondary pin host width (inline, this module) and the
+ * main list's lane padding (`HORIZONTAL_STRIP_CSS`). Percentage basis is
+ * the same for both (the fixed host's containing block = the viewport), so
+ * the two edges land on the same pixel at every split value.
+ */
+export const SPLIT_VAR = '--sidebar-ux-hsplit'
+
+/** Runtime class for the draggable boundary handle (child of the secondary
+ *  pin host, sibling of the tab list). CSS-hides itself outside horizontal. */
+export const SPLIT_HANDLE_CLASS = 'sidebar-ux-hsplit-handle'
+
+/** Minimum strip width reserved for each drawer's zone (dock + a tab). */
+const SPLIT_MIN_SIDE_PX = 64
+
 /** Module state for secondary pin reparent / restore. Cleared on unpin. */
 let _pinHost: HTMLElement | null = null
 let _pinSpacer: HTMLElement | null = null
 let _restoreParent: HTMLElement | null = null
 let _restoreNext: ChildNode | null = null
+
+/** Draggable split handle (secondary pin host child), if live. */
+let _splitHandle: HTMLElement | null = null
+/** True while a split drag owns the var (reconciles must not clobber it). */
+let _splitDragging = false
+/** Active drag's cancel routine (host teardown mid-drag). */
+let _splitDragCancel: (() => void) | null = null
 
 /** Body-level host for the main-drawer mirror strip (never reparents host React nodes). */
 let _mainPinHost: HTMLElement | null = null
@@ -153,6 +182,9 @@ export function __resetPinStateForTest(): void {
   _restoreParent = null
   _restoreNext = null
   _mainPinHost = null
+  _splitHandle = null
+  _splitDragging = false
+  _splitDragCancel = null
 }
 
 /** Live body-level host for the main-drawer mirror pin, if any. */
@@ -188,17 +220,116 @@ export function destroyMainPinHost(): void {
 }
 
 /**
- * S8 zone presence: the secondary half exists only when the second drawer is
+ * S8 zone presence: the secondary zone exists only when the second drawer is
  * enabled, its shell is live AND it has assigned tabs (the list node itself
  * must exist too — during a mode-switch window the model may still report
- * presence while the list is absent; the main host then re-chromes full
- * width and the next presence pass re-splits).
+ * presence while the list is absent; the next presence pass re-adds it).
+ *
+ * Strict predicate for the split overlay: while false, the split var is
+ * removed (main lane back to its default gutter) and no secondary host is
+ * pinned.
  */
 function secondaryZonePresent(): boolean {
   if (!getSettings().secondSidebarEnabled) return false
   if (!isSecondaryShellLive()) return false
   if (!hasSecondaryAssignedTabs()) return false
   return !!getSecondaryTabList()
+}
+
+// ── Horizontal split (Top/Bottom dual drawers) ──
+//
+// One full-width painted surface (the main host) with a transparent
+// secondary overlay anchored to its screen edge. The split var positions the
+// overlay's inner edge; HORIZONTAL_STRIP_CSS pads the main list's
+// leading/trailing inline side by the same value, so the main lane begins
+// exactly at the boundary. Percentage basis is identical for both consumers
+// (a fixed host's containing block is the viewport) — a margin on the inner
+// section would resolve against the list's padded content box and drift by
+// up to 8px at non-50% splits.
+
+/** Viewport-width basis for the split math (the main host is 100% wide). */
+function currentStripWidthPx(): number {
+  const rect = _mainPinHost?.getBoundingClientRect?.()
+  if (rect && Number.isFinite(rect.width) && rect.width > 0) return rect.width
+  if (typeof document !== 'undefined' && document.documentElement) {
+    return document.documentElement.clientWidth || 0
+  }
+  return 0
+}
+
+/**
+ * Fraction (0..1) → clamped split percentage. Reserves SPLIT_MIN_SIDE_PX on
+ * each side so both docks stay reachable on narrow viewports; the settings
+ * layer additionally guarantees a finite [0.1, 0.9] fraction.
+ */
+export function computeSplitPct(
+  fraction: number,
+  stripWidthPx: number = currentStripWidthPx(),
+): number {
+  const f = Number.isFinite(fraction) ? fraction : 0.5
+  const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0
+  const minPct = px > 0 ? Math.max(8, (SPLIT_MIN_SIDE_PX / px) * 100) : 8
+  const maxPct = 100 - minPct
+  const pct = Math.min(maxPct, Math.max(minPct, f * 100))
+  return Math.round(pct * 100) / 100
+}
+
+/**
+ * Sole writer of SPLIT_VAR. Recomputes from settings unless a drag owns the
+ * value; removes the var whenever the strip is not horizontal or the
+ * secondary zone is absent (main lane back to its default gutter).
+ *
+ * Call sites: `runReconcile` (before its skip-cache), boot init, the
+ * `drawerLocationFeature.apply` split branch, and the drag's pointerup.
+ */
+export function syncHorizontalSplit(): void {
+  if (_splitDragging) return
+  if (typeof document === 'undefined' || !document.documentElement?.style) return
+  if (!isHorizontalStrip() || !secondaryZonePresent()) {
+    clearSplitVar()
+    return
+  }
+  writeSplitVar(`${computeSplitPct(getSettings().horizontalSplit)}%`)
+}
+
+/** Live write for the drag (no settings mutation; the drag persists on release). */
+export function setHorizontalSplitPct(pct: number): void {
+  if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) return
+  writeSplitVar(`${Math.round(pct * 100) / 100}%`)
+}
+
+/** Drag ownership flag: reconciles must not overwrite the live value. */
+export function setHorizontalSplitDragging(dragging: boolean): void {
+  _splitDragging = dragging
+}
+
+/** Test helper: current live value of the split var ('' when unset). */
+export function getHorizontalSplitVar(): string {
+  if (typeof document === 'undefined' || !document.documentElement?.style) return ''
+  return document.documentElement.style.getPropertyValue(SPLIT_VAR)
+}
+
+/** Teardown: drop the split var and any drag ownership (idempotent). The
+ *  boundary handle is owned by the pin path (`destroyPinChrome`). */
+export function clearHorizontalSplit(): void {
+  const cancel = _splitDragCancel
+  _splitDragCancel = null
+  _splitDragging = false
+  cancel?.()
+  clearSplitVar()
+}
+
+function writeSplitVar(value: string): void {
+  if (typeof document === 'undefined' || !document.documentElement?.style) return
+  const root = document.documentElement
+  if (root.style.getPropertyValue(SPLIT_VAR) !== value) {
+    root.style.setProperty(SPLIT_VAR, value)
+  }
+}
+
+function clearSplitVar(): void {
+  if (typeof document === 'undefined' || !document.documentElement?.style) return
+  document.documentElement.style.removeProperty?.(SPLIT_VAR)
 }
 
 /**
@@ -208,16 +339,15 @@ function secondaryZonePresent(): boolean {
  * not included is wiped).
  *
  * Vertical (Sides): fixed 56px edge column at the drawer's side.
- * Horizontal (Top/Bottom): fixed full-width strip host; each owner's host
- * occupies its zone (100% solo), anchored to its own drawer's edge and
- * growing inward. Dual zones overlap by exactly 1px — ONLY the left/edge
- * zone carries the +1px; the right zone is exactly 50%. Both halves carrying
- * +1px (the original S8 #4 form) produced a 2px double-painted band that is
- * visible as a seam line under non-opaque theme backgrounds (live report
- * 2026-09-15). The remaining 1px prevents the device-pixel gap at fractional
- * zoom (live bug 2026-09-14: 90% Firefox zoom, 715 CSS px = 637.5 device px)
- * while halving the painted overlap. The list inside is absolutely
- * positioned by the list writer; HORIZONTAL_STRIP_CSS owns orientation.
+ *
+ * Horizontal (Top/Bottom): the strip is ONE full-width painted surface. The
+ * main host always spans 100% (its list paints TAB_STRIP_BACKGROUND across
+ * the whole strip) and the secondary host is a transparent overlay anchored
+ * to its own screen edge, width = the split var, z-above-main so its
+ * floating buttons paint over the shared surface. No seam overlap is needed
+ * because there is only one painted layer. The list inside is absolutely
+ * positioned by the list writer; HORIZONTAL_STRIP_CSS owns orientation, the
+ * lane padding and the overlay's transparency.
  */
 function applyPinHostChrome(
   host: HTMLElement,
@@ -235,7 +365,11 @@ function applyPinHostChrome(
 
   const s = host.style
   setIfDifferent(s, 'position', 'fixed')
-  setIfDifferent(s, 'zIndex', PIN_Z_INDEX)
+  setIfDifferent(
+    s,
+    'zIndex',
+    owner === PIN_OWNER_SECONDARY && horizontal ? PIN_Z_INDEX_SECONDARY : PIN_Z_INDEX,
+  )
   setIfDifferent(s, 'pointerEvents', 'none')
 
   if (horizontal) {
@@ -247,17 +381,15 @@ function applyPinHostChrome(
       setIfDifferent(s, 'bottom', SAFE_BOTTOM)
       setIfDifferent(s, 'top', '')
     }
-    // Dual zones: left/edge-anchored host is calc(50% + 1px), right host is
-    // exactly 50% — the pair overlaps by exactly 1px. The +1px (on ONE side
-    // only) keeps the union covered when a 50% half lands on a fractional
-    // device pixel and the compositor rounds the two fixed layers apart
-    // (live bug 2026-09-14: 90% Firefox zoom, 715 CSS px = 637.5 device px).
-    // Putting +1px on BOTH halves doubled the overlap to 2px, which paints
-    // as a visible darker seam band under non-opaque theme backgrounds
-    // (live report 2026-09-15, user-verified fix: right host exactly 50%).
-    const dual = secondaryZonePresent()
-    const dualWidth = side === 'left' ? 'calc(50% + 1px)' : '50%'
-    setIfDifferent(s, 'width', dual ? dualWidth : '100%')
+    // Main: the full-width base surface, always (presence must never
+    // re-chrome it — the overlay just appears on top). Secondary: the
+    // transparent overlay zone ending at the split boundary. The var
+    // fallback only applies if the host is chromed before the first sync.
+    if (owner === PIN_OWNER_MAIN) {
+      setIfDifferent(s, 'width', '100%')
+    } else {
+      setIfDifferent(s, 'width', `var(${SPLIT_VAR}, 50%)`)
+    }
     if (side === 'right') {
       setIfDifferent(s, 'right', SAFE_RIGHT)
       setIfDifferent(s, 'left', '')
@@ -582,6 +714,9 @@ function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
   // Drop any stray pin hosts left by lost module state / incomplete teardown.
   sweepStrayPinHosts()
   applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY)
+  // A direct pin call (assignment change without a location reconcile) must
+  // not leave the host at the var fallback while the main lane is unpadded.
+  syncHorizontalSplit()
   return _pinHost
 }
 
@@ -729,6 +864,155 @@ export function clearPinnedTabListChrome(tabList: HTMLElement): void {
   setIfDifferent(tabList.style, 'borderRight', '')
 }
 
+// ── Split handle (Top/Bottom dual drawers) ──
+
+/** Coarse-pointer gate (same policy as DnD and the resize handles). */
+function isCoarsePointer(): boolean {
+  try {
+    return typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)')?.matches
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Create (idempotently) the draggable boundary handle on the secondary pin
+ * host. The handle is a HOST child (sibling of the tab list), never a list
+ * child: the dock must stay the tab list's LAST child for
+ * `appendSecondaryTabNode`. CSS hides it outside horizontal; `destroyPinChrome`
+ * must remove it BEFORE its child-reparent loop or it would land inside the
+ * drawer as an invisible 12px click-eater.
+ */
+function ensureSplitHandle(host: HTMLElement): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  if (_splitHandle?.isConnected && _splitHandle.parentElement === host) {
+    return _splitHandle
+  }
+  _splitHandle?.remove()
+  const handle = document.createElement('div')
+  handle.className = SPLIT_HANDLE_CLASS
+  handle.setAttribute('data-canvas-hsplit', '')
+  handle.setAttribute('role', 'separator')
+  handle.setAttribute('aria-orientation', 'vertical')
+  handle.setAttribute('aria-label', 'Resize drawer split')
+  if ('tabIndex' in handle) handle.tabIndex = 0
+  installSplitHandleInteraction(handle)
+  host.appendChild(handle)
+  _splitHandle = handle
+  return handle
+}
+
+/** Remove the split handle and cancel any live drag on it. */
+function removeSplitHandle(): void {
+  _splitDragCancel?.()
+  _splitHandle?.remove()
+  _splitHandle = null
+}
+
+function installSplitHandleInteraction(handle: HTMLElement): void {
+  // Unit tests use partial element stubs — no listeners to install there.
+  if (typeof handle.addEventListener !== 'function') return
+  handle.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (!isHorizontalStrip()) return
+    if (isMobileViewport() || isCoarsePointer()) return
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    startSplitDrag(handle, e)
+  })
+  handle.addEventListener('dblclick', (e: MouseEvent) => {
+    if (!isHorizontalStrip()) return
+    if (isMobileViewport() || isCoarsePointer()) return
+    e.preventDefault()
+    e.stopPropagation()
+    setHorizontalSplitPct(computeSplitPct(0.5))
+    setSettings({ horizontalSplit: 0.5 })
+  })
+}
+
+/**
+ * Pointer drag for the split boundary. The live value goes through
+ * `setHorizontalSplitPct` (var only); the setting persists on a clean
+ * release. Cancel paths (`pointercancel`, window blur, host teardown,
+ * release outside the window) restore the pre-drag value. A full-viewport
+ * overlay keeps iframes in the drawers from swallowing pointermove — the
+ * resize-handle overlay pattern cannot be reused because a pin-host child
+ * has no `.sidebar-ux-drawer` ancestor.
+ */
+function startSplitDrag(handle: HTMLElement, _down: PointerEvent): void {
+  if (typeof document === 'undefined' || _splitDragging) return
+  const root = document.documentElement
+  if (!root?.style) return
+  const side = secondarySide()
+  const vw = currentStripWidthPx()
+  if (!(vw > 0)) return
+  const preDrag = root.style.getPropertyValue(SPLIT_VAR)
+
+  _splitDragging = true
+  handle.classList?.add('sidebar-ux-hsplit-handle--active')
+  if (document.body?.style) {
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  let overlay: HTMLElement | null = null
+  if (document.body) {
+    overlay = document.createElement('div')
+    overlay.setAttribute('data-canvas-hsplit-overlay', '')
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:13000;cursor:col-resize;background:transparent;pointer-events:auto;touch-action:none;'
+    document.body.appendChild(overlay)
+  }
+
+  const finish = (persist: boolean): void => {
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+    document.removeEventListener('pointercancel', onCancel)
+    window.removeEventListener('blur', onCancel)
+    overlay?.remove()
+    handle.classList?.remove('sidebar-ux-hsplit-handle--active')
+    if (document.body?.style) {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    _splitDragging = false
+    _splitDragCancel = null
+    if (persist && handle.isConnected) {
+      const pct = parseFloat(root.style.getPropertyValue(SPLIT_VAR))
+      if (Number.isFinite(pct)) {
+        setSettings({ horizontalSplit: pct / 100 })
+        syncHorizontalSplit()
+        return
+      }
+    }
+    // Cancelled (or host gone): restore the pre-drag value. A zone that
+    // disappeared is cleared by the next sync/reconcile.
+    if (preDrag) root.style.setProperty(SPLIT_VAR, preDrag)
+    else root.style.removeProperty(SPLIT_VAR)
+  }
+
+  const onMove = (e: PointerEvent): void => {
+    if (!handle.isConnected) {
+      finish(false)
+      return
+    }
+    const rect = _mainPinHost?.getBoundingClientRect?.()
+    const left = rect && Number.isFinite(rect.left) ? rect.left : 0
+    const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw
+    const boundaryPx = side === 'left' ? e.clientX - left : right - e.clientX
+    setHorizontalSplitPct(computeSplitPct(boundaryPx / vw, vw))
+  }
+
+  const onUp = (): void => finish(true)
+  const onCancel = (): void => finish(false)
+
+  _splitDragCancel = onCancel
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+  document.addEventListener('pointercancel', onCancel)
+  window.addEventListener('blur', onCancel)
+}
+
 function pinTabList(tabList: HTMLElement): void {
   const drawer = getSecondaryDrawer()
   const panel = getSecondaryPanel()
@@ -767,6 +1051,10 @@ function pinTabList(tabList: HTMLElement): void {
   // location flips while pinned).
   syncSpacerForLocation(_pinSpacer, getDrawerLocation())
   applyPinnedTabListChrome(tabList, side)
+
+  // Boundary handle is a HOST child (sibling of the list) — created with the
+  // pin, removed by destroyPinChrome before its child-reparent loop.
+  if (_pinHost) ensureSplitHandle(_pinHost)
 
   // Tab list is out of flex flow while pinned, but the 56px spacer stays in
   // flow. Orient the drawer so the spacer sits under the outer-edge pin strip
@@ -811,6 +1099,9 @@ function unpinTabList(tabList: HTMLElement | null): void {
 }
 
 function destroyPinChrome(): void {
+  // Handle FIRST: it is a host child, and the reparent loop below would move
+  // it into the drawer as an invisible 12px pointer-events:auto strip.
+  removeSplitHandle()
   if (_pinSpacer) {
     _pinSpacer.remove()
     _pinSpacer = null
@@ -838,6 +1129,9 @@ function destroyPinChrome(): void {
     _pinHost.remove()
     _pinHost = null
   }
+  // No pin ⇒ no split overlay; the next sync would also clear it, but a
+  // direct unpin call (buttons/drawer-sync) may not be followed by one.
+  clearSplitVar()
   // Defensive: clear any stray hosts that module state no longer tracks.
   sweepStrayPinHosts()
 }

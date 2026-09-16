@@ -435,14 +435,17 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   // Put orphan first: insertBefore live list
   host!.insertBefore(orphan, stubTabList)
 
-  assertEqual(host!.children.length, 2, 'C12: pre — dual lists under host')
-  assertEqual(host!.children[0], orphan, 'C12: pre — orphan is first (document-first-match trap)')
+  // Host also carries the split handle (2026-09-16) — count tab lists only.
+  const tabListKids = (): StubElement[] =>
+    host!.children.filter((c) => c.className.includes('sidebar-ux-tab-list'))
+  assertEqual(tabListKids().length, 2, 'C12: pre — dual lists under host')
+  assertEqual(tabListKids()[0], orphan, 'C12: pre — orphan is first (document-first-match trap)')
 
   // Force re-pin the live list — should drop the orphan.
   applyTabListPin(true, { force: true })
 
-  assertEqual(host!.children.length, 1, 'C12: only one tab list under host after force pin')
-  assertEqual(host!.children[0], stubTabList, 'C12: live list remains')
+  assertEqual(tabListKids().length, 1, 'C12: only one tab list under host after force pin')
+  assertEqual(tabListKids()[0], stubTabList, 'C12: live list remains')
   assertEqual(getPinnedTabList(), stubTabList as any, 'C12: getPinnedTabList returns live list')
   assertEqual(getSecondaryTabList(), stubTabList as any, 'C12: getSecondaryTabList returns live list')
 }

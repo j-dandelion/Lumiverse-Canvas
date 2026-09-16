@@ -214,10 +214,15 @@ path (`performDrop` → owned model) is axis-agnostic — all work is geometry.
   a horizontal class token, then a guarded `getComputedStyle` row check, default
   `'y'`. Resolved once when the drag geometry cache is built.
 - **Horizontal (Top/Bottom):** insertion uses X midpoints/center; overlay hit pads
-  swap by axis; adjacent zones select by the zone-edge seam (the Settings dock
-  makes nearest-center wrong; exact tie → secondary); FLIP inverts with
-  `translate(dx, dy)`; the drop-slot spacer holds width + full height; edge
-  auto-scroll self-schedules from the drag rAF (a stationary pointer keeps
+  swap by axis; adjacent zones select by the split boundary (`seamChoice` — the
+  Settings dock makes nearest-center wrong; exact tie → secondary). Since
+  2026-09-16 the boundary is the user-draggable drawer split
+  (`CanvasSettings.horizontalSplit`): the secondary overlay list spans
+  `[edge, split]` and the main section lane starts at the split (list padding,
+  same percentage basis as the fixed host width), so the two container rects
+  tile exactly and `seamChoice` stays correct at every split value. FLIP
+  inverts with `translate(dx, dy)`; the drop-slot spacer holds width + full
+  height; edge auto-scroll self-schedules from the drag rAF (a stationary pointer keeps
   scrolling) and stops via the phase guard on drop/cancel.
 - **Invalidation:** `invalidateDndGeometry()` (cache = null) is called from
   `reconcileDrawerLocation()` mid-drag and from viewport-cross handlers.

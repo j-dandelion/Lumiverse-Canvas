@@ -78,6 +78,19 @@ const slashOff = mergeCanvasSettings({ slashCommandsEnabled: false })
 assertEqual(slashOff.slashCommandsEnabled, false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false')
 assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false (assert)')
 
+// horizontalSplit (2026-09-16) — default 0.5, passthrough, numeric clamp.
+assertEqual(fromNull.horizontalSplit, 0.5, 'mergeCanvasSettings(null) defaults horizontalSplit=0.5')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 0.3 }).horizontalSplit, 0.3, 'merge keeps explicit horizontalSplit')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 0.05 }).horizontalSplit, 0.1, 'merge clamps low horizontalSplit to 0.1')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 5 }).horizontalSplit, 0.9, 'merge clamps high horizontalSplit to 0.9')
+assertEqual(mergeCanvasSettings({ horizontalSplit: -1 }).horizontalSplit, 0.1, 'merge clamps negative horizontalSplit')
+assertEqual(mergeCanvasSettings({ horizontalSplit: Number.NaN }).horizontalSplit, 0.5, 'merge coerces NaN horizontalSplit to 0.5')
+assertEqual(
+  mergeCanvasSettings({ horizontalSplit: 'nope' as unknown as number }).horizontalSplit,
+  0.5,
+  'merge coerces non-number horizontalSplit to 0.5',
+)
+
 // Legacy sidebarShadows* → drawerShadows* migration
 {
   const legacyOnly = mergeCanvasSettings({

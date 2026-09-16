@@ -47,7 +47,7 @@ import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../persist/layout-load'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
-import { applyTabListPosition, applyTabListPin, clearTabListPosition, reconcileTabListPin } from '../sidebar/tab-position'
+import { applyTabListPosition, applyTabListPin, clearTabListPosition, reconcileTabListPin, syncHorizontalSplit } from '../sidebar/tab-position'
 import { applyMainTabListPin, reconcileMainTabListPin, teardownMainPin } from '../sidebar/main-tab-pin'
 import {
   clearDrawerLocation,
@@ -429,6 +429,20 @@ const drawerLocationFeature: CanvasFeature = {
   },
 }
 
+/**
+ * Top/Bottom dual-drawer split (`CanvasSettings.horizontalSplit`). The
+ * boundary drag persists on release; this apply keeps external setting
+ * changes (settings.json edits, future UI controls) in sync with the
+ * `--sidebar-ux-hsplit` CSS var. Geometry/presence passes stay in
+ * `drawerLocationFeature` + `drawer-location.reconcileDrawerLocation`.
+ */
+const horizontalSplitFeature: CanvasFeature = {
+  id: 'horizontalSplit',
+  apply() {
+    syncHorizontalSplit()
+  },
+}
+
 /** Tab list position: moves the column of tab buttons to the screen-edge
  *  side of the secondary sidebar when enabled. No mount needed — the
  *  effect is applied by createSecondarySidebar / mountSecondarySidebar /
@@ -628,6 +642,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   // (html classes + strip var + HORIZONTAL_STRIP_CSS), and it reconciles the
   // whole strip geometry on a location change.
   drawerLocationFeature,
+  horizontalSplitFeature,
   tabPositionFeature,
   taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,

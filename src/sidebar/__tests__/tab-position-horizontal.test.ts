@@ -15,6 +15,8 @@ let secondaryList: FakeEl | null = null
 let side: 'left' | 'right' = 'left'
 let mobile = false
 let dockCalls = 0
+let splitFraction = 0.5
+const settingsPatches: Array<Record<string, unknown>> = []
 
 class FakeClassList {
   private _set = new Set<string>()
@@ -87,7 +89,12 @@ mock.module('../../settings/state', () => ({
     moveControlsToOuterEdge: true,
     taskbarMode: true,
     secondSidebarEnabled: secondEnabled,
+    horizontalSplit: splitFraction,
   }),
+  setSettings: (patch: Record<string, unknown>) => {
+    settingsPatches.push(patch)
+    if (typeof patch.horizontalSplit === 'number') splitFraction = patch.horizontalSplit
+  },
   getDrawerLocation: () => loc,
   getStripEdge: () => (loc === 'top' ? 'top' : loc === 'bottom' ? 'bottom' : null),
   isHorizontalStrip: () => loc !== 'sides',
@@ -140,6 +147,12 @@ const {
   applyPinnedTabListChrome,
   clearPinnedTabListChrome,
   applyTabListPin,
+  syncHorizontalSplit,
+  computeSplitPct,
+  getHorizontalSplitVar,
+  setHorizontalSplitPct,
+  setHorizontalSplitDragging,
+  __resetPinStateForTest,
 } = await import('../tab-position')
 
 const { HORIZONTAL_STRIP_CSS } = await import('../styles')
@@ -195,7 +208,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.style.right).toBe('')
   })
 
-  test('horizontal bottom dual (right side): exactly 50%, anchored right', () => {
+  test('horizontal dual: main host stays 100% (never re-chromes), right anchor', () => {
     loc = 'bottom'
     presence = true
     shellLive = true
@@ -204,41 +217,23 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.getAttribute('data-strip-edge')).toBe('bottom')
     expect(host.style.bottom).toBe(SAFE_BOTTOM)
     expect(host.style.top).toBe('')
-    // Right/opposite-edge zone is EXACTLY 50% — the +1px lives on the left
-    // zone only (1px total overlap; see the asymmetric-rule test below).
-    expect(host.style.width).toBe('50%')
+    // The main host is the full-width painted base surface — presence must
+    // never shrink it (the transparent overlay appears on top instead).
+    expect(host.style.width).toBe('100%')
+    expect(host.style.zIndex).toBe('10000')
     expect(host.style.right).toBe(SAFE_RIGHT)
     expect(host.style.left).toBe('')
   })
 
-  test('dual zone overlap is exactly 1px: left host +1px, right host exactly 50%', () => {
-    // Live bug 2026-09-14: at 90% Firefox zoom each 50% fixed half rounded to
-    // a fractional device pixel and a 1-device-px column of page background
-    // showed through at the seam as a divider — an overlap is needed.
-    // Live report 2026-09-15: BOTH halves carrying calc(50% + 1px) doubled
-    // the overlap to 2px, which painted as a visible seam band under
-    // non-opaque theme backgrounds. Minimal form: exactly one host carries
-    // the +1px (the left/edge-anchored zone); the right zone stays 50%.
+  test('horizontal dual: presence transitions never re-chrome the main width', () => {
     loc = 'top'
     presence = true
     secondaryList = freshList()
-    const left = ensureMainPinHost('left')!
-    expect(left.style.width).toBe('calc(50% + 1px)')
-    const right = ensureMainPinHost('right')!
-    expect(right.style.width).toBe('50%')
-  })
-
-  test('dual collapses to solo when the secondary zone disappears', () => {
-    loc = 'top'
-    presence = true
-    secondaryList = freshList()
-    let host = ensureMainPinHost('left')!
-    expect(host.style.width).toBe('calc(50% + 1px)')
-
-    // Presence lost (mode switch / last tab removed) → full width again.
+    const withZone = ensureMainPinHost('left')!
+    expect(withZone.style.width).toBe('100%')
     presence = false
-    host = ensureMainPinHost('left')!
-    expect(host.style.width).toBe('100%')
+    const withoutZone = ensureMainPinHost('left')!
+    expect(withoutZone.style.width).toBe('100%')
   })
 
   test('flip horizontal → sides clears height and restores edge column', () => {
@@ -326,6 +321,110 @@ describe('list chrome writer (WS3)', () => {
     expect(list.style.flexDirection).toBe('column')
     expect(list.style.borderLeft).toBe('')
     expect(list.style.borderRight).toBe('')
+  })
+})
+
+// ── Top/Bottom split (2026-09-16) ──
+//
+// One full-width painted surface (main host, always 100%) + a transparent
+// secondary overlay anchored to its screen edge. `--sidebar-ux-hsplit` is the
+// boundary; the main list's lane padding consumes the same value. The var is
+// written by syncHorizontalSplit and removed whenever the zone is absent.
+describe('horizontal split var + overlay (2026-09-16)', () => {
+  beforeEach(() => {
+    loc = 'sides'
+    presence = false
+    secondEnabled = true
+    shellLive = true
+    secondaryList = null
+    side = 'left'
+    mobile = false
+    splitFraction = 0.5
+    settingsPatches.length = 0
+    __resetPinStateForTest()
+    document.documentElement.style.removeProperty('--sidebar-ux-hsplit')
+  })
+
+  test('sync writes the fraction as a percent when horizontal + zone present', () => {
+    loc = 'top'
+    presence = true
+    secondaryList = freshList()
+    splitFraction = 0.3
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('30%')
+  })
+
+  test('sync removes the var outside horizontal or without a zone', () => {
+    loc = 'top'
+    presence = true
+    secondaryList = freshList()
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('50%')
+
+    presence = false
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('')
+
+    presence = true
+    loc = 'sides'
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('')
+  })
+
+  test('computeSplitPct reserves a 64px floor per side', () => {
+    expect(computeSplitPct(0.05, 1000)).toBe(8)
+    expect(computeSplitPct(0.95, 1000)).toBe(92)
+    expect(computeSplitPct(0.5, 400)).toBe(50)
+    // 64px of a 400px strip → 16% floor.
+    expect(computeSplitPct(0.02, 400)).toBe(16)
+    expect(computeSplitPct(0.98, 400)).toBe(84)
+    expect(computeSplitPct(Number.NaN, 1000)).toBe(50)
+  })
+
+  test('drag live-writes the var; reconciles cannot clobber it while dragging', () => {
+    loc = 'top'
+    presence = true
+    secondaryList = freshList()
+    splitFraction = 0.3
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('30%')
+
+    setHorizontalSplitDragging(true)
+    setHorizontalSplitPct(40)
+    splitFraction = 0.6
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('40%')
+
+    // Invalid live values are ignored (no NaN% widths).
+    setHorizontalSplitPct(Number.NaN)
+    expect(getHorizontalSplitVar()).toBe('40%')
+
+    setHorizontalSplitDragging(false)
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('60%')
+  })
+
+  test('pin creates the handle on the secondary host; unpin removes it', () => {
+    loc = 'top'
+    presence = true
+    const list = freshList()
+    const drawerParent = new FakeEl()
+    drawerParent.appendChild(list)
+    secondaryList = list
+
+    applyTabListPin(true, { force: true })
+    const host = list.parentElement!
+    expect(host).not.toBe(drawerParent)
+    const handle = host.children.find((c) => c.className.includes('sidebar-ux-hsplit-handle'))
+    expect(!!handle).toBe(true)
+    expect(handle!.getAttribute('role')).toBe('separator')
+    // Secondary overlay host paints above the main base surface and is sized
+    // by the split var.
+    expect(host.style.zIndex).toBe('10001')
+    expect(host.style.width).toBe('var(--sidebar-ux-hsplit, 50%)')
+
+    applyTabListPin(false, { force: true })
+    expect(host.children.some((c) => c.className.includes('sidebar-ux-hsplit-handle'))).toBe(false)
   })
 })
 
@@ -508,5 +607,62 @@ describe('HORIZONTAL_STRIP_CSS Start divider is dock-owned (2026-09-15)', () => 
       expect(rule).not.toContain('border-right')
       expect(rule).not.toContain('border-left')
     }
+  })
+})
+
+// 2026-09-16: dual-drawer split. The secondary overlay must paint nothing of
+// its own (the main list is the single surface, so a second translucent
+// separator shadow would darken the line), and the main lane must end exactly
+// at the split (same percentage basis as the fixed host width). The handle is
+// hidden everywhere by default and only exists visually in horizontal.
+describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
+  const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .filter((b) => b.trim().length > 0)
+
+  test('secondary overlay list is transparent and drops the separator shadow', () => {
+    const rule = blocks.find(
+      (b) =>
+        b.includes('data-pin-owner="secondary"') &&
+        b.includes('> .sidebar-ux-tab-list') &&
+        b.includes('background: transparent'),
+    ) ?? ''
+    expect(rule).toContain('data-strip-axis="horizontal"')
+    expect(rule).toContain('box-shadow: none !important')
+  })
+
+  test('main lane pads the secondary-facing side up to the split var', () => {
+    const startRule = blocks.find(
+      (b) =>
+        b.includes('data-pin-owner="main"') &&
+        b.includes('padding-left: max(8px, var(--sidebar-ux-hsplit, 0px))'),
+    ) ?? ''
+    expect(startRule).toContain('sidebar-ux-side-right')
+    expect(startRule).toContain('!important')
+    const endRule = blocks.find(
+      (b) =>
+        b.includes('data-pin-owner="main"') &&
+        b.includes('padding-right: max(8px, var(--sidebar-ux-hsplit, 0px))'),
+    ) ?? ''
+    expect(endRule).toContain('sidebar-ux-side-left')
+  })
+
+  test('split handle is hidden by default and shown horizontal, side-anchored', () => {
+    const hidden = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle') && b.includes('display: none'),
+    ) ?? ''
+    expect(hidden).toContain('data-pin-owner="secondary"')
+    const shown = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle') && b.includes('display: block'),
+    ) ?? ''
+    expect(shown).toContain('data-strip-axis="horizontal"')
+    const leftAnchor = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle') && b.includes('right: -6px'),
+    ) ?? ''
+    expect(leftAnchor).toContain('sidebar-ux-side-left')
+    const rightAnchor = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle') && b.includes('left: -6px'),
+    ) ?? ''
+    expect(rightAnchor).toContain('sidebar-ux-side-right')
   })
 })

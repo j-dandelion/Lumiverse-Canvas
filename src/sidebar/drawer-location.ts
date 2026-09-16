@@ -45,7 +45,11 @@ import {
   updateMainMirrorDrawerTabVisibility,
 } from './main-mirror-drawer'
 import { getSecondaryWrapper, isSecondaryShellLive } from './secondary'
-import { reconcileTabListPin } from './tab-position'
+import {
+  clearHorizontalSplit,
+  reconcileTabListPin,
+  syncHorizontalSplit,
+} from './tab-position'
 import { reconcileMainTabListPin } from './main-tab-pin'
 import { updateStripGutters } from './strip-gutter'
 import { updateChatReflow } from '../chat/reflow'
@@ -166,6 +170,12 @@ function runReconcile(force: boolean): void {
   const loc = getDrawerLocation()
   const horizontal = isHorizontalStrip()
 
+  // Top/Bottom split var: sync BEFORE the skip-cache. The var depends on the
+  // strict secondary-zone predicate (list node included) which `computeKey`
+  // intentionally does not track; a list-node transition must still apply.
+  // Cheap + idempotent; drag-owned values are respected inside.
+  syncHorizontalSplit()
+
   const key = computeKey(loc)
   if (!force && key === _lastKey) return
   _lastKey = key
@@ -261,6 +271,9 @@ export function clearDrawerLocation(): void {
     _unsubModel()
     _unsubModel = null
   }
+
+  // Module state first — safe without a document (test resets).
+  clearHorizontalSplit()
 
   if (typeof document === 'undefined' || !document.documentElement) return
   const root = document.documentElement
