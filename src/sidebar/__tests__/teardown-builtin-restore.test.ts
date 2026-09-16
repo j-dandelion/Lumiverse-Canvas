@@ -33,6 +33,11 @@ let _fakeMainSidebar: any = null
   documentElement: {
     style: { setProperty: () => {}, getPropertyValue: () => '', removeProperty: () => {} },
     classList: { add() {}, remove() {}, contains() { return false }, toggle() {} },
+    // Reflow shadow ownership writes/removes data-canvas-chat-shadow here.
+    _attrs: {} as Record<string, string>,
+    setAttribute(name: string, value: string) { this._attrs[name] = value },
+    removeAttribute(name: string) { delete this._attrs[name] },
+    getAttribute(name: string) { return this._attrs[name] ?? null },
   },
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeMainSidebar

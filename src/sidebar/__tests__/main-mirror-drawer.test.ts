@@ -189,6 +189,11 @@ function makeClassList() {
 const _docEl = {
   classList: makeClassList(),
   style: new StubStyle(),
+  // Reflow shadow ownership writes data-canvas-chat-shadow here.
+  _attrs: {} as Record<string, string>,
+  setAttribute(k: string, v: string) { this._attrs[k] = v },
+  removeAttribute(k: string) { delete this._attrs[k] },
+  getAttribute(k: string) { return this._attrs[k] ?? null },
 }
 
 let _bodyChildren: StubElement[] = []
