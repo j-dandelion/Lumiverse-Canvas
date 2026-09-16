@@ -827,14 +827,16 @@ export function injectDrawerTabStyles(): void {
     }
   `)
 
-  // Closed-drawer shadow suppression: when the secondary drawer is off-screen
-  // (translateX ≠ 0), its box-shadow must not bleed into the viewport —
-  // even with the +1px overshoot, shadow spread can extend 4–24px past the
-  // element edge.  The data-drawer-open attribute is toggled by open/close
-  // in secondary.tsx; the inline `box-shadow` style on the drawer element
-  // is always present, so we need !important to override it.
+  // Closed-drawer shadow suppression: when a Canvas shell is off-screen
+  // (Sides closed transform puts the drawer edge at ~-1px, Top/Bottom settles
+  // at the closed transform), its box-shadow must not bleed into the viewport
+  // — even with the +1px overshoot, shadow spread can extend 4–60px past the
+  // element edge. Applies to BOTH owners (main mirror + secondary):
+  // `data-drawer-open` is toggled by secondary.tsx open/close and by
+  // main-mirror-drawer.ts open/close. The inline `box-shadow` style on the
+  // drawer element is always present, so we need !important to override it.
   injectStyles('sidebar-ux-shadow-close-suppress', `
-    .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
+    .sidebar-ux-shell[data-drawer-open="false"] > .sidebar-ux-drawer {
       box-shadow: none !important;
     }
   `)

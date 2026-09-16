@@ -107,7 +107,15 @@ The closed path already measures `offsetWidth` and adds a +1 transform overshoot
 
 ## Shadow Suppression When Closed
 
-When the secondary drawer is closed (`data-drawer-open="false"` on the wrapper), CSS forces `box-shadow: none !important` on the drawer element. Without this, the shadow spread from `var(--lumiverse-shadow-xl)` could bleed 4–24px into the viewport past the closed edge. The data attribute is toggled by `openSecondarySidebar` / `closeSecondarySidebar`.
+When either Canvas drawer is closed (`data-drawer-open="false"` on the
+`sidebar-ux-shell` wrapper), CSS forces `box-shadow: none !important` on the
+drawer element. Without this, the shadow spread from `var(--lumiverse-shadow-xl)`
+could bleed tens of px into the viewport past the closed edge (Sides: the
+closed translate leaves the drawer edge at ~-1px; Top/Bottom: the settled
+closed transform). The data attribute is toggled by
+`openSecondarySidebar` / `closeSecondarySidebar` (`sidebar/secondary.tsx`) and
+by `openCanvasMainDrawer` / `closeCanvasMainDrawer`
+(`sidebar/main-mirror-drawer.ts`).
 
 Default `drawerShadowsMobile` is `false` but users can enable it — shadow suppression applies regardless of the setting when the drawer is off-screen.
 

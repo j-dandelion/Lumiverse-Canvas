@@ -268,6 +268,12 @@ export function restyleMainShellSide(side: 'left' | 'right'): void {
 
 export function openCanvasMainDrawer(): void {
   if (!_shell || !_active) return
+  // Shadow suppression key: the inline box-shadow on .sidebar-ux-drawer must
+  // die whenever the shell is closed (the closed translate leaves the drawer
+  // edge at ~-1px, and the shadow spreads 60px into the viewport). Written
+  // BEFORE the already-open early return so a stale attr can never survive a
+  // repeated call (secondary parity, secondary.tsx open/close).
+  _shell.wrapper.dataset.drawerOpen = 'true'
   ensureHostContentParked()
   if (_open) {
     dlog('[main-mirror] open (already open)')
@@ -288,6 +294,9 @@ export function openCanvasMainDrawer(): void {
 
 export function closeCanvasMainDrawer(): void {
   if (!_shell || !_active) return
+  // Written before the already-closed early return (drift defense) — see
+  // openCanvasMainDrawer.
+  _shell.wrapper.dataset.drawerOpen = 'false'
   if (!_open) return
   const side = _shell.side
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420)

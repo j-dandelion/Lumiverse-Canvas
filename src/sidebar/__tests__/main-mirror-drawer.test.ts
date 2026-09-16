@@ -328,6 +328,20 @@ export {}
   )
 }
 
+// --- T9b: data-drawer-open tracks the shell open state (closed-shadow
+//     suppression key; the main mirror used to never update it). ---
+{
+  // Use the module getter — the body-children spy array keeps stale wrappers
+  // from earlier mounts (remove() does not prune it).
+  const shell = mainMirrorModule.getMainMirrorWrapper() as any
+  assert(!!shell, 'T9b: mounted shell present')
+  assertEqual(shell?.dataset?.drawerOpen, 'false', 'T9b: closed mount → data-drawer-open=false')
+  openCanvasMainDrawer()
+  assertEqual(shell?.dataset?.drawerOpen, 'true', 'T9b: open → data-drawer-open=true')
+  closeCanvasMainDrawer()
+  assertEqual(shell?.dataset?.drawerOpen, 'false', 'T9b: close → data-drawer-open=false')
+}
+
 // --- T10: applyMainMirrorDrawer(false) after mount tears down ---
 {
   // T9 left it active
