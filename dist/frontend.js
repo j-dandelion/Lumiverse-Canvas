@@ -17779,6 +17779,15 @@ var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS = `
     font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   }
 
+  /* Upward menus (bottom taskbar / Start dock): mirror the shadow's Y offset.
+     The base down-cast shadow paints over the strip the menu opens from; the
+     upward variant throws it away from the anchor instead (live report
+     2026-09-16). Direction is stamped in JS (data-open-upward); the values
+     mirror the base rule. */
+  .canvas-os-start-menu[data-open-upward] {
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+
   /* Glass — the context-menu recipe, coarse-pointer gated; derives from the
      same surface token as the base. */
   @media not (pointer: coarse) {
@@ -18352,6 +18361,7 @@ function openStartMenu(side, button) {
     const mRect = menu.getBoundingClientRect();
     const uiScale = getUiScale();
     const openUpward = rect.bottom > window.innerHeight / 2;
+    menu.toggleAttribute("data-open-upward", openUpward);
     const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
     const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
     menu.style.left = `${renderedLeft / uiScale}px`;

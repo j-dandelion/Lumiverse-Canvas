@@ -433,6 +433,11 @@ function openStartMenu(side: Side, button: HTMLElement): void {
     const mRect = menu.getBoundingClientRect()
     const uiScale = getUiScale()
     const openUpward = rect.bottom > window.innerHeight / 2
+    // The drop shadow follows the open direction (the sheet owns the values):
+    // an upward menu's down-cast shadow paints over the bottom taskbar/tab
+    // strip it opens from — stamp the direction so CSS can mirror the Y
+    // offset (live report 2026-09-16).
+    menu.toggleAttribute('data-open-upward', openUpward)
     const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8))
     const renderedTop = Math.max(8, Math.min(
       openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8,

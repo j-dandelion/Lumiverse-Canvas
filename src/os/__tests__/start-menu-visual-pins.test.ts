@@ -69,6 +69,18 @@ function blockOf(css: string, needle: string): string {
   assertIncludes(root, 'padding: 4px', 'surface padding parity')
 }
 {
+  // Directional drop shadow: an upward-opening menu must not cast its shadow
+  // over the bottom taskbar/tab strip (live report 2026-09-16).
+  assertIncludes(
+    START_MENU_CSS,
+    '.canvas-os-start-menu[data-open-upward] {',
+    'upward shadow rule exists',
+  )
+  const up = blockOf(START_MENU_CSS, '.canvas-os-start-menu[data-open-upward] {')
+  assertIncludes(up, 'box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5)', 'upward menu mirrors the Y offset')
+  assertIncludes(src, "toggleAttribute('data-open-upward'", 'open direction is stamped on the menu')
+}
+{
   const divider = blockOf(START_MENU_CSS, '.canvas-os-start-menu__divider {')
   assertIncludes(divider, 'margin: 4px 8px', 'divider margin parity')
   assertIncludes(divider, 'background: var(--lumiverse-border)', 'divider token parity')
