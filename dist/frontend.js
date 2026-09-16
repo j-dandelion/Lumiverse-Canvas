@@ -814,7 +814,7 @@ function injectDrawerTabStyles() {
     }
   `);
   injectStyles("sidebar-ux-shadow-close-suppress", `
-    .sidebar-ux-secondary-wrapper[data-drawer-open="false"] > .sidebar-ux-drawer {
+    .sidebar-ux-shell[data-drawer-open="false"] > .sidebar-ux-drawer {
       box-shadow: none !important;
     }
   `);
@@ -1177,6 +1177,25 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
   min-width: 48px !important;
   flex-shrink: 0 !important;
   padding: 0 !important;
+}
+
+/* OS Start button: OUTERMOST slot of its own dock/list, at the drawer-side
+   screen edge (left-attached strip → first item; right-attached → last).
+   CSS-owned so an S4 in-place side flip re-orders immediately — the old
+   inline btn.style.order (JS, keyed on getMainDrawerSide at ensure time)
+   kept the stale value until a shell remount/refresh, which left the Options
+   dock on the edge instead of Start. The Settings button inside the dock has
+   the default order:0; the values also work in the no-dock fallback, where
+   the list's sections default to 0. Placed AFTER the 48×48 sizing rule so
+   os-start-button-css.test.ts keeps parsing the sizing block as the first
+   [data-canvas-os-start] occurrence. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: -1 !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: 1 !important;
 }
 
 /* Main strip's inner section: row + fills the zone. Cluster anchoring lives
@@ -4059,9 +4078,11 @@ function openWindowInDrawerByLiveId(liveId, side) {
     return Promise.resolve();
   }
   const isClosed = model.closed.includes(key);
+  const isHidden2 = model.hidden.includes(key);
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
   const sourceSide = side === "primary" ? "secondary" : "primary";
   const activate = livesInTarget || model.active[sourceSide] === key || isClosed;
+  const unhide = isHidden2 ? dispatch({ t: "setHidden", key, hidden: false }) : Promise.resolve();
   const drawerClosed = !model.drawers[side].open;
   const openDrawer = drawerClosed ? dispatch({ t: "setDrawer", side, open: true }) : Promise.resolve();
   if (drawerClosed)
@@ -4071,7 +4092,7 @@ function openWindowInDrawerByLiveId(liveId, side) {
     { t: "setClosed", key, closed: false },
     { t: "activate", key, side }
   ]) : Promise.resolve();
-  return openDrawer.then(() => move).then(() => open).then(() => {
+  return unhide.then(() => openDrawer).then(() => move).then(() => open).then(() => {
     if (activate)
       host.activate(side, liveId);
   });
@@ -13376,6 +13397,7 @@ function restyleMainShellSide(side) {
 function openCanvasMainDrawer() {
   if (!_shell || !_active2)
     return;
+  _shell.wrapper.dataset.drawerOpen = "true";
   ensureHostContentParked();
   if (_open) {
     dlog("[main-mirror] open (already open)");
@@ -13397,6 +13419,7 @@ function openCanvasMainDrawer() {
 function closeCanvasMainDrawer() {
   if (!_shell || !_active2)
     return;
+  _shell.wrapper.dataset.drawerOpen = "false";
   if (!_open)
     return;
   const side = _shell.side;
@@ -13927,6 +13950,7 @@ var init_main_mirror_drawer = __esm(() => {
 // src/chat/reflow.ts
 var exports_reflow = {};
 __export(exports_reflow, {
+  CHAT_SHADOW_ATTR: () => CHAT_SHADOW_ATTR,
   CONTENT_INSET_L_VAR: () => CONTENT_INSET_L_VAR,
   CONTENT_INSET_R_VAR: () => CONTENT_INSET_R_VAR,
   clearChatMargins: () => clearChatMargins,
@@ -13954,6 +13978,7 @@ function clearChatMargins() {
   const root = document.documentElement;
   root.style.removeProperty("--sidebar-ux-chat-ml");
   root.style.removeProperty("--sidebar-ux-chat-mr");
+  root.removeAttribute(CHAT_SHADOW_ATTR);
 }
 function injectReflowStyles() {
   injectStyles("sidebar-ux-reflow", `
@@ -13961,6 +13986,33 @@ function injectReflowStyles() {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    /* Open-drawer shadow, chat-owned (2026-09-15). The Canvas shells are
+       body-level fixed layers above the whole app subtree (z-index 9990; the
+       host .app is isolated), so their real box-shadow paints over chat
+       content and can never be z-ordered underneath it. While a reflow lane
+       is active the real shadow is suppressed and an inset box-shadow is
+       painted on the chat column instead: inset shadows render in the
+       element's background layer, BELOW its content, so bubbles/composer
+       cover the shadow — underneath on the z axis. The 60px/-60px inset form
+       mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
+       falloff. The attr is set by updateChatReflow only on desktop, Sides
+       location, drawerShadowsDesktop on, chat column present, drawer open on
+       that side; clearChatMargins drops it (mobile / feature off / disable). */
+    @media (min-width: 601px) {
+      html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer {
+        box-shadow: none !important;
+      }
+      html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"] {
+        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
+      html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
+        box-shadow: inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
+      html[data-canvas-chat-shadow~="left"][data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
+        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5),
+                    inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
     }
     @media (max-width: 600px) {
       [class*="_chatColumn_"] {
@@ -13973,7 +14025,7 @@ function injectReflowStyles() {
 }
 function computeContentLaneInsets() {
   if (isMobileViewport()) {
-    return { left: 0, right: 0 };
+    return { left: 0, right: 0, openLeft: false, openRight: false };
   }
   const mainSide = getMainDrawerSide();
   const dock = getDockInsets();
@@ -13986,7 +14038,13 @@ function computeContentLaneInsets() {
   const secStrip = !isHorizontalStrip() && !secOpen && isTaskbarModeEnabled() && getSecondaryTabList() ? TAB_LIST_WIDTH_PX : 0;
   const leftMargin = Math.max(mainSide === "left" ? mainStrip : secStrip, mainSide === "left" ? mainOpen ? Math.max(0, mainDrawerW - dock.left) : 0 : secOpen ? Math.max(0, secDrawerW - dock.left) : 0);
   const rightMargin = Math.max(mainSide === "right" ? mainStrip : secStrip, mainSide === "right" ? mainOpen ? Math.max(0, mainDrawerW - dock.right) : 0 : secOpen ? Math.max(0, secDrawerW - dock.right) : 0);
-  return { left: leftMargin, right: rightMargin };
+  const mainOnLeft = mainSide === "left";
+  return {
+    left: leftMargin,
+    right: rightMargin,
+    openLeft: mainOpen && mainOnLeft || secOpen && !mainOnLeft,
+    openRight: mainOpen && !mainOnLeft || secOpen && mainOnLeft
+  };
 }
 function publishContentLaneInsets() {
   const insets = computeContentLaneInsets();
@@ -14003,6 +14061,20 @@ function scheduleReflow() {
     updateChatReflow();
   });
 }
+function syncChatShadowAttr(insets) {
+  const root = document.documentElement;
+  const sides = [];
+  if (getChatColumn() && getSettings().drawerShadowsDesktop && !isHorizontalStrip()) {
+    if (insets.openLeft)
+      sides.push("left");
+    if (insets.openRight)
+      sides.push("right");
+  }
+  if (sides.length > 0)
+    root.setAttribute(CHAT_SHADOW_ATTR, sides.join(" "));
+  else
+    root.removeAttribute(CHAT_SHADOW_ATTR);
+}
 function updateChatReflow() {
   if (isMobileViewport()) {
     clearChatMargins();
@@ -14012,6 +14084,7 @@ function updateChatReflow() {
   const insets = computeContentLaneInsets();
   setChatMargin("right", insets.right);
   setChatMargin("left", insets.left);
+  syncChatShadowAttr(insets);
   publishContentLaneInsets();
 }
 function _onMediaChangeImpl(e3) {
@@ -14072,7 +14145,7 @@ function startReflowObserver() {
     _onMediaChange2 = null;
   };
 }
-var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
+var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", CHAT_SHADOW_ATTR = "data-canvas-chat-shadow", _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
 var init_reflow = __esm(() => {
   init_store();
   init_secondary();
@@ -17653,32 +17726,37 @@ var init_start_menu_motion = __esm(() => {
 });
 
 // src/os/start-menu.ts
-function deriveStartMenuEntries(side, model, resolve) {
-  const keys = side === "primary" ? model.primary : model.secondary;
-  const activeKey = model.active[side];
+function deriveStartMenuEntries(model, resolve) {
+  const tabs = new Map(getDrawerTabs().map((t3) => [t3.id, t3]));
+  const seen = new Set;
   const out = [];
-  for (const key of keys) {
-    if (model.hidden.includes(key))
-      continue;
-    const liveId = resolve(key);
-    if (!liveId)
-      continue;
-    const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
-    const tab = getDrawerTabs().find((t3) => t3.id === liveId);
-    out.push({
-      liveId,
-      title: tab?.title ?? key,
-      iconSvg: tab?.iconSvg,
-      iconUrl: tab?.iconUrl,
-      state
-    });
+  for (const side of ["primary", "secondary"]) {
+    const keys = side === "primary" ? model.primary : model.secondary;
+    const activeKey = model.active[side];
+    for (const key of keys) {
+      const liveId = resolve(key);
+      if (!liveId || seen.has(liveId))
+        continue;
+      seen.add(liveId);
+      const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
+      const tab = tabs.get(liveId);
+      out.push({
+        liveId,
+        side,
+        title: tab?.title ?? key,
+        iconSvg: tab?.iconSvg,
+        iconUrl: tab?.iconUrl,
+        state
+      });
+    }
   }
+  out.sort((a3, b2) => a3.title.localeCompare(b2.title, undefined, { sensitivity: "base" }) || a3.liveId.localeCompare(b2.liveId));
   return out;
 }
 function glyphFor(state) {
   return state === "open" ? "●" : state === "minimized" ? "–" : "○";
 }
-function createMenuEntry(entry, side) {
+function createMenuEntry(entry) {
   const item = document.createElement("button");
   item.type = "button";
   item.setAttribute("role", "menuitem");
@@ -17721,16 +17799,16 @@ function createMenuEntry(entry, side) {
   item.appendChild(glyph);
   item.addEventListener("click", () => {
     hideStartMenu();
-    openWindowInDrawerByLiveId(entry.liveId, side);
+    openWindowInDrawerByLiveId(entry.liveId, entry.side);
   });
   return item;
 }
-function buildMenu(side) {
+function buildMenu() {
   const host = getHost();
   const model = getModel();
   if (!host || !model)
     return null;
-  const entries = deriveStartMenuEntries(side, model, (key) => host.resolve(key));
+  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key));
   const menu = document.createElement("div");
   menu.id = MENU_ID;
   menu.setAttribute("role", "menu");
@@ -17760,7 +17838,7 @@ function buildMenu(side) {
     menu.appendChild(empty);
   }
   for (const entry of entries) {
-    menu.appendChild(createMenuEntry(entry, side));
+    menu.appendChild(createMenuEntry(entry));
   }
   return menu;
 }
@@ -17792,7 +17870,7 @@ function openStartMenu(side, button) {
     return;
   }
   hideStartMenu({ immediate: true });
-  const menu = buildMenu(side);
+  const menu = buildMenu();
   if (!menu)
     return;
   document.body.appendChild(menu);
@@ -17942,13 +18020,7 @@ async function ensureStartButtonForSide(side) {
     if (dock.nextElementSibling)
       list.appendChild(dock);
   }
-  if (isHorizontalStrip()) {
-    const drawerLeft = getMainDrawerSide() === "left";
-    const startIsOuter = side === "primary" ? drawerLeft : !drawerLeft;
-    btn.style.order = startIsOuter ? "-2" : "2";
-  } else {
-    btn.style.order = "";
-  }
+  btn.style.removeProperty("order");
   if (!btn.dataset.wired) {
     btn.dataset.wired = "1";
     btn.addEventListener("click", () => openStartMenu(side, btn));
@@ -21673,6 +21745,9 @@ function dismissHostContextMenu() {
   }));
 }
 
+// src/setup.ts
+init_reflow();
+
 // src/modals/weaver-lane.ts
 init_store();
 init_reflow();
@@ -22531,6 +22606,7 @@ function setup(ctx) {
   registerCleanup(() => {
     document.getElementById("canvas-ux-context-menu-styles")?.remove();
     document.getElementById("sidebar-ux-reflow")?.remove();
+    clearChatMargins();
     document.getElementById("canvas-ux-secondary-mobile")?.remove();
     document.getElementById("sidebar-ux-shadow-disable-desktop")?.remove();
     document.getElementById("sidebar-ux-shadow-disable-mobile")?.remove();
