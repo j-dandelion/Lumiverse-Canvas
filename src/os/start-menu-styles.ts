@@ -2,12 +2,14 @@
  * OS-mode Start menu styles ("Command Deck") — visual overhaul, 2026-09-15.
  *
  * Chassis parity with the tab right-click context menu
- * (`src/tabs/tab-context-menu.ts`): same surface token, border, 10px radius,
- * shadow stack, 6px item radius, divider margins and `body[data-glass]` recipe.
+ * (`src/tabs/tab-context-menu.ts`): same border, 10px radius, shadow stack,
+ * 6px item radius, divider margins and `body[data-glass]` recipe.
  * Deliberate deviations (documented in the plan
  * `~/Documents/plans/2026-09-15-canvas-start-menu-visual-overhaul.md`):
+ *   - surface is `--lumiverse-card-bg` (fallback `--lumiverse-surface`), not
+ *     the context menu's darker `--lumiverse-bg-deep` (user request 2026-09-16),
  *   - row hover uses `--lumiverse-bg-hover` (the base `--lumiverse-fill` is
- *     rgba(0,0,0,.15) → ~invisible on `bg-deep`),
+ *     rgba(0,0,0,.15) → ~invisible on a dark surface),
  *   - viewport-relative sizing divides by `--lumiverse-ui-scale` (the menu is a
  *     `body > *` child, so raw vw/vh overflow inside the host zoom layer),
  *   - state marks are `●` open / `○` minimized / none closed.
@@ -37,7 +39,7 @@ export const START_MENU_CSS = `
     max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
     overflow: hidden;
     padding: 4px;
-    background: var(--lumiverse-bg-deep, var(--lumiverse-surface, #1a1a1e));
+    background: var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e));
     border: 1px solid var(--lumiverse-border);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -46,10 +48,11 @@ export const START_MENU_CSS = `
     font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   }
 
-  /* Glass — the context menu's recipe, coarse-pointer gated like the base. */
+  /* Glass — the context-menu recipe, coarse-pointer gated; derives from the
+     same surface token as the base. */
   @media not (pointer: coarse) {
     body[data-glass] .canvas-os-start-menu {
-      background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
+      background: color-mix(in srgb, var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e)) 80%, transparent);
       backdrop-filter: blur(var(--lcs-glass-blur, 8px));
     }
   }

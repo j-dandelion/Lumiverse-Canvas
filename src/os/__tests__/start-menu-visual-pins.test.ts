@@ -2,12 +2,14 @@
 //
 // Source-text pins for the visual contract the leaf DOM tests cannot reach:
 //   - chassis parity with the tab right-click context menu
-//     (`src/tabs/tab-context-menu.ts`): surface token, border, 10px radius,
+//     (`src/tabs/tab-context-menu.ts`): border, 10px radius,
 //     shadow stack, divider, glass recipe,
 //   - the deliberate deviations recorded in the plan
 //     (`~/Documents/plans/2026-09-15-canvas-start-menu-visual-overhaul.md`):
-//     visible hover token (the base `--lumiverse-fill` is black-15), zoom-safe
-//     viewport sizing, state marks ● open / ○ minimized / none closed,
+//     `--lumiverse-card-bg` surface (user request 2026-09-16; the base menu
+//     uses the darker `--lumiverse-bg-deep`), visible hover token (the base
+//     `--lumiverse-fill` is black-15), zoom-safe viewport sizing, state marks
+//     ● open / ○ minimized / none closed,
 //   - DOM wiring: class hooks, `data-os-state`, the icon fallback chain and
 //     the stylesheet lifecycle.
 //
@@ -51,7 +53,12 @@ function blockOf(css: string, needle: string): string {
 {
   const root = blockOf(START_MENU_CSS, '.canvas-os-start-menu {')
   assert(root !== '', 'menu root rule exists')
-  assertIncludes(root, 'background: var(--lumiverse-bg-deep', 'surface token parity')
+  assertIncludes(
+    root,
+    'background: var(--lumiverse-card-bg, var(--lumiverse-surface, #1a1a1e))',
+    'surface token is card-bg with the surface fallback',
+  )
+  assert(!root.includes('--lumiverse-bg-deep'), 'deep surface token replaced')
   assertIncludes(root, 'border: 1px solid var(--lumiverse-border)', 'border parity')
   assertIncludes(root, 'border-radius: 10px', '10px radius parity')
   assertIncludes(
@@ -119,10 +126,12 @@ function blockOf(css: string, needle: string): string {
   )
 }
 {
-  // Glass — the context-menu recipe, coarse-pointer gated.
+  // Glass — the context-menu recipe, coarse-pointer gated; same surface token.
   assertIncludes(START_MENU_CSS, 'body[data-glass] .canvas-os-start-menu {', 'glass hook')
   assertIncludes(START_MENU_CSS, '@media not (pointer: coarse)', 'glass coarse-pointer gate')
   assertIncludes(START_MENU_CSS, 'backdrop-filter: blur(var(--lcs-glass-blur, 8px))', 'glass blur token')
+  const glass = blockOf(START_MENU_CSS, 'body[data-glass] .canvas-os-start-menu {')
+  assertIncludes(glass, 'var(--lumiverse-card-bg', 'glass derives from the menu surface token')
 }
 
 // ── 3. Anatomy hooks + interaction states ───────────────────────────────────
