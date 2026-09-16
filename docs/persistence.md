@@ -28,6 +28,7 @@ Canvas persists the full UI state (drawer open/close, widths, tab assignments, s
     "secondSidebarEnabled": true,
     "resizeSidebars": true,
     "chatReflow": true,
+    "welcomeReflow": true,
     "persistDrawerOpenState": true,
     "persistDrawerWidth": true,
     "slashCommandsEnabled": true,

@@ -89,7 +89,7 @@ mock.module('../../sidebar/main-tab-pin', () => ({
 mock.module('../../settings/state', () => ({
   isTaskbarModeEnabled: () => state.taskbarMode,
   isHorizontalStrip: () => state.horizontal,
-  getSettings: () => ({ taskbarMode: state.taskbarMode }),
+  getSettings: () => ({ taskbarMode: state.taskbarMode, chatReflow: true, welcomeReflow: true }),
 }))
 
 mock.module('../../sidebar/secondary', () => ({
@@ -104,6 +104,7 @@ mock.module('../../dom/lumiverse', () => ({
   getMainWrapper: () => null,
   getMainDrawerWidth: () => 420,
   getChatColumn: () => null,
+  getLandingPage: () => null,
   getMainPanelContent: () => null,
 }))
 

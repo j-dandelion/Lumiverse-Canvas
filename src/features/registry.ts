@@ -37,7 +37,7 @@ import { mountPanelChrome, teardownPanelChrome } from '../os/panel-chrome'
 import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
-import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
+import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins, clearWelcomeReflow } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
@@ -148,13 +148,56 @@ const chatReflowFeature: CanvasFeature = {
         registerCleanup(_chatReflowTeardown)
       }
     } else {
-      // On → off: remove the injected CSS and reset chat margins.
-      // The observer stays attached but its CSS rule is gone, so
-      // subsequent scheduleReflow calls have no visual effect.
-      // We don't disconnect the observer — the cleanup chain handles
-      // that on extension disable.
-      document.getElementById('sidebar-ux-reflow')?.remove()
+      // On → off: reset chat margins. The observer stays attached but the
+      // chat write is gated inside updateChatReflow, so subsequent
+      // scheduleReflow calls leave the chat alone. We don't disconnect the
+      // observer — the cleanup chain handles that on extension disable (and
+      // welcomeReflow may still need the shared observer + sheet).
       clearChatMargins()
+      if (!getSettings().welcomeReflow) {
+        document.getElementById('sidebar-ux-reflow')?.remove()
+      }
+    }
+  },
+}
+
+/** Welcome/Landing reflow (default on): the Landing route gets the same
+ *  open-drawer margins as the chat. Independent of chatReflow but shares its
+ *  observer + injected sheet (one MutationObserver watches the main wrapper
+ *  for both consumers). mount()/apply() therefore only start the shared
+ *  observer when it is not already running, and never remove the sheet while
+ *  chat still needs it. */
+const welcomeReflowFeature: CanvasFeature = {
+  id: 'welcomeReflow',
+  mount() {
+    if (!getSettings().welcomeReflow) return
+    if (_chatReflowTeardown) {
+      // The shared observer is already running (chatReflow on, or a runtime
+      // enable): reuse it and just make the sheet + current geometry apply.
+      injectReflowStyles()
+      updateChatReflow()
+      return
+    }
+    _chatReflowTeardown = startReflowObserver()
+    return _chatReflowTeardown
+  },
+  apply(prev, next) {
+    if (prev.welcomeReflow === next.welcomeReflow) return
+    if (next.welcomeReflow) {
+      // Off → on at runtime: same lazy-mount contract as chatReflowFeature.
+      injectReflowStyles()
+      updateChatReflow()
+      if (!_chatReflowTeardown) {
+        _chatReflowTeardown = startReflowObserver()
+        registerCleanup(_chatReflowTeardown)
+      }
+    } else {
+      // On → off: drop the Landing margins/class + snap gate. The shared
+      // sheet must survive while chat still needs it.
+      clearWelcomeReflow()
+      if (!getSettings().chatReflow) {
+        document.getElementById('sidebar-ux-reflow')?.remove()
+      }
     }
   },
 }
@@ -630,6 +673,7 @@ const osSecondaryStartMenuFeature: CanvasFeature = {
 export const FEATURES: readonly CanvasFeature[] = [
   debugFeature,
   chatReflowFeature,
+  welcomeReflowFeature,
   secondSidebarFeature,
   resizeSidebarsFeature,
   drawerSyncFeature,

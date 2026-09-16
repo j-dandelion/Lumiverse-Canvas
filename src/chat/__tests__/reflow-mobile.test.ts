@@ -211,6 +211,11 @@ function _installDom(opts: { open?: boolean; leftSide?: boolean } = {}) {
   chat.className = '_chatColumn_abc'
   body.appendChild(chat)
 
+  // Landing route consumer: only present on the Welcome screen. Query match
+  // is by the stable data-component attribute.
+  const landing = new StubElement()
+  landing.setAttribute('data-component', 'LandingPage')
+
   // Wrapper with optional open + side classes. isMainDrawerOpen reads
   // wrapperOpen; getMainDrawerSide reads wrapperLeft first, defaults to right.
   const wrapper = new StubElement()
@@ -231,10 +236,11 @@ function _installDom(opts: { open?: boolean; leftSide?: boolean } = {}) {
     if (sel === '[data-spindle-mount="sidebar"]') return sidebar
     if (sel.includes('_body_')) return body
     if (sel.includes('_chatColumn_')) return chat
+    if (sel.includes('LandingPage')) return landing
     return null
   }
 
-  return { chat, wrapper, body, sidebar }
+  return { chat, wrapper, body, sidebar, landing }
 }
 
 function _chatStyle(chat: StubElement): any {
@@ -261,7 +267,7 @@ function _resetAll() {
 
 // --- Imports under test ---
 
-import { injectReflowStyles, updateChatReflow, clearChatMargins, startReflowObserver, scheduleReflow } from '../reflow'
+import { injectReflowStyles, updateChatReflow, clearChatMargins, clearWelcomeReflow, startReflowObserver, scheduleReflow } from '../reflow'
 import { FEATURES } from '../../features/registry'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
@@ -295,8 +301,13 @@ const css = (styleEl as any).textContent
 assert(css.includes('margin-left: 0 !important'), 'mobile rule sets margin-left: 0 !important')
 assert(css.includes('margin-right: 0 !important'), 'mobile rule sets margin-right: 0 !important')
 assert(css.includes('transition: none !important'), 'mobile rule sets transition: none !important')
-assert(!css.includes('data-component="LandingPage"'), 'injected style does NOT target LandingPage (strip gutters own Welcome)')
-assert(css.includes('[class*="_chatColumn_"]'), 'injected style targets chat column only')
+assert(css.includes('html.sidebar-ux-welcome-reflow [data-component="LandingPage"]'),
+  'injected style targets LandingPage behind the welcomeReflow class gate')
+assert(css.includes('--sidebar-ux-welcome-ml') && css.includes('--sidebar-ux-welcome-mr'),
+  'injected style consumes the welcome margin vars')
+assert(css.includes(':not(#__theme_studio_authority_a__)'),
+  'welcome rule carries the TS authority specificity guards')
+assert(css.includes('[class*="_chatColumn_"]'), 'injected style still targets the chat column')
 
 // --- Test 3: updateChatReflow is a no-op on mobile ---
 
@@ -335,6 +346,36 @@ assertEqual(
   'updateChatReflow on mobile clears stale --sidebar-ux-chat-mr'
 )
 
+// --- Test 4b: updateChatReflow on mobile clears stale welcome state ---
+
+_resetAll()
+const dom4b = _installDom()
+dom4b.landing.style.setProperty('--sidebar-ux-welcome-ml', '420px')
+dom4b.landing.style.setProperty('--sidebar-ux-welcome-mr', '420px')
+dom4b.landing.setAttribute('data-canvas-reflow-instant', '1')
+stubDocument.documentElement.classList.add('sidebar-ux-welcome-reflow')
+_setViewport(true)
+updateChatReflow()
+assertEqual(
+  dom4b.landing.style.getPropertyValue('--sidebar-ux-welcome-ml'),
+  '',
+  'updateChatReflow on mobile clears stale --sidebar-ux-welcome-ml'
+)
+assertEqual(
+  dom4b.landing.style.getPropertyValue('--sidebar-ux-welcome-mr'),
+  '',
+  'updateChatReflow on mobile clears stale --sidebar-ux-welcome-mr'
+)
+assert(
+  !stubDocument.documentElement.classList.contains('sidebar-ux-welcome-reflow'),
+  'updateChatReflow on mobile removes the welcome root class'
+)
+assertEqual(
+  dom4b.landing.getAttribute('data-canvas-reflow-instant'),
+  null,
+  'updateChatReflow on mobile drops the landing instant attr'
+)
+
 // --- Test 5: updateChatReflow on desktop writes vars correctly ---
 
 _resetAll()
@@ -354,6 +395,23 @@ assertEqual(
   _chatStyle(dom5.chat).getPropertyValue('--sidebar-ux-chat-ml'),
   '0px',
   'updateChatReflow on desktop (main right, open) sets --sidebar-ux-chat-ml to 0px'
+)
+
+// --- Test 5b: desktop applies the Welcome margins from the same insets ---
+
+assertEqual(
+  dom5.landing.style.getPropertyValue('--sidebar-ux-welcome-mr'),
+  '420px',
+  'updateChatReflow on desktop (main right, open) sets --sidebar-ux-welcome-mr to 420px'
+)
+assertEqual(
+  dom5.landing.style.getPropertyValue('--sidebar-ux-welcome-ml'),
+  '0px',
+  'updateChatReflow on desktop (main right, open) sets --sidebar-ux-welcome-ml to 0px'
+)
+assert(
+  stubDocument.documentElement.classList.contains('sidebar-ux-welcome-reflow'),
+  'updateChatReflow on desktop adds the welcome root class'
 )
 
 // --- Test 6: startReflowObserver registers a matchMedia change listener ---

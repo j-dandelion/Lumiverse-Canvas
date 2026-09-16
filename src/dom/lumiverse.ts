@@ -80,6 +80,17 @@ export function getChatColumn(): HTMLElement | null {
   return null
 }
 
+/**
+ * Find the Welcome/Landing screen container. It renders only on the `/` route
+ * (unmounted while a chat is open) and carries a stable `data-component`
+ * attribute — never match its CSS-module class (`_container_<hash>`).
+ * It is a column-flex scroll container (`flex:1 1 auto; overflow-y:auto`), so
+ * left/right margins shrink it without the host `.body` cross-axis flex trap.
+ */
+export function getLandingPage(): HTMLElement | null {
+  return document.querySelector('[data-component="LandingPage"]')
+}
+
 export function getMainDrawerWidth(): number {
   const drawer = getMainDrawer()
   if (!drawer) return 420

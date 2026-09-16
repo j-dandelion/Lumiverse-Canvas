@@ -180,6 +180,13 @@ export interface CanvasSettings {
   /** Center the chat column in the visible area (set --canvas-chat-ml/mr). */
   chatReflow?: boolean
 
+  /** Center the Welcome (Landing) screen in the visible area (set
+   *  --sidebar-ux-welcome-ml/mr on `[data-component="LandingPage"]`). Same
+   *  open-drawer geometry as `chatReflow`, but an independent consumer: the
+   *  two settings share one observer/stylesheet, each gated on its own flag.
+   *  Default on. */
+  welcomeReflow?: boolean
+
   /** Master switch for the Canvas slash-command system. When off, the
    *  intercept, suggest popup, toast surface, and runtime command
    *  registry are all unmounted — typing `/` in the chat textarea is
@@ -249,6 +256,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   drawerShadowsMobile: false,
   // Chat
   chatReflow: true,
+  welcomeReflow: true,
   slashCommandsEnabled: true,
   // Layout
   persistDrawerOpenState: true,

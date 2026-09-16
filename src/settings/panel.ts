@@ -290,6 +290,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: chat.btn,
   }))
 
+  const welcome = makeToggle(
+    () => getSettings().welcomeReflow,
+    (v) => setSettings({ welcomeReflow: v })
+  )
+  sec1.appendChild(buildSettingRow({
+    label: 'Center the Welcome screen in the visible area',
+    hint: 'Shifts the Welcome screen by the open-drawer widths so neither drawer covers it.',
+    control: welcome.btn,
+  }))
+
   const slash = makeToggle(
     () => getSettings().slashCommandsEnabled,
     (v) => setSettings({ slashCommandsEnabled: v })
@@ -543,6 +553,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     resizeSidebars.refresh()
     compact.refresh()
     chat.refresh()
+    welcome.refresh()
     persistOpen.refresh()
     persistWidth.refresh()
     slash.refresh()

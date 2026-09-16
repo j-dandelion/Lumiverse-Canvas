@@ -27,6 +27,7 @@ interface CanvasFeature {
 |---------|-----------|-------------|
 | `debugFeature` | `debugMode` | Enables `[Canvas]` console output + `window.__canvasDebug()` |
 | `chatReflowFeature` | `chatReflow` | Centers chat column by adjusting margins |
+| `welcomeReflowFeature` | `welcomeReflow` | Centers the Welcome/Landing screen by the same open-drawer margins |
 | `secondSidebarFeature` | `secondSidebarEnabled` | Master toggle for the secondary drawer |
 | `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers |
 | `drawerSyncFeature` | `mirrorCompactPosition` | Mirrors main drawer's compact mode + vertical position |
@@ -89,7 +90,7 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 Built once, mounted into Lumiverse's per-extension settings host. In-place re-render via a `refresh` closure — no full re-mount on toggle.
 
 **Sections:**
-1. **Chat** — chatReflow, slashCommandsEnabled
+1. **Chat** — chatReflow, welcomeReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
 3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), osMode, osSecondaryStartMenu (OS mode only: opt-in Start button in the second drawer; row locked while OS mode is off or the second drawer is disabled), coreTabsHidden (unlocks the Configure eye for core tabs; locked on while OS mode forces it), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile. `horizontalSplit` (Top/Bottom dual-drawer boundary) has **no panel row** — it is adjusted by dragging the strip's boundary handle and persisted to settings.json; see `docs/sidebar.md` §Drawer location.
 4. **Second drawer** — secondSidebarEnabled (master; locked off while OS mode is on and the viewport is mobile — `os/os-mode.syncOsMobileDrawerMode` restores the user's dual layout when OS mode turns off or the viewport leaves mobile), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
