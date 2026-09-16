@@ -1553,13 +1553,6 @@ function parseTranslateX(transform) {
   const n = transform.match(/-?[\d.]+/);
   return n ? parseFloat(n[0]) || 0 : 0;
 }
-function notifyPanelMotionChanged() {
-  try {
-    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-      window.dispatchEvent(new Event(CANVAS_PANEL_MOTION_EVENT));
-    }
-  } catch {}
-}
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -1686,7 +1679,6 @@ function settlePanelToggle(state, opts) {
   _livePanelWrappers.delete(state.wrapper);
   resetPanelStyles(state.drawer, state.panel);
   state.wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
-  notifyPanelMotionChanged();
   if (!state.open && !opts?.cancelled) {
     state.wrapper.style.transform = `translateX(${state.closedPx}px)`;
   }
@@ -1797,7 +1789,6 @@ function animatePanelToggle(wrapper, drawer, opts) {
   drawer.style.pointerEvents = "none";
   drawer.style.willChange = "opacity, transform";
   wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
-  notifyPanelMotionChanged();
   _panelAnims.set(wrapper, state);
   _livePanelWrappers.add(wrapper);
   if (prefersReducedMotion()) {
@@ -1809,7 +1800,7 @@ function animatePanelToggle(wrapper, drawer, opts) {
   state.timer = setTimeout(() => settlePanelToggle(state), state.duration + PANEL_SETTLE_GRACE_MS);
   state.raf = requestAnimationFrame((n) => panelFrame(state, n));
 }
-var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, CANVAS_PANEL_MOTION_EVENT = "canvas:panel-motion-changed", PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
+var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
 var init_animation = __esm(() => {
   _anims = new WeakMap;
   _liveTranslateWrappers = new Set;
@@ -14080,7 +14071,6 @@ var init_main_mirror_drawer = __esm(() => {
 // src/chat/reflow.ts
 var exports_reflow = {};
 __export(exports_reflow, {
-  CHAT_SHADOW_ATTR: () => CHAT_SHADOW_ATTR,
   CONTENT_INSET_L_VAR: () => CONTENT_INSET_L_VAR,
   CONTENT_INSET_R_VAR: () => CONTENT_INSET_R_VAR,
   REFLOW_INSTANT_ATTR: () => REFLOW_INSTANT_ATTR,
@@ -14109,7 +14099,6 @@ function clearChatMargins() {
   const root = document.documentElement;
   root.style.removeProperty("--sidebar-ux-chat-ml");
   root.style.removeProperty("--sidebar-ux-chat-mr");
-  root.removeAttribute(CHAT_SHADOW_ATTR);
   _lastReflowedChat = null;
 }
 function injectReflowStyles() {
@@ -14121,59 +14110,18 @@ function injectReflowStyles() {
     }
     /* First application for a given chat element: snap the margins. The chat
        column can mount AFTER the drawer is already open (boot restore / SPA
-       navigation into a chat) — an animated first application would carry the
-       chat-owned inset from x=0 to the drawer edge, i.e. the shadow "sliding
-       in" on refresh / first load (live report 2026-09-15). The attr is set by
-       updateChatReflow's first pass for a new chat element and dropped a
-       painted frame later (double rAF), so user open/close margins still
-       animate. */
+       navigation into a chat); an animated first application reads as a
+       load-time layout slide. The attr is set by updateChatReflow's first pass
+       for a new chat element and dropped a painted frame later (double rAF),
+       so user open/close margins still animate. */
     [class*="_chatColumn_"][data-canvas-reflow-instant] {
       transition: none !important;
     }
     /* Top/Bottom: match the 270ms rail bloom (PANEL_OPEN_MS/PANEL_CLOSE_MS) so
-       the chat edge arrives exactly when the panel settles. chat/reflow swaps
-       the visible shadow then (real bloom-fading box-shadow -> settled
-       under-content inset) — with the longer 350ms margin the inset would
-       still be ~7% short of the edge at swap time and read as a small slide. */
+       the chat edge settles with the panel instead of lingering. */
     html.sidebar-ux-location-top [class*="_chatColumn_"],
     html.sidebar-ux-location-bottom [class*="_chatColumn_"] {
       transition-duration: 0.27s !important;
-    }
-    /* Open-drawer shadow, chat-owned (2026-09-15). The Canvas shells are
-       body-level fixed layers above the whole app subtree (z-index 9990; the
-       host .app is isolated), so their real box-shadow paints over chat
-       content and can never be z-ordered underneath it. While a reflow lane
-       is active the real shadow is suppressed and an inset box-shadow is
-       painted on the chat column instead: inset shadows render in the
-       element's background layer, BELOW its content, so bubbles/composer
-       cover the shadow — underneath on the z axis. The 60px/-60px inset form
-       mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
-       falloff. The attr is set by updateChatReflow only on desktop,
-       drawerShadowsDesktop on, chat column present, drawer open on that side
-       (all drawer locations — Top/Bottom keeps the side panel geometry);
-       clearChatMargins drops it (mobile / feature off / disable). */
-    @media (min-width: 601px) {
-      /* Side-aware real-shadow suppression: a drawer whose chat-owned inset is
-         active (settled-open, the chat-shadow attr carries its side) must not
-         also paint its real box-shadow over chat content. Side-scoped so a
-         closing/animating drawer next to a settled one keeps its real
-         (bloom-fading) shadow. */
-      html[data-canvas-chat-shadow~="left"] .sidebar-ux-shell.sidebar-ux-side-left[data-drawer-open="true"] > .sidebar-ux-drawer {
-        box-shadow: none !important;
-      }
-      html[data-canvas-chat-shadow~="right"] .sidebar-ux-shell.sidebar-ux-side-right[data-drawer-open="true"] > .sidebar-ux-drawer {
-        box-shadow: none !important;
-      }
-      html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"] {
-        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
-      html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
-        box-shadow: inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
-      html[data-canvas-chat-shadow~="left"][data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
-        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5),
-                    inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
     }
     @media (max-width: 600px) {
       [class*="_chatColumn_"] {
@@ -14222,55 +14170,6 @@ function scheduleReflow() {
     updateChatReflow();
   });
 }
-function collectAnimatingShellSides() {
-  let left = false;
-  let right = false;
-  try {
-    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-      return { left, right };
-    }
-    for (const el of Array.from(document.querySelectorAll(".sidebar-ux-shell"))) {
-      if (el.getAttribute?.(PANEL_ANIMATING_ATTR2) == null)
-        continue;
-      const cl = el.classList;
-      if (cl?.contains?.("sidebar-ux-side-left"))
-        left = true;
-      else if (cl?.contains?.("sidebar-ux-side-right"))
-        right = true;
-    }
-  } catch {}
-  return { left, right };
-}
-function collectRevealGuardSides() {
-  let main = false;
-  let secondary = false;
-  try {
-    const cl = typeof document !== "undefined" ? document.documentElement?.classList : null;
-    if (cl?.contains) {
-      main = MAIN_REVEAL_GUARD_CLASSES.some((c3) => cl.contains(c3));
-      secondary = main || SECONDARY_REVEAL_GUARD_CLASSES.some((c3) => cl.contains(c3));
-    }
-  } catch {}
-  return { main, secondary };
-}
-function syncChatShadowAttr(insets) {
-  const root = document.documentElement;
-  const sides = [];
-  if (getChatColumn() && getSettings().drawerShadowsDesktop) {
-    const animating = isHorizontalStrip() ? collectAnimatingShellSides() : { left: false, right: false };
-    const guard = collectRevealGuardSides();
-    const mainSide = getMainDrawerSide();
-    const guarded = (side) => side === mainSide ? guard.main : guard.secondary;
-    if (insets.openLeft && !animating.left && !guarded("left"))
-      sides.push("left");
-    if (insets.openRight && !animating.right && !guarded("right"))
-      sides.push("right");
-  }
-  if (sides.length > 0)
-    root.setAttribute(CHAT_SHADOW_ATTR, sides.join(" "));
-  else
-    root.removeAttribute(CHAT_SHADOW_ATTR);
-}
 function updateChatReflow() {
   if (isMobileViewport()) {
     clearChatMargins();
@@ -14294,7 +14193,6 @@ function updateChatReflow() {
       dropInstant();
     }
   }
-  syncChatShadowAttr(insets);
   publishContentLaneInsets();
 }
 function _onMediaChangeImpl(e3) {
@@ -14308,22 +14206,9 @@ function _onMediaChangeImpl(e3) {
 function startReflowObserver() {
   injectReflowStyles();
   let cancelled = false;
-  const onPanelMotionChange = () => scheduleReflow();
-  if (typeof window !== "undefined") {
-    window.addEventListener(CANVAS_PANEL_MOTION_EVENT2, onPanelMotionChange);
-  }
   const observer = new MutationObserver(() => {
     scheduleReflow();
   });
-  const rootObserver = new MutationObserver(() => {
-    scheduleReflow();
-  });
-  if (typeof document !== "undefined" && document.documentElement && !cancelled) {
-    rootObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"]
-    });
-  }
   waitForElement(getMainWrapper, "main wrapper").then((wrapper) => {
     if (wrapper && !cancelled) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ["class", "style"] });
@@ -14354,10 +14239,6 @@ function startReflowObserver() {
   return () => {
     cancelled = true;
     observer.disconnect();
-    rootObserver.disconnect();
-    if (typeof window !== "undefined") {
-      window.removeEventListener(CANVAS_PANEL_MOTION_EVENT2, onPanelMotionChange);
-    }
     _chatObserver?.disconnect();
     _chatObserver = null;
     if (_reflowRaf !== null) {
@@ -14372,7 +14253,7 @@ function startReflowObserver() {
     _onMediaChange2 = null;
   };
 }
-var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", CHAT_SHADOW_ATTR = "data-canvas-chat-shadow", PANEL_ANIMATING_ATTR2 = "data-canvas-panel-animating", CANVAS_PANEL_MOTION_EVENT2 = "canvas:panel-motion-changed", REFLOW_INSTANT_ATTR = "data-canvas-reflow-instant", _lastReflowedChat = null, _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null, MAIN_REVEAL_GUARD_CLASSES, SECONDARY_REVEAL_GUARD_CLASSES;
+var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", REFLOW_INSTANT_ATTR = "data-canvas-reflow-instant", _lastReflowedChat = null, _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
 var init_reflow = __esm(() => {
   init_store();
   init_secondary();
@@ -14384,15 +14265,6 @@ var init_reflow = __esm(() => {
   init_styles();
   init_main_mirror_drawer();
   init_main_tab_pin();
-  MAIN_REVEAL_GUARD_CLASSES = [
-    "sidebar-ux-main-restore-pending",
-    "sidebar-ux-main-reveal-hold",
-    "sidebar-ux-main-reveal-in"
-  ];
-  SECONDARY_REVEAL_GUARD_CLASSES = [
-    "sidebar-ux-secondary-placement-hold",
-    "sidebar-ux-secondary-reveal-in"
-  ];
 });
 
 // src/resize/handles.ts

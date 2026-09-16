@@ -870,9 +870,8 @@ export function injectDrawerTabStyles(): void {
   //
   // The :not([data-canvas-panel-animating]) guard: `data-drawer-open` flips
   // false at CLOSE-START, so an unguarded rule killed the real box-shadow for
-  // the whole close fade. Top/Bottom closes must keep it — the shadow is the
-  // visible one during the rail bloom (chat/reflow keeps its under-content
-  // inset off until the panel settles) and fades in place with the panel
+  // the whole close fade. Closes must keep it — the real shadow is the one
+  // visible during the bloom/close and must fade in place with the panel
   // (live report 2026-09-15: the shadow must not slide in from the screen
   // edge). The attr is set/cleared by sidebar/animation.ts
   // (PANEL_ANIMATING_ATTR; literal here because this module is a leaf).

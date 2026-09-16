@@ -39,31 +39,6 @@ export function parseTranslateX(transform: string | null | undefined): number {
   return n ? parseFloat(n[0]) || 0 : 0
 }
 
-// ── Panel-motion change notification ─────────────────────────────────────────
-//
-// Top/Bottom blooms set `data-canvas-panel-animating` on the wrapper at start
-// and clear it at settle. chat/reflow uses that attr to keep the drawer's real
-// box-shadow (which fades in place with the panel) during the bloom and only
-// switch to the under-content chat-owned inset once the panel is settled —
-// the shadow must not ride the chat reflow margin (that read as the shadow
-// sliding in from the screen edge). The DOM attr is a mirrored literal in
-// chat/reflow.ts / styles.ts; this window event is how reflow re-runs at the
-// start and end edges of the motion (the attr flip itself is not observable
-// there: reflow only watches the host main wrapper).
-
-/** Window event dispatched when the panel-animating state changes. */
-export const CANVAS_PANEL_MOTION_EVENT = 'canvas:panel-motion-changed'
-
-function notifyPanelMotionChanged(): void {
-  try {
-    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-      window.dispatchEvent(new Event(CANVAS_PANEL_MOTION_EVENT))
-    }
-  } catch {
-    /* event/env unavailable (unit-test stubs) — non-fatal */
-  }
-}
-
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
 }
@@ -354,9 +329,6 @@ function settlePanelToggle(state: PanelAnimState, opts?: { cancelled?: boolean }
   _livePanelWrappers.delete(state.wrapper)
   resetPanelStyles(state.drawer, state.panel)
   state.wrapper.removeAttribute(PANEL_ANIMATING_ATTR)
-  // Let chat/reflow switch back to the under-content inset shadow now that
-  // the panel is settled (the bloom used the real box-shadow).
-  notifyPanelMotionChanged()
   if (!state.open && !opts?.cancelled) {
     state.wrapper.style.transform = `translateX(${state.closedPx}px)`
   }
@@ -514,9 +486,6 @@ export function animatePanelToggle(
   drawer.style.pointerEvents = 'none'
   drawer.style.willChange = 'opacity, transform'
   wrapper.setAttribute(PANEL_ANIMATING_ATTR, '1')
-  // Tell chat/reflow to keep the real (bloom-fading) box-shadow for the
-  // motion instead of the chat-owned inset.
-  notifyPanelMotionChanged()
   _panelAnims.set(wrapper, state)
   _livePanelWrappers.add(wrapper)
 

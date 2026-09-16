@@ -42,42 +42,14 @@ export const CONTENT_INSET_R_VAR = '--sidebar-ux-content-inset-r'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { getSettings, isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
+import { isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 import { isMainTabListPinActive } from '../sidebar/main-tab-pin'
 
-/**
- * Root attribute carrying the chat-owned drawer shadow sides ("left",
- * "right", or "left right"). Set by updateChatReflow while a reflow lane is
- * active; the injected CSS suppresses the shells' real (above-chat) shadow
- * and paints an inset shadow on the chat column instead — inset shadows live
- * in the element's background layer, so chat content covers them.
- */
-export const CHAT_SHADOW_ATTR = 'data-canvas-chat-shadow'
-
-/**
- * Panel-motion DOM hook (set by `sidebar/animation.ts`): present on a shell
- * wrapper while a Top/Bottom rail bloom runs. Top/Bottom shadow policy: during
- * the bloom the drawer's real box-shadow is what the user sees — it fades and
- * micro-scales in place with the panel (`data-canvas-panel-animating` is the
- * literal mirrored from animation.ts / styles.ts). The chat-owned inset is
- * attached to the chat reflow edge and would ride the margin transition,
- * which reads as the shadow sliding in from the screen edge (live report
- * 2026-09-15, Chrome); it is therefore only painted once the panel settles.
- */
-const PANEL_ANIMATING_ATTR = 'data-canvas-panel-animating'
-
-/** Window event fired by animation.ts when the panel-animating state flips
- *  (bloom start / settle). Literal mirror of `CANVAS_PANEL_MOTION_EVENT`
- *  in sidebar/animation.ts (reflow deliberately does not import the motion
- *  module's runtime graph). */
-const CANVAS_PANEL_MOTION_EVENT = 'canvas:panel-motion-changed'
-
 /** One-shot chat-column attr that suppresses the margin transition for the
  *  FIRST margin application of a given chat element (boot restore / late chat
- *  mount) so the shadow never rides a load-time margin transition. Exported
- *  for tests. */
+ *  mount), so load never animates the chat reflow. Exported for tests. */
 export const REFLOW_INSTANT_ATTR = 'data-canvas-reflow-instant'
 
 /** The chat element the margins were last applied to. A different element
@@ -105,8 +77,6 @@ export function clearChatMargins(): void {
   const root = document.documentElement
   root.style.removeProperty('--sidebar-ux-chat-ml')
   root.style.removeProperty('--sidebar-ux-chat-mr')
-  // The chat-owned drawer shadow only exists while a lane is active.
-  root.removeAttribute(CHAT_SHADOW_ATTR)
   // A future re-application (cross-up / re-enable) should snap, not animate
   // from the cleared state.
   _lastReflowedChat = null
@@ -123,59 +93,18 @@ export function injectReflowStyles(): void {
     }
     /* First application for a given chat element: snap the margins. The chat
        column can mount AFTER the drawer is already open (boot restore / SPA
-       navigation into a chat) — an animated first application would carry the
-       chat-owned inset from x=0 to the drawer edge, i.e. the shadow "sliding
-       in" on refresh / first load (live report 2026-09-15). The attr is set by
-       updateChatReflow's first pass for a new chat element and dropped a
-       painted frame later (double rAF), so user open/close margins still
-       animate. */
+       navigation into a chat); an animated first application reads as a
+       load-time layout slide. The attr is set by updateChatReflow's first pass
+       for a new chat element and dropped a painted frame later (double rAF),
+       so user open/close margins still animate. */
     [class*="_chatColumn_"][data-canvas-reflow-instant] {
       transition: none !important;
     }
     /* Top/Bottom: match the 270ms rail bloom (PANEL_OPEN_MS/PANEL_CLOSE_MS) so
-       the chat edge arrives exactly when the panel settles. chat/reflow swaps
-       the visible shadow then (real bloom-fading box-shadow -> settled
-       under-content inset) — with the longer 350ms margin the inset would
-       still be ~7% short of the edge at swap time and read as a small slide. */
+       the chat edge settles with the panel instead of lingering. */
     html.sidebar-ux-location-top [class*="_chatColumn_"],
     html.sidebar-ux-location-bottom [class*="_chatColumn_"] {
       transition-duration: 0.27s !important;
-    }
-    /* Open-drawer shadow, chat-owned (2026-09-15). The Canvas shells are
-       body-level fixed layers above the whole app subtree (z-index 9990; the
-       host .app is isolated), so their real box-shadow paints over chat
-       content and can never be z-ordered underneath it. While a reflow lane
-       is active the real shadow is suppressed and an inset box-shadow is
-       painted on the chat column instead: inset shadows render in the
-       element's background layer, BELOW its content, so bubbles/composer
-       cover the shadow — underneath on the z axis. The 60px/-60px inset form
-       mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
-       falloff. The attr is set by updateChatReflow only on desktop,
-       drawerShadowsDesktop on, chat column present, drawer open on that side
-       (all drawer locations — Top/Bottom keeps the side panel geometry);
-       clearChatMargins drops it (mobile / feature off / disable). */
-    @media (min-width: 601px) {
-      /* Side-aware real-shadow suppression: a drawer whose chat-owned inset is
-         active (settled-open, the chat-shadow attr carries its side) must not
-         also paint its real box-shadow over chat content. Side-scoped so a
-         closing/animating drawer next to a settled one keeps its real
-         (bloom-fading) shadow. */
-      html[data-canvas-chat-shadow~="left"] .sidebar-ux-shell.sidebar-ux-side-left[data-drawer-open="true"] > .sidebar-ux-drawer {
-        box-shadow: none !important;
-      }
-      html[data-canvas-chat-shadow~="right"] .sidebar-ux-shell.sidebar-ux-side-right[data-drawer-open="true"] > .sidebar-ux-drawer {
-        box-shadow: none !important;
-      }
-      html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"] {
-        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
-      html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
-        box-shadow: inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
-      html[data-canvas-chat-shadow~="left"][data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
-        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5),
-                    inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
-      }
     }
     @media (max-width: 600px) {
       [class*="_chatColumn_"] {
@@ -320,106 +249,6 @@ export function scheduleReflow(): void {
   })
 }
 
-/**
- * Screen sides whose shell wrapper is currently running a panel bloom
- * (`data-canvas-panel-animating`). During the bloom the real drawer shadow is
- * the visible one — it fades/micro-scales in place with the panel — so the
- * chat-owned inset must stay off for that side (it would ride the chat reflow
- * margin and read as a slide from the screen edge).
- */
-function collectAnimatingShellSides(): { left: boolean; right: boolean } {
-  let left = false
-  let right = false
-  try {
-    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') {
-      return { left, right }
-    }
-    for (const el of Array.from(document.querySelectorAll('.sidebar-ux-shell'))) {
-      if ((el as Element).getAttribute?.(PANEL_ANIMATING_ATTR) == null) continue
-      const cl = (el as Element).classList
-      if (cl?.contains?.('sidebar-ux-side-left')) left = true
-      else if (cl?.contains?.('sidebar-ux-side-right')) right = true
-    }
-  } catch {
-    /* stub DOM */
-  }
-  return { left, right }
-}
-
-/**
- * main-persist's boot/reveal guard classes (mirrored literals — reflow must
- * not import main-persist: that module reaches `sidebar/secondary`, which
- * imports this one). While a guard class is present a shell is hidden or
- * fading via CSS `animation` (NOT the panel bloom), so the chat-owned inset
- * must stay off for that side: the real shadow is inside the shell and fades
- * with it, while the inset is on the chat column and would pop in before the
- * panel (live report 2026-09-15: shadow visible before the panels faded in on
- * refresh/first load). The `<html>` class observer re-runs the reflow when a
- * guard lifts, so the inset appears right after the fade.
- */
-const MAIN_REVEAL_GUARD_CLASSES = [
-  'sidebar-ux-main-restore-pending', // boot restore guard (shells hidden)
-  'sidebar-ux-main-reveal-hold', // mid-session mode-switch hold
-  'sidebar-ux-main-reveal-in', // one-shot reveal fade (both shells)
-] as const
-const SECONDARY_REVEAL_GUARD_CLASSES = [
-  'sidebar-ux-secondary-placement-hold', // boot placement gate
-  'sidebar-ux-secondary-reveal-in', // late secondary reveal fade
-] as const
-
-/** Which sides are currently hidden/fading by a main-persist reveal guard. */
-function collectRevealGuardSides(): { main: boolean; secondary: boolean } {
-  let main = false
-  let secondary = false
-  try {
-    const cl = typeof document !== 'undefined' ? document.documentElement?.classList : null
-    if (cl?.contains) {
-      main = MAIN_REVEAL_GUARD_CLASSES.some((c) => cl.contains(c))
-      secondary = main || SECONDARY_REVEAL_GUARD_CLASSES.some((c) => cl.contains(c))
-    }
-  } catch {
-    /* stub DOM */
-  }
-  return { main, secondary }
-}
-
-/**
- * Publish the chat-owned drawer-shadow sides (see CHAT_SHADOW_ATTR + the
- * injected CSS). Requires: desktop (caller guarantees), drawerShadowsDesktop
- * on, a chat column present, and a drawer actually open on that side **and
- * settled** (no rail bloom or reveal guard in flight). Top/Bottom blooms keep
- * the drawer's real box-shadow — it fades in place with the panel — and only
- * swap to the under-content inset once the panel is settled; the inset is
- * attached to the chat edge and would otherwise slide in from the screen edge
- * (live report 2026-09-15). Sides has no such swap: its wrapper translate and
- * the chat margin are synced, so the inset riding the edge is the intended
- * motion.
- *
- * Drawer location is deliberately NOT a gate for the geometry: Top/Bottom
- * only moves the tab strip to the top/bottom edge — the panel itself stays a
- * left/right column (S8: panels keep the side geometry), so the open-drawer
- * overhang margin and the shadow lane are still horizontal there. Gating the
- * shadow on Sides was the 2026-09-15 "#2 didn't work" live report (Bottom
- * location).
- */
-function syncChatShadowAttr(insets: { openLeft: boolean; openRight: boolean }): void {
-  const root = document.documentElement
-  const sides: string[] = []
-  if (getChatColumn() && getSettings().drawerShadowsDesktop) {
-    const animating = isHorizontalStrip()
-      ? collectAnimatingShellSides()
-      : { left: false, right: false }
-    const guard = collectRevealGuardSides()
-    const mainSide = getMainDrawerSide()
-    const guarded = (side: 'left' | 'right'): boolean =>
-      side === mainSide ? guard.main : guard.secondary
-    if (insets.openLeft && !animating.left && !guarded('left')) sides.push('left')
-    if (insets.openRight && !animating.right && !guarded('right')) sides.push('right')
-  }
-  if (sides.length > 0) root.setAttribute(CHAT_SHADOW_ATTR, sides.join(' '))
-  else root.removeAttribute(CHAT_SHADOW_ATTR)
-}
-
 export function updateChatReflow(): void {
   // Mobile: reflow is a complete no-op. The host CSS controls the
   // chat column layout at ≤600px (the drawer overlays the chat),
@@ -434,12 +263,10 @@ export function updateChatReflow(): void {
 
   const insets = computeContentLaneInsets()
   // Fresh chat mount (boot restore, SPA navigation): the first margin
-  // application must SNAP. Applying it with the transition would carry the
-  // chat-owned inset from the screen edge to the drawer edge — the shadow
-  // "sliding in" on refresh / first load (live report 2026-09-15). Drop the
-  // suppressor after one painted frame (double rAF: the first rAF still runs
-  // before the frame's style recalc, so removing it there would let the
-  // transition start) and let later margins animate.
+  // application must SNAP, not animate — the chat would otherwise slide into
+  // place on load. Drop the suppressor after one painted frame (double rAF:
+  // the first rAF still runs before the frame's style recalc, so removing it
+  // there would let the transition start) and let later margins animate.
   const chat = getChatColumn()
   const instant = !!chat && chat !== _lastReflowedChat
   if (instant && chat) {
@@ -456,7 +283,6 @@ export function updateChatReflow(): void {
       dropInstant()
     }
   }
-  syncChatShadowAttr(insets)
   publishContentLaneInsets()
 }
 
@@ -480,29 +306,9 @@ export function startReflowObserver(): () => void {
   injectReflowStyles()
 
   let cancelled = false
-  // Panel-motion edges (bloom start / settle): re-render the shadow attr so
-  // the Top/Bottom bloom uses the real drawer shadow and the settled state
-  // swaps to the chat-owned inset.
-  const onPanelMotionChange = () => scheduleReflow()
-  if (typeof window !== 'undefined') {
-    window.addEventListener(CANVAS_PANEL_MOTION_EVENT, onPanelMotionChange)
-  }
   const observer = new MutationObserver(() => {
     scheduleReflow()
   })
-  // main-persist's reveal guards flip on <html> (boot restore guard, mid-session
-  // reveal hold/fade, secondary placement gate). Those phases hide/fade the
-  // shells via CSS animation, not the panel bloom, so the shadow attr must be
-  // recomputed when they lift.
-  const rootObserver = new MutationObserver(() => {
-    scheduleReflow()
-  })
-  if (typeof document !== 'undefined' && document.documentElement && !cancelled) {
-    rootObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    })
-  }
   waitForElement(getMainWrapper, 'main wrapper').then((wrapper) => {
     if (wrapper && !cancelled) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] })
@@ -558,10 +364,6 @@ export function startReflowObserver(): () => void {
   return () => {
     cancelled = true
     observer.disconnect()
-    rootObserver.disconnect()
-    if (typeof window !== 'undefined') {
-      window.removeEventListener(CANVAS_PANEL_MOTION_EVENT, onPanelMotionChange)
-    }
     _chatObserver?.disconnect()
     _chatObserver = null
     if (_reflowRaf !== null) {

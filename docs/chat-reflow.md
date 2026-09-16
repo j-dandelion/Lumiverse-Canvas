@@ -84,78 +84,34 @@ Welcome/Landing is **not** a reflow consumer.
 4. Subtract dock insets per side  
 5. Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
 
-### Open-drawer shadow ownership (2026-09-15)
+### Drawer shadows (2026-09-15)
 
-The Canvas drawer shells are body-level `position: fixed` layers at
-`z-index: 9990`, above the whole host `.app` subtree (`.app` is
-`isolation: isolate`), so their real `box-shadow` paints over chat content and
-**cannot** be z-ordered underneath it from inside the app. While a reflow lane
-is active the real shadow is suppressed and a matching inset `box-shadow` is
-painted on the chat column instead: inset shadows render in the element's
-background layer, below its content, so bubbles/composer cover the shadow —
-underneath on the z axis.
+The drawer's **real** `box-shadow` (inline `var(--lumiverse-shadow-xl)` on
+`.sidebar-ux-drawer`) is the only drawer shadow. It is a child of the shell
+wrapper, so it fades/micro-scales with the panel during a Top/Bottom bloom and
+fades with the shell during main-persist's boot/mode-switch reveal guards —
+no special handling needed. Drawer location does not change it: Top/Bottom
+only moves the tab strip; the panel keeps its left/right column geometry (S8).
 
-**Top/Bottom bloom swap (2026-09-15, second pass):** the inset is attached to
-the chat reflow edge, so during a top/bottom rail bloom it would ride the
-margin transition — reading as the shadow *sliding in from the screen edge*
-(live report, Chrome). The policy is therefore:
-
-- **Panel animating** (`data-canvas-panel-animating` on the shell wrapper,
-  set/cleared by `sidebar/animation.ts`): the chat inset is withheld for that
-  side; the drawer's **real** box-shadow is the visible one and fades /
-  micro-scales in place with the panel. The closed-drawer suppression rule is
-  suspended while animating (`:not([data-canvas-panel-animating])`) because
-  `data-drawer-open` flips false at close-start — without the guard the close
-  fade would be shadowless instead of fading with the panel.
-- **Panel settled**: the side's inset takes over (real shadow suppressed) and
-  the chat margin transition duration is matched to the panel (0.27s in
-  top/bottom) so the swap happens exactly at the final chat edge.
-- **Sides** has no swap: its wrapper translate and the chat margin are synced,
-  so the inset riding the edge is the intended slide.
-
-```css
-/* settled side → suppress its real shadow (side-aware) */
-html[data-canvas-chat-shadow~="left"] .sidebar-ux-shell.sidebar-ux-side-left[data-drawer-open="true"] > .sidebar-ux-drawer { box-shadow: none !important; }
-html[data-canvas-chat-shadow~="right"] .sidebar-ux-shell.sidebar-ux-side-right[data-drawer-open="true"] > .sidebar-ux-drawer { box-shadow: none !important; }
-html[data-canvas-chat-shadow~="left"]  [class*="_chatColumn_"] { box-shadow: inset  60px 0 60px -60px rgba(0,0,0,.5) !important; }
-html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] { box-shadow: inset -60px 0 60px -60px rgba(0,0,0,.5) !important; }
-/* both sides open → later two-shadow rule wins */
-```
-
-- `data-canvas-chat-shadow` (root, token list) is set by `updateChatReflow`
-  only when: desktop, `drawerShadowsDesktop` on, a chat column exists, and
-  that side's drawer is **open and settled** (strip reserves do not count;
-  `computeContentLaneInsets` returns `openLeft`/`openRight`). The
-  `canvas:panel-motion-changed` window event (fired at bloom start/settle)
-  re-runs the reflow so the swap tracks the motion edges.
-- **First application for a fresh chat element snaps** (`data-canvas-reflow-instant`,
-  dropped after one painted frame via double rAF): the chat column can mount
-  after the drawer is already open (boot restore / SPA navigation), and an
-  animated first margin application would carry the inset from x=0 to the
-  drawer edge — the shadow "sliding in" on refresh / first load (live report
-  2026-09-15). Later margin changes on the same element animate normally.
-- **Reveal guards withhold the inset too**: `main-persist` hides/fades the
-  shells with the `sidebar-ux-main-restore-pending` / `-reveal-hold` /
-  `-reveal-in` `<html>` classes (boot restore, mid-session mode-switch, and the
-  secondary `-secondary-placement-hold` / `-secondary-reveal-in` variants).
-  Those phases are CSS animations, not the panel bloom, so `syncChatShadowAttr`
-  withholds the inset for the guarded side(s) — the real shadow is inside the
-  shell and fades in with it. An `<html>` class MutationObserver re-runs the
-  reflow when a guard lifts, adding the inset right after the fade (live report
-  2026-09-15: the shadow appeared before the panels had faded in). The class
-  literals are mirrored in `chat/reflow.ts` (it cannot import `main-persist`:
-  that module reaches `sidebar/secondary`, which imports reflow).
-- **The swap is a hard handoff**: the suppression flip and the inset appearance
-  are keyed on the same `data-canvas-chat-shadow` change, so exactly one shadow
-  is painted per side at any moment (a cross-fade attempt made the handoff read
-  worse live — don't re-add a `box-shadow` transition on the drawer/chat).
-- Drawer location is not a gate for the geometry: Top/Bottom only moves the tab
-  strip to the top/bottom edge — the panel itself stays a left/right column
-  (S8), so the overhang margin and the shadow lane are still horizontal there.
-- `clearChatMargins()` removes the attr — mobile/cross-down, `chatReflow`
-  off, and the extension-disable cleanup in `setup.ts`.
-- The `60px / -60px` inset form mirrors `--lumiverse-shadow-xl`
-  (`0 20px 60px rgba(0,0,0,.5)`) edge falloff.
+- **History / don't resurrect:** a chat-owned inset shadow (root
+  `data-canvas-chat-shadow`; real shadow suppressed while a drawer was open,
+  inset painted on the chat column so it rendered under bubbles) went through
+  several rounds — slide-from-edge artifacts, reveal-guard holes, a reverted
+  cross-fade — and was ultimately removed: the user prefers the single real
+  shadow, accepting that it paints above chat content while a drawer is open.
+  The `data-canvas-chat-shadow` attr, its suppression/inset CSS, the guard
+  checks, and the `canvas:panel-motion-changed` event are all gone.
+- **Closed drawers** must not bleed their 60px shadow into the viewport
+  (`styles.ts` `sidebar-ux-shadow-close-suppress`). The rule carries
+  `:not([data-canvas-panel-animating])` because `data-drawer-open` flips false
+  at close-start — without the guard the close fade would be shadowless
+  instead of fading with the panel.
+- **Chat reflow margins** still snap on a fresh chat element's first
+  application (`data-canvas-reflow-instant`, dropped after one painted frame
+  via double rAF): the chat can mount after the drawer is already open (boot
+  restore / SPA navigation), and an animated first margin application reads as
+  a load-time layout slide. Later margin changes on the same element animate
+  normally; Top/Bottom uses the panel-matched 0.27s duration.
 
 ### Observers
 
