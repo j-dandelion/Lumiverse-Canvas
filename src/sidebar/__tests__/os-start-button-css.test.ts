@@ -122,6 +122,29 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(block, 'padding: 0 !important', 'horizontal Start padding')
 }
 
+// ── 4b. Horizontal end-order is CSS-owned (side-flip re-orders in place) ──
+// The old inline `btn.style.order` was written from getMainDrawerSide() at
+// ensure time only; an S4 in-place side flip (no remount, no ensure) kept the
+// stale value and left the Options dock on the screen edge until a refresh.
+{
+  assertIncludes(
+    HORIZONTAL_STRIP_CSS,
+    '.sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {',
+    'left-attached strip orders Start first (outer edge)',
+  )
+  assertIncludes(
+    HORIZONTAL_STRIP_CSS,
+    '.sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {',
+    'right-attached strip orders Start last (outer edge)',
+  )
+  assertIncludes(HORIZONTAL_STRIP_CSS, 'order: -1 !important', 'left side uses order:-1')
+  assertIncludes(HORIZONTAL_STRIP_CSS, 'order: 1 !important', 'right side uses order:1')
+  assert(
+    !HORIZONTAL_STRIP_CSS.includes('order: -2 !important'),
+    'the old inline-era -2 value must not be reintroduced',
+  )
+}
+
 // ── 5. Mobile rows (both drawers): 52×48 ──
 {
   assertIncludes(SECONDARY_MOBILE_CSS, START_SEL, 'secondary mobile must size Start')
@@ -159,6 +182,12 @@ const START_SEL = 'button[data-canvas-os-start]'
     'bespoke 32px geometry must not return')
   assert(!fnBody.includes('sidebar-ux-main-tab-mirror-btn'),
     'must not reuse the mirror tab class (renderer/DnD/live-order treat it as a tab)')
+  // End-order must stay CSS-owned: no stale inline order writes (the ensure
+  // clears legacy inline values instead — see section 4b).
+  assert(!src.includes('startIsOuter'),
+    'inline Start-order logic must not return (CSS owns the horizontal end-order)')
+  assert(!src.includes('btn.style.order ='),
+    'no inline order assignment; use removeProperty to clear legacy values')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

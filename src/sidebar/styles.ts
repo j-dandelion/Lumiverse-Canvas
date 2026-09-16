@@ -344,6 +344,25 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
   padding: 0 !important;
 }
 
+/* OS Start button: OUTERMOST slot of its own dock/list, at the drawer-side
+   screen edge (left-attached strip → first item; right-attached → last).
+   CSS-owned so an S4 in-place side flip re-orders immediately — the old
+   inline btn.style.order (JS, keyed on getMainDrawerSide at ensure time)
+   kept the stale value until a shell remount/refresh, which left the Options
+   dock on the edge instead of Start. The Settings button inside the dock has
+   the default order:0; the values also work in the no-dock fallback, where
+   the list's sections default to 0. Placed AFTER the 48×48 sizing rule so
+   os-start-button-css.test.ts keeps parsing the sizing block as the first
+   [data-canvas-os-start] occurrence. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: -1 !important;
+}
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: 1 !important;
+}
+
 /* Main strip's inner section: row + fills the zone. Cluster anchoring lives
    on the SECTION (not the outer list) via the host's drawer-side class. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list > .sidebar-ux-tab-list-main,

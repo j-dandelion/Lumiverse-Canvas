@@ -30,8 +30,8 @@
 
 import type { Side } from '../core/model'
 import { getModel, getHost } from '../recon/dispatch'
-import { getDrawerTabs, getMainDrawerSide } from '../store'
-import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
+import { getDrawerTabs } from '../store'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
@@ -419,9 +419,10 @@ function startButtonHtml(): string {
  *   - Sides, secondary → its own bottom dock (same `.sidebar-ux-tab-list-bottom`
  *     chrome as the main drawer's Settings dock: divider + 8px gap, anchored
  *     to the strip end). The divider is therefore NOT part of the button.
- *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end, adjacent to
- *     the settings dock (S8 #3 order trick: the dock's side is order-owned;
- *     Start takes the outermost slot: left/upper drawer → -2, right/lower → 2).
+ *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end of its dock/list
+ *     (HORIZONTAL_STRIP_CSS keys on the wrapper's sidebar-ux-side-* class:
+ *     left → -1 first, right → 1 last), so an in-place side flip re-orders
+ *     without re-running this ensure. No inline order is kept.
  */
 async function ensureStartButtonForSide(side: Side): Promise<void> {
   const list = side === 'primary' ? await getMainMirrorList() : getSecondaryTabList()
@@ -454,13 +455,10 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
     // belt-and-braces for anything that slipped through.
     if (dock.nextElementSibling) list.appendChild(dock)
   }
-  if (isHorizontalStrip()) {
-    const drawerLeft = getMainDrawerSide() === 'left'
-    const startIsOuter = side === 'primary' ? drawerLeft : !drawerLeft
-    btn.style.order = startIsOuter ? '-2' : '2'
-  } else {
-    btn.style.order = ''
-  }
+  // Horizontal end-order is CSS-owned (HORIZONTAL_STRIP_CSS) so a side flip
+  // re-orders in place. Clear any inline order an older session left behind —
+  // in the vertical dock it would survive and reorder Start above Options.
+  btn.style.removeProperty('order')
   if (!btn.dataset.wired) {
     btn.dataset.wired = '1'
     btn.addEventListener('click', () => openStartMenu(side, btn as HTMLElement))
