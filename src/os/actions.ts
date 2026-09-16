@@ -138,9 +138,18 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   }
 
   const isClosed = model.closed.includes(key)
+  const isHidden = model.hidden.includes(key)
   const livesInTarget = side === 'primary' ? model.primary.includes(key) : model.secondary.includes(key)
   const sourceSide: Side = side === 'primary' ? 'secondary' : 'primary'
   const activate = livesInTarget || model.active[sourceSide] === key || isClosed
+
+  // Hidden targets (Start-menu recovery path): activation is hidden-gated in
+  // the reducer, so un-hide FIRST — otherwise the activate intent is dropped
+  // and the tail still clicks host content through, leaving displayed content
+  // with no active window. Un-hiding also restores the strip button.
+  const unhide: Promise<void> = isHidden
+    ? dispatch({ t: 'setHidden', key, hidden: false })
+    : Promise.resolve()
 
   // D19: auto-open the target drawer when it is closed (width omitted —
   // applySetDrawer keeps the drawer's saved width). Primary is shell-owned:
@@ -166,7 +175,8 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
       ])
     : Promise.resolve()
 
-  return openDrawer
+  return unhide
+    .then(() => openDrawer)
     .then(() => move)
     .then(() => open)
     .then(() => {

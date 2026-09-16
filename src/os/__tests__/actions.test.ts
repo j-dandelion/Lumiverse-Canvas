@@ -345,6 +345,53 @@ const baseModel = () => ({
   assertEqual(fake.dispatches.length, 0, 'toggle with OS off → no dispatch')
 }
 
+// ── openWindowInDrawerByLiveId: hidden targets are un-hidden FIRST ──
+// The Start menu lists hidden tabs; activation is hidden-gated in the
+// reducer, so the un-hide must precede setClosed/activate or the open chain
+// would click host content through with no active model window.
+{
+  fresh({ ...baseModel(), hidden: [KEY] })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  assertEqual(fake.dispatches[0]?.t, 'setHidden', 'hidden target → un-hide dispatched first')
+  assertEqual(fake.dispatches[0]?.hidden, false, 'un-hide → hidden:false')
+  assertEqual(fake.dispatches[0]?.key, KEY, 'un-hide targets the resolved key')
+  assert(
+    fake.dispatches.findIndex((d: any) => d.t === 'activate') > 0,
+    'activate follows the un-hide',
+  )
+}
+{
+  // Hidden + closed + closed drawer: un-hide → D19 open → un-close/activate.
+  fresh({
+    ...baseModel(),
+    hidden: [KEY],
+    closed: [KEY],
+    drawers: { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 } },
+  })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  const order = fake.dispatches.map((d: any) => d.t)
+  assertEqual(order[0], 'setHidden', 'hidden+closed → un-hide first')
+  assertEqual(order[1], 'setDrawer', 'then auto-open the closed drawer (D19)')
+  assertEqual(order[2], 'setClosed', 'then un-close')
+  assertEqual(order[3], 'activate', 'then activate')
+}
+{
+  // Foreign-drawer hidden tab: routing to its OWN side un-hides in place —
+  // no cross-drawer move (the Start menu is drawer-agnostic).
+  fresh({
+    ...baseModel(),
+    primary: ['builtin:other'],
+    secondary: [KEY],
+    hidden: [KEY],
+  })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'secondary')
+  assertEqual(fake.moveCalls.length, 0, 'own-drawer routing never moves')
+  assertEqual(fake.dispatches[0]?.t, 'setHidden', 'un-hide still first')
+}
+
 // ── getDisplayedLiveId (D17 presence + D2/D9 close policy source) ──
 {
   fresh(baseModel())

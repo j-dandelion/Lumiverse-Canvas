@@ -7,12 +7,15 @@
  *     button (D10), the secondary strip's end; Top/Bottom mode → the OUTER
  *     (screen-edge) end of each strip via CSS `order` (the S8 #3 dock-order
  *     trick — single geometry authority stays in tab-position.ts).
- *   - the **menu**: a compact vertical list of every non-hidden tab (any
- *     window state), entries in strip order with a state glyph (D18:
- *     ● open, – minimized, ○ closed) and the tab's store icon. Clicking
- *     routes through the window-state actions: closed → launch fresh,
- *     minimized → restore, open → focus; a tab assigned to the other drawer
- *     moves (D13); a closed drawer auto-opens (D19).
+ *   - the **menu**: the full tab inventory — BOTH drawers, hidden and closed
+ *     tabs included — alphabetized by title (case-insensitive) with a state
+ *     glyph (D18: ● open, – minimized, ○ closed) and the tab's store icon.
+ *     Clicking routes through the window-state actions, targeting the entry's
+ *     OWN drawer: closed → launch fresh, minimized → restore, open → focus;
+ *     a hidden tab is un-hidden first so its strip button returns (D19
+ *     auto-opens a closed target drawer). The launcher is deliberately
+ *     drawer-agnostic — it never moves a tab between drawers (D13 override
+ *     for this surface; a move would be destructive from an all-tabs menu).
  *
  * Lifecycle: ONE menu open at a time across drawers; Escape or click-outside
  * dismisses; entries derive on every open (never stale). The menu anchors
@@ -75,6 +78,8 @@ let _unsubDocListeners: (() => void) | null = null
 export interface StartMenuEntry {
   /** Live tab id (the window-state actions' keying). */
   liveId: string
+  /** The tab's own drawer — the click routes here (no cross-drawer move). */
+  side: Side
   title: string
   iconSvg?: string
   iconUrl?: string
@@ -82,12 +87,16 @@ export interface StartMenuEntry {
 }
 
 /**
- * Derive the Start menu entries for a drawer: every non-hidden tab in strip
- * order, each with its window state. F7: eye-hidden tabs never appear.
- * Unresolvable extension keys are skipped (they cannot open this session).
+ * Derive the Start menu entries: every tab of BOTH drawers — hidden and
+ * closed included — alphabetized by title (case-insensitive, stable tie-break
+ * on liveId). The launcher is drawer-agnostic: both Start buttons show the
+ * same inventory and each entry routes to its own drawer. Hidden tabs are
+ * listed on purpose (the menu is the recovery path for eye-hidden tabs) and
+ * `openWindowInDrawerByLiveId` un-hides them before activating — activation
+ * is hidden-gated in the reducer. Unresolvable extension keys are skipped
+ * (they cannot open this session).
  */
 export function deriveStartMenuEntries(
-  side: Side,
   model: {
     primary: readonly string[]
     secondary: readonly string[]
@@ -97,25 +106,35 @@ export function deriveStartMenuEntries(
   },
   resolve: (key: string) => string | null,
 ): StartMenuEntry[] {
-  const keys = side === 'primary' ? model.primary : model.secondary
-  const activeKey = model.active[side]
+  // One store scan for titles/icons (was a per-key find).
+  const tabs = new Map(getDrawerTabs().map((t) => [t.id, t]))
+  const seen = new Set<string>()
   const out: StartMenuEntry[] = []
-  for (const key of keys) {
-    if (model.hidden.includes(key)) continue
-    const liveId = resolve(key)
-    if (!liveId) continue
-    const state = model.closed.includes(key)
-      ? 'closed'
-      : key === activeKey ? 'open' : 'minimized'
-    const tab = getDrawerTabs().find((t) => t.id === liveId)
-    out.push({
-      liveId,
-      title: tab?.title ?? key,
-      iconSvg: tab?.iconSvg,
-      iconUrl: tab?.iconUrl,
-      state,
-    })
+  for (const side of ['primary', 'secondary'] as const) {
+    const keys = side === 'primary' ? model.primary : model.secondary
+    const activeKey = model.active[side]
+    for (const key of keys) {
+      const liveId = resolve(key)
+      if (!liveId || seen.has(liveId)) continue
+      seen.add(liveId)
+      const state = model.closed.includes(key)
+        ? 'closed'
+        : key === activeKey ? 'open' : 'minimized'
+      const tab = tabs.get(liveId)
+      out.push({
+        liveId,
+        side,
+        title: tab?.title ?? key,
+        iconSvg: tab?.iconSvg,
+        iconUrl: tab?.iconUrl,
+        state,
+      })
+    }
   }
+  out.sort((a, b) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
+    || a.liveId.localeCompare(b.liveId),
+  )
   return out
 }
 
@@ -126,7 +145,7 @@ export function glyphFor(state: StartMenuEntry['state']): string {
 
 // ── Menu DOM ─────────────────────────────────────────────────────────────────
 
-function createMenuEntry(entry: StartMenuEntry, side: Side): HTMLElement {
+function createMenuEntry(entry: StartMenuEntry): HTMLElement {
   const item = document.createElement('button')
   item.type = 'button'
   item.setAttribute('role', 'menuitem')
@@ -168,17 +187,19 @@ function createMenuEntry(entry: StartMenuEntry, side: Side): HTMLElement {
   item.appendChild(glyph)
   item.addEventListener('click', () => {
     hideStartMenu()
-    void openWindowInDrawerByLiveId(entry.liveId, side)
+    // Route to the entry's OWN drawer: the menu is drawer-agnostic, and a
+    // cross-drawer move would be destructive from an all-tabs launcher.
+    void openWindowInDrawerByLiveId(entry.liveId, entry.side)
   })
   return item
 }
 
-/** Build the menu surface for one drawer's entries (caller positions it). */
-function buildMenu(side: Side): HTMLElement | null {
+/** Build the (drawer-agnostic) menu surface; the caller positions it. */
+function buildMenu(): HTMLElement | null {
   const host = getHost()
   const model = getModel()
   if (!host || !model) return null
-  const entries = deriveStartMenuEntries(side, model, (key) => host.resolve(key))
+  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key))
   const menu = document.createElement('div')
   menu.id = MENU_ID
   menu.setAttribute('role', 'menu')
@@ -209,7 +230,7 @@ function buildMenu(side: Side): HTMLElement | null {
     menu.appendChild(empty)
   }
   for (const entry of entries) {
-    menu.appendChild(createMenuEntry(entry, side))
+    menu.appendChild(createMenuEntry(entry))
   }
   return menu
 }
@@ -257,7 +278,7 @@ function openStartMenu(side: Side, button: HTMLElement): void {
     return
   }
   hideStartMenu({ immediate: true })
-  const menu = buildMenu(side)
+  const menu = buildMenu()
   if (!menu) return
   document.body.appendChild(menu)
   _menu = menu
