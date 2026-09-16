@@ -675,4 +675,14 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
     ) ?? ''
     expect(rightAnchor).toContain('sidebar-ux-side-right')
   })
+
+  test('divider line is 2px with a strong idle alpha (fractional-zoom visibility)', () => {
+    // Live report 2026-09-16: a 1px `--primary-020` hairline antialiases
+    // away at fractional browser zoom (75%) and over light tab buttons.
+    const rule = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle::after') && b.includes('width: 2px'),
+    ) ?? ''
+    expect(rule).toContain('margin-left: -1px')
+    expect(rule).toContain('background: var(--lumiverse-primary-050')
+  })
 })

@@ -425,16 +425,21 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
   top: 6px;
   bottom: 6px;
   left: 50%;
-  width: 1px;
-  margin-left: -0.5px;
-  background: var(--lumiverse-primary-020) !important;
+  /* 2px, not a 1px hairline: at fractional browser zoom (e.g. 75% → 1 CSS px
+     = 0.75 device px) a 1px line antialiases away, especially over a light
+     tab button — live report 2026-09-16 ("I only see the divider at 100%
+     zoom"). The stronger idle alpha keeps it legible over both the strip and
+     the buttons; hover/drag goes full primary. */
+  width: 2px;
+  margin-left: -1px;
+  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
   pointer-events: none;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
-  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+  background: var(--lumiverse-primary, var(--lumiverse-primary-050)) !important;
 }
 /* Touch/coarse-pointer (and the mobile sheet width): the split still applies
    but there is no handle — same policy as DnD and the resize handles. */

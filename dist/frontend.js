@@ -1265,16 +1265,21 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
   top: 6px;
   bottom: 6px;
   left: 50%;
-  width: 1px;
-  margin-left: -0.5px;
-  background: var(--lumiverse-primary-020) !important;
+  /* 2px, not a 1px hairline: at fractional browser zoom (e.g. 75% → 1 CSS px
+     = 0.75 device px) a 1px line antialiases away, especially over a light
+     tab button — live report 2026-09-16 ("I only see the divider at 100%
+     zoom"). The stronger idle alpha keeps it legible over both the strip and
+     the buttons; hover/drag goes full primary. */
+  width: 2px;
+  margin-left: -1px;
+  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
   pointer-events: none;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
-  background: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+  background: var(--lumiverse-primary, var(--lumiverse-primary-050)) !important;
 }
 /* Touch/coarse-pointer (and the mobile sheet width): the split still applies
    but there is no handle — same policy as DnD and the resize handles. */
@@ -4137,6 +4142,13 @@ function ensureSplitHandle(host) {
     axis: host.getAttribute?.(STRIP_AXIS_ATTR),
     handleParent: handle.parentElement?.className
   });
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      try {
+        dlog(`[hsplit] probe ${splitProbe(handle)}`);
+      } catch {}
+    });
+  }
   return handle;
 }
 function removeSplitHandle() {
@@ -4181,10 +4193,13 @@ function splitProbe(handle) {
   const k = rectSnapshot(handle);
   let cssW = "?";
   let inlineW = "?";
+  let hostVis = "?";
   try {
     if (host) {
-      cssW = getComputedStyle(host).width;
+      const hcs = getComputedStyle(host);
+      cssW = hcs.width;
       inlineW = host.style.width;
+      hostVis = `${hcs.display}/${hcs.visibility}/${hcs.opacity}`;
     }
   } catch {}
   const varNow = document.documentElement.style.getPropertyValue(SPLIT_VAR);
@@ -4192,10 +4207,10 @@ function splitProbe(handle) {
   let hLine = "?";
   try {
     const hcs = getComputedStyle(handle);
-    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}`;
+    hPos = `${hcs.position}/${hcs.left}/${hcs.right}/${hcs.width}/${hcs.display}/${hcs.visibility}/${hcs.opacity}`;
     hLine = getComputedStyle(handle, "::after").backgroundColor;
   } catch {}
-  return `host=[${h?.l ?? "?"},${h?.r ?? "?"}] hostW=${h?.w ?? "?"} cssW=${cssW} inlineW=${inlineW} handle=[${k?.l ?? "?"},${k?.r ?? "?"}] hPos=${hPos} line=${hLine} var=${varNow}`;
+  return `host=[${h?.l ?? "?"},${h?.r ?? "?"}] hostW=${h?.w ?? "?"} cssW=${cssW} inlineW=${inlineW} hostVis=${hostVis} handle=[${k?.l ?? "?"},${k?.r ?? "?"}] hPos=${hPos} line=${hLine} var=${varNow}`;
 }
 function startSplitDrag(handle, _down) {
   if (typeof document === "undefined" || _splitDragging)
