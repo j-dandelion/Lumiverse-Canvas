@@ -548,15 +548,17 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
     'test 12c: closed drawer → attr removed',
   )
 
-  // Top/Bottom location has no L/R shadow lane.
+  // Top/Bottom keeps the side-panel geometry (only the strip moves), so the
+  // chat-owned shadow lane is still horizontal — this was the live "#2 didn't
+  // work" report (Bottom location).
   _resetAll()
   _installDom({ open: true, leftSide: false })
   hydrateSettings({ drawerLocation: 'top' })
   updateChatReflow()
   assertEqual(
     (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
-    null,
-    'test 12d: Top/Bottom location → attr off',
+    'right',
+    'test 12d: Top/Bottom + open right drawer → attr still on (panel is a side column)',
   )
   hydrateSettings(null)
 

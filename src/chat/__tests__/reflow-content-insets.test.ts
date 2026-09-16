@@ -158,6 +158,76 @@ state.mainSide = 'right'
 assertEqual(computeContentLaneInsets().left, 0, 'main right open: left = 0')
 assertEqual(computeContentLaneInsets().right, 420, 'main right open: right = 420 (main width)')
 
+// ── Test 1b: open-side reporting (chat-owned shadow ownership) ──
+reset()
+state.mainOpen = true
+state.mainSide = 'right'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, true, 'main right open: openRight = true')
+  assertEqual(i.openLeft, false, 'main right open: openLeft = false')
+}
+reset()
+state.mainOpen = true
+state.mainSide = 'left'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'main left open: openLeft = true')
+  assertEqual(i.openRight, false, 'main left open: openRight = false')
+}
+reset()
+state.secondaryOpen = true
+state.mainSide = 'right'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'secondary open (opposite right main): openLeft = true')
+  assertEqual(i.openRight, false, 'secondary open: openRight = false')
+}
+reset()
+state.mainOpen = true
+state.mirrorActive = true
+state.canvasMainOpen = true
+state.mainSide = 'right'
+state.secondaryOpen = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'both open: openLeft = true (secondary)')
+  assertEqual(i.openRight, true, 'both open: openRight = true (main)')
+}
+// Top/Bottom only moves the strip — the panel stays a side column, so the
+// open side still reports (the 2026-09-15 "#2 didn't work" live report).
+reset()
+state.mainOpen = true
+state.mirrorActive = true
+state.canvasMainOpen = true
+state.mainSide = 'right'
+state.horizontal = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, true, 'horizontal + main right open: openRight = true (panel is still a side column)')
+  assertEqual(i.openLeft, false, 'horizontal + main right open: openLeft = false')
+}
+// Strip reserves must still not count as "open" in horizontal mode.
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = true
+state.mirrorActive = true
+state.mainPinActive = true
+state.horizontal = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, false, 'horizontal closed + pin strip: openRight = false (strip reserve is not an open drawer)')
+}
+reset()
+state.mobile = true
+state.mainOpen = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, false, 'mobile: openLeft = false')
+  assertEqual(i.openRight, false, 'mobile: openRight = false')
+}
+
 // ── Test 2: publishContentLaneInsets sets vars ──
 reset()
 state.mainOpen = true

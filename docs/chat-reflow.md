@@ -103,12 +103,14 @@ html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] { box-shadow: ins
 ```
 
 - `data-canvas-chat-shadow` (root, token list) is set by `updateChatReflow`
-  only when: desktop, Sides location, `drawerShadowsDesktop` on, a chat column
-  exists, and that side's drawer is **open** (strip reserves do not count;
+  only when: desktop, `drawerShadowsDesktop` on, a chat column exists, and
+  that side's drawer is **open** (strip reserves do not count;
   `computeContentLaneInsets` returns `openLeft`/`openRight`).
+- Drawer location is not a gate: Top/Bottom only moves the tab strip to the
+  top/bottom edge — the panel itself stays a left/right column (S8), so the
+  overhang margin and the shadow lane are still horizontal there.
 - `clearChatMargins()` removes the attr — mobile/cross-down, `chatReflow`
   off, and the extension-disable cleanup in `setup.ts`.
-- Top/Bottom location has no L/R shadow lane → attr stays off.
 - The `60px / -60px` inset form mirrors `--lumiverse-shadow-xl`
   (`0 20px 60px rgba(0,0,0,.5)`) edge falloff.
 

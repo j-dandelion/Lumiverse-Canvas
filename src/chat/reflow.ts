@@ -99,9 +99,10 @@ export function injectReflowStyles(): void {
        element's background layer, BELOW its content, so bubbles/composer
        cover the shadow — underneath on the z axis. The 60px/-60px inset form
        mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
-       falloff. The attr is set by updateChatReflow only on desktop, Sides
-       location, drawerShadowsDesktop on, chat column present, drawer open on
-       that side; clearChatMargins drops it (mobile / feature off / disable). */
+       falloff. The attr is set by updateChatReflow only on desktop,
+       drawerShadowsDesktop on, chat column present, drawer open on that side
+       (all drawer locations — Top/Bottom keeps the side panel geometry);
+       clearChatMargins drops it (mobile / feature off / disable). */
     @media (min-width: 601px) {
       html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer {
         box-shadow: none !important;
@@ -262,15 +263,19 @@ export function scheduleReflow(): void {
 
 /**
  * Publish the chat-owned drawer-shadow sides (see CHAT_SHADOW_ATTR + the
- * injected CSS). Requires: desktop (caller guarantees), Sides location,
- * drawerShadowsDesktop on, a chat column present, and a drawer actually open
- * on that side. Horizontal/Top-Bottom reserves live on the top/bottom edge —
- * no L/R shadow lane there, so the attr stays off.
+ * injected CSS). Requires: desktop (caller guarantees), drawerShadowsDesktop
+ * on, a chat column present, and a drawer actually open on that side.
+ *
+ * Drawer location is deliberately NOT a gate: Top/Bottom only moves the tab
+ * strip to the top/bottom edge — the panel itself stays a left/right column
+ * (S8: panels keep the side geometry), so the open-drawer overhang margin and
+ * the shadow lane are still horizontal there. Gating this on Sides was the
+ * 2026-09-15 "#2 didn't work" live report (Bottom location).
  */
 function syncChatShadowAttr(insets: { openLeft: boolean; openRight: boolean }): void {
   const root = document.documentElement
   const sides: string[] = []
-  if (getChatColumn() && getSettings().drawerShadowsDesktop && !isHorizontalStrip()) {
+  if (getChatColumn() && getSettings().drawerShadowsDesktop) {
     if (insets.openLeft) sides.push('left')
     if (insets.openRight) sides.push('right')
   }
