@@ -16,7 +16,7 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 10. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
 11. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
 
-**[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, host NO-GOs. **Read this before touching tab moves, the main-mirror, or restore.**
+**[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, drawer-location/motion traps, host NO-GOs. **Read this before touching tab moves, the main-mirror, restore, or drawer motion.**
 
 ## Quick Reference
 
@@ -40,14 +40,18 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `src/recon/dispatch.ts` — dispatch queue, `placementFirstMoveByLiveId` (the move path), `bootstrapFromLayout` (restore + boot placement)
 - `src/host/lumiverse/implementation.ts` — `LumiverseHost` (HostPort): observe/place/setOrder/activate against live Lumiverse
 - `src/features/registry.ts` — feature registry (add new features here)
+- `src/os/` — OS mode: `actions.ts` (window-state actions), `os-mode.ts` (enable/disable + slot routing), `drawer-command.ts` (shell-command seam), `panel-chrome.ts` (header minimize/X + D17 parking), `start-menu.ts` + `start-menu-motion.ts` (Start button/menu), spec `~/Documents/plans/os-mode-spec.md`
 - `src/sidebar/secondary.tsx` — secondary sidebar DOM construction + `reassignSecondaryTabsFromModel`
 - `src/sidebar/secondary-drawer.ts` — secondary drawer state machine
+- `src/sidebar/drawer-shell.ts` — shared shell builder for both drawers (wrapper / drawer / panel / header / tab list)
+- `src/sidebar/animation.ts` + `src/sidebar/panel-motion.ts` — mode-routed open/close motion: Sides `translateX` slide (350 ms) vs Top/Bottom rail bloom (`animatePanelToggle`, anchored to the displayed window's strip button)
 - `src/sidebar/drawer-location.ts` — Drawer location presentation/orchestration: html classes + `--sidebar-ux-strip-h`, shell edge offsets, handle visibility, consumer knobs, presence subscription, `reconcileDrawerLocation()` fan-out, `clearDrawerLocation()` (never writes strip geometry)
 - `src/sidebar/tab-position.ts` — the single strip-geometry writer: pin host chrome (`data-strip-axis`/`data-strip-edge`, zone split), list chrome + clear, spacer sync
 - `src/sidebar/main-tab-pin.ts` — main-mirror pin: exclusive active key, `userPicked` guard, neighbor handoff
 - `src/tabs/assignment.ts` — owned-model facade (TabKey-keyed)
 - `src/slash/runtime.ts` — slash command runtime wiring
-- `src/layout/persist.ts` — layout persistence + IPC
+- `src/persist/layout-repo.ts` + `src/persist/layout-load.ts` — layout persistence + IPC
+- `src/persist/settings-repo.ts` — settings persistence + IPC
 
 ### State Flow
 ```
@@ -57,7 +61,7 @@ User toggles setting in panel
       → feature.apply(prev, next, ctx)    [features/registry.ts]
     → refreshSettingsPanel()              [settings/state.ts]
     → persistSettings()                   [settings/state.ts] (100ms debounce)
-      → sendToBackend({ type: 'SAVE_LAYOUT', layout })  [layout/persist.ts]
+      → sendToBackend({ type: 'SAVE_LAYOUT', layout })  [persist/layout-repo.ts]
 ```
 
 ### Extension Points

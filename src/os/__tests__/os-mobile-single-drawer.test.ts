@@ -1,0 +1,202 @@
+// OS + mobile single-drawer force (six-concerns #6) — orchestration tests for
+// os/os-mode.syncOsMobileDrawerMode. The mode-switch API is mocked so these
+// tests assert the decision + flag bookkeeping, not the layout machinery
+// (second-drawer-mode.test.ts owns that).
+
+import { mock } from 'bun:test'
+
+let passed = 0
+let failed = 0
+function assert(cond: unknown, msg: string) {
+  if (cond) passed++
+  else {
+    failed++
+    console.error('FAIL:', msg)
+  }
+}
+function assertEqual<T>(actual: T, expected: T, msg: string) {
+  if (actual === expected) passed++
+  else {
+    failed++
+    console.error(`FAIL: ${msg} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
+}
+
+// ── Mutable mocks ──
+let osMode = false
+let mobile = false
+let secondSidebarEnabled = false
+let forcedSingleDrawer = false
+const setSettingsCalls: Array<Record<string, unknown>> = []
+const modeCalls: Array<{ next: boolean; opts?: unknown }> = []
+let modeGate: Promise<void> | null = null
+
+mock.module('../../recon/dispatch', () => ({
+  getHost: () => ({}),
+  getModel: () => null,
+  snapshotOwnedModelLayout: () => null,
+  dispatchBatch: () => Promise.resolve(),
+}))
+mock.module('../../persist/layout-load', () => ({ cancelLayoutSave: () => {} }))
+mock.module('../../layout/mode-profiles', () => ({
+  restoreSingleModeLayout: () => Promise.resolve({ ok: true }),
+}))
+mock.module('../../settings/state', () => ({
+  getSettings: () => ({
+    osMode,
+    secondSidebarEnabled,
+    osForcedSingleDrawer: forcedSingleDrawer,
+  }),
+  setSettings: (patch: Record<string, unknown>) => {
+    setSettingsCalls.push(patch)
+    if (patch.osForcedSingleDrawer !== undefined) {
+      forcedSingleDrawer = !!patch.osForcedSingleDrawer
+    }
+  },
+  isOsModeEnabled: () => osMode,
+  getSingleLayoutSlot: () => null,
+  getDualLayoutSlot: () => null,
+  setSingleLayoutSlot: () => {},
+  setDualLayoutSlot: () => {},
+  getOsSingleLayoutSlot: () => null,
+  getOsDualLayoutSlot: () => null,
+  setOsSingleLayoutSlot: () => {},
+  setOsDualLayoutSlot: () => {},
+}))
+mock.module('../../settings/second-drawer-mode', () => ({
+  requestSecondDrawerMode: async (next: boolean, opts?: unknown) => {
+    modeCalls.push({ next, opts })
+    if (modeGate) await modeGate
+    secondSidebarEnabled = next
+  },
+}))
+
+;(globalThis as { window?: unknown }).window = {
+  matchMedia: () => ({ matches: mobile }),
+}
+
+const { syncOsMobileDrawerMode } = await import('../os-mode')
+
+function reset() {
+  osMode = false
+  mobile = false
+  secondSidebarEnabled = false
+  forcedSingleDrawer = false
+  setSettingsCalls.length = 0
+  modeCalls.length = 0
+  modeGate = null
+}
+
+// ── Force: OS on + mobile + dual → flag set, silent mode switch ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  await syncOsMobileDrawerMode()
+  assert(
+    setSettingsCalls.some((p) => p.osForcedSingleDrawer === true),
+    'force sets osForcedSingleDrawer before the switch',
+  )
+  assertEqual(modeCalls.length, 1, 'force runs exactly one mode switch')
+  assertEqual(modeCalls[0]?.next, false, 'force disables the second drawer')
+  assert(
+    (modeCalls[0]?.opts as { silent?: boolean } | undefined)?.silent === true,
+    'force uses the silent switch (no dirty dialog)',
+  )
+}
+
+// ── No force: OS off / desktop / already single ──
+{
+  reset()
+  osMode = false
+  mobile = true
+  secondSidebarEnabled = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 0, 'OS off → no mode switch')
+  assertEqual(setSettingsCalls.length, 0, 'OS off → no flag write')
+}
+{
+  reset()
+  osMode = true
+  mobile = false
+  secondSidebarEnabled = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 0, 'desktop viewport → no mode switch')
+}
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = false
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 0, 'already single-drawer → no switch')
+}
+
+// ── Restore: flag set + OS off → clear flag, re-enable dual ──
+{
+  reset()
+  osMode = false
+  mobile = true
+  secondSidebarEnabled = false
+  forcedSingleDrawer = true
+  await syncOsMobileDrawerMode()
+  assert(
+    setSettingsCalls.some((p) => p.osForcedSingleDrawer === false),
+    'restore clears the flag',
+  )
+  assertEqual(modeCalls.length, 1, 'restore runs one mode switch')
+  assertEqual(modeCalls[0]?.next, true, 'restore re-enables the second drawer')
+}
+
+// ── Restore on leaving mobile while OS stays on ──
+{
+  reset()
+  osMode = true
+  mobile = false
+  secondSidebarEnabled = false
+  forcedSingleDrawer = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 1, 'cross-up restores the dual drawer')
+  assertEqual(modeCalls[0]?.next, true, 'cross-up re-enables the second drawer')
+}
+
+// ── Recovery: flag already set but the drawer is still enabled ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  forcedSingleDrawer = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 1, 'stuck dual is re-forced')
+  assertEqual(modeCalls[0]?.next, false, 'recovery disables the second drawer')
+  assertEqual(
+    setSettingsCalls.filter((p) => p.osForcedSingleDrawer !== undefined).length,
+    0,
+    'recovery does not rewrite the already-true flag',
+  )
+}
+
+// ── Single-flight: concurrent syncs share one run ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  let release!: () => void
+  modeGate = new Promise<void>((r) => { release = r })
+  const p1 = syncOsMobileDrawerMode()
+  const p2 = syncOsMobileDrawerMode()
+  assert(p1 === p2, 'concurrent calls return the same promise')
+  release()
+  await p1
+  assertEqual(modeCalls.length, 1, 'single-flight coalesces to one mode switch')
+}
+
+console.log('---')
+if (failed > 0) {
+  console.error(`FAILED: ${failed}`)
+  process.exitCode = 1
+}
+console.log(`PASS: ${passed}`)

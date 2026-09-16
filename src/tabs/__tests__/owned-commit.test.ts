@@ -440,6 +440,78 @@ function test_missingSecondaryButtonKeys(): void {
   assertEqual(missing3.length, 0, 'OC9f: unresolvable key skipped')
 }
 
+// ── OC10: OS closed-window coherence — Configure unhide drops `closed` ──
+// The setHidden sweep emits one intent per model key, so the drop must key on
+// the hidden→visible TRANSITION, never on "key is closed" alone (that would
+// un-close every OS window on any Apply).
+async function test_OC10_unhideDropsClosed() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { hidden: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [PROFILE],
+    closed: [PROFILE],
+    active: { primary: A, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  // The Configure eye turned back on for the hidden+closed core tab.
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, true, 'OC10a: unhide commit ok')
+  const after = getModel()
+  if (after) {
+    assert(!after.hidden.includes(PROFILE), 'OC10b: profile unhidden')
+    assert(!after.closed.includes(PROFILE), 'OC10c: hidden→visible drops the closed membership')
+  }
+
+  // Sweep guard: a key that is already visible in the draft keeps its closed
+  // membership (the sweep emits setHidden(false) for it too — the drop must
+  // not fire).
+  shutdown()
+  const host2 = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary'),
+    makeLiveTab(A, 'h:a', 'primary'),
+  ])
+  const model2: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [],
+    closed: [A],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model2, host2)
+  await flush()
+  const draft2 = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  await commitDraftToOwnedModel(draft2)
+  const after2 = getModel()
+  if (after2) {
+    assert(after2.closed.includes(A), 'OC10d: already-visible closed key keeps its membership')
+  }
+  shutdown()
+}
+
 test_plannedMoves()
 test_missingSecondaryButtonKeys()
 
@@ -450,6 +522,7 @@ await test_OC4_rebaseHandlesLateRegistration()
 await test_OC5_drawerSideSwap()
 await test_OC6_hideIntent()
 await test_OC8_skipChrome()
+await test_OC10_unhideDropsClosed()
 
 console.log(`tabs/owned-commit: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

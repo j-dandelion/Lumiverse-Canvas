@@ -6,10 +6,16 @@
 // on Lumiverse internals. Extensions come from the store's drawerTabs
 // (getDrawerTabs()).
 //
-// CORE hide-locked (9): profile, presets, loom, characters, personas,
+// Core hide-locked (9): profile, presets, loom, characters, personas,
 // branches, spindle, theme, lorebook. All other built-ins can hide.
+// The lock is a UI gate; the `coreTabsHidden` setting unlocks it (OS mode
+// forces that setting on). The set itself lives in the `./core-tabs` leaf so
+// os/actions can consult it without importing the store graph.
 
 import { type DrawerTab, getDrawerTabs } from '../store'
+import { CORE_HIDE_LOCKED, isCoreTabId } from './core-tabs'
+
+export { CORE_HIDE_LOCKED } from './core-tabs'
 
 /** Opaque version string bumped when the source-of-truth set/order changes. */
 export const BUILTIN_CATALOG_VERSION = 'lumiverse-drawer-tabs-2026-07'
@@ -22,13 +28,6 @@ export const BUILTIN_TAB_IDS: readonly string[] = [
   'feedback', 'worldinfo', 'imagegen', 'wallpaper', 'regex',
   'branches', 'theme', 'spindle',
 ]
-
-/** Built-in tab ids that cannot be hidden in the Configure Tabs UI. */
-export const CORE_HIDE_LOCKED: ReadonlySet<string> = new Set([
-  'profile', 'presets', 'loom',
-  'characters', 'personas',
-  'branches', 'spindle', 'theme', 'lorebook',
-])
 
 export type CatalogTab = {
   id: string
@@ -204,5 +203,5 @@ export function filterCatalogToLive(
 
 /** True when the given tab id is in the CORE_HIDE_LOCKED set. */
 export function isHideLocked(tabId: string): boolean {
-  return CORE_HIDE_LOCKED.has(tabId)
+  return isCoreTabId(tabId)
 }

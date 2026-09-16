@@ -28,9 +28,12 @@ const fake: {
   singleSlot: Record<string, unknown> | null
   dualSlot: Record<string, unknown> | null
   secondSidebarEnabled: boolean
+  forcedSingleDrawer: boolean
   restoreCalls: Array<{ slot: unknown; host: unknown }>
   restoreResult: { ok: boolean; reason?: string }
   batchCalls: Array<Array<{ t: string; key: string; closed: boolean }>>
+  setSettingsCalls: Array<Record<string, unknown>>
+  modeCalls: Array<{ next: boolean; opts?: unknown }>
 } = {
   osMode: false,
   model: { secondary: [], closed: [] },
@@ -41,9 +44,18 @@ const fake: {
   singleSlot: null,
   dualSlot: null,
   secondSidebarEnabled: false,
+  forcedSingleDrawer: false,
   restoreCalls: [],
   restoreResult: { ok: true },
   batchCalls: [],
+  setSettingsCalls: [],
+  modeCalls: [],
+}
+
+// Desktop viewport: the OS+mobile single-drawer sync must stay inert in this
+// suite (its own suite covers the force/restore).
+;(globalThis as { window?: unknown }).window = {
+  matchMedia: () => ({ matches: false }),
 }
 
 mock.module('../../recon/dispatch', () => ({
@@ -65,7 +77,12 @@ mock.module('../../layout/mode-profiles', () => ({
   },
 }))
 mock.module('../../settings/state', () => ({
-  getSettings: () => ({ secondSidebarEnabled: fake.secondSidebarEnabled }),
+  getSettings: () => ({
+    secondSidebarEnabled: fake.secondSidebarEnabled,
+    osMode: fake.osMode,
+    osForcedSingleDrawer: fake.forcedSingleDrawer,
+  }),
+  setSettings: (patch: Record<string, unknown>) => { fake.setSettingsCalls.push(patch) },
   isOsModeEnabled: () => fake.osMode,
   getSingleLayoutSlot: () => fake.singleSlot,
   getDualLayoutSlot: () => fake.dualSlot,
@@ -75,6 +92,11 @@ mock.module('../../settings/state', () => ({
   getOsDualLayoutSlot: () => fake.osDual,
   setOsSingleLayoutSlot: (l: Record<string, unknown> | null) => { fake.osSingle = l },
   setOsDualLayoutSlot: (l: Record<string, unknown> | null) => { fake.osDual = l },
+}))
+mock.module('../../settings/second-drawer-mode', () => ({
+  requestSecondDrawerMode: async (next: boolean, opts?: unknown) => {
+    fake.modeCalls.push({ next, opts })
+  },
 }))
 
 // Module under test — imports AFTER mocks (repo convention).
@@ -87,6 +109,11 @@ function fresh() {
   fake.osSingle = null
   fake.osDual = null
   fake.batchCalls.length = 0
+  fake.setSettingsCalls.length = 0
+  fake.modeCalls.length = 0
+  fake.forcedSingleDrawer = false
+  fake.osMode = false
+  fake.secondSidebarEnabled = false
 }
 
 function tab(id: string, sidebar: 'primary' | 'secondary') {

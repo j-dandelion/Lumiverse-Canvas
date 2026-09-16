@@ -37,12 +37,17 @@ const mainMirror = readFileSync(
 // ── 1. Suppression selector covers BOTH shell owners ──
 assertIncludes(
   styles,
-  '.sidebar-ux-shell[data-drawer-open="false"] > .sidebar-ux-drawer',
-  'suppression is keyed on the shared sidebar-ux-shell wrapper class',
+  '.sidebar-ux-shell[data-drawer-open="false"]:not([data-canvas-panel-animating]) > .sidebar-ux-drawer',
+  'suppression is keyed on the shared sidebar-ux-shell wrapper class, suspended during a panel bloom',
 )
 assert(
   !styles.includes('.sidebar-ux-secondary-wrapper[data-drawer-open="false"]'),
   'the secondary-only selector must not come back (main mirror would lose suppression)',
+)
+assertIncludes(
+  styles,
+  ':not([data-canvas-panel-animating])',
+  'the close-fade guard must stay (the real shadow fades with the panel in Top/Bottom)',
 )
 assertIncludes(
   styles,

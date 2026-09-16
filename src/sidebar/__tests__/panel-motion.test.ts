@@ -20,7 +20,12 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 }
 
 import { hydrateSettings } from '../../settings/state'
-import { __getAnimState, __getPanelAnimState, cancelWrapperAnimation } from '../animation'
+import {
+  __getAnimState,
+  __getPanelAnimState,
+  cancelWrapperAnimation,
+  PANEL_ANIMATING_ATTR,
+} from '../animation'
 import {
   __setAnchorForTest,
   animateDrawerClose,
@@ -52,6 +57,8 @@ function makeWrapper(transform = '') {
     style: { transform },
     setAttribute: (name: string) => { attrs.add(name) },
     removeAttribute: (name: string) => { attrs.delete(name) },
+    hasAttribute: (name: string) => attrs.has(name),
+    __attrs: attrs,
   } as unknown as HTMLElement
 }
 
@@ -182,6 +189,39 @@ function makeWrapper(transform = '') {
   assert(d4.drawer.style.transformOrigin.startsWith('29.52'), 'anchored open uses the button origin')
   cancelWrapperAnimation(w4)
   ;(globalThis as any).document = undefined
+}
+
+// ── 7. Panel-animating flag: marks the bloom for chat/reflow's shadow swap ──
+// Top/Bottom blooms carry `data-canvas-panel-animating` so reflow keeps the
+// real (bloom-fading) drawer shadow during the motion and only paints the
+// under-content chat inset when settled.
+{
+  hydrateSettings({ drawerLocation: 'top' })
+  const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
+  const { drawer } = makeDrawer()
+  animateDrawerOpen(wrapper, drawer, 'primary')
+  assert(wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'top open marks the wrapper animating')
+  cancelWrapperAnimation(wrapper)
+  assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'cancel clears the animating flag')
+}
+{
+  hydrateSettings({ drawerLocation: 'bottom' })
+  const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
+  const { drawer } = makeDrawer()
+  animateDrawerClose(wrapper, drawer, 420, 'primary')
+  assert(wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'bottom close marks the wrapper animating')
+  cancelWrapperAnimation(wrapper)
+  assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'cancel clears the close animating flag')
+}
+{
+  // Sides uses the translate tween — no bloom flag (the chat inset rides the
+  // synced side slide there, no swap needed).
+  hydrateSettings({ drawerLocation: 'sides' })
+  const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
+  const { drawer } = makeDrawer()
+  animateDrawerClose(wrapper, drawer, 420, 'primary')
+  assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'sides close runs no bloom flag')
+  cancelWrapperAnimation(wrapper)
 }
 
 // Reset the shared settings singleton so later suites see defaults.

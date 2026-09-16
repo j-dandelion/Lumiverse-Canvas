@@ -1139,6 +1139,20 @@ export async function flushConfigureCommits(): Promise<void> {
 
 
 
+// Mobile viewport check local to this module (no sidebar/mobile-exclusion
+// import — that module pulls the whole shell graph).
+function _isMobileViewportForConfigure(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 600px)').matches
+    )
+  } catch {
+    return false
+  }
+}
+
 // ── Catalog ref for module-level re-renders ──
 
 let _catalogRef: CatalogTab[] = []
@@ -1170,6 +1184,12 @@ function ConfigureTabsModalInner(props: ModalProps) {
   } = props
 
   const leftIsSecondaryVal = leftColumnIsSecondary(draft.drawerSide)
+
+  // OS mode on a mobile viewport forces single-drawer mode (see
+  // os/os-mode.syncOsMobileDrawerMode): lock the footer toggle so the user
+  // cannot flip the invariant off from this surface.
+  const osMobileSingle =
+    !!getSettings().osMode && _isMobileViewportForConfigure()
 
   // Ref-based latest values for document-level Escape handler
   const committingRef = useRef(committing)
@@ -1311,7 +1331,10 @@ function ConfigureTabsModalInner(props: ModalProps) {
   /** Render a single tab row. */
   const renderTabRow = (tab: CatalogTab, index: number, side: ColumnSide) => {
     const isHidden = draft.hiddenIds.has(tab.id)
-    const isLocked = tab.hideLocked
+    // Core tabs unlock for hiding while `coreTabsHidden` is on (OS mode forces
+    // it on): closing a window marks it hidden, so the eye must be usable.
+    const coreUnlocked = !!getSettings().coreTabsHidden
+    const isLocked = tab.hideLocked && !coreUnlocked
     const isCore = tab.kind === 'builtin' && tab.hideLocked
     // Core tabs show their real descriptions too; the locked state is
     // conveyed by the Core badge, the disabled toggle, and its tooltip.
@@ -1451,7 +1474,9 @@ function ConfigureTabsModalInner(props: ModalProps) {
               </button>
             </div>
           </div>
-          <p class="canvas-configure-tabs-subtitle">Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.</p>
+          <p class="canvas-configure-tabs-subtitle">{getSettings().coreTabsHidden
+            ? 'Drag to reorder sidebar tabs. Toggle to hide tabs; closing a core tab in OS mode hides it here too.'
+            : 'Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.'}</p>
         </div>
 
         {/* Body: two columns when second drawer is enabled, one column otherwise */}
@@ -1481,15 +1506,18 @@ function ConfigureTabsModalInner(props: ModalProps) {
             <div class="canvas-configure-tabs-second-drawer-toggle">
               <span
                 class="canvas-configure-tabs-second-drawer-toggle-label"
-                onClick={() => onToggleSecondDrawer()}
+                title={osMobileSingle ? 'OS mode uses single-drawer mode on mobile — disable OS mode first.' : undefined}
+                onClick={() => { if (!osMobileSingle) onToggleSecondDrawer() }}
               >
                 Second drawer
               </span>
               <button
                 class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
+                disabled={osMobileSingle}
+                title={osMobileSingle ? 'OS mode uses single-drawer mode on mobile — disable OS mode first.' : undefined}
                 onClick={(e) => {
                   e.stopPropagation()
-                  onToggleSecondDrawer()
+                  if (!osMobileSingle) onToggleSecondDrawer()
                 }}
               />
             </div>
@@ -1775,7 +1803,7 @@ function renderModal(
       }}
       onToggleHide={(tabId, hidden) => {
         if (!_draftRef) return
-        const next = setHidden(_draftRef, tabId, hidden)
+        const next = setHidden(_draftRef, tabId, hidden, !!getSettings().coreTabsHidden)
         _draftRef = next
         renderModal(next, catalog, null, false)
         autoCommit()

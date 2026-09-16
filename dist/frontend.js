@@ -114,13 +114,16 @@ function normalizeCanvasSettingsFields(s) {
     }
   }
   if (out.osMode) {
-    out = { ...out, taskbarMode: true, moveControlsToOuterEdge: true };
+    out = { ...out, taskbarMode: true, moveControlsToOuterEdge: true, coreTabsHidden: true };
   }
   {
     const p = out.osChromePrefs;
-    if (p != null && (typeof p !== "object" || typeof p.taskbarMode !== "boolean" || typeof p.moveControlsToOuterEdge !== "boolean")) {
+    if (p != null && (typeof p !== "object" || typeof p.taskbarMode !== "boolean" || typeof p.moveControlsToOuterEdge !== "boolean" || p.coreTabsHidden !== undefined && typeof p.coreTabsHidden !== "boolean")) {
       out = { ...out, osChromePrefs: null };
     }
+  }
+  if (typeof out.osForcedSingleDrawer !== "boolean") {
+    out = { ...out, osForcedSingleDrawer: false };
   }
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
@@ -165,6 +168,8 @@ var init_types = __esm(() => {
     taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
     osMode: false,
+    coreTabsHidden: false,
+    osForcedSingleDrawer: false,
     osChromePrefs: null,
     dragAndDropDrawerTabs: true,
     drawerShadowsDesktop: true,
@@ -814,7 +819,7 @@ function injectDrawerTabStyles() {
     }
   `);
   injectStyles("sidebar-ux-shadow-close-suppress", `
-    .sidebar-ux-shell[data-drawer-open="false"] > .sidebar-ux-drawer {
+    .sidebar-ux-shell[data-drawer-open="false"]:not([data-canvas-panel-animating]) > .sidebar-ux-drawer {
       box-shadow: none !important;
     }
   `);
@@ -1161,6 +1166,19 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list::-webkit-scrollbar,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list::-webkit-scrollbar {
   display: none !important;
+}
+
+/* Chat-facing 1px edge separator (six-concerns #2): same primary-020 token
+   as the panel↔chat border (CHAT_FACING_BORDER in tab-position.ts). Inset
+   box-shadow, not a border — the strip arithmetic (4 + 48 + 4 = 56) has no
+   room for a border pair without clipping the 48px buttons (overflow-y is
+   hidden). The active-tab indicator is a child; the 4px padding keeps the
+   line clear of it. (2px in the first pass; user-tuned to 1px.) */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
+  box-shadow: inset 0 -1px 0 var(--lumiverse-primary-020) !important;
+}
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
+  box-shadow: inset 0 1px 0 var(--lumiverse-primary-020) !important;
 }
 
 /* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
@@ -1535,6 +1553,13 @@ function parseTranslateX(transform) {
   const n = transform.match(/-?[\d.]+/);
   return n ? parseFloat(n[0]) || 0 : 0;
 }
+function notifyPanelMotionChanged() {
+  try {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new Event(CANVAS_PANEL_MOTION_EVENT));
+    }
+  } catch {}
+}
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -1661,6 +1686,7 @@ function settlePanelToggle(state, opts) {
   _livePanelWrappers.delete(state.wrapper);
   resetPanelStyles(state.drawer, state.panel);
   state.wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
+  notifyPanelMotionChanged();
   if (!state.open && !opts?.cancelled) {
     state.wrapper.style.transform = `translateX(${state.closedPx}px)`;
   }
@@ -1771,6 +1797,7 @@ function animatePanelToggle(wrapper, drawer, opts) {
   drawer.style.pointerEvents = "none";
   drawer.style.willChange = "opacity, transform";
   wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
+  notifyPanelMotionChanged();
   _panelAnims.set(wrapper, state);
   _livePanelWrappers.add(wrapper);
   if (prefersReducedMotion()) {
@@ -1782,7 +1809,7 @@ function animatePanelToggle(wrapper, drawer, opts) {
   state.timer = setTimeout(() => settlePanelToggle(state), state.duration + PANEL_SETTLE_GRACE_MS);
   state.raf = requestAnimationFrame((n) => panelFrame(state, n));
 }
-var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
+var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, CANVAS_PANEL_MOTION_EVENT = "canvas:panel-motion-changed", PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
 var init_animation = __esm(() => {
   _anims = new WeakMap;
   _liveTranslateWrappers = new Set;
@@ -3989,6 +4016,25 @@ var init_tab_position = __esm(() => {
   init_drawer_shell();
 });
 
+// src/tabs/core-tabs.ts
+function isCoreTabId(id) {
+  return CORE_HIDE_LOCKED.has(id);
+}
+var CORE_HIDE_LOCKED;
+var init_core_tabs = __esm(() => {
+  CORE_HIDE_LOCKED = new Set([
+    "profile",
+    "presets",
+    "loom",
+    "characters",
+    "personas",
+    "branches",
+    "spindle",
+    "theme",
+    "lorebook"
+  ]);
+});
+
 // src/os/drawer-command.ts
 function setDrawerCommandHandler(handler) {
   _handler = handler;
@@ -4013,6 +4059,12 @@ __export(exports_actions, {
   openWindowInDrawerByLiveId: () => openWindowInDrawerByLiveId,
   toggleWindowByLiveId: () => toggleWindowByLiveId
 });
+function shouldHideOnClose(key) {
+  if (!getSettings().coreTabsHidden)
+    return false;
+  const coreId = parseBuiltinKey(key);
+  return !!coreId && isCoreTabId(coreId);
+}
 function getDisplayedLiveId(side) {
   const host = getHost();
   const model = getModel();
@@ -4034,14 +4086,19 @@ function closeWindowByLiveId(liveId) {
   const livesInPrimary = model.primary.includes(key);
   const side = livesInPrimary ? "primary" : "secondary";
   const wasDisplayed = model.active[side] === key;
+  const hideOnClose = shouldHideOnClose(key);
   if (!wasDisplayed) {
-    return dispatch({ t: "setClosed", key, closed: true });
+    return dispatchBatch([
+      { t: "setClosed", key, closed: true },
+      ...hideOnClose ? [{ t: "setHidden", key, hidden: true }] : []
+    ]);
   }
   if (model.drawers[side].open)
     suppressNextCloseAnchor(side);
   const result = dispatchBatch([
     { t: "setClosed", key, closed: true },
-    { t: "setDrawer", side, open: false }
+    { t: "setDrawer", side, open: false },
+    ...hideOnClose ? [{ t: "setHidden", key, hidden: true }] : []
   ]);
   commandDrawerOpen(side, false);
   return result;
@@ -4113,6 +4170,7 @@ function toggleWindowByLiveId(liveId, side) {
 var init_actions = __esm(() => {
   init_dispatch();
   init_state();
+  init_core_tabs();
   init_panel_motion();
   init_log();
 });
@@ -4822,11 +4880,13 @@ function filterCatalogToLive(catalog, host, knownLiveIds) {
   return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
 }
 function isHideLocked(tabId) {
-  return CORE_HIDE_LOCKED.has(tabId);
+  return isCoreTabId(tabId);
 }
-var BUILTIN_TAB_IDS, CORE_HIDE_LOCKED, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
 var init_configure_catalog = __esm(() => {
   init_store();
+  init_core_tabs();
+  init_core_tabs();
   BUILTIN_TAB_IDS = [
     "profile",
     "presets",
@@ -4854,17 +4914,6 @@ var init_configure_catalog = __esm(() => {
     "theme",
     "spindle"
   ];
-  CORE_HIDE_LOCKED = new Set([
-    "profile",
-    "presets",
-    "loom",
-    "characters",
-    "personas",
-    "branches",
-    "spindle",
-    "theme",
-    "lorebook"
-  ]);
   BUILTIN_TAB_TITLES = {
     profile: "Profile",
     presets: "Reasoning",
@@ -5250,8 +5299,8 @@ function moveTabVisible(draft, tabId, to, toVisibleIndex) {
   const { builtinOrder, extensionOrder } = syncKindOrders(next);
   return { ...next, builtinOrder, extensionOrder };
 }
-function setHidden(draft, tabId, hidden) {
-  if (isHideLocked(tabId))
+function setHidden(draft, tabId, hidden, allowCore = false) {
+  if (!allowCore && isHideLocked(tabId))
     return draft;
   const next = new Set(draft.hiddenIds);
   if (hidden) {
@@ -6414,6 +6463,11 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
     for (const key of [...model.primary, ...model.secondary]) {
       intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
     }
+    for (const key of model.closed) {
+      if (model.hidden.includes(key) && !hidden.has(key)) {
+        intents.push({ t: "setClosed", key, closed: false });
+      }
+    }
     if (commitBaseModel) {
       const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
       for (const source of ["primary", "secondary"]) {
@@ -7472,6 +7526,49 @@ var init_mode_profiles = __esm(() => {
 });
 
 // src/os/os-mode.ts
+var exports_os_mode = {};
+__export(exports_os_mode, {
+  applyOsModeChange: () => applyOsModeChange,
+  getActiveDualSlot: () => getActiveDualSlot,
+  getActiveSingleSlot: () => getActiveSingleSlot,
+  seedOsSlotFromLive: () => seedOsSlotFromLive,
+  setActiveDualSlot: () => setActiveDualSlot,
+  setActiveSingleSlot: () => setActiveSingleSlot,
+  syncOsMobileDrawerMode: () => syncOsMobileDrawerMode
+});
+function isMobileViewportLocal() {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+  } catch {
+    return false;
+  }
+}
+function syncOsMobileDrawerMode() {
+  if (_mobileDrawerSync)
+    return _mobileDrawerSync;
+  _mobileDrawerSync = runSyncOsMobileDrawerMode().finally(() => {
+    _mobileDrawerSync = null;
+  });
+  return _mobileDrawerSync;
+}
+async function runSyncOsMobileDrawerMode() {
+  const s3 = getSettings();
+  const force = !!s3.osMode && isMobileViewportLocal();
+  if (force && s3.secondSidebarEnabled) {
+    if (!s3.osForcedSingleDrawer)
+      setSettings({ osForcedSingleDrawer: true });
+    dlog("[os] mobile: forcing single-drawer mode");
+    const { requestSecondDrawerMode } = await Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode));
+    await requestSecondDrawerMode(false, { silent: true });
+    return;
+  }
+  if (!force && s3.osForcedSingleDrawer) {
+    setSettings({ osForcedSingleDrawer: false });
+    dlog("[os] mobile: restoring dual-drawer mode");
+    const { requestSecondDrawerMode } = await Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode));
+    await requestSecondDrawerMode(true);
+  }
+}
 function getActiveSingleSlot() {
   return isOsModeEnabled() ? getOsSingleLayoutSlot() : getSingleLayoutSlot();
 }
@@ -7525,6 +7622,7 @@ function snapshotOsSlotFromLive() {
 async function applyOsModeChange(prev, next) {
   if (!prev.osMode && next.osMode) {
     seedOsSlotFromLive();
+    await syncOsMobileDrawerMode();
     return;
   }
   if (prev.osMode && !next.osMode) {
@@ -7548,8 +7646,11 @@ async function applyOsModeChange(prev, next) {
       const reopen = after.closed.map((key) => ({ t: "setClosed", key, closed: false }));
       await dispatchBatch(reopen);
     }
+    await syncOsMobileDrawerMode();
+    return;
   }
 }
+var _mobileDrawerSync = null;
 var init_os_mode = __esm(() => {
   init_dispatch();
   init_layout_load();
@@ -7844,7 +7945,7 @@ async function finishDisable() {
     dwarn("[second-drawer-mode] reconcileDrawerLocation after disable failed:", err);
   }
 }
-async function requestSecondDrawerMode(next) {
+async function requestSecondDrawerMode(next, opts) {
   if (next) {
     if (getSettings().secondSidebarEnabled)
       return;
@@ -7935,25 +8036,27 @@ async function requestSecondDrawerMode(next) {
       modelSecondary: getModel()?.secondary.length ?? 0
     });
     let userChoice = "clean";
-    try {
-      const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
-      if (m3.isConfigureTabsModalOpen()) {
-        try {
-          await m3.flushConfigureCommits();
-        } catch (err) {
-          dwarn("[second-drawer-mode] flushConfigureCommits failed:", err);
-        }
-        const draft = m3.getConfigureDraftRef();
-        const base = m3.getConfigureBaseRef();
-        if (draft && base) {
-          const { isDraftDirty: isDraftDirty2 } = await Promise.resolve().then(() => (init_configure_model(), exports_configure_model));
-          if (isDraftDirty2(draft, base)) {
-            userChoice = await showModeSwitchDialog();
+    if (!opts?.silent) {
+      try {
+        const m3 = await Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal));
+        if (m3.isConfigureTabsModalOpen()) {
+          try {
+            await m3.flushConfigureCommits();
+          } catch (err) {
+            dwarn("[second-drawer-mode] flushConfigureCommits failed:", err);
+          }
+          const draft = m3.getConfigureDraftRef();
+          const base = m3.getConfigureBaseRef();
+          if (draft && base) {
+            const { isDraftDirty: isDraftDirty2 } = await Promise.resolve().then(() => (init_configure_model(), exports_configure_model));
+            if (isDraftDirty2(draft, base)) {
+              userChoice = await showModeSwitchDialog();
+            }
           }
         }
+      } catch (err) {
+        dwarn("[second-drawer-mode] error checking modal state:", err);
       }
-    } catch (err) {
-      dwarn("[second-drawer-mode] error checking modal state:", err);
     }
     if (userChoice === "cancel")
       return;
@@ -8898,6 +9001,13 @@ async function flushConfigureCommits() {
   await autoCommit();
   await autoCommit();
 }
+function _isMobileViewportForConfigure() {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+  } catch {
+    return false;
+  }
+}
 function ConfigureTabsModalInner(props) {
   const {
     draft,
@@ -8914,6 +9024,7 @@ function ConfigureTabsModalInner(props) {
     onDone
   } = props;
   const leftIsSecondaryVal = leftColumnIsSecondary(draft.drawerSide);
+  const osMobileSingle = !!getSettings().osMode && _isMobileViewportForConfigure();
   const committingRef = A2(committing);
   committingRef.current = committing;
   const cancelRef = A2(onCancel);
@@ -9031,7 +9142,8 @@ function ConfigureTabsModalInner(props) {
   };
   const renderTabRow = (tab, index, side) => {
     const isHidden2 = draft.hiddenIds.has(tab.id);
-    const isLocked = tab.hideLocked;
+    const coreUnlocked = !!getSettings().coreTabsHidden;
+    const isLocked = tab.hideLocked && !coreUnlocked;
     const isCore = tab.kind === "builtin" && tab.hideLocked;
     const description = tab.description || "";
     return /* @__PURE__ */ u3("div", {
@@ -9216,7 +9328,7 @@ function ConfigureTabsModalInner(props) {
             }),
             /* @__PURE__ */ u3("p", {
               class: "canvas-configure-tabs-subtitle",
-              children: "Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible."
+              children: getSettings().coreTabsHidden ? "Drag to reorder sidebar tabs. Toggle to hide tabs; closing a core tab in OS mode hides it here too." : "Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible."
             })
           ]
         }),
@@ -9245,14 +9357,21 @@ function ConfigureTabsModalInner(props) {
                   children: [
                     /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-second-drawer-toggle-label",
-                      onClick: () => onToggleSecondDrawer(),
+                      title: osMobileSingle ? "OS mode uses single-drawer mode on mobile — disable OS mode first." : undefined,
+                      onClick: () => {
+                        if (!osMobileSingle)
+                          onToggleSecondDrawer();
+                      },
                       children: "Second drawer"
                     }),
                     /* @__PURE__ */ u3("button", {
                       class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
+                      disabled: osMobileSingle,
+                      title: osMobileSingle ? "OS mode uses single-drawer mode on mobile — disable OS mode first." : undefined,
                       onClick: (e3) => {
                         e3.stopPropagation();
-                        onToggleSecondDrawer();
+                        if (!osMobileSingle)
+                          onToggleSecondDrawer();
                       }
                     })
                   ]
@@ -9427,7 +9546,7 @@ function renderModal(draft, catalog, commitError, committing) {
     onToggleHide: (tabId, hidden) => {
       if (!_draftRef)
         return;
-      const next = setHidden(_draftRef, tabId, hidden);
+      const next = setHidden(_draftRef, tabId, hidden, !!getSettings().coreTabsHidden);
       _draftRef = next;
       renderModal(next, catalog, null, false);
       autoCommit();
@@ -11739,13 +11858,24 @@ function showAssignmentMenu(x2, y3, tabId, tabTitle, originatingTarget) {
     _contextMenu.appendChild(moveItem);
   }
   if (isOsModeEnabled()) {
+    const side = currentSidebar === "secondary" ? "secondary" : "primary";
+    let windowOpen = false;
+    try {
+      const host = getHost();
+      const model = getModel();
+      const key = host?.findKey?.(tabId) ?? null;
+      windowOpen = !!(key && model && model.active[side] === key);
+    } catch {
+      windowOpen = false;
+    }
     const divider = createDivider();
     _contextMenu.appendChild(divider);
-    const minimizeItem = createAssignmentContextMenuItem("Minimize", () => {
-      const side = currentSidebar === "secondary" ? "secondary" : "primary";
-      Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(tabId, side));
-    });
-    _contextMenu.appendChild(minimizeItem);
+    if (windowOpen) {
+      const minimizeItem = createAssignmentContextMenuItem("Minimize", () => {
+        Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(tabId, side));
+      });
+      _contextMenu.appendChild(minimizeItem);
+    }
     const closeItem = createAssignmentContextMenuItem("Close", () => {
       Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.closeWindowByLiveId(tabId));
     });
@@ -13953,6 +14083,7 @@ __export(exports_reflow, {
   CHAT_SHADOW_ATTR: () => CHAT_SHADOW_ATTR,
   CONTENT_INSET_L_VAR: () => CONTENT_INSET_L_VAR,
   CONTENT_INSET_R_VAR: () => CONTENT_INSET_R_VAR,
+  REFLOW_INSTANT_ATTR: () => REFLOW_INSTANT_ATTR,
   clearChatMargins: () => clearChatMargins,
   computeContentLaneInsets: () => computeContentLaneInsets,
   injectReflowStyles: () => injectReflowStyles,
@@ -13979,6 +14110,7 @@ function clearChatMargins() {
   root.style.removeProperty("--sidebar-ux-chat-ml");
   root.style.removeProperty("--sidebar-ux-chat-mr");
   root.removeAttribute(CHAT_SHADOW_ATTR);
+  _lastReflowedChat = null;
 }
 function injectReflowStyles() {
   injectStyles("sidebar-ux-reflow", `
@@ -13986,6 +14118,26 @@ function injectReflowStyles() {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    /* First application for a given chat element: snap the margins. The chat
+       column can mount AFTER the drawer is already open (boot restore / SPA
+       navigation into a chat) — an animated first application would carry the
+       chat-owned inset from x=0 to the drawer edge, i.e. the shadow "sliding
+       in" on refresh / first load (live report 2026-09-15). The attr is set by
+       updateChatReflow's first pass for a new chat element and dropped a
+       painted frame later (double rAF), so user open/close margins still
+       animate. */
+    [class*="_chatColumn_"][data-canvas-reflow-instant] {
+      transition: none !important;
+    }
+    /* Top/Bottom: match the 270ms rail bloom (PANEL_OPEN_MS/PANEL_CLOSE_MS) so
+       the chat edge arrives exactly when the panel settles. chat/reflow swaps
+       the visible shadow then (real bloom-fading box-shadow -> settled
+       under-content inset) — with the longer 350ms margin the inset would
+       still be ~7% short of the edge at swap time and read as a small slide. */
+    html.sidebar-ux-location-top [class*="_chatColumn_"],
+    html.sidebar-ux-location-bottom [class*="_chatColumn_"] {
+      transition-duration: 0.27s !important;
     }
     /* Open-drawer shadow, chat-owned (2026-09-15). The Canvas shells are
        body-level fixed layers above the whole app subtree (z-index 9990; the
@@ -14001,7 +14153,15 @@ function injectReflowStyles() {
        (all drawer locations — Top/Bottom keeps the side panel geometry);
        clearChatMargins drops it (mobile / feature off / disable). */
     @media (min-width: 601px) {
-      html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer {
+      /* Side-aware real-shadow suppression: a drawer whose chat-owned inset is
+         active (settled-open, the chat-shadow attr carries its side) must not
+         also paint its real box-shadow over chat content. Side-scoped so a
+         closing/animating drawer next to a settled one keeps its real
+         (bloom-fading) shadow. */
+      html[data-canvas-chat-shadow~="left"] .sidebar-ux-shell.sidebar-ux-side-left[data-drawer-open="true"] > .sidebar-ux-drawer {
+        box-shadow: none !important;
+      }
+      html[data-canvas-chat-shadow~="right"] .sidebar-ux-shell.sidebar-ux-side-right[data-drawer-open="true"] > .sidebar-ux-drawer {
         box-shadow: none !important;
       }
       html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"] {
@@ -14062,13 +14222,48 @@ function scheduleReflow() {
     updateChatReflow();
   });
 }
+function collectAnimatingShellSides() {
+  let left = false;
+  let right = false;
+  try {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+      return { left, right };
+    }
+    for (const el of Array.from(document.querySelectorAll(".sidebar-ux-shell"))) {
+      if (el.getAttribute?.(PANEL_ANIMATING_ATTR2) == null)
+        continue;
+      const cl = el.classList;
+      if (cl?.contains?.("sidebar-ux-side-left"))
+        left = true;
+      else if (cl?.contains?.("sidebar-ux-side-right"))
+        right = true;
+    }
+  } catch {}
+  return { left, right };
+}
+function collectRevealGuardSides() {
+  let main = false;
+  let secondary = false;
+  try {
+    const cl = typeof document !== "undefined" ? document.documentElement?.classList : null;
+    if (cl?.contains) {
+      main = MAIN_REVEAL_GUARD_CLASSES.some((c3) => cl.contains(c3));
+      secondary = main || SECONDARY_REVEAL_GUARD_CLASSES.some((c3) => cl.contains(c3));
+    }
+  } catch {}
+  return { main, secondary };
+}
 function syncChatShadowAttr(insets) {
   const root = document.documentElement;
   const sides = [];
   if (getChatColumn() && getSettings().drawerShadowsDesktop) {
-    if (insets.openLeft)
+    const animating = isHorizontalStrip() ? collectAnimatingShellSides() : { left: false, right: false };
+    const guard = collectRevealGuardSides();
+    const mainSide = getMainDrawerSide();
+    const guarded = (side) => side === mainSide ? guard.main : guard.secondary;
+    if (insets.openLeft && !animating.left && !guarded("left"))
       sides.push("left");
-    if (insets.openRight)
+    if (insets.openRight && !animating.right && !guarded("right"))
       sides.push("right");
   }
   if (sides.length > 0)
@@ -14083,8 +14278,22 @@ function updateChatReflow() {
     return;
   }
   const insets = computeContentLaneInsets();
+  const chat = getChatColumn();
+  const instant = !!chat && chat !== _lastReflowedChat;
+  if (instant && chat) {
+    chat.setAttribute(REFLOW_INSTANT_ATTR, "1");
+  }
   setChatMargin("right", insets.right);
   setChatMargin("left", insets.left);
+  if (instant && chat) {
+    _lastReflowedChat = chat;
+    const dropInstant = () => chat.removeAttribute(REFLOW_INSTANT_ATTR);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => requestAnimationFrame(dropInstant));
+    } else {
+      dropInstant();
+    }
+  }
   syncChatShadowAttr(insets);
   publishContentLaneInsets();
 }
@@ -14099,9 +14308,22 @@ function _onMediaChangeImpl(e3) {
 function startReflowObserver() {
   injectReflowStyles();
   let cancelled = false;
+  const onPanelMotionChange = () => scheduleReflow();
+  if (typeof window !== "undefined") {
+    window.addEventListener(CANVAS_PANEL_MOTION_EVENT2, onPanelMotionChange);
+  }
   const observer = new MutationObserver(() => {
     scheduleReflow();
   });
+  const rootObserver = new MutationObserver(() => {
+    scheduleReflow();
+  });
+  if (typeof document !== "undefined" && document.documentElement && !cancelled) {
+    rootObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"]
+    });
+  }
   waitForElement(getMainWrapper, "main wrapper").then((wrapper) => {
     if (wrapper && !cancelled) {
       observer.observe(wrapper, { attributes: true, attributeFilter: ["class", "style"] });
@@ -14132,6 +14354,10 @@ function startReflowObserver() {
   return () => {
     cancelled = true;
     observer.disconnect();
+    rootObserver.disconnect();
+    if (typeof window !== "undefined") {
+      window.removeEventListener(CANVAS_PANEL_MOTION_EVENT2, onPanelMotionChange);
+    }
     _chatObserver?.disconnect();
     _chatObserver = null;
     if (_reflowRaf !== null) {
@@ -14146,7 +14372,7 @@ function startReflowObserver() {
     _onMediaChange2 = null;
   };
 }
-var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", CHAT_SHADOW_ATTR = "data-canvas-chat-shadow", _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null;
+var CONTENT_INSET_L_VAR = "--sidebar-ux-content-inset-l", CONTENT_INSET_R_VAR = "--sidebar-ux-content-inset-r", CHAT_SHADOW_ATTR = "data-canvas-chat-shadow", PANEL_ANIMATING_ATTR2 = "data-canvas-panel-animating", CANVAS_PANEL_MOTION_EVENT2 = "canvas:panel-motion-changed", REFLOW_INSTANT_ATTR = "data-canvas-reflow-instant", _lastReflowedChat = null, _reflowRaf = null, _mediaQuery2 = null, _onMediaChange2 = null, MAIN_REVEAL_GUARD_CLASSES, SECONDARY_REVEAL_GUARD_CLASSES;
 var init_reflow = __esm(() => {
   init_store();
   init_secondary();
@@ -14158,6 +14384,15 @@ var init_reflow = __esm(() => {
   init_styles();
   init_main_mirror_drawer();
   init_main_tab_pin();
+  MAIN_REVEAL_GUARD_CLASSES = [
+    "sidebar-ux-main-restore-pending",
+    "sidebar-ux-main-reveal-hold",
+    "sidebar-ux-main-reveal-in"
+  ];
+  SECONDARY_REVEAL_GUARD_CLASSES = [
+    "sidebar-ux-secondary-placement-hold",
+    "sidebar-ux-secondary-reveal-in"
+  ];
 });
 
 // src/resize/handles.ts
@@ -15416,6 +15651,8 @@ function startMobileExclusion() {
     Promise.resolve().then(() => (init_tab_list_dnd(), exports_tab_list_dnd)).then((m3) => m3.invalidateDndGeometry()).catch(() => {});
     Promise.resolve().then(() => (init_buttons(), exports_buttons)).then((m3) => m3.updateDrawerTabVisibility());
     Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer)).then((m3) => m3.updateMainMirrorDrawerTabVisibility());
+    Promise.resolve().then(() => (init_os_mode(), exports_os_mode)).then((m3) => m3.syncOsMobileDrawerMode()).catch(() => {});
+    Promise.resolve().then(() => (init_state(), exports_state)).then((m3) => m3.refreshSettingsPanel()).catch(() => {});
   };
   _mediaQuery3.addEventListener("change", _onMediaChange3);
   const _onResize = () => {
@@ -17551,16 +17788,19 @@ function setSettings(patch) {
   if (patch.osMode === true && prev.osMode !== true) {
     next.osChromePrefs = {
       taskbarMode: !!prev.taskbarMode,
-      moveControlsToOuterEdge: !!prev.moveControlsToOuterEdge
+      moveControlsToOuterEdge: !!prev.moveControlsToOuterEdge,
+      coreTabsHidden: !!prev.coreTabsHidden
     };
   }
   if (patch.osMode === false && prev.osMode === true) {
     const prefs = next.osChromePrefs ?? {
       taskbarMode: DEFAULT_CANVAS_SETTINGS.taskbarMode,
-      moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge
+      moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
+      coreTabsHidden: DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     };
     next.taskbarMode = prefs.taskbarMode;
     next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge;
+    next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden;
     next.osChromePrefs = { ...prefs };
   }
   _settings = normalizeCanvasSettings(next);
@@ -21199,6 +21439,13 @@ function buildToggleControl(value, onChange, disabled) {
 }
 
 // src/settings/panel.ts
+function _isMobileViewportForPanel() {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+  } catch {
+    return false;
+  }
+}
 function injectPanelStyles() {
   injectStyles(PANEL_STYLE_ID, `
     .sidebar-ux-panel-root {
@@ -21426,6 +21673,14 @@ function buildSettingsPanelDOM() {
     control: osMode.btn
   });
   secSidebars.appendChild(osModeRow);
+  const coreTabsHidden = makeToggle(() => getSettings().coreTabsHidden, (v3) => setSettings({ coreTabsHidden: v3 }), { disabled: () => !!getSettings().osMode });
+  const coreTabsHiddenRow = buildSettingRow({
+    label: "Core tabs can be hidden",
+    hint: CORE_TABS_HIDDEN_HINT,
+    control: coreTabsHidden.btn
+  });
+  secSidebars.appendChild(coreTabsHiddenRow);
+  const coreTabsHiddenHint = coreTabsHiddenRow.querySelector(".sidebar-ux-panel-row-hint");
   const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().taskbarMode });
   const hideDrawerTabToggleRow = buildSettingRow({
     label: "Hide drawer open/close buttons",
@@ -21469,11 +21724,13 @@ function buildSettingsPanelDOM() {
       setSettings({ secondSidebarEnabled: v3 });
     });
   });
-  sec2.appendChild(buildSettingRow({
+  const masterRow = buildSettingRow({
     label: "Enable second drawer",
-    hint: "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.",
+    hint: SECOND_DRAWER_HINT,
     control: master.btn
-  }));
+  });
+  sec2.appendChild(masterRow);
+  const masterHint = masterRow.querySelector(".sidebar-ux-panel-row-hint");
   const compact = makeToggle(() => getSettings().mirrorCompactPosition, (v3) => setSettings({ mirrorCompactPosition: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
   sec2.appendChild(buildSettingRow({
     label: "Mirror compact mode + vertical position",
@@ -21498,6 +21755,7 @@ function buildSettingsPanelDOM() {
     moveControlsToOuter.refresh();
     taskbarMode.refresh();
     osMode.refresh();
+    coreTabsHidden.refresh();
     hideDrawerTabToggle.refresh();
     dragAndDropDrawerTabs.refresh();
     resizeSidebars.refresh();
@@ -21533,6 +21791,15 @@ function buildSettingsPanelDOM() {
       }
     }
     {
+      const os = !!getSettings().osMode;
+      coreTabsHidden.btn.disabled = os;
+      coreTabsHidden.btn.style.cursor = os ? "not-allowed" : "pointer";
+      coreTabsHiddenRow.classList.toggle("sidebar-ux-panel-row-disabled", os);
+      if (coreTabsHiddenHint) {
+        coreTabsHiddenHint.textContent = os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT;
+      }
+    }
+    {
       if (horizontal) {
         hideDrawerTabToggle.btn.disabled = true;
         hideDrawerTabToggle.btn.style.cursor = "not-allowed";
@@ -21555,6 +21822,15 @@ function buildSettingsPanelDOM() {
       row.btn.disabled = d3;
       row.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       row.btn.parentElement?.classList.toggle("sidebar-ux-panel-row-disabled", d3);
+    }
+    {
+      const osMobile = !!getSettings().osMode && _isMobileViewportForPanel();
+      master.btn.disabled = osMobile;
+      master.btn.style.cursor = osMobile ? "not-allowed" : "pointer";
+      masterRow.classList.toggle("sidebar-ux-panel-row-disabled", osMobile);
+      if (masterHint) {
+        masterHint.textContent = osMobile ? SECOND_DRAWER_OS_MOBILE_HINT : SECOND_DRAWER_HINT;
+      }
     }
   };
   return { root, refresh };
@@ -21589,7 +21865,7 @@ function applySettings(prev, next) {
     feature.apply(prev, next, _settingsPanelCtx);
   }
 }
-var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", OS_MODE_HINT = "Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode. Desktop only.", OS_MODE_TASKBAR_LOCK_HINT = "Required by OS mode. Disable OS mode to change taskbar settings.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
+var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", OS_MODE_HINT = "Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode; on mobile it uses single-drawer mode.", OS_MODE_TASKBAR_LOCK_HINT = "Required by OS mode. Disable OS mode to change taskbar settings.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SECOND_DRAWER_HINT = "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.", SECOND_DRAWER_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
 var init_panel = __esm(() => {
   init_state();
   init_log();
@@ -21929,10 +22205,21 @@ function injectCanvasItem(menu, info) {
   }
   if (isOsModeEnabled() && menuLooksLikeTabMenu(menu)) {
     const side = info.currentSidebar;
+    let windowOpen = false;
+    try {
+      const host = getHost();
+      const model = getModel();
+      const key = host?.findKey?.(info.tabId) ?? null;
+      windowOpen = !!(key && model && model.active[side] === key);
+    } catch {
+      windowOpen = false;
+    }
     appendMenuDivider(menu);
-    appendCanvasMenuItem(menu, "Minimize", () => {
-      Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(info.tabId, side)).catch((err) => dwarn("[os] context-menu minimize failed:", err));
-    });
+    if (windowOpen) {
+      appendCanvasMenuItem(menu, "Minimize", () => {
+        Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.minimizeWindowByLiveId(info.tabId, side)).catch((err) => dwarn("[os] context-menu minimize failed:", err));
+      });
+    }
     appendCanvasMenuItem(menu, "Close", () => {
       Promise.resolve().then(() => (init_actions(), exports_actions)).then((m3) => m3.closeWindowByLiveId(info.tabId)).catch((err) => dwarn("[os] context-menu close failed:", err));
     });
@@ -23145,6 +23432,12 @@ function setup(ctx) {
     } else {
       dlog(`applyMainDrawer:skipped (no restore flags)`);
       unsuppressMainDrawer();
+    }
+    try {
+      const { syncOsMobileDrawerMode: syncOsMobileDrawerMode2 } = await Promise.resolve().then(() => (init_os_mode(), exports_os_mode));
+      await syncOsMobileDrawerMode2();
+    } catch (err) {
+      dlog("syncOsMobileDrawerMode failed (non-fatal)", err);
     }
     dlog(`setup():.then end gen=${generation}`);
     cancelBootWatchdog();

@@ -147,6 +147,8 @@ const stubWindow: any = {
 
 ;(globalThis as any).document = stubDocument
 ;(globalThis as any).window = stubWindow
+;(globalThis as any).requestAnimationFrame = stubWindow.requestAnimationFrame
+;(globalThis as any).cancelAnimationFrame = stubWindow.cancelAnimationFrame
 ;(globalThis as any).MutationObserver = class {
   constructor(_cb: any) {}
   observe(_target: any, _options: any) {}
@@ -225,7 +227,7 @@ function _resetAll() {
 
 // --- Imports under test ---
 
-import { clearChatMargins, injectReflowStyles, updateChatReflow } from '../reflow'
+import { clearChatMargins, injectReflowStyles, updateChatReflow, REFLOW_INSTANT_ATTR } from '../reflow'
 import { hydrateSettings } from '../../settings/state'
 import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
 
@@ -598,8 +600,16 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   injectReflowStyles()
   const css = ((_styleElements['sidebar-ux-reflow'] as any)?.textContent ?? '') as string
   assert(
-    css.includes('.sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer'),
-    'test 13: real shadow suppression selector present',
+    css.includes(
+      'html[data-canvas-chat-shadow~="left"] .sidebar-ux-shell.sidebar-ux-side-left[data-drawer-open="true"] > .sidebar-ux-drawer',
+    ),
+    'test 13: left real-shadow suppression selector present (side-aware)',
+  )
+  assert(
+    css.includes(
+      'html[data-canvas-chat-shadow~="right"] .sidebar-ux-shell.sidebar-ux-side-right[data-drawer-open="true"] > .sidebar-ux-drawer',
+    ),
+    'test 13: right real-shadow suppression selector present (side-aware)',
   )
   assert(
     css.includes('html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"]'),
@@ -646,6 +656,89 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   teardown()
   ;(globalThis as any).MutationObserver = origMO
 })()
+
+// --- Test 14: Top/Bottom panel bloom defers the chat inset (shadow swap) ---
+// During the rail bloom the drawer's real box-shadow is the visible one (it
+// fades in place with the panel); the chat-owned inset — attached to the chat
+// reflow edge — is only painted once the panel settles, so the shadow never
+// appears to slide in from the screen edge (live report 2026-09-15).
+
+{
+  _resetAll()
+  _installDom({ open: true, leftSide: false, appRoot: false })
+  const shell = new StubElement()
+  shell.className = 'sidebar-ux-shell sidebar-ux-side-right'
+  shell.setAttribute('data-canvas-panel-animating', '1')
+  ;(stubDocument as any).querySelectorAll = (sel: string) =>
+    sel === '.sidebar-ux-shell' ? [shell] : []
+  hydrateSettings({ drawerLocation: 'top' })
+  try {
+    updateChatReflow()
+    assertEqual(
+      (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+      null,
+      'test 14a: shadow attr withheld while the panel blooms',
+    )
+    shell.removeAttribute('data-canvas-panel-animating')
+    updateChatReflow()
+    assertEqual(
+      (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+      'right',
+      'test 14b: settled panel swaps to the under-content inset',
+    )
+  } finally {
+    hydrateSettings(null)
+    delete (stubDocument as any).querySelectorAll
+  }
+}
+
+// --- Test 15: a fresh chat element's first reflow snaps (no load slide) ---
+// The chat can mount after the drawer is already open (boot restore / SPA
+// navigation); an animated first margin application would carry the chat-owned
+// inset from x=0 to the drawer edge — the shadow "sliding in" on refresh.
+
+{
+  _resetAll()
+  const { chat } = _installDom({ open: true, appRoot: false })
+  updateChatReflow()
+  assertEqual(
+    chat.getAttribute(REFLOW_INSTANT_ATTR),
+    '1',
+    'test 15a: first reflow for a fresh chat element marks it instant',
+  )
+  chat.removeAttribute(REFLOW_INSTANT_ATTR)
+  updateChatReflow()
+  assertEqual(
+    chat.getAttribute(REFLOW_INSTANT_ATTR),
+    null,
+    'test 15b: later reflows on the same element let margins animate',
+  )
+}
+
+// --- Test 16: main-persist reveal guards withhold the inset ---
+// Boot restore / mode-switch reveals hide+fade the shells via CSS animation
+// (not the panel bloom): the real shadow fades with the shell, and the chat
+// inset must not appear until the guard lifts (live report 2026-09-15: the
+// shadow appeared before the panels had faded in).
+
+{
+  _resetAll()
+  _installDom({ open: true, appRoot: false })
+  stubDocument.documentElement.classList.add('sidebar-ux-main-reveal-in')
+  updateChatReflow()
+  assertEqual(
+    stubDocument.documentElement.getAttribute('data-canvas-chat-shadow'),
+    null,
+    'test 16a: reveal guard withholds the chat inset',
+  )
+  stubDocument.documentElement.classList.remove('sidebar-ux-main-reveal-in')
+  updateChatReflow()
+  assertEqual(
+    stubDocument.documentElement.getAttribute('data-canvas-chat-shadow'),
+    'right',
+    'test 16b: inset returns after the reveal guard lifts',
+  )
+}
 
 // --- Summary ---
 

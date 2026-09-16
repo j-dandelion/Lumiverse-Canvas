@@ -207,23 +207,27 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
 
   // OS mode: snapshot the pre-OS chrome values on enable, restore them on
   // disable. Same pattern as sidesChromePrefs: the normalize invariant
-  // (osMode forces taskbarMode + moveControlsToOuterEdge on) would otherwise
-  // bake the forced values in, so the user's prior choice lives in
-  // `osChromePrefs`. Restore happens BEFORE normalization — a top/bottom
-  // `drawerLocation` re-forces taskbar on afterwards, which is correct.
+  // (osMode forces taskbarMode + moveControlsToOuterEdge + coreTabsHidden on)
+  // would otherwise bake the forced values in, so the user's prior choices
+  // live in `osChromePrefs`. Restore happens BEFORE normalization — a
+  // top/bottom `drawerLocation` re-forces taskbar on afterwards, which is
+  // correct.
   if (patch.osMode === true && prev.osMode !== true) {
     next.osChromePrefs = {
       taskbarMode: !!prev.taskbarMode,
       moveControlsToOuterEdge: !!prev.moveControlsToOuterEdge,
+      coreTabsHidden: !!prev.coreTabsHidden,
     }
   }
   if (patch.osMode === false && prev.osMode === true) {
     const prefs = next.osChromePrefs ?? {
       taskbarMode: DEFAULT_CANVAS_SETTINGS.taskbarMode,
       moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
+      coreTabsHidden: DEFAULT_CANVAS_SETTINGS.coreTabsHidden,
     }
     next.taskbarMode = prefs.taskbarMode
     next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge
+    next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     next.osChromePrefs = { ...prefs }
   }
 

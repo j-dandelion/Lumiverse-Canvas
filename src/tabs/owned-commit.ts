@@ -183,6 +183,18 @@ export async function commitDraftToOwnedModel(
       intents.push({ t: 'setHidden', key, hidden: hidden.has(key) })
     }
 
+    // OS closed-window coherence: un-hiding a tab in Configure that is in the
+    // model's OS closed set brings the window back (drop the closed
+    // membership) instead of leaving its strip button hidden with no visible
+    // state. Keyed on the genuine hidden→visible transition — the sweep above
+    // emits setHidden for EVERY key on every save, so keying the drop on
+    // "key is closed" alone would un-close every OS window on any Apply.
+    for (const key of model.closed) {
+      if (model.hidden.includes(key) && !hidden.has(key)) {
+        intents.push({ t: 'setClosed', key, closed: false })
+      }
+    }
+
     // Activation is part of the same transaction as placement and ordering.
     // Host reconciliation may observe a transient cross-drawer DOM placement;
     // use the owned selection from before that observation and make the

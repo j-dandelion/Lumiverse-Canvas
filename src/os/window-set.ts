@@ -20,7 +20,11 @@
  * Hidden × closed matrix (ruling F7): eye-hidden wins — callers must filter
  * Configure-Tabs-hidden tabs BEFORE consulting these helpers; a hidden tab
  * is invisible everywhere regardless of closed-set membership, and unhiding
- * a closed tab leaves it minimized (the caller drops its closed membership).
+ * a closed tab leaves it minimized. The Configure unhide path drops the
+ * closed membership at the commit seam (`tabs/owned-commit.ts` emits
+ * `setClosed(false)` for a genuine hidden→visible transition), so the eye
+ * toggle brings the window back instead of leaving a permanently hidden
+ * strip button.
  */
 
 export type { TabKey } from '../core/model'

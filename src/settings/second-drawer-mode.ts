@@ -509,7 +509,10 @@ async function finishDisable(): Promise<void> {
  * Tab-assignment persistence is always-on (built-in), so the enable path
  * always uses the facet-ON path (no branch for facet OFF).
  */
-export async function requestSecondDrawerMode(next: boolean): Promise<void> {
+export async function requestSecondDrawerMode(
+  next: boolean,
+  opts?: { silent?: boolean },
+): Promise<void> {
   if (next) {
     // ── ENABLE ──
     if (getSettings().secondSidebarEnabled) return
@@ -708,26 +711,31 @@ export async function requestSecondDrawerMode(next: boolean): Promise<void> {
     // Drain in-flight Configure auto-commits + global commit queue before
     // dirty check so we do not treat a still-rebasing base as residual dirty,
     // and so Apply does not race "Commit already in progress".
+    // `silent` (OS+mobile automatic force) skips the 3-way dialog: an
+    // automatic mode switch must not pop a modal; finishDisable refreshes the
+    // still-open modal from the now-disabled live state either way.
     let userChoice: ModeSwitchChoice | 'clean' = 'clean'
-    try {
-      const m = await import('../tabs/configure-modal')
-      if (m.isConfigureTabsModalOpen()) {
-        try {
-          await m.flushConfigureCommits()
-        } catch (err) {
-          dwarn('[second-drawer-mode] flushConfigureCommits failed:', err)
-        }
-        const draft = m.getConfigureDraftRef()
-        const base = m.getConfigureBaseRef()
-        if (draft && base) {
-          const { isDraftDirty } = await import('../tabs/configure-model')
-          if (isDraftDirty(draft, base)) {
-            userChoice = await showModeSwitchDialog()
+    if (!opts?.silent) {
+      try {
+        const m = await import('../tabs/configure-modal')
+        if (m.isConfigureTabsModalOpen()) {
+          try {
+            await m.flushConfigureCommits()
+          } catch (err) {
+            dwarn('[second-drawer-mode] flushConfigureCommits failed:', err)
+          }
+          const draft = m.getConfigureDraftRef()
+          const base = m.getConfigureBaseRef()
+          if (draft && base) {
+            const { isDraftDirty } = await import('../tabs/configure-model')
+            if (isDraftDirty(draft, base)) {
+              userChoice = await showModeSwitchDialog()
+            }
           }
         }
+      } catch (err) {
+        dwarn('[second-drawer-mode] error checking modal state:', err)
       }
-    } catch (err) {
-      dwarn('[second-drawer-mode] error checking modal state:', err)
     }
 
     if (userChoice === 'cancel') return

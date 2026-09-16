@@ -369,6 +369,26 @@ try {
   _mockIsShowTabLabels = false
 }
 
+// --- Test 7: OS mode with no bootstrapped model → Close only (Minimize gated) ---
+// The Minimize item appears only for the drawer's open/active window; without
+// a model there is no active, so only Close is injected (six-concerns #4).
+hideAssignmentMenu()
+const prev7os = getSettings().osMode
+const prev7 = getSettings().secondSidebarEnabled
+setSettings({ osMode: true, secondSidebarEnabled: true })
+try {
+  showAssignmentMenu(100, 200, 'test-tab-os-gate', 'OS Gate Tab')
+  const menu = stubBody.querySelector('.canvas-tab-context-menu')
+  assert(menu !== null, 'OS mode: menu is created')
+  const labels = menu!.children.map((c) => c.textContent)
+  assert(labels.includes('Close'), 'OS mode: Close is injected')
+  assert(!labels.includes('Minimize'), 'OS mode without an active model: Minimize omitted')
+} finally {
+  setSettings({ osMode: prev7os })
+  setSettings({ secondSidebarEnabled: prev7 })
+  hideAssignmentMenu()
+}
+
 // --- Summary ---
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

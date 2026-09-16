@@ -548,13 +548,18 @@ export function moveTabVisible(
 
 /**
  * Set a tab's hidden state. No-op if the tab is hide-locked.
+ *
+ * `allowCore` unlocks the core tabs (`CORE_HIDE_LOCKED`) for the
+ * `coreTabsHidden` setting — OS mode forces it on so closing a core window
+ * can mark it hidden. Default false keeps every non-OS caller locked.
  */
 export function setHidden(
   draft: ConfigureDraft,
   tabId: string,
   hidden: boolean,
+  allowCore = false,
 ): ConfigureDraft {
-  if (isHideLocked(tabId)) return draft
+  if (!allowCore && isHideLocked(tabId)) return draft
 
   const next = new Set(draft.hiddenIds)
   if (hidden) {

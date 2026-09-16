@@ -20,11 +20,26 @@
  */
 
 import type { Side } from '../core/model'
+import { parseBuiltinKey } from '../core/model'
 import { dispatch, dispatchBatch, dispatchMoveByLiveId, getHost, getModel } from '../recon/dispatch'
-import { isOsModeEnabled } from '../settings/state'
+import { getSettings, isOsModeEnabled } from '../settings/state'
+import { isCoreTabId } from '../tabs/core-tabs'
 import { suppressNextCloseAnchor } from '../sidebar/panel-motion'
 import { commandDrawerOpen } from './drawer-command'
 import { dlog } from '../debug/log'
+
+/**
+ * True when closing this window must also mark the tab hidden in Configure
+ * Tabs. Only core built-ins need the reflection (`coreTabsHidden` is forced
+ * on by OS mode); non-core close semantics stay closed-only. The check uses
+ * the resolved model key — live ids may carry `:N` suffix drift, while
+ * `CORE_HIDE_LOCKED` holds bare ids.
+ */
+function shouldHideOnClose(key: string): boolean {
+  if (!getSettings().coreTabsHidden) return false
+  const coreId = parseBuiltinKey(key)
+  return !!coreId && isCoreTabId(coreId)
+}
 
 /**
  * The drawer's DISPLAYED window as a live id (null = nothing displayed).
@@ -59,8 +74,16 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
   const livesInPrimary = model.primary.includes(key)
   const side: Side = livesInPrimary ? 'primary' : 'secondary'
   const wasDisplayed = model.active[side] === key
+  // Core tabs (with coreTabsHidden on): closing also marks the tab hidden so
+  // Configure Tabs reflects the closed state. Appended AFTER setClosed so the
+  // displayed-window clear (D17) is never replaced by a neighbor via
+  // applySetHidden's active-replacement branch.
+  const hideOnClose = shouldHideOnClose(key)
   if (!wasDisplayed) {
-    return dispatch({ t: 'setClosed', key, closed: true })
+    return dispatchBatch([
+      { t: 'setClosed', key, closed: true },
+      ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true } as const] : []),
+    ])
   }
   // D17 + D7: closing the displayed window → no active → collapse.
   // The close animation must NOT collapse toward the window's strip button:
@@ -72,6 +95,7 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
   const result = dispatchBatch([
     { t: 'setClosed', key, closed: true },
     { t: 'setDrawer', side, open: false },
+    ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true } as const] : []),
   ])
   // The primary shell is the only writer of its open state (the model→host
   // setDrawer write is suppressed — live-verify #1 echo guard); command it

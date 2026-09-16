@@ -25,6 +25,12 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
 // ── Mutable controls for mocks ──
 let osOn = true
 let secondEnabled = true
+// Model active keys per side: the OS Minimize item shows only for the
+// drawer's OPEN/active window (six-concerns #4).
+let activeBySide: { primary: string | null; secondary: string | null } = {
+  primary: null,
+  secondary: null,
+}
 const minimizeCalls: Array<{ liveId: string; side: string }> = []
 const closeCalls: string[] = []
 const keyEvents: string[] = []
@@ -140,6 +146,10 @@ mock.module('../../debug/log', () => ({
 mock.module('../../recon/dispatch', () => ({
   dispatchMoveByLiveId: () => Promise.resolve(),
   placementFirstMoveByLiveId: () => Promise.resolve(),
+  getHost: () => ({
+    findKey: (id: string) => `builtin:${id.replace(/:.*$/, '')}`,
+  }),
+  getModel: () => ({ active: activeBySide }),
 }))
 mock.module('../../os/actions', () => ({
   minimizeWindowByLiveId: (liveId: string, side: string) => {
@@ -160,6 +170,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 {
   osOn = true
   secondEnabled = true
+  activeBySide = { primary: 'builtin:personas', secondary: null }
   const menu = makeMenu()
   __injectCanvasItemForTest(menu as unknown as HTMLElement, 'personas', 'primary')
   const texts = buttonTexts(menu)
@@ -192,6 +203,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 {
   osOn = true
   secondEnabled = false
+  activeBySide = { primary: 'builtin:personas', secondary: null }
   const menu = makeMenu()
   __injectCanvasItemForTest(menu as unknown as HTMLElement, 'personas', 'primary')
   const texts = buttonTexts(menu)
@@ -217,6 +229,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
   osOn = true
   secondEnabled = true
   minimizeCalls.length = 0
+  activeBySide = { primary: null, secondary: 'builtin:lorebook' }
   const menu = makeMenu()
   __injectCanvasItemForTest(menu as unknown as HTMLElement, 'lorebook', 'secondary')
   const texts = buttonTexts(menu)
@@ -225,6 +238,23 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
   minimizeBtn.click()
   await flush()
   assertEqual(minimizeCalls[0]?.side, 'secondary', 'S5: minimize side follows the capture')
+}
+
+// ── S6: minimized tab — Close only, no Minimize (six-concerns #4) ──
+{
+  osOn = true
+  secondEnabled = true
+  closeCalls.length = 0
+  activeBySide = { primary: 'builtin:other', secondary: null }
+  const menu = makeMenu()
+  __injectCanvasItemForTest(menu as unknown as HTMLElement, 'personas', 'primary')
+  const texts = buttonTexts(menu)
+  assert(!texts.includes('Minimize'), 'S6: no Minimize on a minimized window')
+  assert(texts.includes('Close'), 'S6: Close still offered for a minimized window')
+  const closeBtn = menu.querySelectorAll('button').find((b) => (b as StubButton).textContent === 'Close') as StubButton
+  closeBtn.click()
+  await flush()
+  assertEqual(closeCalls.length, 1, 'S6: close still wired')
 }
 
 console.log(`context-menu os-items tests: ${passed} passed, ${failed} failed`)

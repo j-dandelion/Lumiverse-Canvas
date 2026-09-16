@@ -45,13 +45,15 @@ Built-in placement: `requestTabLocation` to the container is an allowlist silent
   the mirror button's forwarded synthetic event, `main-renderer.onMirrorContextMenu`).
   Canvas injects into it (`context-menu/index.ts`): "Move to second drawer"/"Move to
   main drawer" (the move item is gated on the second drawer being enabled) plus
-  **Minimize + Close** while OS mode is on (spec D14). The OS pair is injected only
-  when the menu carries tab-menu wording (labels toggle / "Configure tabs") so a
-  foreign body portal never gets a destructive Close; each injected click dismisses
-  the host menu with an `Escape` keydown.
+  **Minimize + Close** while OS mode is on (spec D14). Minimize is injected only when
+  the tab is that drawer's open/active window (the model active is the predicate — a
+  minimized window's item would be a no-op); Close is always injected. The OS pair is
+  injected only when the menu carries tab-menu wording (labels toggle / "Configure
+  tabs") so a foreign body portal never gets a destructive Close; each injected click
+  dismisses the host menu with an `Escape` keydown.
 - **Second drawer** — Canvas-owned `.canvas-tab-context-menu`
   (`tabs/tab-context-menu.ts`): labels toggle, Configure tabs, Move to …, and the
-  same OS Minimize/Close pair.
+  same OS Minimize (open/active windows only) / Close pair.
 
 ## Button Management (`tabs/buttons.ts`)
 
@@ -145,7 +147,7 @@ only mode state. `detachedTabs` writers (`getLiveIdAssignmentEntries`) emit
 `tabId` = current live id and `tabTitle` = the model TabKey (authoritative
 for restore).
 
-The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks `lastLoaded` and the dual slot. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
+The first-enable seed is implemented in `layout/snapshot.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks `lastLoaded` and the dual slot. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
 
 ### Conflict rule: slot wins on disable
 
@@ -182,12 +184,21 @@ automatically on toggle hide, swap side, and drag-end (not mid-drag).
 
 | Action | Behavior |
 |--------|----------|
-| Toggle tab hidden (eye icon) | Draft commits immediately (no Done needed). |
+| Toggle tab hidden (eye icon) | Draft commits immediately (no Done needed). Core built-in rows (`CORE_HIDE_LOCKED`: profile, presets, loom, characters, personas, branches, spindle, theme, lorebook) are locked unless `coreTabsHidden` is on; the set lives in the `tabs/core-tabs.ts` leaf (OS-mode consumers must not import the store graph). |
 | Swap drawer side radio | Draft commits immediately (no Done needed). |
 | Drag-end within or between columns | Draft commits immediately (no Done needed). |
 | Mid-drag | No draft commit; the previous committed state is unchanged. If drag-tab and drop-tab change order, only the final drop commits. |
 | Close modal (X / Escape) | No special behavior — regular draft-based close dialog applies. |
 | Enable/disable second drawer | No special behavior — full mode-switch dialog. |
+
+**OS closed-window reflection (2026-09-15):** while `coreTabsHidden` is on (OS mode
+forces it), closing a core window dispatches `setClosed` + `setHidden` (hidden last,
+so D17's "nothing displayed" survives) and the Configure row shows as hidden. A
+genuine hidden→visible transition in a commit emits `setClosed(false)`
+(`owned-commit.ts`) so un-hiding brings the window back instead of leaving a
+permanently hidden strip button. The sweep guard matters: the commit emits a
+`setHidden` intent for every model key on every Apply, so the closed-drop is keyed
+on the membership transition, never on "key is in the closed set".
 
 ## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
 

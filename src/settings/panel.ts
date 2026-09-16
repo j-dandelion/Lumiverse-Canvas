@@ -54,14 +54,36 @@ const HIDE_BUTTONS_INERT_HINT =
 const LOCATION_LOCK_HINT =
   'Required by Drawer location: Top/Bottom. Switch to Sides to change.'
 const OS_MODE_HINT =
-  'Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode. Desktop only.'
+  'Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode; on mobile it uses single-drawer mode.'
 const OS_MODE_TASKBAR_LOCK_HINT =
   'Required by OS mode. Disable OS mode to change taskbar settings.'
+const CORE_TABS_HIDDEN_HINT =
+  'Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.'
+const CORE_TABS_HIDDEN_OS_LOCK_HINT =
+  'Required by OS mode. Disable OS mode to change.'
+const SECOND_DRAWER_HINT =
+  'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.'
+const SECOND_DRAWER_OS_MOBILE_HINT =
+  'OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.'
 
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
 // ctx to feed feature.apply().
 let _settingsPanelCtx: SpindleFrontendContext | null = null
+
+/** Mobile viewport check local to this module (no sidebar/mobile-exclusion
+ *  import — that module pulls the whole shell graph). */
+function _isMobileViewportForPanel(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 600px)').matches
+    )
+  } catch {
+    return false
+  }
+}
 
 const PANEL_STYLE_ID = 'sidebar-ux-panel-styles'
 
@@ -361,6 +383,19 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
   })
   secSidebars.appendChild(osModeRow)
 
+  const coreTabsHidden = makeToggle(
+    () => getSettings().coreTabsHidden,
+    (v) => setSettings({ coreTabsHidden: v }),
+    { disabled: () => !!getSettings().osMode },
+  )
+  const coreTabsHiddenRow = buildSettingRow({
+    label: 'Core tabs can be hidden',
+    hint: CORE_TABS_HIDDEN_HINT,
+    control: coreTabsHidden.btn,
+  })
+  secSidebars.appendChild(coreTabsHiddenRow)
+  const coreTabsHiddenHint = coreTabsHiddenRow.querySelector('.sidebar-ux-panel-row-hint')
+
   const hideDrawerTabToggle = makeToggle(
     () => getSettings().hideDrawerOpenCloseButtons,
     (v) => setSettings({ hideDrawerOpenCloseButtons: v }),
@@ -433,11 +468,13 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       })
     }
   )
-  sec2.appendChild(buildSettingRow({
+  const masterRow = buildSettingRow({
     label: 'Enable second drawer',
-    hint: 'Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.',
+    hint: SECOND_DRAWER_HINT,
     control: master.btn,
-  }))
+  })
+  sec2.appendChild(masterRow)
+  const masterHint = masterRow.querySelector('.sidebar-ux-panel-row-hint')
 
   const compact = makeToggle(
     () => getSettings().mirrorCompactPosition,
@@ -481,6 +518,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     moveControlsToOuter.refresh()
     taskbarMode.refresh()
     osMode.refresh()
+    coreTabsHidden.refresh()
     hideDrawerTabToggle.refresh()
     dragAndDropDrawerTabs.refresh()
     resizeSidebars.refresh()
@@ -532,6 +570,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
           : os ? OS_MODE_TASKBAR_LOCK_HINT : TASKBAR_HINT
       }
     }
+    // coreTabsHidden: locked on while OS mode forces it (a closed window
+    // must show as hidden in Configure Tabs). Off-OS the user controls it.
+    {
+      const os = !!getSettings().osMode
+      coreTabsHidden.btn.disabled = os
+      coreTabsHidden.btn.style.cursor = os ? 'not-allowed' : 'pointer'
+      coreTabsHiddenRow.classList.toggle('sidebar-ux-panel-row-disabled', os)
+      if (coreTabsHiddenHint) {
+        coreTabsHiddenHint.textContent = os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT
+      }
+    }
     // hideDrawerOpenCloseButtons requires taskbarMode (S7: dragAndDropDrawerTabs
     // no longer does — toggle-only gate, see isDragAndDropDrawerTabsEnabled).
     // While horizontal the handles are hidden unconditionally, so the row is
@@ -558,6 +607,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       row.btn.disabled = d
       row.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       ;(row.btn.parentElement as HTMLElement)?.classList.toggle('sidebar-ux-panel-row-disabled', d)
+    }
+    // Second-drawer master locked while OS mode runs on a mobile viewport
+    // (os/os-mode.syncOsMobileDrawerMode forces single drawer there).
+    {
+      const osMobile = !!getSettings().osMode && _isMobileViewportForPanel()
+      master.btn.disabled = osMobile
+      master.btn.style.cursor = osMobile ? 'not-allowed' : 'pointer'
+      masterRow.classList.toggle('sidebar-ux-panel-row-disabled', osMobile)
+      if (masterHint) {
+        masterHint.textContent = osMobile ? SECOND_DRAWER_OS_MOBILE_HINT : SECOND_DRAWER_HINT
+      }
     }
   }
 

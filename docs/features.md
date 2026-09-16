@@ -39,6 +39,7 @@ interface CanvasFeature {
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `taskbarModeFeature` | `taskbarMode` | Taskbar mode: pin tab strips when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `taskbarMode`) |
+| `osModeFeature` | `osMode` | OS mode: window lifecycle (open / minimized / closed), per-drawer Start menus, OS-specific layout slots, panel-header minimize/X chrome. Live on mobile (single-drawer force). Requires the taskbar chrome (normalize forces `taskbarMode` + outer edge + `coreTabsHidden` on; `setSettings` snapshots the pre-OS values in `osChromePrefs` and restores them on disable) |
 | `dragAndDropDrawerTabsFeature` | `dragAndDropDrawerTabs` | Drag-and-drop to reorder/move drawer tabs — mouse distance-based, touch long-press (taskbar-agnostic since S7 — toggle-only gate; desktop only) |
 | `drawerTabDragFeature` | `drawerTabDrag` | Enables drag-to-reposition on drawer tabs (vertical vh of open/close edge control) |
 
@@ -75,6 +76,8 @@ In-memory `FullCanvasSettings` (all fields required via `Required<CanvasSettings
 **Dependency chain (normalize, order matters):**
 1. `drawerLocation` enum coercion (unknown → `sides`)
 2. Location invariant: `top`/`bottom` force `moveControlsToOuterEdge` + `taskbarMode` ON. Normalize never forces them off — the Sides restore lives in `setSettings` (needs prev/next): an explicit chrome toggle while on Sides records `sidesChromePrefs`, and a horizontal → sides location change restores it (defaults when the record is absent, e.g. a legacy blob last saved while horizontal).
+2c. OS-mode invariant: `osMode: true` forces `taskbarMode` + `moveControlsToOuterEdge` + `coreTabsHidden` ON. The pre-OS values are snapshotted into `osChromePrefs` by `setSettings` on an explicit enable and restored on disable (`coreTabsHidden` is optional for legacy blobs → default false).
+2e. `osForcedSingleDrawer` boolean coercion (corrupt disk value → false).
 3. `hideDrawerOpenCloseButtons` requires `taskbarMode` (must run after #2 so a location flip does not clear `hide`)
 - `dragAndDropDrawerTabs` is NOT cascaded (S7 removed the cascade) — the toggle is its only gate.
 - Helpers: `isTaskbarModeEnabled(s)` requires outer-edge; `isHideDrawerOpenCloseButtonsEnabled(s)` requires taskbar mode; `isDragAndDropDrawerTabsEnabled(s)` = the toggle alone (S7); `isHorizontalStrip(s)` / `getDrawerLocation(s)` / `getStripEdge(s)` for Drawer location.
@@ -86,8 +89,8 @@ Built once, mounted into Lumiverse's per-extension settings host. In-place re-re
 **Sections:**
 1. **Chat** — chatReflow, slashCommandsEnabled
 2. **Layout** — persistDrawerOpenState, persistDrawerWidth (tab-assignment persistence is always-on, no toggle)
-3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
-4. **Second drawer** — secondSidebarEnabled (master), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
+3. **Drawers** — drawerLocation (segmented Sides|Top|Bottom; locks the two taskbar rows while horizontal; disabled while the settings load is in flight), moveControlsToOuterEdge, taskbarMode (requires outer edge; main + secondary), osMode, coreTabsHidden (unlocks the Configure eye for core tabs; locked on while OS mode forces it), hideDrawerOpenCloseButtons (requires taskbar mode; pinned strip is the open/close chrome; inert + checked while horizontal), dragAndDropDrawerTabs (toggle-only since S7; mouse distance / touch long-press tab list reorder; fine-pointer desktop only), resizeSidebars, drawerShadowsDesktop, drawerShadowsMobile
+4. **Second drawer** — secondSidebarEnabled (master; locked off while OS mode is on and the viewport is mobile — `os/os-mode.syncOsMobileDrawerMode` restores the user's dual layout when OS mode turns off or the viewport leaves mobile), mirrorCompactPosition (showTabLabels removed — second drawer always follows host)
 5. **Debug** — debugMode
 
 ### Settings Diff Dispatch (`applySettings`)

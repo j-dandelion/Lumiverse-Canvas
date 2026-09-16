@@ -95,7 +95,7 @@ clampSidebarWidth(px: number): number
 // Min: 200px, Max: 80% of viewport width
 ```
 
-Used by resize handles, `applyLayout`, `createSecondarySidebar`, and `restoreMainDrawerFromDom`.
+Used by resize handles, `applyMainDrawer`, `createSecondarySidebar`, and `restoreMainDrawerFromDom`.
 
 ## Element Polling (`dom/wait-for.ts`)
 

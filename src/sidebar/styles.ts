@@ -328,6 +328,19 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
   display: none !important;
 }
 
+/* Chat-facing 1px edge separator (six-concerns #2): same primary-020 token
+   as the panel↔chat border (CHAT_FACING_BORDER in tab-position.ts). Inset
+   box-shadow, not a border — the strip arithmetic (4 + 48 + 4 = 56) has no
+   room for a border pair without clipping the 48px buttons (overflow-y is
+   hidden). The active-tab indicator is a child; the 4px padding keeps the
+   line clear of it. (2px in the first pass; user-tuned to 1px.) */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
+  box-shadow: inset 0 -1px 0 var(--lumiverse-primary-020) !important;
+}
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-list {
+  box-shadow: inset 0 1px 0 var(--lumiverse-primary-020) !important;
+}
+
 /* Buttons: square 48x48 (56 - 4 - 4). Beats the renderer inline width:100%
    and the OS Start button's base width:100% (OS_START_BUTTON_CSS) — a row
    must never stretch it. */
@@ -854,8 +867,17 @@ export function injectDrawerTabStyles(): void {
   // `data-drawer-open` is toggled by secondary.tsx open/close and by
   // main-mirror-drawer.ts open/close. The inline `box-shadow` style on the
   // drawer element is always present, so we need !important to override it.
+  //
+  // The :not([data-canvas-panel-animating]) guard: `data-drawer-open` flips
+  // false at CLOSE-START, so an unguarded rule killed the real box-shadow for
+  // the whole close fade. Top/Bottom closes must keep it — the shadow is the
+  // visible one during the rail bloom (chat/reflow keeps its under-content
+  // inset off until the panel settles) and fades in place with the panel
+  // (live report 2026-09-15: the shadow must not slide in from the screen
+  // edge). The attr is set/cleared by sidebar/animation.ts
+  // (PANEL_ANIMATING_ATTR; literal here because this module is a leaf).
   injectStyles('sidebar-ux-shadow-close-suppress', `
-    .sidebar-ux-shell[data-drawer-open="false"] > .sidebar-ux-drawer {
+    .sidebar-ux-shell[data-drawer-open="false"]:not([data-canvas-panel-animating]) > .sidebar-ux-drawer {
       box-shadow: none !important;
     }
   `)

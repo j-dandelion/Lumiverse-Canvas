@@ -481,6 +481,17 @@ export function setup(ctx: SpindleFrontendContext) {
       // beginMainDrawerRestoreGuard already ran; do not leave drawer suppressed.
       unsuppressMainDrawer()
     }
+    // OS mode on a mobile viewport forces single-drawer mode. Runs AFTER the
+    // owned-model bootstrap + boot placement + drawer restore so the mode
+    // switch projects a real model (the OS slots are written and the entering
+    // single slot is restored). Idempotent; no-op when OS mode is off or the
+    // viewport is desktop.
+    try {
+      const { syncOsMobileDrawerMode } = await import('./os/os-mode')
+      await syncOsMobileDrawerMode()
+    } catch (err) {
+      dlog('syncOsMobileDrawerMode failed (non-fatal)', err)
+    }
     dlog(`setup():.then end gen=${generation}`)
     cancelBootWatchdog()
     bootStep(`setup-done gen=${generation}`, `elapsed since start`)

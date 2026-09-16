@@ -331,6 +331,14 @@ export function startMobileExclusion(): () => void {
     // transitions clear any stale inline display:none from the hide setting.
     void import('../tabs/buttons').then((m) => m.updateDrawerTabVisibility())
     void import('./main-mirror-drawer').then((m) => m.updateMainMirrorDrawerTabVisibility())
+    // OS mode: the mobile viewport forces single-drawer mode; leaving it
+    // restores the user's dual mode (idempotent, no-op when OS mode is off).
+    // Dynamic import: os-mode pulls dispatch/settings and must not join this
+    // module's load cycle.
+    void import('../os/os-mode').then((m) => m.syncOsMobileDrawerMode()).catch(() => {})
+    // The locked second-drawer row reflects `osMode && isMobileViewport()`;
+    // refresh it so the settings panel tracks the crossing.
+    void import('../settings/state').then((m) => m.refreshSettingsPanel()).catch(() => {})
   }
   _mediaQuery.addEventListener('change', _onMediaChange)
 

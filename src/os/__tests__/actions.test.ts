@@ -18,6 +18,7 @@ import { mock } from 'bun:test'
 
 const fake: {
   osMode: boolean
+  coreTabsHidden: boolean
   model: any
   findKey: (id: string) => string | null
   resolveMap: Record<string, string>
@@ -27,6 +28,7 @@ const fake: {
   activations: Array<{ side: string; id: string }>
 } = {
   osMode: true,
+  coreTabsHidden: false,
   model: null,
   findKey: () => null,
   resolveMap: {},
@@ -63,6 +65,7 @@ mock.module('../../recon/dispatch', () => ({
 }))
 mock.module('../../settings/state', () => ({
   isOsModeEnabled: () => fake.osMode,
+  getSettings: () => ({ coreTabsHidden: fake.coreTabsHidden }),
   // panel-motion (imported by actions) reads the drawer location; this suite
   // is about the action layer, so the motion router stays inert.
   isHorizontalStrip: () => false,
@@ -84,6 +87,7 @@ function fresh(model: any) {
   fake.drawerCommands.length = 0
   fake.activations.length = 0
   fake.osMode = true
+  fake.coreTabsHidden = false
   fake.model = model
   fake.resolveMap = {}
 }
@@ -149,6 +153,50 @@ const baseModel = () => ({
   fake.osMode = false
   await closeWindowByLiveId('weaver:2')
   assertEqual(fake.dispatches.length, 0, 'close with OS off → no dispatch (chrome absent)')
+}
+{
+  // Core tab + coreTabsHidden: the close also marks it hidden (Configure
+  // reflection), APPENDED after setClosed so D17's active clear is not
+  // replaced by a neighbor via applySetHidden.
+  const PROFILE = 'builtin:profile'
+  fresh({ ...baseModel(), primary: [PROFILE, 'builtin:other'], active: { primary: PROFILE, secondary: null } })
+  fake.coreTabsHidden = true
+  fake.findKey = (id: string) => (id === 'profile' ? PROFILE : null)
+  await closeWindowByLiveId('profile')
+  assertEqual(fake.dispatches.length, 3, 'core close → setClosed + setDrawer + setHidden')
+  assertEqual(fake.dispatches[0]?.t, 'setClosed', 'core close → setClosed first')
+  assertEqual(fake.dispatches[1]?.t, 'setDrawer', 'core close → drawer collapse second')
+  assertEqual(fake.dispatches[2]?.t, 'setHidden', 'core close → setHidden appended last')
+  assertEqual(fake.dispatches[2]?.hidden, true, 'core close → hidden:true')
+}
+{
+  // Core tab + setting OFF: no hidden reflection (close-only semantics).
+  const PROFILE = 'builtin:profile'
+  fresh({ ...baseModel(), primary: [PROFILE, 'builtin:other'], active: { primary: PROFILE, secondary: null } })
+  fake.coreTabsHidden = false
+  fake.findKey = (id: string) => (id === 'profile' ? PROFILE : null)
+  await closeWindowByLiveId('profile')
+  assertEqual(fake.dispatches.length, 2, 'core close with coreTabsHidden off → no setHidden')
+  assert(!fake.dispatches.some((d) => d.t === 'setHidden'), 'no setHidden when the setting is off')
+}
+{
+  // Non-core tab + coreTabsHidden ON: still close-only.
+  fresh(baseModel())
+  fake.coreTabsHidden = true
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await closeWindowByLiveId('weaver:2')
+  assert(!fake.dispatches.some((d) => d.t === 'setHidden'), 'non-core close never adds setHidden')
+}
+{
+  // Core MINIMIZED close (not the displayed window): membership + hidden.
+  const PROFILE = 'builtin:profile'
+  fresh({ ...baseModel(), primary: [PROFILE, 'builtin:other'], active: { primary: 'builtin:other', secondary: null } })
+  fake.coreTabsHidden = true
+  fake.findKey = (id: string) => (id === 'profile' ? PROFILE : null)
+  await closeWindowByLiveId('profile')
+  assertEqual(fake.dispatches.length, 2, 'minimized core close → setClosed + setHidden')
+  assertEqual(fake.dispatches[0]?.t, 'setClosed', 'minimized core close → setClosed first')
+  assertEqual(fake.dispatches[1]?.t, 'setHidden', 'minimized core close → setHidden last')
 }
 
 // ── minimizeWindowByLiveId ──

@@ -24,7 +24,7 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar } from '../tabs/assignment'
-import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
+import { dispatchMoveByLiveId, getHost, getModel, placementFirstMoveByLiveId } from '../recon/dispatch'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 import { isSettingsButton } from '../tabs/buttons'
@@ -309,18 +309,32 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   }
 
   // OS mode (spec D14, §4.3): Minimize + Close for the main drawer's tab
-  // menu. The secondary drawer keeps its Canvas-owned menu
+  // menu. Minimize only applies to the drawer's OPEN/active window (the model
+  // active is the predicate; a minimized window's item would be a no-op), so
+  // it is omitted unless this tab is that window. Close stays for any visible
+  // strip button. The secondary drawer keeps its Canvas-owned menu
   // (tabs/tab-context-menu.ts). Lazy-import avoids the load-order cycle
   // (this module ← os/panel-chrome ← os/actions → dispatch). The identity
   // guard keeps the destructive pair off foreign body portals.
   if (isOsModeEnabled() && menuLooksLikeTabMenu(menu)) {
     const side = info.currentSidebar
+    let windowOpen = false
+    try {
+      const host = getHost()
+      const model = getModel()
+      const key = host?.findKey?.(info.tabId) ?? null
+      windowOpen = !!(key && model && model.active[side] === key)
+    } catch {
+      windowOpen = false
+    }
     appendMenuDivider(menu)
-    appendCanvasMenuItem(menu, 'Minimize', () => {
-      void import('../os/actions')
-        .then((m) => m.minimizeWindowByLiveId(info.tabId, side))
-        .catch((err) => dwarn('[os] context-menu minimize failed:', err))
-    })
+    if (windowOpen) {
+      appendCanvasMenuItem(menu, 'Minimize', () => {
+        void import('../os/actions')
+          .then((m) => m.minimizeWindowByLiveId(info.tabId, side))
+          .catch((err) => dwarn('[os] context-menu minimize failed:', err))
+      })
+    }
     appendCanvasMenuItem(menu, 'Close', () => {
       void import('../os/actions')
         .then((m) => m.closeWindowByLiveId(info.tabId))

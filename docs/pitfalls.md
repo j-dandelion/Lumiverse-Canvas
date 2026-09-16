@@ -115,6 +115,51 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
 
 **Invariant — OS off ⇒ `model.closed` empty.** A successful slot restore bootstraps from a non-OS slot (no `closedTabIds`), but a missing/empty slot or a partial restore leaves the live closed-set; the Start menu is torn down on disable, so those windows would stay hidden forever. `applyOsModeChange`'s disable branch clears any residual membership via `dispatchBatch(setClosed…false)`, and `buildPersistedBlob` is the persistence backstop: when `!isOsModeEnabled()` the non-OS serialization gets `closedTabIds: []` (the OS slots keep their stored values). Never persist the OS closed-set into a non-OS slot or the top-level blob.
 
+## 14. Motion traps (Start menu + drawer panels, 2026-09-15)
+
+- **Measure the PLACED box, never the pre-position rect.** A `position: fixed`
+  element with `left/top: auto` measures at its static position (the body
+  flow), not where it is about to be placed. The Start menu's growth origin
+  came from that rect, so the Bottom-rail origin sat ~2x too far below the
+  placed menu and the open frame started too low (fix `3db6dd0`). Same class as
+  the drawer close's capture→cancel→measure order: snapshot the animated state
+  first, cancel, then measure the settled/placed rect.
+- **An external `transform-origin` + scale IS the movement.** Anchoring the
+  origin at the invoking button's center (outside the element box) makes one
+  `scale()` both grow/shrink the surface and translate it toward/away from the
+  anchor — the "grows out of / collapses into the button" effect. With the host
+  `body > * { zoom: var(--lumiverse-ui-scale) }`, transform-origin px are LAYOUT
+  px: convert rendered deltas with `/ uiScale` (or use percentages).
+- **A duplicate close must not fall through to the slow path.**
+  `closeSecondarySidebar` has no early return, and the horizontal bloom keeps
+  the wrapper at `translateX(0)` until it settles, so a second close would
+  otherwise start the 350 ms slide. `animatePanelToggle` owns idempotence
+  (close-during-close no-op, settled-closed early return) and continues
+  interrupted tweens from the current inline pose.
+- **Parking must wait for the exit animation.** OS D17 parking
+  (`data-canvas-os-no-active` → `display:none` on `.sidebar-ux-panel-content`
+  plus the title clear) applied at the first frame of the close, so the content
+  vanished instantly while only the surface faded. `panel-chrome` defers it:
+  `whenPanelParkingReady` (one-frame re-check — the chrome pass can run before
+  the close command starts the animation) → `whenPanelMotionSettles`; the sheet
+  rule is scoped `:not([data-canvas-panel-animating])`. Deferred callbacks
+  re-check the live displayed state (reopen race); a superseding motion drops
+  the previous state's listeners.
+- **Panel close anchors:** the displayed window's strip button
+  (`computePanelAnchor` percentages) when it exists; OS close dismisses the
+  window first (async model commit), so `os/actions.ts` sends a one-shot
+  `suppressNextCloseAnchor(side)` and the close fades in place. OS minimize
+  keeps its button and still collapses toward it. The anchor tracker is a
+  dynamic `import('../recon/dispatch')` — keep it out of the static dispatch
+  cycle (`dispatch → reconcile → active-tab → main-mirror → panel-motion`).
+- **Cancellation hygiene:** `cancelWrapperAnimation(wrapper)` cancels BOTH the
+  translate tween and the panel bloom and resets the bloom's inline styles
+  (`pointer-events: auto` — clearing to `''` would inherit the wrapper's
+  `none`; `will-change` cleared — a persistent `transform` hint makes the drawer
+  a containing block for fixed descendants). Every structural writer (restyle
+  side, viewport sync, width restore, unmount) cancels first; `drawerLocation`
+  flips call `cancelAllWrapperAnimations()`.
+
 ## 15. Start-menu visual layer ("Command Deck", 2026-09-15)
 
 - **The observer's `iconSvg` is always empty.** `getDrawerTabs()` prefers the
@@ -147,3 +192,4 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
   `process.exitCode = 1` (the runner only fails on non-zero exit /
   `FAILED: [1-9]`); import only leaf modules so `bun run` does not drag the
   store/dispatch graph.
+

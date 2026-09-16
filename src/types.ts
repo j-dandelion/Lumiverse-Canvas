@@ -105,7 +105,7 @@ export interface CanvasSettings {
    *  control when taskbar mode is off. */
   hideDrawerOpenCloseButtons?: boolean
 
-  /** OS mode (desktop only, default off): window-style tab/panel lifecycle —
+  /** OS mode (default off): window-style tab/panel lifecycle —
    *  each visible tab is a window that is open (displayed/active),
    *  minimized (parked, strip button stays), or closed (strip button
    *  hidden; the per-drawer Start menu is its only return path). Requires
@@ -114,16 +114,36 @@ export interface CanvasSettings {
    *  top/bottom `drawerLocation`); disabling OS mode restores the pre-OS
    *  values from `osChromePrefs`. Persists via the dedicated OS layout
    *  slots (`osSingleLayout` / `osDualLayout`) so OS edits never touch the
-   *  non-OS slots. No-op on mobile (≤600px). */
+   *  non-OS slots. Live on mobile too (≤600px): the mobile viewport forces
+   *  single-drawer mode while OS mode is on (see `osForcedSingleDrawer`). */
   osMode?: boolean
 
+  /** When on, the Configure Tabs eye toggle is unlocked for core built-in
+   *  tabs (`CORE_HIDE_LOCKED`) and closing one in OS mode also marks it
+   *  hidden. OS mode requires it (normalize forces it true) because a
+   *  closed window must show as hidden in Configure Tabs; disabling OS mode
+   *  restores the pre-OS value from `osChromePrefs`. Default off. */
+  coreTabsHidden?: boolean
+
+  /** Internal bookkeeping (never a user-facing toggle): OS mode auto-toggles
+   *  the second drawer off while the viewport is mobile and this flag marks
+   *  that the disable was OS-initiated, so disabling OS mode (or leaving the
+   *  mobile viewport) re-enables the user's dual-drawer mode. Written by
+   *  `syncOsMobileDrawerMode` around the mode-switch call. Default false. */
+  osForcedSingleDrawer?: boolean
+
   /** Internal bookkeeping (never a user-facing toggle): the user's
-   *  `taskbarMode` + `moveControlsToOuterEdge` values before OS mode was
-   *  enabled, restored when OS mode is disabled. `null` = no explicit OS
-   *  choice recorded yet (legacy blob) → restore the defaults. Written by
-   *  `setSettings` on an explicit OS enable. Same pattern as
-   *  `sidesChromePrefs`. */
-  osChromePrefs?: { taskbarMode: boolean; moveControlsToOuterEdge: boolean } | null
+   *  `taskbarMode` + `moveControlsToOuterEdge` (+ the pre-OS
+   *  `coreTabsHidden`) values before OS mode was enabled, restored when OS
+   *  mode is disabled. `null` = no explicit OS choice recorded yet (legacy
+   *  blob) → restore the defaults. Written by `setSettings` on an explicit
+   *  OS enable. Same pattern as `sidesChromePrefs`. */
+  osChromePrefs?: {
+    taskbarMode: boolean
+    moveControlsToOuterEdge: boolean
+    /** Optional for blobs written before the core-hide option existed. */
+    coreTabsHidden?: boolean
+  } | null
 
   /** Drag-and-drop to reorder drawer tabs within a list or move them
    *  between primary and secondary. Mouse: distance-based lift (~6px);
@@ -201,6 +221,8 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
   osMode: false,
+  coreTabsHidden: false,
+  osForcedSingleDrawer: false,
   osChromePrefs: null,
   dragAndDropDrawerTabs: true,
   drawerShadowsDesktop: true,
@@ -243,11 +265,15 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  *   2b. `sidesChromePrefs` shape validation (corrupt persisted bookkeeping →
  *      null, so the Sides restore falls back to defaults).
  *   2c. OS-mode invariant: `osMode: true` forces `taskbarMode` +
- *      `moveControlsToOuterEdge` on (window chrome needs the pinned strips).
+ *      `moveControlsToOuterEdge` on (window chrome needs the pinned strips)
+ *      and `coreTabsHidden: true` (a closed window must show as hidden in
+ *      Configure Tabs, which requires the core-hide unlock).
  *      Never forces them off — the pre-OS restore lives in `setSettings`
  *      (it needs prev/next; this function has only one state).
  *   2d. `osChromePrefs` shape validation (corrupt persisted bookkeeping →
- *      null, so the OS-disable restore falls back to defaults).
+ *      null, so the OS-disable restore falls back to defaults). The
+ *      `coreTabsHidden` member is optional (blobs written before it existed).
+ *   2e. `osForcedSingleDrawer` boolean coercion (corrupt disk value → false).
  *   3. `hideDrawerOpenCloseButtons` requires taskbarMode (must run AFTER the
  *      location + OS invariants, so `{osMode:true, hide:true, taskbar:false}`
  *      keeps `hide`).
@@ -282,20 +308,30 @@ export function normalizeCanvasSettingsFields(
   // Cascade 2c: OS-mode invariant — window chrome (panel headers, taskbar
   // strips, Start buttons) is built on the taskbar pin path, so OS mode
   // requires the full taskbar chrome pair, same as top/bottom locations.
+  // `coreTabsHidden` is forced on too: closing a window marks it hidden, so
+  // the Configure Tabs core-hide lock must be unlocked for the reflection to
+  // work. Never forces off — the pre-OS restore lives in setSettings.
   if (out.osMode) {
-    out = { ...out, taskbarMode: true, moveControlsToOuterEdge: true }
+    out = { ...out, taskbarMode: true, moveControlsToOuterEdge: true, coreTabsHidden: true }
   }
   // Cascade 2d: osChromePrefs shape validation (see cascade 2b rationale).
+  // `coreTabsHidden` is optional for blobs written before the option existed.
   {
     const p = out.osChromePrefs as unknown
     if (
       p != null
       && (typeof p !== 'object'
         || typeof (p as { taskbarMode?: unknown }).taskbarMode !== 'boolean'
-        || typeof (p as { moveControlsToOuterEdge?: unknown }).moveControlsToOuterEdge !== 'boolean')
+        || typeof (p as { moveControlsToOuterEdge?: unknown }).moveControlsToOuterEdge !== 'boolean'
+        || ((p as { coreTabsHidden?: unknown }).coreTabsHidden !== undefined
+          && typeof (p as { coreTabsHidden?: unknown }).coreTabsHidden !== 'boolean'))
     ) {
       out = { ...out, osChromePrefs: null }
     }
+  }
+  // Cascade 2e: osForcedSingleDrawer boolean coercion (corrupt disk value).
+  if (typeof (out as { osForcedSingleDrawer?: unknown }).osForcedSingleDrawer !== 'boolean') {
+    out = { ...out, osForcedSingleDrawer: false }
   }
   // Cascade 3: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {

@@ -56,7 +56,7 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 - Uses `spindle.storage.*` (not raw `fs`) because the host resolves paths against a per-extension, per-user storage root.
 - Serializes `SAVE_LAYOUT` requests and makes `LOAD_LAYOUT` wait for queued saves. Extension updates can overlap IPC handlers; without this ordering, an older slower write can overwrite a newer layout or a reload can read stale settings.
 
-## Frontend Persistence (`layout/persist.ts`)
+## Frontend Persistence (`persist/layout-load.ts` + `persist/layout-repo.ts`)
 
 ### Two Write Paths
 
@@ -85,7 +85,7 @@ Tab-assignment persistence (`detachedTabs`, `secondary.activeTabId`) is **always
 
 **Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it. Tab assignments are always written from the live state (or frozen from last-loaded when the second drawer is off).
 
-**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets, but tabs are always restored. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → open + width on; false → open + width off). Secondary open restore also requires at least one live secondary tab assignment (tabs are always restored, so the check is just whether the restored map has any tabs assigned); open facet alone does not show an empty second drawer.
+**Restore path:** `bootstrapFromLayout` (owned model; `recon/dispatch.ts`) and `applyMainDrawer` (`layout/main-restore.ts`) apply only the enabled facets, but tabs are always restored. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → open + width on; false → open + width off). Secondary open restore also requires at least one live secondary tab assignment (tabs are always restored, so the check is just whether the restored map has any tabs assigned); open facet alone does not show an empty second drawer.
 
 ### `loadSavedLayout()`
 
@@ -154,7 +154,7 @@ Each mode (single-drawer / dual-drawer) keeps its **own persisted layout**, so s
 
 **DetachedTabs semantics** (unified across all writers): `tabId` = current live id (placement), `tabTitle` = the model TabKey (authoritative for restore — tagging-state-independent). Writers use `getLiveIdAssignmentEntries()` (`tabs/assignment.ts`).
 
-## First-Enable Seed (`layout/persist.ts` — `seedDualLayoutFromLive`)
+## First-Enable Seed (`layout/snapshot.ts` — `seedDualLayoutFromLive`)
 
 When the user enables the second drawer for the **first time** (no prior dual tabs exist on disk or in the session profile), Canvas seeds the dual layout from the current live single-drawer state rather than restoring stale or empty defaults.
 
@@ -167,7 +167,7 @@ When the user enables the second drawer for the **first time** (no prior dual ta
 
 **Why before setSettings:** the seed is written to `_lastLoadedLayout` so `secondSidebarFeature.apply` reads it during its mount callback. Without the seed, the feature would see a stale lastLoaded (possibly with ghost secondary state from a prior session) and attempt to restore tabs that don't exist.
 
-**Re-enable (has dual tabs):** skipped entirely — `hasDetachedTabs` returns true for lastLoaded or the session profile, so the restore path (`applyLayout` or `restoreSessionDualProfile`) runs unchanged. The seed does not overwrite real dual tabs.
+**Re-enable (has dual tabs):** skipped entirely — `hasDetachedTabs` returns true for lastLoaded or the session profile, so the restore path (`bootstrapFromLayout` or `restoreSessionDualProfile`) runs unchanged. The seed does not overwrite real dual tabs.
 
 **Helper functions:**
 - `hasDetachedTabs(layoutOrProfile)` — null-safe check for at least one entry in `detachedTabs`.
@@ -209,7 +209,7 @@ restore because `host.findKey` turns a TabKey into a garbage `ext:…` key (see
 [pitfalls.md](pitfalls.md) §1). The owned-model serialize path
 (`serializeModelToLayout` → `host.resolve`) was always live-id correct.
 
-## Layout Restore (`layout/apply.ts`)
+## Layout Restore (`recon/dispatch.bootstrapFromLayout` + `layout/`)
 
 Restores the secondary sidebar state:
 
@@ -247,3 +247,5 @@ See [pitfalls.md](pitfalls.md) §1, §7, §8.
 Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with `buildPersistedLayout()` geometry plus `getSettings()`.
 
 Tab assignment is always written (built-in). When the remaining two user-facing layout facets (open + width) are both OFF, their geometry fields come from the last-loaded layout (or closed defaults), so re-enabling a facet later does not lose the previous disk state.
+
+**Preference bookkeeping (never user-facing):** `sidesChromePrefs` (taskbar + outer-edge before a Top/Bottom excursion), `osChromePrefs` (the same pair plus `coreTabsHidden` before OS mode was enabled; the `coreTabsHidden` member is optional for blobs written before it existed — restore defaults to false), and `osForcedSingleDrawer` (OS mode auto-disabled the second drawer because the viewport is mobile; disabling OS mode or leaving mobile restores dual). Corrupt shapes/values are normalized: `osChromePrefs` with a non-boolean member drops to null, a non-boolean `osForcedSingleDrawer` coerces to false.

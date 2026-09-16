@@ -212,6 +212,28 @@ closed-drawer case: re-tapping an OS-closed window's button now runs the full
 D19 action (un-close + activate) instead of the legacy `showSecondaryTab`
 path, which left the window in `model.closed`.
 
+### OS mode forces single-drawer mode on mobile (2026-09-15)
+
+OS mode is live on every viewport, but dual-drawer layout is not usable on a
+≤600px viewport (full-bleed drawers + mutual exclusion), so while OS mode is on
+and the viewport is mobile the second drawer is forced off through the real
+mode-switch API (`os/os-mode.syncOsMobileDrawerMode` →
+`requestSecondDrawerMode(false, { silent: true })`): the live dual layout is
+saved into the OS dual slot and the OS single slot is restored. The
+`osForcedSingleDrawer` bookkeeping setting marks that the disable was
+OS-initiated; disabling OS mode — or leaving the mobile viewport — restores the
+user's dual layout (`requestSecondDrawerMode(true)`), routed to the OS or
+non-OS slot by the F6 accessors.
+
+Entry points: the OS toggle (`applyOsModeChange`), the viewport-cross handler
+(`_onMediaChange`), and the end of the `setup()` boot chain (after
+`bootstrapFromLayout` + boot placement + `applyMainDrawer`, so the mode switch
+projects a real model and saves the dual layout before restoring single). The
+sync is single-flight (OS toggle + crossing can race) and re-fires while the
+drawer is still enabled (recovery after an interrupted switch). The settings
+panel's second-drawer master row and the Configure Tabs footer toggle are
+locked while OS mode is on and the viewport is mobile.
+
 ## Mobile-Specific Behavior in Other Modules
 
 - `assignToSecondary`: does not auto-open secondary drawer on mobile

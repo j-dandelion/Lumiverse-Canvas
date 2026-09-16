@@ -39,6 +39,7 @@ import { restoreSingleModeLayout } from '../layout/mode-profiles'
 import type { LegacyLayout } from '../persist/layout-model'
 import {
   getSettings,
+  setSettings,
   isOsModeEnabled,
   getSingleLayoutSlot,
   getDualLayoutSlot,
@@ -50,6 +51,70 @@ import {
   setOsDualLayoutSlot,
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
+
+// ── OS + mobile single-drawer force ──────────────────────────────────────────
+//
+// OS mode is live on mobile, but dual-drawer layout is not usable there
+// (full-bleed drawers, mutual exclusion): while OS mode is on and the
+// viewport is ≤600px, the second drawer is forced off through the real
+// mode-switch API (so the dual layout is saved in the OS slot and restored on
+// the way out). `osForcedSingleDrawer` records that the disable was
+// OS-initiated; once OS mode is off — or the viewport leaves mobile — the
+// user's dual-drawer mode is restored.
+//
+// Local matchMedia helper: importing sidebar/mobile-exclusion would pull the
+// whole shell graph into this module's already-cyclic load chain
+// (mobile-exclusion → sidebar/secondary → settings/state → panel → registry →
+// os-mode).
+
+function isMobileViewportLocal(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 600px)').matches
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Single-flight: the OS toggle, a viewport crossing, and the boot sync can
+ *  race; one mode switch at a time, everyone awaits the same promise. */
+let _mobileDrawerSync: Promise<void> | null = null
+
+/**
+ * Reconcile the OS+mobile single-drawer invariant with the current settings
+ * and viewport. Safe to call from any entry point (OS enable/disable,
+ * viewport crossing, post-boot).
+ */
+export function syncOsMobileDrawerMode(): Promise<void> {
+  if (_mobileDrawerSync) return _mobileDrawerSync
+  _mobileDrawerSync = runSyncOsMobileDrawerMode().finally(() => {
+    _mobileDrawerSync = null
+  })
+  return _mobileDrawerSync
+}
+
+async function runSyncOsMobileDrawerMode(): Promise<void> {
+  const s = getSettings()
+  const force = !!s.osMode && isMobileViewportLocal()
+  if (force && s.secondSidebarEnabled) {
+    // Re-fires while the drawer is still enabled (recovery after an
+    // interrupted switch), not only when the flag is unset.
+    if (!s.osForcedSingleDrawer) setSettings({ osForcedSingleDrawer: true })
+    dlog('[os] mobile: forcing single-drawer mode')
+    const { requestSecondDrawerMode } = await import('../settings/second-drawer-mode')
+    await requestSecondDrawerMode(false, { silent: true })
+    return
+  }
+  if (!force && s.osForcedSingleDrawer) {
+    setSettings({ osForcedSingleDrawer: false })
+    dlog('[os] mobile: restoring dual-drawer mode')
+    const { requestSecondDrawerMode } = await import('../settings/second-drawer-mode')
+    await requestSecondDrawerMode(true)
+  }
+}
 
 // ── F6 mode-switch slot routing ──────────────────────────────────────────────
 //
@@ -130,6 +195,10 @@ export async function applyOsModeChange(
   if (!prev.osMode && next.osMode) {
     // ── Enable ──
     seedOsSlotFromLive()
+    // Mobile: force single-drawer mode after the OS slot seed (the live dual
+    // layout is what the mode switch saves into the OS dual slot). No-op on
+    // desktop / when the second drawer is already off.
+    await syncOsMobileDrawerMode()
     return
   }
   if (prev.osMode && !next.osMode) {
@@ -163,5 +232,12 @@ export async function applyOsModeChange(
       const reopen: Intent[] = after.closed.map((key) => ({ t: 'setClosed', key, closed: false }))
       await dispatchBatch(reopen)
     }
+    // Mobile single-drawer restore: if OS mode had forced the second drawer
+    // off (mobile), bring the user's dual mode back through the full
+    // mode-switch API. Runs after the non-OS single restore above so the
+    // switch saves the restored single state as the entering-mode baseline and
+    // restores the non-OS dual slot. No-op when nothing was forced.
+    await syncOsMobileDrawerMode()
+    return
   }
 }

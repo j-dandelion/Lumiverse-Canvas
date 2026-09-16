@@ -463,6 +463,32 @@ describe('HORIZONTAL_STRIP_CSS chat top/bottom reserve (live bug 2026-09-15)', (
   })
 })
 
+// 2026-09-15 (six-concerns #2): the horizontal strip gets a 1px chat-facing
+// separator line in the same primary-020 token as the panel↔chat border. It
+// is an inset box-shadow (a real border would overflow the 56px strip
+// arithmetic / clip the 48px buttons). User-tuned from 2px to 1px.
+describe('HORIZONTAL_STRIP_CSS chat-facing strip edge (six-concerns #2)', () => {
+  const blocks = HORIZONTAL_STRIP_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .filter((b) => b.trim().length > 0)
+
+  test('top strip carries an inset bottom edge in primary-020', () => {
+    const rule = blocks.find(
+      (b) => b.includes('sidebar-ux-location-top') && b.includes('box-shadow: inset 0 -1px 0'),
+    ) ?? ''
+    expect(rule).toContain('> .sidebar-ux-tab-list')
+    expect(rule).toContain('box-shadow: inset 0 -1px 0 var(--lumiverse-primary-020) !important')
+  })
+
+  test('bottom strip carries an inset top edge in primary-020', () => {
+    const rule = blocks.find(
+      (b) => b.includes('sidebar-ux-location-bottom') && b.includes('box-shadow: inset 0 1px 0'),
+    ) ?? ''
+    expect(rule).toContain('> .sidebar-ux-tab-list')
+    expect(rule).toContain('box-shadow: inset 0 1px 0 var(--lumiverse-primary-020) !important')
+  })
+})
+
 // 2026-09-15: the OS Start in the second drawer lives in a
 // `.sidebar-ux-tab-list-bottom` dock (exactly like the main drawer's Settings
 // dock), so the generic dock rules above own its divider in Top/Bottom — no
