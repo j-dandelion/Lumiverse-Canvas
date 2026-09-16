@@ -34,6 +34,35 @@ Resize handles are suppressed on mobile (`isPointerResizeActive()` checks `match
 
 Idempotent — mount handles if setting is on and handles are missing; remove if setting is off.
 
+## Horizontal Split Handle (`sidebar/tab-position.ts`)
+
+The Top/Bottom dual-drawer boundary handle. Full architecture in
+[sidebar.md](sidebar.md) §Drawer location; drag specifics:
+
+- 12px transparent hit zone, a child of the **secondary pin host** (never the
+  tab list — the Settings/Start dock must stay the list's last child),
+  physically anchored to the host's inner edge (`left:-6px` on a side-right
+  host, `right:-6px` on side-left), `cursor: col-resize`.
+- Visual line: zero-width `::after` with `border-left: 1px solid` — the
+  border paint path, deliberately **not** a 1px background (fractional-zoom
+  visibility; `pitfalls.md` §11).
+- Drag (fine pointer only, same gate as DnD/resize handles): pointermove
+  converts `clientX` to a fraction (a side-right secondary measures from the
+  viewport's right edge), clamps via `computeSplitPct` (64px-per-side floor),
+  and live-writes `--sidebar-ux-hsplit` through `setHorizontalSplitPct` (the
+  drag-ownership flag stops reconciles from clobbering the live value).
+  `pointerup` persists `CanvasSettings.horizontalSplit`; double-click resets
+  to 0.5.
+- Cancel paths (`pointercancel`, window blur, host teardown, release outside
+  the window) restore the pre-drag value; a full-viewport transparent overlay
+  (`z-index:13000`, the DnD pattern) keeps drawer iframes from swallowing
+  pointermove. Hidden in Sides (`display: none` on vertical hosts) and under
+  `@media (max-width:600px), (pointer:coarse)`.
+- Geometry ownership: the secondary host width and the main list lane padding
+  both consume the var; the host width is written inline with `!important`
+  (`setImportant`) so stale theme CSS cannot freeze the split — live bug
+  2026-09-16, `pitfalls.md` §11.
+
 ## Drawer Tab Drag (`drawerTabPosition/`)
 
 Vertical drag repositioning for drawer tabs (main + secondary).
