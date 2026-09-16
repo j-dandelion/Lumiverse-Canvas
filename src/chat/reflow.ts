@@ -42,10 +42,19 @@ export const CONTENT_INSET_R_VAR = '--sidebar-ux-content-inset-r'
 
 import { waitForElement } from '../dom/wait-for'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
-import { isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
+import { getSettings, isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { TAB_LIST_WIDTH_PX, MAIN_MIRROR_WIDTH_VAR } from '../sidebar/styles'
 import { isMainMirrorActive, isCanvasMainOpen } from '../sidebar/main-mirror-drawer'
 import { isMainTabListPinActive } from '../sidebar/main-tab-pin'
+
+/**
+ * Root attribute carrying the chat-owned drawer shadow sides ("left",
+ * "right", or "left right"). Set by updateChatReflow while a reflow lane is
+ * active; the injected CSS suppresses the shells' real (above-chat) shadow
+ * and paints an inset shadow on the chat column instead — inset shadows live
+ * in the element's background layer, so chat content covers them.
+ */
+export const CHAT_SHADOW_ATTR = 'data-canvas-chat-shadow'
 
 export function setChatMargin(side: 'left' | 'right', px: number): void {
   const chat = getChatColumn()
@@ -68,6 +77,8 @@ export function clearChatMargins(): void {
   const root = document.documentElement
   root.style.removeProperty('--sidebar-ux-chat-ml')
   root.style.removeProperty('--sidebar-ux-chat-mr')
+  // The chat-owned drawer shadow only exists while a lane is active.
+  root.removeAttribute(CHAT_SHADOW_ATTR)
 }
 
 export function injectReflowStyles(): void {
@@ -78,6 +89,33 @@ export function injectReflowStyles(): void {
       margin-left: var(--sidebar-ux-chat-ml, 0px) !important;
       margin-right: var(--sidebar-ux-chat-mr, 0px) !important;
       transition: margin 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    /* Open-drawer shadow, chat-owned (2026-09-15). The Canvas shells are
+       body-level fixed layers above the whole app subtree (z-index 9990; the
+       host .app is isolated), so their real box-shadow paints over chat
+       content and can never be z-ordered underneath it. While a reflow lane
+       is active the real shadow is suppressed and an inset box-shadow is
+       painted on the chat column instead: inset shadows render in the
+       element's background layer, BELOW its content, so bubbles/composer
+       cover the shadow — underneath on the z axis. The 60px/-60px inset form
+       mirrors --lumiverse-shadow-xl (0 20px 60px rgba(0,0,0,.5)) edge
+       falloff. The attr is set by updateChatReflow only on desktop, Sides
+       location, drawerShadowsDesktop on, chat column present, drawer open on
+       that side; clearChatMargins drops it (mobile / feature off / disable). */
+    @media (min-width: 601px) {
+      html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer {
+        box-shadow: none !important;
+      }
+      html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"] {
+        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
+      html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
+        box-shadow: inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
+      html[data-canvas-chat-shadow~="left"][data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] {
+        box-shadow: inset 60px 0 60px -60px rgba(0, 0, 0, 0.5),
+                    inset -60px 0 60px -60px rgba(0, 0, 0, 0.5) !important;
+      }
     }
     @media (max-width: 600px) {
       [class*="_chatColumn_"] {
@@ -95,7 +133,9 @@ let _reflowRaf: number | null = null
 /**
  * Compute the content lane insets — the left/right visual margin that
  * remains visible between the drawer chrome and the viewport edge.
- * Returns {left, right} in pixels.
+ * Returns {left, right} in pixels plus the open-drawer sides (Sides truth
+ * for the chat-owned shadow; each is true only while that side's drawer is
+ * actually open — strip reserves do not count).
  *
  * Exact same math as the chat-reflow margins: main mirror OR host drawer
  * on one side, secondary open / pin strip on the other, dock-panel clamp,
@@ -110,9 +150,14 @@ let _reflowRaf: number | null = null
  * margin there is the drawer width minus the dock inset (the drawer covers
  * the dock; only the overhang past the dock needs reserving).
  */
-export function computeContentLaneInsets(): { left: number; right: number } {
+export function computeContentLaneInsets(): {
+  left: number
+  right: number
+  openLeft: boolean
+  openRight: boolean
+} {
   if (isMobileViewport()) {
-    return { left: 0, right: 0 }
+    return { left: 0, right: 0, openLeft: false, openRight: false }
   }
 
   const mainSide = getMainDrawerSide()
@@ -172,7 +217,15 @@ export function computeContentLaneInsets(): { left: number; right: number } {
         : 0,
   )
 
-  return { left: leftMargin, right: rightMargin }
+  // Sides truth for the chat-owned shadow: the drawer (not the strip) must be
+  // open on that side. Secondary is always opposite the main side.
+  const mainOnLeft = mainSide === 'left'
+  return {
+    left: leftMargin,
+    right: rightMargin,
+    openLeft: (mainOpen && mainOnLeft) || (secOpen && !mainOnLeft),
+    openRight: (mainOpen && !mainOnLeft) || (secOpen && mainOnLeft),
+  }
 }
 
 /**
@@ -207,6 +260,24 @@ export function scheduleReflow(): void {
   })
 }
 
+/**
+ * Publish the chat-owned drawer-shadow sides (see CHAT_SHADOW_ATTR + the
+ * injected CSS). Requires: desktop (caller guarantees), Sides location,
+ * drawerShadowsDesktop on, a chat column present, and a drawer actually open
+ * on that side. Horizontal/Top-Bottom reserves live on the top/bottom edge —
+ * no L/R shadow lane there, so the attr stays off.
+ */
+function syncChatShadowAttr(insets: { openLeft: boolean; openRight: boolean }): void {
+  const root = document.documentElement
+  const sides: string[] = []
+  if (getChatColumn() && getSettings().drawerShadowsDesktop && !isHorizontalStrip()) {
+    if (insets.openLeft) sides.push('left')
+    if (insets.openRight) sides.push('right')
+  }
+  if (sides.length > 0) root.setAttribute(CHAT_SHADOW_ATTR, sides.join(' '))
+  else root.removeAttribute(CHAT_SHADOW_ATTR)
+}
+
 export function updateChatReflow(): void {
   // Mobile: reflow is a complete no-op. The host CSS controls the
   // chat column layout at ≤600px (the drawer overlays the chat),
@@ -222,6 +293,7 @@ export function updateChatReflow(): void {
   const insets = computeContentLaneInsets()
   setChatMargin('right', insets.right)
   setChatMargin('left', insets.left)
+  syncChatShadowAttr(insets)
   publishContentLaneInsets()
 }
 

@@ -61,6 +61,7 @@ import { bootStep, bootError, bootWarn, armBootWatchdog } from './debug/boot-dia
 import { logPersistLoad, plog, syncPersistDebugToBackend } from './debug/persist-debug'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
+import { clearChatMargins } from './chat/reflow'
 import { startWeaverLane } from './modals/weaver-lane'
 import { LumiverseHost } from './host/lumiverse/implementation'
 import { bootstrapFromLayout, bootPlacementDone, shutdown as shutdownCore } from './recon/dispatch'
@@ -180,6 +181,9 @@ export function setup(ctx: SpindleFrontendContext) {
   registerCleanup(() => {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
     document.getElementById('sidebar-ux-reflow')?.remove()
+    // The reflow sheet owns margins + the chat-shadow attr on the host chat
+    // element; removing the sheet alone would leave both stranded.
+    clearChatMargins()
     document.getElementById('canvas-ux-secondary-mobile')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-desktop')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-mobile')?.remove()

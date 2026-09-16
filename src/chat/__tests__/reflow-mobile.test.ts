@@ -49,6 +49,7 @@ class StubElement {
   remove() {}
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
+  removeAttribute(n: string) { delete this._attrs[n] }
   get style(): any {
     const s = this._style
     return {

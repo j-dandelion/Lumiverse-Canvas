@@ -42,6 +42,7 @@ class StubElement {
   remove() {}
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
+  removeAttribute(n: string) { delete this._attrs[n] }
   get style(): any {
     const s = this._style
     return {
@@ -224,7 +225,7 @@ function _resetAll() {
 
 // --- Imports under test ---
 
-import { updateChatReflow } from '../reflow'
+import { clearChatMargins, injectReflowStyles, updateChatReflow } from '../reflow'
 import { hydrateSettings } from '../../settings/state'
 import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
 
@@ -507,6 +508,109 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   )
   // Restore defaults so later tests see the baseline settings.
   hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+}
+
+// --- Test 12: chat-owned drawer shadow (data-canvas-chat-shadow) ---
+// The Canvas shells are body-level layers above the isolated host app, so
+// their real box-shadow can never be z-ordered under chat content. While a
+// reflow lane is active the root attr suppresses the real shadow and the
+// chat column paints an inset one (below its children). The attr must
+// reflect only OPEN drawers in Sides location with the shadow setting on.
+
+{
+  // Open drawer on the right.
+  _resetAll()
+  _installDom({ open: true, leftSide: false })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    'right',
+    'test 12a: open right drawer → data-canvas-chat-shadow="right"',
+  )
+
+  // Open drawer on the left.
+  _resetAll()
+  _installDom({ open: true, leftSide: true })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    'left',
+    'test 12b: open left drawer → data-canvas-chat-shadow="left"',
+  )
+
+  // Closed drawer → no lane, no shadow ownership.
+  _resetAll()
+  _installDom({ open: false, leftSide: false })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    null,
+    'test 12c: closed drawer → attr removed',
+  )
+
+  // Top/Bottom location has no L/R shadow lane.
+  _resetAll()
+  _installDom({ open: true, leftSide: false })
+  hydrateSettings({ drawerLocation: 'top' })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    null,
+    'test 12d: Top/Bottom location → attr off',
+  )
+  hydrateSettings(null)
+
+  // Drawer shadows setting off → no chat-owned shadow either.
+  _resetAll()
+  _installDom({ open: true, leftSide: false })
+  hydrateSettings({ drawerShadowsDesktop: false })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    null,
+    'test 12e: drawerShadowsDesktop off → attr off',
+  )
+  hydrateSettings(null)
+
+  // Feature-off / teardown path drops the attr.
+  _resetAll()
+  _installDom({ open: true, leftSide: false })
+  updateChatReflow()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    'right',
+    'test 12f setup: attr present while open',
+  )
+  clearChatMargins()
+  assertEqual(
+    (stubDocument.documentElement as StubElement).getAttribute('data-canvas-chat-shadow'),
+    null,
+    'test 12f: clearChatMargins removes the attr',
+  )
+}
+
+// --- Test 13: injected reflow CSS owns the suppression + inset shadow ---
+
+{
+  _resetAll()
+  injectReflowStyles()
+  const css = ((_styleElements['sidebar-ux-reflow'] as any)?.textContent ?? '') as string
+  assert(
+    css.includes('.sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer'),
+    'test 13: real shadow suppression selector present',
+  )
+  assert(
+    css.includes('html[data-canvas-chat-shadow~="left"] [class*="_chatColumn_"]'),
+    'test 13: left inset shadow rule present',
+  )
+  assert(
+    css.includes('inset -60px 0 60px -60px'),
+    'test 13: right inset shadow rule present',
+  )
+  assert(
+    css.includes('html[data-canvas-chat-shadow~="left"][data-canvas-chat-shadow~="right"]'),
+    'test 13: both-sides inset rule present (later rule wins over the singles)',
+  )
 }
 
 // --- Test 11: startReflowObserver observes App element for style changes ---

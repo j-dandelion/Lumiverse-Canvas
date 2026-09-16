@@ -84,6 +84,34 @@ Welcome/Landing is **not** a reflow consumer.
 4. Subtract dock insets per side  
 5. Write `--sidebar-ux-chat-ml/mr` on the **chat column element**
 
+### Open-drawer shadow ownership (2026-09-15)
+
+The Canvas drawer shells are body-level `position: fixed` layers at
+`z-index: 9990`, above the whole host `.app` subtree (`.app` is
+`isolation: isolate`), so their real `box-shadow` paints over chat content and
+**cannot** be z-ordered underneath it from inside the app. While a reflow lane
+is active the real shadow is suppressed and a matching inset `box-shadow` is
+painted on the chat column instead: inset shadows render in the element's
+background layer, below its content, so bubbles/composer cover the shadow —
+underneath on the z axis.
+
+```css
+html[data-canvas-chat-shadow] .sidebar-ux-shell[data-drawer-open="true"] > .sidebar-ux-drawer { box-shadow: none !important; }
+html[data-canvas-chat-shadow~="left"]  [class*="_chatColumn_"] { box-shadow: inset  60px 0 60px -60px rgba(0,0,0,.5) !important; }
+html[data-canvas-chat-shadow~="right"] [class*="_chatColumn_"] { box-shadow: inset -60px 0 60px -60px rgba(0,0,0,.5) !important; }
+/* both sides open → later two-shadow rule wins */
+```
+
+- `data-canvas-chat-shadow` (root, token list) is set by `updateChatReflow`
+  only when: desktop, Sides location, `drawerShadowsDesktop` on, a chat column
+  exists, and that side's drawer is **open** (strip reserves do not count;
+  `computeContentLaneInsets` returns `openLeft`/`openRight`).
+- `clearChatMargins()` removes the attr — mobile/cross-down, `chatReflow`
+  off, and the extension-disable cleanup in `setup.ts`.
+- Top/Bottom location has no L/R shadow lane → attr stays off.
+- The `60px / -60px` inset form mirrors `--lumiverse-shadow-xl`
+  (`0 20px 60px rgba(0,0,0,.5)`) edge falloff.
+
 ### Observers
 
 `startReflowObserver()` (gated on `chatReflow`):

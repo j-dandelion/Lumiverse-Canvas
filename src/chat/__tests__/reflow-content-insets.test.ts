@@ -35,6 +35,7 @@ class StubElement {
   }
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
+  removeAttribute(n: string) { delete this._attrs[n] }
   get classList() {
     const self = this
     return { contains: (c: string) => self.className.split(/\s+/).includes(c), toString: () => self.className }
