@@ -19,16 +19,20 @@ import { mock } from 'bun:test'
 const fake: {
   osMode: boolean
   coreTabsHidden: boolean
+  horizontal: boolean
+  mainSide: 'left' | 'right'
   model: any
   findKey: (id: string) => string | null
   resolveMap: Record<string, string>
   dispatches: any[]
-  moveCalls: Array<{ liveId: string; activateDest: boolean }>
+  moveCalls: Array<{ liveId: string; activateDest: boolean; visibleIndex?: number }>
   drawerCommands: Array<{ side: string; open: boolean }>
   activations: Array<{ side: string; id: string }>
 } = {
   osMode: true,
   coreTabsHidden: false,
+  horizontal: false,
+  mainSide: 'right',
   model: null,
   findKey: () => null,
   resolveMap: {},
@@ -49,8 +53,8 @@ setDrawerCommandHandler((side, open) => {
 mock.module('../../recon/dispatch', () => ({
   dispatch: (intent: any) => { fake.dispatches.push(intent); return Promise.resolve() },
   dispatchBatch: (intents: any[]) => { fake.dispatches.push(...intents); return Promise.resolve() },
-  dispatchMoveByLiveId: (liveId: string, activateDest: boolean) => {
-    fake.moveCalls.push({ liveId, activateDest })
+  dispatchMoveByLiveId: (liveId: string, activateDest: boolean, visibleIndex?: number) => {
+    fake.moveCalls.push({ liveId, activateDest, visibleIndex })
     return Promise.resolve()
   },
   getHost: () => ({
@@ -67,8 +71,9 @@ mock.module('../../settings/state', () => ({
   isOsModeEnabled: () => fake.osMode,
   getSettings: () => ({ coreTabsHidden: fake.coreTabsHidden }),
   // panel-motion (imported by actions) reads the drawer location; this suite
-  // is about the action layer, so the motion router stays inert.
-  isHorizontalStrip: () => false,
+  // is about the action layer, so the motion router stays inert unless a test
+  // flips the horizontal flag for the launch-order mapping.
+  isHorizontalStrip: () => fake.horizontal,
   getStripEdge: () => null,
 }))
 
@@ -79,6 +84,7 @@ const {
   openWindowInDrawerByLiveId,
   toggleWindowByLiveId,
   getDisplayedLiveId,
+  launchEndVisibleIndex,
 } = await import('../actions')
 
 function fresh(model: any) {
@@ -88,6 +94,8 @@ function fresh(model: any) {
   fake.activations.length = 0
   fake.osMode = true
   fake.coreTabsHidden = false
+  fake.horizontal = false
+  fake.mainSide = 'right'
   fake.model = model
   fake.resolveMap = {}
 }
@@ -103,6 +111,7 @@ const baseModel = () => ({
     primary: { open: true, width: 420 },
     secondary: { open: false, width: 420 },
   },
+  side: 'right' as 'left' | 'right',
 })
 
 // ── closeWindowByLiveId ──
@@ -233,10 +242,12 @@ const baseModel = () => ({
   fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
   await openWindowInDrawerByLiveId('weaver:2', 'primary')
   assertEqual(fake.moveCalls.length, 0, 'same-drawer open → no move')
-  assertEqual(fake.dispatches.length, 2, 'same-drawer open → setClosed + activate')
+  assertEqual(fake.dispatches.length, 3, 'same-drawer open → un-close + launch-end reorder + activate')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'open: first un-close')
   assertEqual(fake.dispatches[0]?.closed, false, 'open: closed:false')
-  assertEqual(fake.dispatches[1]?.t, 'activate', 'open: then activate')
+  assertEqual(fake.dispatches[1]?.t, 'reorder', 'absent launch reorders to the drawer end')
+  assertEqual(fake.dispatches[1]?.index, -1, 'vertical end → visible index -1 (append)')
+  assertEqual(fake.dispatches[2]?.t, 'activate', 'open: then activate')
   assertEqual(fake.drawerCommands.length, 0, 'open with the drawer already open → no shell command')
   assertEqual(fake.activations.length, 1, 'primary activation clicks the host content (diffActive is model-derived)')
   assertEqual(fake.activations[0]?.side, 'primary', 'content activation targets the primary side')
@@ -255,7 +266,8 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D19: closed drawer auto-opens first')
   assertEqual(fake.dispatches[0]?.open, true, 'D19: setDrawer open:true')
   assertEqual(fake.dispatches[1]?.t, 'setClosed', 'open after the drawer opens')
-  assertEqual(fake.dispatches[2]?.t, 'activate', 'activate last')
+  assertEqual(fake.dispatches[2]?.t, 'reorder', 'launch-end reorder between un-close and activate')
+  assertEqual(fake.dispatches[3]?.t, 'activate', 'activate last')
   assertEqual(fake.drawerCommands.length, 1, 'D19 commands the shell (primary is shell-owned)')
   assertEqual(fake.drawerCommands[0]?.open, true, 'D19 shell command opens the drawer')
   assertEqual(fake.activations.length, 1, 'D19 open clicks the host content')
@@ -273,6 +285,7 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 1, 'D13: cross-drawer move dispatched')
   assertEqual(fake.moveCalls[0]?.activateDest, false, 'D13: move carries no focus (batch owns it)')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, undefined, 'D13: present window keeps the default append')
   assertEqual(fake.dispatches.length, 2, 'D13: open batch after the move')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'un-close first')
   assertEqual(fake.dispatches[1]?.t, 'activate', 'activate in the target drawer')
@@ -293,6 +306,7 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 1, 'D13: minimized cross-drawer move dispatched')
   assertEqual(fake.moveCalls[0]?.activateDest, false, 'D13: minimized move keeps no focus')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, undefined, 'D13: minimized (present) window keeps the default append')
   assertEqual(fake.dispatches.length, 1, 'D13 minimized: only the D19 drawer-open, no open batch')
   assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D13 minimized: the only dispatch is the drawer-open')
   assertEqual(fake.activations.length, 0, 'D13 minimized arrival does not activate content')
@@ -310,6 +324,7 @@ const baseModel = () => ({
   fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 1, 'closed cross-drawer: move dispatched')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, -1, 'closed cross-drawer: absent launch places at the drawer end')
   assertEqual(fake.dispatches.length, 3, 'closed cross-drawer: D19 open + un-close + activate')
   assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D19 fires before the open batch')
   assertEqual(fake.dispatches[1]?.t, 'setClosed', 'launch fresh: un-close')
@@ -404,6 +419,8 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[0]?.t, 'setHidden', 'hidden target → un-hide dispatched first')
   assertEqual(fake.dispatches[0]?.hidden, false, 'un-hide → hidden:false')
   assertEqual(fake.dispatches[0]?.key, KEY, 'un-hide targets the resolved key')
+  assertEqual(fake.dispatches[1]?.t, 'reorder', 'hidden launch folds the launch-end reorder into the un-hide batch')
+  assertEqual(fake.dispatches[1]?.index, -1, 'hidden launch → visible index -1 (vertical append)')
   assert(
     fake.dispatches.findIndex((d: any) => d.t === 'activate') > 0,
     'activate follows the un-hide',
@@ -421,9 +438,10 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'primary')
   const order = fake.dispatches.map((d: any) => d.t)
   assertEqual(order[0], 'setHidden', 'hidden+closed → un-hide first')
-  assertEqual(order[1], 'setDrawer', 'then auto-open the closed drawer (D19)')
-  assertEqual(order[2], 'setClosed', 'then un-close')
-  assertEqual(order[3], 'activate', 'then activate')
+  assertEqual(order[1], 'reorder', 'hidden+closed → launch-end reorder rides the un-hide batch')
+  assertEqual(order[2], 'setDrawer', 'then auto-open the closed drawer (D19)')
+  assertEqual(order[3], 'setClosed', 'then un-close')
+  assertEqual(order[4], 'activate', 'then activate')
 }
 {
   // Foreign-drawer hidden tab: routing to its OWN side un-hides in place —
@@ -438,6 +456,33 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 0, 'own-drawer routing never moves')
   assertEqual(fake.dispatches[0]?.t, 'setHidden', 'un-hide still first')
+  assertEqual(fake.dispatches[1]?.t, 'reorder', 'foreign hidden window also reorders to its own drawer end')
+}
+
+// ── launchEndVisibleIndex (per-side horizontal end mapping) ──
+// The horizontal clusters are edge-anchored per drawer side: a left drawer's
+// order runs away from the left edge (append = middle end), a right drawer's
+// run is right-anchored (index 0 = middle end).
+{
+  assertEqual(launchEndVisibleIndex('primary', 'right', false), -1, 'vertical → append')
+  assertEqual(launchEndVisibleIndex('secondary', 'left', false), -1, 'vertical (secondary) → append')
+  assertEqual(launchEndVisibleIndex('primary', 'left', true), -1, 'horizontal left primary → middle end is append')
+  assertEqual(launchEndVisibleIndex('secondary', 'right', true), -1, 'horizontal left secondary (right drawer) → append')
+  assertEqual(launchEndVisibleIndex('primary', 'right', true), 0, 'horizontal right primary → middle end is prepend')
+  assertEqual(launchEndVisibleIndex('secondary', 'left', true), 0, 'horizontal right secondary (left drawer) → prepend')
+}
+
+// ── Horizontal launch integration: right-side drawer prepends ──
+{
+  fresh({ ...baseModel(), closed: [KEY] })
+  fake.horizontal = true
+  fake.mainSide = 'right'
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  assertEqual(fake.dispatches[0]?.t, 'setClosed', 'horizontal right-side open: un-close first')
+  assertEqual(fake.dispatches[1]?.t, 'reorder', 'horizontal right-side open: launch-end reorder')
+  assertEqual(fake.dispatches[1]?.index, 0, 'horizontal right-side launch prepends (middle-facing end)')
+  assertEqual(fake.dispatches[2]?.t, 'activate', 'horizontal right-side open: activate last')
 }
 
 // ── getDisplayedLiveId (D17 presence + D2/D9 close policy source) ──

@@ -22,7 +22,7 @@
 import type { Side } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
 import { dispatch, dispatchBatch, dispatchMoveByLiveId, getHost, getModel } from '../recon/dispatch'
-import { getSettings, isOsModeEnabled } from '../settings/state'
+import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
 import { isCoreTabId } from '../tabs/core-tabs'
 import { suppressNextCloseAnchor } from '../sidebar/panel-motion'
 import { commandDrawerOpen } from './drawer-command'
@@ -134,6 +134,33 @@ export function minimizeWindowByLiveId(liveId: string, side: Side): Promise<void
 }
 
 /**
+ * Visible index that lands a freshly launched (previously absent) window at
+ * the drawer's END:
+ *   - vertical (Sides): append → the bottom of the strip.
+ *   - horizontal (Top/Bottom): the clusters are anchored to their drawer's
+ *     screen edge, so the end closest to the screen middle is index `-1` for
+ *     a LEFT drawer (the order runs away from the left edge) but index `0`
+ *     for a RIGHT drawer (the run is right-anchored by the CSS spacer, so
+ *     index 0 already faces the middle).
+ * `primary` uses the main drawer's physical side; `secondary` is the
+ * opposite. Pure so the per-side mapping is directly testable.
+ */
+export function launchEndVisibleIndex(
+  side: Side,
+  mainDrawerSide: 'left' | 'right',
+  horizontal: boolean,
+): number {
+  if (!horizontal) return -1
+  const physical =
+    side === 'primary'
+      ? mainDrawerSide
+      : mainDrawerSide === 'left'
+        ? 'right'
+        : 'left'
+  return physical === 'right' ? 0 : -1
+}
+
+/**
  * Open a window in a drawer (D6/D13/D19). Branches compose as a promise
  * chain — each stage reuses the proven dispatch machinery instead of
  * re-deriving placement logic:
@@ -145,6 +172,12 @@ export function minimizeWindowByLiveId(liveId: string, side: Side): Promise<void
  *      stays minimized through the move.
  *   3. Un-close + activate: closed → the window launches fresh and becomes
  *      the drawer's displayed window.
+ *
+ * Launch placement (2026-09-16): a window that was ABSENT (closed or hidden)
+ * is reordered to the drawer's end in the same commit — launching changes
+ * its order. A window whose strip button is already in the drawer (open or
+ * minimized) keeps its slot. The predicate is snapshotted before the batches
+ * mutate it.
  *
  * Activation rule: `activate` is true for a same-drawer open/restore
  * (launch or un-minimize), for a window active in the source (becomes
@@ -166,13 +199,25 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   const livesInTarget = side === 'primary' ? model.primary.includes(key) : model.secondary.includes(key)
   const sourceSide: Side = side === 'primary' ? 'secondary' : 'primary'
   const activate = livesInTarget || model.active[sourceSide] === key || isClosed
+  // Launch placement: absent windows move to the end of the target drawer.
+  const absent = isClosed || isHidden
+  const launchIndex = absent
+    ? launchEndVisibleIndex(side, model.side, isHorizontalStrip())
+    : -1
 
   // Hidden targets (Start-menu recovery path): activation is hidden-gated in
   // the reducer, so un-hide FIRST — otherwise the activate intent is dropped
   // and the tail still clicks host content through, leaving displayed content
-  // with no active window. Un-hiding also restores the strip button.
+  // with no active window. Un-hiding also restores the strip button. Same
+  // drawer → the launch-end reorder folds into this batch; cross-drawer
+  // absents are placed by the move's explicit index below.
   const unhide: Promise<void> = isHidden
-    ? dispatch({ t: 'setHidden', key, hidden: false })
+    ? dispatchBatch([
+        { t: 'setHidden', key, hidden: false },
+        ...(livesInTarget
+          ? [{ t: 'reorder', key, side, index: launchIndex } as const]
+          : []),
+      ])
     : Promise.resolve()
 
   // D19: auto-open the target drawer when it is closed (width omitted —
@@ -184,17 +229,23 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
     : Promise.resolve()
   if (drawerClosed) commandDrawerOpen(side, true)
 
-  // D13: cross-drawer move first (no focus during the move).
+  // D13: cross-drawer move first (no focus during the move). Absent launches
+  // carry their launch-end index; present ones keep the append default.
   const move = livesInTarget
     ? Promise.resolve()
-    : dispatchMoveByLiveId(liveId, false)
+    : dispatchMoveByLiveId(liveId, false, absent ? launchIndex : undefined)
 
   // Un-close + activate in one folded model transition — LAZY so the
   // `activate=false` branch (D13 minimized arrival) never dispatches it.
-  // Identity no-ops short-circuit inside reduce.
+  // Identity no-ops short-circuit inside reduce. A closed-but-visible
+  // same-drawer window also folds its launch-end reorder between un-close and
+  // activate (hidden keys already reordered in the un-hide batch).
   const open: Promise<void> = activate
     ? dispatchBatch([
         { t: 'setClosed', key, closed: false },
+        ...(isClosed && !isHidden && livesInTarget
+          ? [{ t: 'reorder', key, side, index: launchIndex } as const]
+          : []),
         { t: 'activate', key, side },
       ])
     : Promise.resolve()

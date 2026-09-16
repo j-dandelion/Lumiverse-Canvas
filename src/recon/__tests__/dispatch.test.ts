@@ -573,6 +573,43 @@ async function testMoveWhenTabIsInModel() {
   shutdown()
 }
 
+// ============================================================================
+// D13-launch — explicit visible index (OS launch-end placement)
+// ============================================================================
+async function testMoveWithExplicitVisibleIndex() {
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'secondary', { activeInSecondary: true }),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, B],
+    secondary: [A],
+    hidden: [],
+    active: { primary: PROFILE, secondary: A },
+  }
+
+  shutdown()
+  bootstrap(model, host)
+
+  // The OS launch path passes an explicit end index for absent windows:
+  // index 0 = PREPEND (the middle-facing end of a right-side horizontal
+  // drawer); the default callers keep the append.
+  await dispatchMoveByLiveId('h:b', false, 0)
+  await flush()
+
+  const newModel = getModel()
+  assert(newModel != null, 'D13x-a: model present')
+  if (newModel) {
+    assertEqual(newModel.secondary[0], B, 'D13x-b: B inserted at explicit visible index 0')
+    assertEqual(newModel.secondary.length, 2, 'D13x-c: no key lost by the explicit index')
+    assertEqual(newModel.active.secondary, A,
+      'D13x-d: activateDest false → destination focus unchanged')
+  }
+  shutdown()
+}
+
 // ==========================================================================
 // D14 — owned dispatch persists the resulting model
 // ==========================================================================
@@ -890,6 +927,7 @@ await testBootstrapShutdownRace()
 // Move when tab not yet in model
 await testMoveWhenTabNotInModel()
 await testMoveWhenTabIsInModel()
+await testMoveWithExplicitVisibleIndex()
 await testDispatchPersistsModel()
 await testUnknownLiveIdIsNoOp()
 await testDispatchActivateByLiveId()

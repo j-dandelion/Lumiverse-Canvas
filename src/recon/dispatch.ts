@@ -564,9 +564,18 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
   return task
 }
 
+/**
+ * Move a tab (resolved from a live id) to the other drawer.
+ *
+ * `visibleIndex` overrides the destination insertion point (visible-index
+ * semantics, `-1` = append — see `visibleToAbsoluteIndex`). Callers that just
+ * move (context menu, DnD fallback) omit it and keep the append default; the
+ * OS launch path passes an explicit end index for absent windows.
+ */
 export function dispatchMoveByLiveId(
   liveId: LiveTabId,
   activateDest = true,
+  visibleIndex?: number,
 ): Promise<void> {
   const host = _host
   const model = _model
@@ -588,7 +597,7 @@ export function dispatchMoveByLiveId(
         t: 'move',
         key,
         to: nextTo,
-        index: destVisible,
+        index: visibleIndex ?? destVisible,
         activateDest,
       })
     })
@@ -601,7 +610,7 @@ export function dispatchMoveByLiveId(
     t: 'move',
     key,
     to,
-    index: destVisible,
+    index: visibleIndex ?? destVisible,
     activateDest,
   })
 }
