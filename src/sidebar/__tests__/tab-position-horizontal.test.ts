@@ -474,7 +474,9 @@ describe('HORIZONTAL_STRIP_CSS Start divider is dock-owned (2026-09-15)', () => 
       .split('}')
       .filter((b) => b.trim().length > 0)
     const startRules = blocks.filter((b) => b.includes('data-canvas-os-start'))
-    expect(startRules.length).toBe(1) // the 48x48 sizing rule only
+    // The 48×48 sizing block and the CSS-owned end-order blocks (2026-09-15)
+    // are the Start-specific rules; none may carry divider chrome.
+    expect(startRules.some((r) => r.includes('width: 48px'))).toBe(true)
     for (const rule of startRules) {
       expect(rule).not.toContain('border-top')
       expect(rule).not.toContain('border-right')
