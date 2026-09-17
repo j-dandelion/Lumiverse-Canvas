@@ -73,6 +73,9 @@ mock.module('../../persist/layout-load', () => ({
 mock.module('../../layout/mode-profiles', () => ({
   restoreSingleModeLayout: (slot: unknown, host: unknown) => {
     fake.restoreCalls.push({ slot, host })
+    // Mirror the real slot-wins bootstrap: a successful restore rebuilds the
+    // model from the non-OS slot, so the live closed set empties.
+    if (fake.restoreResult.ok && fake.model) fake.model.closed.length = 0
     return Promise.resolve(fake.restoreResult)
   },
 }))
@@ -181,7 +184,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
-  fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
   fake.host = {}
   await applyOsModeChange({ osMode: true }, { osMode: false })
   assertEqual(fake.restoreCalls.length, 1, 'disable (single) restores the singleLayout slot')
@@ -215,7 +218,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
-  fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
   fake.host = null
   await applyOsModeChange({ osMode: true }, { osMode: false })
   assertEqual(fake.restoreCalls.length, 0, 'no host → no restore')
@@ -226,7 +229,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
-  fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
   fake.host = {}
   fake.restoreResult = { ok: false, reason: 'bootstrap: fake failure' }
   let threw = false
@@ -262,11 +265,29 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
   fake.secondSidebarEnabled = false
-  fake.singleSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
   fake.host = {}
   await applyOsModeChange({ osMode: true }, { osMode: false })
   assertEqual(fake.restoreCalls.length, 1, 'clean restore still runs')
   assertEqual(fake.batchCalls.length, 0, 'no closed survivors → no clear batch')
+}
+
+{
+  // H3 production single-drawer shape: single slots serialize
+  // `detachedTabs: []` with a populated `tabOrder`, so the restore gate must
+  // key off either list — otherwise a closed+hidden core window survives
+  // OS-off forever (no Start menu to reopen it).
+  fresh()
+  fake.model = { secondary: [], closed: ['builtin:loom'] }
+  fake.snapshot = { detachedTabs: [], tabOrder: ['builtin:loom'], closedTabIds: ['builtin:loom'] }
+  fake.secondSidebarEnabled = false
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['builtin:loom'] }
+  fake.host = {}
+  await applyOsModeChange({ osMode: true }, { osMode: false })
+  assertEqual(fake.restoreCalls.length, 1, 'production single slot (tabOrder only) restores')
+  assertEqual(fake.restoreCalls[0]?.slot, fake.singleSlot, 'restore consumes the single slot')
+  assertEqual(fake.model?.closed.length ?? -1, 0, 'closed set is empty — the core key is no longer hidden')
+  assertEqual(fake.batchCalls.length, 0, 'restore — not the residual sweep — cleared the hidden window')
 }
 
 console.log('---')

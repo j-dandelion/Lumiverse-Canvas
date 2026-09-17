@@ -212,7 +212,7 @@ export async function applyOsModeChange(
     const dual = getSettings().secondSidebarEnabled
     const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot()
     const host = getHost()
-    const hasTabs = !!slot && Array.isArray(slot.detachedTabs) && slot.detachedTabs.length > 0
+    const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0)
     if (slot && host && hasTabs) {
       const result = await restoreSingleModeLayout(slot, host)
       if (!result.ok) {
