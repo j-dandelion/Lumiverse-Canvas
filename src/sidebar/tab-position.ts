@@ -92,6 +92,14 @@ export const SPLIT_VAR = '--sidebar-ux-hsplit'
  *  pin host, sibling of the tab list). CSS-hides itself outside horizontal. */
 export const SPLIT_HANDLE_CLASS = 'sidebar-ux-hsplit-handle'
 
+/** Adjacent class toggled by the proximity tracker: the divider line fades
+ *  in only while the pointer is inside the strip and near the boundary. */
+export const SPLIT_HANDLE_NEAR_CLASS = 'sidebar-ux-hsplit-handle--near'
+
+/** Reveal radius (CSS px) around the boundary. The line is hidden unless the
+ *  pointer is inside the strip band and within this distance of it. */
+export const SPLIT_REVEAL_RADIUS_PX = 100
+
 /** Minimum strip width reserved for each drawer's zone (dock + a tab). */
 const SPLIT_MIN_SIDE_PX = 64
 
@@ -107,6 +115,8 @@ let _splitHandle: HTMLElement | null = null
 let _splitDragging = false
 /** Active drag's cancel routine (host teardown mid-drag). */
 let _splitDragCancel: (() => void) | null = null
+/** Document-level listener teardown for the handle's proximity tracker. */
+let _splitProximityCleanup: (() => void) | null = null
 
 /** Body-level host for the main-drawer mirror strip (never reparents host React nodes). */
 let _mainPinHost: HTMLElement | null = null
@@ -177,6 +187,7 @@ export function __setMainPinHostForTest(host: HTMLElement | null): void {
 
 /** Test-only: reset module pin state without touching a live document. */
 export function __resetPinStateForTest(): void {
+  teardownSplitProximityTracker()
   _pinHost = null
   _pinSpacer = null
   _restoreParent = null
@@ -904,6 +915,140 @@ function isCoarsePointer(): boolean {
 }
 
 /**
+ * Pure proximity predicate for the divider reveal (unit-tested). True when
+ * the pointer is inside the strip band [top, bottom] and within
+ * `SPLIT_REVEAL_RADIUS_PX` of the boundary line. Unknown geometry (NaN
+ * rect, no divider) is "not near" — the line stays hidden.
+ */
+export function shouldRevealSplitHandle(opts: {
+  x: number
+  y: number
+  stripTop: number
+  stripBottom: number
+  dividerX: number | null
+}): boolean {
+  const { x, y, stripTop, stripBottom, dividerX } = opts
+  if (!Number.isFinite(stripTop) || !Number.isFinite(stripBottom)) return false
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+  if (y < stripTop || y > stripBottom) return false
+  if (dividerX === null || !Number.isFinite(dividerX)) return false
+  return Math.abs(x - dividerX) <= SPLIT_REVEAL_RADIUS_PX
+}
+
+/**
+ * Document-level pointer tracker for the divider reveal. Proximity is
+ * measured in JS: a CSS :hover zone wide enough for the 100px radius would
+ * swallow tab clicks. rAF-coalesced so `getBoundingClientRect` runs at most
+ * once per frame; bound to the handle and torn down with it.
+ *
+ * Exit is handled in two places because drawer panels are iframes: a
+ * pointermove from the strip into a panel never reaches the parent document,
+ * so the capture-phase pointerout (which does fire on the way out) hides the
+ * line when the leaving coordinates are outside the strip band; window
+ * leave/blur covers the remaining edges.
+ */
+function installSplitProximityTracker(handle: HTMLElement): void {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return
+  if (typeof document.addEventListener !== 'function') return
+  if (typeof window.addEventListener !== 'function') return
+  if (typeof handle.addEventListener !== 'function') return
+  if (typeof handle.getBoundingClientRect !== 'function') return
+  teardownSplitProximityTracker()
+
+  let near = false
+  let frame = 0
+  let lastX = 0
+  let lastY = 0
+  const schedule: (cb: () => void) => number =
+    typeof requestAnimationFrame === 'function'
+      ? (cb) => requestAnimationFrame(cb)
+      : (cb) => {
+          cb()
+          return 0
+        }
+
+  const setNear = (on: boolean): void => {
+    if (near === on) return
+    near = on
+    if (on) handle.classList?.add?.(SPLIT_HANDLE_NEAR_CLASS)
+    else handle.classList?.remove?.(SPLIT_HANDLE_NEAR_CLASS)
+  }
+
+  const stripBand = (): { top: number; bottom: number } | null => {
+    const rect = handle.parentElement?.getBoundingClientRect?.()
+    if (!rect) return null
+    return { top: rect.top, bottom: rect.bottom }
+  }
+
+  const apply = (): void => {
+    frame = 0
+    if (!handle.isConnected) {
+      teardownSplitProximityTracker()
+      return
+    }
+    // A live drag owns the boundary; keep the line revealed.
+    if (_splitDragging) {
+      setNear(true)
+      return
+    }
+    if (!isHorizontalStrip() || isMobileViewport() || isCoarsePointer()) {
+      setNear(false)
+      return
+    }
+    const band = stripBand()
+    const rect = handle.getBoundingClientRect()
+    setNear(
+      shouldRevealSplitHandle({
+        x: lastX,
+        y: lastY,
+        stripTop: band ? band.top : NaN,
+        stripBottom: band ? band.bottom : NaN,
+        dividerX: rect ? rect.left + rect.width / 2 : null,
+      }),
+    )
+  }
+
+  const onMove = (e: PointerEvent): void => {
+    lastX = e.clientX
+    lastY = e.clientY
+    if (!frame) frame = schedule(apply)
+  }
+
+  const onOut = (e: PointerEvent): void => {
+    if (!near || _splitDragging) return
+    const band = stripBand()
+    if (band && e.clientY >= band.top && e.clientY <= band.bottom) return
+    setNear(false)
+  }
+
+  const hide = (): void => {
+    setNear(false)
+  }
+
+  document.addEventListener('pointermove', onMove, { passive: true })
+  document.addEventListener('pointerout', onOut, true)
+  document.addEventListener('pointerleave', hide, true)
+  document.addEventListener('mouseleave', hide, true)
+  window.addEventListener('blur', hide)
+
+  _splitProximityCleanup = () => {
+    if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+    frame = 0
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerout', onOut, true)
+    document.removeEventListener('pointerleave', hide, true)
+    document.removeEventListener('mouseleave', hide, true)
+    window.removeEventListener('blur', hide)
+  }
+}
+
+function teardownSplitProximityTracker(): void {
+  const cleanup = _splitProximityCleanup
+  _splitProximityCleanup = null
+  cleanup?.()
+}
+
+/**
  * Create (idempotently) the draggable boundary handle on the secondary pin
  * host. The handle is a HOST child (sibling of the tab list), never a list
  * child: the dock must stay the tab list's LAST child for
@@ -932,6 +1077,7 @@ function ensureSplitHandle(host: HTMLElement): HTMLElement | null {
 
 /** Remove the split handle and cancel any live drag on it. */
 function removeSplitHandle(): void {
+  teardownSplitProximityTracker()
   _splitDragCancel?.()
   _splitHandle?.remove()
   _splitHandle = null
@@ -956,6 +1102,9 @@ function installSplitHandleInteraction(handle: HTMLElement): void {
     setHorizontalSplitPct(computeSplitPct(0.5))
     setSettings({ horizontalSplit: 0.5 })
   })
+  // Divider reveal: hidden until the pointer is in the strip and near the
+  // boundary (the 12px handle itself cannot express a 100px proximity).
+  installSplitProximityTracker(handle)
 }
 
 /**

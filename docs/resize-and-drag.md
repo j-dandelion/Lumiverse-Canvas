@@ -46,6 +46,16 @@ The Top/Bottom dual-drawer boundary handle. Full architecture in
 - Visual line: zero-width `::after` with `border-left: 1px solid` — the
   border paint path, deliberately **not** a 1px background (fractional-zoom
   visibility; `pitfalls.md` §11).
+- Reveal (2026-09-17): the line is `opacity: 0` at rest and fades in/out
+  (150ms transition). A document-level JS pointer tracker (`--near` class)
+  reveals it only while the pointer is inside the strip band and within
+  `SPLIT_REVEAL_RADIUS_PX` (100px) of the boundary — measured in JS because a
+  CSS `:hover` zone wide enough for the radius would swallow tab clicks.
+  `:hover` / `:focus-visible` / `--active` (drag) reveal unconditionally.
+  The tracker is rAF-coalesced, bound to the handle (torn down with it), and
+  a capture-phase `pointerout` hides the line when the pointer leaves the
+  strip straight into a drawer iframe (after which no document pointermove
+  fires). Pure predicate `shouldRevealSplitHandle()` is unit-tested.
 - Drag (fine pointer only, same gate as DnD/resize handles): pointermove
   converts `clientX` to a fraction (a side-right secondary measures from the
   viewport's right edge), clamps via `computeSplitPct` (64px-per-side floor),

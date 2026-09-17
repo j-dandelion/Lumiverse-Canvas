@@ -158,6 +158,8 @@ const {
   getHorizontalSplitVar,
   setHorizontalSplitPct,
   setHorizontalSplitDragging,
+  shouldRevealSplitHandle,
+  SPLIT_REVEAL_RADIUS_PX,
   __resetPinStateForTest,
 } = await import('../tab-position')
 
@@ -688,5 +690,60 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
     expect(rule).toContain('width: 0')
     expect(rule).toContain('background: transparent')
     expect(rule).toContain('border-left: 1px solid var(--lumiverse-primary-020)')
+  })
+
+  // 2026-09-17: the line is hidden at rest and revealed only near the
+  // boundary. Reveal is JS proximity (tab-position), not :hover — a hover
+  // zone wide enough for 100px would swallow tab clicks.
+  test('divider is hidden at rest and fades via an opacity transition', () => {
+    const rule = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle::after') && b.includes('border-left: 1px solid'),
+    ) ?? ''
+    expect(rule).toContain('opacity: 0')
+    expect(rule).toContain('transition: opacity')
+    expect(rule).toContain('pointer-events: none')
+  })
+
+  test('proximity (--near), hover, focus-visible and drag reveal the line', () => {
+    const near = blocks.find(
+      (b) => b.includes('sidebar-ux-hsplit-handle--near') && b.includes('opacity: 1'),
+    ) ?? ''
+    expect(near).toContain('data-strip-axis="horizontal"')
+    const engaged = blocks.find(
+      (b) => b.includes(':hover::after') && b.includes('opacity: 1'),
+    ) ?? ''
+    expect(engaged).toContain('sidebar-ux-hsplit-handle--active')
+    expect(engaged).toContain(':focus-visible')
+    expect(engaged).toContain('border-left-color: var(--lumiverse-primary-050')
+  })
+})
+
+// 2026-09-17: pure proximity predicate behind the divider reveal. The runtime
+// tracker feeds it the pointer position, the strip band (handle parent rect)
+// and the boundary x (handle center); only finite geometry can reveal.
+describe('shouldRevealSplitHandle (2026-09-17)', () => {
+  const base = { stripTop: 0, stripBottom: 56, dividerX: 500 }
+
+  test('reveal radius is 100px on both sides of the boundary', () => {
+    expect(SPLIT_REVEAL_RADIUS_PX).toBe(100)
+    expect(shouldRevealSplitHandle({ ...base, x: 400, y: 30 })).toBe(true)
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30 })).toBe(true)
+    expect(shouldRevealSplitHandle({ ...base, x: 600, y: 30 })).toBe(true)
+    expect(shouldRevealSplitHandle({ ...base, x: 399, y: 30 })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: 601, y: 30 })).toBe(false)
+  })
+
+  test('outside the strip band is never near (both locations)', () => {
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: -1 })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: 57 })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: 450, y: 0 })).toBe(true)
+    expect(shouldRevealSplitHandle({ ...base, x: 450, y: 55.5 })).toBe(true)
+  })
+
+  test('unknown geometry stays hidden', () => {
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30, dividerX: null })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30, dividerX: NaN })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30, stripTop: NaN })).toBe(false)
+    expect(shouldRevealSplitHandle({ ...base, x: NaN, y: 30 })).toBe(false)
   })
 })

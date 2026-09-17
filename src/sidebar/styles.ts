@@ -436,13 +436,34 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
   margin: 0;
   border-left: 1px solid var(--lumiverse-primary-020) !important;
   background: transparent !important;
+  /* Idle: hidden. The line fades in only while the pointer is inside the
+     strip band and within SPLIT_REVEAL_RADIUS_PX (100) of the boundary —
+     the --near class toggled by tab-position's proximity tracker — or
+     when the handle is directly hovered / focused / dragged. The radius is
+     measured in JS: a CSS :hover zone wide enough for 100px would swallow
+     tab clicks. */
+  opacity: 0;
+  transition: opacity 150ms ease;
   pointer-events: none;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:focus-visible::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:focus-visible::after,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
   border-left-color: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+  /* Directly engaged (hover/focus/drag) always shows the line, independent
+     of the 100px proximity tracker. */
+  opacity: 1 !important;
+}
+
+/* Proximity reveal: tab-position's document pointer tracker toggles
+   the --near class only while the pointer is inside the strip band and
+   within 100px of the boundary; the opacity transition above fades it. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--near::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--near::after {
+  opacity: 1 !important;
 }
 /* Touch/coarse-pointer (and the mobile sheet width): the split still applies
    but there is no handle — same policy as DnD and the resize handles. */
