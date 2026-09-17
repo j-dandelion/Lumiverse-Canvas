@@ -41,7 +41,7 @@ import { getModel, getHost } from '../recon/dispatch'
 import { getDrawerTabs } from '../store'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { openWindowInDrawerByLiveId } from './actions'
-import { getSecondaryTabList, PUZZLE_ICON_SVG } from '../sidebar/secondary'
+import { getSecondaryTabList } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { BUILTIN_ICON_SVGS } from '../tabs/builtin-icons'
@@ -100,7 +100,7 @@ export interface StartMenuEntry {
 function isPlaceholderIcon(svg: Element): boolean {
   return (
     svg.classList.contains('lucide-puzzle') ||
-    svg.outerHTML === PUZZLE_ICON_SVG
+    svg.classList.contains('canvas-puzzle')
   )
 }
 

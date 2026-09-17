@@ -218,7 +218,7 @@ function blockOf(css: string, needle: string): string {
   assert(storeIdx > domIdx, 'store fields after the live button')
   assert(builtinIdx > storeIdx, 'built-in map last')
   assertIncludes(src, 'lucide-puzzle', 'host puzzle placeholder detected')
-  assertIncludes(src, 'PUZZLE_ICON_SVG', 'canvas puzzle placeholder detected')
+  assertIncludes(src, 'canvas-puzzle', 'canvas puzzle placeholder detected')
   assertIncludes(src, 'entryMonogram(entry.title)', 'monogram render fallback')
   assertIncludes(src, "tile.classList.add('canvas-os-start-menu__tile--monogram')", 'monogram class hook')
   assertIncludes(src, 'BUILTIN_ICON_SVGS', 'built-in icon map consumed')

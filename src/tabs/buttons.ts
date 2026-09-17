@@ -385,6 +385,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     iconWrap.appendChild(img)
   } else {
     iconWrap.innerHTML = PUZZLE_ICON_SVG
+    iconWrap.querySelector('svg')?.classList.add('canvas-puzzle')
   }
   btn.appendChild(iconWrap)
 

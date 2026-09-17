@@ -238,9 +238,20 @@ assertEqual(
   'host puzzle placeholder is a miss',
 )
 assertEqual(
-  extractButtonIcon(stubRoot({ svg: stubSvg(PUZZLE_ICON_SVG) })).svg,
+  extractButtonIcon(
+    stubRoot({
+      svg: stubSvg(PUZZLE_ICON_SVG.replace(/<path([^>]*)\/>/, '<path$1></path>'), [
+        'canvas-puzzle',
+      ]),
+    }),
+  ).svg,
   undefined,
-  'canvas puzzle placeholder is a miss',
+  'canvas puzzle placeholder is a miss (structural marker class, parsed serialization)',
+)
+assertEqual(
+  extractButtonIcon(stubRoot({ svg: stubSvg(PUZZLE_ICON_SVG) })).svg,
+  PUZZLE_ICON_SVG,
+  'raw puzzle markup without the marker class is not sniffed by outerHTML',
 )
 assertEqual(
   extractButtonIcon(stubRoot({ img: 'https://x/i.png' })).url,
