@@ -171,6 +171,11 @@ function applyActivate(model: LayoutModel, key: TabKey, side: Side): LayoutModel
   const list = listForSide(model, side)
   if (!list.includes(key)) return model
   if (isHidden(model, key)) return model
+  // Fold-time guard: producers may observe an OS-closed key as active (the
+  // tracked cell survives close as reopen memory), but a closed window must
+  // never be activated. The legitimate un-hide/un-close→activate flow emits
+  // setClosed(false) earlier in the same intent batch, so it still passes.
+  if (model.closed.includes(key)) return model
   // Identity-preserving for no-op rounds (same convention as applySetDrawer):
   // a redundant activate for the already-active key returns the ORIGINAL
   // reference so dispatch's `next === _model` gate short-circuits — no

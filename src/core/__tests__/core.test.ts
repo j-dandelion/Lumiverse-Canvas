@@ -512,6 +512,34 @@ function test_activate() {
   const mh = modelWith({ primary: [PROFILE, PRESETS], hidden: [PROFILE] })
   const ah = reduce(mh, { t: 'activate', key: PROFILE, side: 'primary' })
   assertEqual(ah.active.primary, null, 'activate hidden tab no-ops')
+
+  // H2: a closed key (OS close keeps reopen memory) is never activated.
+  const closed = reduce(
+    modelWith({ primary: [PROFILE, PRESETS], secondary: [LOOM] }),
+    { t: 'setClosed', key: PROFILE, closed: true },
+  )
+  const closedAct = reduce(closed, { t: 'activate', key: PROFILE, side: 'primary' })
+  assert(closedAct === closed, 'activate closed key is identity no-op')
+  assertEqual(closedAct.active.primary, null, 'activate closed key does not set active')
+
+  // Fold order preserved: un-close then activate in one batch still activates.
+  const reopened = foldIntents(closed, [
+    { t: 'setClosed', key: PROFILE, closed: false },
+    { t: 'activate', key: PROFILE, side: 'primary' },
+  ])
+  assertEqual(reopened.active.primary, PROFILE, 'fold [setClosed(false), activate] activates the key')
+
+  // No over-blocking: other keys (same or other side) still activate normally.
+  assertEqual(
+    reduce(closed, { t: 'activate', key: PRESETS, side: 'primary' }).active.primary,
+    PRESETS,
+    'activate non-closed sibling on the same side still works',
+  )
+  assertEqual(
+    reduce(closed, { t: 'activate', key: LOOM, side: 'secondary' }).active.secondary,
+    LOOM,
+    'activate non-closed key on the other side still works',
+  )
 }
 
 test_activate()

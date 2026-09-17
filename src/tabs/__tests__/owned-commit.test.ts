@@ -512,6 +512,44 @@ async function test_OC10_unhideDropsClosed() {
   shutdown()
 }
 
+// ── OC11 (H2): a commit that observes the OS-closed key as active must not
+// write it into the model's active — the raw observed active is reopen
+// memory, not a live selection. ──
+async function test_OC11_closedObservedActiveIgnored() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary'),
+    makeLiveTab(A, 'h:a', 'primary', { activeInPrimary: true }),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [],
+    closed: [A],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, true, 'OC11a: commit ok')
+  const after = getModel()
+  if (after) {
+    assert(after.active.primary !== A, 'OC11b: closed observed-active key is not written into model.active')
+    assertEqual(after.active.primary, PROFILE, 'OC11c: prior active preserved')
+  }
+  shutdown()
+}
+
 test_plannedMoves()
 test_missingSecondaryButtonKeys()
 
@@ -523,6 +561,7 @@ await test_OC5_drawerSideSwap()
 await test_OC6_hideIntent()
 await test_OC8_skipChrome()
 await test_OC10_unhideDropsClosed()
+await test_OC11_closedObservedActiveIgnored()
 
 console.log(`tabs/owned-commit: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
