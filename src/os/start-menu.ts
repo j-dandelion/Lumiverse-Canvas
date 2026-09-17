@@ -542,6 +542,8 @@ function attachMenuDismiss(): void {
     hideStartMenu()
   }
   const onKey = (ev: KeyboardEvent) => {
+    // APG behavior — Tab closes the menu and moves focus on.
+    if (ev.key === 'Tab') { hideStartMenu(); return }
     if (ev.key === 'Escape') {
       ev.preventDefault()
       hideStartMenu()

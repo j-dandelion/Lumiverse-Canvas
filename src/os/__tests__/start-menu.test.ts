@@ -476,6 +476,50 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   assertEqual(activeCount(winRec, 'resize'), 0, 'M9: the second menu teardown clears its listeners')
 }
 
+// ── (4) Tab dismisses WITHOUT preventDefault (L5; APG menu pattern) ─────────
+// The document keydown handler must treat Tab as a dismissal: the menu closes
+// and the browser's default Tab then moves focus out naturally. No
+// preventDefault — focus must not stay trapped in the menu, or a later Enter
+// can activate the background element under the overlay.
+{
+  const { menu } = openFreshMenu()
+  assertEqual(activeCount(docRec, 'keydown'), 1, 'L5: open registers the keydown handler')
+  // The close is animated by default; the harness's fake WAAPI never settles
+  // its onfinish, so drop animate() to take hideStartMenu's instant path and
+  // observe the removal synchronously.
+  ;(menu as unknown as { animate?: unknown }).animate = undefined
+  let prevented = false
+  lastAdd(docRec, 'keydown')!({ key: 'Tab', preventDefault: () => { prevented = true } })
+  assert(!prevented, 'L5: Tab must NOT preventDefault (browser moves focus on)')
+  assert(menu.removed, 'L5: Tab hides the menu')
+  assert(!fakeBody.children.includes(menu), 'L5: the Tab-dismissed menu left the DOM')
+  assertEqual(activeCount(docRec, 'keydown'), 0, 'L5: Tab dismissal tears down the keydown handler')
+  assertEqual(activeCount(docRec, 'mousedown'), 0, 'L5: outside-click dismissal removed by the same teardown')
+}
+
+// ── (5) Control: ArrowDown navigates; Escape closes + preventDefaults ───────
+{
+  const { menu } = openFreshMenu()
+  const list = menu.children[2] as FakeEl
+  const items = list.children.filter((c) => c.tagName === 'BUTTON')
+  assertEqual(items.length, 4, 'L5 control: one menuitem per derived entry')
+  menu.querySelectorAll = () => items
+  ;(fakeDoc as any).activeElement = items[0]
+  let focused: unknown = null
+  items[1]!.focus = () => { focused = items[1]; (fakeDoc as any).activeElement = items[1] }
+  let prevented = false
+  lastAdd(docRec, 'keydown')!({ key: 'ArrowDown', preventDefault: () => { prevented = true } })
+  assert(prevented, 'L5 control: ArrowDown still preventDefaults')
+  assertEqual(focused, items[1], 'L5 control: ArrowDown still moves focus to the next item')
+
+  ;(menu as unknown as { animate?: unknown }).animate = undefined
+  let escPrevented = false
+  lastAdd(docRec, 'keydown')!({ key: 'Escape', preventDefault: () => { escPrevented = true } })
+  assert(escPrevented, 'L5 control: Escape still preventDefaults')
+  assert(menu.removed, 'L5 control: Escape still closes the menu')
+  assertEqual(activeCount(docRec, 'keydown'), 0, 'L5 control: Escape teardown intact')
+}
+
 console.log('---')
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)
