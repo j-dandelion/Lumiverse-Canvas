@@ -1195,7 +1195,10 @@ function startSplitDrag(handle: HTMLElement): void {
       finish(false)
       return
     }
-    const rect = _mainPinHost?.getBoundingClientRect?.()
+    // The handle's parent IS the inset-anchored overlay host, so its rect
+    // includes the safe-area insets the lane padding adds back.
+    const rect =
+      handle.parentElement?.getBoundingClientRect?.() ?? _mainPinHost?.getBoundingClientRect?.()
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw
     const boundaryPx = side === 'left' ? e.clientX - left : right - e.clientX

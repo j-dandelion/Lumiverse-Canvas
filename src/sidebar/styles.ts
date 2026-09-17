@@ -356,11 +356,12 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
    overlay anchored to its screen edge. The overlay's inner edge is the
    split, carried by --sidebar-ux-hsplit (a % of the strip; written by
    tab-position.syncHorizontalSplit). The main lane is padded by the same
-   value so each drawer's tabs stay in their own region — same percentage
-   basis as the fixed host width (viewport), so the edges coincide at any
-   split. Selectors need the owner + axis + location tier to beat the base
-   list rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides
-   pinned list (same data-pin-owner) untouched. */
+   value PLUS both safe-area insets (the overlay edge is inset-anchored) so
+   each drawer's tabs stay in their own region — same percentage basis as
+   the fixed host width (viewport), so the edges coincide at any split.
+   Selectors need the owner + axis + location tier to beat the base list
+   rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides pinned
+   list (same data-pin-owner) untouched. */
 
 /* Secondary overlay list: no surface of its own, and the chat-facing
    separator is suppressed — the main list paints it once, and the token is
@@ -373,16 +374,20 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
 
 /* Main lane: pad the list's secondary-facing side out to the split. The
    background paints through the padding (full-width surface); max() keeps
-   the plain 8px gutter while there is no zone (var absent/0). The sidebar
-   side classes name the MAIN drawer's side, so the secondary sits opposite:
-   main right → lane starts on the left; main left → lane ends on the right. */
+   the plain 8px gutter while there is no zone. The lane edge must meet the
+   overlay's inset-anchored edge, so both safe-area insets are added: at
+   zero insets + present var the sum is exactly the hsplit var, and the
+   var's fallback is the negated inset sum, so an absent var collapses to
+   the 8px gutter. The sidebar side classes name the MAIN drawer's side, so
+   the secondary sits opposite: main right → lane starts on the left; main
+   left → lane ends on the right. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
-  padding-left: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+  padding-left: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, calc(-1 * (env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)))))) !important;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
-  padding-right: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+  padding-right: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, calc(-1 * (env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)))))) !important;
 }
 
 /* Boundary handle: hidden everywhere by default (Sides keeps its pinned

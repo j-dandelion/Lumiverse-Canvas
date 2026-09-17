@@ -702,20 +702,35 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
     expect(rule).toContain('box-shadow: none !important')
   })
 
-  test('main lane pads the secondary-facing side up to the split var', () => {
+  test('main lane pads the secondary-facing side up to the split var (inset-compensated)', () => {
+    // The overlay edge is inset-anchored, so the lane padding adds both
+    // safe-area insets to the var; the var fallback negates them, so an
+    // absent var still collapses to the plain 8px gutter.
+    const negativeInsets =
+      'calc(-1 * (env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)))'
     const startRule = blocks.find(
       (b) =>
         b.includes('data-pin-owner="main"') &&
-        b.includes('padding-left: max(8px, var(--sidebar-ux-hsplit, 0px))'),
+        b.includes(
+          `padding-left: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, ${negativeInsets})))`,
+        ),
     ) ?? ''
     expect(startRule).toContain('sidebar-ux-side-right')
+    expect(startRule).toContain('env(safe-area-inset-left, 0px)')
+    expect(startRule).toContain('env(safe-area-inset-right, 0px)')
+    expect(startRule).toContain(`var(--sidebar-ux-hsplit, ${negativeInsets})`)
     expect(startRule).toContain('!important')
     const endRule = blocks.find(
       (b) =>
         b.includes('data-pin-owner="main"') &&
-        b.includes('padding-right: max(8px, var(--sidebar-ux-hsplit, 0px))'),
+        b.includes(
+          `padding-right: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, ${negativeInsets})))`,
+        ),
     ) ?? ''
     expect(endRule).toContain('sidebar-ux-side-left')
+    expect(endRule).toContain('env(safe-area-inset-left, 0px)')
+    expect(endRule).toContain('env(safe-area-inset-right, 0px)')
+    expect(endRule).toContain(`var(--sidebar-ux-hsplit, ${negativeInsets})`)
   })
 
   // The lane rules own the split-facing padding, so they carry the same inert
@@ -726,7 +741,7 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
     const laneRules = blocks.filter(
       (b) =>
         b.includes('data-pin-owner="main"') &&
-        b.includes('var(--sidebar-ux-hsplit, 0px)'),
+        b.includes('var(--sidebar-ux-hsplit, calc('),
     )
     expect(laneRules.length).toBeGreaterThanOrEqual(2)
     for (const rule of laneRules) {
