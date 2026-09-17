@@ -238,6 +238,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     expect(host.getAttribute('data-strip-axis')).toBe('horizontal')
     expect(host.getAttribute('data-strip-edge')).toBe('top')
     expect(host.style.height).toBe('var(--sidebar-ux-strip-h, 56px)')
+    expect(host.style.getPropertyPriority('height')).toBe('important')
     expect(host.style.top).toBe(SAFE_TOP)
     expect(host.style.bottom).toBe('')
     expect(host.style.width).toBe('100%')
@@ -278,6 +279,7 @@ describe('applyPinHostChrome via ensureMainPinHost (WS3)', () => {
     loc = 'top'
     let host = ensureMainPinHost('left')!
     expect(host.style.height).toBe('var(--sidebar-ux-strip-h, 56px)')
+    expect(host.style.getPropertyPriority('height')).toBe('important')
     loc = 'sides'
     host = ensureMainPinHost('left')!
     expect(host.getAttribute('data-strip-axis')).toBe('vertical')
@@ -476,6 +478,8 @@ describe('horizontal split var + overlay (2026-09-16)', () => {
     expect(host.style.zIndex).toBe('10001')
     expect(host.style.width).toBe('var(--sidebar-ux-hsplit, 50%)')
     expect(host.style.getPropertyPriority('width')).toBe('important')
+    expect(host.style.height).toBe('var(--sidebar-ux-strip-h, 56px)')
+    expect(host.style.getPropertyPriority('height')).toBe('important')
 
     applyTabListPin(false, { force: true })
     expect(host.children.some((c) => c.className.includes('sidebar-ux-hsplit-handle'))).toBe(false)
@@ -699,6 +703,23 @@ describe('HORIZONTAL_STRIP_CSS split overlay + lane (2026-09-16)', () => {
         b.includes('padding-right: max(8px, var(--sidebar-ux-hsplit, 0px))'),
     ) ?? ''
     expect(endRule).toContain('sidebar-ux-side-left')
+  })
+
+  // The lane rules own the split-facing padding, so they carry the same inert
+  // 2-ID authority tier as the chat reserves (see the reserve describe above):
+  // a TS strong rule (:where(base):not(#a):not(#b)) would otherwise beat the
+  // lane !important at equal priority and break the DnD/click seam.
+  test('lane rules carry the authority specificity tier', () => {
+    const laneRules = blocks.filter(
+      (b) =>
+        b.includes('data-pin-owner="main"') &&
+        b.includes('var(--sidebar-ux-hsplit, 0px)'),
+    )
+    expect(laneRules.length).toBeGreaterThanOrEqual(2)
+    for (const rule of laneRules) {
+      expect(rule).toContain(':not(#__theme_studio_authority_a__)')
+      expect(rule).toContain(':not(#__theme_studio_authority_b__)')
+    }
   })
 
   test('split handle is hidden by default and shown horizontal, side-anchored', () => {

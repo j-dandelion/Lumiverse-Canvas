@@ -405,7 +405,7 @@ function applyPinHostChrome(
   setIfDifferent(s, 'pointerEvents', 'none')
 
   if (horizontal) {
-    setIfDifferent(s, 'height', 'var(--sidebar-ux-strip-h, 56px)')
+    setImportant(s, 'height', 'var(--sidebar-ux-strip-h, 56px)')
     if (edge === 'top') {
       setIfDifferent(s, 'top', SAFE_TOP)
       setIfDifferent(s, 'bottom', '')

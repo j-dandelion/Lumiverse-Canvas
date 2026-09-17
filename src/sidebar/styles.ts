@@ -376,12 +376,12 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
    the plain 8px gutter while there is no zone (var absent/0). The sidebar
    side classes name the MAIN drawer's side, so the secondary sits opposite:
    main right → lane starts on the left; main left → lane ends on the right. */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list {
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
   padding-left: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list {
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
   padding-right: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
 }
 
