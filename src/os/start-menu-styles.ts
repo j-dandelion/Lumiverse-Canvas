@@ -17,7 +17,8 @@
  *     rgba(0,0,0,.15) → ~invisible on a dark surface),
  *   - viewport-relative sizing divides by `--lumiverse-ui-scale` (the menu is a
  *     `body > *` child, so raw vw/vh overflow inside the host zoom layer),
- *   - state marks are `●` open / `○` minimized / none closed.
+ *   - state marks are `●` open / `○` minimized / none closed (or eye-hidden —
+ *     no strip button, so the closed presentation applies).
  *
  * Leaf module: imports only the style injector so the source-pin tests can
  * import `START_MENU_CSS` without dragging the store/dispatch graph.

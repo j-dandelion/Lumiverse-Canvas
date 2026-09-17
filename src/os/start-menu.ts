@@ -155,9 +155,10 @@ export function resolveEntryIcon(
  * window) but the LAUNCH is not: each entry opens in the invoking menu's
  * drawer, and a window whose button was not already there lands at that
  * drawer's launch end (`openWindowInDrawerByLiveId`). Hidden tabs are listed
- * on purpose (the menu is the recovery path for eye-hidden tabs) and the
- * action un-hides them before activating — activation is hidden-gated in the
- * reducer. Unresolvable extension keys are skipped (they cannot open this
+ * on purpose (the menu is the recovery path for eye-hidden tabs) and present
+ * like closed — no mark, "Launch" verb — because they have no strip button;
+ * the action un-hides them before activating (activation is hidden-gated in
+ * the reducer). Unresolvable extension keys are skipped (they cannot open this
  * session).
  */
 export function deriveStartMenuEntries(
@@ -181,7 +182,10 @@ export function deriveStartMenuEntries(
       const liveId = resolve(key)
       if (!liveId || seen.has(liveId)) continue
       seen.add(liveId)
-      const state = model.closed.includes(key)
+      // Closed OR eye-hidden → 'closed' (no strip button, so no mark):
+      // 'minimized' means "parked WITH a strip button" — a hidden tab has
+      // none. The click un-hides + launches either way.
+      const state = model.closed.includes(key) || model.hidden.includes(key)
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
       const tab = tabs.get(liveId)

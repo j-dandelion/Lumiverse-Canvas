@@ -88,9 +88,33 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(entries[2]?.state, 'minimized', 'inactive in-drawer → minimized')
   assertEqual(entries[3]?.liveId, 'h:2', 'hidden tab is listed (recovery path)')
   assertEqual(entries[3]?.side, 'secondary', 'hidden tab keeps its drawer')
-  assertEqual(entries[3]?.state, 'minimized', 'hidden non-active tab → minimized')
+  assertEqual(entries[3]?.state, 'closed', 'hidden non-active tab → closed (no strip button, no ○)')
   assertEqual(entries[0]?.iconSvg, '<svg/>', 'icon from the store')
   assertEqual(entries[0]?.title, 'Alpha', 'title from the store')
+}
+
+// ── hidden presents like closed; a visible inactive tab stays minimized ──
+{
+  // Same model minus the OS closure: the eye-hidden tab must still show as
+  // closed (it has no strip button), while a plain inactive tab keeps the
+  // minimized ○.
+  const entries = deriveStartMenuEntries({ ...makeModel(), closed: [] }, resolve)
+  assertEqual(
+    entries.find((e) => e.liveId === 'h:2')?.state,
+    'closed',
+    'eye-hidden tab → closed state (no mark)',
+  )
+  assertEqual(
+    entries.find((e) => e.liveId === 'b:2')?.state,
+    'minimized',
+    'visible inactive tab → minimized (mark)',
+  )
+  const both = deriveStartMenuEntries({ ...makeModel(), closed: [KEY_HIDDEN] }, resolve)
+  assertEqual(
+    both.find((e) => e.liveId === 'h:2')?.state,
+    'closed',
+    'hidden + OS-closed → closed',
+  )
 }
 
 // ── case-insensitive collation, stable on ties ──
