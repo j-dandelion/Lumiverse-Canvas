@@ -47,7 +47,7 @@ export function absoluteToVisibleIndex(
 /**
  * Returns the nearest selectable neighbour after `removed` leaves `side`.
  * Prefers the visible tab immediately above (lower index), else the visible
- * tab immediately below (higher index). Skips hidden tabs.
+ * tab immediately below (higher index). Skips hidden and closed tabs.
  * Returns null only when no selectable tab remains.
  */
 export function activeAfterRemoval(
@@ -61,12 +61,12 @@ export function activeAfterRemoval(
 
   for (let i = idx - 1; i >= 0; i--) {
     const key = list[i]!
-    if (!isHidden(model, key)) return key
+    if (!isHidden(model, key) && !model.closed.includes(key)) return key
   }
 
   for (let i = idx + 1; i < list.length; i++) {
     const key = list[i]!
-    if (!isHidden(model, key)) return key
+    if (!isHidden(model, key) && !model.closed.includes(key)) return key
   }
 
   return null

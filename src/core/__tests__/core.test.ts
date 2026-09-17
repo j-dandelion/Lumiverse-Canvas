@@ -292,6 +292,56 @@ function test_invariant5_activeAfterRemoval() {
 
 test_invariant5_activeAfterRemoval()
 
+// ── OS mode (2026-09-16 H1): the closed set is an additional selectability
+//    gate for activeAfterRemoval — a closed window must never be elected as
+//    the replacement active (move-out, setHidden, etc.). Note `closed` is
+//    deliberately NOT consulted by visibleKeys / visibleToAbsoluteIndex
+//    (strip + visible-index semantics), only by active selection.
+function test_invariant5_activeAfterRemovalSkipsClosed() {
+  // Nearest neighbour above is closed → fall through to the next selectable
+  // key above (hidden CORTEX is skipped too).
+  const aboveClosed = { ...modelWith({
+    primary: [PROFILE, PRESETS, CORTEX, LOOM],
+    hidden: [CORTEX],
+  }), closed: [PRESETS] }
+  assertEqual(activeAfterRemoval(aboveClosed, 'primary', LOOM), PROFILE, 'closed above: skip closed + hidden, pick next selectable above')
+
+  // Nothing selectable above → fall BELOW rather than elect the closed key.
+  const belowAfterClosed = { ...modelWith({ primary: [PROFILE, PRESETS, LOOM] }), closed: [PROFILE] }
+  assertEqual(activeAfterRemoval(belowAfterClosed, 'primary', PRESETS), LOOM, 'only closed above: prefer below over closed')
+
+  // Move the active out of the side: the source replacement must not be the
+  // closed neighbour above.
+  const m = { ...modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PRESETS] }
+  const moved = reduce(m, { t: 'move', key: LOOM, to: 'secondary', index: 0, activateDest: false })
+  assertArraysEqual(moved.primary, [PROFILE, PRESETS], 'move active out: source loses only the moved key')
+  assertEqual(moved.active.primary, PROFILE, 'move active out: closed neighbour is not elected as replacement')
+
+  // Only closed keys remain → no replacement at all.
+  const onlyClosed = { ...modelWith({ primary: [PROFILE, PRESETS, LOOM] }), closed: [PROFILE, PRESETS] }
+  assertEqual(activeAfterRemoval(onlyClosed, 'primary', LOOM), null, 'only closed keys remain: replacement is null')
+
+  // setHidden(active) replaces through activeAfterRemoval too.
+  const hiddenActive = { ...modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PRESETS] }
+  const hid = reduce(hiddenActive, { t: 'setHidden', key: LOOM, hidden: true })
+  assertEqual(hid.active.primary, PROFILE, 'setHidden(active): closed neighbour is not elected')
+
+  const hidOnlyClosed = { ...modelWith({
+    primary: [PROFILE, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PROFILE] }
+  const hidNull = reduce(hidOnlyClosed, { t: 'setHidden', key: LOOM, hidden: true })
+  assertEqual(hidNull.active.primary, null, 'setHidden(active) with only closed left: replacement is null')
+}
+
+test_invariant5_activeAfterRemovalSkipsClosed()
+
 // ═══════════════════════════════════════════════════════════════════
 // Move intent
 // ═══════════════════════════════════════════════════════════════════
