@@ -30,6 +30,8 @@ let forcedSingleDrawer = false
 const setSettingsCalls: Array<Record<string, unknown>> = []
 const modeCalls: Array<{ next: boolean; opts?: unknown }> = []
 let modeGate: Promise<void> | null = null
+let modeReject = false
+let modeSkipFlip = false
 
 mock.module('../../recon/dispatch', () => ({
   getHost: () => ({}),
@@ -67,7 +69,8 @@ mock.module('../../settings/second-drawer-mode', () => ({
   requestSecondDrawerMode: async (next: boolean, opts?: unknown) => {
     modeCalls.push({ next, opts })
     if (modeGate) await modeGate
-    secondSidebarEnabled = next
+    if (modeReject) throw new Error('mode switch failed')
+    if (!modeSkipFlip) secondSidebarEnabled = next
   },
 }))
 
@@ -85,6 +88,8 @@ function reset() {
   setSettingsCalls.length = 0
   modeCalls.length = 0
   modeGate = null
+  modeReject = false
+  modeSkipFlip = false
 }
 
 // ── Force: OS on + mobile + dual → flag set, silent mode switch ──
@@ -237,6 +242,56 @@ function reset() {
   assertEqual(modeCalls[1]?.next, true, 'rerun re-enables the second drawer')
   assertEqual(secondSidebarEnabled, true, 'final state is dual')
   assertEqual(forcedSingleDrawer, false, 'OS-off clears the latch')
+}
+
+// ── L6: a rejecting restore keeps the latch so the next sync retries ──
+{
+  reset()
+  osMode = false
+  mobile = true
+  secondSidebarEnabled = false
+  forcedSingleDrawer = true
+  modeReject = true
+  await syncOsMobileDrawerMode().catch(() => {})
+  assertEqual(modeCalls.length, 1, 'rejecting restore still runs the mode switch')
+  assertEqual(secondSidebarEnabled, false, 'rejecting restore leaves the drawer off')
+  assertEqual(forcedSingleDrawer, true, 'rejecting restore keeps the latch')
+  modeReject = false
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 2, 'next sync retries the restore switch')
+  assertEqual(secondSidebarEnabled, true, 'retry lands the dual drawer')
+  assertEqual(forcedSingleDrawer, false, 'retry clears the latch')
+}
+
+// ── L6: a resolved-but-failed restore (swallowed error) keeps the latch ──
+{
+  reset()
+  osMode = false
+  mobile = true
+  secondSidebarEnabled = false
+  forcedSingleDrawer = true
+  modeSkipFlip = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 1, 'swallowed failure runs the restore switch')
+  assertEqual(secondSidebarEnabled, false, 'swallowed failure leaves the drawer off')
+  assertEqual(forcedSingleDrawer, true, 'swallowed failure keeps the latch')
+}
+
+// ── L6: the latch clears only once the drawer is actually back ──
+{
+  reset()
+  osMode = false
+  mobile = true
+  secondSidebarEnabled = false
+  forcedSingleDrawer = true
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 1, 'successful restore runs one mode switch')
+  assertEqual(secondSidebarEnabled, true, 'successful restore lands the dual drawer')
+  assertEqual(forcedSingleDrawer, false, 'successful restore clears the latch')
+  assert(
+    setSettingsCalls.some((p) => p.osForcedSingleDrawer === false),
+    'successful restore writes the cleared latch',
+  )
 }
 
 console.log('---')

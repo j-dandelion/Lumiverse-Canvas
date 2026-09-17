@@ -124,10 +124,17 @@ async function runSyncOsMobileDrawerMode(): Promise<void> {
     return
   }
   if (!force && s.osForcedSingleDrawer) {
-    setSettings({ osForcedSingleDrawer: false })
     dlog('[os] mobile: restoring dual-drawer mode')
     const { requestSecondDrawerMode } = await import('../settings/second-drawer-mode')
     await requestSecondDrawerMode(true)
+    // Only clear the latch when the drawer actually came back: the mode-switch
+    // path swallows failures, so a resolved promise is not proof of success.
+    // Keeping the latch lets the next sync trigger retry the restore.
+    if (getSettings().secondSidebarEnabled) {
+      setSettings({ osForcedSingleDrawer: false })
+    } else {
+      dwarn('[os] mobile: dual restore did not land; keeping forced-single latch')
+    }
   }
 }
 
