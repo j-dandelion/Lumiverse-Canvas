@@ -269,9 +269,10 @@ function currentStripWidthPx(): number {
 }
 
 /**
- * Fraction (0..1) → clamped split percentage. Reserves SPLIT_MIN_SIDE_PX on
- * each side so both docks stay reachable on narrow viewports; the settings
- * layer additionally guarantees a finite [0.1, 0.9] fraction.
+ * Fraction (0..1) → clamped split percentage. The live drag domain is a
+ * subset of the persisted [10, 90] domain: SPLIT_MIN_SIDE_PX per side is
+ * enforced as a 10% floor, raised further when 64px exceeds 10% of the strip
+ * (narrow viewports) so both docks stay reachable and a release never snaps.
  */
 export function computeSplitPct(
   fraction: number,
@@ -279,7 +280,7 @@ export function computeSplitPct(
 ): number {
   const f = Number.isFinite(fraction) ? fraction : 0.5
   const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0
-  const minPct = px > 0 ? Math.max(8, (SPLIT_MIN_SIDE_PX / px) * 100) : 8
+  const minPct = px > 0 ? Math.max(10, (SPLIT_MIN_SIDE_PX / px) * 100) : 10
   const maxPct = 100 - minPct
   const pct = Math.min(maxPct, Math.max(minPct, f * 100))
   return Math.round(pct * 100) / 100

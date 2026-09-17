@@ -381,14 +381,28 @@ describe('horizontal split var + overlay (2026-09-16)', () => {
     expect(getHorizontalSplitVar()).toBe('')
   })
 
-  test('computeSplitPct reserves a 64px floor per side', () => {
-    expect(computeSplitPct(0.05, 1000)).toBe(8)
-    expect(computeSplitPct(0.95, 1000)).toBe(92)
+  test('computeSplitPct clamps to the persisted [10, 90] domain', () => {
+    expect(computeSplitPct(0.05, 1000)).toBe(10)
+    expect(computeSplitPct(0.95, 1000)).toBe(90)
     expect(computeSplitPct(0.5, 400)).toBe(50)
     // 64px of a 400px strip → 16% floor.
     expect(computeSplitPct(0.02, 400)).toBe(16)
     expect(computeSplitPct(0.98, 400)).toBe(84)
     expect(computeSplitPct(Number.NaN, 1000)).toBe(50)
+  })
+
+  test('computeSplitPct lands exactly on the persisted bounds (no release snap)', () => {
+    expect(computeSplitPct(1, 1920)).toBe(90)
+    expect(computeSplitPct(0, 1920)).toBe(10)
+  })
+
+  test('computeSplitPct keeps the 64px/side floor on narrow strips', () => {
+    expect(computeSplitPct(1, 500)).toBe(87.2)
+    expect(computeSplitPct(0, 500)).toBe(12.8)
+  })
+
+  test('computeSplitPct ignores the 64px floor once 10% is wider', () => {
+    expect(computeSplitPct(1, 700)).toBe(90)
   })
 
   test('drag live-writes the var; reconciles cannot clobber it while dragging', () => {
