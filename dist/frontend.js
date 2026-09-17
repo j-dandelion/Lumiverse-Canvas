@@ -1202,11 +1202,12 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] > .sidebar-ux-tab-l
    overlay anchored to its screen edge. The overlay's inner edge is the
    split, carried by --sidebar-ux-hsplit (a % of the strip; written by
    tab-position.syncHorizontalSplit). The main lane is padded by the same
-   value so each drawer's tabs stay in their own region — same percentage
-   basis as the fixed host width (viewport), so the edges coincide at any
-   split. Selectors need the owner + axis + location tier to beat the base
-   list rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides
-   pinned list (same data-pin-owner) untouched. */
+   value PLUS both safe-area insets (the overlay edge is inset-anchored) so
+   each drawer's tabs stay in their own region — same percentage basis as
+   the fixed host width (viewport), so the edges coincide at any split.
+   Selectors need the owner + axis + location tier to beat the base list
+   rule (0,3,1) and inline backgrounds; axis-gating keeps the Sides pinned
+   list (same data-pin-owner) untouched. */
 
 /* Secondary overlay list: no surface of its own, and the chat-facing
    separator is suppressed — the main list paints it once, and the token is
@@ -1219,16 +1220,20 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
 
 /* Main lane: pad the list's secondary-facing side out to the split. The
    background paints through the padding (full-width surface); max() keeps
-   the plain 8px gutter while there is no zone (var absent/0). The sidebar
-   side classes name the MAIN drawer's side, so the secondary sits opposite:
-   main right → lane starts on the left; main left → lane ends on the right. */
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right > .sidebar-ux-tab-list {
-  padding-left: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+   the plain 8px gutter while there is no zone. The lane edge must meet the
+   overlay's inset-anchored edge, so both safe-area insets are added: at
+   zero insets + present var the sum is exactly the hsplit var, and the
+   var's fallback is the negated inset sum, so an absent var collapses to
+   the 8px gutter. The sidebar side classes name the MAIN drawer's side, so
+   the secondary sits opposite: main right → lane starts on the left; main
+   left → lane ends on the right. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-right:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
+  padding-left: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, calc(-1 * (env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)))))) !important;
 }
-html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list,
-html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left > .sidebar-ux-tab-list {
-  padding-right: max(8px, var(--sidebar-ux-hsplit, 0px)) !important;
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="main"].sidebar-ux-side-left:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) > .sidebar-ux-tab-list {
+  padding-right: max(8px, calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px) + var(--sidebar-ux-hsplit, calc(-1 * (env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)))))) !important;
 }
 
 /* Boundary handle: hidden everywhere by default (Sides keeps its pinned
@@ -1531,10 +1536,10 @@ html.${LOCATION_CLASS_TOP} [class*="_chatColumnInner_"]:not(#__theme_studio_auth
 html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
+html.${LOCATION_CLASS_TOP} [data-component="LandingPage"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-top: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"] {
+html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
 `;
@@ -1978,12 +1983,12 @@ function activeAfterRemoval(model, side, removed) {
     return null;
   for (let i = idx - 1;i >= 0; i--) {
     const key = list[i];
-    if (!isHidden(model, key))
+    if (!isHidden(model, key) && !model.closed.includes(key))
       return key;
   }
   for (let i = idx + 1;i < list.length; i++) {
     const key = list[i];
-    if (!isHidden(model, key))
+    if (!isHidden(model, key) && !model.closed.includes(key))
       return key;
   }
   return null;
@@ -2132,6 +2137,8 @@ function applyActivate(model, key, side) {
   if (!list.includes(key))
     return model;
   if (isHidden(model, key))
+    return model;
+  if (model.closed.includes(key))
     return model;
   if (model.active[side] === key)
     return model;
@@ -3643,11 +3650,13 @@ __export(exports_tab_position, {
   TAB_LIST_PIN_HOST_CLASS: () => TAB_LIST_PIN_HOST_CLASS,
   TAB_LIST_SPACER_CLASS: () => TAB_LIST_SPACER_CLASS,
   TAB_LIST_WIDTH_PX: () => TAB_LIST_WIDTH_PX,
+  __finishSplitDragForTest: () => __finishSplitDragForTest,
   __getMainPinHostForTest: () => __getMainPinHostForTest,
   __getPinHostForTest: () => __getPinHostForTest,
   __resetPinStateForTest: () => __resetPinStateForTest,
   __setMainPinHostForTest: () => __setMainPinHostForTest,
   __setPinHostForTest: () => __setPinHostForTest,
+  __startSplitDragForTest: () => __startSplitDragForTest,
   applyPinnedTabListChrome: () => applyPinnedTabListChrome,
   applyTabListPin: () => applyTabListPin,
   applyTabListPosition: () => applyTabListPosition,
@@ -3714,6 +3723,10 @@ function __setMainPinHostForTest(host) {
 }
 function __resetPinStateForTest() {
   teardownSplitProximityTracker();
+  const cancelDrag = _splitDragCancel;
+  _splitDragCancel = null;
+  _splitDragFinish = null;
+  cancelDrag?.();
   _pinHost = null;
   _pinSpacer = null;
   _restoreParent = null;
@@ -3722,6 +3735,12 @@ function __resetPinStateForTest() {
   _splitHandle = null;
   _splitDragging = false;
   _splitDragCancel = null;
+}
+function __startSplitDragForTest(handle) {
+  startSplitDrag(handle);
+}
+function __finishSplitDragForTest(persist) {
+  _splitDragFinish?.(persist);
 }
 function getMainPinHost() {
   return _mainPinHost;
@@ -3768,7 +3787,7 @@ function currentStripWidthPx() {
 function computeSplitPct(fraction, stripWidthPx = currentStripWidthPx()) {
   const f = Number.isFinite(fraction) ? fraction : 0.5;
   const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0;
-  const minPct = px > 0 ? Math.max(8, SPLIT_MIN_SIDE_PX / px * 100) : 8;
+  const minPct = px > 0 ? Math.max(10, SPLIT_MIN_SIDE_PX / px * 100) : 10;
   const maxPct = 100 - minPct;
   const pct = Math.min(maxPct, Math.max(minPct, f * 100));
   return Math.round(pct * 100) / 100;
@@ -3831,7 +3850,7 @@ function applyPinHostChrome(host, side, owner) {
   setIfDifferent(s, "zIndex", owner === PIN_OWNER_SECONDARY && horizontal ? PIN_Z_INDEX_SECONDARY : PIN_Z_INDEX);
   setIfDifferent(s, "pointerEvents", "none");
   if (horizontal) {
-    setIfDifferent(s, "height", "var(--sidebar-ux-strip-h, 56px)");
+    setImportant(s, "height", "var(--sidebar-ux-strip-h, 56px)");
     if (edge === "top") {
       setIfDifferent(s, "top", SAFE_TOP);
       setIfDifferent(s, "bottom", "");
@@ -4344,6 +4363,7 @@ function startSplitDrag(handle) {
     }
     _splitDragging = false;
     _splitDragCancel = null;
+    _splitDragFinish = null;
     if (persist && handle.isConnected) {
       const pct = parseFloat(root.style.getPropertyValue(SPLIT_VAR));
       if (Number.isFinite(pct)) {
@@ -4362,7 +4382,7 @@ function startSplitDrag(handle) {
       finish(false);
       return;
     }
-    const rect = _mainPinHost?.getBoundingClientRect?.();
+    const rect = handle.parentElement?.getBoundingClientRect?.() ?? _mainPinHost?.getBoundingClientRect?.();
     const left = rect && Number.isFinite(rect.left) ? rect.left : 0;
     const right = rect && Number.isFinite(rect.right) ? rect.right : left + vw;
     const boundaryPx = side === "left" ? e.clientX - left : right - e.clientX;
@@ -4371,6 +4391,7 @@ function startSplitDrag(handle) {
   const onUp = () => finish(true);
   const onCancel = () => finish(false);
   _splitDragCancel = onCancel;
+  _splitDragFinish = finish;
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onCancel);
@@ -4463,7 +4484,7 @@ function destroyPinChrome() {
   clearSplitVar();
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_HANDLE_NEAR_CLASS = "sidebar-ux-hsplit-handle--near", SPLIT_REVEAL_RADIUS_PX = 100, SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _splitProximityCleanup = null, _mainPinHost = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_HANDLE_NEAR_CLASS = "sidebar-ux-hsplit-handle--near", SPLIT_REVEAL_RADIUS_PX = 100, SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _splitDragFinish = null, _splitProximityCleanup = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
@@ -8029,9 +8050,17 @@ function isMobileViewportLocal() {
   }
 }
 function syncOsMobileDrawerMode() {
-  if (_mobileDrawerSync)
+  if (_mobileDrawerSync) {
+    _mobileDrawerSyncDirty = true;
     return _mobileDrawerSync;
-  _mobileDrawerSync = runSyncOsMobileDrawerMode().finally(() => {
+  }
+  _mobileDrawerSync = (async () => {
+    let i3 = 0;
+    do {
+      _mobileDrawerSyncDirty = false;
+      await runSyncOsMobileDrawerMode();
+    } while (_mobileDrawerSyncDirty && ++i3 < 5);
+  })().finally(() => {
     _mobileDrawerSync = null;
   });
   return _mobileDrawerSync;
@@ -8048,10 +8077,14 @@ async function runSyncOsMobileDrawerMode() {
     return;
   }
   if (!force && s3.osForcedSingleDrawer) {
-    setSettings({ osForcedSingleDrawer: false });
     dlog("[os] mobile: restoring dual-drawer mode");
     const { requestSecondDrawerMode } = await Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode));
     await requestSecondDrawerMode(true);
+    if (getSettings().secondSidebarEnabled) {
+      setSettings({ osForcedSingleDrawer: false });
+    } else {
+      dwarn("[os] mobile: dual restore did not land; keeping forced-single latch");
+    }
   }
 }
 function getActiveSingleSlot() {
@@ -8116,7 +8149,7 @@ async function applyOsModeChange(prev, next) {
     const dual = getSettings().secondSidebarEnabled;
     const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot();
     const host = getHost();
-    const hasTabs = !!slot && Array.isArray(slot.detachedTabs) && slot.detachedTabs.length > 0;
+    const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0);
     if (slot && host && hasTabs) {
       const result = await restoreSingleModeLayout(slot, host);
       if (!result.ok) {
@@ -8135,7 +8168,7 @@ async function applyOsModeChange(prev, next) {
     return;
   }
 }
-var _mobileDrawerSync = null;
+var _mobileDrawerSync = null, _mobileDrawerSyncDirty = false;
 var init_os_mode = __esm(() => {
   init_dispatch();
   init_layout_load();
@@ -8149,6 +8182,13 @@ var exports_second_drawer_mode = {};
 __export(exports_second_drawer_mode, {
   requestSecondDrawerMode: () => requestSecondDrawerMode
 });
+function isMobileViewportLocal2() {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+  } catch {
+    return false;
+  }
+}
 function injectDialogStyles() {
   injectStyles(STYLE_ID2, `
     #${HOST_ID} {
@@ -8355,10 +8395,13 @@ function showModeSwitchDialog() {
 }
 async function finishDisable() {
   const dualSnapshot = snapshotOwnedModelLayout();
-  if (dualSnapshot) {
+  const storedDual = getActiveDualSlot();
+  const snapshotTabs = dualSnapshot?.detachedTabs?.length ?? 0;
+  const storedTabs = storedDual?.detachedTabs?.length ?? 0;
+  if (dualSnapshot && (snapshotTabs > 0 || storedTabs === 0)) {
     setActiveDualSlot(dualSnapshot);
     dlog("[second-drawer-mode] saved dual layout slot:", {
-      tabs: dualSnapshot.detachedTabs?.length ?? 0
+      tabs: snapshotTabs
     });
   }
   let singleLayout = getActiveSingleSlot();
@@ -8434,6 +8477,10 @@ async function requestSecondDrawerMode(next, opts) {
   if (next) {
     if (getSettings().secondSidebarEnabled)
       return;
+    if (getSettings().osMode && isMobileViewportLocal2()) {
+      dlog("[second-drawer-mode] enable ignored: OS mode forces single drawer on mobile");
+      return;
+    }
     const switchDualSlot = getActiveDualSlot();
     const switchSingleSlot = getActiveSingleSlot();
     dlog("[second-drawer-mode] switching to dual", {
@@ -12698,6 +12745,7 @@ function addSecondaryTabButton(tab) {
     iconWrap.appendChild(img);
   } else {
     iconWrap.innerHTML = PUZZLE_ICON_SVG;
+    iconWrap.querySelector("svg")?.classList.add("canvas-puzzle");
   }
   btn.appendChild(iconWrap);
   const labelSpan = document.createElement("span");
@@ -13214,8 +13262,20 @@ function buildPersistedBlob(model, resolve) {
   const isDual = model.secondary.length > 0;
   const os = isOsModeEnabled();
   const base = os ? layout : { ...layout, closedTabIds: [] };
+  const s3 = getSettings();
+  const lastPrimary = getLastLoadedLayout()?.primary ?? null;
+  const basePrimary = base.primary ?? {};
+  const lastOpen = lastPrimary?.open;
+  const lastWidth = lastPrimary?.width;
+  const frozenOpen = typeof lastOpen === "boolean" ? lastOpen : basePrimary.open;
+  const frozenWidth = typeof lastWidth === "number" ? lastWidth : basePrimary.width;
   return {
     ...base,
+    primary: {
+      ...basePrimary,
+      open: s3.persistDrawerOpenState ? basePrimary.open : frozenOpen,
+      width: s3.persistDrawerWidth ? basePrimary.width : frozenWidth
+    },
     dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
     singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
     osDualLayout: isDual ? os ? base : getOsDualLayoutSlot() : getOsDualLayoutSlot(),
@@ -13432,6 +13492,8 @@ async function applyMainMirrorMoveChrome(chrome, liveId) {
   }
 }
 async function captureSecondaryNeighborForMove(liveId) {
+  if (getModel()?.drawers.secondary.open !== true)
+    return { neighborBtn: null };
   const { getActiveSecondaryTabId: getActiveSecondaryTabId2 } = await Promise.resolve().then(() => (init_active_tab(), exports_active_tab));
   if (getActiveSecondaryTabId2() !== liveId)
     return { neighborBtn: null };
@@ -13721,20 +13783,22 @@ function animateDrawerOpen(wrapper, drawer, side) {
     return;
   }
   ensureAnchorTracking();
+  wrapper.style.transform = "translateX(0)";
+  const anchor = resolveAnchor(side, drawer, "open");
   animatePanelToggle(wrapper, drawer, {
     open: true,
     edge: getStripEdge() ?? "top",
-    anchor: resolveAnchor(side, drawer, "open")
+    anchor
   });
 }
 function animateDrawerClose(wrapper, drawer, closedPx, side) {
+  const suppressed = _suppressCloseAnchor[side];
+  _suppressCloseAnchor[side] = false;
   if (!isHorizontalStrip()) {
     animateWrapper(wrapper, closedPx);
     return;
   }
   ensureAnchorTracking();
-  const suppressed = _suppressCloseAnchor[side];
-  _suppressCloseAnchor[side] = false;
   animatePanelToggle(wrapper, drawer, {
     open: false,
     edge: getStripEdge() ?? "top",
@@ -18258,8 +18322,9 @@ function setSettings(patch) {
       moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
       coreTabsHidden: DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     };
-    next.taskbarMode = prefs.taskbarMode;
-    next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge;
+    const chromePrefs = next.drawerLocation === "sides" ? next.sidesChromePrefs ?? prefs : prefs;
+    next.taskbarMode = chromePrefs.taskbarMode;
+    next.moveControlsToOuterEdge = chromePrefs.moveControlsToOuterEdge;
     next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden;
     next.osChromePrefs = { ...prefs };
   }
@@ -18731,7 +18796,7 @@ var init_start_menu_motion = __esm(() => {
 
 // src/os/start-menu.ts
 function isPlaceholderIcon(svg) {
-  return svg.classList.contains("lucide-puzzle") || svg.outerHTML === PUZZLE_ICON_SVG;
+  return svg.classList.contains("lucide-puzzle") || svg.classList.contains("canvas-puzzle");
 }
 function extractButtonIcon(root) {
   if (!root || typeof root.querySelector !== "function")
@@ -19028,6 +19093,10 @@ function attachMenuDismiss() {
     hideStartMenu();
   };
   const onKey = (ev) => {
+    if (ev.key === "Tab") {
+      hideStartMenu();
+      return;
+    }
     if (ev.key === "Escape") {
       ev.preventDefault();
       hideStartMenu();
@@ -19046,11 +19115,18 @@ function attachMenuDismiss() {
     const next = idx === -1 ? items[0] : items[(idx + dir + items.length) % items.length];
     next.focus();
   };
+  const onViewportResize = () => {
+    hideStartMenu({ immediate: true });
+  };
   document.addEventListener("mousedown", onDocMousedown, true);
   document.addEventListener("keydown", onKey, true);
+  window.addEventListener("resize", onViewportResize);
+  window.visualViewport?.addEventListener("resize", onViewportResize);
   _unsubDocListeners = () => {
     document.removeEventListener("mousedown", onDocMousedown, true);
     document.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("resize", onViewportResize);
+    window.visualViewport?.removeEventListener("resize", onViewportResize);
   };
 }
 function startButtonHtml() {
@@ -21509,7 +21585,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, osSecondaryStartMenuFeature, osWindowControlsFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, coreTabsHiddenFeature, osSecondaryStartMenuFeature, osWindowControlsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -21533,6 +21609,8 @@ var init_registry = __esm(() => {
   init_strip_gutter();
   init_buttons();
   init_main_mirror_drawer();
+  init_dispatch();
+  init_core_tabs();
   init_drawer_tab_position();
   debugFeature = {
     id: "debugMode",
@@ -21838,6 +21916,28 @@ var init_registry = __esm(() => {
       }
     }
   };
+  coreTabsHiddenFeature = {
+    id: "coreTabsHidden",
+    apply(prev, next) {
+      if (!prev.coreTabsHidden || next.coreTabsHidden)
+        return;
+      const model = getModel();
+      if (!model || model.hidden.length === 0)
+        return;
+      const stranded = model.hidden.filter((key) => {
+        const coreId = parseBuiltinKey(key);
+        return !!coreId && isCoreTabId(coreId);
+      });
+      if (stranded.length === 0)
+        return;
+      dispatchBatch(stranded.map((key) => ({ t: "setHidden", key, hidden: false }))).then(() => {
+        Promise.resolve().then(() => (init_configure_modal(), exports_configure_modal)).then((m3) => {
+          if (m3.isConfigureTabsModalOpen())
+            m3.refreshConfigureDraftFromLive();
+        }).catch(() => {});
+      }).catch(() => {});
+    }
+  };
   osSecondaryStartMenuFeature = {
     id: "osSecondaryStartMenu",
     apply(prev, next) {
@@ -21872,6 +21972,7 @@ var init_registry = __esm(() => {
     taskbarModeFeature,
     hideDrawerOpenCloseButtonsFeature,
     osModeFeature,
+    coreTabsHiddenFeature,
     osSecondaryStartMenuFeature,
     osWindowControlsFeature,
     dragAndDropDrawerTabsFeature,
