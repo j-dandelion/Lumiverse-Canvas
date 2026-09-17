@@ -191,6 +191,53 @@ function makeWrapper(transform = '') {
   ;(globalThis as any).document = undefined
 }
 
+// ── 6b. Regression: a suppressed close on Sides must consume the one-shot
+//      hint. The Sides branch early-returns without a bloom, so leaving the
+//      flag behind made a later Top/Bottom close wrongly fade in place
+//      instead of collapsing toward the displayed window's strip button. ──
+{
+  hydrateSettings({ drawerLocation: 'sides' })
+  const button = {
+    isConnected: true,
+    getAttribute: (name: string) => (name === 'data-tab-id' ? 'live-a' : null),
+    closest: () => ({
+      getAttribute: (name: string) => (name === 'data-pin-owner' ? 'secondary' : null),
+    }),
+    getBoundingClientRect: () => ({ left: 100, top: 8, width: 48, height: 48 }),
+  }
+  ;(globalThis as any).document = { querySelectorAll: () => [button] }
+  __setAnchorForTest('secondary', 'key-a', 'live-a')
+
+  // OS close schedules suppression; the close then runs on Sides (translate
+  // tween, no bloom) and must still consume/clear the flag.
+  const wrapper = makeWrapper('translateX(0)')
+  const { drawer } = makeDrawer()
+  suppressNextCloseAnchor('secondary')
+  animateDrawerClose(wrapper, drawer, 420, 'secondary')
+  assertEqual(__getPanelAnimState(wrapper).panelRaf, null, 'sides close does not bloom')
+  assert(__getAnimState(wrapper).animRaf !== null, 'sides close runs the translate tween')
+  cancelWrapperAnimation(wrapper)
+
+  // Switch to Top: the next close must anchor toward the displayed window's
+  // button — not inherit the stale suppression from the Sides close.
+  hydrateSettings({ drawerLocation: 'top' })
+  const d2 = makeDrawer()
+  const w2 = makeWrapper('translateX(0)')
+  animateDrawerClose(w2, d2.drawer, 420, 'secondary')
+  assert(
+    d2.drawer.style.transformOrigin.startsWith('29.52'),
+    'sides close consumed the suppress hint — top close anchors again',
+  )
+  assert(d2.drawer.style.transformOrigin.endsWith('% -3%'), 'top close uses the button y')
+  assertEqual(
+    d2.drawer.style.transform,
+    'translateY(0px) scale(1)',
+    'anchored top close keeps the structural snap',
+  )
+  cancelWrapperAnimation(w2)
+  ;(globalThis as any).document = undefined
+}
+
 // ── 7. Panel-animating flag: marks the bloom for chat/reflow's shadow swap ──
 // Top/Bottom blooms carry `data-canvas-panel-animating` so reflow keeps the
 // real (bloom-fading) drawer shadow during the motion and only paints the

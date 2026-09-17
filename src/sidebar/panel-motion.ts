@@ -185,13 +185,13 @@ export function animateDrawerClose(
   closedPx: number,
   side: Side,
 ): void {
+  const suppressed = _suppressCloseAnchor[side]
+  _suppressCloseAnchor[side] = false
   if (!isHorizontalStrip()) {
     animateWrapper(wrapper, closedPx)
     return
   }
   ensureAnchorTracking()
-  const suppressed = _suppressCloseAnchor[side]
-  _suppressCloseAnchor[side] = false
   animatePanelToggle(wrapper, drawer, {
     open: false,
     edge: getStripEdge() ?? 'top',
