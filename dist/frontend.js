@@ -1282,13 +1282,34 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
   margin: 0;
   border-left: 1px solid var(--lumiverse-primary-020) !important;
   background: transparent !important;
+  /* Idle: hidden. The line fades in only while the pointer is inside the
+     strip band and within SPLIT_REVEAL_RADIUS_PX (100) of the boundary —
+     the --near class toggled by tab-position's proximity tracker — or
+     when the handle is directly hovered / focused / dragged. The radius is
+     measured in JS: a CSS :hover zone wide enough for 100px would swallow
+     tab clicks. */
+  opacity: 0;
+  transition: opacity 150ms ease;
   pointer-events: none;
 }
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:hover::after,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:focus-visible::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle:focus-visible::after,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--active::after {
   border-left-color: var(--lumiverse-primary-050, var(--lumiverse-primary-020)) !important;
+  /* Directly engaged (hover/focus/drag) always shows the line, independent
+     of the 100px proximity tracker. */
+  opacity: 1 !important;
+}
+
+/* Proximity reveal: tab-position's document pointer tracker toggles
+   the --near class only while the pointer is inside the strip band and
+   within 100px of the boundary; the opacity transition above fades it. */
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--near::after,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="secondary"] > .sidebar-ux-hsplit-handle.sidebar-ux-hsplit-handle--near::after {
+  opacity: 1 !important;
 }
 /* Touch/coarse-pointer (and the mobile sheet width): the split still applies
    but there is no handle — same policy as DnD and the resize handles. */
@@ -3611,6 +3632,8 @@ __export(exports_tab_position, {
   PIN_OWNER_MAIN: () => PIN_OWNER_MAIN,
   PIN_OWNER_SECONDARY: () => PIN_OWNER_SECONDARY,
   SPLIT_HANDLE_CLASS: () => SPLIT_HANDLE_CLASS,
+  SPLIT_HANDLE_NEAR_CLASS: () => SPLIT_HANDLE_NEAR_CLASS,
+  SPLIT_REVEAL_RADIUS_PX: () => SPLIT_REVEAL_RADIUS_PX,
   SPLIT_VAR: () => SPLIT_VAR,
   STRIP_AXIS_ATTR: () => STRIP_AXIS_ATTR,
   STRIP_AXIS_HORIZONTAL: () => STRIP_AXIS_HORIZONTAL,
@@ -3642,6 +3665,7 @@ __export(exports_tab_position, {
   reconcileTabListPin: () => reconcileTabListPin,
   setHorizontalSplitDragging: () => setHorizontalSplitDragging,
   setHorizontalSplitPct: () => setHorizontalSplitPct,
+  shouldRevealSplitHandle: () => shouldRevealSplitHandle,
   syncHorizontalSplit: () => syncHorizontalSplit
 });
 function getPinnedTabList() {
@@ -3689,6 +3713,7 @@ function __setMainPinHostForTest(host) {
   _mainPinHost = host;
 }
 function __resetPinStateForTest() {
+  teardownSplitProximityTracker();
   _pinHost = null;
   _pinSpacer = null;
   _restoreParent = null;
@@ -4121,6 +4146,115 @@ function isCoarsePointer() {
     return false;
   }
 }
+function shouldRevealSplitHandle(opts) {
+  const { x, y, stripTop, stripBottom, dividerX } = opts;
+  if (!Number.isFinite(stripTop) || !Number.isFinite(stripBottom))
+    return false;
+  if (!Number.isFinite(x) || !Number.isFinite(y))
+    return false;
+  if (y < stripTop || y > stripBottom)
+    return false;
+  if (dividerX === null || !Number.isFinite(dividerX))
+    return false;
+  return Math.abs(x - dividerX) <= SPLIT_REVEAL_RADIUS_PX;
+}
+function installSplitProximityTracker(handle) {
+  if (typeof document === "undefined" || typeof window === "undefined")
+    return;
+  if (typeof document.addEventListener !== "function")
+    return;
+  if (typeof window.addEventListener !== "function")
+    return;
+  if (typeof handle.addEventListener !== "function")
+    return;
+  if (typeof handle.getBoundingClientRect !== "function")
+    return;
+  teardownSplitProximityTracker();
+  let near = false;
+  let frame = 0;
+  let lastX = 0;
+  let lastY = 0;
+  const schedule = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => {
+    cb();
+    return 0;
+  };
+  const setNear = (on) => {
+    if (near === on)
+      return;
+    near = on;
+    if (on)
+      handle.classList?.add?.(SPLIT_HANDLE_NEAR_CLASS);
+    else
+      handle.classList?.remove?.(SPLIT_HANDLE_NEAR_CLASS);
+  };
+  const stripBand = () => {
+    const rect = handle.parentElement?.getBoundingClientRect?.();
+    if (!rect)
+      return null;
+    return { top: rect.top, bottom: rect.bottom };
+  };
+  const apply = () => {
+    frame = 0;
+    if (!handle.isConnected) {
+      teardownSplitProximityTracker();
+      return;
+    }
+    if (_splitDragging) {
+      setNear(true);
+      return;
+    }
+    if (!isHorizontalStrip() || isMobileViewport() || isCoarsePointer()) {
+      setNear(false);
+      return;
+    }
+    const band = stripBand();
+    const rect = handle.getBoundingClientRect();
+    setNear(shouldRevealSplitHandle({
+      x: lastX,
+      y: lastY,
+      stripTop: band ? band.top : NaN,
+      stripBottom: band ? band.bottom : NaN,
+      dividerX: rect ? rect.left + rect.width / 2 : null
+    }));
+  };
+  const onMove = (e) => {
+    lastX = e.clientX;
+    lastY = e.clientY;
+    if (!frame)
+      frame = schedule(apply);
+  };
+  const onOut = (e) => {
+    if (!near || _splitDragging)
+      return;
+    const band = stripBand();
+    if (band && e.clientY >= band.top && e.clientY <= band.bottom)
+      return;
+    setNear(false);
+  };
+  const hide = () => {
+    setNear(false);
+  };
+  document.addEventListener("pointermove", onMove, { passive: true });
+  document.addEventListener("pointerout", onOut, true);
+  document.addEventListener("pointerleave", hide, true);
+  document.addEventListener("mouseleave", hide, true);
+  window.addEventListener("blur", hide);
+  _splitProximityCleanup = () => {
+    if (frame && typeof cancelAnimationFrame === "function")
+      cancelAnimationFrame(frame);
+    frame = 0;
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerout", onOut, true);
+    document.removeEventListener("pointerleave", hide, true);
+    document.removeEventListener("mouseleave", hide, true);
+    window.removeEventListener("blur", hide);
+  };
+}
+function teardownSplitProximityTracker() {
+  const cleanup = _splitProximityCleanup;
+  _splitProximityCleanup = null;
+  cleanup?.();
+}
 function ensureSplitHandle(host) {
   if (typeof document === "undefined")
     return null;
@@ -4142,6 +4276,7 @@ function ensureSplitHandle(host) {
   return handle;
 }
 function removeSplitHandle() {
+  teardownSplitProximityTracker();
   _splitDragCancel?.();
   _splitHandle?.remove();
   _splitHandle = null;
@@ -4170,6 +4305,7 @@ function installSplitHandleInteraction(handle) {
     setHorizontalSplitPct(computeSplitPct(0.5));
     setSettings({ horizontalSplit: 0.5 });
   });
+  installSplitProximityTracker(handle);
 }
 function startSplitDrag(handle) {
   if (typeof document === "undefined" || _splitDragging)
@@ -4327,7 +4463,7 @@ function destroyPinChrome() {
   clearSplitVar();
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _mainPinHost = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_HANDLE_NEAR_CLASS = "sidebar-ux-hsplit-handle--near", SPLIT_REVEAL_RADIUS_PX = 100, SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _splitProximityCleanup = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
