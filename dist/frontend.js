@@ -18622,7 +18622,7 @@ function deriveStartMenuEntries(model, resolve) {
       if (!liveId || seen.has(liveId))
         continue;
       seen.add(liveId);
-      const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
+      const state = model.closed.includes(key) || model.hidden.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
       const tab = tabs.get(liveId);
       const icon = resolveEntryIcon(tab, liveId);
       out.push({
