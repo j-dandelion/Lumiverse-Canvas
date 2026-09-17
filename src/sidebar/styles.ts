@@ -685,10 +685,10 @@ html.${LOCATION_CLASS_TOP} [class*="_chatColumnInner_"]:not(#__theme_studio_auth
 html.${LOCATION_CLASS_BOTTOM} [class*="_chatColumnInner_"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_TOP} [data-component="LandingPage"] {
+html.${LOCATION_CLASS_TOP} [data-component="LandingPage"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-top: var(--sidebar-ux-strip-h, 56px) !important;
 }
-html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"] {
+html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
 `

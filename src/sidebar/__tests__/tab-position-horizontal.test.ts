@@ -609,6 +609,19 @@ describe('HORIZONTAL_STRIP_CSS chat top/bottom reserve (live bug 2026-09-15)', (
     }
   })
 
+  // Same authority tier for the LandingPage reserve rules (L3): they own the
+  // same top/bottom reserve as the chat rules and were the only unguarded
+  // pair — a strong themed margin on the landing component silently dropped
+  // the reserve.
+  test('landing-page reserve rules carry the authority specificity tier', () => {
+    const owned = blocks.filter((b) => b.includes('[data-component="LandingPage"]'))
+    expect(owned.length).toBeGreaterThanOrEqual(2)
+    for (const rule of owned) {
+      expect(rule).toContain(':not(#__theme_studio_authority_a__)')
+      expect(rule).toContain(':not(#__theme_studio_authority_b__)')
+    }
+  })
+
   test('outer chat rules are retained (top margin pushes past the strip)', () => {
     const outerRules = blocks.filter(
       (b) => b.includes('_chatColumn_') && !b.includes('_chatColumnInner_'),
