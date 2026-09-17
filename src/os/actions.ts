@@ -275,6 +275,17 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
       .then(() => move)
       .then(() => open)
       .then(() => {
+        // SOURCE CLEANUP BEFORE THE CONTENT CLICK (order matters). Moving a
+        // window out of the second drawer re-homes its host button/root:
+        // built-ins get `requestHostTabToMain`, extensions are reparented (or
+        // detached so the host re-attaches on activation). Clicking the main
+        // content BEFORE that re-home leaves the target panel empty — the
+        // click resolves against a root still owned by the secondary wrapper
+        // (live report 2026-09-16).
+        if (!movingOutOfSecondary) return
+        return releaseSecondarySource(liveId, secondaryChrome)
+      })
+      .then(() => {
         // CONTENT SWITCH (D6). A model-only activation does not move the host
         // content: on the primary side reconcile's diffActive is MODEL-derived
         // (observe() reads model.active.primary while the mirror owns the
@@ -283,12 +294,9 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
         // memory), so reconcile's diffActive is a no-op too. Click through the
         // host port — primary = host twin click, secondary = showSecondaryTab
         // (silent: the model activation was dispatched above). Idempotent when
-        // the tab is already host-active.
+        // the tab is already host-active. Runs AFTER the source re-home so the
+        // root is attached on the target side when the click lands.
         void host.activate(side, liveId)
-      })
-      .then(() => {
-        if (!movingOutOfSecondary) return
-        return releaseSecondarySource(liveId, secondaryChrome)
       }),
   )
 }

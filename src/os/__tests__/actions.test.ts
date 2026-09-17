@@ -29,6 +29,8 @@ const fake: {
   secondaryCaptures: string[]
   secondaryHandoffs: string[]
   unassignCalls: string[]
+  /** Ordered log across mocks — pins the source-cleanup-before-content order. */
+  events: string[]
   drawerCommands: Array<{ side: string; open: boolean }>
   activations: Array<{ side: string; id: string }>
 } = {
@@ -44,6 +46,7 @@ const fake: {
   secondaryCaptures: [],
   secondaryHandoffs: [],
   unassignCalls: [],
+  events: [],
   drawerCommands: [],
   activations: [],
 }
@@ -69,12 +72,14 @@ mock.module('../../recon/dispatch', () => ({
   },
   applySecondaryNeighborHandoff: async (_chrome: any, liveId: string) => {
     fake.secondaryHandoffs.push(liveId)
+    fake.events.push(`handoff:${liveId}`)
   },
   getHost: () => ({
     findKey: (id: string) => fake.findKey(id),
     resolve: (key: string) => fake.resolveMap[key] ?? null,
     activate: (side: string, id: string) => {
       fake.activations.push({ side, id })
+      fake.events.push(`activate:${side}`)
       return Promise.resolve('ok')
     },
   }),
@@ -83,7 +88,10 @@ mock.module('../../recon/dispatch', () => ({
 // The OS launch path dynamically imports the secondary drawer for the
 // source-drawer cleanup (moves out of the second drawer); record it.
 mock.module('../../sidebar/secondary-drawer', () => ({
-  unassignFromSecondary: async (id: string) => { fake.unassignCalls.push(id) },
+  unassignFromSecondary: async (id: string) => {
+    fake.unassignCalls.push(id)
+    fake.events.push(`unassign:${id}`)
+  },
 }))
 mock.module('../../settings/state', () => ({
   isOsModeEnabled: () => fake.osMode,
@@ -111,6 +119,7 @@ function fresh(model: any) {
   fake.secondaryCaptures.length = 0
   fake.secondaryHandoffs.length = 0
   fake.unassignCalls.length = 0
+  fake.events.length = 0
   fake.drawerCommands.length = 0
   fake.activations.length = 0
   fake.osMode = true
@@ -404,6 +413,14 @@ const baseModel = () => ({
   assertEqual(fake.unassignCalls[0], 'weaver:2', 'unassign targets the moved live id')
   assertEqual(fake.secondaryHandoffs.length, 1, 'secondary→primary: neighbor handoff applied after the move')
   assertEqual(fake.secondaryHandoffs[0], 'weaver:2', 'handoff keyed by the moved live id')
+  // Order pin: the source re-home must run BEFORE the target content click —
+  // otherwise the main panel resolves against a root still owned by the
+  // secondary wrapper and shows no content (live report 2026-09-16).
+  const iUnassign = fake.events.indexOf('unassign:weaver:2')
+  const iActivate = fake.events.indexOf('activate:primary')
+  assertEqual(iUnassign >= 0, true, 'secondary→primary: unassign logged')
+  assertEqual(iActivate >= 0, true, 'secondary→primary: target content click logged')
+  assert(iUnassign < iActivate, 'source cleanup runs before the target content click')
 }
 {
   // Launch of a primary-resident window INTO secondary (the second drawer's
