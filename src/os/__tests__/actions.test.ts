@@ -26,6 +26,9 @@ const fake: {
   resolveMap: Record<string, string>
   dispatches: any[]
   moveCalls: Array<{ liveId: string; activateDest: boolean; visibleIndex?: number }>
+  secondaryCaptures: string[]
+  secondaryHandoffs: string[]
+  unassignCalls: string[]
   drawerCommands: Array<{ side: string; open: boolean }>
   activations: Array<{ side: string; id: string }>
 } = {
@@ -38,6 +41,9 @@ const fake: {
   resolveMap: {},
   dispatches: [],
   moveCalls: [],
+  secondaryCaptures: [],
+  secondaryHandoffs: [],
+  unassignCalls: [],
   drawerCommands: [],
   activations: [],
 }
@@ -57,6 +63,13 @@ mock.module('../../recon/dispatch', () => ({
     fake.moveCalls.push({ liveId, activateDest, visibleIndex })
     return Promise.resolve()
   },
+  captureSecondaryNeighborForMove: async (liveId: string) => {
+    fake.secondaryCaptures.push(liveId)
+    return { neighborBtn: null }
+  },
+  applySecondaryNeighborHandoff: async (_chrome: any, liveId: string) => {
+    fake.secondaryHandoffs.push(liveId)
+  },
   getHost: () => ({
     findKey: (id: string) => fake.findKey(id),
     resolve: (key: string) => fake.resolveMap[key] ?? null,
@@ -66,6 +79,11 @@ mock.module('../../recon/dispatch', () => ({
     },
   }),
   getModel: () => fake.model,
+}))
+// The OS launch path dynamically imports the secondary drawer for the
+// source-drawer cleanup (moves out of the second drawer); record it.
+mock.module('../../sidebar/secondary-drawer', () => ({
+  unassignFromSecondary: async (id: string) => { fake.unassignCalls.push(id) },
 }))
 mock.module('../../settings/state', () => ({
   isOsModeEnabled: () => fake.osMode,
@@ -90,6 +108,9 @@ const {
 function fresh(model: any) {
   fake.dispatches.length = 0
   fake.moveCalls.length = 0
+  fake.secondaryCaptures.length = 0
+  fake.secondaryHandoffs.length = 0
+  fake.unassignCalls.length = 0
   fake.drawerCommands.length = 0
   fake.activations.length = 0
   fake.osMode = true
@@ -360,6 +381,55 @@ const baseModel = () => ({
   assertEqual(fake.dispatches[2]?.t, 'activate', 'launch fresh: displayed')
   assertEqual(fake.activations.length, 1, 'secondary launch clicks its content too')
   assertEqual(fake.activations[0]?.side, 'secondary', 'secondary launch activation targets the secondary side')
+}
+{
+  // Launch of the DISPLAYED secondary window into primary (the main Start
+  // menu): the source drawer needs the non-model-driven cleanup — neighbor
+  // captured BEFORE the move, stale button unassigned, neighbor handoff
+  // applied after. Without this the drawer kept a ghost button/header.
+  fresh(baseModel())
+  fake.model = {
+    ...baseModel(),
+    primary: ['builtin:other'],
+    secondary: [KEY, 'builtin:loom'],
+    active: { primary: 'builtin:other', secondary: KEY },
+  }
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  assertEqual(fake.moveCalls.length, 1, 'secondary→primary: move dispatched')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, -1, 'secondary→primary: launch-end placement preserved')
+  assertEqual(fake.secondaryCaptures.length, 1, 'secondary→primary: neighbor captured before the move')
+  assertEqual(fake.secondaryCaptures[0], 'weaver:2', 'secondary capture keyed by the moved live id')
+  assertEqual(fake.unassignCalls.length, 1, 'secondary→primary: stale source button unassigned')
+  assertEqual(fake.unassignCalls[0], 'weaver:2', 'unassign targets the moved live id')
+  assertEqual(fake.secondaryHandoffs.length, 1, 'secondary→primary: neighbor handoff applied after the move')
+  assertEqual(fake.secondaryHandoffs[0], 'weaver:2', 'handoff keyed by the moved live id')
+}
+{
+  // Launch of a primary-resident window INTO secondary (the second drawer's
+  // menu): the main-mirror removal is model-driven, so none of the secondary
+  // cleanup runs.
+  fresh(baseModel())
+  fake.model = {
+    ...baseModel(),
+    secondary: ['builtin:loom'],
+    active: { primary: KEY, secondary: 'builtin:loom' },
+  }
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'secondary')
+  assertEqual(fake.moveCalls.length, 1, 'primary→secondary: move dispatched')
+  assertEqual(fake.secondaryCaptures.length, 0, 'primary→secondary: no secondary capture')
+  assertEqual(fake.unassignCalls.length, 0, 'primary→secondary: no secondary unassign')
+  assertEqual(fake.secondaryHandoffs.length, 0, 'primary→secondary: no secondary handoff')
+}
+{
+  // Same-drawer launch: no cross-drawer cleanup either.
+  fresh({ ...baseModel(), closed: [KEY] })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  assertEqual(fake.secondaryCaptures.length, 0, 'same-drawer: no secondary capture')
+  assertEqual(fake.unassignCalls.length, 0, 'same-drawer: no secondary unassign')
+  assertEqual(fake.secondaryHandoffs.length, 0, 'same-drawer: no secondary handoff')
 }
 {
   // OS off → nothing.

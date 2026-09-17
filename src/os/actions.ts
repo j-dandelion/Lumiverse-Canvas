@@ -28,7 +28,7 @@ import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/sta
 import { isCoreTabId } from '../tabs/core-tabs'
 import { suppressNextCloseAnchor } from '../sidebar/panel-motion'
 import { commandDrawerOpen } from './drawer-command'
-import { dlog } from '../debug/log'
+import { dlog, dwarn } from '../debug/log'
 
 /**
  * True when closing this window must also mark the tab hidden in Configure
@@ -186,6 +186,11 @@ export function launchEndVisibleIndex(
  * target drawer, including a window minimized in the other drawer. Only the
  * cross-drawer MOVE keeps its `activateDest: false` (no focus during the
  * move); the open batch owns the focus.
+ *
+ * Source handoff: a move OUT of the second drawer also unassigns the stale
+ * source button and activates the captured neighbor when the moved window was
+ * displayed there — the secondary shell's removal/neighbor half is not
+ * model-driven. Moves out of the main drawer are model-driven (mirror).
  */
 export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<void> {
   if (!isOsModeEnabled()) return Promise.resolve()
@@ -206,6 +211,21 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   const launchIndex = placeAtEnd
     ? launchEndVisibleIndex(side, model.side, isHorizontalStrip())
     : -1
+
+  // Source-drawer handoff for a move OUT of the second drawer. The secondary
+  // shell's removal/neighbor half is NOT model-driven: reconcile derives the
+  // observed location from the assignment facade, so a moved-out button is
+  // never placed away and the stale source button (plus its header/content)
+  // survives as a ghost. Capture the nearest visible neighbor BEFORE any
+  // placement (the moved button must still be in the list), then sweep the
+  // stale button + activate the neighbor once the move commits. Moves out of
+  // the main drawer need none of this — the mirror renders from the model.
+  const movingOutOfSecondary = !livesInTarget && side === 'primary'
+  const secondaryCapture: Promise<{ neighborBtn: HTMLElement | null }> = movingOutOfSecondary
+    // Dynamic: keeps the lean dispatch mocks in unrelated suites working (the
+    // helper is only reached on a move out of the second drawer).
+    ? import('../recon/dispatch').then((m) => m.captureSecondaryNeighborForMove(liveId))
+    : Promise.resolve({ neighborBtn: null })
 
   // Hidden targets (Start-menu recovery path): activation is hidden-gated in
   // the reducer, so un-hide FIRST — otherwise the activate intent is dropped
@@ -249,22 +269,50 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
     { t: 'activate', key, side },
   ])
 
-  return unhide
-    .then(() => openDrawer)
-    .then(() => move)
-    .then(() => open)
-    .then(() => {
-      // CONTENT SWITCH (D6). A model-only activation does not move the host
-      // content: on the primary side reconcile's diffActive is MODEL-derived
-      // (observe() reads model.active.primary while the mirror owns the
-      // surface), so nothing clicks the host twin; on the secondary the
-      // tracked active still equals the tab after an OS minimize (reopen
-      // memory), so reconcile's diffActive is a no-op too. Click through the
-      // host port — primary = host twin click, secondary = showSecondaryTab
-      // (silent: the model activation was dispatched above). Idempotent when
-      // the tab is already host-active.
-      void host.activate(side, liveId)
-    })
+  return secondaryCapture.then((secondaryChrome) =>
+    unhide
+      .then(() => openDrawer)
+      .then(() => move)
+      .then(() => open)
+      .then(() => {
+        // CONTENT SWITCH (D6). A model-only activation does not move the host
+        // content: on the primary side reconcile's diffActive is MODEL-derived
+        // (observe() reads model.active.primary while the mirror owns the
+        // surface), so nothing clicks the host twin; on the secondary the
+        // tracked active still equals the tab after an OS minimize (reopen
+        // memory), so reconcile's diffActive is a no-op too. Click through the
+        // host port — primary = host twin click, secondary = showSecondaryTab
+        // (silent: the model activation was dispatched above). Idempotent when
+        // the tab is already host-active.
+        void host.activate(side, liveId)
+      })
+      .then(() => {
+        if (!movingOutOfSecondary) return
+        return releaseSecondarySource(liveId, secondaryChrome)
+      }),
+  )
+}
+
+/**
+ * Cleanup after an OS launch moved a window OUT of the second drawer:
+ * remove the stale source button (the removal half is not model-driven — see
+ * `secondaryTabsToUnassign` in sidebar/secondary.tsx) and activate the
+ * captured neighbor when the moved window was the drawer's displayed one, so
+ * the drawer never keeps a ghost button/header with no content. Mirrors the
+ * capture/apply split of `placementFirstMoveByLiveId` (right-click / DnD).
+ */
+async function releaseSecondarySource(
+  liveId: string,
+  chrome: { neighborBtn: HTMLElement | null },
+): Promise<void> {
+  try {
+    const drawer = await import('../sidebar/secondary-drawer')
+    await drawer.unassignFromSecondary(liveId)
+  } catch (err) {
+    dwarn('[os] openWindow: secondary source cleanup failed:', err instanceof Error ? err.message : err)
+  }
+  const dispatchMod = await import('../recon/dispatch')
+  await dispatchMod.applySecondaryNeighborHandoff(chrome, liveId)
 }
 
 /**
