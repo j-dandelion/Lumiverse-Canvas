@@ -5517,11 +5517,11 @@ function openWindowInDrawerByLiveId(liveId, side) {
     { t: "activate", key, side }
   ]);
   return secondaryCapture.then((secondaryChrome) => unhide.then(() => openDrawer).then(() => move).then(() => open).then(() => {
-    host.activate(side, liveId);
-  }).then(() => {
     if (!movingOutOfSecondary)
       return;
     return releaseSecondarySource(liveId, secondaryChrome);
+  }).then(() => {
+    host.activate(side, liveId);
   }));
 }
 async function releaseSecondarySource(liveId, chrome) {
