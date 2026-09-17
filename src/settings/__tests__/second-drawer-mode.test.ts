@@ -258,6 +258,52 @@ await requestSecondDrawerMode(false)
 assert(getDualLayoutSlot() === refreshedLive, 'normal dual disable: stored slot refreshed to the live snapshot')
 assertEqual(getDualLayoutSlot().detachedTabs.length, 2, 'normal dual disable: refreshed slot carries both detached tabs')
 
+// ── M6: OS+mobile enable guard (stale Configure toggle) ──
+// The module-local helper reads window.matchMedia; stub the viewport here
+// (controllable per scenario) since no other test in this file defines it.
+let mobileViewport = false
+;(globalThis as any).window = {
+  matchMedia: (query: string) => ({
+    matches: mobileViewport,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }),
+}
+
+setSettings({ secondSidebarEnabled: false })
+setSettings({ osMode: true })
+await sleep(150)
+sent.length = 0
+
+// Mobile + OS mode: the enable must be refused with no state mutation and
+// no mode-switch side effects (no dual mount/restore, no settings save).
+mobileViewport = true
+calls.bootstrapFromLayout = 0
+await requestSecondDrawerMode(true)
+assert(getSettings().secondSidebarEnabled === false, 'M6 mobile: enable refused while OS mode on')
+assertEqual(getSettings().osMode, true, 'M6 mobile: osMode untouched')
+assertEqual(calls.bootstrapFromLayout, 0, 'M6 mobile: no dual mount/restore ran')
+await sleep(250)
+assertEqual(
+  sent.filter((m) => m.type === 'SAVE_SETTINGS').length,
+  0,
+  'M6 mobile: no settings save side effect',
+)
+
+// Desktop + OS mode: behavior unchanged — the enable proceeds normally.
+// (No bootstrapFromLayout assertion here: with OS mode on, the active dual
+// slot is the OS variant, which is empty in this scenario.)
+mobileViewport = false
+sent.length = 0
+await requestSecondDrawerMode(true)
+assert(getSettings().secondSidebarEnabled === true, 'M6 desktop: enable still works with OS mode on')
+await sleep(250)
+assert(
+  sent.filter((m) => m.type === 'SAVE_SETTINGS').length >= 1,
+  'M6 desktop: enable proceeded through the persist path',
+)
+
 // ── Summary ──
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)

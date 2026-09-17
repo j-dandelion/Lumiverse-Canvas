@@ -68,6 +68,21 @@ import { resetSideRemountStateAfterDisable } from '../sidebar/drawer-sync'
 import { injectStyles } from '../debug/styles'
 import { dlog, dwarn } from '../debug/log'
 
+// Local matchMedia helper: importing sidebar/mobile-exclusion would pull the
+// whole shell graph into this module's already-cyclic load chain (see the
+// same pattern in os/os-mode.ts).
+function isMobileViewportLocal(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 600px)').matches
+    )
+  } catch {
+    return false
+  }
+}
+
 // ── Mode-switch dialog ──
 
 const HOST_ID = 'canvas-mode-switch-dialog'
@@ -526,6 +541,16 @@ export async function requestSecondDrawerMode(
   if (next) {
     // ── ENABLE ──
     if (getSettings().secondSidebarEnabled) return
+
+    // M6: OS+mobile single-drawer invariant. The Configure modal computes its
+    // lock state at render time, so a stale-enabled toggle clicked after a
+    // mobile viewport crossing could enable dual mode while OS mode is on.
+    // Refuse the enable (no state mutation); the OS-mobile force only ever
+    // calls the disable direction, which stays unguarded.
+    if (getSettings().osMode && isMobileViewportLocal()) {
+      dlog('[second-drawer-mode] enable ignored: OS mode forces single drawer on mobile')
+      return
+    }
 
     // Diagnostic: the mode switch decision — which persisted layout slot
     // each mode uses. Verifies "Enable second drawer loads the dual layout
