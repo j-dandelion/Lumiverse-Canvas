@@ -285,7 +285,7 @@ const baseModel = () => ({
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 1, 'D13: cross-drawer move dispatched')
   assertEqual(fake.moveCalls[0]?.activateDest, false, 'D13: move carries no focus (batch owns it)')
-  assertEqual(fake.moveCalls[0]?.visibleIndex, undefined, 'D13: present window keeps the default append')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, -1, 'D13: launch into the other drawer lands at its launch end')
   assertEqual(fake.dispatches.length, 2, 'D13: open batch after the move')
   assertEqual(fake.dispatches[0]?.t, 'setClosed', 'un-close first')
   assertEqual(fake.dispatches[1]?.t, 'activate', 'activate in the target drawer')
@@ -293,8 +293,9 @@ const baseModel = () => ({
   assertEqual(fake.activations[0]?.side, 'secondary', 'secondary content activation targets the secondary side')
 }
 {
-  // D13 state preservation: minimized in source arrives minimized — move
-  // only, no un-close/activate batch.
+  // D13 minimized cross-drawer launch: the invoking drawer is authoritative —
+  // the window MOVES here and DISPLAYS (no minimized arrival), placed at the
+  // target drawer's launch end.
   fresh(baseModel())
   fake.model = {
     ...baseModel(),
@@ -304,12 +305,40 @@ const baseModel = () => ({
   }
   fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
-  assertEqual(fake.moveCalls.length, 1, 'D13: minimized cross-drawer move dispatched')
-  assertEqual(fake.moveCalls[0]?.activateDest, false, 'D13: minimized move keeps no focus')
-  assertEqual(fake.moveCalls[0]?.visibleIndex, undefined, 'D13: minimized (present) window keeps the default append')
-  assertEqual(fake.dispatches.length, 1, 'D13 minimized: only the D19 drawer-open, no open batch')
-  assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'D13 minimized: the only dispatch is the drawer-open')
-  assertEqual(fake.activations.length, 0, 'D13 minimized arrival does not activate content')
+  assertEqual(fake.moveCalls.length, 1, 'minimized cross-drawer: move dispatched')
+  assertEqual(fake.moveCalls[0]?.activateDest, false, 'minimized cross-drawer: move keeps no focus')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, -1, 'minimized cross-drawer: launch lands at the drawer end')
+  assertEqual(fake.dispatches.length, 3, 'minimized cross-drawer: D19 open + un-close/activate batch')
+  assertEqual(fake.dispatches[0]?.t, 'setDrawer', 'minimized cross-drawer: D19 drawer-open first')
+  assertEqual(fake.dispatches[1]?.t, 'setClosed', 'minimized cross-drawer: then un-close')
+  assertEqual(fake.dispatches[2]?.t, 'activate', 'minimized cross-drawer: then display in the target drawer')
+  assertEqual(fake.activations.length, 1, 'minimized cross-drawer launch displays content in the target drawer')
+  assertEqual(fake.activations[0]?.side, 'secondary', 'minimized cross-drawer activation targets the launching drawer')
+}
+{
+  // Horizontal right-side launch: even a minimized window from the other
+  // drawer is displayed here and prepends (index 0 = the middle-facing end of
+  // a right-anchored cluster).
+  fresh(baseModel())
+  fake.horizontal = true
+  fake.mainSide = 'right'
+  fake.model = {
+    ...baseModel(),
+    primary: ['builtin:other'],
+    secondary: [KEY],
+    active: { primary: 'builtin:other', secondary: null },
+  }
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  assertEqual(fake.moveCalls.length, 1, 'horizontal cross-drawer: move dispatched')
+  assertEqual(fake.moveCalls[0]?.visibleIndex, 0, 'horizontal right main drawer: launch prepends (middle end)')
+  assertEqual(
+    fake.dispatches.some((d: any) => d.t === 'activate' && d.side === 'primary'),
+    true,
+    'horizontal cross-drawer minimized launch activates in the target drawer',
+  )
+  assertEqual(fake.activations.length, 1, 'horizontal cross-drawer launch displays content')
+  assertEqual(fake.activations[0]?.side, 'primary', 'activation targets the launching drawer')
 }
 {
   // D13 + closed: a closed tab in the other drawer moves and launches fresh.

@@ -99,8 +99,8 @@ assertIncludes(
 )
 assertIncludes(
   startMenu,
-  'void openWindowInDrawerByLiveId(entry.liveId, entry.side)',
-  'entry click routes to the entry OWN drawer (drawer-agnostic launcher, no D13 move)',
+  'void openWindowInDrawerByLiveId(entry.liveId, targetSide)',
+  'entry click launches into the MENU drawer (per-drawer launcher)',
 )
 
 // ── 6. Motion module contracts ──

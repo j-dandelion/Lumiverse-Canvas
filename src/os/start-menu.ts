@@ -14,13 +14,13 @@
  *   - the **menu**: the full tab inventory — BOTH drawers, hidden and closed
  *     tabs included — alphabetized by title (case-insensitive) with a state
  *     mark (D18 direction: filled dot = open, hollow circle = minimized, no
- *     mark = closed) and the tab's icon. Clicking routes through the
- *     window-state actions, targeting the entry's OWN drawer: closed → launch
- *     fresh, minimized → restore, open → focus; a hidden tab is un-hidden
- *     first so its strip button returns (D19 auto-opens a closed target
- *     drawer). The launcher is deliberately
- *     drawer-agnostic — it never moves a tab between drawers (D13 override
- *     for this surface; a move would be destructive from an all-tabs menu).
+ *     mark = closed) and the tab's icon. Clicking LAUNCHES into the invoking
+ *     drawer (the menu's own side is authoritative, user direction
+ *     2026-09-16): closed → launch fresh, minimized → restore, open → focus;
+ *     the window moves to the invoking drawer when needed and, unless its
+ *     button was already there, lands at that drawer's launch end (middle-
+ *     facing end in Top/Bottom). A hidden tab is un-hidden first so its strip
+ *     button returns (D19 auto-opens a closed target drawer).
  *
  * Lifecycle: ONE menu open at a time across drawers; Escape or click-outside
  * dismisses; entries derive on every open (never stale). The menu anchors
@@ -85,7 +85,8 @@ let _unsubDocListeners: (() => void) | null = null
 export interface StartMenuEntry {
   /** Live tab id (the window-state actions' keying). */
   liveId: string
-  /** The tab's own drawer — the click routes here (no cross-drawer move). */
+  /** The tab's own drawer — inventory metadata. The click LAUNCHES into the
+   *  invoking menu's drawer, not this one. */
   side: Side
   title: string
   iconSvg?: string
@@ -150,12 +151,14 @@ export function resolveEntryIcon(
 /**
  * Derive the Start menu entries: every tab of BOTH drawers — hidden and
  * closed included — alphabetized by title (case-insensitive, stable tie-break
- * on liveId). The launcher is drawer-agnostic: both Start buttons show the
- * same inventory and each entry routes to its own drawer. Hidden tabs are
- * listed on purpose (the menu is the recovery path for eye-hidden tabs) and
- * `openWindowInDrawerByLiveId` un-hides them before activating — activation
- * is hidden-gated in the reducer. Unresolvable extension keys are skipped
- * (they cannot open this session).
+ * on liveId). The inventory is drawer-agnostic (both Start buttons list every
+ * window) but the LAUNCH is not: each entry opens in the invoking menu's
+ * drawer, and a window whose button was not already there lands at that
+ * drawer's launch end (`openWindowInDrawerByLiveId`). Hidden tabs are listed
+ * on purpose (the menu is the recovery path for eye-hidden tabs) and the
+ * action un-hides them before activating — activation is hidden-gated in the
+ * reducer. Unresolvable extension keys are skipped (they cannot open this
+ * session).
  */
 export function deriveStartMenuEntries(
   model: {
@@ -227,7 +230,7 @@ export const STATE_MARK_SVG: Record<StartMenuEntry['state'], string> = {
 
 // ── Menu DOM ─────────────────────────────────────────────────────────────────
 
-function createMenuEntry(entry: StartMenuEntry): HTMLElement {
+function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   const item = document.createElement('button')
   item.type = 'button'
   item.className = 'canvas-os-start-menu__item'
@@ -266,9 +269,11 @@ function createMenuEntry(entry: StartMenuEntry): HTMLElement {
   item.append(rail, tile, label, status)
   item.addEventListener('click', () => {
     hideStartMenu()
-    // Route to the entry's OWN drawer: the menu is drawer-agnostic, and a
-    // cross-drawer move would be destructive from an all-tabs launcher.
-    void openWindowInDrawerByLiveId(entry.liveId, entry.side)
+    // Launch into the INVOKING menu's drawer (per-drawer launcher): the entry
+    // inventory is global, but the clicked window opens where the user is.
+    // The action places it at that drawer's launch end unless its button is
+    // already there.
+    void openWindowInDrawerByLiveId(entry.liveId, targetSide)
   })
   return item
 }
@@ -336,8 +341,8 @@ function createEmptyState(): HTMLElement {
   return empty
 }
 
-/** Build the (drawer-agnostic) menu surface; the caller positions it. */
-function buildMenu(): HTMLElement | null {
+/** Build the menu surface for the invoking drawer; the caller positions it. */
+function buildMenu(targetSide: Side): HTMLElement | null {
   const host = getHost()
   const model = getModel()
   if (!host || !model) return null
@@ -361,7 +366,7 @@ function buildMenu(): HTMLElement | null {
   list.className = 'canvas-os-start-menu__list'
   list.setAttribute('role', 'presentation')
   for (const entry of entries) {
-    list.appendChild(createMenuEntry(entry))
+    list.appendChild(createMenuEntry(entry, targetSide))
   }
   menu.appendChild(list)
   return menu
@@ -410,7 +415,7 @@ function openStartMenu(side: Side, button: HTMLElement): void {
     return
   }
   hideStartMenu({ immediate: true })
-  const menu = buildMenu()
+  const menu = buildMenu(side)
   if (!menu) return
   document.body.appendChild(menu)
   _menu = menu
