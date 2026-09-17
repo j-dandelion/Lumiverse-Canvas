@@ -58,6 +58,9 @@ import {
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
+import { getModel, dispatchBatch } from '../recon/dispatch'
+import { parseBuiltinKey } from '../core/model'
+import { isCoreTabId } from '../tabs/core-tabs'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -655,6 +658,48 @@ const osModeFeature: CanvasFeature = {
   },
 }
 
+/** CoreTabsHidden (M8): when the user turns `coreTabsHidden` off, any core
+ *  built-in tab still in the model's hidden set would be stranded — with OS
+ *  off the Configure eye re-locks (`hideLocked && !coreUnlocked`), so no UI
+ *  path can un-hide it even though the copy claims core tabs stay visible.
+ *  Sweep those keys back to visible as model intents.
+ *
+ *  Registered AFTER osModeFeature: the OS-off diff flips `osMode` and
+ *  `coreTabsHidden` in one setSettings, and feature apply order is FEATURES
+ *  order. `applyOsModeChange` is fire-and-forget async, but the frozen
+ *  non-OS slots cannot contain core-hidden ids, so the sweep is safe
+ *  regardless of which half lands first. */
+const coreTabsHiddenFeature: CanvasFeature = {
+  id: 'coreTabsHidden',
+  apply(prev, next) {
+    if (!prev.coreTabsHidden || next.coreTabsHidden) return
+    const model = getModel()
+    if (!model || model.hidden.length === 0) return
+    // Same resolution as os/actions.ts shouldHideOnClose: model keys may
+    // carry live-id suffix drift, so map through parseBuiltinKey before the
+    // core-set check — never string-match raw model keys.
+    const stranded = model.hidden.filter((key) => {
+      const coreId = parseBuiltinKey(key)
+      return !!coreId && isCoreTabId(coreId)
+    })
+    if (stranded.length === 0) return
+    void dispatchBatch(
+      stranded.map((key) => ({ t: 'setHidden' as const, key, hidden: false })),
+    )
+      .then(() => {
+        // Keep an open Configure modal consistent with the sweep — the eye
+        // renders from live state. Dynamic import avoids the state cycle
+        // (configure-modal -> settings/state -> panel -> registry).
+        void import('../tabs/configure-modal')
+          .then((m) => {
+            if (m.isConfigureTabsModalOpen()) m.refreshConfigureDraftFromLive()
+          })
+          .catch(() => { /* modal module may not be loaded */ })
+      })
+      .catch(() => { /* dispatch reports its own failures */ })
+  },
+}
+
 /** OS secondary Start menu (default off): the second drawer's Start button +
  *  menu are opt-in. The main drawer's Start menu always lists every window
  *  from both drawers, so hiding the secondary chrome never strands a window.
@@ -705,6 +750,9 @@ export const FEATURES: readonly CanvasFeature[] = [
   hideDrawerOpenCloseButtonsFeature,
   // OS mode depends on the taskbar chrome being applied first (§4.8).
   osModeFeature,
+  // M8: coreTabsHidden must apply AFTER osModeFeature (OS-off flips both
+  // settings in one diff; feature apply order is FEATURES order).
+  coreTabsHiddenFeature,
   // OS secondary Start chrome: downstream of the OS mount pipeline.
   osSecondaryStartMenuFeature,
   // OS header controls: same downstream placement (chrome pass only).
