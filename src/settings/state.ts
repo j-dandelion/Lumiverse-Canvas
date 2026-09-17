@@ -225,8 +225,17 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
       moveControlsToOuterEdge: DEFAULT_CANVAS_SETTINGS.moveControlsToOuterEdge,
       coreTabsHidden: DEFAULT_CANVAS_SETTINGS.coreTabsHidden,
     }
-    next.taskbarMode = prefs.taskbarMode
-    next.moveControlsToOuterEdge = prefs.moveControlsToOuterEdge
+    // M7: an OS enable from a Top/Bottom location snapshots the
+    // location-forced chrome pair, not a user choice. Back on Sides the
+    // Sides snapshot (or, for legacy blobs without one, the pre-OS pair)
+    // is the trustworthy source; `coreTabsHidden` still comes from the OS
+    // snapshot. Non-Sides keeps the plain OS snapshot — normalization
+    // re-forces the pair there anyway.
+    const chromePrefs = next.drawerLocation === 'sides'
+      ? next.sidesChromePrefs ?? prefs
+      : prefs
+    next.taskbarMode = chromePrefs.taskbarMode
+    next.moveControlsToOuterEdge = chromePrefs.moveControlsToOuterEdge
     next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     next.osChromePrefs = { ...prefs }
   }

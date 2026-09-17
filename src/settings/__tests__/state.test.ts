@@ -557,6 +557,53 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   setSettings({ osMode: false })
   assertEqual(getSettings().taskbarMode, true, 'S1 restore: taskbar back on')
   assertEqual(getSettings().moveControlsToOuterEdge, false, 'S1 state: outer back off')
+
+  // M7: after an OS excursion started from Top, the location-forced pair must
+  // not stick when the user is back on Sides — the Sides snapshot wins.
+  hydrateSettings(null)
+  setSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7: sides chrome-off recorded')
+  setSettings({ drawerLocation: 'top' })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, true, 'M7: OS enable from top snapshots forced-true')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, true, 'M7: OS still forces chrome on while on sides')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'M7: sides snapshot restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7: sides snapshot restores outer off')
+
+  // M7 legacy: no Sides snapshot yet — returning to Sides materializes one
+  // from the defaults, and that snapshot is what the OS disable restores.
+  hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  assertEqual(getSettings().sidesChromePrefs, null, 'M7 legacy: no snapshot yet')
+  setSettings({ drawerLocation: 'top' })
+  setSettings({ osMode: true })
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7 legacy: return to sides materializes snapshot')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'M7 legacy: materialized snapshot restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7 legacy: materialized snapshot restores outer off')
+
+  // M7 fallback chain: sidesChromePrefs null on a legacy Sides blob → the
+  // osChromePrefs pair is used, not the defaults.
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  setSettings({ osMode: true })
+  setSettings({ osMode: false })
+  assertEqual(getSettings().sidesChromePrefs, null, 'M7 fallback: still no sides snapshot')
+  assertEqual(getSettings().taskbarMode, true, 'M7 fallback: osChromePrefs pair supplies taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7 fallback: osChromePrefs pair supplies outer off')
+
+  // M7: an OS disable while still on Top keeps the forced pair (the location
+  // invariant owns it) even with a false Sides snapshot on record.
+  hydrateSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: { taskbarMode: false, moveControlsToOuterEdge: false },
+  })
+  setSettings({ osMode: true })
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'M7 top: disable keeps forced taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'M7 top: disable keeps forced outer on')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7 top: sides snapshot untouched')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
