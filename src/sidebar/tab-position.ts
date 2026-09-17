@@ -115,6 +115,8 @@ let _splitHandle: HTMLElement | null = null
 let _splitDragging = false
 /** Active drag's cancel routine (host teardown mid-drag). */
 let _splitDragCancel: (() => void) | null = null
+/** Active drag's finish routine: persist on pointerup, restore on cancel. */
+let _splitDragFinish: ((persist: boolean) => void) | null = null
 /** Document-level listener teardown for the handle's proximity tracker. */
 let _splitProximityCleanup: (() => void) | null = null
 
@@ -188,6 +190,13 @@ export function __setMainPinHostForTest(host: HTMLElement | null): void {
 /** Test-only: reset module pin state without touching a live document. */
 export function __resetPinStateForTest(): void {
   teardownSplitProximityTracker()
+  // Cancel a live drag BEFORE dropping its refs: the finish closure owns the
+  // document/window listeners and the pre-drag var restore, which must be
+  // torn down rather than orphaned.
+  const cancelDrag = _splitDragCancel
+  _splitDragCancel = null
+  _splitDragFinish = null
+  cancelDrag?.()
   _pinHost = null
   _pinSpacer = null
   _restoreParent = null
@@ -196,6 +205,17 @@ export function __resetPinStateForTest(): void {
   _splitHandle = null
   _splitDragging = false
   _splitDragCancel = null
+}
+
+/** Test-only: enter the split-boundary drag body (bypasses pointerdown gating). */
+export function __startSplitDragForTest(handle: HTMLElement): void {
+  startSplitDrag(handle)
+}
+
+/** Test-only: invoke the live drag's finish routine. `persist=true` runs the
+ *  pointerup path (writes the setting); `false` runs cancel/restore. */
+export function __finishSplitDragForTest(persist: boolean): void {
+  _splitDragFinish?.(persist)
 }
 
 /** Live body-level host for the main-drawer mirror pin, if any. */
@@ -1155,6 +1175,7 @@ function startSplitDrag(handle: HTMLElement): void {
     }
     _splitDragging = false
     _splitDragCancel = null
+    _splitDragFinish = null
     if (persist && handle.isConnected) {
       const pct = parseFloat(root.style.getPropertyValue(SPLIT_VAR))
       if (Number.isFinite(pct)) {
@@ -1185,6 +1206,7 @@ function startSplitDrag(handle: HTMLElement): void {
   const onCancel = (): void => finish(false)
 
   _splitDragCancel = onCancel
+  _splitDragFinish = finish
   document.addEventListener('pointermove', onMove)
   document.addEventListener('pointerup', onUp)
   document.addEventListener('pointercancel', onCancel)

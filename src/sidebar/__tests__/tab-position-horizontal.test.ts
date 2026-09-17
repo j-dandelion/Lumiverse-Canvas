@@ -73,6 +73,7 @@ class FakeEl {
   parentElement: FakeEl | null = null
   firstChild: FakeEl | null = null
   childNodes: FakeEl[] = []
+  isConnected = true
   setAttribute(k: string, v: string) { this.attrs.set(k, v) }
   getAttribute(k: string) { return this.attrs.get(k) ?? null }
   appendChild(c: FakeEl) { c.parentElement = this; this.children.push(c); this.childNodes.push(c); this.firstChild = this.children[0] ?? null; return c }
@@ -136,16 +137,41 @@ mock.module('../dock-offset', () => ({
   updateDockOffsets: () => { dockCalls++ },
 }))
 
+// ── document/window listener recording (split drag lifecycle) ──
+
+type RecordedListener = { type: string; fn: (...args: any[]) => void }
+
+function recorder(store: RecordedListener[]) {
+  return {
+    addEventListener(type: string, fn: (...args: any[]) => void) {
+      store.push({ type, fn })
+    },
+    removeEventListener(type: string, fn: (...args: any[]) => void) {
+      const i = store.findIndex((l) => l.type === type && l.fn === fn)
+      if (i >= 0) store.splice(i, 1)
+    },
+  }
+}
+
+const docListeners: RecordedListener[] = []
+const winListeners: RecordedListener[] = []
+
+function fireRecorded(store: RecordedListener[], type: string, ev: unknown): void {
+  for (const l of [...store]) if (l.type === type) l.fn(ev)
+}
+
 // ── DOM stub ──
 
 const body = new FakeEl()
 ;(globalThis as any).document = {
   body,
-  documentElement: { style: new FakeStyle(), classList: new FakeClassList() },
+  documentElement: { style: new FakeStyle(), classList: new FakeClassList(), clientWidth: 1000 },
   createElement: () => new FakeEl(),
   querySelector: () => null,
   querySelectorAll: () => [],
+  ...recorder(docListeners),
 }
+;(globalThis as any).window = recorder(winListeners)
 
 const {
   ensureMainPinHost,
@@ -161,6 +187,8 @@ const {
   shouldRevealSplitHandle,
   SPLIT_REVEAL_RADIUS_PX,
   __resetPinStateForTest,
+  __startSplitDragForTest,
+  __finishSplitDragForTest,
 } = await import('../tab-position')
 
 const { HORIZONTAL_STRIP_CSS } = await import('../styles')
@@ -759,5 +787,109 @@ describe('shouldRevealSplitHandle (2026-09-17)', () => {
     expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30, dividerX: NaN })).toBe(false)
     expect(shouldRevealSplitHandle({ ...base, x: 500, y: 30, stripTop: NaN })).toBe(false)
     expect(shouldRevealSplitHandle({ ...base, x: NaN, y: 30 })).toBe(false)
+  })
+})
+
+// L8: split drag release/cancel lifecycle. One `finish(persist)` closure sits
+// behind pointerup, pointercancel, window blur and host teardown: a release
+// persists the clamped live pct, every cancel path restores the pre-drag var
+// and never writes settings, and teardown removes every listener it added.
+describe('split drag release/cancel lifecycle (L8)', () => {
+  function startDrag(): FakeEl {
+    const handle = new FakeEl()
+    handle.className = 'sidebar-ux-hsplit-handle'
+    __startSplitDragForTest(handle as any)
+    return handle
+  }
+
+  function moveTo(x: number): void {
+    fireRecorded(docListeners, 'pointermove', { clientX: x, clientY: 28 })
+  }
+
+  beforeEach(() => {
+    loc = 'top'
+    presence = true
+    secondEnabled = true
+    shellLive = true
+    secondaryList = freshList()
+    side = 'right'
+    mobile = false
+    splitFraction = 0.3
+    settingsPatches.length = 0
+    docListeners.length = 0
+    winListeners.length = 0
+    __resetPinStateForTest()
+    document.documentElement.style.removeProperty('--sidebar-ux-hsplit')
+  })
+
+  test('release persists the clamped live pct and releases drag ownership', () => {
+    syncHorizontalSplit()
+    const handle = startDrag()
+    expect(docListeners.map((l) => l.type)).toEqual(['pointermove', 'pointerup', 'pointercancel'])
+    expect(winListeners.map((l) => l.type)).toEqual(['blur'])
+    moveTo(700)
+    expect(getHorizontalSplitVar()).toBe('70%')
+    // Out-of-domain moves clamp live (M3 domain), so the persisted value is
+    // the clamped pct and never snaps on the next reconcile.
+    moveTo(9900)
+    expect(getHorizontalSplitVar()).toBe('90%')
+    __finishSplitDragForTest(true)
+    expect(settingsPatches).toEqual([{ horizontalSplit: 0.9 }])
+    const pct = (settingsPatches[0]!.horizontalSplit as number) * 100
+    expect(pct).toBeGreaterThanOrEqual(10)
+    expect(pct).toBeLessThanOrEqual(90)
+    expect(docListeners.length).toBe(0)
+    expect(winListeners.length).toBe(0)
+    expect(handle.classList.contains('sidebar-ux-hsplit-handle--active')).toBe(false)
+    // Ownership released: a reconcile writes settings again.
+    splitFraction = 0.4
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('40%')
+  })
+
+  test('cancel restores the pre-drag value without persisting', () => {
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('30%')
+    startDrag()
+    moveTo(700)
+    expect(getHorizontalSplitVar()).toBe('70%')
+    __finishSplitDragForTest(false)
+    expect(settingsPatches.length).toBe(0)
+    expect(getHorizontalSplitVar()).toBe('30%')
+    expect(docListeners.length).toBe(0)
+    expect(winListeners.length).toBe(0)
+    // Ownership released: a reconcile writes settings again.
+    splitFraction = 0.4
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('40%')
+  })
+
+  test('window blur cancels the drag and restores the pre-drag value', () => {
+    syncHorizontalSplit()
+    startDrag()
+    moveTo(700)
+    expect(getHorizontalSplitVar()).toBe('70%')
+    fireRecorded(winListeners, 'blur', {})
+    expect(settingsPatches.length).toBe(0)
+    expect(getHorizontalSplitVar()).toBe('30%')
+    expect(docListeners.length).toBe(0)
+    expect(winListeners.length).toBe(0)
+  })
+
+  test('teardown mid-drag removes listeners, restores the var, clears the flag', () => {
+    syncHorizontalSplit()
+    const handle = startDrag()
+    moveTo(700)
+    expect(docListeners.length).toBe(3)
+    expect(winListeners.length).toBe(1)
+    __resetPinStateForTest()
+    expect(docListeners.length).toBe(0)
+    expect(winListeners.length).toBe(0)
+    expect(getHorizontalSplitVar()).toBe('30%')
+    expect(handle.classList.contains('sidebar-ux-hsplit-handle--active')).toBe(false)
+    // Flag released: a reconcile writes settings again.
+    splitFraction = 0.4
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('40%')
   })
 })
