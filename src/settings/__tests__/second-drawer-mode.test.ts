@@ -34,6 +34,9 @@ import * as actualDispatch from '../../recon/dispatch'
 
 const calls = {
   bootstrapFromLayout: 0,
+  // Controllable live-model serialization for finishDisable's dual-slot
+  // capture (null = no model, as in the persistence scenarios above).
+  ownedModelSnapshot: null as any,
 }
 
 // features/registry: mock to empty so setSettings → applySettings iterates
@@ -68,7 +71,7 @@ mock.module('../../recon/dispatch', () => ({
   flush: async () => {},
   getHost: () => ({ resolve: (k: string) => k }),
   getModel: () => null,
-  snapshotOwnedModelLayout: () => null,
+  snapshotOwnedModelLayout: () => calls.ownedModelSnapshot,
   onModelChanged: () => () => {},
   dispatchActivateByLiveId: async () => {},
   dispatch: async () => {},
@@ -112,7 +115,7 @@ mock.module('../../tabs/configure-modal', () => ({
 const [{ requestSecondDrawerMode }] = await Promise.all([
   import('../second-drawer-mode'),
 ])
-const [{ getSettings, setSettings, setDualLayoutSlot }] = await Promise.all([
+const [{ getSettings, setSettings, getDualLayoutSlot, setDualLayoutSlot }] = await Promise.all([
   import('../state'),
 ])
 const [
@@ -207,6 +210,53 @@ assertEqual(
   false,
   'persisted settings carry secondSidebarEnabled: false',
 )
+
+// ── H4: boot anomaly — a single-shaped live model must not downgrade a real
+// stored dual slot ──
+// Re-enable so the setting says dual while the live owned model is
+// single-shaped (detachedTabs: []). Disable must leave a non-empty stored
+// slot untouched instead of overwriting it with the empty snapshot.
+await requestSecondDrawerMode(true)
+assert(getSettings().secondSidebarEnabled === true, 'H4 setup: dual mode live')
+
+const anomalyStored = {
+  version: 2,
+  primary: { open: false, width: 420, tabId: null },
+  secondary: { open: false, width: 420, activeTabId: 'builtin:loom' },
+  detachedTabs: [{ tabId: 'builtin:loom', tabTitle: 'builtin:loom', sidebar: 'secondary' }],
+  hiddenTabIds: [],
+}
+setDualLayoutSlot(anomalyStored)
+calls.ownedModelSnapshot = {
+  version: 2,
+  primary: { open: false, width: 420, tabId: null },
+  secondary: { open: false, width: 420, activeTabId: null },
+  detachedTabs: [],
+  hiddenTabIds: [],
+}
+await requestSecondDrawerMode(false)
+
+assert(getDualLayoutSlot() === anomalyStored, 'H4: single-shaped live model did not overwrite the stored dual slot')
+assertEqual(getDualLayoutSlot().detachedTabs.length, 1, 'H4: stored slot still has its 1 detached tab')
+
+// ── Normal dual disable: a live snapshot WITH detached tabs refreshes the
+// stored slot (the H4 guard must not block real writes) ──
+await requestSecondDrawerMode(true)
+const refreshedLive = {
+  version: 2,
+  primary: { open: false, width: 420, tabId: null },
+  secondary: { open: false, width: 420, activeTabId: 'builtin:loom' },
+  detachedTabs: [
+    { tabId: 'builtin:loom', tabTitle: 'builtin:loom', sidebar: 'secondary' },
+    { tabId: 'builtin:regex', tabTitle: 'builtin:regex', sidebar: 'secondary' },
+  ],
+  hiddenTabIds: [],
+}
+calls.ownedModelSnapshot = refreshedLive
+await requestSecondDrawerMode(false)
+
+assert(getDualLayoutSlot() === refreshedLive, 'normal dual disable: stored slot refreshed to the live snapshot')
+assertEqual(getDualLayoutSlot().detachedTabs.length, 2, 'normal dual disable: refreshed slot carries both detached tabs')
 
 // ── Summary ──
 console.log(`PASS: ${passed}`)

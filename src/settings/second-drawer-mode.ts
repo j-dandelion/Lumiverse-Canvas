@@ -336,14 +336,24 @@ async function finishDisable(): Promise<void> {
   //    swapped to the single layout below. This is what re-enable restores.
   //    It survives reloads because the owned-model persist path embeds the
   //    slot in the layout blob (dispatch.ts:buildPersistedBlob).
+  //
+  //    Guard (H4): a single-shaped live model (detachedTabs: []) while
+  //    secondSidebarEnabled is true is the documented boot anomaly. Writing
+  //    that snapshot would permanently destroy a real stored dual slot —
+  //    re-enable's restore gate then finds nothing — so a zero-tab snapshot
+  //    may only overwrite an already-empty stored slot (WORKFLOW.md
+  //    documents the hazard).
   const dualSnapshot = snapshotOwnedModelLayout()
-  if (dualSnapshot) {
+  const storedDual = getActiveDualSlot()
+  const snapshotTabs = dualSnapshot?.detachedTabs?.length ?? 0
+  const storedTabs = storedDual?.detachedTabs?.length ?? 0
+  if (dualSnapshot && (snapshotTabs > 0 || storedTabs === 0)) {
     // F6: OS-aware routing — an OS session writes osDualLayout (the non-OS
     // slots are frozen during the session; clobbering them would leak OS
     // state into the layout the user returns to on OS disable).
     setActiveDualSlot(dualSnapshot)
     dlog('[second-drawer-mode] saved dual layout slot:', {
-      tabs: dualSnapshot.detachedTabs?.length ?? 0,
+      tabs: snapshotTabs,
     })
   }
 
