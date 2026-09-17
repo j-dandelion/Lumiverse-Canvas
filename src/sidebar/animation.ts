@@ -7,7 +7,10 @@
 
 import { prefersReducedMotion } from '../dom/motion-prefs'
 
-const ANIM_DURATION_MS = 350
+/** Sides translate duration (ms). Exported for tests to avoid literal drift. */
+export const ANIM_DURATION_MS = 350
+
+type SettleListener = () => void
 
 type AnimState = {
   raf: number | null
@@ -15,6 +18,10 @@ type AnimState = {
   from: number
   to: number
   onComplete: (() => void) | null
+  /** OS parking listeners: run when this tween settles (or is cancelled by an
+   *  explicit cancel entry point). Carried over to a superseding motion so a
+   *  close→close interruption never strands them. */
+  settleCallbacks: SettleListener[]
 }
 
 const _anims = new WeakMap<HTMLElement, AnimState>()
@@ -43,6 +50,28 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
 }
 
+/** Run settle listeners, isolating each from the others' errors. */
+function runSettleCallbacks(callbacks: SettleListener[]): void {
+  for (const cb of callbacks) {
+    try {
+      cb()
+    } catch {
+      /* settle listeners are advisory */
+    }
+  }
+}
+
+/** Mark the wrapper as mid-motion (either kind) for the CSS guards. */
+function markWrapperAnimating(wrapper: HTMLElement): void {
+  wrapper.setAttribute(PANEL_ANIMATING_ATTR, '1')
+}
+
+/** Drop the motion flag. Safe when another motion just took over: the new
+ *  motion sets it again synchronously before the browser paints. */
+function clearWrapperAnimating(wrapper: HTMLElement): void {
+  wrapper.removeAttribute(PANEL_ANIMATING_ATTR)
+}
+
 function animFrame(wrapper: HTMLElement, state: AnimState, now: number) {
   if (state.start === null) state.start = now
   const elapsed = now - state.start
@@ -58,8 +87,11 @@ function animFrame(wrapper: HTMLElement, state: AnimState, now: number) {
     state.raf = null
     state.start = null
     _liveTranslateWrappers.delete(wrapper)
+    clearWrapperAnimating(wrapper)
     const done = state.onComplete
     state.onComplete = null
+    const callbacks = state.settleCallbacks
+    state.settleCallbacks = []
     if (done) {
       try {
         done()
@@ -67,36 +99,59 @@ function animFrame(wrapper: HTMLElement, state: AnimState, now: number) {
         /* caller errors must not break animation bookkeeping */
       }
     }
+    runSettleCallbacks(callbacks)
   }
 }
 
-/** Stop an in-flight translate tween without touching inline styles. */
-function cancelTranslateTween(wrapper: HTMLElement): void {
+/**
+ * Stop an in-flight translate tween without touching inline styles.
+ * Returns the drained settle listeners — the CALLER decides their fate:
+ *   - superseded by a new tween/bloom → transfer them to the new motion;
+ *   - explicit cancel (`cancelWrapperAnimation`) → run them (motion over).
+ * The motion flag is dropped only when a tween was actually live; a no-op
+ * call must not clobber a live bloom's flag (the two motions are mutually
+ * exclusive, but `animatePanelToggle` calls this on every start).
+ */
+function cancelTranslateTween(wrapper: HTMLElement): SettleListener[] {
   const state = _anims.get(wrapper)
-  if (state?.raf != null) {
-    cancelAnimationFrame(state.raf)
-    state.raf = null
-    state.start = null
-    state.onComplete = null
+  const wasLive = _liveTranslateWrappers.has(wrapper) || state?.raf != null
+  const pending = state ? state.settleCallbacks : []
+  if (state) {
+    if (state.raf != null) {
+      cancelAnimationFrame(state.raf)
+      state.raf = null
+      state.start = null
+      state.onComplete = null
+    }
+    state.settleCallbacks = []
   }
   _liveTranslateWrappers.delete(wrapper)
+  if (wasLive) clearWrapperAnimating(wrapper)
+  return pending
 }
 
 /** Cancel in-flight motion for a specific wrapper (or the last animated one).
  *  Cancels BOTH the translate tween and the panel bloom; the bloom reset
- *  restores the drawer's inline styles and `pointer-events: auto`. */
+ *  restores the drawer's inline styles and `pointer-events: auto`. Settle
+ *  listeners pending on a cancelled translate tween run now — the motion is
+ *  over, and each listener re-checks the live window state before applying. */
 export function cancelWrapperAnimation(wrapper?: HTMLElement | null): void {
   const target = wrapper ?? _lastWrapper
   if (!target) return
-  cancelTranslateTween(target)
+  const drained = cancelTranslateTween(target)
   cancelPanelToggle(target)
+  runSettleCallbacks(drained)
 }
 
 /** Cancel every in-flight wrapper tween (translate + bloom). Used when the
  *  geometry the animation was targeting changes underneath it (location
- *  flips, side swaps, teardown). */
+ *  flips, side swaps, teardown). Settle listeners of cancelled translate
+ *  tweens run (parking re-checks state). */
 export function cancelAllWrapperAnimations(): void {
-  for (const wrapper of Array.from(_liveTranslateWrappers)) cancelTranslateTween(wrapper)
+  for (const wrapper of Array.from(_liveTranslateWrappers)) {
+    const drained = cancelTranslateTween(wrapper)
+    runSettleCallbacks(drained)
+  }
   for (const wrapper of Array.from(_livePanelWrappers)) cancelPanelToggle(wrapper)
 }
 
@@ -114,6 +169,12 @@ export function __getAnimState(wrapper?: HTMLElement | null) {
 /**
  * Animate wrapper translateX to targetPx over ANIM_DURATION_MS.
  * Optional onComplete fires once when the animation settles (not on cancel).
+ *
+ * Sides motion is marked with `PANEL_ANIMATING_ATTR` for the whole tween
+ * (same hook the Top/Bottom bloom uses), so the CSS guards that keep the OS
+ * parking content visible and hold the real drawer shadow during a close
+ * apply to the slide too. A superseding tween inherits the superseded
+ * tween's settle listeners (OS parking must wait for the NEW motion).
  */
 export function animateWrapper(
   wrapper: HTMLElement,
@@ -127,9 +188,14 @@ export function animateWrapper(
   cancelPanelToggle(wrapper)
   let state = _anims.get(wrapper)
   if (!state) {
-    state = { raf: null, start: null, from: 0, to: 0, onComplete: null }
+    state = { raf: null, start: null, from: 0, to: 0, onComplete: null, settleCallbacks: [] }
     _anims.set(wrapper, state)
   }
+  // Carry pending settle listeners over from the superseded tween: a
+  // close→close interruption must still park when the replacement settles,
+  // and a close→open interruption re-checks the live state at open settle.
+  const carried = state.settleCallbacks
+  state.settleCallbacks = []
   const current = parseTranslateX(wrapper.style.transform)
   state.from = current
   state.to = targetPx
@@ -141,6 +207,7 @@ export function animateWrapper(
     wrapper.style.transform = `translateX(${targetPx}px)`
     state.raf = null
     _liveTranslateWrappers.delete(wrapper)
+    clearWrapperAnimating(wrapper)
     const done = state.onComplete
     state.onComplete = null
     if (done) {
@@ -150,9 +217,12 @@ export function animateWrapper(
         /* ignore */
       }
     }
+    runSettleCallbacks(carried)
     return
   }
+  state.settleCallbacks = carried
   _liveTranslateWrappers.add(wrapper)
+  markWrapperAnimating(wrapper)
   state.raf = requestAnimationFrame((t) => animFrame(wrapper, state!, t))
 }
 
@@ -207,10 +277,12 @@ export const PANEL_UI_FROM = 0.55
 export const PANEL_UI_PHASE = 0.1
 /** Settle grace over the duration when rAF is starved (background tab). */
 const PANEL_SETTLE_GRACE_MS = 100
-/** DOM hook while a panel motion is in flight. Keeps OS "no displayed window"
- *  parking (`display:none` on the content slot) from applying mid-fade — the
- *  user saw the content vanish instantly (2026-09-15). Mirrored literally in
- *  `sidebar/styles.ts` (that module is a leaf on purpose). */
+/** DOM hook while ANY wrapper motion is in flight — the Top/Bottom bloom or
+ *  the Sides translate tween. Keeps OS "no displayed window" parking
+ *  (`display:none` on the content slot) from applying mid-motion (user saw the
+ *  content vanish instantly, 2026-09-15) and holds the closed-drawer shadow
+ *  suppression off during a close. Mirrored literally in `sidebar/styles.ts`
+ *  (that module is a leaf on purpose). */
 export const PANEL_ANIMATING_ATTR = 'data-canvas-panel-animating'
 
 interface PanelPose {
@@ -359,21 +431,29 @@ function cancelPanelToggle(wrapper: HTMLElement): void {
   if (state) settlePanelToggle(state, { cancelled: true })
 }
 
-/** True while a panel motion is in flight for this wrapper (OS chrome uses
- *  this to defer no-displayed-window parking until the fade completes). */
+/** True while ANY wrapper motion is in flight for this wrapper — the
+ *  Top/Bottom bloom or the Sides translate tween. OS chrome uses this to defer
+ *  no-displayed-window parking until the motion completes. */
 export function isPanelAnimating(wrapper: HTMLElement): boolean {
-  return _panelAnims.has(wrapper)
+  return _panelAnims.has(wrapper) || _liveTranslateWrappers.has(wrapper)
 }
 
-/** Run `cb` when the wrapper's current panel motion settles (or is cancelled);
- *  runs immediately when no motion is in flight. */
+/** Run `cb` when the wrapper's current motion settles (or a translate tween is
+ *  explicitly cancelled); runs immediately when no motion is in flight.
+ *  Listeners registered on a tween that is later superseded transfer to the
+ *  replacement motion (see `animateWrapper` / `animatePanelToggle`). */
 export function whenPanelMotionSettles(wrapper: HTMLElement, cb: () => void): void {
-  const state = _panelAnims.get(wrapper)
-  if (!state) {
-    cb()
+  const bloom = _panelAnims.get(wrapper)
+  if (bloom) {
+    bloom.settleCallbacks.push(cb)
     return
   }
-  state.settleCallbacks.push(cb)
+  const tween = _anims.get(wrapper)
+  if (tween && _liveTranslateWrappers.has(wrapper)) {
+    tween.settleCallbacks.push(cb)
+    return
+  }
+  cb()
 }
 
 function panelFrame(state: PanelAnimState, now: number): void {
@@ -412,14 +492,21 @@ export function animatePanelToggle(
   opts: PanelToggleOptions,
 ): void {
   _lastWrapper = wrapper
-  // A Sides translate tween must never race the bloom.
-  cancelTranslateTween(wrapper)
+  // A Sides translate tween must never race the bloom. Any settle listeners
+  // it was holding transfer to the bloom (OS parking waits for whatever
+  // motion is actually running).
+  const carried = cancelTranslateTween(wrapper)
 
   const closedPx = opts.closedPx ?? 0
   let existing = _panelAnims.get(wrapper) ?? null
   if (existing) {
-    // Close during close is a no-op (idempotent dismiss).
-    if (!opts.open && !existing.open) return
+    // Close during close is a no-op (idempotent dismiss). No translate tween
+    // can be live here (the two motions are mutually exclusive), so `carried`
+    // is empty; run it defensively so a listener can never be stranded.
+    if (!opts.open && !existing.open) {
+      runSettleCallbacks(carried)
+      return
+    }
     // Detach the old state WITHOUT resetting styles: the new tween continues
     // from its current pose (continuity, no pop).
     if (existing.raf !== null) cancelAnimationFrame(existing.raf)
@@ -433,6 +520,7 @@ export function animatePanelToggle(
   } else if (!opts.open && parseTranslateX(wrapper.style.transform) === closedPx) {
     // Already settled closed — nothing to do (and never fall through to the
     // translate path, which would slide the off-screen wrapper for 350ms).
+    runSettleCallbacks(carried)
     return
   }
 
@@ -477,7 +565,7 @@ export function animatePanelToggle(
     to,
     cur: from,
     onComplete: opts.onComplete ?? null,
-    settleCallbacks: [],
+    settleCallbacks: carried,
     done: false,
   }
 

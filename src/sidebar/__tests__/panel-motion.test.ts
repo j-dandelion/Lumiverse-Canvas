@@ -24,6 +24,7 @@ import {
   __getAnimState,
   __getPanelAnimState,
   cancelWrapperAnimation,
+  isPanelAnimating,
   PANEL_ANIMATING_ATTR,
   parseTranslateX,
 } from '../animation'
@@ -304,14 +305,20 @@ function makeWrapper(transform = '') {
   assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'cancel clears the close animating flag')
 }
 {
-  // Sides uses the translate tween — no bloom flag (the chat inset rides the
-  // synced side slide there, no swap needed).
+  // Sides uses the translate tween. Since 2026-09-17 the wrapper carries the
+  // motion flag for the slide too — the CSS guards must keep the OS parking
+  // content visible and hold the real drawer shadow for the whole motion, and
+  // OS chrome's parking gate must see the tween (isPanelAnimating) instead of
+  // parking at the slide's first frame.
   hydrateSettings({ drawerLocation: 'sides' })
   const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
   const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'primary')
-  assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'sides close runs no bloom flag')
+  assert(wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'sides close marks the wrapper animating')
+  assert(isPanelAnimating(wrapper), 'sides close counts as in-flight panel motion (parking waits)')
   cancelWrapperAnimation(wrapper)
+  assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'cancel clears the sides animating flag')
+  assert(!isPanelAnimating(wrapper), 'cancel clears the sides motion state')
 }
 
 // Reset the shared settings singleton so later suites see defaults.

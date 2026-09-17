@@ -140,14 +140,23 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
   (close-during-close no-op, settled-closed early return) and continues
   interrupted tweens from the current inline pose.
 - **Parking must wait for the exit animation.** OS D17 parking
-  (`data-canvas-os-no-active` → `display:none` on `.sidebar-ux-panel-content`
-  plus the title clear) applied at the first frame of the close, so the content
-  vanished instantly while only the surface faded. `panel-chrome` defers it:
+  (`applyNoActiveParking`: `data-canvas-os-no-active` → `display:none` on
+  `.sidebar-ux-panel-content`, the title clear, AND the X/– hide) applied at
+  the first frame of the close, so the content vanished / the header collapsed
+  while the surface was still animating. `panel-chrome` defers it:
   `whenPanelParkingReady` (one-frame re-check — the chrome pass can run before
   the close command starts the animation) → `whenPanelMotionSettles`; the sheet
-  rule is scoped `:not([data-canvas-panel-animating])`. Deferred callbacks
-  re-check the live displayed state (reopen race); a superseding motion drops
-  the previous state's listeners.
+  rule is scoped `:not([data-canvas-panel-animating])`. The gate must recognize
+  BOTH motions: `isPanelAnimating` checks `_panelAnims` (bloom) OR
+  `_liveTranslateWrappers` (Sides slide) — the original bloom-only check made
+  Sides parking land at the slide's first frame (fixed 2026-09-17).
+  Deferred callbacks re-check the live displayed state (reopen race) and
+  no-op after teardown/OS-off. Listener fate on interruption: a translate
+  tween transfers its pending listeners to whatever supersedes it (another
+  tween or a bloom); a superseded BLOOM drops its listeners (the model commit
+  driving the new motion re-registers); explicit cancels
+  (`cancelWrapperAnimation` / `cancelAllWrapperAnimations`) drain and run them.
+  Never fire them at a supersede boundary — that re-parks mid-motion.
 - **Panel close anchors:** the displayed window's strip button
   (`computePanelAnchor` percentages) when it exists; OS close dismisses the
   window first (async model commit), so `os/actions.ts` sends a one-shot

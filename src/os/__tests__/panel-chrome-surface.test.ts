@@ -152,7 +152,7 @@ const tabButtons = read('src/tabs/buttons.ts')
     'the tracked-active predicate minimize call must not return (stale reopen memory)')
 }
 
-// ── 7. D17 no-active parking (stale content + title) ──
+// ── 7. D17 no-active parking (stale content + title + controls) ──
 {
   assertIncludes(mainMirror, 'export function setCanvasMainNoActive',
     'main shell exposes the D17 parking hook')
@@ -160,16 +160,33 @@ const tabButtons = read('src/tabs/buttons.ts')
     'parking is an attribute (display suppression, never unmount)')
   assertIncludes(mainMirror, "_shell.title.textContent = ''",
     'parking clears the stale header title')
-  assertIncludes(panelChrome, "whenPanelParkingReady('primary'",
+  assertIncludes(panelChrome, 'whenPanelParkingReady(side,',
     'chrome defers parking until the close motion settles (content must fade, not vanish)')
-  assertIncludes(panelChrome, "if (!getDisplayedLiveId('primary')) setCanvasMainNoActive(true)",
+  assertIncludes(panelChrome, 'function applyNoActiveParking(',
+    'one parking body owns title/content/control hiding')
+  assertIncludes(panelChrome, 'if (!_active || !isOsModeEnabled()) return',
+    'the deferred parking no-ops after teardown / OS-off mid-motion')
+  assertIncludes(panelChrome, 'if (getDisplayedLiveId(side)) return',
     'the deferred parking re-checks the live displayed-window state (reopen race)')
+  assert(!panelChrome.includes('setHeaderHidden(surface.closeBtn, !displayed)'),
+    'the header controls must NOT hide synchronously — they hide with the parking pass')
+  assertIncludes(panelChrome, 'setHeaderHidden(surface.closeBtn, true)',
+    'the deferred parking hides the close control')
+  assertIncludes(panelChrome, 'setHeaderHidden(minBtn, true)',
+    'the deferred parking hides the minimize control')
   assertIncludes(panelChrome, 'setCanvasMainNoActive(false)',
-    'teardown un-parks the content slot')
+    'a displayed window un-parks the content slot synchronously')
   assertIncludes(styles, '[data-canvas-os-no-active]',
     'sheet owns the no-active content hide')
   assertIncludes(styles, 'data-canvas-panel-animating',
     'sheet keeps the content visible while a panel motion is in flight')
+  // The settle gate must recognize the Sides translate tween, not only the
+  // bloom — the 2026-09-17 bug: Sides parking landed at the slide's frame 1.
+  const animation = read('src/sidebar/animation.ts')
+  assertIncludes(animation, '_panelAnims.has(wrapper) || _liveTranslateWrappers.has(wrapper)',
+    'isPanelAnimating covers the Sides translate tween')
+  assertIncludes(animation, 'tween.settleCallbacks.push(cb)',
+    'whenPanelMotionSettles registers on a live translate tween')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -29,7 +29,10 @@
  * When the drawer has NO displayed window (active null), both header
  * buttons hide — there is nothing to minimize or close (D17). Hiding uses
  * the `data-canvas-os-hidden` attribute (a sheet rule), never inline
- * `display`, so the shell buttons' own chrome survives teardown.
+ * `display`, so the shell buttons' own chrome survives teardown. The hide is
+ * part of the D17 parking pass and therefore deferred until the close motion
+ * settles (2026-09-17) — the controls belong to the panel that is still
+ * visibly sliding away and must not collapse at frame 1.
  */
 
 import { HEADER_ACTIONS_CLASS, DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
@@ -113,6 +116,11 @@ function clearTitle(header: HTMLElement): void {
  * the settle. Callbacks re-check the live state — a reopen may win the race.
  * (User feedback 2026-09-15: parking mid-fade made the panel content/title
  * vanish instantly.)
+ *
+ * Sides included (2026-09-17): `isPanelAnimating` / `whenPanelMotionSettles`
+ * recognize the translate tween too — before this, the Sides slide never
+ * registered, so parking landed at the slide's first frame (title cleared,
+ * controls hidden, content dropped while the panel was still on screen).
  */
 function whenPanelParkingReady(side: 'primary' | 'secondary', apply: () => void): void {
   const wrapper = side === 'primary' ? getMainMirrorWrapper() : getSecondaryWrapper()
@@ -126,6 +134,30 @@ function whenPanelParkingReady(side: 'primary' | 'secondary', apply: () => void)
   }
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(check)
   else check()
+}
+
+/**
+ * D17 parking body. Runs only once the side's motion has settled:
+ *   - the primary's parked content slot is hidden (attribute + sheet),
+ *   - both sides' stale header title is cleared,
+ *   - both header controls (X + injected minimize) hide — nothing to
+ *     minimize or close.
+ * Re-resolves the header surface (a remount may have replaced it) and
+ * re-checks the live displayed state (a reopen may win the race). Teardown /
+ * OS-off mid-motion must not re-park: the chrome mount flag + OS gate guard.
+ */
+function applyNoActiveParking(side: 'primary' | 'secondary'): void {
+  if (!_active || !isOsModeEnabled()) return
+  if (getDisplayedLiveId(side)) return
+  if (side === 'primary') setCanvasMainNoActive(true)
+  const surface = resolveHeaderSurface(side)
+  if (!surface) return
+  if (side === 'secondary') clearTitle(surface.header)
+  setHeaderHidden(surface.closeBtn, true)
+  const minBtn = surface.actions.querySelector(
+    `button[${MINIMIZE_ATTR}]`,
+  ) as HTMLButtonElement | null
+  if (minBtn) setHeaderHidden(minBtn, true)
 }
 
 // ── Injection + presence (D17) ────────────────────────────────────────────────
@@ -142,26 +174,21 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
   ensureHeaderObserved(surface.header)
 
   const displayed = getDisplayedLiveId(side)
-  // D17 parking: no displayed window → no header title and no stale parked
-  // content (the drawer can still be manually reopened via the edge toggle,
-  // D16). Primary hides its content slot through the shell attribute; both
-  // sides clear the stale title (the next activation restores it).
-  if (side === 'primary') {
-    if (displayed) {
-      setCanvasMainNoActive(false)
-    } else {
-      whenPanelParkingReady('primary', () => {
-        if (!getDisplayedLiveId('primary')) setCanvasMainNoActive(true)
-      })
-    }
-  } else if (!displayed) {
-    whenPanelParkingReady('secondary', () => {
-      if (!getDisplayedLiveId('secondary')) clearTitle(surface.header)
-    })
+  // D17 parking: no displayed window → no header title, no stale parked
+  // content and no header controls (the drawer can still be manually reopened
+  // via the edge toggle, D16). Primary hides its content slot through the
+  // shell attribute; both sides clear the stale title (the next activation
+  // restores it). Un-parking is synchronous (a window is displayed NOW);
+  // parking waits for the close motion to settle so the panel never collapses
+  // / blanks at the slide's first frame (Sides, 2026-09-17).
+  if (displayed) {
+    if (side === 'primary') setCanvasMainNoActive(false)
+    // Existence parity with the close button: stale injections survive
+    // rewrites; hide keeps them invisible until the next ensure pass.
+    setHeaderHidden(surface.closeBtn, false)
+  } else {
+    whenPanelParkingReady(side, () => applyNoActiveParking(side))
   }
-  // Existence parity with the close button: stale injections survive
-  // rewrites; hide keeps them invisible until the next ensure pass.
-  setHeaderHidden(surface.closeBtn, !displayed)
 
   // The minimize control is opt-out (`osWindowControls`): when off, only the
   // X shows and the X minimizes (vanilla behavior — see mountPanelChrome's
@@ -189,7 +216,10 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
     minBtn.remove()
     minBtn = null
   }
-  if (minBtn) setHeaderHidden(minBtn, !displayed)
+  // Hiding is owned by the deferred D17 parking callback when nothing is
+  // displayed (the control must stay visible for the whole close motion);
+  // a displayed window un-hides synchronously.
+  if (minBtn && displayed) setHeaderHidden(minBtn, false)
 }
 
 /** Resolved closed-set live ids (refreshed on every model change). */

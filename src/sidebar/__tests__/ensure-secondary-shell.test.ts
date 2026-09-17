@@ -197,6 +197,9 @@ mock.module('../animation', () => ({
   animatePanelToggle: () => {},
   computePanelAnchor: () => null,
   __getPanelAnimState: () => ({ panelRaf: null, panelStart: null }),
+  // OS chrome's parking gate (module graph links panel-chrome dynamically).
+  isPanelAnimating: () => false,
+  whenPanelMotionSettles: (_w: unknown, cb: () => void) => cb(),
 }))
 
 mock.module('../styles', () => ({

@@ -986,11 +986,13 @@ export function injectDrawerTabStyles(): void {
     /* D17 parking: no displayed window → no stale parked content when the
        drawer is (re)opened via the edge toggle. Keep the parked host DOM —
        this is display suppression, never unmount (spec §4.6).
-       The :not([data-canvas-panel-animating]) guard: while a close fade is
-       running the content must stay visible and fade with the panel (feedback
-       2026-09-15 — parking mid-fade made the content vanish instantly). The
-       attribute is set/cleared by sidebar/animation.ts (PANEL_ANIMATING_ATTR;
-       literal here because this module is a leaf on purpose). */
+       The :not([data-canvas-panel-animating]) guard: while a motion is
+       running the content must stay visible and move/fade with the panel
+       (feedback 2026-09-15 — parking mid-fade made the content vanish
+       instantly). The attribute covers BOTH the Top/Bottom bloom and the
+       Sides translate tween (2026-09-17) and is set/cleared by
+       sidebar/animation.ts (PANEL_ANIMATING_ATTR; literal here because this
+       module is a leaf on purpose). */
     .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active]:not([data-canvas-panel-animating]) .sidebar-ux-panel-content {
       display: none !important;
     }
@@ -1008,10 +1010,11 @@ export function injectDrawerTabStyles(): void {
   // The :not([data-canvas-panel-animating]) guard: `data-drawer-open` flips
   // false at CLOSE-START, so an unguarded rule killed the real box-shadow for
   // the whole close fade. Closes must keep it — the real shadow is the one
-  // visible during the bloom/close and must fade in place with the panel
-  // (live report 2026-09-15: the shadow must not slide in from the screen
-  // edge). The attr is set/cleared by sidebar/animation.ts
-  // (PANEL_ANIMATING_ATTR; literal here because this module is a leaf).
+  // visible during the motion and must fade/slide with the panel (live report
+  // 2026-09-15: the shadow must not slide in from the screen edge). The attr
+  // covers the Top/Bottom bloom AND the Sides translate tween (2026-09-17)
+  // and is set/cleared by sidebar/animation.ts (PANEL_ANIMATING_ATTR; literal
+  // here because this module is a leaf).
   injectStyles('sidebar-ux-shadow-close-suppress', `
     .sidebar-ux-shell[data-drawer-open="false"]:not([data-canvas-panel-animating]) > .sidebar-ux-drawer {
       box-shadow: none !important;

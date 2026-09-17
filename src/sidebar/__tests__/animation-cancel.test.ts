@@ -45,7 +45,13 @@ function flushRaf() {
 }
 
 function makeStubWrapper(): HTMLElement {
-  return { style: { transform: '' } } as unknown as HTMLElement
+  const attrs = new Set<string>()
+  return {
+    style: { transform: '' },
+    setAttribute: (name: string) => { attrs.add(name) },
+    removeAttribute: (name: string) => { attrs.delete(name) },
+    hasAttribute: (name: string) => attrs.has(name),
+  } as unknown as HTMLElement
 }
 
 // --- Test: cancel clears rAF state ---

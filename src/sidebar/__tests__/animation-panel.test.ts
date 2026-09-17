@@ -28,6 +28,7 @@ function assertNear(actual: number, expected: number, message: string, eps = 1e-
 }
 
 import {
+  ANIM_DURATION_MS,
   PANEL_ANIMATING_ATTR,
   PANEL_CLOSE_MS,
   PANEL_ENTER_PX,
@@ -373,6 +374,81 @@ assert(PANEL_UI_FROM > 0 && PANEL_UI_FROM < 1, 'UI lag channel starts partially 
   flush(PANEL_OPEN_MS / 2)
   flush(PANEL_OPEN_MS / 2 + PANEL_CLOSE_MS)
   assertEqual(stale, 0, 'a superseded motion never fires its listeners')
+}
+
+// ── 13. Sides translate tween: settle listeners + motion flag (2026-09-17) ──
+// OS parking waits for the motion via isPanelAnimating/whenPanelMotionSettles.
+// Sides previously only ran the translate tween, which those helpers did not
+// recognize — so parking (title/content/controls) applied at the slide's first
+// frame. The tween now reports in-flight state, carries the CSS motion flag,
+// fires listeners at completion, notifies them on explicit cancel, and
+// TRANSFERS them to a superseding motion (never strands, never early-fires).
+{
+  const wrapper = makeWrapper('translateX(0)')
+  assertEqual(isPanelAnimating(wrapper), false, 'translate: idle wrapper is not animating')
+  animateWrapper(wrapper, 420)
+  assertEqual(isPanelAnimating(wrapper), true, 'translate: live tween counts as animating')
+  assertEqual(wrapper.hasAttribute(PANEL_ANIMATING_ATTR), true, 'translate: motion flag set for the slide')
+  let settled = 0
+  whenPanelMotionSettles(wrapper, () => settled++)
+  flush(0)
+  flush(ANIM_DURATION_MS)
+  assertEqual(settled, 1, 'translate: settle listener fires exactly once at completion')
+  assertEqual(isPanelAnimating(wrapper), false, 'translate: settled wrapper is idle')
+  assertEqual(wrapper.hasAttribute(PANEL_ANIMATING_ATTR), false, 'translate: motion flag cleared at settle')
+  let late = 0
+  whenPanelMotionSettles(wrapper, () => late++)
+  assertEqual(late, 1, 'translate: listener registered after settle runs immediately')
+}
+
+// 13b. Explicit cancel notifies listeners (parking callbacks re-check state).
+{
+  const wrapper = makeWrapper('translateX(0)')
+  animateWrapper(wrapper, 420)
+  let cancelled = 0
+  whenPanelMotionSettles(wrapper, () => cancelled++)
+  cancelWrapperAnimation(wrapper)
+  assertEqual(cancelled, 1, 'translate: explicit cancel notifies the settle listener')
+  assertEqual(isPanelAnimating(wrapper), false, 'translate: cancel clears the motion state')
+  assertEqual(wrapper.hasAttribute(PANEL_ANIMATING_ATTR), false, 'translate: cancel clears the motion flag')
+}
+
+// 13c. Superseding tween inherits the listeners (close→close / close→reopen).
+{
+  const wrapper = makeWrapper('translateX(0)')
+  animateWrapper(wrapper, 420)
+  let carried = 0
+  whenPanelMotionSettles(wrapper, () => carried++)
+  flush(0)
+  flush(100)
+  animateWrapper(wrapper, 0)
+  assertEqual(carried, 0, 'translate: superseded listener does not fire at replacement start')
+  flush(200)
+  flush(ANIM_DURATION_MS + 200)
+  assertEqual(carried, 1, 'translate: superseded listener fires once at the replacement settle')
+}
+
+// 13d. A Top/Bottom bloom taking over a live Sides tween inherits them too.
+{
+  const wrapper = makeWrapper('translateX(0)')
+  const { drawer } = makeDrawer()
+  animateWrapper(wrapper, 420)
+  let carried = 0
+  whenPanelMotionSettles(wrapper, () => carried++)
+  // Location flip mid-close: the bloom replaces the translate tween.
+  animatePanelToggle(wrapper, drawer, { open: false, edge: 'top', closedPx: 420 })
+  assertEqual(carried, 0, 'translate→bloom: listener not fired at bloom start')
+  flush(0)
+  flush(PANEL_CLOSE_MS)
+  assertEqual(carried, 1, 'translate→bloom: listener fires once at the bloom settle')
+}
+
+// 13e. An at-target animateWrapper is a no-op motion (idle for parking).
+{
+  const wrapper = makeWrapper('translateX(420px)')
+  animateWrapper(wrapper, 420)
+  assertEqual(isPanelAnimating(wrapper), false, 'translate: at-target wrapper is idle (no tween)')
+  assertEqual(wrapper.hasAttribute(PANEL_ANIMATING_ATTR), false, 'translate: at-target wrapper carries no flag')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

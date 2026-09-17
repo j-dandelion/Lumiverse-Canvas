@@ -175,12 +175,11 @@ export function animateDrawerOpen(wrapper: HTMLElement, drawer: HTMLElement, sid
 /** Animate a drawer closed (mode-routed). `closedPx` is the structural closed
  *  translate for the wrapper (side/width-derived, caller-owned).
  *
- *  Top/Bottom shadow policy: during the bloom the drawer's real box-shadow
- *  (a child of the fading drawer) is what the user sees — it fades with the
- *  panel and micro-scales in place. chat/reflow only paints the chat-owned
- *  inset (which would ride the chat reflow margin, reading as a slide from
- *  the screen edge) once the panel is settled; `data-canvas-panel-animating`
- *  is the flag it reads. */
+ *  Shadow policy: the drawer's real box-shadow (a child of the moving drawer)
+ *  is what the user sees during either motion — it fades with the bloom and
+ *  rides the Sides slide. The closed-drawer suppression must not apply until
+ *  the motion settles; `data-canvas-panel-animating` (set by animation.ts for
+ *  BOTH motion kinds, 2026-09-17) is the flag the sheet guard reads. */
 export function animateDrawerClose(
   wrapper: HTMLElement,
   drawer: HTMLElement,
