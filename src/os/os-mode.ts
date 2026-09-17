@@ -79,9 +79,12 @@ function isMobileViewportLocal(): boolean {
   }
 }
 
-/** Single-flight: the OS toggle, a viewport crossing, and the boot sync can
- *  race; one mode switch at a time, everyone awaits the same promise. */
+/** Single-flight with a dirty rerun: the OS toggle, a viewport crossing, and
+ *  the boot sync can race; one mode switch at a time, everyone awaits the same
+ *  promise, and a trigger landing mid-switch marks the run dirty so it reruns
+ *  against fresh settings/viewport instead of being dropped. */
 let _mobileDrawerSync: Promise<void> | null = null
+let _mobileDrawerSyncDirty = false
 
 /**
  * Reconcile the OS+mobile single-drawer invariant with the current settings
@@ -89,8 +92,20 @@ let _mobileDrawerSync: Promise<void> | null = null
  * viewport crossing, post-boot).
  */
 export function syncOsMobileDrawerMode(): Promise<void> {
-  if (_mobileDrawerSync) return _mobileDrawerSync
-  _mobileDrawerSync = runSyncOsMobileDrawerMode().finally(() => {
+  if (_mobileDrawerSync) {
+    _mobileDrawerSyncDirty = true
+    return _mobileDrawerSync
+  }
+  _mobileDrawerSync = (async () => {
+    let i = 0
+    do {
+      _mobileDrawerSyncDirty = false
+      await runSyncOsMobileDrawerMode()
+      // Dirty again while the last run was in flight ⇒ rerun (settings and
+      // viewport are re-read at entry). Cap at 5 to bound pathological
+      // flapping.
+    } while (_mobileDrawerSyncDirty && ++i < 5)
+  })().finally(() => {
     _mobileDrawerSync = null
   })
   return _mobileDrawerSync

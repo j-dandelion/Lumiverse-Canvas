@@ -178,7 +178,8 @@ function reset() {
   )
 }
 
-// ── Single-flight: concurrent syncs share one run ──
+// ── Single-flight: concurrent syncs share one run; the dirty rerun then
+//    converges without a duplicate switch (state unchanged) ──
 {
   reset()
   osMode = true
@@ -192,6 +193,50 @@ function reset() {
   release()
   await p1
   assertEqual(modeCalls.length, 1, 'single-flight coalesces to one mode switch')
+  assertEqual(secondSidebarEnabled, false, 'rerun converges on the single-drawer state')
+}
+
+// ── M5-A: crossing to desktop mid-force reruns and restores dual ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  let release!: () => void
+  modeGate = new Promise<void>((r) => { release = r })
+  const p1 = syncOsMobileDrawerMode()
+  // Viewport crosses to desktop while the forced switch is still in flight.
+  mobile = false
+  const p2 = syncOsMobileDrawerMode()
+  assert(p1 === p2, 'mid-flight trigger shares the in-flight promise')
+  release()
+  await p1
+  assertEqual(modeCalls.length, 2, 'crossing reruns: force then restore')
+  assertEqual(modeCalls[0]?.next, false, 'first run forced single-drawer')
+  assertEqual(modeCalls[1]?.next, true, 'rerun restores dual-drawer')
+  assertEqual(secondSidebarEnabled, true, 'final state is dual on desktop')
+  assertEqual(forcedSingleDrawer, false, 'rerun clears the latch')
+}
+
+// ── M5-B: OS-off mid-force reruns and restores dual ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  let release!: () => void
+  modeGate = new Promise<void>((r) => { release = r })
+  const p1 = syncOsMobileDrawerMode()
+  // OS mode turns off while the forced switch is still in flight.
+  osMode = false
+  const p2 = syncOsMobileDrawerMode()
+  assert(p1 === p2, 'OS-off trigger shares the in-flight promise')
+  release()
+  await p1
+  assertEqual(modeCalls.length, 2, 'OS-off reruns: force then restore')
+  assertEqual(modeCalls[1]?.next, true, 'rerun re-enables the second drawer')
+  assertEqual(secondSidebarEnabled, true, 'final state is dual')
+  assertEqual(forcedSingleDrawer, false, 'OS-off clears the latch')
 }
 
 console.log('---')
