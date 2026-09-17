@@ -874,6 +874,9 @@ export interface SecondaryMoveChrome {
 export async function captureSecondaryNeighborForMove(
   liveId: LiveTabId,
 ): Promise<SecondaryMoveChrome> {
+  // A collapsed drawer has no displayed window to hand off from: the tracked
+  // cell is reopen memory (OS minimize/close keeps it), not display truth.
+  if (getModel()?.drawers.secondary.open !== true) return { neighborBtn: null }
   const { getActiveSecondaryTabId } = await import('../tabs/active-tab')
   if (getActiveSecondaryTabId() !== liveId) return { neighborBtn: null }
   const { findNeighborSecondaryButtonFor } = await import('../tabs/buttons')

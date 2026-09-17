@@ -3,7 +3,7 @@ import { createEmptyModel, builtinKey, extensionKey } from '../../core/model'
 import { type Intent } from '../../core/intents'
 import { visibleKeys } from '../../core/select'
 import { FakeHost, type LiveTab } from '../../host/fake/implementation'
-import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId, dispatchActivateByLiveId } from '../../recon/dispatch'
+import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId, dispatchActivateByLiveId, captureSecondaryNeighborForMove } from '../../recon/dispatch'
 import { serializeModelToLayout, buildModelFromLayout } from '../../persist/layout-model'
 import {
   armLayoutRepo,
@@ -908,6 +908,82 @@ async function testDispatchActivateByLiveId() {
 }
 
 // ============================================================================
+// D19 — captureSecondaryNeighborForMove: collapsed drawer = no display truth
+// ============================================================================
+async function testSecondaryNeighborCaptureGate() {
+  const { __setSecondaryWrapperForTest } = await import('../../sidebar/secondary')
+  const { setActiveSecondaryTabId } = await import('../../tabs/active-tab')
+
+  // Minimal secondary tab-list stubs for the real neighbor finder.
+  const mkBtn = (id: string, title: string) => ({
+    className: '',
+    style: { display: '' },
+    getAttribute: (name: string) =>
+      name === 'data-tab-id' ? id : name === 'title' ? title : null,
+  })
+  const secButtons = [mkBtn('h:a', 'Tab A'), mkBtn('h:b', 'Tab B'), mkBtn('h:c', 'Tab C')]
+  const secList = {
+    querySelectorAll: (sel: string) => (sel === 'button[data-tab-id]' ? secButtons : []),
+  }
+  __setSecondaryWrapperForTest({
+    querySelector: (sel: string) => (sel === '.sidebar-ux-tab-list' ? secList : null),
+  } as any)
+
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+
+  // No model → nothing displayed → capture bails even though h:b is tracked.
+  shutdown()
+  setActiveSecondaryTabId('h:b', { silent: true })
+  let chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19a: no model → no secondary neighbor capture')
+
+  // Model present but the secondary drawer is collapsed (OS minimize/close
+  // keeps the tracked active as reopen memory) → still no capture.
+  const closedModel: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A, B],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(closedModel, host)
+  await flush()
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19b: collapsed drawer → no secondary neighbor capture')
+
+  // Open drawer + moved tab is the tracked active → neighbor captured above.
+  const openModel: LayoutModel = {
+    ...closedModel,
+    drawers: {
+      ...closedModel.drawers,
+      secondary: { ...closedModel.drawers.secondary, open: true },
+    },
+  }
+  bootstrap(openModel, host)
+  await flush()
+  setActiveSecondaryTabId('h:b', { silent: true })
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assertEqual(
+    (chrome.neighborBtn as any)?.getAttribute('data-tab-id') ?? null,
+    'h:a',
+    'D19c: open drawer + active-tab move captures the neighbor above',
+  )
+
+  // Open drawer but a NON-active tab is moved → quiet move, no capture.
+  setActiveSecondaryTabId('h:c', { silent: true })
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19d: non-active move stays quiet with the drawer open')
+
+  __setSecondaryWrapperForTest(null)
+  setActiveSecondaryTabId(null, { silent: true })
+  shutdown()
+}
+
+// ============================================================================
 // Run all tests
 // ============================================================================
 await testRightClickMovePrimaryToSecondary()
@@ -931,6 +1007,7 @@ await testMoveWithExplicitVisibleIndex()
 await testDispatchPersistsModel()
 await testUnknownLiveIdIsNoOp()
 await testDispatchActivateByLiveId()
+await testSecondaryNeighborCaptureGate()
 
 // Round-trip serialization
 await testRoundTripSerialization()

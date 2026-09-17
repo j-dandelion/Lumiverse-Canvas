@@ -1560,10 +1560,29 @@ function reset(): void {
     return []
   }
 
+  // Collapsed/absent model → no displayed window to hand off from: the
+  // capture bails before consulting the tracked active (reopen memory).
+  setActiveSecondaryTabId('tab-b')
+  let secChrome = await captureSecondaryNeighborForMove('tab-b')
+  assert(secChrome.neighborBtn === null, 'M24: collapsed drawer → no neighbor capture')
+
+  // Bootstrap an OPEN secondary drawer — only an open drawer displays the
+  // tracked active window the move must hand off from.
+  const host = await bootMirror()
+  const booted = getModel()!
+  bootstrap({
+    ...booted,
+    drawers: {
+      ...booted.drawers,
+      secondary: { ...booted.drawers.secondary, open: true },
+    },
+  }, host)
+  await flush()
+
   // Moved tab is NOT the drawer's tracked active → no capture (the active
   // tab keeps its replacement; quiet move).
   setActiveSecondaryTabId('tab-a')
-  let secChrome = await captureSecondaryNeighborForMove('tab-b')
+  secChrome = await captureSecondaryNeighborForMove('tab-b')
   assert(secChrome.neighborBtn === null, 'M24: not the tracked active → no neighbor')
 
   // Moved tab IS the tracked active → nearest visible button above.
