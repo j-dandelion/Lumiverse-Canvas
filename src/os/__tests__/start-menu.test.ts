@@ -22,6 +22,8 @@ import {
   deriveStartMenuEntries,
   entryMonogram,
   extractButtonIcon,
+  hideStartMenu,
+  openStartMenu,
   resolveEntryIcon,
   STATE_LABEL,
   STATE_MARK_SVG,
@@ -57,6 +59,17 @@ mock.module('../../store', () => ({
   // Other store exports are not referenced by start-menu's derive path.
   getMainDrawerSide: () => 'right',
   callHostStoreAction: () => {},
+}))
+// The dismissal-lifecycle block below opens the REAL menu via openStartMenu;
+// the recon host/model and the stylesheet injector are the only heavy edges
+// the open path needs — stub them so the DOM shim stays minimal.
+mock.module('../../recon/dispatch', () => ({
+  getModel: () => makeModel(),
+  getHost: () => ({ resolve: (key: string) => liveIds.get(key) ?? null }),
+}))
+mock.module('../start-menu-styles', () => ({
+  injectStartMenuStyles: () => {},
+  START_MENU_STYLE_ID: 'canvas-os-start-menu-styles',
 }))
 
 function makeModel() {
@@ -255,6 +268,202 @@ assertEqual(
   undefined,
   'unknown extension falls through to the monogram',
 )
+
+// ── Resize dismissal lifecycle (M9): window + visualViewport listeners ──────
+// The REAL openStartMenu runs against a hand-rolled DOM + listener recorders
+// (repo convention, no jsdom): a window/visualViewport resize must dismiss
+// the menu immediately through the SAME `_unsubDocListeners` teardown that
+// outside-click/Escape use — removal exactly once, no leaks across cycles.
+
+class FakeEl {
+  tagName: string
+  id = ''
+  type = ''
+  textContent = ''
+  innerHTML = ''
+  style: Record<string, string> = {}
+  children: FakeEl[] = []
+  parentElement: FakeEl | null = null
+  isConnected = false
+  removed = false
+  animateCalls = 0
+  private _classes = new Set<string>()
+  private _attrs = new Map<string, string>()
+
+  constructor(tag: string) { this.tagName = tag.toUpperCase() }
+
+  get className() { return [...this._classes].join(' ') }
+  set className(v: string) { this._classes = new Set(String(v).split(/\s+/).filter(Boolean)) }
+
+  classList = {
+    add: (...cs: string[]) => { for (const c of cs) this._classes.add(c) },
+    remove: (...cs: string[]) => { for (const c of cs) this._classes.delete(c) },
+    contains: (c: string) => this._classes.has(c),
+  }
+
+  setAttribute(k: string, v: string) { this._attrs.set(k, v) }
+  getAttribute(k: string) { return this._attrs.get(k) ?? null }
+  toggleAttribute(k: string, force?: boolean) {
+    const on = force === undefined ? !this._attrs.has(k) : force
+    if (on) this._attrs.set(k, '')
+    else this._attrs.delete(k)
+    return on
+  }
+  appendChild(child: FakeEl) {
+    child.parentElement = this
+    child.isConnected = true
+    this.children.push(child)
+    return child
+  }
+  append(...kids: FakeEl[]) { for (const k of kids) this.appendChild(k) }
+  remove() {
+    if (this.parentElement) {
+      this.parentElement.children = this.parentElement.children.filter((c) => c !== this)
+    }
+    this.parentElement = null
+    this.isConnected = false
+    this.removed = true
+  }
+  contains(el: unknown): boolean {
+    return el === this || this.children.some((c) => c.contains(el))
+  }
+  addEventListener() { /* element-level listeners are not under test */ }
+  removeEventListener() { /* element-level listeners are not under test */ }
+  focus() { /* no-op */ }
+  querySelector(): FakeEl | null { return null }
+  querySelectorAll(): FakeEl[] { return [] }
+  getBoundingClientRect() {
+    return { left: 16, top: 600, width: 120, height: 40, right: 136, bottom: 640 }
+  }
+  animate() {
+    this.animateCalls++
+    return {
+      onfinish: null as (() => void) | null,
+      oncancel: null as (() => void) | null,
+      cancel() { /* no-op */ },
+    }
+  }
+}
+
+type ListenerFn = (ev: unknown) => void
+interface ListenerCall { type: string; fn: ListenerFn }
+function makeRecorder() {
+  const adds: ListenerCall[] = []
+  const removes: ListenerCall[] = []
+  return {
+    adds,
+    removes,
+    addEventListener: (type: string, fn: ListenerFn) => { adds.push({ type, fn }) },
+    removeEventListener: (type: string, fn: ListenerFn) => { removes.push({ type, fn }) },
+  }
+}
+type Recorder = ReturnType<typeof makeRecorder>
+function activeCount(rec: Recorder, type: string): number {
+  const dead = new Set(rec.removes.filter((c) => c.type === type).map((c) => c.fn))
+  return rec.adds.filter((c) => c.type === type && !dead.has(c.fn)).length
+}
+function fire(rec: Recorder, type: string): void {
+  const dead = new Set(rec.removes.filter((c) => c.type === type).map((c) => c.fn))
+  for (const c of rec.adds.filter((c) => c.type === type && !dead.has(c.fn))) c.fn({})
+}
+function lastAdd(rec: Recorder, type: string): ListenerFn | undefined {
+  return [...rec.adds].reverse().find((c) => c.type === type)?.fn
+}
+
+const winRec = makeRecorder()
+const docRec = makeRecorder()
+const vvRec = makeRecorder()
+const fakeBody = new FakeEl('body')
+const fakeDoc = {
+  body: fakeBody,
+  head: new FakeEl('head'),
+  documentElement: new FakeEl('html'),
+  activeElement: null,
+  createElement: (tag: string) => new FakeEl(tag),
+  getElementById: () => null,
+  querySelectorAll: () => [] as FakeEl[],
+  addEventListener: docRec.addEventListener,
+  removeEventListener: docRec.removeEventListener,
+}
+;(globalThis as any).window = {
+  addEventListener: winRec.addEventListener,
+  removeEventListener: winRec.removeEventListener,
+  innerWidth: 1024,
+  innerHeight: 768,
+  visualViewport: {
+    addEventListener: vvRec.addEventListener,
+    removeEventListener: vvRec.removeEventListener,
+  },
+}
+;(globalThis as any).document = fakeDoc
+;(globalThis as any).requestAnimationFrame = (cb: (t: number) => void) => { cb(0); return 1 }
+;(globalThis as any).cancelAnimationFrame = () => { /* no-op */ }
+
+function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
+  const button = new FakeEl('button')
+  button.isConnected = true
+  openStartMenu('primary', button as unknown as HTMLElement)
+  const menu = fakeBody.children[fakeBody.children.length - 1] as FakeEl
+  return { menu, button }
+}
+
+// ── (1) window resize ⇒ immediate hide + listener removed ──
+{
+  assertEqual(activeCount(winRec, 'resize'), 0, 'M9: no window resize listener before open')
+  const { menu } = openFreshMenu()
+  assertEqual(activeCount(winRec, 'resize'), 1, 'M9: open registers one window resize dismissal')
+  assertEqual(activeCount(docRec, 'mousedown'), 1, 'M9: outside-click dismissal still registered on open')
+  assertEqual(menu.animateCalls, 1, 'M9: the open animation ran (fake WAAPI)')
+  fire(winRec, 'resize')
+  assert(menu.removed, 'M9: window resize hides the menu')
+  assert(!fakeBody.children.includes(menu), 'M9: the dismissed menu left the DOM')
+  assertEqual(menu.animateCalls, 1, 'M9: resize dismissal is immediate (no close animation)')
+  assertEqual(activeCount(winRec, 'resize'), 0, 'M9: window resize listener removed on dismiss')
+  assertEqual(activeCount(docRec, 'mousedown'), 0, 'M9: mousedown listener removed by the same teardown')
+  assertEqual(activeCount(docRec, 'keydown'), 0, 'M9: keydown listener removed by the same teardown')
+  assertEqual(activeCount(vvRec, 'resize'), 0, 'M9: visualViewport listener removed by the same teardown')
+  // Idempotent: a stale handler fire after teardown is a no-op, not a double remove.
+  lastAdd(winRec, 'resize')!({})
+  assertEqual(
+    winRec.removes.filter((c) => c.type === 'resize').length,
+    1,
+    'M9: dismissal removes the resize listener exactly once',
+  )
+}
+
+// ── (2) visualViewport resize ⇒ immediate hide + listener removed ──
+{
+  const { menu } = openFreshMenu()
+  assertEqual(activeCount(vvRec, 'resize'), 1, 'M9: open registers one visualViewport resize dismissal')
+  fire(vvRec, 'resize')
+  assert(menu.removed, 'M9: visualViewport resize hides the menu')
+  assertEqual(menu.animateCalls, 1, 'M9: visualViewport dismissal is immediate (no close animation)')
+  assertEqual(activeCount(vvRec, 'resize'), 0, 'M9: visualViewport listener removed on dismiss')
+  assertEqual(activeCount(winRec, 'resize'), 0, 'M9: window listener removed by the same teardown')
+}
+
+// ── (3) open → close → open ⇒ exactly one active dismissal set ──
+{
+  const { menu: first } = openFreshMenu()
+  hideStartMenu({ immediate: true })
+  assert(first.removed, 'M9: close removes the first menu')
+  assertEqual(activeCount(winRec, 'resize'), 0, 'M9: close removes the window resize listener')
+  assertEqual(activeCount(vvRec, 'resize'), 0, 'M9: close removes the visualViewport resize listener')
+  const addsBeforeReopen = winRec.adds.filter((c) => c.type === 'resize').length
+  const { menu: second } = openFreshMenu()
+  assertEqual(activeCount(winRec, 'resize'), 1, 'M9: reopen registers exactly one window resize listener')
+  assertEqual(activeCount(vvRec, 'resize'), 1, 'M9: reopen registers exactly one visualViewport listener')
+  assertEqual(activeCount(docRec, 'mousedown'), 1, 'M9: reopen registers exactly one mousedown listener')
+  assertEqual(activeCount(docRec, 'keydown'), 1, 'M9: reopen registers exactly one keydown listener')
+  assertEqual(
+    winRec.adds.filter((c) => c.type === 'resize').length,
+    addsBeforeReopen + 1,
+    'M9: exactly one window resize add per open cycle (no re-registration leak)',
+  )
+  fire(winRec, 'resize')
+  assert(second.removed, 'M9: the second menu still dismisses on resize')
+  assertEqual(activeCount(winRec, 'resize'), 0, 'M9: the second menu teardown clears its listeners')
+}
 
 console.log('---')
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

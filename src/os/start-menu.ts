@@ -410,7 +410,7 @@ function reconcileStartMenuPresence(): void {
 
 /** Open the menu for a drawer, anchored to the invoking button. Idempotent:
  *  clicking a drawer's own Start button while its menu is open toggles. */
-function openStartMenu(side: Side, button: HTMLElement): void {
+export function openStartMenu(side: Side, button: HTMLElement): void {
   // Same-side toggle — only while the menu is genuinely open on a live
   // button. A shell remount can leave a stale open flag + dead anchor; then
   // the click must open a fresh menu, not try to close the orphan.
@@ -532,7 +532,7 @@ export function hideStartMenu(opts?: { immediate?: boolean }): void {
   dlog('[os] start menu close', { side, immediate: false })
 }
 
-/** Outside-click + Escape dismissal while the menu is open. */
+/** Outside-click + Escape + viewport-change dismissal while the menu is open. */
 function attachMenuDismiss(): void {
   const onDocMousedown = (ev: MouseEvent) => {
     const target = ev.target
@@ -557,11 +557,22 @@ function attachMenuDismiss(): void {
     const next = idx === -1 ? items[0]! : items[(idx + dir + items.length) % items.length]!
     next.focus()
   }
+  // A resize moves the anchored button (viewport-anchored strips) while the
+  // fixed body-level menu keeps its old coordinates — dismiss immediately
+  // rather than leave a stale anchor / clipped surface behind.
+  const onViewportResize = () => {
+    hideStartMenu({ immediate: true })
+  }
   document.addEventListener('mousedown', onDocMousedown, true)
   document.addEventListener('keydown', onKey, true)
+  window.addEventListener('resize', onViewportResize)
+  window.visualViewport?.addEventListener('resize', onViewportResize)
+  // Known residual: no document-level `scroll` dismissal (the strip's own scroll case).
   _unsubDocListeners = () => {
     document.removeEventListener('mousedown', onDocMousedown, true)
     document.removeEventListener('keydown', onKey, true)
+    window.removeEventListener('resize', onViewportResize)
+    window.visualViewport?.removeEventListener('resize', onViewportResize)
   }
 }
 
