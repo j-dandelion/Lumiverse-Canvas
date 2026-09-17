@@ -4467,10 +4467,8 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const isClosed = model.closed.includes(key);
   const isHidden2 = model.hidden.includes(key);
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
-  const sourceSide = side === "primary" ? "secondary" : "primary";
-  const activate = livesInTarget || model.active[sourceSide] === key || isClosed;
-  const absent = isClosed || isHidden2;
-  const launchIndex = absent ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
+  const placeAtEnd = !livesInTarget || isClosed || isHidden2;
+  const launchIndex = placeAtEnd ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
   const unhide = isHidden2 ? dispatchBatch([
     { t: "setHidden", key, hidden: false },
     ...livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : []
@@ -4479,15 +4477,14 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const openDrawer = drawerClosed ? dispatch({ t: "setDrawer", side, open: true }) : Promise.resolve();
   if (drawerClosed)
     commandDrawerOpen(side, true);
-  const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false, absent ? launchIndex : undefined);
-  const open = activate ? dispatchBatch([
+  const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false, launchIndex);
+  const open = dispatchBatch([
     { t: "setClosed", key, closed: false },
     ...isClosed && !isHidden2 && livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : [],
     { t: "activate", key, side }
-  ]) : Promise.resolve();
+  ]);
   return unhide.then(() => openDrawer).then(() => move).then(() => open).then(() => {
-    if (activate)
-      host.activate(side, liveId);
+    host.activate(side, liveId);
   });
 }
 function toggleWindowByLiveId(liveId, side) {
@@ -18641,7 +18638,7 @@ function deriveStartMenuEntries(model, resolve) {
   out.sort((a3, b2) => a3.title.localeCompare(b2.title, undefined, { sensitivity: "base" }) || a3.liveId.localeCompare(b2.liveId));
   return out;
 }
-function createMenuEntry(entry) {
+function createMenuEntry(entry, targetSide) {
   const item = document.createElement("button");
   item.type = "button";
   item.className = "canvas-os-start-menu__item";
@@ -18675,7 +18672,7 @@ function createMenuEntry(entry) {
   item.append(rail, tile, label, status);
   item.addEventListener("click", () => {
     hideStartMenu();
-    openWindowInDrawerByLiveId(entry.liveId, entry.side);
+    openWindowInDrawerByLiveId(entry.liveId, targetSide);
   });
   return item;
 }
@@ -18730,7 +18727,7 @@ function createEmptyState() {
   empty.append(glyph, title, hint);
   return empty;
 }
-function buildMenu() {
+function buildMenu(targetSide) {
   const host = getHost();
   const model = getModel();
   if (!host || !model)
@@ -18755,7 +18752,7 @@ function buildMenu() {
   list.className = "canvas-os-start-menu__list";
   list.setAttribute("role", "presentation");
   for (const entry of entries) {
-    list.appendChild(createMenuEntry(entry));
+    list.appendChild(createMenuEntry(entry, targetSide));
   }
   menu.appendChild(list);
   return menu;
@@ -18788,7 +18785,7 @@ function openStartMenu(side, button) {
     return;
   }
   hideStartMenu({ immediate: true });
-  const menu = buildMenu();
+  const menu = buildMenu(side);
   if (!menu)
     return;
   document.body.appendChild(menu);
