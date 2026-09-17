@@ -25,6 +25,7 @@ import {
   __getPanelAnimState,
   cancelWrapperAnimation,
   PANEL_ANIMATING_ATTR,
+  parseTranslateX,
 } from '../animation'
 import {
   __setAnchorForTest,
@@ -42,12 +43,17 @@ let rafId = 0
 }
 ;(globalThis as any).cancelAnimationFrame = () => {}
 
-function makeDrawer() {
+function makeDrawer(wrapper?: { style: { transform: string } }) {
   const panel: Record<string, string> = {}
   const drawer = {
     style: {} as Record<string, string>,
     querySelector: (sel: string) => (sel === '.sidebar-ux-panel' ? { style: panel } : null),
-    getBoundingClientRect: () => ({ left: 0, top: 56, width: 420, height: 800 }),
+    getBoundingClientRect: () => ({
+      left: parseTranslateX(wrapper?.style.transform),
+      top: 56,
+      width: 420,
+      height: 800,
+    }),
   } as unknown as HTMLElement
   return { drawer, panel }
 }
@@ -66,7 +72,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'sides' })
   const wrapper = makeWrapper('translateX(420px)')
-  const { drawer, panel } = makeDrawer()
+  const { drawer, panel } = makeDrawer(wrapper)
   animateDrawerOpen(wrapper, drawer, 'primary')
   assertEqual(__getPanelAnimState(wrapper).panelRaf, null, 'sides open does not bloom')
   assert(__getAnimState(wrapper).animRaf !== null, 'sides open runs the translate tween')
@@ -78,7 +84,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'sides' })
   const wrapper = makeWrapper('translateX(0)')
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'secondary')
   assertEqual(__getPanelAnimState(wrapper).panelRaf, null, 'sides close does not bloom')
   assert(__getAnimState(wrapper).animRaf !== null, 'sides close runs the translate tween')
@@ -90,7 +96,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'top' })
   const wrapper = makeWrapper('translateX(420px)')
-  const { drawer, panel } = makeDrawer()
+  const { drawer, panel } = makeDrawer(wrapper)
   animateDrawerOpen(wrapper, drawer, 'primary')
   assertEqual(wrapper.style.transform, 'translateX(0)', 'top open snaps the wrapper structurally')
   assertEqual(drawer.style.opacity, '0', 'top open starts the bloom')
@@ -105,7 +111,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'bottom' })
   const wrapper = makeWrapper('translateX(0)')
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'secondary')
   assertEqual(drawer.style.transformOrigin, '50% 100%', 'unanchored bottom close uses the rail center')
   assertEqual(
@@ -122,7 +128,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'top' })
   const wrapper = makeWrapper('translateX(420px)')
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'primary')
   assertEqual(__getPanelAnimState(wrapper).panelRaf, null, 'settled-closed wrapper takes no bloom')
   assertEqual(__getAnimState(wrapper).animRaf, null, 'settled-closed wrapper takes no slide')
@@ -144,7 +150,7 @@ function makeWrapper(transform = '') {
 
   __setAnchorForTest('secondary', 'key-a', 'live-a')
   const wrapper = makeWrapper('translateX(0)')
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'secondary')
   assert(
     drawer.style.transformOrigin.startsWith('29.52'),
@@ -154,8 +160,8 @@ function makeWrapper(transform = '') {
   cancelWrapperAnimation(wrapper)
 
   // suppressNextCloseAnchor (OS close) → the next close fades in place …
-  const d2 = makeDrawer()
   const w2 = makeWrapper('translateX(0)')
+  const d2 = makeDrawer(w2)
   suppressNextCloseAnchor('secondary')
   animateDrawerClose(w2, d2.drawer, 420, 'secondary')
   assertEqual(d2.drawer.style.transformOrigin, '50% 0%', 'suppressed close falls back to the rail center')
@@ -167,8 +173,8 @@ function makeWrapper(transform = '') {
   cancelWrapperAnimation(w2)
 
   // … and the hint is one-shot: the next close anchors again.
-  const d3 = makeDrawer()
   const w3 = makeWrapper('translateX(0)')
+  const d3 = makeDrawer(w3)
   animateDrawerClose(w3, d3.drawer, 420, 'secondary')
   assert(d3.drawer.style.transformOrigin.startsWith('29.52'), 'suppression hint is one-shot')
   cancelWrapperAnimation(w3)
@@ -183,8 +189,8 @@ function makeWrapper(transform = '') {
       getAttribute: (name: string) => (name === 'data-pin-owner' ? 'main' : null),
     }),
   }] }
-  const d4 = makeDrawer()
   const w4 = makeWrapper('translateX(420px)')
+  const d4 = makeDrawer(w4)
   animateDrawerOpen(w4, d4.drawer, 'primary')
   assert(d4.drawer.style.transformOrigin.startsWith('29.52'), 'anchored open uses the button origin')
   cancelWrapperAnimation(w4)
@@ -211,7 +217,7 @@ function makeWrapper(transform = '') {
   // OS close schedules suppression; the close then runs on Sides (translate
   // tween, no bloom) and must still consume/clear the flag.
   const wrapper = makeWrapper('translateX(0)')
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   suppressNextCloseAnchor('secondary')
   animateDrawerClose(wrapper, drawer, 420, 'secondary')
   assertEqual(__getPanelAnimState(wrapper).panelRaf, null, 'sides close does not bloom')
@@ -221,8 +227,8 @@ function makeWrapper(transform = '') {
   // Switch to Top: the next close must anchor toward the displayed window's
   // button — not inherit the stale suppression from the Sides close.
   hydrateSettings({ drawerLocation: 'top' })
-  const d2 = makeDrawer()
   const w2 = makeWrapper('translateX(0)')
+  const d2 = makeDrawer(w2)
   animateDrawerClose(w2, d2.drawer, 420, 'secondary')
   assert(
     d2.drawer.style.transformOrigin.startsWith('29.52'),
@@ -238,6 +244,43 @@ function makeWrapper(transform = '') {
   ;(globalThis as any).document = undefined
 }
 
+// ── 6c. First open (M4): the wrapper is still at the closed translate when the
+//      open begins. The anchor must be resolved after the structural snap, so
+//      the origin is the on-screen geometry — not shifted by the closedPx that
+//      the wrapper still carries when the ordering is wrong. ──
+{
+  hydrateSettings({ drawerLocation: 'top' })
+  const button = {
+    isConnected: true,
+    getAttribute: (name: string) => (name === 'data-tab-id' ? 'live-b' : null),
+    closest: () => ({
+      getAttribute: (name: string) => (name === 'data-pin-owner' ? 'main' : null),
+    }),
+    getBoundingClientRect: () => ({ left: 100, top: 8, width: 48, height: 48 }),
+  }
+  ;(globalThis as any).document = { querySelectorAll: () => [button] }
+  __setAnchorForTest('primary', 'key-b', 'live-b')
+
+  const closedWrapper = makeWrapper('translateX(420px)')
+  const closedDrawer = makeDrawer(closedWrapper)
+  animateDrawerOpen(closedWrapper, closedDrawer.drawer, 'primary')
+  assertEqual(closedWrapper.style.transform, 'translateX(0)', 'first open snaps the wrapper before measuring')
+  const firstOpenOrigin = closedDrawer.drawer.style.transformOrigin
+  assert(firstOpenOrigin.startsWith('29.52'), 'first-open anchor ignores the closed-translate offset')
+  cancelWrapperAnimation(closedWrapper)
+
+  const openWrapper = makeWrapper('translateX(0)')
+  const openDrawer = makeDrawer(openWrapper)
+  animateDrawerOpen(openWrapper, openDrawer.drawer, 'primary')
+  assertEqual(
+    firstOpenOrigin,
+    openDrawer.drawer.style.transformOrigin,
+    'first-open anchor matches the on-screen (translateX(0)) geometry',
+  )
+  cancelWrapperAnimation(openWrapper)
+  ;(globalThis as any).document = undefined
+}
+
 // ── 7. Panel-animating flag: marks the bloom for chat/reflow's shadow swap ──
 // Top/Bottom blooms carry `data-canvas-panel-animating` so reflow keeps the
 // real (bloom-fading) drawer shadow during the motion and only paints the
@@ -245,7 +288,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'top' })
   const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerOpen(wrapper, drawer, 'primary')
   assert(wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'top open marks the wrapper animating')
   cancelWrapperAnimation(wrapper)
@@ -254,7 +297,7 @@ function makeWrapper(transform = '') {
 {
   hydrateSettings({ drawerLocation: 'bottom' })
   const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'primary')
   assert(wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'bottom close marks the wrapper animating')
   cancelWrapperAnimation(wrapper)
@@ -265,7 +308,7 @@ function makeWrapper(transform = '') {
   // synced side slide there, no swap needed).
   hydrateSettings({ drawerLocation: 'sides' })
   const wrapper = makeWrapper('translateX(0)') as HTMLElement & { __attrs: Set<string> }
-  const { drawer } = makeDrawer()
+  const { drawer } = makeDrawer(wrapper)
   animateDrawerClose(wrapper, drawer, 420, 'primary')
   assert(!wrapper.__attrs.has(PANEL_ANIMATING_ATTR), 'sides close runs no bloom flag')
   cancelWrapperAnimation(wrapper)

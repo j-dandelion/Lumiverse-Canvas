@@ -163,10 +163,12 @@ export function animateDrawerOpen(wrapper: HTMLElement, drawer: HTMLElement, sid
     return
   }
   ensureAnchorTracking()
+  wrapper.style.transform = 'translateX(0)'
+  const anchor = resolveAnchor(side, drawer, 'open')
   animatePanelToggle(wrapper, drawer, {
     open: true,
     edge: getStripEdge() ?? 'top',
-    anchor: resolveAnchor(side, drawer, 'open'),
+    anchor,
   })
 }
 
