@@ -825,11 +825,13 @@ function injectDrawerTabStyles() {
     /* D17 parking: no displayed window → no stale parked content when the
        drawer is (re)opened via the edge toggle. Keep the parked host DOM —
        this is display suppression, never unmount (spec §4.6).
-       The :not([data-canvas-panel-animating]) guard: while a close fade is
-       running the content must stay visible and fade with the panel (feedback
-       2026-09-15 — parking mid-fade made the content vanish instantly). The
-       attribute is set/cleared by sidebar/animation.ts (PANEL_ANIMATING_ATTR;
-       literal here because this module is a leaf on purpose). */
+       The :not([data-canvas-panel-animating]) guard: while a motion is
+       running the content must stay visible and move/fade with the panel
+       (feedback 2026-09-15 — parking mid-fade made the content vanish
+       instantly). The attribute covers BOTH the Top/Bottom bloom and the
+       Sides translate tween (2026-09-17) and is set/cleared by
+       sidebar/animation.ts (PANEL_ANIMATING_ATTR; literal here because this
+       module is a leaf on purpose). */
     .sidebar-ux-main-mirror-wrapper[data-canvas-os-no-active]:not([data-canvas-panel-animating]) .sidebar-ux-panel-content {
       display: none !important;
     }
@@ -1699,6 +1701,19 @@ function parseTranslateX(transform) {
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
+function runSettleCallbacks(callbacks) {
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch {}
+  }
+}
+function markWrapperAnimating(wrapper) {
+  wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
+}
+function clearWrapperAnimating(wrapper) {
+  wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
+}
 function animFrame(wrapper, state, now) {
   if (state.start === null)
     state.start = now;
@@ -1713,35 +1728,50 @@ function animFrame(wrapper, state, now) {
     state.raf = null;
     state.start = null;
     _liveTranslateWrappers.delete(wrapper);
+    clearWrapperAnimating(wrapper);
     const done = state.onComplete;
     state.onComplete = null;
+    const callbacks = state.settleCallbacks;
+    state.settleCallbacks = [];
     if (done) {
       try {
         done();
       } catch {}
     }
+    runSettleCallbacks(callbacks);
   }
 }
 function cancelTranslateTween(wrapper) {
   const state = _anims.get(wrapper);
-  if (state?.raf != null) {
-    cancelAnimationFrame(state.raf);
-    state.raf = null;
-    state.start = null;
-    state.onComplete = null;
+  const wasLive = _liveTranslateWrappers.has(wrapper) || state?.raf != null;
+  const pending = state ? state.settleCallbacks : [];
+  if (state) {
+    if (state.raf != null) {
+      cancelAnimationFrame(state.raf);
+      state.raf = null;
+      state.start = null;
+      state.onComplete = null;
+    }
+    state.settleCallbacks = [];
   }
   _liveTranslateWrappers.delete(wrapper);
+  if (wasLive)
+    clearWrapperAnimating(wrapper);
+  return pending;
 }
 function cancelWrapperAnimation(wrapper) {
   const target = wrapper ?? _lastWrapper;
   if (!target)
     return;
-  cancelTranslateTween(target);
+  const drained = cancelTranslateTween(target);
   cancelPanelToggle(target);
+  runSettleCallbacks(drained);
 }
 function cancelAllWrapperAnimations() {
-  for (const wrapper of Array.from(_liveTranslateWrappers))
-    cancelTranslateTween(wrapper);
+  for (const wrapper of Array.from(_liveTranslateWrappers)) {
+    const drained = cancelTranslateTween(wrapper);
+    runSettleCallbacks(drained);
+  }
   for (const wrapper of Array.from(_livePanelWrappers))
     cancelPanelToggle(wrapper);
 }
@@ -1750,9 +1780,11 @@ function animateWrapper(wrapper, targetPx, onComplete) {
   cancelPanelToggle(wrapper);
   let state = _anims.get(wrapper);
   if (!state) {
-    state = { raf: null, start: null, from: 0, to: 0, onComplete: null };
+    state = { raf: null, start: null, from: 0, to: 0, onComplete: null, settleCallbacks: [] };
     _anims.set(wrapper, state);
   }
+  const carried = state.settleCallbacks;
+  state.settleCallbacks = [];
   const current = parseTranslateX(wrapper.style.transform);
   state.from = current;
   state.to = targetPx;
@@ -1764,6 +1796,7 @@ function animateWrapper(wrapper, targetPx, onComplete) {
     wrapper.style.transform = `translateX(${targetPx}px)`;
     state.raf = null;
     _liveTranslateWrappers.delete(wrapper);
+    clearWrapperAnimating(wrapper);
     const done = state.onComplete;
     state.onComplete = null;
     if (done) {
@@ -1771,9 +1804,12 @@ function animateWrapper(wrapper, targetPx, onComplete) {
         done();
       } catch {}
     }
+    runSettleCallbacks(carried);
     return;
   }
+  state.settleCallbacks = carried;
   _liveTranslateWrappers.add(wrapper);
+  markWrapperAnimating(wrapper);
   state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t));
 }
 function computePanelAnchor(button, drawer) {
@@ -1846,15 +1882,20 @@ function cancelPanelToggle(wrapper) {
     settlePanelToggle(state, { cancelled: true });
 }
 function isPanelAnimating(wrapper) {
-  return _panelAnims.has(wrapper);
+  return _panelAnims.has(wrapper) || _liveTranslateWrappers.has(wrapper);
 }
 function whenPanelMotionSettles(wrapper, cb) {
-  const state = _panelAnims.get(wrapper);
-  if (!state) {
-    cb();
+  const bloom = _panelAnims.get(wrapper);
+  if (bloom) {
+    bloom.settleCallbacks.push(cb);
     return;
   }
-  state.settleCallbacks.push(cb);
+  const tween = _anims.get(wrapper);
+  if (tween && _liveTranslateWrappers.has(wrapper)) {
+    tween.settleCallbacks.push(cb);
+    return;
+  }
+  cb();
 }
 function panelFrame(state, now) {
   if (state.done)
@@ -1880,12 +1921,14 @@ function panelFrame(state, now) {
 }
 function animatePanelToggle(wrapper, drawer, opts) {
   _lastWrapper = wrapper;
-  cancelTranslateTween(wrapper);
+  const carried = cancelTranslateTween(wrapper);
   const closedPx = opts.closedPx ?? 0;
   let existing = _panelAnims.get(wrapper) ?? null;
   if (existing) {
-    if (!opts.open && !existing.open)
+    if (!opts.open && !existing.open) {
+      runSettleCallbacks(carried);
       return;
+    }
     if (existing.raf !== null)
       cancelAnimationFrame(existing.raf);
     if (existing.timer !== null)
@@ -1895,6 +1938,7 @@ function animatePanelToggle(wrapper, drawer, opts) {
     existing.timer = null;
     existing.settleCallbacks = [];
   } else if (!opts.open && parseTranslateX(wrapper.style.transform) === closedPx) {
+    runSettleCallbacks(carried);
     return;
   }
   const panel = drawer.querySelector?.(".sidebar-ux-panel") ?? null;
@@ -1923,7 +1967,7 @@ function animatePanelToggle(wrapper, drawer, opts) {
     to,
     cur: from,
     onComplete: opts.onComplete ?? null,
-    settleCallbacks: [],
+    settleCallbacks: carried,
     done: false
   };
   if (opts.open)
@@ -17132,28 +17176,36 @@ function whenPanelParkingReady(side, apply) {
   else
     check();
 }
+function applyNoActiveParking(side) {
+  if (!_active3 || !isOsModeEnabled())
+    return;
+  if (getDisplayedLiveId(side))
+    return;
+  if (side === "primary")
+    setCanvasMainNoActive(true);
+  const surface = resolveHeaderSurface(side);
+  if (!surface)
+    return;
+  if (side === "secondary")
+    clearTitle(surface.header);
+  setHeaderHidden(surface.closeBtn, true);
+  const minBtn = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
+  if (minBtn)
+    setHeaderHidden(minBtn, true);
+}
 function ensureChromeForSide(side) {
   const surface = resolveHeaderSurface(side);
   if (!surface)
     return;
   ensureHeaderObserved(surface.header);
   const displayed = getDisplayedLiveId(side);
-  if (side === "primary") {
-    if (displayed) {
+  if (displayed) {
+    if (side === "primary")
       setCanvasMainNoActive(false);
-    } else {
-      whenPanelParkingReady("primary", () => {
-        if (!getDisplayedLiveId("primary"))
-          setCanvasMainNoActive(true);
-      });
-    }
-  } else if (!displayed) {
-    whenPanelParkingReady("secondary", () => {
-      if (!getDisplayedLiveId("secondary"))
-        clearTitle(surface.header);
-    });
+    setHeaderHidden(surface.closeBtn, false);
+  } else {
+    whenPanelParkingReady(side, () => applyNoActiveParking(side));
   }
-  setHeaderHidden(surface.closeBtn, !displayed);
   const showMinimize = displayed && !!getSettings().osWindowControls;
   let minBtn = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
   if (showMinimize && !minBtn) {
@@ -17175,8 +17227,8 @@ function ensureChromeForSide(side) {
     minBtn.remove();
     minBtn = null;
   }
-  if (minBtn)
-    setHeaderHidden(minBtn, !displayed);
+  if (minBtn && displayed)
+    setHeaderHidden(minBtn, false);
 }
 function resolveClosedLiveIds() {
   const host = getHost();
