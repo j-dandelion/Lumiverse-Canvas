@@ -10,6 +10,7 @@ import {
   __resetLayoutRepoForTest,
   setLayoutRepoBackendCtx,
 } from '../../persist/layout-repo'
+import { hydrateSettings, setLastLoadedLayout } from '../../settings/state'
 
 let passed = 0
 let failed = 0
@@ -983,6 +984,111 @@ async function testSecondaryNeighborCaptureGate() {
   shutdown()
 }
 
+// ==========================================================================
+// D20 — persistence facets freeze main-drawer geometry on the owned-model path
+//
+// Contract (docs/persistence.md:87): a SAVE_LAYOUT with a disabled
+// persistDrawerOpenState / persistDrawerWidth facet writes the LAST-LOADED
+// main-drawer value, not the latest live geometry. layout/snapshot.ts
+// buildPersistedLayout implements this for the settings-save path; the owned
+// model writer (persistModel → buildPersistedBlob) must match. Mode slots and
+// every other field stay live; both facets true = the default live path.
+// ==========================================================================
+async function testPersistFacetFreeze() {
+  async function bootAndSave(opts: {
+    settings: { persistDrawerOpenState?: boolean; persistDrawerWidth?: boolean }
+    lastLoaded: any
+    bootOpen: boolean
+    bootWidth: number
+    liveOpen: boolean
+    liveWidth: number
+  }): Promise<any> {
+    const host = new FakeHost([
+      makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    ])
+    const writes: any[] = []
+    const backend = {
+      sendToBackend(message: { type: string; [key: string]: unknown }) {
+        if (message.type === 'SAVE_LAYOUT') writes.push(message.layout)
+      },
+      onBackendMessage() { return () => {} },
+    }
+    __resetLayoutRepoForTest()
+    setLayoutRepoBackendCtx(backend)
+    armLayoutRepo()
+    shutdown()
+    hydrateSettings(opts.settings)
+    setLastLoadedLayout(opts.lastLoaded)
+    bootstrap({
+      ...createEmptyModel(),
+      primary: [PROFILE],
+      active: { primary: PROFILE, secondary: null },
+      drawers: {
+        primary: { open: opts.bootOpen, width: opts.bootWidth },
+        secondary: { open: false, width: 420 },
+      },
+    }, host, 'test-v1.0')
+    await flush()
+    writes.length = 0
+    await dispatch({ t: 'setDrawer', side: 'primary', open: opts.liveOpen, width: opts.liveWidth })
+    await flush()
+    const saved = writes[writes.length - 1]
+    shutdown()
+    hydrateSettings(null)
+    setLastLoadedLayout(null)
+    __resetLayoutRepoForTest()
+    return saved
+  }
+
+  // Case 1: both facets true (default) — live open/width persist.
+  const live = await bootAndSave({
+    settings: {},
+    lastLoaded: { primary: { open: false, width: 300 }, secondary: { open: false, width: 300 } },
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(live?.primary?.open, true, 'D20a: both facets true → live open persists')
+  assertEqual(live?.primary?.width, 555, 'D20b: both facets true → live width persists')
+
+  // Case 2: persistDrawerOpenState false — frozen last-loaded open wins.
+  const frozenOpen = await bootAndSave({
+    settings: { persistDrawerOpenState: false },
+    lastLoaded: { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 } },
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(frozenOpen?.primary?.open, false, 'D20c: open facet off → last-loaded open=false kept')
+  assertEqual(frozenOpen?.primary?.width, 555, 'D20d: open facet off → width still live')
+
+  // Case 3: persistDrawerWidth false — frozen last-loaded width wins.
+  const frozenWidth = await bootAndSave({
+    settings: { persistDrawerWidth: false },
+    lastLoaded: { primary: { open: false, width: 411 }, secondary: { open: false, width: 420 } },
+    bootOpen: false,
+    bootWidth: 411,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(frozenWidth?.primary?.width, 411, 'D20e: width facet off → last-loaded width=411 kept')
+  assertEqual(frozenWidth?.primary?.open, true, 'D20f: width facet off → open still live')
+
+  // Case 4: facet off but no last-loaded layout — live value, no undefined leak.
+  const noLast = await bootAndSave({
+    settings: { persistDrawerOpenState: false, persistDrawerWidth: false },
+    lastLoaded: null,
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(noLast?.primary?.open, true, 'D20g: no last-loaded → live open kept')
+  assertEqual(noLast?.primary?.width, 555, 'D20h: no last-loaded → live width kept')
+}
+
 // ============================================================================
 // Run all tests
 // ============================================================================
@@ -1005,6 +1111,7 @@ await testMoveWhenTabNotInModel()
 await testMoveWhenTabIsInModel()
 await testMoveWithExplicitVisibleIndex()
 await testDispatchPersistsModel()
+await testPersistFacetFreeze()
 await testUnknownLiveIdIsNoOp()
 await testDispatchActivateByLiveId()
 await testSecondaryNeighborCaptureGate()

@@ -7,7 +7,7 @@ import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
 import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
 import { saveLayoutToDisk } from '../persist/layout-repo'
-import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled } from '../settings/state'
+import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled, getSettings, getLastLoadedLayout } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 let _host: HostPort | null = null
@@ -421,8 +421,26 @@ function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string
   const os = isOsModeEnabled()
   // Non-OS serialization: closedTabIds only survive while OS mode is on.
   const base: LegacyLayout = os ? layout : { ...layout, closedTabIds: [] }
+  // Facet freeze — mirrors `layout/snapshot.ts` buildPersistedLayout: a
+  // disabled persistDrawerOpenState / persistDrawerWidth facet keeps the
+  // LAST-LOADED main-drawer open/width on disk instead of the latest live
+  // geometry ("turning a facet off freezes its disk value", docs/persistence.md).
+  // No last-loaded layout (or a missing field) → live value, no undefined leak.
+  // Mode slots below stay live (`base`) so each profile round-trips whole.
+  const s = getSettings()
+  const lastPrimary = (getLastLoadedLayout()?.primary ?? null) as { open?: unknown; width?: unknown } | null
+  const basePrimary = base.primary ?? {}
+  const lastOpen = lastPrimary?.open
+  const lastWidth = lastPrimary?.width
+  const frozenOpen = typeof lastOpen === 'boolean' ? lastOpen : basePrimary.open
+  const frozenWidth = typeof lastWidth === 'number' ? lastWidth : basePrimary.width
   return {
     ...base,
+    primary: {
+      ...basePrimary,
+      open: s.persistDrawerOpenState ? basePrimary.open : frozenOpen,
+      width: s.persistDrawerWidth ? basePrimary.width : frozenWidth,
+    },
     dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
     singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
     osDualLayout: isDual ? (os ? base : getOsDualLayoutSlot()) : getOsDualLayoutSlot(),
