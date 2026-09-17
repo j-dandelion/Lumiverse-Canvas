@@ -222,6 +222,25 @@ describe('drawer-location presentation (WS2)', () => {
     expect(calls).not.toContain('invalidateDnd')
   })
 
+  test('split var re-syncs AFTER the pin fan-out (stale-basis fix)', () => {
+    // The pass-opening sync runs before the pins re-chrome the hosts to the
+    // new axis; without a post-fan-out sync the value left behind can be
+    // computed from the stale Sides 56px main host (live bug 2026-09-17:
+    // -14.29% var, 0-width secondary overlay until a model commit).
+    initDrawerLocation()
+    calls.length = 0
+    loc = 'top'
+    reconcileDrawerLocation({ force: true })
+    const secondaryPinIdx = calls.indexOf('secondaryPin')
+    const mainPinIdx = calls.indexOf('mainPin')
+    const lastSyncIdx = calls.lastIndexOf('splitSync')
+    expect(secondaryPinIdx).toBeGreaterThanOrEqual(0)
+    expect(mainPinIdx).toBeGreaterThan(secondaryPinIdx)
+    // The LAST split sync of the pass comes after both pin writers.
+    expect(lastSyncIdx).toBeGreaterThan(mainPinIdx)
+  })
+
+
   test('reconcile mid-drag invalidates cached DnD geometry', () => {
     initDrawerLocation()
     reconcileDrawerLocation({ force: true })

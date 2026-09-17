@@ -191,6 +191,16 @@ function runReconcile(force: boolean): void {
   // A teardown/fresh reconcile during the fan-out supersedes this pass.
   if (gen !== _locGen) return
 
+  // The fan-out above re-chromes both hosts to the new axis AFTER the
+  // pass-opening sync computed its basis. Re-sync now so the value this pass
+  // leaves behind uses the settled post-flip geometry. Without it a
+  // Sides→Top/Bottom flip retained a negative var from the stale vertical
+  // main host (56px basis → -14.29%) and the secondary overlay stayed
+  // collapsed at 0 width until the next model commit — the reported "second
+  // drawer does not render until a main tab is clicked" (live bug
+  // 2026-09-17). Idempotent; drag-owned values are respected inside.
+  syncHorizontalSplit()
+
   // S8: mid-drag layout churn invalidates cached DnD container geometry.
   if (isDndDragActive()) invalidateDndGeometry()
 

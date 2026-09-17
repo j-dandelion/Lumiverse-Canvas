@@ -278,10 +278,22 @@ function secondaryZonePresent(): boolean {
 // section would resolve against the list's padded content box and drift by
 // up to 8px at non-50% splits.
 
-/** Viewport-width basis for the split math (the main host is 100% wide). */
+/** Viewport-width basis for the split math (the main host is 100% wide).
+ *
+ * Only trust the main host rect once it IS the horizontal host. During a
+ * Sides→Top/Bottom flip the split sync runs before the pin fan-out re-chromes
+ * the main host, so its rect is still the vertical 56px Sides strip — feeding
+ * that as the basis made `computeSplitPct` produce a negative var and the
+ * secondary overlay collapsed to 0 width until the next model commit (live
+ * bug 2026-09-17). The viewport IS the horizontal host's containing block
+ * (fixed + width:100%), so clientWidth is the correct basis pre-flip. */
 function currentStripWidthPx(): number {
-  const rect = _mainPinHost?.getBoundingClientRect?.()
-  if (rect && Number.isFinite(rect.width) && rect.width > 0) return rect.width
+  const hostIsHorizontal =
+    _mainPinHost?.getAttribute?.(STRIP_AXIS_ATTR) === STRIP_AXIS_HORIZONTAL
+  if (hostIsHorizontal) {
+    const rect = _mainPinHost?.getBoundingClientRect?.()
+    if (rect && Number.isFinite(rect.width) && rect.width > 0) return rect.width
+  }
   if (typeof document !== 'undefined' && document.documentElement) {
     return document.documentElement.clientWidth || 0
   }
@@ -302,6 +314,12 @@ export function computeSplitPct(
   const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0
   const minPct = px > 0 ? Math.max(10, (SPLIT_MIN_SIDE_PX / px) * 100) : 10
   const maxPct = 100 - minPct
+  // Degenerate basis: the strip is narrower than 2×SPLIT_MIN_SIDE_PX, so the
+  // 64px/side floor cannot fit and the algebra returns a non-positive max.
+  // A negative/zero split var collapses the secondary overlay to 0 width
+  // (live bug 2026-09-17: a stale vertical 56px host produced -14.29%).
+  // Fall back to the middle instead.
+  if (maxPct < minPct) return 50
   const pct = Math.min(maxPct, Math.max(minPct, f * 100))
   return Math.round(pct * 100) / 100
 }

@@ -431,6 +431,46 @@ describe('horizontal split var + overlay (2026-09-16)', () => {
     expect(computeSplitPct(0, 500)).toBe(12.8)
   })
 
+  test('computeSplitPct falls back to the middle on a degenerate basis', () => {
+    // Basis narrower than 2×SPLIT_MIN_SIDE_PX (128): the 64px/side floor
+    // cannot fit, so the algebra would return a non-positive max. A stale
+    // vertical main host (56px) produced -14.29% and collapsed the secondary
+    // overlay until the next model commit (live bug 2026-09-17). The
+    // degenerate branch ignores the requested fraction.
+    expect(computeSplitPct(0.5, 56)).toBe(50)
+    expect(computeSplitPct(0.9, 64)).toBe(50)
+    expect(computeSplitPct(1, 64)).toBe(50)
+    expect(computeSplitPct(0.5, 100)).toBe(50)
+  })
+
+  test('basis guard: a stale vertical main host is not used as the basis', () => {
+    // Sides + taskbar chrome: the main host is the vertical 56px strip.
+    loc = 'sides'
+    const host = ensureMainPinHost('left')!
+    expect(host.getAttribute('data-strip-axis')).toBe('vertical')
+    // The rect a real vertical host reports while the split sync runs
+    // mid-flip (before reconcileMainTabListPin re-chromes it horizontal).
+    ;(host as unknown as { getBoundingClientRect: () => unknown }).getBoundingClientRect = () => ({
+      width: 56,
+      height: 800,
+      left: 0,
+      right: 56,
+      top: 0,
+      bottom: 800,
+      x: 0,
+      y: 0,
+    })
+    // Flip to Top: the sync must use the viewport (clientWidth 1000 in this
+    // harness) — not the stale rect. Pre-fix this wrote '-14.29%'; with only
+    // the degenerate guard it would write '50%' (persisted fraction lost).
+    loc = 'top'
+    presence = true
+    secondaryList = freshList()
+    splitFraction = 0.3
+    syncHorizontalSplit()
+    expect(getHorizontalSplitVar()).toBe('30%')
+  })
+
   test('computeSplitPct ignores the 64px floor once 10% is wider', () => {
     expect(computeSplitPct(1, 700)).toBe(90)
   })
