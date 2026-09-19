@@ -133,6 +133,21 @@ function normalizeCanvasSettingsFields(s) {
   if (typeof out.osForcedSingleDrawer !== "boolean") {
     out = { ...out, osForcedSingleDrawer: false };
   }
+  {
+    const loc = out.optionsButtonLocation;
+    if (loc !== null && loc !== "left" && loc !== "right" && loc !== "both") {
+      out = { ...out, optionsButtonLocation: null };
+    }
+  }
+  {
+    const loc = out.startButtonLocation;
+    if (loc !== null && loc !== "left" && loc !== "right" && loc !== "both") {
+      out = { ...out, startButtonLocation: null };
+    }
+  }
+  if (typeof out.startButtonAlwaysOnScreenEdge !== "boolean") {
+    out = { ...out, startButtonAlwaysOnScreenEdge: true };
+  }
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false };
   }
@@ -161,6 +176,9 @@ function mergeCanvasSettings(saved) {
     if (saved.taskbarMode === undefined && typeof raw.keepTabListVisible === "boolean") {
       out.taskbarMode = raw.keepTabListVisible;
     }
+    if (saved.startButtonLocation === undefined && raw.osSecondaryStartMenu === true) {
+      out.startButtonLocation = "both";
+    }
   }
   return normalizeCanvasSettingsFields(out);
 }
@@ -177,7 +195,9 @@ var init_types = __esm(() => {
     taskbarMode: false,
     hideDrawerOpenCloseButtons: false,
     osMode: false,
-    osSecondaryStartMenu: false,
+    startButtonLocation: null,
+    startButtonAlwaysOnScreenEdge: true,
+    optionsButtonLocation: null,
     osWindowControls: true,
     coreTabsHidden: false,
     osForcedSingleDrawer: false,
@@ -1351,7 +1371,13 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
    the default order:0; the values also work in the no-dock fallback, where
    the list's sections default to 0. Placed AFTER the 48×48 sizing rule so
    os-start-button-css.test.ts keeps parsing the sizing block as the first
-   [data-canvas-os-start] occurrence. */
+   [data-canvas-os-start] occurrence.
+
+   These outer rules are the unstamped default. The inner variant
+   (startButtonAlwaysOnScreenEdge off, chrome-locations sets
+   .sidebar-ux-start-edge-inner on <html>) overrides them below with higher
+   specificity — a root class, not per-host attrs, so pin-host recreation
+   cannot drop the variant. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: -1 !important;
@@ -1359,6 +1385,17 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-lef
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: 1 !important;
+}
+/* Inner variant: Start on the TAB-FACING side of its dock. Left side: default
+   order keeps it after the gear. Right side: order:-1 — the dock DOM is
+   [gear, start], so plain order:0 would leave Start outermost. */
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: 0 !important;
+}
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: -1 !important;
 }
 
 /* Main strip's inner section: row + fills the zone. Cluster anchoring lives
@@ -3820,9 +3857,12 @@ function secondaryZonePresent() {
   return !!getSecondaryTabList();
 }
 function currentStripWidthPx() {
-  const rect = _mainPinHost?.getBoundingClientRect?.();
-  if (rect && Number.isFinite(rect.width) && rect.width > 0)
-    return rect.width;
+  const hostIsHorizontal = _mainPinHost?.getAttribute?.(STRIP_AXIS_ATTR) === STRIP_AXIS_HORIZONTAL;
+  if (hostIsHorizontal) {
+    const rect = _mainPinHost?.getBoundingClientRect?.();
+    if (rect && Number.isFinite(rect.width) && rect.width > 0)
+      return rect.width;
+  }
   if (typeof document !== "undefined" && document.documentElement) {
     return document.documentElement.clientWidth || 0;
   }
@@ -3833,6 +3873,8 @@ function computeSplitPct(fraction, stripWidthPx = currentStripWidthPx()) {
   const px = Number.isFinite(stripWidthPx) && stripWidthPx > 0 ? stripWidthPx : 0;
   const minPct = px > 0 ? Math.max(10, SPLIT_MIN_SIDE_PX / px * 100) : 10;
   const maxPct = 100 - minPct;
+  if (maxPct < minPct)
+    return 50;
   const pct = Math.min(maxPct, Math.max(minPct, f * 100));
   return Math.round(pct * 100) / 100;
 }
@@ -6411,6 +6453,1207 @@ var init_main_tab_pin = __esm(() => {
   _state2 = { ...initialState };
 });
 
+// src/sidebar/chrome-sides.ts
+function resolveChromeSides(value, mainSide, secondEnabled) {
+  const secondSide = mainSide === "left" ? "right" : "left";
+  if (value === "both") {
+    return {
+      sides: secondEnabled ? [mainSide, secondSide] : [mainSide],
+      main: true,
+      second: secondEnabled
+    };
+  }
+  if (value === "left" || value === "right") {
+    if (value === mainSide)
+      return { sides: [mainSide], main: true, second: false };
+    if (secondEnabled)
+      return { sides: [secondSide], main: false, second: true };
+    return { sides: [mainSide], main: true, second: false };
+  }
+  return { sides: [mainSide], main: true, second: false };
+}
+function displayChromeSide(value, mainSide) {
+  if (value === "both")
+    return "both";
+  if (value === "left" || value === "right")
+    return value;
+  return mainSide;
+}
+
+// src/tabs/secondary-start-dock.ts
+function getSecondaryStartDock(list) {
+  return list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
+}
+function appendSecondaryTabNode(list, node) {
+  const dock = getSecondaryStartDock(list);
+  if (dock)
+    list.insertBefore(node, dock);
+  else
+    list.appendChild(node);
+}
+var SECONDARY_START_DOCK_CLASS = "sidebar-ux-secondary-start-dock";
+
+// src/sidebar/settings-dock.ts
+var exports_settings_dock = {};
+__export(exports_settings_dock, {
+  applyOptionsButtonLocation: () => applyOptionsButtonLocation,
+  refreshMainDockEmptyState: () => refreshMainDockEmptyState,
+  teardownSettingsDock: () => teardownSettingsDock
+});
+function getMainGears() {
+  try {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function")
+      return [];
+    return Array.from(document.querySelectorAll(`button[data-mirror-key="${SETTINGS_MIRROR_KEY}"], button[${GEAR_ATTR}="main"]`));
+  } catch {
+    return [];
+  }
+}
+function refreshMainDockEmptyState() {
+  try {
+    const wrapper = getMainMirrorWrapper();
+    if (!wrapper || typeof wrapper.querySelectorAll !== "function")
+      return;
+    const gearHidden = getMainGears().some((g) => g.classList.contains(GEAR_HIDDEN_CLASS));
+    const list = wrapper.querySelector(".sidebar-ux-tab-list");
+    const dock = list?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) ?? wrapper.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`);
+    if (!dock)
+      return;
+    const hasStart = typeof dock.querySelector === "function" && !!dock.querySelector(`button[${START_ATTR}]`);
+    dock.classList.toggle(DOCK_EMPTY_CLASS, gearHidden && !hasStart);
+  } catch {}
+}
+function applyMainGear(include) {
+  for (const gear of getMainGears()) {
+    if (!gear.hasAttribute(GEAR_ATTR))
+      gear.setAttribute(GEAR_ATTR, "main");
+    gear.classList.toggle(GEAR_HIDDEN_CLASS, !include);
+  }
+  refreshMainDockEmptyState();
+}
+function buildSecondaryGear() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tabBtnSettings";
+  btn.setAttribute(GEAR_ATTR, "secondary");
+  btn.setAttribute("title", "Settings");
+  btn.setAttribute("aria-label", "Settings");
+  const svg = findSettingsTwin()?.querySelector("svg")?.outerHTML;
+  btn.innerHTML = svg || FALLBACK_GEAR_SVG;
+  btn.addEventListener("click", () => {
+    const twin = findSettingsTwin();
+    if (twin && typeof twin.click === "function") {
+      twin.click();
+      return;
+    }
+    try {
+      callHostStoreAction("openSettings");
+    } catch (err) {
+      dwarn("[settings-dock] openSettings fallback failed:", err);
+    }
+  });
+  return btn;
+}
+function applySecondaryGear(include) {
+  const list = getSecondaryTabList();
+  if (!list) {
+    if (!include) {
+      for (const gear of Array.from(document.querySelectorAll(`button[${GEAR_ATTR}="secondary"]`))) {
+        gear.remove();
+      }
+      removeEmptySecondaryDocks();
+    }
+    return;
+  }
+  let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
+  if (include && !dock) {
+    dock = document.createElement("div");
+    dock.className = `${TAB_LIST_BOTTOM_CLASS} ${SECONDARY_START_DOCK_CLASS}`;
+    list.appendChild(dock);
+  }
+  if (dock) {
+    let gear = dock.querySelector(`button[${GEAR_ATTR}="secondary"]`);
+    if (include && !gear) {
+      gear = buildSecondaryGear();
+      dock.appendChild(gear);
+    } else if (!include && gear) {
+      gear.remove();
+    }
+    if (dock.nextElementSibling)
+      list.appendChild(dock);
+  }
+  if (!include)
+    removeEmptySecondaryDocks();
+}
+function removeEmptySecondaryDocks() {
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    if (!dock.firstElementChild)
+      dock.remove();
+  }
+}
+function applyOptionsButtonLocation(resolved) {
+  try {
+    injectStyles(STYLE_ID2, SETTINGS_DOCK_CSS);
+  } catch (err) {
+    dwarn("[settings-dock] style injection failed:", err);
+  }
+  try {
+    applyMainGear(resolved.main);
+    applySecondaryGear(resolved.second);
+  } catch (err) {
+    dwarn("[settings-dock] apply failed:", err);
+  }
+}
+function teardownSettingsDock() {
+  for (const gear of Array.from(document.querySelectorAll(`button[${GEAR_ATTR}="secondary"]`))) {
+    gear.remove();
+  }
+  removeEmptySecondaryDocks();
+  for (const gear of getMainGears()) {
+    gear.classList.remove(GEAR_HIDDEN_CLASS);
+  }
+  refreshMainDockEmptyState();
+  try {
+    document.getElementById(STYLE_ID2)?.remove();
+  } catch {}
+}
+var STYLE_ID2 = "sidebar-ux-settings-dock-styles", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", GEAR_ATTR = "data-canvas-settings-gear", GEAR_HIDDEN_CLASS = "sidebar-ux-options-hidden", DOCK_EMPTY_CLASS = "sidebar-ux-dock-empty", START_ATTR = "data-canvas-os-start", FALLBACK_GEAR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>', SETTINGS_DOCK_CSS;
+var init_settings_dock = __esm(() => {
+  init_log();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_main_renderer();
+  init_store();
+  SETTINGS_DOCK_CSS = `
+  .sidebar-ux-tab-list button[data-canvas-settings-gear] {
+    width: 100%;
+    height: 48px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+    box-sizing: border-box;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .sidebar-ux-tab-list button[data-canvas-settings-gear]:hover {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+  }
+  .sidebar-ux-tab-list button[data-canvas-settings-gear]:focus-visible {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+  .sidebar-ux-tab-list button[data-canvas-settings-gear] > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  /* Horizontal strips: square, same size as tab buttons (the base width:100%
+     would stretch the flex row). */
+  [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-settings-gear] {
+    width: 48px !important;
+    height: 48px !important;
+    min-width: 48px !important;
+  }
+  /* Literal-side exclusion (main drawer gear is renderer-owned). */
+  button[${GEAR_ATTR}].sidebar-ux-options-hidden,
+  button[data-mirror-key="${SETTINGS_MIRROR_KEY}"].sidebar-ux-options-hidden {
+    display: none !important;
+  }
+  /* A bottom dock whose only children are hidden must not paint its divider. */
+  .sidebar-ux-tab-list-bottom.sidebar-ux-dock-empty {
+    display: none !important;
+  }
+`;
+});
+
+// src/tabs/builtin-icons.ts
+var BUILTIN_ICON_SVGS;
+var init_builtin_icons = __esm(() => {
+  BUILTIN_ICON_SVGS = {
+    profile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+    presets: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>`,
+    loom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>`,
+    weaver: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>`,
+    connections: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`,
+    browser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/></svg>`,
+    characters: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+    personas: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11h.01"/><path d="M14 6h.01"/><path d="M18 6h.01"/><path d="M6.5 13.1h.01"/><path d="M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3"/><path d="M17.4 9.9c-.8.8-2 .8-2.8 0"/><path d="M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7"/><path d="M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4"/></svg>`,
+    multiplayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>`,
+    lorebook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
+    cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>`,
+    databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
+    create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg>`,
+    ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
+    prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+    council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`,
+    summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
+    feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></svg>`,
+    worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
+    imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
+    wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="2"/><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
+    regex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 1 2-2"/><path d="M16 10a2 2 0 0 1-2-2"/><path d="M20 2a2 2 0 0 1 2 2"/><path d="M22 8a2 2 0 0 1-2 2"/><path d="m3 7 3 3 3-3"/><path d="M6 10V5a3 3 0 0 1 3-3h1"/><rect x="2" y="14" width="8" height="8" rx="2"/></svg>`,
+    branches: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
+    theme: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`,
+    spindle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
+  };
+});
+
+// src/os/start-menu-styles.ts
+function injectStartMenuStyles() {
+  injectStyles(START_MENU_STYLE_ID, START_MENU_CSS);
+}
+var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS;
+var init_start_menu_styles = __esm(() => {
+  init_styles();
+  START_MENU_CSS = `
+  .canvas-os-start-menu {
+    --csm-row-h: 40px;
+    --csm-tile: 28px;
+    --csm-status-w: calc(58px * var(--lumiverse-font-scale, 1));
+
+    position: fixed; /* left/top/visibility inline (layout px, /uiScale contract) */
+    z-index: 2147483600;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    width: min(320px, calc((100vw - 16px) / var(--lumiverse-ui-scale, 1)));
+    max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
+    overflow: hidden;
+    padding: 4px;
+    background: ${TAB_STRIP_BACKGROUND};
+    border: 1px solid var(--lumiverse-border);
+    border-radius: 10px;
+    /* Softened, contained cast (user report 2026-09-16: "too intense,
+       elongated at one vertical end"). The negative spread keeps the blur
+       from smearing along the anchored edge; the direction mirror below is
+       preserved. Deliberate deviation from the context-menu chassis stack
+       (which has no spread). */
+    box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    color: var(--lumiverse-text);
+    font-family: inherit;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  }
+
+  /* Upward menus (bottom taskbar / Start dock): mirror the shadow's Y offset.
+     The base down-cast shadow paints over the strip the menu opens from; the
+     upward variant throws it away from the anchor instead (live report
+     2026-09-16). Direction is stamped in JS (data-open-upward); the values
+     mirror the base rule (same softened/contained stack). */
+  .canvas-os-start-menu[data-open-upward] {
+    box-shadow: 0 -8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+
+  /* Glass — the context-menu recipe, coarse-pointer gated; derives from the
+     same surface token as the base. */
+  @media not (pointer: coarse) {
+    body[data-glass] .canvas-os-start-menu {
+      background: color-mix(in srgb, ${TAB_STRIP_BACKGROUND} 80%, transparent);
+      backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+    }
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    height: 30px;
+    padding: 0 9px;
+  }
+  .canvas-os-start-menu__brand {
+    display: flex;
+    width: 14px;
+    height: 14px;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__brand svg { width: 14px; height: 14px; display: block; }
+  .canvas-os-start-menu__title {
+    flex: 1;
+    min-width: 0;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__count {
+    flex-shrink: 0;
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
+    color: var(--lumiverse-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Divider — context-menu token parity ─────────────────────────────── */
+  .canvas-os-start-menu__divider {
+    flex-shrink: 0;
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--lumiverse-border);
+  }
+
+  /* ── List ────────────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* ── Item — context-menu geometry (vertical padding 6px fits the tile) ── */
+  button.canvas-os-start-menu__item {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: var(--csm-row-h);
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--lumiverse-text);
+    font-family: inherit;
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  button.canvas-os-start-menu__item:hover {
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+  }
+  button.canvas-os-start-menu__item:active {
+    background: var(--lumiverse-primary-020);
+  }
+  button.canvas-os-start-menu__item:focus-visible {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: -2px;
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+  }
+
+  /* State rail — running windows pin to the rail. */
+  .canvas-os-start-menu__rail {
+    flex-shrink: 0;
+    width: 3px;
+    height: 16px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__rail {
+    background: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__rail {
+    background: var(--lumiverse-text-muted);
+  }
+
+  /* Icon tile — a container, never a state channel at rest. */
+  .canvas-os-start-menu__tile {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--csm-tile);
+    height: var(--csm-tile);
+    overflow: hidden;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+  .canvas-os-start-menu__tile > svg,
+  .canvas-os-start-menu__tile > img {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+  .canvas-os-start-menu__tile > img { border-radius: 3px; object-fit: contain; }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__tile {
+    background: var(--lumiverse-primary-010, var(--lumiverse-primary-015));
+    color: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
+    box-shadow: inset 0 0 0 1px var(--lumiverse-border-hover);
+    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__tile {
+    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--lumiverse-text);
+  }
+  .canvas-os-start-menu__tile--monogram {
+    font-size: calc(12px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Label */
+  .canvas-os-start-menu__label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Status slot — mark at rest, action verb on hover/focus (opacity only).
+     Closed entries have no mark node at all; the slot is just the verb's home. */
+  .canvas-os-start-menu__status {
+    position: relative;
+    flex-shrink: 0;
+    width: var(--csm-status-w);
+    height: 18px;
+    overflow: hidden;
+  }
+  .canvas-os-start-menu__mark,
+  .canvas-os-start-menu__verb {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    transition: opacity 150ms ease;
+  }
+  .canvas-os-start-menu__mark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__mark > svg { width: 18px; height: 18px; display: block; }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__mark {
+    color: var(--lumiverse-primary);
+  }
+  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__mark {
+    color: var(--lumiverse-text-muted);
+  }
+  .canvas-os-start-menu__verb {
+    opacity: 0;
+    color: var(--lumiverse-text-muted);
+    font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__verb {
+    color: var(--lumiverse-primary-text, var(--lumiverse-primary));
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__mark,
+  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__mark {
+    opacity: 0;
+  }
+  .canvas-os-start-menu__item:hover .canvas-os-start-menu__verb,
+  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__verb {
+    opacity: 1;
+  }
+
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  .canvas-os-start-menu__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 20px 12px 22px;
+    text-align: center;
+  }
+  .canvas-os-start-menu__empty-glyph {
+    display: flex;
+    width: 24px;
+    height: 24px;
+    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
+  }
+  .canvas-os-start-menu__empty-glyph svg { width: 24px; height: 24px; }
+  .canvas-os-start-menu__empty-title {
+    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+    font-weight: 600;
+    color: var(--lumiverse-text);
+  }
+  .canvas-os-start-menu__empty-hint {
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
+    color: var(--lumiverse-text-muted);
+  }
+
+  /* ── Touch ───────────────────────────────────────────────────────────── */
+  @media (pointer: coarse) {
+    .canvas-os-start-menu { --csm-row-h: 46px; --csm-status-w: 18px; }
+    .canvas-os-start-menu__verb { display: none; }
+  }
+
+  /* Reduced motion — WAAPI handles open/close in JS. */
+  @media (prefers-reduced-motion: reduce) {
+    .canvas-os-start-menu__item,
+    .canvas-os-start-menu__rail,
+    .canvas-os-start-menu__tile,
+    .canvas-os-start-menu__mark,
+    .canvas-os-start-menu__verb { transition: none; }
+  }
+
+  /* Forced colors — outline focus survives; the closed tile's inset shadow does not. */
+  @media (forced-colors: active) {
+    button.canvas-os-start-menu__item:focus-visible {
+      outline: 2px solid ButtonBorder;
+      outline-offset: -2px;
+    }
+    .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
+      box-shadow: none;
+      border: 1px solid ButtonBorder;
+    }
+  }
+`;
+});
+
+// src/os/start-menu-motion.ts
+function getUiScale() {
+  if (typeof document === "undefined" || !document.documentElement)
+    return 1;
+  if (typeof getComputedStyle !== "function")
+    return 1;
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale");
+    const n = parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  } catch {
+    return 1;
+  }
+}
+function computeGrowthOrigin(button, menu, uiScale = 1) {
+  const s = Number.isFinite(uiScale) && uiScale > 0 ? uiScale : 1;
+  return {
+    x: (button.left + button.width / 2 - menu.left) / s,
+    y: (button.top + button.height / 2 - menu.top) / s
+  };
+}
+function canAnimateMenu(menu) {
+  return typeof menu.animate === "function";
+}
+function captureMenuVisualState(menu) {
+  const settled = { opacity: "1", transform: "scale(1)" };
+  if (typeof getComputedStyle !== "function")
+    return settled;
+  try {
+    const cs = getComputedStyle(menu);
+    return {
+      opacity: cs.opacity || "1",
+      transform: cs.transform && cs.transform !== "none" ? cs.transform : "scale(1)"
+    };
+  } catch {
+    return settled;
+  }
+}
+function playMenuIn(menu, origin) {
+  if (!canAnimateMenu(menu) || prefersReducedMotion())
+    return null;
+  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
+  return menu.animate([
+    { opacity: 0, transform: `scale(${START_MENU_SCALE})` },
+    { opacity: 1, transform: "scale(1)" }
+  ], { duration: START_MENU_OPEN_MS, easing: START_MENU_EASE_OUT, fill: "both" });
+}
+function playMenuOut(menu, origin, from, onDone) {
+  if (!canAnimateMenu(menu) || prefersReducedMotion()) {
+    onDone();
+    return null;
+  }
+  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
+  let finished = false;
+  let timer = null;
+  let anim = null;
+  const finish = () => {
+    if (finished)
+      return;
+    finished = true;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    onDone();
+  };
+  timer = setTimeout(finish, CLOSE_FALLBACK_MS);
+  anim = menu.animate([
+    { opacity: from.opacity, transform: from.transform },
+    { opacity: 0, transform: `scale(${START_MENU_SCALE})` }
+  ], { duration: START_MENU_CLOSE_MS, easing: START_MENU_EASE_IN, fill: "both" });
+  anim.onfinish = () => {
+    anim.onfinish = null;
+    finish();
+  };
+  anim.oncancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return anim;
+}
+var START_MENU_OPEN_MS = 150, START_MENU_CLOSE_MS = 120, START_MENU_SCALE = 0.92, START_MENU_EASE_OUT = "cubic-bezier(0.215, 0.61, 0.355, 1)", START_MENU_EASE_IN = "cubic-bezier(0.4, 0, 1, 1)", CLOSE_FALLBACK_MS;
+var init_start_menu_motion = __esm(() => {
+  CLOSE_FALLBACK_MS = START_MENU_CLOSE_MS + 100;
+});
+
+// src/os/start-menu.ts
+function isPlaceholderIcon(svg) {
+  return svg.classList.contains("lucide-puzzle") || svg.classList.contains("canvas-puzzle");
+}
+function extractButtonIcon(root) {
+  if (!root || typeof root.querySelector !== "function")
+    return {};
+  const svg = root.querySelector("svg");
+  if (svg && !isPlaceholderIcon(svg))
+    return { svg: svg.outerHTML };
+  const url = root.querySelector("img")?.getAttribute("src") ?? undefined;
+  return url ? { url } : {};
+}
+function builtinBaseId(liveId) {
+  return liveId.replace(/:\d+$/, "");
+}
+function entryMonogram(title) {
+  const first = Array.from(title.trim())[0];
+  return first ? first.toUpperCase() : "?";
+}
+function resolveEntryIcon(tab, liveId) {
+  const dom = extractButtonIcon(tab?.root);
+  if (dom.svg)
+    return { svg: dom.svg };
+  if (dom.url)
+    return { url: dom.url };
+  if (tab?.iconSvg)
+    return { svg: tab.iconSvg };
+  if (tab?.iconUrl)
+    return { url: tab.iconUrl };
+  const builtin = BUILTIN_ICON_SVGS[builtinBaseId(liveId)];
+  return builtin ? { svg: builtin } : {};
+}
+function deriveStartMenuEntries(model, resolve) {
+  const tabs = new Map(getDrawerTabs().map((t) => [t.id, t]));
+  const seen = new Set;
+  const out = [];
+  for (const side of ["primary", "secondary"]) {
+    const keys = side === "primary" ? model.primary : model.secondary;
+    const activeKey = model.active[side];
+    for (const key of keys) {
+      const liveId = resolve(key);
+      if (!liveId || seen.has(liveId))
+        continue;
+      seen.add(liveId);
+      const state = model.closed.includes(key) || model.hidden.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
+      const tab = tabs.get(liveId);
+      const icon = resolveEntryIcon(tab, liveId);
+      out.push({
+        liveId,
+        side,
+        title: tab?.title ?? key,
+        iconSvg: icon.svg,
+        iconUrl: icon.url,
+        state
+      });
+    }
+  }
+  out.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) || a.liveId.localeCompare(b.liveId));
+  return out;
+}
+function createMenuEntry(entry, targetSide) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "canvas-os-start-menu__item";
+  item.setAttribute("role", "menuitem");
+  item.setAttribute("data-os-state", entry.state);
+  item.setAttribute("aria-label", `${entry.title} — ${STATE_LABEL[entry.state]}`);
+  const rail = document.createElement("span");
+  rail.className = "canvas-os-start-menu__rail";
+  rail.setAttribute("aria-hidden", "true");
+  const tile = document.createElement("span");
+  tile.className = "canvas-os-start-menu__tile";
+  tile.setAttribute("aria-hidden", "true");
+  renderEntryIcon(tile, entry);
+  const label = document.createElement("span");
+  label.className = "canvas-os-start-menu__label";
+  label.textContent = entry.title;
+  const status = document.createElement("span");
+  status.className = "canvas-os-start-menu__status";
+  status.setAttribute("aria-hidden", "true");
+  const markSvg = STATE_MARK_SVG[entry.state];
+  if (markSvg) {
+    const mark = document.createElement("span");
+    mark.className = "canvas-os-start-menu__mark";
+    mark.innerHTML = markSvg;
+    status.appendChild(mark);
+  }
+  const verb = document.createElement("span");
+  verb.className = "canvas-os-start-menu__verb";
+  verb.textContent = STATE_VERB[entry.state];
+  status.appendChild(verb);
+  item.append(rail, tile, label, status);
+  item.addEventListener("click", () => {
+    hideStartMenu();
+    openWindowInDrawerByLiveId(entry.liveId, targetSide);
+  });
+  return item;
+}
+function renderEntryIcon(tile, entry) {
+  if (entry.iconSvg) {
+    tile.innerHTML = entry.iconSvg;
+    return;
+  }
+  if (entry.iconUrl) {
+    const img = document.createElement("img");
+    img.src = entry.iconUrl;
+    img.alt = "";
+    img.width = 16;
+    img.height = 16;
+    tile.appendChild(img);
+    return;
+  }
+  tile.textContent = entryMonogram(entry.title);
+  tile.classList.add("canvas-os-start-menu__tile--monogram");
+}
+function createHeader(count) {
+  const header = document.createElement("div");
+  header.className = "canvas-os-start-menu__header";
+  header.setAttribute("role", "presentation");
+  header.setAttribute("aria-hidden", "true");
+  const brand = document.createElement("span");
+  brand.className = "canvas-os-start-menu__brand";
+  brand.innerHTML = START_GLYPH_SVG;
+  const title = document.createElement("span");
+  title.className = "canvas-os-start-menu__title";
+  title.textContent = "Windows";
+  const countEl = document.createElement("span");
+  countEl.className = "canvas-os-start-menu__count";
+  countEl.textContent = count === 1 ? "1 window" : `${count} windows`;
+  header.append(brand, title, countEl);
+  return header;
+}
+function createEmptyState() {
+  const empty = document.createElement("div");
+  empty.className = "canvas-os-start-menu__empty";
+  empty.setAttribute("role", "presentation");
+  const glyph = document.createElement("span");
+  glyph.className = "canvas-os-start-menu__empty-glyph";
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.innerHTML = START_GLYPH_SVG;
+  const title = document.createElement("span");
+  title.className = "canvas-os-start-menu__empty-title";
+  title.textContent = "No windows";
+  const hint = document.createElement("span");
+  hint.className = "canvas-os-start-menu__empty-hint";
+  hint.textContent = "Open a tab to add a window here";
+  empty.append(glyph, title, hint);
+  return empty;
+}
+function buildMenu(targetSide) {
+  const host = getHost();
+  const model = getModel();
+  if (!host || !model)
+    return null;
+  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key));
+  injectStartMenuStyles();
+  const menu = document.createElement("div");
+  menu.id = MENU_ID;
+  menu.className = "canvas-os-start-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Start menu");
+  if (entries.length === 0) {
+    menu.appendChild(createEmptyState());
+    return menu;
+  }
+  menu.appendChild(createHeader(entries.length));
+  const divider = document.createElement("div");
+  divider.className = "canvas-os-start-menu__divider";
+  divider.setAttribute("role", "separator");
+  menu.appendChild(divider);
+  const list = document.createElement("div");
+  list.className = "canvas-os-start-menu__list";
+  list.setAttribute("role", "presentation");
+  for (const entry of entries) {
+    list.appendChild(createMenuEntry(entry, targetSide));
+  }
+  menu.appendChild(list);
+  return menu;
+}
+function cancelMenuRaf() {
+  if (_menuRaf) {
+    cancelAnimationFrame(_menuRaf);
+    _menuRaf = 0;
+  }
+}
+function cancelClosing() {
+  if (!_closing)
+    return;
+  const { menu, anim } = _closing;
+  _closing = null;
+  if (anim) {
+    anim.onfinish = null;
+    anim.cancel();
+  }
+  menu.remove();
+}
+function reconcileStartMenuPresence() {
+  if (_menu && (!_menuButton || !_menuButton.isConnected)) {
+    hideStartMenu({ immediate: true });
+  }
+}
+function openStartMenu(side, button) {
+  if (_menuOpenFor === side && _menuButton?.isConnected) {
+    hideStartMenu();
+    return;
+  }
+  hideStartMenu({ immediate: true });
+  const menu = buildMenu(side);
+  if (!menu)
+    return;
+  document.body.appendChild(menu);
+  _menu = menu;
+  _menuOpenFor = side;
+  _menuButton = button;
+  _menuRevealed = false;
+  button.setAttribute("aria-expanded", "true");
+  const rect = button.getBoundingClientRect();
+  menu.style.visibility = "hidden";
+  cancelMenuRaf();
+  _menuRaf = requestAnimationFrame(() => {
+    _menuRaf = 0;
+    if (_menu !== menu)
+      return;
+    const mRect = menu.getBoundingClientRect();
+    const uiScale = getUiScale();
+    const openUpward = rect.bottom > window.innerHeight / 2;
+    menu.toggleAttribute("data-open-upward", openUpward);
+    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
+    const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
+    menu.style.left = `${renderedLeft / uiScale}px`;
+    menu.style.top = `${renderedTop / uiScale}px`;
+    const placedRect = menu.getBoundingClientRect();
+    menu.style.visibility = "";
+    _menuRevealed = true;
+    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, placedRect, uiScale));
+    menu.querySelector('[role="menuitem"]')?.focus();
+  });
+  attachMenuDismiss();
+  dlog("[os] start menu open", { side });
+}
+function hideStartMenu(opts) {
+  _unsubDocListeners?.();
+  _unsubDocListeners = null;
+  for (const btn of document.querySelectorAll(`button[${START_ATTR2}]`)) {
+    btn.setAttribute("aria-expanded", "false");
+  }
+  const menu = _menu;
+  const button = _menuButton;
+  const revealed = _menuRevealed;
+  const side = _menuOpenFor;
+  _menu = null;
+  _menuOpenFor = null;
+  _menuButton = null;
+  _menuRevealed = false;
+  cancelMenuRaf();
+  const active = document.activeElement;
+  if (menu && active && menu.contains(active)) {
+    if (button?.isConnected)
+      button.focus();
+    else
+      active.blur();
+  }
+  const animatable = menu !== null && canAnimateMenu(menu) && !prefersReducedMotion();
+  if (!menu || opts?.immediate || !animatable || !revealed || !button || !button.isConnected) {
+    _menuAnim?.cancel();
+    _menuAnim = null;
+    menu?.remove();
+    cancelClosing();
+    if (menu)
+      dlog("[os] start menu close", { side, immediate: true });
+    return;
+  }
+  const from = captureMenuVisualState(menu);
+  _menuAnim?.cancel();
+  _menuAnim = null;
+  const origin = computeGrowthOrigin(button.getBoundingClientRect(), menu.getBoundingClientRect(), getUiScale());
+  menu.style.pointerEvents = "none";
+  const anim = playMenuOut(menu, origin, from, () => {
+    menu.remove();
+    if (_closing?.menu === menu)
+      _closing = null;
+  });
+  if (anim)
+    _closing = { menu, anim };
+  dlog("[os] start menu close", { side, immediate: false });
+}
+function attachMenuDismiss() {
+  const onDocMousedown = (ev) => {
+    const target = ev.target;
+    if (!(target instanceof Element))
+      return;
+    if (_menu?.contains(target))
+      return;
+    if (target.closest(`button[${START_ATTR2}]`))
+      return;
+    hideStartMenu();
+  };
+  const onKey = (ev) => {
+    if (ev.key === "Tab") {
+      hideStartMenu();
+      return;
+    }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      hideStartMenu();
+      return;
+    }
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp")
+      return;
+    if (!_menu)
+      return;
+    const items = Array.from(_menu.querySelectorAll('[role="menuitem"]'));
+    if (items.length === 0)
+      return;
+    const idx = items.indexOf(document.activeElement);
+    ev.preventDefault();
+    const dir = ev.key === "ArrowDown" ? 1 : -1;
+    const next = idx === -1 ? items[0] : items[(idx + dir + items.length) % items.length];
+    next.focus();
+  };
+  const onViewportResize = () => {
+    hideStartMenu({ immediate: true });
+  };
+  document.addEventListener("mousedown", onDocMousedown, true);
+  document.addEventListener("keydown", onKey, true);
+  window.addEventListener("resize", onViewportResize);
+  window.visualViewport?.addEventListener("resize", onViewportResize);
+  _unsubDocListeners = () => {
+    document.removeEventListener("mousedown", onDocMousedown, true);
+    document.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("resize", onViewportResize);
+    window.visualViewport?.removeEventListener("resize", onViewportResize);
+  };
+}
+function startButtonHtml() {
+  return `<button type="button" ${START_ATTR2}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`;
+}
+async function ensureStartButtonForSide(side) {
+  const list = side === "primary" ? await getMainMirrorList() : getSecondaryTabList();
+  if (!list)
+    return;
+  let btn = list.querySelector(`button[${START_ATTR2}]`);
+  if (btn && !btn.isConnected)
+    btn = null;
+  if (!btn) {
+    const template = document.createElement("template");
+    template.innerHTML = startButtonHtml().trim();
+    btn = template.content.firstElementChild;
+  }
+  btn.setAttribute(START_SIDE_ATTR, side);
+  if (side === "primary") {
+    if (!btn.parentElement) {
+      const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS2}`);
+      if (dock)
+        dock.appendChild(btn);
+      else
+        list.appendChild(btn);
+    }
+  } else {
+    let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
+    if (!dock) {
+      dock = document.createElement("div");
+      dock.className = `${TAB_LIST_BOTTOM_CLASS2} ${SECONDARY_START_DOCK_CLASS}`;
+      list.appendChild(dock);
+    }
+    if (btn.parentElement !== dock)
+      dock.appendChild(btn);
+    if (dock.nextElementSibling)
+      list.appendChild(dock);
+  }
+  btn.style.removeProperty("order");
+  if (!btn.dataset.wired) {
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", () => openStartMenu(side, btn));
+  }
+}
+async function getMainMirrorList() {
+  const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+  return m.getMainMirrorTabList();
+}
+function removeStartChromeForSide(side) {
+  for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR2}][${START_SIDE_ATTR}="${side}"]`))) {
+    btn.remove();
+  }
+  if (side === "secondary") {
+    for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+      if (!dock.firstElementChild)
+        dock.remove();
+    }
+  }
+  if (_menuOpenFor === side)
+    hideStartMenu({ immediate: true });
+}
+function reconcileStartChrome() {
+  scheduleEnsureButtons();
+}
+function scheduleEnsureButtons() {
+  if (_buttonRaf)
+    return;
+  _buttonRaf = requestAnimationFrame(async () => {
+    _buttonRaf = 0;
+    reconcileStartMenuPresence();
+    if (!isOsModeEnabled())
+      return;
+    const resolved = resolveChromeSides(getSettings().startButtonLocation, getMainDrawerSide(), !!getSettings().secondSidebarEnabled);
+    if (resolved.main)
+      await ensureStartButtonForSide("primary");
+    else
+      removeStartChromeForSide("primary");
+    if (resolved.second)
+      await ensureStartButtonForSide("secondary");
+    else
+      removeStartChromeForSide("secondary");
+    Promise.resolve().then(() => (init_settings_dock(), exports_settings_dock)).then((m) => m.refreshMainDockEmptyState()).catch(() => {});
+  });
+}
+function installShellCreatedListener() {
+  if (typeof window === "undefined" || _onShellCreated !== null)
+    return;
+  _onShellCreated = () => scheduleEnsureButtons();
+  window.addEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
+}
+function removeShellCreatedListener() {
+  if (_onShellCreated && typeof window !== "undefined") {
+    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
+  }
+  _onShellCreated = null;
+}
+function mountStartMenu() {
+  if (!isOsModeEnabled())
+    return;
+  installShellCreatedListener();
+  scheduleEnsureButtons();
+  Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m) => m.registerCleanup(teardownStartMenu));
+  dlog("[os] start menu chrome mounted");
+}
+function applyStartButtonLocationChange() {
+  if (!isOsModeEnabled())
+    return;
+  scheduleEnsureButtons();
+}
+function teardownStartMenu() {
+  removeShellCreatedListener();
+  if (_buttonRaf) {
+    cancelAnimationFrame(_buttonRaf);
+    _buttonRaf = 0;
+  }
+  hideStartMenu({ immediate: true });
+  for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR2}]`))) {
+    btn.remove();
+  }
+  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+    if (!dock.firstElementChild)
+      dock.remove();
+  }
+  document.getElementById(START_MENU_STYLE_ID)?.remove();
+  dlog("[os] start menu chrome unmounted");
+}
+var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
+var init_start_menu = __esm(() => {
+  init_dispatch();
+  init_store();
+  init_state();
+  init_actions();
+  init_secondary();
+  init_drawer_shell();
+  init_builtin_icons();
+  init_start_menu_styles();
+  init_log();
+  init_start_menu_motion();
+  STATE_LABEL = {
+    open: "open",
+    minimized: "minimized",
+    closed: "closed"
+  };
+  STATE_VERB = {
+    open: "Focus",
+    minimized: "Restore",
+    closed: "Launch"
+  };
+  STATE_MARK_SVG = {
+    open: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="4" fill="currentColor"/><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/></svg>',
+    minimized: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="5.25" stroke="currentColor" stroke-width="1.5"/></svg>',
+    closed: ""
+  };
+});
+
+// src/os/chrome-locations.ts
+var exports_chrome_locations = {};
+__export(exports_chrome_locations, {
+  START_EDGE_INNER_CLASS: () => START_EDGE_INNER_CLASS,
+  clearStartEdgeClass: () => clearStartEdgeClass,
+  reconcileChromeLocations: () => reconcileChromeLocations,
+  removeShellCreatedListener: () => removeShellCreatedListener2,
+  teardownChromeLocations: () => teardownChromeLocations
+});
+function ensureShellCreatedListener() {
+  if (_onShellCreated2 !== null)
+    return;
+  try {
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function")
+      return;
+    _onShellCreated2 = () => reconcileChromeLocations();
+    window.addEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated2);
+    Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m) => m.registerCleanup(() => removeShellCreatedListener2())).catch(() => {});
+    dlog("[chrome-locations] shell-created listener installed");
+  } catch {}
+}
+function removeShellCreatedListener2() {
+  try {
+    if (_onShellCreated2 && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated2);
+    }
+  } catch {}
+  _onShellCreated2 = null;
+}
+function applyStartEdgeClass() {
+  try {
+    const el = document.documentElement;
+    if (!el || typeof el.classList?.toggle !== "function")
+      return;
+    const inner = !getSettings().startButtonAlwaysOnScreenEdge;
+    el.classList.toggle(START_EDGE_INNER_CLASS, inner);
+  } catch {}
+}
+function clearStartEdgeClass() {
+  try {
+    document.documentElement?.classList?.remove(START_EDGE_INNER_CLASS);
+  } catch {}
+}
+function reconcileChromeLocations() {
+  ensureShellCreatedListener();
+  const s = getSettings();
+  const mainSide = getMainDrawerSide();
+  const secondEnabled = !!s.secondSidebarEnabled;
+  applyOptionsButtonLocation(resolveChromeSides(s.optionsButtonLocation, mainSide, secondEnabled));
+  applyStartEdgeClass();
+  reconcileStartChrome();
+}
+function teardownChromeLocations() {
+  removeShellCreatedListener2();
+  teardownSettingsDock();
+  clearStartEdgeClass();
+}
+var _onShellCreated2 = null, START_EDGE_INNER_CLASS = "sidebar-ux-start-edge-inner";
+var init_chrome_locations = __esm(() => {
+  init_state();
+  init_store();
+  init_settings_dock();
+  init_start_menu();
+  init_drawer_shell();
+  init_log();
+});
+
 // src/tabs/configure-catalog.ts
 function humanizeTabId(id) {
   const known = BUILTIN_TAB_TITLES[id];
@@ -7312,19 +8555,6 @@ var init_hidden_tabs = __esm(() => {
   init_canvas_hidden();
 });
 
-// src/tabs/secondary-start-dock.ts
-function getSecondaryStartDock(list) {
-  return list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
-}
-function appendSecondaryTabNode(list, node) {
-  const dock = getSecondaryStartDock(list);
-  if (dock)
-    list.insertBefore(node, dock);
-  else
-    list.appendChild(node);
-}
-var SECONDARY_START_DOCK_CLASS = "sidebar-ux-secondary-start-dock";
-
 // src/tabs/live-tab-order.ts
 function readVisibleTabIdsFromList(list) {
   if (!list)
@@ -7824,38 +9054,6 @@ var init_hooks_module = __esm(() => {
   k2 = typeof requestAnimationFrame == "function";
 });
 
-// src/tabs/builtin-icons.ts
-var BUILTIN_ICON_SVGS;
-var init_builtin_icons = __esm(() => {
-  BUILTIN_ICON_SVGS = {
-    profile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
-    presets: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>`,
-    loom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>`,
-    weaver: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>`,
-    connections: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`,
-    browser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/></svg>`,
-    characters: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-    personas: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11h.01"/><path d="M14 6h.01"/><path d="M18 6h.01"/><path d="M6.5 13.1h.01"/><path d="M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3"/><path d="M17.4 9.9c-.8.8-2 .8-2.8 0"/><path d="M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7"/><path d="M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4"/></svg>`,
-    multiplayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>`,
-    lorebook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
-    cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>`,
-    databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
-    create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg>`,
-    ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
-    prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
-    council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`,
-    summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
-    feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></svg>`,
-    worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
-    imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
-    wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="2"/><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
-    regex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 1 2-2"/><path d="M16 10a2 2 0 0 1-2-2"/><path d="M20 2a2 2 0 0 1 2 2"/><path d="M22 8a2 2 0 0 1-2 2"/><path d="m3 7 3 3 3-3"/><path d="M6 10V5a3 3 0 0 1 3-3h1"/><rect x="2" y="14" width="8" height="8" rx="2"/></svg>`,
-    branches: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
-    theme: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`,
-    spindle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
-  };
-});
-
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e3, t3, n2, o3, i3, u4) {
   t3 || (t3 = {});
@@ -8234,7 +9432,7 @@ function isMobileViewportLocal2() {
   }
 }
 function injectDialogStyles() {
-  injectStyles(STYLE_ID2, `
+  injectStyles(STYLE_ID3, `
     #${HOST_ID} {
       position: fixed;
       inset: 0;
@@ -8656,7 +9854,7 @@ async function requestSecondDrawerMode(next, opts) {
     await finishDisable();
   }
 }
-var HOST_ID = "canvas-mode-switch-dialog", STYLE_ID2 = "canvas-mode-switch-dialog-styles", _dialogHost = null, _dialogKeydown = null;
+var HOST_ID = "canvas-mode-switch-dialog", STYLE_ID3 = "canvas-mode-switch-dialog-styles", _dialogHost = null, _dialogKeydown = null;
 var init_second_drawer_mode = __esm(() => {
   init_state();
   init_os_mode();
@@ -11597,6 +12795,7 @@ function runReconcile(force) {
   reconcileMainTabListPin();
   if (gen !== _locGen)
     return;
+  syncHorizontalSplit();
   if (isDndDragActive())
     invalidateDndGeometry();
   updateDrawerTabVisibility();
@@ -12080,6 +13279,7 @@ function checkSideChanged() {
     });
     applyCanvasSideChange(currentSide, { syncHost: false });
     convergeModelToHostSide(currentSide);
+    refreshSettingsPanelForSideChange();
   } else {
     _lastKnownSide = currentSide;
     syncDrawerTabSettings();
@@ -12093,6 +13293,11 @@ function checkSideChanged() {
 function resetSideRemountStateAfterDisable() {
   setMainDrawerSideOverride(null);
   _lastKnownSide = getMainDrawerSide();
+  Promise.resolve().then(() => (init_chrome_locations(), exports_chrome_locations)).then((m3) => m3.reconcileChromeLocations()).catch(() => {});
+  refreshSettingsPanelForSideChange();
+}
+function refreshSettingsPanelForSideChange() {
+  Promise.resolve().then(() => (init_state(), exports_state)).then((m3) => m3.refreshSettingsPanel()).catch(() => {});
 }
 function refreshSideGeometry() {
   Promise.resolve().then(() => (init_handles(), exports_handles)).then((m3) => {
@@ -12131,6 +13336,7 @@ function refreshSideGeometry() {
   syncDrawerTabSettings();
   updateDrawerTabVisibility();
   Promise.resolve().then(() => (init_drawer_location(), exports_drawer_location)).then((m3) => m3.reconcileDrawerLocation()).catch(() => {});
+  Promise.resolve().then(() => (init_chrome_locations(), exports_chrome_locations)).then((m3) => m3.reconcileChromeLocations()).catch(() => {});
 }
 async function applyCanvasSideChange(desired, opts) {
   const gen = ++_sideApplyGen;
@@ -12161,6 +13367,7 @@ async function applyCanvasSideChange(desired, opts) {
       return { writeOk: false };
     }
     _lastKnownSide = desired;
+    refreshSettingsPanelForSideChange();
     waitForSideSettle(desired, gen).then(() => {
       if (gen !== _sideApplyGen)
         return;
@@ -18455,874 +19662,6 @@ var init_state = __esm(() => {
   _settings = mergeCanvasSettings(null);
 });
 
-// src/os/start-menu-styles.ts
-function injectStartMenuStyles() {
-  injectStyles(START_MENU_STYLE_ID, START_MENU_CSS);
-}
-var START_MENU_STYLE_ID = "canvas-os-start-menu-styles", START_MENU_CSS;
-var init_start_menu_styles = __esm(() => {
-  init_styles();
-  START_MENU_CSS = `
-  .canvas-os-start-menu {
-    --csm-row-h: 40px;
-    --csm-tile: 28px;
-    --csm-status-w: calc(58px * var(--lumiverse-font-scale, 1));
-
-    position: fixed; /* left/top/visibility inline (layout px, /uiScale contract) */
-    z-index: 2147483600;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    width: min(320px, calc((100vw - 16px) / var(--lumiverse-ui-scale, 1)));
-    max-height: calc(min(60vh, 420px) / var(--lumiverse-ui-scale, 1));
-    overflow: hidden;
-    padding: 4px;
-    background: ${TAB_STRIP_BACKGROUND};
-    border: 1px solid var(--lumiverse-border);
-    border-radius: 10px;
-    /* Softened, contained cast (user report 2026-09-16: "too intense,
-       elongated at one vertical end"). The negative spread keeps the blur
-       from smearing along the anchored edge; the direction mirror below is
-       preserved. Deliberate deviation from the context-menu chassis stack
-       (which has no spread). */
-    box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
-    color: var(--lumiverse-text);
-    font-family: inherit;
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-  }
-
-  /* Upward menus (bottom taskbar / Start dock): mirror the shadow's Y offset.
-     The base down-cast shadow paints over the strip the menu opens from; the
-     upward variant throws it away from the anchor instead (live report
-     2026-09-16). Direction is stamped in JS (data-open-upward); the values
-     mirror the base rule (same softened/contained stack). */
-  .canvas-os-start-menu[data-open-upward] {
-    box-shadow: 0 -8px 24px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  }
-
-  /* Glass — the context-menu recipe, coarse-pointer gated; derives from the
-     same surface token as the base. */
-  @media not (pointer: coarse) {
-    body[data-glass] .canvas-os-start-menu {
-      background: color-mix(in srgb, ${TAB_STRIP_BACKGROUND} 80%, transparent);
-      backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-    }
-  }
-
-  /* ── Header ──────────────────────────────────────────────────────────── */
-  .canvas-os-start-menu__header {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    flex-shrink: 0;
-    height: 30px;
-    padding: 0 9px;
-  }
-  .canvas-os-start-menu__brand {
-    display: flex;
-    width: 14px;
-    height: 14px;
-    color: var(--lumiverse-text-muted);
-  }
-  .canvas-os-start-menu__brand svg { width: 14px; height: 14px; display: block; }
-  .canvas-os-start-menu__title {
-    flex: 1;
-    min-width: 0;
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-    font-weight: 600;
-    color: var(--lumiverse-text-muted);
-  }
-  .canvas-os-start-menu__count {
-    flex-shrink: 0;
-    font-size: calc(11px * var(--lumiverse-font-scale, 1));
-    color: var(--lumiverse-text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* ── Divider — context-menu token parity ─────────────────────────────── */
-  .canvas-os-start-menu__divider {
-    flex-shrink: 0;
-    height: 1px;
-    margin: 4px 8px;
-    background: var(--lumiverse-border);
-  }
-
-  /* ── List ────────────────────────────────────────────────────────────── */
-  .canvas-os-start-menu__list {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-
-  /* ── Item — context-menu geometry (vertical padding 6px fits the tile) ── */
-  button.canvas-os-start-menu__item {
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: var(--csm-row-h);
-    padding: 6px 12px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: var(--lumiverse-text);
-    font-family: inherit;
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-    text-align: left;
-    cursor: pointer;
-    transition: background 120ms ease, color 120ms ease;
-  }
-  button.canvas-os-start-menu__item:hover {
-    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
-  }
-  button.canvas-os-start-menu__item:active {
-    background: var(--lumiverse-primary-020);
-  }
-  button.canvas-os-start-menu__item:focus-visible {
-    outline: 2px solid var(--lumiverse-primary);
-    outline-offset: -2px;
-    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
-  }
-
-  /* State rail — running windows pin to the rail. */
-  .canvas-os-start-menu__rail {
-    flex-shrink: 0;
-    width: 3px;
-    height: 16px;
-    border-radius: 999px;
-    background: transparent;
-    transition: background 120ms ease;
-  }
-  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__rail {
-    background: var(--lumiverse-primary);
-  }
-  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__rail {
-    background: var(--lumiverse-text-muted);
-  }
-
-  /* Icon tile — a container, never a state channel at rest. */
-  .canvas-os-start-menu__tile {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--csm-tile);
-    height: var(--csm-tile);
-    overflow: hidden;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--lumiverse-text-muted);
-    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
-  }
-  .canvas-os-start-menu__tile > svg,
-  .canvas-os-start-menu__tile > img {
-    width: 16px;
-    height: 16px;
-    display: block;
-  }
-  .canvas-os-start-menu__tile > img { border-radius: 3px; object-fit: contain; }
-  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__tile {
-    background: var(--lumiverse-primary-010, var(--lumiverse-primary-015));
-    color: var(--lumiverse-primary);
-  }
-  .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
-    box-shadow: inset 0 0 0 1px var(--lumiverse-border-hover);
-    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
-  }
-  .canvas-os-start-menu__item:hover .canvas-os-start-menu__tile {
-    background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.06));
-    color: var(--lumiverse-text);
-  }
-  .canvas-os-start-menu__tile--monogram {
-    font-size: calc(12px * var(--lumiverse-font-scale, 1));
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-
-  /* Label */
-  .canvas-os-start-menu__label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Status slot — mark at rest, action verb on hover/focus (opacity only).
-     Closed entries have no mark node at all; the slot is just the verb's home. */
-  .canvas-os-start-menu__status {
-    position: relative;
-    flex-shrink: 0;
-    width: var(--csm-status-w);
-    height: 18px;
-    overflow: hidden;
-  }
-  .canvas-os-start-menu__mark,
-  .canvas-os-start-menu__verb {
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    transition: opacity 150ms ease;
-  }
-  .canvas-os-start-menu__mark {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    color: var(--lumiverse-text-muted);
-  }
-  .canvas-os-start-menu__mark > svg { width: 18px; height: 18px; display: block; }
-  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__mark {
-    color: var(--lumiverse-primary);
-  }
-  .canvas-os-start-menu__item[data-os-state='minimized'] .canvas-os-start-menu__mark {
-    color: var(--lumiverse-text-muted);
-  }
-  .canvas-os-start-menu__verb {
-    opacity: 0;
-    color: var(--lumiverse-text-muted);
-    font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
-  .canvas-os-start-menu__item[data-os-state='open'] .canvas-os-start-menu__verb {
-    color: var(--lumiverse-primary-text, var(--lumiverse-primary));
-  }
-  .canvas-os-start-menu__item:hover .canvas-os-start-menu__mark,
-  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__mark {
-    opacity: 0;
-  }
-  .canvas-os-start-menu__item:hover .canvas-os-start-menu__verb,
-  .canvas-os-start-menu__item:focus-visible .canvas-os-start-menu__verb {
-    opacity: 1;
-  }
-
-  /* ── Empty state ─────────────────────────────────────────────────────── */
-  .canvas-os-start-menu__empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 20px 12px 22px;
-    text-align: center;
-  }
-  .canvas-os-start-menu__empty-glyph {
-    display: flex;
-    width: 24px;
-    height: 24px;
-    color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
-  }
-  .canvas-os-start-menu__empty-glyph svg { width: 24px; height: 24px; }
-  .canvas-os-start-menu__empty-title {
-    font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-    font-weight: 600;
-    color: var(--lumiverse-text);
-  }
-  .canvas-os-start-menu__empty-hint {
-    font-size: calc(11px * var(--lumiverse-font-scale, 1));
-    color: var(--lumiverse-text-muted);
-  }
-
-  /* ── Touch ───────────────────────────────────────────────────────────── */
-  @media (pointer: coarse) {
-    .canvas-os-start-menu { --csm-row-h: 46px; --csm-status-w: 18px; }
-    .canvas-os-start-menu__verb { display: none; }
-  }
-
-  /* Reduced motion — WAAPI handles open/close in JS. */
-  @media (prefers-reduced-motion: reduce) {
-    .canvas-os-start-menu__item,
-    .canvas-os-start-menu__rail,
-    .canvas-os-start-menu__tile,
-    .canvas-os-start-menu__mark,
-    .canvas-os-start-menu__verb { transition: none; }
-  }
-
-  /* Forced colors — outline focus survives; the closed tile's inset shadow does not. */
-  @media (forced-colors: active) {
-    button.canvas-os-start-menu__item:focus-visible {
-      outline: 2px solid ButtonBorder;
-      outline-offset: -2px;
-    }
-    .canvas-os-start-menu__item[data-os-state='closed'] .canvas-os-start-menu__tile {
-      box-shadow: none;
-      border: 1px solid ButtonBorder;
-    }
-  }
-`;
-});
-
-// src/os/start-menu-motion.ts
-function getUiScale() {
-  if (typeof document === "undefined" || !document.documentElement)
-    return 1;
-  if (typeof getComputedStyle !== "function")
-    return 1;
-  try {
-    const raw = getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale");
-    const n2 = parseFloat(raw);
-    return Number.isFinite(n2) && n2 > 0 ? n2 : 1;
-  } catch {
-    return 1;
-  }
-}
-function computeGrowthOrigin(button, menu, uiScale = 1) {
-  const s3 = Number.isFinite(uiScale) && uiScale > 0 ? uiScale : 1;
-  return {
-    x: (button.left + button.width / 2 - menu.left) / s3,
-    y: (button.top + button.height / 2 - menu.top) / s3
-  };
-}
-function canAnimateMenu(menu) {
-  return typeof menu.animate === "function";
-}
-function captureMenuVisualState(menu) {
-  const settled = { opacity: "1", transform: "scale(1)" };
-  if (typeof getComputedStyle !== "function")
-    return settled;
-  try {
-    const cs = getComputedStyle(menu);
-    return {
-      opacity: cs.opacity || "1",
-      transform: cs.transform && cs.transform !== "none" ? cs.transform : "scale(1)"
-    };
-  } catch {
-    return settled;
-  }
-}
-function playMenuIn(menu, origin) {
-  if (!canAnimateMenu(menu) || prefersReducedMotion())
-    return null;
-  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
-  return menu.animate([
-    { opacity: 0, transform: `scale(${START_MENU_SCALE})` },
-    { opacity: 1, transform: "scale(1)" }
-  ], { duration: START_MENU_OPEN_MS, easing: START_MENU_EASE_OUT, fill: "both" });
-}
-function playMenuOut(menu, origin, from, onDone) {
-  if (!canAnimateMenu(menu) || prefersReducedMotion()) {
-    onDone();
-    return null;
-  }
-  menu.style.transformOrigin = `${origin.x}px ${origin.y}px`;
-  let finished = false;
-  let timer = null;
-  let anim = null;
-  const finish = () => {
-    if (finished)
-      return;
-    finished = true;
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    onDone();
-  };
-  timer = setTimeout(finish, CLOSE_FALLBACK_MS);
-  anim = menu.animate([
-    { opacity: from.opacity, transform: from.transform },
-    { opacity: 0, transform: `scale(${START_MENU_SCALE})` }
-  ], { duration: START_MENU_CLOSE_MS, easing: START_MENU_EASE_IN, fill: "both" });
-  anim.onfinish = () => {
-    anim.onfinish = null;
-    finish();
-  };
-  anim.oncancel = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-  return anim;
-}
-var START_MENU_OPEN_MS = 150, START_MENU_CLOSE_MS = 120, START_MENU_SCALE = 0.92, START_MENU_EASE_OUT = "cubic-bezier(0.215, 0.61, 0.355, 1)", START_MENU_EASE_IN = "cubic-bezier(0.4, 0, 1, 1)", CLOSE_FALLBACK_MS;
-var init_start_menu_motion = __esm(() => {
-  CLOSE_FALLBACK_MS = START_MENU_CLOSE_MS + 100;
-});
-
-// src/os/start-menu.ts
-function isPlaceholderIcon(svg) {
-  return svg.classList.contains("lucide-puzzle") || svg.classList.contains("canvas-puzzle");
-}
-function extractButtonIcon(root) {
-  if (!root || typeof root.querySelector !== "function")
-    return {};
-  const svg = root.querySelector("svg");
-  if (svg && !isPlaceholderIcon(svg))
-    return { svg: svg.outerHTML };
-  const url = root.querySelector("img")?.getAttribute("src") ?? undefined;
-  return url ? { url } : {};
-}
-function builtinBaseId(liveId) {
-  return liveId.replace(/:\d+$/, "");
-}
-function entryMonogram(title) {
-  const first = Array.from(title.trim())[0];
-  return first ? first.toUpperCase() : "?";
-}
-function resolveEntryIcon(tab, liveId) {
-  const dom = extractButtonIcon(tab?.root);
-  if (dom.svg)
-    return { svg: dom.svg };
-  if (dom.url)
-    return { url: dom.url };
-  if (tab?.iconSvg)
-    return { svg: tab.iconSvg };
-  if (tab?.iconUrl)
-    return { url: tab.iconUrl };
-  const builtin = BUILTIN_ICON_SVGS[builtinBaseId(liveId)];
-  return builtin ? { svg: builtin } : {};
-}
-function deriveStartMenuEntries(model, resolve) {
-  const tabs = new Map(getDrawerTabs().map((t3) => [t3.id, t3]));
-  const seen = new Set;
-  const out = [];
-  for (const side of ["primary", "secondary"]) {
-    const keys = side === "primary" ? model.primary : model.secondary;
-    const activeKey = model.active[side];
-    for (const key of keys) {
-      const liveId = resolve(key);
-      if (!liveId || seen.has(liveId))
-        continue;
-      seen.add(liveId);
-      const state = model.closed.includes(key) || model.hidden.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
-      const tab = tabs.get(liveId);
-      const icon = resolveEntryIcon(tab, liveId);
-      out.push({
-        liveId,
-        side,
-        title: tab?.title ?? key,
-        iconSvg: icon.svg,
-        iconUrl: icon.url,
-        state
-      });
-    }
-  }
-  out.sort((a3, b2) => a3.title.localeCompare(b2.title, undefined, { sensitivity: "base" }) || a3.liveId.localeCompare(b2.liveId));
-  return out;
-}
-function createMenuEntry(entry, targetSide) {
-  const item = document.createElement("button");
-  item.type = "button";
-  item.className = "canvas-os-start-menu__item";
-  item.setAttribute("role", "menuitem");
-  item.setAttribute("data-os-state", entry.state);
-  item.setAttribute("aria-label", `${entry.title} — ${STATE_LABEL[entry.state]}`);
-  const rail = document.createElement("span");
-  rail.className = "canvas-os-start-menu__rail";
-  rail.setAttribute("aria-hidden", "true");
-  const tile = document.createElement("span");
-  tile.className = "canvas-os-start-menu__tile";
-  tile.setAttribute("aria-hidden", "true");
-  renderEntryIcon(tile, entry);
-  const label = document.createElement("span");
-  label.className = "canvas-os-start-menu__label";
-  label.textContent = entry.title;
-  const status = document.createElement("span");
-  status.className = "canvas-os-start-menu__status";
-  status.setAttribute("aria-hidden", "true");
-  const markSvg = STATE_MARK_SVG[entry.state];
-  if (markSvg) {
-    const mark = document.createElement("span");
-    mark.className = "canvas-os-start-menu__mark";
-    mark.innerHTML = markSvg;
-    status.appendChild(mark);
-  }
-  const verb = document.createElement("span");
-  verb.className = "canvas-os-start-menu__verb";
-  verb.textContent = STATE_VERB[entry.state];
-  status.appendChild(verb);
-  item.append(rail, tile, label, status);
-  item.addEventListener("click", () => {
-    hideStartMenu();
-    openWindowInDrawerByLiveId(entry.liveId, targetSide);
-  });
-  return item;
-}
-function renderEntryIcon(tile, entry) {
-  if (entry.iconSvg) {
-    tile.innerHTML = entry.iconSvg;
-    return;
-  }
-  if (entry.iconUrl) {
-    const img = document.createElement("img");
-    img.src = entry.iconUrl;
-    img.alt = "";
-    img.width = 16;
-    img.height = 16;
-    tile.appendChild(img);
-    return;
-  }
-  tile.textContent = entryMonogram(entry.title);
-  tile.classList.add("canvas-os-start-menu__tile--monogram");
-}
-function createHeader(count) {
-  const header = document.createElement("div");
-  header.className = "canvas-os-start-menu__header";
-  header.setAttribute("role", "presentation");
-  header.setAttribute("aria-hidden", "true");
-  const brand = document.createElement("span");
-  brand.className = "canvas-os-start-menu__brand";
-  brand.innerHTML = START_GLYPH_SVG;
-  const title = document.createElement("span");
-  title.className = "canvas-os-start-menu__title";
-  title.textContent = "Windows";
-  const countEl = document.createElement("span");
-  countEl.className = "canvas-os-start-menu__count";
-  countEl.textContent = count === 1 ? "1 window" : `${count} windows`;
-  header.append(brand, title, countEl);
-  return header;
-}
-function createEmptyState() {
-  const empty = document.createElement("div");
-  empty.className = "canvas-os-start-menu__empty";
-  empty.setAttribute("role", "presentation");
-  const glyph = document.createElement("span");
-  glyph.className = "canvas-os-start-menu__empty-glyph";
-  glyph.setAttribute("aria-hidden", "true");
-  glyph.innerHTML = START_GLYPH_SVG;
-  const title = document.createElement("span");
-  title.className = "canvas-os-start-menu__empty-title";
-  title.textContent = "No windows";
-  const hint = document.createElement("span");
-  hint.className = "canvas-os-start-menu__empty-hint";
-  hint.textContent = "Open a tab to add a window here";
-  empty.append(glyph, title, hint);
-  return empty;
-}
-function buildMenu(targetSide) {
-  const host = getHost();
-  const model = getModel();
-  if (!host || !model)
-    return null;
-  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key));
-  injectStartMenuStyles();
-  const menu = document.createElement("div");
-  menu.id = MENU_ID;
-  menu.className = "canvas-os-start-menu";
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Start menu");
-  if (entries.length === 0) {
-    menu.appendChild(createEmptyState());
-    return menu;
-  }
-  menu.appendChild(createHeader(entries.length));
-  const divider = document.createElement("div");
-  divider.className = "canvas-os-start-menu__divider";
-  divider.setAttribute("role", "separator");
-  menu.appendChild(divider);
-  const list = document.createElement("div");
-  list.className = "canvas-os-start-menu__list";
-  list.setAttribute("role", "presentation");
-  for (const entry of entries) {
-    list.appendChild(createMenuEntry(entry, targetSide));
-  }
-  menu.appendChild(list);
-  return menu;
-}
-function cancelMenuRaf() {
-  if (_menuRaf) {
-    cancelAnimationFrame(_menuRaf);
-    _menuRaf = 0;
-  }
-}
-function cancelClosing() {
-  if (!_closing)
-    return;
-  const { menu, anim } = _closing;
-  _closing = null;
-  if (anim) {
-    anim.onfinish = null;
-    anim.cancel();
-  }
-  menu.remove();
-}
-function reconcileStartMenuPresence() {
-  if (_menu && (!_menuButton || !_menuButton.isConnected)) {
-    hideStartMenu({ immediate: true });
-  }
-}
-function openStartMenu(side, button) {
-  if (_menuOpenFor === side && _menuButton?.isConnected) {
-    hideStartMenu();
-    return;
-  }
-  hideStartMenu({ immediate: true });
-  const menu = buildMenu(side);
-  if (!menu)
-    return;
-  document.body.appendChild(menu);
-  _menu = menu;
-  _menuOpenFor = side;
-  _menuButton = button;
-  _menuRevealed = false;
-  button.setAttribute("aria-expanded", "true");
-  const rect = button.getBoundingClientRect();
-  menu.style.visibility = "hidden";
-  cancelMenuRaf();
-  _menuRaf = requestAnimationFrame(() => {
-    _menuRaf = 0;
-    if (_menu !== menu)
-      return;
-    const mRect = menu.getBoundingClientRect();
-    const uiScale = getUiScale();
-    const openUpward = rect.bottom > window.innerHeight / 2;
-    menu.toggleAttribute("data-open-upward", openUpward);
-    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
-    const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
-    menu.style.left = `${renderedLeft / uiScale}px`;
-    menu.style.top = `${renderedTop / uiScale}px`;
-    const placedRect = menu.getBoundingClientRect();
-    menu.style.visibility = "";
-    _menuRevealed = true;
-    _menuAnim = playMenuIn(menu, computeGrowthOrigin(rect, placedRect, uiScale));
-    menu.querySelector('[role="menuitem"]')?.focus();
-  });
-  attachMenuDismiss();
-  dlog("[os] start menu open", { side });
-}
-function hideStartMenu(opts) {
-  _unsubDocListeners?.();
-  _unsubDocListeners = null;
-  for (const btn of document.querySelectorAll(`button[${START_ATTR}]`)) {
-    btn.setAttribute("aria-expanded", "false");
-  }
-  const menu = _menu;
-  const button = _menuButton;
-  const revealed = _menuRevealed;
-  const side = _menuOpenFor;
-  _menu = null;
-  _menuOpenFor = null;
-  _menuButton = null;
-  _menuRevealed = false;
-  cancelMenuRaf();
-  const active = document.activeElement;
-  if (menu && active && menu.contains(active)) {
-    if (button?.isConnected)
-      button.focus();
-    else
-      active.blur();
-  }
-  const animatable = menu !== null && canAnimateMenu(menu) && !prefersReducedMotion();
-  if (!menu || opts?.immediate || !animatable || !revealed || !button || !button.isConnected) {
-    _menuAnim?.cancel();
-    _menuAnim = null;
-    menu?.remove();
-    cancelClosing();
-    if (menu)
-      dlog("[os] start menu close", { side, immediate: true });
-    return;
-  }
-  const from = captureMenuVisualState(menu);
-  _menuAnim?.cancel();
-  _menuAnim = null;
-  const origin = computeGrowthOrigin(button.getBoundingClientRect(), menu.getBoundingClientRect(), getUiScale());
-  menu.style.pointerEvents = "none";
-  const anim = playMenuOut(menu, origin, from, () => {
-    menu.remove();
-    if (_closing?.menu === menu)
-      _closing = null;
-  });
-  if (anim)
-    _closing = { menu, anim };
-  dlog("[os] start menu close", { side, immediate: false });
-}
-function attachMenuDismiss() {
-  const onDocMousedown = (ev) => {
-    const target = ev.target;
-    if (!(target instanceof Element))
-      return;
-    if (_menu?.contains(target))
-      return;
-    if (target.closest(`button[${START_ATTR}]`))
-      return;
-    hideStartMenu();
-  };
-  const onKey = (ev) => {
-    if (ev.key === "Tab") {
-      hideStartMenu();
-      return;
-    }
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      hideStartMenu();
-      return;
-    }
-    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp")
-      return;
-    if (!_menu)
-      return;
-    const items = Array.from(_menu.querySelectorAll('[role="menuitem"]'));
-    if (items.length === 0)
-      return;
-    const idx = items.indexOf(document.activeElement);
-    ev.preventDefault();
-    const dir = ev.key === "ArrowDown" ? 1 : -1;
-    const next = idx === -1 ? items[0] : items[(idx + dir + items.length) % items.length];
-    next.focus();
-  };
-  const onViewportResize = () => {
-    hideStartMenu({ immediate: true });
-  };
-  document.addEventListener("mousedown", onDocMousedown, true);
-  document.addEventListener("keydown", onKey, true);
-  window.addEventListener("resize", onViewportResize);
-  window.visualViewport?.addEventListener("resize", onViewportResize);
-  _unsubDocListeners = () => {
-    document.removeEventListener("mousedown", onDocMousedown, true);
-    document.removeEventListener("keydown", onKey, true);
-    window.removeEventListener("resize", onViewportResize);
-    window.visualViewport?.removeEventListener("resize", onViewportResize);
-  };
-}
-function startButtonHtml() {
-  return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`;
-}
-async function ensureStartButtonForSide(side) {
-  const list = side === "primary" ? await getMainMirrorList() : getSecondaryTabList();
-  if (!list)
-    return;
-  let btn = list.querySelector(`button[${START_ATTR}]`);
-  if (btn && !btn.isConnected)
-    btn = null;
-  if (!btn) {
-    const template = document.createElement("template");
-    template.innerHTML = startButtonHtml().trim();
-    btn = template.content.firstElementChild;
-  }
-  if (side === "primary") {
-    if (!btn.parentElement) {
-      const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`);
-      if (dock)
-        dock.appendChild(btn);
-      else
-        list.appendChild(btn);
-    }
-  } else {
-    let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
-    if (!dock) {
-      dock = document.createElement("div");
-      dock.className = `${TAB_LIST_BOTTOM_CLASS} ${SECONDARY_START_DOCK_CLASS}`;
-      list.appendChild(dock);
-    }
-    if (btn.parentElement !== dock)
-      dock.appendChild(btn);
-    if (dock.nextElementSibling)
-      list.appendChild(dock);
-  }
-  btn.style.removeProperty("order");
-  if (!btn.dataset.wired) {
-    btn.dataset.wired = "1";
-    btn.addEventListener("click", () => openStartMenu(side, btn));
-  }
-}
-async function getMainMirrorList() {
-  const m3 = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-  return m3.getMainMirrorTabList();
-}
-function removeSecondaryStartChrome() {
-  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
-    dock.remove();
-  }
-  getSecondaryTabList()?.querySelector(`button[${START_ATTR}]`)?.remove();
-  if (_menuOpenFor === "secondary")
-    hideStartMenu({ immediate: true });
-}
-function scheduleEnsureButtons() {
-  if (_buttonRaf)
-    return;
-  _buttonRaf = requestAnimationFrame(async () => {
-    _buttonRaf = 0;
-    reconcileStartMenuPresence();
-    await ensureStartButtonForSide("primary");
-    if (isOsModeEnabled()) {
-      if (getSettings().secondSidebarEnabled && getSettings().osSecondaryStartMenu) {
-        await ensureStartButtonForSide("secondary");
-      } else {
-        removeSecondaryStartChrome();
-      }
-    }
-  });
-}
-function installShellCreatedListener() {
-  if (typeof window === "undefined" || _onShellCreated !== null)
-    return;
-  _onShellCreated = () => scheduleEnsureButtons();
-  window.addEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
-}
-function removeShellCreatedListener() {
-  if (_onShellCreated && typeof window !== "undefined") {
-    window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, _onShellCreated);
-  }
-  _onShellCreated = null;
-}
-function mountStartMenu() {
-  if (!isOsModeEnabled())
-    return;
-  installShellCreatedListener();
-  scheduleEnsureButtons();
-  Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(teardownStartMenu));
-  dlog("[os] start menu chrome mounted");
-}
-function applySecondaryStartMenuChange(enabled) {
-  if (!isOsModeEnabled())
-    return;
-  if (enabled)
-    scheduleEnsureButtons();
-  else
-    removeSecondaryStartChrome();
-}
-function teardownStartMenu() {
-  removeShellCreatedListener();
-  if (_buttonRaf) {
-    cancelAnimationFrame(_buttonRaf);
-    _buttonRaf = 0;
-  }
-  hideStartMenu({ immediate: true });
-  for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
-    btn.remove();
-  }
-  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
-    dock.remove();
-  }
-  document.getElementById(START_MENU_STYLE_ID)?.remove();
-  dlog("[os] start menu chrome unmounted");
-}
-var START_ATTR = "data-canvas-os-start", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
-var init_start_menu = __esm(() => {
-  init_dispatch();
-  init_store();
-  init_state();
-  init_actions();
-  init_secondary();
-  init_drawer_shell();
-  init_builtin_icons();
-  init_start_menu_styles();
-  init_log();
-  init_start_menu_motion();
-  STATE_LABEL = {
-    open: "open",
-    minimized: "minimized",
-    closed: "closed"
-  };
-  STATE_VERB = {
-    open: "Focus",
-    minimized: "Restore",
-    closed: "Launch"
-  };
-  STATE_MARK_SVG = {
-    open: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="4" fill="currentColor"/><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/></svg>',
-    minimized: '<svg viewBox="0 0 18 18" width="18" height="18" fill="none"><circle cx="9" cy="9" r="5.25" stroke="currentColor" stroke-width="1.5"/></svg>',
-    closed: ""
-  };
-});
-
 // src/debug/fiber-scan.ts
 function installDebugEscapeHatch() {
   window.__canvasDebug = function() {
@@ -19737,7 +20076,7 @@ function renderGhostOverlay(ta, suffix, caretPos) {
   el.replaceChildren(pre, ghost);
 }
 function injectGhostStyles() {
-  injectStyles(STYLE_ID3, `
+  injectStyles(STYLE_ID4, `
     #${GHOST_ID} {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
@@ -19754,7 +20093,7 @@ function injectGhostStyles() {
     }
   `);
 }
-var GHOST_ID = "canvas-slash-ghost", STYLE_ID3 = "canvas-slash-ghost-styles", _ctx3 = null;
+var GHOST_ID = "canvas-slash-ghost", STYLE_ID4 = "canvas-slash-ghost-styles", _ctx3 = null;
 var init_ghost_text = () => {};
 
 // src/slash/suggest.ts
@@ -19939,7 +20278,7 @@ function applyTextareaAriaBaseline(textarea) {
   }
 }
 function injectSuggestStyles() {
-  injectStyles(STYLE_ID4, `
+  injectStyles(STYLE_ID5, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
@@ -20036,7 +20375,7 @@ function escapeHtml2(s3) {
 function escapeAttr(s3) {
   return escapeHtml2(s3);
 }
-var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID4 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
+var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID5 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
   init_ghost_text();
   init_intent();
@@ -21112,7 +21451,7 @@ function unmountToastSurface() {
   toasts = [];
 }
 function injectToastStyles() {
-  injectStyles(STYLE_ID5, `
+  injectStyles(STYLE_ID6, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -21146,7 +21485,7 @@ function injectToastStyles() {
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
   `);
 }
-var STYLE_ID5 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
+var STYLE_ID6 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
 var init_toast = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -21637,7 +21976,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, coreTabsHiddenFeature, osSecondaryStartMenuFeature, osWindowControlsFeature, FEATURES;
+`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, coreTabsHiddenFeature, optionsButtonLocationFeature, startButtonLocationFeature, startButtonAlwaysOnScreenEdgeFeature, osWindowControlsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -21645,6 +21984,7 @@ var init_registry = __esm(() => {
   init_os_mode();
   init_panel_chrome();
   init_start_menu();
+  init_chrome_locations();
   init_animation();
   init_fiber_scan();
   init_reflow();
@@ -21851,6 +22191,7 @@ var init_registry = __esm(() => {
       cancelAllWrapperAnimations();
       reconcileDrawerLocation({ force: true });
       hideStartMenu({ immediate: true });
+      reconcileChromeLocations();
     }
   };
   horizontalSplitFeature = {
@@ -21990,12 +22331,35 @@ var init_registry = __esm(() => {
       }).catch(() => {});
     }
   };
-  osSecondaryStartMenuFeature = {
-    id: "osSecondaryStartMenu",
-    apply(prev, next) {
-      if (prev.osSecondaryStartMenu === next.osSecondaryStartMenu)
-        return;
-      applySecondaryStartMenuChange(next.osSecondaryStartMenu);
+  optionsButtonLocationFeature = {
+    id: "optionsButtonLocation",
+    unconditional: true,
+    mount() {
+      reconcileChromeLocations();
+      return () => teardownChromeLocations();
+    },
+    apply() {
+      reconcileChromeLocations();
+    }
+  };
+  startButtonLocationFeature = {
+    id: "startButtonLocation",
+    unconditional: true,
+    mount() {
+      reconcileChromeLocations();
+    },
+    apply() {
+      applyStartButtonLocationChange();
+    }
+  };
+  startButtonAlwaysOnScreenEdgeFeature = {
+    id: "startButtonAlwaysOnScreenEdge",
+    unconditional: true,
+    mount() {
+      reconcileChromeLocations();
+    },
+    apply() {
+      reconcileChromeLocations();
     }
   };
   osWindowControlsFeature = {
@@ -22025,7 +22389,9 @@ var init_registry = __esm(() => {
     hideDrawerOpenCloseButtonsFeature,
     osModeFeature,
     coreTabsHiddenFeature,
-    osSecondaryStartMenuFeature,
+    startButtonLocationFeature,
+    optionsButtonLocationFeature,
+    startButtonAlwaysOnScreenEdgeFeature,
     osWindowControlsFeature,
     dragAndDropDrawerTabsFeature,
     drawerTabDragFeature
@@ -22033,6 +22399,197 @@ var init_registry = __esm(() => {
 });
 
 // src/settings/render.ts
+function ensurePopover() {
+  if (_popover)
+    return _popover;
+  try {
+    if (typeof document === "undefined" || typeof document.createElement !== "function")
+      return null;
+    const pop = document.createElement("div");
+    pop.className = "sidebar-ux-help-popover";
+    pop.id = HELP_POPOVER_ID;
+    pop.setAttribute("role", "tooltip");
+    pop.setAttribute("hidden", "");
+    const body = document.body;
+    if (!body || typeof body.appendChild !== "function")
+      return null;
+    body.appendChild(pop);
+    _popover = pop;
+    return pop;
+  } catch {
+    return null;
+  }
+}
+function isFinePointer() {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  } catch {
+    return false;
+  }
+}
+function installDismiss() {
+  if (_uninstallDismiss)
+    return;
+  try {
+    if (typeof document === "undefined" || typeof document.addEventListener !== "function")
+      return;
+    const onPointerDown = (ev) => {
+      const target = ev.target;
+      if (_anchor && target && typeof _anchor.contains === "function" && _anchor.contains(target))
+        return;
+      if (_popover && target && typeof _popover.contains === "function" && _popover.contains(target))
+        return;
+      closeHelp();
+    };
+    const onKey = (ev) => {
+      if (ev.key === "Escape")
+        closeHelp();
+    };
+    const onScrollOrResize = () => closeHelp();
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKey, true);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("scroll", onScrollOrResize, true);
+      window.addEventListener("resize", onScrollOrResize);
+    }
+    _uninstallDismiss = () => {
+      try {
+        document.removeEventListener("pointerdown", onPointerDown, true);
+        document.removeEventListener("keydown", onKey, true);
+        if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+          window.removeEventListener("scroll", onScrollOrResize, true);
+          window.removeEventListener("resize", onScrollOrResize);
+        }
+      } catch {}
+    };
+  } catch {}
+}
+function positionPopover(anchor, pop) {
+  try {
+    if (typeof anchor.getBoundingClientRect !== "function" || typeof pop.getBoundingClientRect !== "function")
+      return;
+    const a3 = anchor.getBoundingClientRect();
+    pop.hidden = false;
+    const p3 = pop.getBoundingClientRect();
+    const vw = typeof window !== "undefined" && window.innerWidth || 360;
+    const vh = typeof window !== "undefined" && window.innerHeight || 640;
+    const gap = 8;
+    let top = a3.top - p3.height - gap;
+    if (top < gap)
+      top = a3.bottom + gap;
+    if (top + p3.height > vh - gap)
+      top = Math.max(gap, vh - p3.height - gap);
+    let left = a3.left + a3.width / 2 - p3.width / 2;
+    left = Math.max(gap, Math.min(vw - p3.width - gap, left));
+    pop.style.position = "fixed";
+    pop.style.top = `${Math.round(top)}px`;
+    pop.style.left = `${Math.round(left)}px`;
+  } catch {}
+}
+function openHelp(anchor, text) {
+  if (_closeTimer) {
+    clearTimeout(_closeTimer);
+    _closeTimer = null;
+  }
+  if (_anchor && _anchor !== anchor)
+    closeHelp();
+  const pop = ensurePopover();
+  if (!pop)
+    return;
+  _anchor = anchor;
+  _open2 = true;
+  pop.textContent = text;
+  pop.hidden = false;
+  try {
+    pop.removeAttribute?.("hidden");
+  } catch {}
+  anchor.setAttribute("aria-expanded", "true");
+  anchor.setAttribute("aria-describedby", HELP_POPOVER_ID);
+  positionPopover(anchor, pop);
+  installDismiss();
+}
+function closeHelp() {
+  if (!_open2 && !_anchor)
+    return;
+  _open2 = false;
+  const anchor = _anchor;
+  const pop = _popover;
+  _anchor = null;
+  if (pop) {
+    pop.hidden = true;
+    try {
+      pop.setAttribute?.("hidden", "");
+    } catch {}
+  }
+  if (anchor) {
+    anchor.setAttribute("aria-expanded", "false");
+    try {
+      anchor.removeAttribute?.("aria-describedby");
+    } catch {}
+  }
+  if (_uninstallDismiss) {
+    _uninstallDismiss();
+    _uninstallDismiss = null;
+  }
+}
+function disposeHelpLayer() {
+  closeHelp();
+  if (_closeTimer) {
+    clearTimeout(_closeTimer);
+    _closeTimer = null;
+  }
+  if (_popover) {
+    try {
+      _popover.remove?.();
+      _popover.parentElement?.removeChild?.(_popover);
+    } catch {}
+    _popover = null;
+  }
+}
+function buildHelpTip(label, getText) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sidebar-ux-panel-help";
+  btn.setAttribute("aria-label", `More info: ${label}`);
+  btn.setAttribute("aria-expanded", "false");
+  btn.textContent = "?";
+  const open = () => openHelp(btn, getText());
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault?.();
+    ev.stopPropagation?.();
+    if (_open2 && _anchor === btn)
+      closeHelp();
+    else
+      open();
+  });
+  btn.addEventListener("pointerenter", () => {
+    if (isFinePointer())
+      open();
+  });
+  btn.addEventListener("pointerleave", () => {
+    if (!isFinePointer())
+      return;
+    if (_anchor !== btn)
+      return;
+    if (_closeTimer)
+      clearTimeout(_closeTimer);
+    _closeTimer = setTimeout(() => {
+      _closeTimer = null;
+      if (_anchor === btn)
+        closeHelp();
+    }, 75);
+  });
+  btn.addEventListener("focus", () => open());
+  btn.addEventListener("blur", () => {
+    if (_anchor === btn)
+      closeHelp();
+  });
+  btn.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape")
+      closeHelp();
+  });
+  return btn;
+}
 function buildSettingRow(args) {
   const row = document.createElement("div");
   row.className = "sidebar-ux-panel-row";
@@ -22040,19 +22597,34 @@ function buildSettingRow(args) {
     row.classList.add("sidebar-ux-panel-row-disabled");
   const text = document.createElement("div");
   text.className = "sidebar-ux-panel-row-text";
+  const head = document.createElement("div");
+  head.className = "sidebar-ux-panel-row-label-head";
   const label = document.createElement("div");
   label.className = "sidebar-ux-panel-row-label";
   label.textContent = args.label;
-  text.appendChild(label);
-  if (args.hint) {
-    const hint = document.createElement("div");
-    hint.className = "sidebar-ux-panel-row-hint";
-    hint.textContent = args.hint;
-    text.appendChild(hint);
-  }
+  head.appendChild(label);
+  const hint = document.createElement("div");
+  hint.className = "sidebar-ux-panel-row-hint";
+  hint.textContent = args.hint ?? "";
+  hint.hidden = true;
+  head.appendChild(buildHelpTip(args.label, () => hint.textContent || ""));
+  text.appendChild(head);
+  text.appendChild(hint);
   row.appendChild(text);
   row.appendChild(args.control);
-  return row;
+  return {
+    row,
+    setHint(next) {
+      if (hint.textContent !== next)
+        hint.textContent = next;
+    },
+    setDisabled(disabled) {
+      row.classList.toggle("sidebar-ux-panel-row-disabled", disabled);
+      const control = args.control;
+      if (typeof control.disabled === "boolean")
+        control.disabled = disabled;
+    }
+  };
 }
 function buildSegmentedControl(options, value, onChange) {
   const root = document.createElement("div");
@@ -22124,6 +22696,93 @@ function buildSegmentedControl(options, value, onChange) {
     }
   };
 }
+function buildTileGroup(options, value, onChange) {
+  const root = document.createElement("div");
+  root.className = "sidebar-ux-panel-modes";
+  root.setAttribute("role", "radiogroup");
+  let current = value;
+  const entries = [];
+  const render = () => {
+    for (const { btn, value: v3 } of entries) {
+      const active = v3 === current;
+      btn.classList.toggle("sidebar-ux-panel-mode-selected", active);
+      btn.setAttribute("aria-checked", String(active));
+      btn.tabIndex = active ? 0 : -1;
+    }
+  };
+  const select = (next) => {
+    if (next === current)
+      return;
+    current = next;
+    render();
+    onChange(next);
+  };
+  options.forEach((opt, i3) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sidebar-ux-panel-mode";
+    btn.setAttribute("role", "radio");
+    btn.setAttribute("aria-label", opt.caption ? `${opt.label} — ${opt.caption}` : opt.label);
+    if (opt.icon) {
+      const icon = document.createElement("span");
+      icon.className = "sidebar-ux-panel-mode-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = opt.icon;
+      btn.appendChild(icon);
+    }
+    const title = document.createElement("span");
+    title.className = "sidebar-ux-panel-mode-title";
+    title.textContent = opt.label;
+    btn.appendChild(title);
+    if (opt.caption) {
+      const caption = document.createElement("span");
+      caption.className = "sidebar-ux-panel-mode-caption";
+      caption.textContent = opt.caption;
+      btn.appendChild(caption);
+    }
+    btn.addEventListener("click", () => {
+      if (btn.disabled)
+        return;
+      select(opt.value);
+    });
+    btn.addEventListener("keydown", (ev) => {
+      const forward = ev.key === "ArrowRight" || ev.key === "ArrowDown";
+      const backward = ev.key === "ArrowLeft" || ev.key === "ArrowUp";
+      if (!forward && !backward)
+        return;
+      ev.preventDefault();
+      const dir = forward ? 1 : -1;
+      let next = i3;
+      for (let step = 0;step < options.length; step++) {
+        next = (next + dir + options.length) % options.length;
+        const candidate = entries[next];
+        if (!candidate || !candidate.btn.disabled)
+          break;
+      }
+      const target = entries[next];
+      if (!target || target.btn.disabled)
+        return;
+      target.btn.focus();
+      select(target.value);
+    });
+    entries.push({ btn, value: opt.value });
+    root.appendChild(btn);
+  });
+  render();
+  return {
+    root,
+    refresh(next) {
+      current = next;
+      render();
+    },
+    setDisabled(disabled) {
+      for (const { btn } of entries) {
+        btn.disabled = disabled;
+        btn.setAttribute("aria-disabled", String(disabled));
+      }
+    }
+  };
+}
 function buildToggleControl(value, onChange, disabled) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -22141,6 +22800,7 @@ function buildToggleControl(value, onChange, disabled) {
   });
   return btn;
 }
+var HELP_POPOVER_ID = "sidebar-ux-help-popover", _popover = null, _anchor = null, _open2 = false, _closeTimer = null, _uninstallDismiss = null;
 
 // src/settings/panel.ts
 function _isMobileViewportForPanel() {
@@ -22150,63 +22810,220 @@ function _isMobileViewportForPanel() {
     return false;
   }
 }
+function safeMainSide() {
+  try {
+    return _storeMod?.getMainDrawerSide() ?? "right";
+  } catch {
+    return "right";
+  }
+}
+function safeMainSideOverride() {
+  try {
+    return _storeMod?.getMainDrawerSideOverride() ?? null;
+  } catch {
+    return null;
+  }
+}
+function isStoreReady() {
+  return _storeMod !== null;
+}
+function isModelReady() {
+  try {
+    return _dispatchMod?.getModel() != null;
+  } catch {
+    return false;
+  }
+}
 function injectPanelStyles() {
   injectStyles(PANEL_STYLE_ID, `
     .sidebar-ux-panel-root {
       font-family: var(--lumiverse-font-family, sans-serif);
       color: var(--lumiverse-text);
-      padding: 4px 0 24px;
+      padding: 2px 0 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-width: 0;
     }
     .sidebar-ux-panel-header {
-      padding: 4px 0 12px;
+      padding: 2px 0 0;
       margin: 0;
     }
     .sidebar-ux-panel-header-title {
       margin: 0;
-      font-size: calc(18px * var(--lumiverse-font-scale, 1));
+      font-size: calc(17px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       line-height: 1.2;
       color: var(--lumiverse-text);
     }
-    .sidebar-ux-panel-section {
-      margin-top: 18px;
+    .sidebar-ux-panel-header-sub {
+      margin-top: 3px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.4;
+      color: var(--lumiverse-text-muted);
     }
+    .sidebar-ux-panel-section { min-width: 0; }
     .sidebar-ux-panel-section-title {
-      margin: 0 0 8px;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      margin: 0 0 8px 2px;
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
       color: var(--lumiverse-text-muted);
+    }
+    .sidebar-ux-panel-group {
+      border: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
+      border-radius: var(--lumiverse-radius-md, 10px);
+      background: color-mix(in srgb, var(--lumiverse-text) 2.5%, transparent);
+      overflow: hidden;
     }
     .sidebar-ux-panel-row {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 10px 12px;
-      border: 1px solid var(--lumiverse-border);
-      border-radius: 8px;
-      background: var(--lumiverse-surface);
-      margin-bottom: 6px;
-      transition: opacity 0.15s ease;
+      gap: 14px;
+      padding: 11px 13px;
+      min-width: 0;
+      transition: background 0.15s ease, opacity 0.15s ease;
     }
-    .sidebar-ux-panel-row-disabled {
-      opacity: 0.45;
+    .sidebar-ux-panel-row + .sidebar-ux-panel-row {
+      border-top: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
     }
-    .sidebar-ux-panel-row-text { flex: 1; min-width: 0; }
+    .sidebar-ux-panel-row:hover {
+      background: color-mix(in srgb, var(--lumiverse-text) 2%, transparent);
+    }
+    .sidebar-ux-panel-row-disabled { opacity: 0.45; }
+    .sidebar-ux-panel-row-text { flex: 1 1 auto; min-width: 0; }
+    .sidebar-ux-panel-row-label-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
     .sidebar-ux-panel-row-label {
       font-size: calc(13px * var(--lumiverse-font-scale, 1));
       font-weight: 500;
       line-height: 1.3;
       color: var(--lumiverse-text);
     }
-    .sidebar-ux-panel-row-hint {
-      margin-top: 2px;
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
-      line-height: 1.35;
+    /* Hint text is the popover's source only — never painted inline. */
+    .sidebar-ux-panel-row-hint { display: none; }
+    /* Sub-rows (second-drawer / OS-scoped options) read as children of the
+       row above them. */
+    .sidebar-ux-panel-sub {
+      padding-left: 26px;
+      position: relative;
+    }
+    .sidebar-ux-panel-sub::before {
+      content: '';
+      position: absolute;
+      left: 12px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--lumiverse-primary-020);
+    }
+    /* Help button */
+    .sidebar-ux-panel-help {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
+      font-size: calc(10px * var(--lumiverse-font-scale, 1));
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .sidebar-ux-panel-help:hover,
+    .sidebar-ux-panel-help[aria-expanded="true"] {
+      border-color: var(--lumiverse-primary);
+      background: var(--lumiverse-primary-020);
+      color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-help:focus-visible {
+      outline: 2px solid var(--lumiverse-primary);
+      outline-offset: 2px;
+    }
+    /* Mode tiles */
+    .sidebar-ux-panel-modes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px 13px 10px;
+      margin-bottom: 0;
+    }
+    .sidebar-ux-panel-mode {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 68px;
+      padding: 10px 8px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius-md, 10px);
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
+      color: var(--lumiverse-text-muted);
+      cursor: pointer;
+      text-align: center;
+      font-family: inherit;
+      transition: all 0.15s ease;
+      position: relative;
+    }
+    .sidebar-ux-panel-mode:hover:not(:disabled) {
+      border-color: var(--lumiverse-border-hover);
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-panel-mode-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: currentColor;
+    }
+    .sidebar-ux-panel-mode-icon svg { width: 18px; height: 18px; }
+    .sidebar-ux-panel-mode-title {
+      font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--lumiverse-text);
+    }
+    .sidebar-ux-panel-mode-caption {
+      font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.25;
       color: var(--lumiverse-text-muted);
     }
+    .sidebar-ux-panel-mode-selected {
+      border-color: var(--lumiverse-primary);
+      background: var(--lumiverse-primary-020);
+      color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-mode-selected .sidebar-ux-panel-mode-title {
+      color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-mode-selected::after {
+      content: '';
+      position: absolute;
+      top: 7px;
+      right: 7px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--lumiverse-primary);
+    }
+    .sidebar-ux-panel-mode:focus-visible {
+      outline: 2px solid var(--lumiverse-primary);
+      outline-offset: 2px;
+    }
+    .sidebar-ux-panel-mode:disabled { opacity: 0.5; cursor: not-allowed; }
+    /* Toggle */
     .sidebar-ux-panel-toggle {
       flex-shrink: 0;
       position: relative;
@@ -22227,7 +23044,7 @@ function injectPanelStyles() {
       height: 14px;
       border-radius: 50%;
       background: var(--lumiverse-text);
-      transition: transform 0.15s ease, background 0.15s ease;
+      transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.15s ease;
     }
     .sidebar-ux-panel-toggle-on {
       background: var(--lumiverse-primary);
@@ -22245,19 +23062,21 @@ function injectPanelStyles() {
     .sidebar-ux-panel-segmented {
       display: flex;
       flex-shrink: 0;
-      min-width: 168px;
+      min-width: 150px;
+      max-width: 100%;
       border-radius: 8px;
       background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
       border: 1px solid var(--lumiverse-border);
       overflow: hidden;
     }
     .sidebar-ux-panel-segmented-btn {
-      flex: 1;
-      padding: 7px 12px;
+      flex: 1 1 0;
+      padding: 7px 10px;
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       font-family: inherit;
       text-align: center;
+      white-space: nowrap;
       color: var(--lumiverse-text-muted);
       background: transparent;
       border: none;
@@ -22283,6 +23102,51 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: -2px;
     }
+    /* Help popover (body-level, fixed) */
+    .sidebar-ux-help-popover {
+      position: fixed;
+      z-index: 10050;
+      max-width: 260px;
+      padding: 8px 10px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 10px;
+      background: var(--lumiverse-bg-elevated, var(--lumiverse-bg-opaque, var(--lumiverse-surface, #1a1a1e)));
+      color: var(--lumiverse-text);
+      box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0,0,0,0.4));
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      animation: sidebar-ux-help-in 120ms ease;
+    }
+    [data-glass] .sidebar-ux-help-popover {
+      background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated, #1a1a1e));
+      backdrop-filter: blur(var(--lcs-glass-blur, 12px));
+    }
+    @keyframes sidebar-ux-help-in {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sidebar-ux-help-popover { animation: none; }
+      .sidebar-ux-panel-row,
+      .sidebar-ux-panel-toggle,
+      .sidebar-ux-panel-toggle-knob,
+      .sidebar-ux-panel-mode,
+      .sidebar-ux-panel-help { transition: none; }
+    }
+    /* Narrow layouts: stack the control under the label. */
+    @media (max-width: 600px), (pointer: coarse) {
+      .sidebar-ux-panel-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 9px;
+      }
+      .sidebar-ux-panel-row > .sidebar-ux-panel-segmented { min-width: 0; width: 100%; }
+      .sidebar-ux-panel-row > .sidebar-ux-panel-toggle { align-self: flex-end; }
+      .sidebar-ux-panel-help { width: 20px; height: 20px; }
+      .sidebar-ux-panel-mode-caption { display: none; }
+      .sidebar-ux-panel-sub { padding-left: 22px; }
+      .sidebar-ux-panel-sub::before { left: 9px; }
+    }
   `);
 }
 function buildSettingsPanelDOM() {
@@ -22295,6 +23159,10 @@ function buildSettingsPanelDOM() {
   headerTitle.className = "sidebar-ux-panel-header-title";
   headerTitle.textContent = "Canvas - Enhanced UI";
   header.appendChild(headerTitle);
+  const headerSub = document.createElement("div");
+  headerSub.className = "sidebar-ux-panel-header-sub";
+  headerSub.textContent = "Drawers, taskbars, and layout — applied live.";
+  header.appendChild(headerSub);
   root.appendChild(header);
   const makeToggle = (getValue, setValue, opts = {}) => {
     const btn = buildToggleControl(getValue(), (next) => setValue(next), opts.disabled);
@@ -22312,184 +23180,236 @@ function buildSettingsPanelDOM() {
     h4.className = "sidebar-ux-panel-section-title";
     h4.textContent = title;
     sec.appendChild(h4);
-    return sec;
+    const group = document.createElement("div");
+    group.className = "sidebar-ux-panel-group";
+    sec.appendChild(group);
+    return { sec, group };
   };
-  const sec1 = section("Chat");
-  const chat = makeToggle(() => getSettings().chatReflow, (v3) => setSettings({ chatReflow: v3 }));
-  sec1.appendChild(buildSettingRow({
-    label: "Center the chat in the visible area",
-    hint: "Shifts the chat column by the open-drawer widths so neither drawer covers it.",
-    control: chat.btn
-  }));
-  const welcome = makeToggle(() => getSettings().welcomeReflow, (v3) => setSettings({ welcomeReflow: v3 }));
-  sec1.appendChild(buildSettingRow({
-    label: "Center the Welcome screen in the visible area",
-    hint: "Shifts the Welcome screen by the open-drawer widths so neither drawer covers it.",
-    control: welcome.btn
-  }));
-  const slash = makeToggle(() => getSettings().slashCommandsEnabled, (v3) => setSettings({ slashCommandsEnabled: v3 }));
-  sec1.appendChild(buildSettingRow({
-    label: "Enable slash commands",
-    hint: "When on, typing / in the chat input opens the slash-command menu.",
-    control: slash.btn
-  }));
-  const secLayout = section("Layout");
-  const persistOpen = makeToggle(() => getSettings().persistDrawerOpenState, (v3) => setSettings({ persistDrawerOpenState: v3 }));
-  secLayout.appendChild(buildSettingRow({
-    label: "Remember drawer open/close state",
-    hint: "Persist drawer open/closed state (and active tab) across sessions.",
-    control: persistOpen.btn
-  }));
-  const persistWidth = makeToggle(() => getSettings().persistDrawerWidth, (v3) => setSettings({ persistDrawerWidth: v3 }));
-  secLayout.appendChild(buildSettingRow({
-    label: "Remember resized drawer width",
-    hint: "Persist drawer widths across sessions.",
-    control: persistWidth.btn
-  }));
-  const secSidebars = section("Drawers");
+  const appendRow = (group, handle, sub = false) => {
+    if (sub)
+      handle.row.classList.add("sidebar-ux-panel-sub");
+    group.appendChild(handle.row);
+    return handle;
+  };
+  const drawers = section("Drawers / Taskbars");
+  const effectiveMode = () => {
+    const s3 = getSettings();
+    if (s3.osMode)
+      return "os";
+    return isTaskbarModeEnabled(s3) ? "taskbar" : "vanilla";
+  };
+  const selectMode = (mode) => {
+    if (mode === effectiveMode())
+      return;
+    if (mode === "os") {
+      setSettings({ osMode: true });
+      return;
+    }
+    if (mode === "taskbar") {
+      setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true });
+      return;
+    }
+    setSettings({
+      drawerLocation: "sides",
+      osMode: false,
+      taskbarMode: false,
+      moveControlsToOuterEdge: false
+    });
+  };
+  const modes = buildTileGroup(MODE_TILE_DEFS, effectiveMode(), (v3) => selectMode(v3));
+  modes.root.setAttribute("aria-label", "Drawer chrome mode");
+  drawers.group.appendChild(modes.root);
   const drawerLocation = buildSegmentedControl([
     { value: "sides", label: "Sides" },
     { value: "top", label: "Top" },
     { value: "bottom", label: "Bottom" }
   ], getSettings().drawerLocation, (v3) => setSettings({ drawerLocation: v3 }));
-  drawerLocation.root.setAttribute("aria-label", "Drawer location");
-  drawerLocation.setDisabled(isLoadInProgress());
-  secSidebars.appendChild(buildSettingRow({
-    label: "Drawer location",
-    hint: "Tabs pinned to the top/bottom edge; panels still slide from their side. Requires Taskbar mode (turned on automatically).",
+  drawerLocation.root.setAttribute("aria-label", "Drawer layout");
+  const drawerLocationRow = appendRow(drawers.group, buildSettingRow({
+    label: "Drawer layout",
+    hint: DRAWER_LAYOUT_HINT,
     control: drawerLocation.root
   }));
+  const mainSide = buildSegmentedControl([
+    { value: "left", label: "Left" },
+    { value: "right", label: "Right" }
+  ], safeMainSide(), (v3) => {
+    mainSide.refresh(v3);
+    (async () => {
+      try {
+        const m3 = _dispatchMod ?? await Promise.resolve().then(() => (init_dispatch(), exports_dispatch));
+        _dispatchMod = m3;
+        const model = m3.getModel();
+        if (!model || model.side === v3)
+          return;
+        await m3.dispatch({ t: "swapSides" });
+      } catch (err) {
+        dwarn("[settings-panel] swap drawer side failed:", err);
+      }
+    })();
+  });
+  mainSide.root.setAttribute("aria-label", "Main drawer side");
+  const mainSideRow = appendRow(drawers.group, buildSettingRow({
+    label: "Main drawer side",
+    hint: MAIN_SIDE_HINT,
+    control: mainSide.root
+  }));
+  const drawerMode = buildSegmentedControl([
+    { value: "single", label: "Single" },
+    { value: "dual", label: "Dual" }
+  ], getSettings().secondSidebarEnabled ? "dual" : "single", (v3) => {
+    Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
+      m3.requestSecondDrawerMode(v3 === "dual");
+    }).catch((err) => {
+      dwarn("[settings-panel] second-drawer-mode import failed:", err);
+      setSettings({ secondSidebarEnabled: v3 === "dual" });
+    });
+  });
+  drawerMode.root.setAttribute("aria-label", "Drawer mode");
+  const drawerModeRow = appendRow(drawers.group, buildSettingRow({
+    label: "Drawer mode",
+    hint: DRAWER_MODE_HINT,
+    control: drawerMode.root
+  }));
+  const compact = makeToggle(() => getSettings().mirrorCompactPosition, (v3) => setSettings({ mirrorCompactPosition: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
+  const compactRow = appendRow(drawers.group, buildSettingRow({
+    label: "Mirror compact mode + vertical position",
+    hint: MIRROR_COMPACT_HINT,
+    control: compact.btn,
+    disabled: !getSettings().secondSidebarEnabled
+  }), true);
   const moveControlsToOuter = makeToggle(() => getSettings().moveControlsToOuterEdge, (v3) => setSettings({ moveControlsToOuterEdge: v3 }));
-  const moveControlsRow = buildSettingRow({
-    label: "Move tab controls to outer edge",
+  const moveControlsRow = appendRow(drawers.group, buildSettingRow({
+    label: "Move tab strip to outer edge",
     hint: MOVE_CONTROLS_HINT,
     control: moveControlsToOuter.btn
-  });
-  secSidebars.appendChild(moveControlsRow);
-  const moveControlsHint = moveControlsRow.querySelector(".sidebar-ux-panel-row-hint");
-  const taskbarMode = makeToggle(() => getSettings().taskbarMode, (v3) => setSettings({ taskbarMode: v3 }), { disabled: () => !getSettings().moveControlsToOuterEdge });
-  const taskbarModeRow = buildSettingRow({
-    label: "Taskbar mode",
-    hint: TASKBAR_HINT,
-    control: taskbarMode.btn,
-    disabled: !getSettings().moveControlsToOuterEdge
-  });
-  secSidebars.appendChild(taskbarModeRow);
-  const taskbarModeHint = taskbarModeRow.querySelector(".sidebar-ux-panel-row-hint");
-  const osMode = makeToggle(() => getSettings().osMode, (v3) => setSettings({ osMode: v3 }));
-  const osModeRow = buildSettingRow({
-    label: "OS mode",
-    hint: OS_MODE_HINT,
-    control: osMode.btn
-  });
-  secSidebars.appendChild(osModeRow);
-  const osWindowControls = makeToggle(() => getSettings().osWindowControls, (v3) => setSettings({ osWindowControls: v3 }), { disabled: () => !getSettings().osMode });
-  const osWindowControlsRow = buildSettingRow({
-    label: "Separate minimize and close controls",
-    hint: OS_WINDOW_CONTROLS_HINT,
-    control: osWindowControls.btn,
+  }));
+  const optionsLocation = buildSegmentedControl([
+    { value: "left", label: "Left drawer" },
+    { value: "right", label: "Right drawer" },
+    { value: "both", label: "Both" }
+  ], displayChromeSide(getSettings().optionsButtonLocation, safeMainSide()), (v3) => setSettings({ optionsButtonLocation: v3 }));
+  optionsLocation.root.setAttribute("aria-label", "Options button location");
+  optionsLocation.setDisabled(isLoadInProgress());
+  const optionsLocationRow = appendRow(drawers.group, buildSettingRow({
+    label: "Options button location",
+    hint: OPTIONS_LOCATION_HINT,
+    control: optionsLocation.root
+  }));
+  const startLocation = buildSegmentedControl([
+    { value: "left", label: "Left drawer" },
+    { value: "right", label: "Right drawer" },
+    { value: "both", label: "Both" }
+  ], displayChromeSide(getSettings().startButtonLocation, safeMainSide()), (v3) => setSettings({ startButtonLocation: v3 }));
+  startLocation.root.setAttribute("aria-label", "Start button location");
+  const startLocationRow = appendRow(drawers.group, buildSettingRow({
+    label: "Start button location",
+    hint: START_LOCATION_HINT,
+    control: startLocation.root,
     disabled: !getSettings().osMode
-  });
-  secSidebars.appendChild(osWindowControlsRow);
-  const osWindowControlsHint = osWindowControlsRow.querySelector(".sidebar-ux-panel-row-hint");
-  const osSecondaryStart = makeToggle(() => getSettings().osSecondaryStartMenu, (v3) => setSettings({ osSecondaryStartMenu: v3 }), { disabled: () => !getSettings().osMode || !getSettings().secondSidebarEnabled });
-  const osSecondaryStartRow = buildSettingRow({
-    label: "Start menu in the second drawer",
-    hint: OS_SECONDARY_START_HINT,
-    control: osSecondaryStart.btn,
-    disabled: !getSettings().osMode || !getSettings().secondSidebarEnabled
-  });
-  secSidebars.appendChild(osSecondaryStartRow);
-  const osSecondaryStartHint = osSecondaryStartRow.querySelector(".sidebar-ux-panel-row-hint");
-  const coreTabsHidden = makeToggle(() => getSettings().coreTabsHidden, (v3) => setSettings({ coreTabsHidden: v3 }), { disabled: () => !!getSettings().osMode });
-  const coreTabsHiddenRow = buildSettingRow({
-    label: "Core tabs can be hidden",
-    hint: CORE_TABS_HIDDEN_HINT,
-    control: coreTabsHidden.btn
-  });
-  secSidebars.appendChild(coreTabsHiddenRow);
-  const coreTabsHiddenHint = coreTabsHiddenRow.querySelector(".sidebar-ux-panel-row-hint");
+  }));
+  const startEdge = makeToggle(() => getSettings().startButtonAlwaysOnScreenEdge, (v3) => setSettings({ startButtonAlwaysOnScreenEdge: v3 }));
+  const startEdgeRow = appendRow(drawers.group, buildSettingRow({
+    label: "Start button always on screen edge",
+    hint: START_EDGE_HINT,
+    control: startEdge.btn,
+    disabled: !isHorizontalStrip()
+  }), true);
   const hideDrawerTabToggle = makeToggle(() => getSettings().hideDrawerOpenCloseButtons, (v3) => setSettings({ hideDrawerOpenCloseButtons: v3 }), { disabled: () => !getSettings().taskbarMode });
-  const hideDrawerTabToggleRow = buildSettingRow({
+  const hideDrawerTabToggleRow = appendRow(drawers.group, buildSettingRow({
     label: "Hide drawer open/close buttons",
     hint: HIDE_BUTTONS_HINT,
     control: hideDrawerTabToggle.btn,
     disabled: !getSettings().taskbarMode
-  });
-  secSidebars.appendChild(hideDrawerTabToggleRow);
-  const hideDrawerTabHint = hideDrawerTabToggleRow.querySelector(".sidebar-ux-panel-row-hint");
-  const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }));
-  const dragAndDropDrawerTabsRow = buildSettingRow({
-    label: "Drag and drop drawer tabs",
-    hint: "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.",
-    control: dragAndDropDrawerTabs.btn
-  });
-  secSidebars.appendChild(dragAndDropDrawerTabsRow);
-  const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }));
-  secSidebars.appendChild(buildSettingRow({
-    label: "Drag to resize drawers",
-    hint: "Adds a 4px grab handle on the inner edge of both drawers.",
-    control: resizeSidebars.btn
+  }));
+  const osWindowControls = makeToggle(() => getSettings().osWindowControls, (v3) => setSettings({ osWindowControls: v3 }), { disabled: () => !getSettings().osMode });
+  const osWindowControlsRow = appendRow(drawers.group, buildSettingRow({
+    label: "Separate minimize and close controls",
+    hint: OS_WINDOW_CONTROLS_HINT,
+    control: osWindowControls.btn,
+    disabled: !getSettings().osMode
+  }));
+  const coreTabsHidden = makeToggle(() => getSettings().coreTabsHidden, (v3) => setSettings({ coreTabsHidden: v3 }), { disabled: () => !!getSettings().osMode });
+  const coreTabsHiddenRow = appendRow(drawers.group, buildSettingRow({
+    label: "Core tabs can be hidden",
+    hint: CORE_TABS_HIDDEN_HINT,
+    control: coreTabsHidden.btn
   }));
   const shadowsDesktop = makeToggle(() => getSettings().drawerShadowsDesktop, (v3) => setSettings({ drawerShadowsDesktop: v3 }));
-  secSidebars.appendChild(buildSettingRow({
+  appendRow(drawers.group, buildSettingRow({
     label: "Drawer shadows (desktop)",
-    hint: "Show box-shadow on drawers when the viewport is wider than 600px.",
+    hint: SHADOWS_DESKTOP_HINT,
     control: shadowsDesktop.btn
   }));
   const shadowsMobile = makeToggle(() => getSettings().drawerShadowsMobile, (v3) => setSettings({ drawerShadowsMobile: v3 }));
-  secSidebars.appendChild(buildSettingRow({
+  appendRow(drawers.group, buildSettingRow({
     label: "Drawer shadows (mobile)",
-    hint: "Show box-shadow on drawers when the viewport is 600px or narrower.",
+    hint: SHADOWS_MOBILE_HINT,
     control: shadowsMobile.btn
   }));
-  const sec2 = section("Second drawer");
-  const master = makeToggle(() => getSettings().secondSidebarEnabled, (v3) => {
-    Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
-      m3.requestSecondDrawerMode(v3);
-    }).catch((err) => {
-      dwarn("[settings-panel] second-drawer-mode import failed:", err);
-      setSettings({ secondSidebarEnabled: v3 });
-    });
-  });
-  const masterRow = buildSettingRow({
-    label: "Enable second drawer",
-    hint: SECOND_DRAWER_HINT,
-    control: master.btn
-  });
-  sec2.appendChild(masterRow);
-  const masterHint = masterRow.querySelector(".sidebar-ux-panel-row-hint");
-  const compact = makeToggle(() => getSettings().mirrorCompactPosition, (v3) => setSettings({ mirrorCompactPosition: v3 }), { disabled: () => !getSettings().secondSidebarEnabled });
-  sec2.appendChild(buildSettingRow({
-    label: "Mirror compact mode + vertical position",
-    hint: "Matches the main drawer's compact/vertical tab position on the secondary drawer.",
-    control: compact.btn,
-    disabled: !getSettings().secondSidebarEnabled
+  root.appendChild(drawers.sec);
+  const layout = section("Layout");
+  const chat = makeToggle(() => getSettings().chatReflow, (v3) => setSettings({ chatReflow: v3 }));
+  appendRow(layout.group, buildSettingRow({
+    label: "Center the chat in the visible area",
+    hint: CHAT_REFLOW_HINT,
+    control: chat.btn
   }));
-  const sec4 = section("Debug");
+  const welcome = makeToggle(() => getSettings().welcomeReflow, (v3) => setSettings({ welcomeReflow: v3 }));
+  appendRow(layout.group, buildSettingRow({
+    label: "Center the landing page in the visible area",
+    hint: WELCOME_REFLOW_HINT,
+    control: welcome.btn
+  }));
+  const dragAndDropDrawerTabs = makeToggle(() => getSettings().dragAndDropDrawerTabs, (v3) => setSettings({ dragAndDropDrawerTabs: v3 }));
+  appendRow(layout.group, buildSettingRow({
+    label: "Drag and drop tabs",
+    hint: DRAG_DROP_HINT,
+    control: dragAndDropDrawerTabs.btn
+  }));
+  const resizeSidebars = makeToggle(() => getSettings().resizeSidebars, (v3) => setSettings({ resizeSidebars: v3 }));
+  appendRow(layout.group, buildSettingRow({
+    label: "Drag to resize panels",
+    hint: RESIZE_PANELS_HINT,
+    control: resizeSidebars.btn
+  }));
+  root.appendChild(layout.sec);
+  const persistence = section("Persistence");
+  const persistOpen = makeToggle(() => getSettings().persistDrawerOpenState, (v3) => setSettings({ persistDrawerOpenState: v3 }));
+  appendRow(persistence.group, buildSettingRow({
+    label: "Remember drawer open/close state",
+    hint: PERSIST_OPEN_HINT,
+    control: persistOpen.btn
+  }));
+  const persistWidth = makeToggle(() => getSettings().persistDrawerWidth, (v3) => setSettings({ persistDrawerWidth: v3 }));
+  appendRow(persistence.group, buildSettingRow({
+    label: "Remember drag-to-resize",
+    hint: PERSIST_WIDTH_HINT,
+    control: persistWidth.btn
+  }));
+  root.appendChild(persistence.sec);
+  const misc = section("Misc");
+  const slash = makeToggle(() => getSettings().slashCommandsEnabled, (v3) => setSettings({ slashCommandsEnabled: v3 }));
+  appendRow(misc.group, buildSettingRow({
+    label: "Enable slash commands",
+    hint: SLASH_HINT,
+    control: slash.btn
+  }));
   const debugMode = makeToggle(() => getSettings().debugMode, (v3) => setSettings({ debugMode: v3 }));
-  sec4.appendChild(buildSettingRow({
+  appendRow(misc.group, buildSettingRow({
     label: "Debug mode",
-    hint: "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.",
+    hint: DEBUG_HINT,
     control: debugMode.btn
   }));
-  root.appendChild(sec1);
-  root.appendChild(secLayout);
-  root.appendChild(secSidebars);
-  root.appendChild(sec2);
-  root.appendChild(sec4);
+  root.appendChild(misc.sec);
   const refresh = () => {
-    master.refresh();
+    compact.refresh();
     moveControlsToOuter.refresh();
-    taskbarMode.refresh();
-    osMode.refresh();
     osWindowControls.refresh();
-    osSecondaryStart.refresh();
     coreTabsHidden.refresh();
     hideDrawerTabToggle.refresh();
     dragAndDropDrawerTabs.refresh();
     resizeSidebars.refresh();
-    compact.refresh();
     chat.refresh();
     welcome.refresh();
     persistOpen.refresh();
@@ -22498,55 +23418,69 @@ function buildSettingsPanelDOM() {
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
-    drawerLocation.refresh(getSettings().drawerLocation);
+    startEdge.refresh();
+    const s3 = getSettings();
+    modes.refresh(effectiveMode());
+    modes.setDisabled(isLoadInProgress());
+    drawerLocation.refresh(s3.drawerLocation);
     drawerLocation.setDisabled(isLoadInProgress());
+    drawerLocationRow.setDisabled(isLoadInProgress());
+    const override = safeMainSideOverride();
+    mainSide.refresh(override ?? safeMainSide());
+    const sideLocked = isLoadInProgress() || !isStoreReady() || !isModelReady() || override !== null;
+    mainSide.setDisabled(sideLocked);
+    mainSideRow.setDisabled(sideLocked);
+    mainSideRow.setHint(override !== null ? MAIN_SIDE_SWAP_HINT : MAIN_SIDE_HINT);
+    drawerMode.refresh(s3.secondSidebarEnabled ? "dual" : "single");
+    const osMobile = !!s3.osMode && _isMobileViewportForPanel();
+    drawerMode.setDisabled(osMobile);
+    drawerModeRow.setDisabled(osMobile);
+    drawerModeRow.setHint(osMobile ? DRAWER_MODE_OS_MOBILE_HINT : DRAWER_MODE_HINT);
+    {
+      const d3 = !s3.secondSidebarEnabled;
+      compact.btn.disabled = d3;
+      compact.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      compactRow.setDisabled(d3);
+    }
     const horizontal = isHorizontalStrip();
     {
-      const os = getSettings().osMode;
+      const os = s3.osMode;
       const d3 = horizontal || os;
       moveControlsToOuter.btn.disabled = d3;
       moveControlsToOuter.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      moveControlsRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-      if (moveControlsHint) {
-        moveControlsHint.textContent = horizontal ? LOCATION_LOCK_HINT : os ? OS_MODE_TASKBAR_LOCK_HINT : MOVE_CONTROLS_HINT;
-      }
+      moveControlsRow.setDisabled(d3);
+      moveControlsRow.setHint(horizontal ? LOCATION_LOCK_HINT : os ? OS_MODE_TASKBAR_LOCK_HINT : MOVE_CONTROLS_HINT);
+    }
+    optionsLocation.refresh(displayChromeSide(s3.optionsButtonLocation, safeMainSide()));
+    optionsLocation.setDisabled(isLoadInProgress());
+    optionsLocationRow.setDisabled(isLoadInProgress());
+    {
+      const d3 = !s3.osMode;
+      startLocation.refresh(displayChromeSide(s3.startButtonLocation, safeMainSide()));
+      startLocation.setDisabled(d3 || isLoadInProgress());
+      startLocationRow.setDisabled(d3);
+      startLocationRow.setHint(d3 ? START_LOCATION_LOCK_HINT : START_LOCATION_HINT);
     }
     {
-      const os = getSettings().osMode;
-      const d3 = horizontal || os || !getSettings().moveControlsToOuterEdge;
-      taskbarMode.btn.disabled = d3;
-      taskbarMode.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      taskbarModeRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-      if (taskbarModeHint) {
-        taskbarModeHint.textContent = horizontal ? LOCATION_LOCK_HINT : os ? OS_MODE_TASKBAR_LOCK_HINT : TASKBAR_HINT;
-      }
+      const d3 = !horizontal;
+      startEdge.btn.disabled = d3;
+      startEdge.btn.style.cursor = d3 ? "not-allowed" : "pointer";
+      startEdgeRow.setDisabled(d3);
+      startEdgeRow.setHint(d3 ? START_EDGE_INERT_HINT : START_EDGE_HINT);
     }
     {
-      const os = !!getSettings().osMode;
+      const os = !!s3.osMode;
       coreTabsHidden.btn.disabled = os;
       coreTabsHidden.btn.style.cursor = os ? "not-allowed" : "pointer";
-      coreTabsHiddenRow.classList.toggle("sidebar-ux-panel-row-disabled", os);
-      if (coreTabsHiddenHint) {
-        coreTabsHiddenHint.textContent = os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT;
-      }
+      coreTabsHiddenRow.setDisabled(os);
+      coreTabsHiddenRow.setHint(os ? CORE_TABS_HIDDEN_OS_LOCK_HINT : CORE_TABS_HIDDEN_HINT);
     }
     {
-      const d3 = !getSettings().osMode || !getSettings().secondSidebarEnabled;
-      osSecondaryStart.btn.disabled = d3;
-      osSecondaryStart.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      osSecondaryStartRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-      if (osSecondaryStartHint) {
-        osSecondaryStartHint.textContent = d3 ? OS_SECONDARY_START_LOCK_HINT : OS_SECONDARY_START_HINT;
-      }
-    }
-    {
-      const d3 = !getSettings().osMode;
+      const d3 = !s3.osMode;
       osWindowControls.btn.disabled = d3;
       osWindowControls.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      osWindowControlsRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-      if (osWindowControlsHint) {
-        osWindowControlsHint.textContent = d3 ? OS_WINDOW_CONTROLS_LOCK_HINT : OS_WINDOW_CONTROLS_HINT;
-      }
+      osWindowControlsRow.setDisabled(d3);
+      osWindowControlsRow.setHint(d3 ? OS_WINDOW_CONTROLS_LOCK_HINT : OS_WINDOW_CONTROLS_HINT);
     }
     {
       if (horizontal) {
@@ -22554,31 +23488,14 @@ function buildSettingsPanelDOM() {
         hideDrawerTabToggle.btn.style.cursor = "not-allowed";
         hideDrawerTabToggle.btn.classList.add("sidebar-ux-panel-toggle-on");
         hideDrawerTabToggle.btn.setAttribute("aria-checked", "true");
-        hideDrawerTabToggleRow.classList.add("sidebar-ux-panel-row-disabled");
-        if (hideDrawerTabHint)
-          hideDrawerTabHint.textContent = HIDE_BUTTONS_INERT_HINT;
+        hideDrawerTabToggleRow.setDisabled(true);
+        hideDrawerTabToggleRow.setHint(HIDE_BUTTONS_INERT_HINT);
       } else {
-        const d3 = !getSettings().taskbarMode;
+        const d3 = !s3.taskbarMode;
         hideDrawerTabToggle.btn.disabled = d3;
         hideDrawerTabToggle.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-        hideDrawerTabToggleRow.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-        if (hideDrawerTabHint)
-          hideDrawerTabHint.textContent = HIDE_BUTTONS_HINT;
-      }
-    }
-    for (const row of [compact]) {
-      const d3 = !getSettings().secondSidebarEnabled;
-      row.btn.disabled = d3;
-      row.btn.style.cursor = d3 ? "not-allowed" : "pointer";
-      row.btn.parentElement?.classList.toggle("sidebar-ux-panel-row-disabled", d3);
-    }
-    {
-      const osMobile = !!getSettings().osMode && _isMobileViewportForPanel();
-      master.btn.disabled = osMobile;
-      master.btn.style.cursor = osMobile ? "not-allowed" : "pointer";
-      masterRow.classList.toggle("sidebar-ux-panel-row-disabled", osMobile);
-      if (masterHint) {
-        masterHint.textContent = osMobile ? SECOND_DRAWER_OS_MOBILE_HINT : SECOND_DRAWER_HINT;
+        hideDrawerTabToggleRow.setDisabled(d3);
+        hideDrawerTabToggleRow.setHint(HIDE_BUTTONS_HINT);
       }
     }
   };
@@ -22594,10 +23511,13 @@ function mountSettingsPanel(ctx) {
     const host = ctx.ui.mount("settings_extensions");
     if (!host)
       return;
+    disposeHelpLayer();
     host.replaceChildren();
     const { root, refresh } = buildSettingsPanelDOM();
     host.appendChild(root);
     setPanelRefresh(refresh);
+    refresh();
+    Promise.resolve().then(() => (init_cleanup(), exports_cleanup)).then((m3) => m3.registerCleanup(disposeHelpLayer)).catch(() => {});
     dlog('Settings panel mounted into data-spindle-mount="settings_extensions"');
   } catch (err) {
     dwarn("mountSettingsPanel failed:", err);
@@ -22614,12 +23534,40 @@ function applySettings(prev, next) {
     feature.apply(prev, next, _settingsPanelCtx);
   }
 }
-var MOVE_CONTROLS_HINT = 'Moves the list of tab buttons to be along the edge of the screen instead of the edge of the chat area. Required for "Taskbar mode".', TASKBAR_HINT = 'Pins tab buttons to the screen edge when a drawer is closed so you can switch tabs without opening it. Requires "Move tab controls to outer edge". Desktop only.', HIDE_BUTTONS_HINT = 'Hides the small button that open/closes the drawer. Requires "Taskbar mode".', HIDE_BUTTONS_INERT_HINT = "Handles are hidden while tabs are pinned to the top/bottom edge.", LOCATION_LOCK_HINT = "Required by Drawer location: Top/Bottom. Switch to Sides to change.", OS_MODE_HINT = "Operating-system-style windows: minimize or close panels, launch windows from a per-drawer Start menu, and keep separate OS layouts per drawer mode. Enabling OS mode turns on taskbar mode; on mobile it uses single-drawer mode.", OS_MODE_TASKBAR_LOCK_HINT = "Required by OS mode. Disable OS mode to change taskbar settings.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", OS_SECONDARY_START_HINT = "OS mode only: shows the Start button in the second drawer's strip. Off by default — the main drawer's Start menu still lists every window, so nothing becomes unreachable.", OS_SECONDARY_START_LOCK_HINT = "Requires OS mode and the second drawer. Turn both on to use it.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", SECOND_DRAWER_HINT = "Adds a second drawer to the opposite side of the main one. Master switch for all sub-features below.", SECOND_DRAWER_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", _settingsPanelCtx = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles";
+var DRAWER_LAYOUT_HINT = "Where the tab strips live. Top/Bottom pins a full-width strip to that viewport edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which screen edge the main drawer sits on. Mirrors Lumiverse → Display → Drawer side, and also changes with Configure Tabs → Swap drawer locations.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single = one drawer (the main one). Dual = a second drawer on the opposite side. Each mode keeps its own saved layout.", DRAWER_MODE_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the main drawer's compact mode and vertical tab position on the second drawer.", MOVE_CONTROLS_HINT = "Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on (window chrome needs the pinned strips). Disable OS mode to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear. Left/Right are screen sides; if that side has no drawer open, the gear stays on the main drawer.", START_LOCATION_HINT = "OS mode only: which drawer shows the Start button. The Start menu always lists every window from both drawers.", START_LOCATION_LOCK_HINT = "Requires OS mode. Turn it on to choose where Start appears.", START_EDGE_HINT = "Top/Bottom only: pins Start to the outer (screen-edge) end of the tab strip. Off places it next to the tabs.", START_EDGE_INERT_HINT = "Only applies when Drawer layout is Top or Bottom.", HIDE_BUTTONS_HINT = "Hides the small handle that opens/closes the drawer. Requires Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Handles are always hidden while tabs are pinned to the top/bottom edge.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SHADOWS_DESKTOP_HINT = "Show box-shadow on drawers when the viewport is wider than 600px.", SHADOWS_MOBILE_HINT = "Show box-shadow on drawers when the viewport is 600px or narrower.", CHAT_REFLOW_HINT = "Shifts the chat column by the open-drawer widths so neither drawer covers it.", WELCOME_REFLOW_HINT = "Shifts the landing page by the open-drawer widths so neither drawer covers it.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu.", PERSIST_OPEN_HINT = "Persist drawer open/closed state (and active tab) across sessions.", PERSIST_WIDTH_HINT = "Persist drawer widths across sessions.", DRAG_DROP_HINT = "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.", RESIZE_PANELS_HINT = "Adds a 4px grab handle on the inner edge of both drawers.", DEBUG_HINT = "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
   init_registry();
   init_layout_load();
+  Promise.resolve().then(() => (init_store(), exports_store)).then((m3) => {
+    _storeMod = m3;
+    refreshSettingsPanel();
+  }).catch(() => {});
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m3) => {
+    _dispatchMod = m3;
+    refreshSettingsPanel();
+  }).catch(() => {});
+  MODE_TILE_DEFS = [
+    {
+      value: "vanilla",
+      label: "Vanilla mode",
+      caption: "Stock Lumiverse drawers",
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="16" rx="2"/><rect x="14" y="4" width="7" height="16" rx="2"/></svg>'
+    },
+    {
+      value: "taskbar",
+      label: "Taskbar mode",
+      caption: "Strips pinned to the edge",
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M7 6.5h.01"/></svg>'
+    },
+    {
+      value: "os",
+      label: "OS mode",
+      caption: "Windows + Start menu",
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18"/><path d="M6 6h.01"/><path d="M9 6h.01"/><path d="M9 16h6"/></svg>'
+    }
+  ];
 });
 
 // src/frontend.ts
