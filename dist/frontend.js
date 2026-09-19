@@ -1386,12 +1386,14 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: 1 !important;
 }
-/* Inner variant: Start on the TAB-FACING side of its dock. Left side: default
-   order keeps it after the gear. Right side: order:-1 — the dock DOM is
-   [gear, start], so plain order:0 would leave Start outermost. */
+/* Inner variant: Start on the TAB-FACING side of its dock. Left side:
+   order:1 puts Start AFTER the gear regardless of DOM order — the secondary
+   dock appends its gear, so its DOM can be [start, gear], where an order tie
+   at 0 left Start outermost (M3 2026-09-19). Right side: order:-1 — Start
+   before the gear (tab-facing on a right-attached strip). */
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
-  order: 0 !important;
+  order: 1 !important;
 }
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
@@ -1528,6 +1530,32 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-rig
   margin-left: 4px !important;
   padding-left: 4px !important;
   border-left: 1px solid var(--lumiverse-primary-020) !important;
+}
+
+/* Inner variant + no VISIBLE Settings gear: a lone Start has no sibling to
+   reorder within the outer-anchored dock, so the setting would be a silent
+   no-op. Move the DOCK across the tabs (divider/margins mirrored) so Start
+   lands on the tab-facing side. :has counts only a displayed gear — a gear
+   hidden by the location setting must not suppress the flip (M2 2026-09-19). */
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))),
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))) {
+  order: 1 !important;
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  border-right: none !important;
+  margin-left: 4px !important;
+  padding-left: 4px !important;
+  border-left: 1px solid var(--lumiverse-primary-020) !important;
+}
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))),
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))) {
+  order: -1 !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: none !important;
+  margin-right: 4px !important;
+  padding-right: 4px !important;
+  border-right: 1px solid var(--lumiverse-primary-020) !important;
 }
 
 /* Active indicator on the panel-facing side: top-edge strip -> bottom inset,
@@ -5798,661 +5826,6 @@ var init_actions = __esm(() => {
   init_log();
 });
 
-// src/sidebar/main-renderer.ts
-function directChildByClass(parent, className) {
-  for (const child of Array.from(parent.children)) {
-    const el = child;
-    if (el.classList?.contains?.(className) || String(el.className || "").includes(className)) {
-      return el;
-    }
-  }
-  return null;
-}
-function ensureMirrorListStructure(list) {
-  let main = directChildByClass(list, MAIN_MIRROR_LIST_MAIN_CLASS);
-  let bottom = directChildByClass(list, MAIN_MIRROR_LIST_BOTTOM_CLASS);
-  if (!main) {
-    main = document.createElement("div");
-    main.className = MAIN_MIRROR_LIST_MAIN_CLASS;
-    list.insertBefore(main, list.firstChild);
-  }
-  if (!bottom) {
-    bottom = document.createElement("div");
-    bottom.className = MAIN_MIRROR_LIST_BOTTOM_CLASS;
-    list.appendChild(bottom);
-  }
-  for (const child of Array.from(list.children)) {
-    if (child !== main && child !== bottom && child.classList?.contains(MAIN_MIRROR_BTN_CLASS)) {
-      main.appendChild(child);
-    }
-  }
-  if (list.firstChild !== main)
-    list.insertBefore(main, list.firstChild);
-  if (main.nextSibling !== bottom)
-    list.appendChild(bottom);
-  if (list.style.overflowY !== "hidden")
-    list.style.overflowY = "hidden";
-  if (list.style.minHeight !== "0")
-    list.style.minHeight = "0";
-  if (main.style.flex !== "1 1 auto")
-    main.style.flex = "1 1 auto";
-  if (main.style.minHeight !== "0")
-    main.style.minHeight = "0";
-  if (main.style.display !== "flex")
-    main.style.display = "flex";
-  if (main.style.flexDirection !== "column")
-    main.style.flexDirection = "column";
-  if (main.style.gap !== "2px")
-    main.style.gap = "2px";
-  if (main.style.overflowY !== "auto")
-    main.style.overflowY = "auto";
-  if (main.style.overflowX !== "hidden")
-    main.style.overflowX = "hidden";
-  if (main.style.scrollbarWidth !== "none")
-    main.style.scrollbarWidth = "none";
-  if (bottom.style.flexShrink !== "0")
-    bottom.style.flexShrink = "0";
-  if (bottom.style.flexDirection !== "column")
-    bottom.style.flexDirection = "column";
-  if (bottom.style.gap !== "2px")
-    bottom.style.gap = "2px";
-  if (bottom.style.marginTop !== "auto")
-    bottom.style.marginTop = "auto";
-  if (bottom.style.paddingTop !== "8px")
-    bottom.style.paddingTop = "8px";
-  if (bottom.style.borderTop !== "1px solid var(--lumiverse-primary-020)") {
-    bottom.style.borderTop = "1px solid var(--lumiverse-primary-020)";
-  }
-  return { main, bottom };
-}
-function keyTitle(key) {
-  const builtin = parseBuiltinKey(key);
-  if (builtin)
-    return builtin;
-  const ext = parseExtensionKey(key);
-  if (ext)
-    return ext.tabName;
-  return null;
-}
-function twinForKey(key) {
-  const host = getHost();
-  const liveId = host ? host.resolve(key) : null;
-  if (liveId) {
-    const btn = findMainTabButton(liveId);
-    if (btn)
-      return { liveId, btn };
-  }
-  const title = keyTitle(key);
-  if (title) {
-    const btn = findMainTabButton(title);
-    return { liveId, btn };
-  }
-  return { liveId, btn: null };
-}
-function twinForMirror(mirror) {
-  const liveId = mirror.getAttribute("data-tab-id");
-  if (liveId) {
-    const btn = findMainTabButton(liveId);
-    if (btn)
-      return { liveId, btn };
-  }
-  const key = mirror.getAttribute("data-mirror-key");
-  if (key && !key.startsWith("__")) {
-    return twinForKey(key);
-  }
-  if (key === SETTINGS_MIRROR_KEY) {
-    const btn = findSettingsTwin();
-    return { liveId: btn?.getAttribute("data-tab-id") ?? null, btn };
-  }
-  return { liveId: liveId ?? null, btn: null };
-}
-function resolveMirrorLabeled(twin, isSettings) {
-  if (isSettings)
-    return false;
-  return isShowTabLabels();
-}
-function applyMirrorButtonChrome(btn, labeled) {
-  const height = labeled ? "56px" : "48px";
-  if (btn.style.height === height && btn.style.gap === "1px") {
-    btn.style.background = "";
-    btn.style.boxShadow = "";
-    btn.style.color = "";
-    btn.style.borderRadius = "";
-    return;
-  }
-  btn.style.width = "100%";
-  btn.style.height = height;
-  btn.style.flexShrink = "0";
-  btn.style.display = "flex";
-  btn.style.flexDirection = "column";
-  btn.style.alignItems = "center";
-  btn.style.justifyContent = "center";
-  btn.style.gap = "1px";
-  btn.style.border = "none";
-  btn.style.cursor = "pointer";
-  btn.style.transition = "all 0.2s ease";
-  btn.style.padding = "0";
-  btn.style.boxSizing = "border-box";
-  btn.style.background = "";
-  btn.style.boxShadow = "";
-  btn.style.color = "";
-  btn.style.borderRadius = "";
-}
-function buildMirrorInnerHtml(twin, labeled, isSettings, fallbackTitle) {
-  const parts = [];
-  const svg = twin?.querySelector("svg") ?? null;
-  if (svg) {
-    parts.push(`<span>${svg.outerHTML}</span>`);
-  }
-  if (labeled && !isSettings) {
-    const hostLabel = twin?.querySelector('span[class*="tabLabel"]');
-    const fromHost = hostLabel ? (hostLabel.textContent || "").trim() : "";
-    const text = fromHost || (fallbackTitle ? deriveShortName(fallbackTitle) : "");
-    if (text) {
-      parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
-    }
-  }
-  const badge = twin?.querySelector('span[class*="tabBadge"]');
-  if (badge) {
-    parts.push(badge.outerHTML);
-  }
-  return parts.join("");
-}
-function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function cssAttrEscape(value) {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/(["\\])/g, "\\$1");
-}
-function findSettingsTwin() {
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return null;
-  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
-  for (const btn of buttons) {
-    if (isSettingsButton(btn))
-      return btn;
-  }
-  return null;
-}
-function ensureMirrorButton(container, listRoot, mirrorKey, insertBefore) {
-  let mirror = listRoot.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(mirrorKey)}"]`);
-  if (!mirror) {
-    mirror = document.createElement("button");
-    mirror.type = "button";
-    mirror.classList.add(MAIN_MIRROR_BTN_CLASS);
-    mirror.setAttribute("data-mirror-key", mirrorKey);
-    mirror.addEventListener("click", onMirrorClick);
-    mirror.addEventListener("contextmenu", onMirrorContextMenu);
-    container.insertBefore(mirror, insertBefore);
-  } else if (mirror.parentElement !== container || mirror !== insertBefore) {
-    container.insertBefore(mirror, insertBefore);
-  }
-  return mirror;
-}
-function renderMainMirrorTabs() {
-  const list = getMainMirrorTabList();
-  if (!list)
-    return;
-  if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
-    list.classList.add(MAIN_MIRROR_LIST_CLASS);
-  }
-  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list);
-  const model = getModel();
-  if (!model) {
-    return;
-  }
-  const open = isCanvasMainOpen();
-  const activeKey = model.active.primary;
-  const regularKeys = model.primary;
-  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
-  const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
-  let insertBefore = mainSection.firstChild;
-  for (const key of regularKeys) {
-    const twin = twinForKey(key);
-    const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
-    insertBefore = mirror.nextSibling;
-    if (twin.liveId)
-      mirror.setAttribute("data-tab-id", twin.liveId);
-    else
-      mirror.removeAttribute("data-tab-id");
-    const fallbackTitle = keyTitle(key) ?? twin.btn?.getAttribute("title") ?? "";
-    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || fallbackTitle;
-    if (title) {
-      mirror.setAttribute("title", title);
-      mirror.setAttribute("aria-label", title);
-    }
-    const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey;
-    mirror.style.display = hidden ? "none" : "";
-    const showActive = open && activeKey === key && !hidden;
-    mirror.classList.toggle("sidebar-ux-tab-active", showActive);
-    const labeled = resolveMirrorLabeled(twin.btn, false);
-    mirror.classList.toggle("sidebar-ux-tab-labeled", labeled);
-    const nextHtml = buildMirrorInnerHtml(twin.btn, labeled, false, title);
-    if (mirror.getAttribute("data-mirror-html") !== nextHtml) {
-      mirror.setAttribute("data-mirror-html", nextHtml);
-      mirror.innerHTML = nextHtml;
-    }
-    applyMirrorButtonChrome(mirror, labeled);
-  }
-  const wantedKeys = new Set(regularKeys);
-  for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
-    const key = btn.getAttribute("data-mirror-key") || "";
-    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
-      btn.remove();
-    }
-  }
-  for (const child of Array.from(mainSection.children)) {
-    const el = child;
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
-      mainSection.removeChild(el);
-    }
-  }
-  const settingsTwin = findSettingsTwin();
-  if (settingsTwin) {
-    bottomSection.style.display = "flex";
-    const settingsMirror = ensureMirrorButton(bottomSection, list, SETTINGS_MIRROR_KEY, bottomSection.firstChild);
-    const title = settingsTwin.getAttribute("title") || settingsTwin.getAttribute("aria-label") || "Settings";
-    const settingsTwinId = settingsTwin.getAttribute("data-tab-id") || "";
-    if (settingsTwinId)
-      settingsMirror.setAttribute("data-tab-id", settingsTwinId);
-    else
-      settingsMirror.removeAttribute("data-tab-id");
-    settingsMirror.setAttribute("title", title);
-    settingsMirror.setAttribute("aria-label", title);
-    settingsMirror.classList.remove("sidebar-ux-tab-active");
-    settingsMirror.classList.remove("sidebar-ux-tab-labeled");
-    const settingsHtml = buildMirrorInnerHtml(settingsTwin, false, true, title);
-    if (settingsMirror.getAttribute("data-mirror-html") !== settingsHtml) {
-      settingsMirror.setAttribute("data-mirror-html", settingsHtml);
-      settingsMirror.innerHTML = settingsHtml;
-    }
-    applyMirrorButtonChrome(settingsMirror, false);
-  } else {
-    bottomSection.style.display = "none";
-    while (bottomSection.firstChild)
-      bottomSection.removeChild(bottomSection.firstChild);
-  }
-  if (open && activeKey !== null && visibleKeys(model, "primary").length > 0) {
-    const twin = twinForKey(activeKey);
-    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || keyTitle(activeKey) || "";
-    if (title)
-      setCanvasMainTitle(title);
-  }
-  dlog("[main-renderer] render tabs", {
-    order: Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`)).map((b) => b.getAttribute("data-mirror-key") || "?"),
-    activeKey,
-    open,
-    hidden: model.hidden.length
-  });
-}
-function _isMobileRenderer() {
-  if (typeof window === "undefined" || !window.matchMedia)
-    return false;
-  return window.matchMedia("(max-width: 600px)").matches;
-}
-function onMirrorClick(ev) {
-  ev.preventDefault();
-  ev.stopPropagation();
-  const mirror = ev.currentTarget;
-  const key = mirror.getAttribute("data-mirror-key") || "";
-  const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || undefined;
-  const twin = twinForMirror(mirror);
-  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror) || twin.btn != null && isSettingsButton(twin.btn);
-  if (isSettings) {
-    dlog("[main-renderer] click → settings (host only, no canvas tab)", { key });
-    let target = twin.btn && twin.btn.isConnected ? twin.btn : null;
-    if (!target) {
-      renderMainMirrorTabs();
-      target = twinForMirror(mirror).btn;
-    }
-    if (target && target.isConnected) {
-      try {
-        target.click();
-      } catch {}
-    }
-    return;
-  }
-  if (isOsModeEnabled() && key && !key.startsWith("__")) {
-    const osLiveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
-    if (osLiveId) {
-      dlog("[main-renderer] click → OS window toggle", { title, key });
-      toggleWindowByLiveId(osLiveId, "primary").catch(() => {});
-      return;
-    }
-  }
-  const model = getModel();
-  const activeTabClose = !_isMobileRenderer() || isTaskbarModeEnabled();
-  if (isCanvasMainOpen() && activeTabClose && model != null && model.active.primary === key) {
-    dlog("[main-renderer] click → close (active tab)", { title, key });
-    closeCanvasMainDrawer();
-    return;
-  }
-  if (twin.btn && twin.btn.isConnected) {
-    try {
-      twin.btn.click();
-    } catch {}
-  }
-  const liveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
-  if (liveId) {
-    dispatchActivateByLiveId(liveId, "primary").catch(() => {});
-  } else if (key && !key.startsWith("__")) {
-    dispatch({ t: "activate", key, side: "primary" }).catch(() => {});
-  }
-  onMainMirrorTabActivated(title);
-}
-function onMirrorContextMenu(ev) {
-  const e = ev;
-  e.preventDefault();
-  e.stopPropagation();
-  const mirror = e.currentTarget;
-  const key = mirror.getAttribute("data-mirror-key") || "";
-  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror);
-  if (isSettings) {
-    dlog("[main-renderer] contextmenu → settings (no host forward)");
-    return;
-  }
-  let twin = twinForMirror(mirror);
-  if ((!twin.btn || !twin.btn.isConnected) && !key.startsWith("__")) {
-    renderMainMirrorTabs();
-    twin = twinForMirror(mirror);
-  }
-  if (!twin.btn || !twin.btn.isConnected) {
-    dwarn("[main-renderer] contextmenu: no connected host twin", {
-      title: mirror.getAttribute("title")
-    });
-    return;
-  }
-  dlog("[main-renderer] contextmenu → host forward", {
-    title: twin.btn.getAttribute("title") || mirror.getAttribute("title"),
-    x: e.clientX,
-    y: e.clientY
-  });
-  try {
-    twin.btn.dispatchEvent(new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: e.clientX,
-      clientY: e.clientY,
-      button: 2,
-      buttons: 2
-    }));
-  } catch (err) {
-    dwarn("[main-renderer] contextmenu: host dispatch failed", err);
-  }
-}
-function scheduleMainMirrorRender() {
-  if (_renderRaf !== null)
-    return;
-  if (typeof requestAnimationFrame !== "function") {
-    renderMainMirrorTabs();
-    return;
-  }
-  _renderRaf = requestAnimationFrame(() => {
-    _renderRaf = null;
-    try {
-      renderMainMirrorTabs();
-    } catch {}
-  });
-}
-function initMainRenderer() {
-  if (!_unsubModelChanged) {
-    _unsubModelChanged = onModelChanged(() => scheduleMainMirrorRender());
-  }
-  renderMainMirrorTabs();
-}
-function teardownMainRenderer() {
-  if (_unsubModelChanged) {
-    _unsubModelChanged();
-    _unsubModelChanged = null;
-  }
-  if (_renderRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_renderRaf);
-  }
-  _renderRaf = null;
-}
-var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged = null, _renderRaf = null;
-var init_main_renderer = __esm(() => {
-  init_dispatch();
-  init_state();
-  init_actions();
-  init_drawer_sync();
-  init_main_mirror_drawer();
-  init_buttons();
-  init_log();
-});
-
-// src/sidebar/main-tab-pin.ts
-var exports_main_tab_pin = {};
-__export(exports_main_tab_pin, {
-  __resetMainTabPinForTest: () => __resetMainTabPinForTest,
-  activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
-  applyMainTabListPin: () => applyMainTabListPin,
-  isMainTabListPinActive: () => isMainTabListPinActive,
-  reconcileMainTabListPin: () => reconcileMainTabListPin,
-  teardownMainPin: () => teardownMainPin
-});
-function commitState(updater) {
-  Object.assign(_state2, updater(_state2));
-}
-function applyMainTabListPin(enabled, opts) {
-  if (isMobileViewport() && !isHorizontalStrip()) {
-    applyMainMirrorDrawer(true, { force: false });
-    initMainRenderer();
-    if (_state2.enabled) {
-      commitState(() => ({ enabled: false }));
-      unpinMainMirrorForChromeOff();
-    }
-    reconcileMainMirror();
-    return;
-  }
-  if (enabled) {
-    applyMainMirrorDrawer(true, { force: !!opts?.force });
-  } else {
-    applyMainMirrorDrawer(true, { force: false });
-  }
-  initMainRenderer();
-  if (_state2.enabled === enabled && !opts?.force) {
-    scheduleReconcile();
-    return;
-  }
-  commitState(() => ({ enabled }));
-  ensureObservers();
-  if (enabled) {
-    reconcileMainMirror();
-  } else {
-    unpinMainMirrorShellTabList();
-    reconcileMainMirror();
-    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.clearStripGutters()).catch(() => {});
-  }
-}
-function unpinMainMirrorForChromeOff() {
-  try {
-    unpinMainMirrorShellTabList();
-  } catch {}
-  const host = getMainPinHost();
-  if (host) {
-    const pinnedLists = host.querySelectorAll(`.${TAB_LIST_PINNED_CLASS}`);
-    for (const el of Array.from(pinnedLists))
-      clearPinnedTabListChrome(el);
-  }
-  destroyMainPinHost();
-}
-function reconcileMainTabListPin() {
-  if (isMobileViewport() && !isHorizontalStrip()) {
-    applyMainTabListPin(false);
-    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-    return;
-  }
-  reconcileMainMirrorDrawer();
-  initMainRenderer();
-  const shouldPin = isTaskbarModeEnabled();
-  if (shouldPin) {
-    commitState(() => ({ enabled: true }));
-    ensureObservers();
-    reconcileMainMirror();
-  } else {
-    if (_state2.enabled) {
-      commitState(() => ({ enabled: false }));
-      unpinMainMirrorForChromeOff();
-    }
-    ensureObservers();
-    reconcileMainMirror();
-  }
-  applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-    mainDrawer: getMainMirrorDrawer(),
-    mainTabList: getMainMirrorTabList(),
-    mainPanel: getMainMirrorPanel()
-  });
-  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
-}
-function isMainTabListPinActive() {
-  return _state2.enabled && isMainMirrorActive();
-}
-function __resetMainTabPinForTest() {
-  stopObservers();
-  teardownMainRenderer();
-  _state2 = { ...initialState };
-  __resetMainMirrorForTest();
-  destroyMainPinHost();
-}
-function teardownMainPin() {
-  commitState(() => ({ enabled: false }));
-  stopObservers();
-  teardownMainRenderer();
-  applyMainMirrorDrawer(false, { force: true });
-  destroyMainPinHost();
-}
-function effectivePinGate() {
-  return isTaskbarModeEnabled() && (!isMobileViewport() || isHorizontalStrip());
-}
-function scheduleReconcile() {
-  if (_state2.reconcileRaf !== null)
-    return;
-  const wantPinAtSchedule = effectivePinGate();
-  commitState(() => ({
-    reconcileRaf: requestAnimationFrame(() => {
-      commitState(() => ({ reconcileRaf: null }));
-      const wantPinNow = effectivePinGate();
-      if (wantPinNow !== wantPinAtSchedule) {
-        reconcileMainTabListPin();
-        return;
-      }
-      if (isMainMirrorActive())
-        reconcileMainMirror();
-    })
-  }));
-}
-function reconcileMainMirror() {
-  if (!isMainMirrorActive())
-    return;
-  const side = getMainDrawerSide();
-  const pinned = _state2.enabled;
-  let host = null;
-  if (pinned) {
-    host = pinMainMirrorShellTabList(side);
-  }
-  const list = resolveMirrorList();
-  if (!list)
-    return;
-  if (pinned) {
-    if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
-      list.classList.add(TAB_LIST_PINNED_CLASS);
-    }
-    if (host && host.style.display === "none") {
-      host.style.display = "";
-    }
-  } else if (list.classList.contains(TAB_LIST_PINNED_CLASS)) {
-    list.classList.remove(TAB_LIST_PINNED_CLASS);
-  }
-  const sidebar = getMainSidebar();
-  if (sidebar && sidebar !== _state2.sidebar) {
-    attachSidebarObserver(sidebar);
-  }
-  renderMainMirrorTabs();
-}
-function resolveMirrorList() {
-  const fromShell = getMainMirrorTabList();
-  if (fromShell)
-    return fromShell;
-  if (!_state2.enabled)
-    return null;
-  const side = getMainDrawerSide();
-  const host = ensureMainPinHost(side);
-  if (!host)
-    return null;
-  let list = host.querySelector(".sidebar-ux-tab-list");
-  if (!list) {
-    list = document.createElement("div");
-    list.classList.add("sidebar-ux-tab-list");
-    host.appendChild(list);
-  }
-  return list;
-}
-function activateMainMirrorFromRestore(hostBtn, title, opts) {
-  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
-  if (hostBtn && hostBtn.isConnected) {
-    try {
-      hostBtn.click();
-    } catch {}
-  }
-  onMainMirrorTabActivated(resolvedTitle, opts);
-}
-function ensureObservers() {
-  const sidebar = getMainSidebar();
-  if (sidebar)
-    attachSidebarObserver(sidebar);
-}
-function attachSidebarObserver(sidebar) {
-  if (_state2.observer && _state2.sidebar === sidebar)
-    return;
-  if (_state2.observer) {
-    _state2.observer.disconnect();
-    commitState(() => ({ observer: null }));
-  }
-  commitState(() => ({ sidebar }));
-  if (typeof MutationObserver === "undefined")
-    return;
-  const observer = new MutationObserver(() => scheduleReconcile());
-  observer.observe(sidebar, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["class", "data-tab-id", "title", "aria-label"]
-  });
-  commitState(() => ({ observer }));
-}
-function stopObservers() {
-  if (_state2.observer) {
-    _state2.observer.disconnect();
-    commitState(() => ({ observer: null, sidebar: null }));
-  }
-  if (_state2.reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_state2.reconcileRaf);
-    commitState(() => ({ reconcileRaf: null }));
-  }
-}
-var initialState, _state2;
-var init_main_tab_pin = __esm(() => {
-  init_store();
-  init_state();
-  init_mobile_exclusion();
-  init_main_mirror_drawer();
-  init_tab_position();
-  init_main_renderer();
-  initialState = {
-    enabled: false,
-    sidebar: null,
-    observer: null,
-    reconcileRaf: null
-  };
-  _state2 = { ...initialState };
-});
-
 // src/sidebar/chrome-sides.ts
 function resolveChromeSides(value, mainSide, secondEnabled) {
   const secondSide = mainSide === "left" ? "right" : "left";
@@ -6512,11 +5885,11 @@ function getMainGears() {
 function refreshMainDockEmptyState() {
   try {
     const wrapper = getMainMirrorWrapper();
-    if (!wrapper || typeof wrapper.querySelectorAll !== "function")
+    const list = getMainMirrorTabList() ?? wrapper?.querySelector(".sidebar-ux-tab-list");
+    if (!list && !wrapper)
       return;
     const gearHidden = getMainGears().some((g) => g.classList.contains(GEAR_HIDDEN_CLASS));
-    const list = wrapper.querySelector(".sidebar-ux-tab-list");
-    const dock = list?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) ?? wrapper.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`);
+    const dock = list?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) ?? wrapper?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`);
     if (!dock)
       return;
     const hasStart = typeof dock.querySelector === "function" && !!dock.querySelector(`button[${START_ATTR}]`);
@@ -6562,8 +5935,9 @@ function applySecondaryGear(include) {
         gear.remove();
       }
       removeEmptySecondaryDocks();
+      return true;
     }
-    return;
+    return false;
   }
   let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
   if (include && !dock) {
@@ -6584,6 +5958,7 @@ function applySecondaryGear(include) {
   }
   if (!include)
     removeEmptySecondaryDocks();
+  return true;
 }
 function removeEmptySecondaryDocks() {
   for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
@@ -6598,10 +5973,13 @@ function applyOptionsButtonLocation(resolved) {
     dwarn("[settings-dock] style injection failed:", err);
   }
   try {
-    applyMainGear(resolved.main);
+    const secondaryReady = !resolved.second || getSecondaryTabList() !== null;
+    applyMainGear(resolved.main || !secondaryReady);
     applySecondaryGear(resolved.second);
+    return { pendingSecond: resolved.second && !secondaryReady };
   } catch (err) {
     dwarn("[settings-dock] apply failed:", err);
+    return { pendingSecond: false };
   }
 }
 function teardownSettingsDock() {
@@ -7591,9 +6969,11 @@ var init_start_menu = __esm(() => {
 var exports_chrome_locations = {};
 __export(exports_chrome_locations, {
   START_EDGE_INNER_CLASS: () => START_EDGE_INNER_CLASS,
+  activateChromeLocations: () => activateChromeLocations,
   clearStartEdgeClass: () => clearStartEdgeClass,
   reconcileChromeLocations: () => reconcileChromeLocations,
   removeShellCreatedListener: () => removeShellCreatedListener2,
+  scheduleChromeReconcile: () => scheduleChromeReconcile,
   teardownChromeLocations: () => teardownChromeLocations
 });
 function ensureShellCreatedListener() {
@@ -7608,6 +6988,15 @@ function ensureShellCreatedListener() {
     dlog("[chrome-locations] shell-created listener installed");
   } catch {}
 }
+function ensureModelListener() {
+  if (_unsubModelChanged !== null)
+    return;
+  Promise.resolve().then(() => (init_dispatch(), exports_dispatch)).then((m) => {
+    if (_disposed || _unsubModelChanged !== null)
+      return;
+    _unsubModelChanged = m.onModelChanged(() => scheduleChromeReconcile());
+  }).catch(() => {});
+}
 function removeShellCreatedListener2() {
   try {
     if (_onShellCreated2 && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
@@ -7615,6 +7004,33 @@ function removeShellCreatedListener2() {
     }
   } catch {}
   _onShellCreated2 = null;
+  try {
+    _unsubModelChanged?.();
+  } catch {}
+  _unsubModelChanged = null;
+}
+function scheduleChromeReconcile() {
+  if (_disposed || _scheduledCancel !== null)
+    return;
+  try {
+    if (typeof requestAnimationFrame === "function") {
+      const id = requestAnimationFrame(() => {
+        _scheduledCancel = null;
+        reconcileChromeLocations();
+      });
+      _scheduledCancel = () => cancelAnimationFrame(id);
+      return;
+    }
+    if (typeof setTimeout === "function") {
+      const id = setTimeout(() => {
+        _scheduledCancel = null;
+        reconcileChromeLocations();
+      }, 0);
+      _scheduledCancel = () => clearTimeout(id);
+      return;
+    }
+  } catch {}
+  reconcileChromeLocations();
 }
 function applyStartEdgeClass() {
   try {
@@ -7631,20 +7047,49 @@ function clearStartEdgeClass() {
   } catch {}
 }
 function reconcileChromeLocations() {
+  if (_disposed)
+    return;
   ensureShellCreatedListener();
+  ensureModelListener();
   const s = getSettings();
   const mainSide = getMainDrawerSide();
+  if (_lastMainSide !== null && _lastMainSide !== mainSide) {
+    hideStartMenu({ immediate: true });
+  }
+  _lastMainSide = mainSide;
   const secondEnabled = !!s.secondSidebarEnabled;
-  applyOptionsButtonLocation(resolveChromeSides(s.optionsButtonLocation, mainSide, secondEnabled));
+  const applied = applyOptionsButtonLocation(resolveChromeSides(s.optionsButtonLocation, mainSide, secondEnabled));
   applyStartEdgeClass();
   reconcileStartChrome();
+  if (applied?.pendingSecond) {
+    if (_pendingSecondRetries < MAX_PENDING_SECOND_RETRIES) {
+      _pendingSecondRetries++;
+      scheduleChromeReconcile();
+    }
+  } else {
+    _pendingSecondRetries = 0;
+  }
+}
+function activateChromeLocations() {
+  _disposed = false;
+  _pendingSecondRetries = 0;
+  reconcileChromeLocations();
 }
 function teardownChromeLocations() {
+  _disposed = true;
+  if (_scheduledCancel) {
+    try {
+      _scheduledCancel();
+    } catch {}
+    _scheduledCancel = null;
+  }
   removeShellCreatedListener2();
   teardownSettingsDock();
   clearStartEdgeClass();
+  _lastMainSide = null;
+  _pendingSecondRetries = 0;
 }
-var _onShellCreated2 = null, START_EDGE_INNER_CLASS = "sidebar-ux-start-edge-inner";
+var _onShellCreated2 = null, _unsubModelChanged = null, _scheduledCancel = null, _disposed = false, _pendingSecondRetries = 0, MAX_PENDING_SECOND_RETRIES = 5, _lastMainSide = null, START_EDGE_INNER_CLASS = "sidebar-ux-start-edge-inner";
 var init_chrome_locations = __esm(() => {
   init_state();
   init_store();
@@ -7652,6 +7097,665 @@ var init_chrome_locations = __esm(() => {
   init_start_menu();
   init_drawer_shell();
   init_log();
+});
+
+// src/sidebar/main-renderer.ts
+function directChildByClass(parent, className) {
+  for (const child of Array.from(parent.children)) {
+    const el = child;
+    if (el.classList?.contains?.(className) || String(el.className || "").includes(className)) {
+      return el;
+    }
+  }
+  return null;
+}
+function ensureMirrorListStructure(list) {
+  let main = directChildByClass(list, MAIN_MIRROR_LIST_MAIN_CLASS);
+  let bottom = directChildByClass(list, MAIN_MIRROR_LIST_BOTTOM_CLASS);
+  if (!main) {
+    main = document.createElement("div");
+    main.className = MAIN_MIRROR_LIST_MAIN_CLASS;
+    list.insertBefore(main, list.firstChild);
+  }
+  if (!bottom) {
+    bottom = document.createElement("div");
+    bottom.className = MAIN_MIRROR_LIST_BOTTOM_CLASS;
+    list.appendChild(bottom);
+  }
+  for (const child of Array.from(list.children)) {
+    if (child !== main && child !== bottom && child.classList?.contains(MAIN_MIRROR_BTN_CLASS)) {
+      main.appendChild(child);
+    }
+  }
+  if (list.firstChild !== main)
+    list.insertBefore(main, list.firstChild);
+  if (main.nextSibling !== bottom)
+    list.appendChild(bottom);
+  if (list.style.overflowY !== "hidden")
+    list.style.overflowY = "hidden";
+  if (list.style.minHeight !== "0")
+    list.style.minHeight = "0";
+  if (main.style.flex !== "1 1 auto")
+    main.style.flex = "1 1 auto";
+  if (main.style.minHeight !== "0")
+    main.style.minHeight = "0";
+  if (main.style.display !== "flex")
+    main.style.display = "flex";
+  if (main.style.flexDirection !== "column")
+    main.style.flexDirection = "column";
+  if (main.style.gap !== "2px")
+    main.style.gap = "2px";
+  if (main.style.overflowY !== "auto")
+    main.style.overflowY = "auto";
+  if (main.style.overflowX !== "hidden")
+    main.style.overflowX = "hidden";
+  if (main.style.scrollbarWidth !== "none")
+    main.style.scrollbarWidth = "none";
+  if (bottom.style.flexShrink !== "0")
+    bottom.style.flexShrink = "0";
+  if (bottom.style.flexDirection !== "column")
+    bottom.style.flexDirection = "column";
+  if (bottom.style.gap !== "2px")
+    bottom.style.gap = "2px";
+  if (bottom.style.marginTop !== "auto")
+    bottom.style.marginTop = "auto";
+  if (bottom.style.paddingTop !== "8px")
+    bottom.style.paddingTop = "8px";
+  if (bottom.style.borderTop !== "1px solid var(--lumiverse-primary-020)") {
+    bottom.style.borderTop = "1px solid var(--lumiverse-primary-020)";
+  }
+  return { main, bottom };
+}
+function keyTitle(key) {
+  const builtin = parseBuiltinKey(key);
+  if (builtin)
+    return builtin;
+  const ext = parseExtensionKey(key);
+  if (ext)
+    return ext.tabName;
+  return null;
+}
+function twinForKey(key) {
+  const host = getHost();
+  const liveId = host ? host.resolve(key) : null;
+  if (liveId) {
+    const btn = findMainTabButton(liveId);
+    if (btn)
+      return { liveId, btn };
+  }
+  const title = keyTitle(key);
+  if (title) {
+    const btn = findMainTabButton(title);
+    return { liveId, btn };
+  }
+  return { liveId, btn: null };
+}
+function twinForMirror(mirror) {
+  const liveId = mirror.getAttribute("data-tab-id");
+  if (liveId) {
+    const btn = findMainTabButton(liveId);
+    if (btn)
+      return { liveId, btn };
+  }
+  const key = mirror.getAttribute("data-mirror-key");
+  if (key && !key.startsWith("__")) {
+    return twinForKey(key);
+  }
+  if (key === SETTINGS_MIRROR_KEY) {
+    const btn = findSettingsTwin();
+    return { liveId: btn?.getAttribute("data-tab-id") ?? null, btn };
+  }
+  return { liveId: liveId ?? null, btn: null };
+}
+function resolveMirrorLabeled(twin, isSettings) {
+  if (isSettings)
+    return false;
+  return isShowTabLabels();
+}
+function applyMirrorButtonChrome(btn, labeled) {
+  const height = labeled ? "56px" : "48px";
+  if (btn.style.height === height && btn.style.gap === "1px") {
+    btn.style.background = "";
+    btn.style.boxShadow = "";
+    btn.style.color = "";
+    btn.style.borderRadius = "";
+    return;
+  }
+  btn.style.width = "100%";
+  btn.style.height = height;
+  btn.style.flexShrink = "0";
+  btn.style.display = "flex";
+  btn.style.flexDirection = "column";
+  btn.style.alignItems = "center";
+  btn.style.justifyContent = "center";
+  btn.style.gap = "1px";
+  btn.style.border = "none";
+  btn.style.cursor = "pointer";
+  btn.style.transition = "all 0.2s ease";
+  btn.style.padding = "0";
+  btn.style.boxSizing = "border-box";
+  btn.style.background = "";
+  btn.style.boxShadow = "";
+  btn.style.color = "";
+  btn.style.borderRadius = "";
+}
+function buildMirrorInnerHtml(twin, labeled, isSettings, fallbackTitle) {
+  const parts = [];
+  const svg = twin?.querySelector("svg") ?? null;
+  if (svg) {
+    parts.push(`<span>${svg.outerHTML}</span>`);
+  }
+  if (labeled && !isSettings) {
+    const hostLabel = twin?.querySelector('span[class*="tabLabel"]');
+    const fromHost = hostLabel ? (hostLabel.textContent || "").trim() : "";
+    const text = fromHost || (fallbackTitle ? deriveShortName(fallbackTitle) : "");
+    if (text) {
+      parts.push(`<span class="sidebar-ux-tab-label" style="opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease">${escapeHtml(text)}</span>`);
+    }
+  }
+  const badge = twin?.querySelector('span[class*="tabBadge"]');
+  if (badge) {
+    parts.push(badge.outerHTML);
+  }
+  return parts.join("");
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function cssAttrEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/(["\\])/g, "\\$1");
+}
+function findSettingsTwin() {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return null;
+  const buttons = Array.from(sidebar.querySelectorAll('button[class*="tabBtn"]'));
+  for (const btn of buttons) {
+    if (isSettingsButton(btn))
+      return btn;
+  }
+  return null;
+}
+function ensureMirrorButton(container, listRoot, mirrorKey, insertBefore) {
+  let mirror = listRoot.querySelector(`button.${MAIN_MIRROR_BTN_CLASS}[data-mirror-key="${cssAttrEscape(mirrorKey)}"]`);
+  if (!mirror) {
+    mirror = document.createElement("button");
+    mirror.type = "button";
+    mirror.classList.add(MAIN_MIRROR_BTN_CLASS);
+    mirror.setAttribute("data-mirror-key", mirrorKey);
+    mirror.addEventListener("click", onMirrorClick);
+    mirror.addEventListener("contextmenu", onMirrorContextMenu);
+    container.insertBefore(mirror, insertBefore);
+  } else if (mirror.parentElement !== container || mirror !== insertBefore) {
+    container.insertBefore(mirror, insertBefore);
+  }
+  return mirror;
+}
+function renderMainMirrorTabs() {
+  const list = getMainMirrorTabList();
+  if (!list)
+    return;
+  if (!list.classList.contains(MAIN_MIRROR_LIST_CLASS)) {
+    list.classList.add(MAIN_MIRROR_LIST_CLASS);
+  }
+  const { main: mainSection, bottom: bottomSection } = ensureMirrorListStructure(list);
+  const model = getModel();
+  if (!model) {
+    return;
+  }
+  const open = isCanvasMainOpen();
+  const activeKey = model.active.primary;
+  const regularKeys = model.primary;
+  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
+  const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
+  let insertBefore = mainSection.firstChild;
+  for (const key of regularKeys) {
+    const twin = twinForKey(key);
+    const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
+    insertBefore = mirror.nextSibling;
+    if (twin.liveId)
+      mirror.setAttribute("data-tab-id", twin.liveId);
+    else
+      mirror.removeAttribute("data-tab-id");
+    const fallbackTitle = keyTitle(key) ?? twin.btn?.getAttribute("title") ?? "";
+    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || fallbackTitle;
+    if (title) {
+      mirror.setAttribute("title", title);
+      mirror.setAttribute("aria-label", title);
+    }
+    const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey;
+    mirror.style.display = hidden ? "none" : "";
+    const showActive = open && activeKey === key && !hidden;
+    mirror.classList.toggle("sidebar-ux-tab-active", showActive);
+    const labeled = resolveMirrorLabeled(twin.btn, false);
+    mirror.classList.toggle("sidebar-ux-tab-labeled", labeled);
+    const nextHtml = buildMirrorInnerHtml(twin.btn, labeled, false, title);
+    if (mirror.getAttribute("data-mirror-html") !== nextHtml) {
+      mirror.setAttribute("data-mirror-html", nextHtml);
+      mirror.innerHTML = nextHtml;
+    }
+    applyMirrorButtonChrome(mirror, labeled);
+  }
+  const wantedKeys = new Set(regularKeys);
+  for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
+    const key = btn.getAttribute("data-mirror-key") || "";
+    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
+      btn.remove();
+    }
+  }
+  for (const child of Array.from(mainSection.children)) {
+    const el = child;
+    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+      mainSection.removeChild(el);
+    }
+  }
+  const settingsTwin = findSettingsTwin();
+  if (settingsTwin) {
+    bottomSection.style.display = "flex";
+    const settingsMirror = ensureMirrorButton(bottomSection, list, SETTINGS_MIRROR_KEY, bottomSection.firstChild);
+    const title = settingsTwin.getAttribute("title") || settingsTwin.getAttribute("aria-label") || "Settings";
+    const settingsTwinId = settingsTwin.getAttribute("data-tab-id") || "";
+    if (settingsTwinId)
+      settingsMirror.setAttribute("data-tab-id", settingsTwinId);
+    else
+      settingsMirror.removeAttribute("data-tab-id");
+    settingsMirror.setAttribute("title", title);
+    settingsMirror.setAttribute("aria-label", title);
+    settingsMirror.classList.remove("sidebar-ux-tab-active");
+    settingsMirror.classList.remove("sidebar-ux-tab-labeled");
+    const settingsHtml = buildMirrorInnerHtml(settingsTwin, false, true, title);
+    if (settingsMirror.getAttribute("data-mirror-html") !== settingsHtml) {
+      settingsMirror.setAttribute("data-mirror-html", settingsHtml);
+      settingsMirror.innerHTML = settingsHtml;
+    }
+    applyMirrorButtonChrome(settingsMirror, false);
+  } else {
+    bottomSection.style.display = "none";
+    while (bottomSection.firstChild)
+      bottomSection.removeChild(bottomSection.firstChild);
+  }
+  if (open && activeKey !== null && visibleKeys(model, "primary").length > 0) {
+    const twin = twinForKey(activeKey);
+    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || keyTitle(activeKey) || "";
+    if (title)
+      setCanvasMainTitle(title);
+  }
+  dlog("[main-renderer] render tabs", {
+    order: Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`)).map((b) => b.getAttribute("data-mirror-key") || "?"),
+    activeKey,
+    open,
+    hidden: model.hidden.length
+  });
+  const s = getSettings();
+  if (s.osMode || s.optionsButtonLocation !== null || !s.startButtonAlwaysOnScreenEdge) {
+    Promise.resolve().then(() => (init_chrome_locations(), exports_chrome_locations)).then((m) => m.scheduleChromeReconcile()).catch(() => {});
+  }
+}
+function _isMobileRenderer() {
+  if (typeof window === "undefined" || !window.matchMedia)
+    return false;
+  return window.matchMedia("(max-width: 600px)").matches;
+}
+function onMirrorClick(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const mirror = ev.currentTarget;
+  const key = mirror.getAttribute("data-mirror-key") || "";
+  const title = mirror.getAttribute("title") || mirror.getAttribute("aria-label") || undefined;
+  const twin = twinForMirror(mirror);
+  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror) || twin.btn != null && isSettingsButton(twin.btn);
+  if (isSettings) {
+    dlog("[main-renderer] click → settings (host only, no canvas tab)", { key });
+    let target = twin.btn && twin.btn.isConnected ? twin.btn : null;
+    if (!target) {
+      renderMainMirrorTabs();
+      target = twinForMirror(mirror).btn;
+    }
+    if (target && target.isConnected) {
+      try {
+        target.click();
+      } catch {}
+    }
+    return;
+  }
+  if (isOsModeEnabled() && key && !key.startsWith("__")) {
+    const osLiveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
+    if (osLiveId) {
+      dlog("[main-renderer] click → OS window toggle", { title, key });
+      toggleWindowByLiveId(osLiveId, "primary").catch(() => {});
+      return;
+    }
+  }
+  const model = getModel();
+  const activeTabClose = !_isMobileRenderer() || isTaskbarModeEnabled();
+  if (isCanvasMainOpen() && activeTabClose && model != null && model.active.primary === key) {
+    dlog("[main-renderer] click → close (active tab)", { title, key });
+    closeCanvasMainDrawer();
+    return;
+  }
+  if (twin.btn && twin.btn.isConnected) {
+    try {
+      twin.btn.click();
+    } catch {}
+  }
+  const liveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
+  if (liveId) {
+    dispatchActivateByLiveId(liveId, "primary").catch(() => {});
+  } else if (key && !key.startsWith("__")) {
+    dispatch({ t: "activate", key, side: "primary" }).catch(() => {});
+  }
+  onMainMirrorTabActivated(title);
+}
+function onMirrorContextMenu(ev) {
+  const e = ev;
+  e.preventDefault();
+  e.stopPropagation();
+  const mirror = e.currentTarget;
+  const key = mirror.getAttribute("data-mirror-key") || "";
+  const isSettings = key === SETTINGS_MIRROR_KEY || isSettingsButton(mirror);
+  if (isSettings) {
+    dlog("[main-renderer] contextmenu → settings (no host forward)");
+    return;
+  }
+  let twin = twinForMirror(mirror);
+  if ((!twin.btn || !twin.btn.isConnected) && !key.startsWith("__")) {
+    renderMainMirrorTabs();
+    twin = twinForMirror(mirror);
+  }
+  if (!twin.btn || !twin.btn.isConnected) {
+    dwarn("[main-renderer] contextmenu: no connected host twin", {
+      title: mirror.getAttribute("title")
+    });
+    return;
+  }
+  dlog("[main-renderer] contextmenu → host forward", {
+    title: twin.btn.getAttribute("title") || mirror.getAttribute("title"),
+    x: e.clientX,
+    y: e.clientY
+  });
+  try {
+    twin.btn.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      button: 2,
+      buttons: 2
+    }));
+  } catch (err) {
+    dwarn("[main-renderer] contextmenu: host dispatch failed", err);
+  }
+}
+function scheduleMainMirrorRender() {
+  if (_renderRaf !== null)
+    return;
+  if (typeof requestAnimationFrame !== "function") {
+    renderMainMirrorTabs();
+    return;
+  }
+  _renderRaf = requestAnimationFrame(() => {
+    _renderRaf = null;
+    try {
+      renderMainMirrorTabs();
+    } catch {}
+  });
+}
+function initMainRenderer() {
+  if (!_unsubModelChanged2) {
+    _unsubModelChanged2 = onModelChanged(() => scheduleMainMirrorRender());
+  }
+  renderMainMirrorTabs();
+}
+function teardownMainRenderer() {
+  if (_unsubModelChanged2) {
+    _unsubModelChanged2();
+    _unsubModelChanged2 = null;
+  }
+  if (_renderRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_renderRaf);
+  }
+  _renderRaf = null;
+}
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged2 = null, _renderRaf = null;
+var init_main_renderer = __esm(() => {
+  init_dispatch();
+  init_state();
+  init_actions();
+  init_drawer_sync();
+  init_main_mirror_drawer();
+  init_buttons();
+  init_log();
+});
+
+// src/sidebar/main-tab-pin.ts
+var exports_main_tab_pin = {};
+__export(exports_main_tab_pin, {
+  __resetMainTabPinForTest: () => __resetMainTabPinForTest,
+  activateMainMirrorFromRestore: () => activateMainMirrorFromRestore,
+  applyMainTabListPin: () => applyMainTabListPin,
+  isMainTabListPinActive: () => isMainTabListPinActive,
+  reconcileMainTabListPin: () => reconcileMainTabListPin,
+  teardownMainPin: () => teardownMainPin
+});
+function commitState(updater) {
+  Object.assign(_state2, updater(_state2));
+}
+function applyMainTabListPin(enabled, opts) {
+  if (isMobileViewport() && !isHorizontalStrip()) {
+    applyMainMirrorDrawer(true, { force: false });
+    initMainRenderer();
+    if (_state2.enabled) {
+      commitState(() => ({ enabled: false }));
+      unpinMainMirrorForChromeOff();
+    }
+    reconcileMainMirror();
+    return;
+  }
+  if (enabled) {
+    applyMainMirrorDrawer(true, { force: !!opts?.force });
+  } else {
+    applyMainMirrorDrawer(true, { force: false });
+  }
+  initMainRenderer();
+  if (_state2.enabled === enabled && !opts?.force) {
+    scheduleReconcile();
+    return;
+  }
+  commitState(() => ({ enabled }));
+  ensureObservers();
+  if (enabled) {
+    reconcileMainMirror();
+  } else {
+    unpinMainMirrorShellTabList();
+    reconcileMainMirror();
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.clearStripGutters()).catch(() => {});
+  }
+}
+function unpinMainMirrorForChromeOff() {
+  try {
+    unpinMainMirrorShellTabList();
+  } catch {}
+  const host = getMainPinHost();
+  if (host) {
+    const pinnedLists = host.querySelectorAll(`.${TAB_LIST_PINNED_CLASS}`);
+    for (const el of Array.from(pinnedLists))
+      clearPinnedTabListChrome(el);
+  }
+  destroyMainPinHost();
+}
+function reconcileMainTabListPin() {
+  if (isMobileViewport() && !isHorizontalStrip()) {
+    applyMainTabListPin(false);
+    Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+    return;
+  }
+  reconcileMainMirrorDrawer();
+  initMainRenderer();
+  const shouldPin = isTaskbarModeEnabled();
+  if (shouldPin) {
+    commitState(() => ({ enabled: true }));
+    ensureObservers();
+    reconcileMainMirror();
+  } else {
+    if (_state2.enabled) {
+      commitState(() => ({ enabled: false }));
+      unpinMainMirrorForChromeOff();
+    }
+    ensureObservers();
+    reconcileMainMirror();
+  }
+  applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+    mainDrawer: getMainMirrorDrawer(),
+    mainTabList: getMainMirrorTabList(),
+    mainPanel: getMainMirrorPanel()
+  });
+  Promise.resolve().then(() => (init_strip_gutter(), exports_strip_gutter)).then((m) => m.updateStripGutters());
+}
+function isMainTabListPinActive() {
+  return _state2.enabled && isMainMirrorActive();
+}
+function __resetMainTabPinForTest() {
+  stopObservers();
+  teardownMainRenderer();
+  _state2 = { ...initialState };
+  __resetMainMirrorForTest();
+  destroyMainPinHost();
+}
+function teardownMainPin() {
+  commitState(() => ({ enabled: false }));
+  stopObservers();
+  teardownMainRenderer();
+  applyMainMirrorDrawer(false, { force: true });
+  destroyMainPinHost();
+}
+function effectivePinGate() {
+  return isTaskbarModeEnabled() && (!isMobileViewport() || isHorizontalStrip());
+}
+function scheduleReconcile() {
+  if (_state2.reconcileRaf !== null)
+    return;
+  const wantPinAtSchedule = effectivePinGate();
+  commitState(() => ({
+    reconcileRaf: requestAnimationFrame(() => {
+      commitState(() => ({ reconcileRaf: null }));
+      const wantPinNow = effectivePinGate();
+      if (wantPinNow !== wantPinAtSchedule) {
+        reconcileMainTabListPin();
+        return;
+      }
+      if (isMainMirrorActive())
+        reconcileMainMirror();
+    })
+  }));
+}
+function reconcileMainMirror() {
+  if (!isMainMirrorActive())
+    return;
+  const side = getMainDrawerSide();
+  const pinned = _state2.enabled;
+  let host = null;
+  if (pinned) {
+    host = pinMainMirrorShellTabList(side);
+  }
+  const list = resolveMirrorList();
+  if (!list)
+    return;
+  if (pinned) {
+    if (!list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+      list.classList.add(TAB_LIST_PINNED_CLASS);
+    }
+    if (host && host.style.display === "none") {
+      host.style.display = "";
+    }
+  } else if (list.classList.contains(TAB_LIST_PINNED_CLASS)) {
+    list.classList.remove(TAB_LIST_PINNED_CLASS);
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar && sidebar !== _state2.sidebar) {
+    attachSidebarObserver(sidebar);
+  }
+  renderMainMirrorTabs();
+}
+function resolveMirrorList() {
+  const fromShell = getMainMirrorTabList();
+  if (fromShell)
+    return fromShell;
+  if (!_state2.enabled)
+    return null;
+  const side = getMainDrawerSide();
+  const host = ensureMainPinHost(side);
+  if (!host)
+    return null;
+  let list = host.querySelector(".sidebar-ux-tab-list");
+  if (!list) {
+    list = document.createElement("div");
+    list.classList.add("sidebar-ux-tab-list");
+    host.appendChild(list);
+  }
+  return list;
+}
+function activateMainMirrorFromRestore(hostBtn, title, opts) {
+  const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
+  if (hostBtn && hostBtn.isConnected) {
+    try {
+      hostBtn.click();
+    } catch {}
+  }
+  onMainMirrorTabActivated(resolvedTitle, opts);
+}
+function ensureObservers() {
+  const sidebar = getMainSidebar();
+  if (sidebar)
+    attachSidebarObserver(sidebar);
+}
+function attachSidebarObserver(sidebar) {
+  if (_state2.observer && _state2.sidebar === sidebar)
+    return;
+  if (_state2.observer) {
+    _state2.observer.disconnect();
+    commitState(() => ({ observer: null }));
+  }
+  commitState(() => ({ sidebar }));
+  if (typeof MutationObserver === "undefined")
+    return;
+  const observer = new MutationObserver(() => scheduleReconcile());
+  observer.observe(sidebar, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "data-tab-id", "title", "aria-label"]
+  });
+  commitState(() => ({ observer }));
+}
+function stopObservers() {
+  if (_state2.observer) {
+    _state2.observer.disconnect();
+    commitState(() => ({ observer: null, sidebar: null }));
+  }
+  if (_state2.reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_state2.reconcileRaf);
+    commitState(() => ({ reconcileRaf: null }));
+  }
+}
+var initialState, _state2;
+var init_main_tab_pin = __esm(() => {
+  init_store();
+  init_state();
+  init_mobile_exclusion();
+  init_main_mirror_drawer();
+  init_tab_position();
+  init_main_renderer();
+  initialState = {
+    enabled: false,
+    sidebar: null,
+    observer: null,
+    reconcileRaf: null
+  };
+  _state2 = { ...initialState };
 });
 
 // src/tabs/configure-catalog.ts
@@ -13299,6 +13403,12 @@ function resetSideRemountStateAfterDisable() {
 function refreshSettingsPanelForSideChange() {
   Promise.resolve().then(() => (init_state(), exports_state)).then((m3) => m3.refreshSettingsPanel()).catch(() => {});
 }
+function clearSideOverrideWithPanelRefresh() {
+  if (getMainDrawerSideOverride() === null)
+    return;
+  setMainDrawerSideOverride(null);
+  refreshSettingsPanelForSideChange();
+}
 function refreshSideGeometry() {
   Promise.resolve().then(() => (init_handles(), exports_handles)).then((m3) => {
     try {
@@ -13359,7 +13469,7 @@ async function applyCanvasSideChange(desired, opts) {
     refreshSideGeometry();
     if (!writeOk) {
       const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide;
-      setMainDrawerSideOverride(null);
+      clearSideOverrideWithPanelRefresh();
       restyleMainShellSide(realSide);
       restyleSecondaryShellSide(realSide === "left" ? "right" : "left");
       _lastKnownSide = realSide;
@@ -13401,12 +13511,12 @@ function reconcileSideOverrideFromDom() {
   if (domSide === null)
     return;
   if (domSide === override) {
-    setMainDrawerSideOverride(null);
+    clearSideOverrideWithPanelRefresh();
     return;
   }
   const hostSide = getHostDrawerSettings()?.side;
   if ((hostSide === "left" || hostSide === "right") && hostSide !== override && hostSide === domSide) {
-    setMainDrawerSideOverride(null);
+    clearSideOverrideWithPanelRefresh();
   }
 }
 function waitForSideSettle(desired, gen) {
@@ -13422,7 +13532,7 @@ function waitForSideSettle(desired, gen) {
     }
     if (readMainWrapperSideFromDom() === desired) {
       if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-        setMainDrawerSideOverride(null);
+        clearSideOverrideWithPanelRefresh();
       }
       resolve();
       return;
@@ -13458,7 +13568,7 @@ function waitForSideSettle(desired, gen) {
       }
       if (readMainWrapperSideFromDom() === desired) {
         if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-          setMainDrawerSideOverride(null);
+          clearSideOverrideWithPanelRefresh();
         }
         finish();
       }
@@ -18513,8 +18623,8 @@ function mountPanelChrome() {
   if (typeof window !== "undefined") {
     window.addEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
   }
-  if (!_unsubModelChanged2) {
-    _unsubModelChanged2 = onModelChanged(refreshOsVisibility);
+  if (!_unsubModelChanged3) {
+    _unsubModelChanged3 = onModelChanged(refreshOsVisibility);
   }
   ensureChromeBoth();
   refreshOsVisibility();
@@ -18535,8 +18645,8 @@ function teardownPanelChrome() {
     cancelAnimationFrame(_ensureRaf);
     _ensureRaf = 0;
   }
-  _unsubModelChanged2?.();
-  _unsubModelChanged2 = null;
+  _unsubModelChanged3?.();
+  _unsubModelChanged3 = null;
   closedLiveIdsCache = new Set;
   for (const side of ["primary", "secondary"]) {
     const surface = resolveHeaderSurface(side);
@@ -18549,7 +18659,7 @@ function teardownPanelChrome() {
   applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
   dlog("[os] panel chrome unmounted");
 }
-var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged2 = null;
+var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged3 = null;
 var init_panel_chrome = __esm(() => {
   init_drawer_shell();
   init_main_mirror_drawer();
@@ -19431,6 +19541,7 @@ var init_settings_repo = __esm(() => {
 // src/settings/state.ts
 var exports_state = {};
 __export(exports_state, {
+  __setSettingsSaveRetriesForTest: () => __setSettingsSaveRetriesForTest,
   cancelSettingsSave: () => cancelSettingsSave,
   flushSettingsSave: () => flushSettingsSave,
   getDrawerLocation: () => getDrawerLocation,
@@ -19447,6 +19558,7 @@ __export(exports_state, {
   isHideDrawerOpenCloseButtonsEnabled: () => isHideDrawerOpenCloseButtonsEnabled,
   isHorizontalStrip: () => isHorizontalStrip,
   isOsModeEnabled: () => isOsModeEnabled,
+  isSettingsHydrated: () => isSettingsHydrated,
   isTaskbarModeEnabled: () => isTaskbarModeEnabled,
   normalizeCanvasSettings: () => normalizeCanvasSettings,
   persistSettings: () => persistSettings,
@@ -19541,8 +19653,12 @@ function getStripEdge(s3 = _settings) {
   const loc = getDrawerLocation(s3);
   return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
 }
+function isSettingsHydrated() {
+  return _hydrated;
+}
 function hydrateSettings(raw) {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));
+  _hydrated = true;
 }
 function setSettings(patch) {
   const prev = _settings;
@@ -19589,9 +19705,12 @@ function setSettings(patch) {
   }
   _settings = normalizeCanvasSettings(next);
   setDebug(_settings.debugMode);
-  applySettings(prev, _settings);
-  refreshSettingsPanel();
-  persistSettings();
+  try {
+    applySettings(prev, _settings);
+  } finally {
+    refreshSettingsPanel();
+    persistSettings();
+  }
 }
 function refreshSettingsPanel() {
   if (_panelRefresh)
@@ -19599,6 +19718,10 @@ function refreshSettingsPanel() {
 }
 function fireSettingsSave() {
   _saveSettingsTimer = null;
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer);
+    _settingsRetryTimer = null;
+  }
   if (!isSettingsRepoArmed()) {
     dlog("persistSettings: not armed at debounce fire, skipping");
     logPersistSave("persistSettings:debounce", null, { skipped: "not-armed" });
@@ -19616,11 +19739,36 @@ function fireSettingsSave() {
   saveSettingsToDisk(_settings).then((r3) => {
     if (r3.status === "error") {
       console.warn("[canvas] saveSettingsToDisk failed:", r3.reason);
+      scheduleSettingsRetry();
+    } else {
+      _settingsDirty = false;
+      _settingsRetryCount = 0;
     }
   }).catch((err) => {
     console.warn("[canvas] saveSettingsToDisk rejected:", err);
+    scheduleSettingsRetry();
   });
   setLastLoadedLayout({ ...layoutSnapshot, settings: _settings });
+}
+function scheduleSettingsRetry() {
+  if (_settingsRetryTimer !== null)
+    return;
+  if (!isSettingsRepoArmed())
+    return;
+  if (_settingsRetryCount >= _maxSettingsSaveRetries) {
+    console.warn("[canvas] settings save keeps failing; will retry on the next change or unload");
+    return;
+  }
+  _settingsRetryCount++;
+  const timer = setTimeout(() => {
+    _settingsRetryTimer = null;
+    fireSettingsSave();
+  }, SETTINGS_RETRY_MS);
+  timer.unref?.();
+  _settingsRetryTimer = timer;
+}
+function __setSettingsSaveRetriesForTest(max) {
+  _maxSettingsSaveRetries = Math.max(0, max);
 }
 function persistSettings() {
   if (!isSettingsRepoArmed()) {
@@ -19633,6 +19781,8 @@ function persistSettings() {
     logPersistSave("persistSettings", null, { skipped: "load-in-progress", loadInProgress: true });
     return;
   }
+  _settingsDirty = true;
+  _settingsRetryCount = 0;
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer);
   }
@@ -19641,16 +19791,28 @@ function persistSettings() {
 function flushSettingsSave() {
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer);
-    fireSettingsSave();
+    _saveSettingsTimer = null;
   }
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer);
+    _settingsRetryTimer = null;
+  }
+  if (_settingsDirty)
+    fireSettingsSave();
 }
 function cancelSettingsSave() {
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer);
     _saveSettingsTimer = null;
   }
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer);
+    _settingsRetryTimer = null;
+  }
+  _settingsDirty = false;
+  _settingsRetryCount = 0;
 }
-var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _singleLayout = null, _dualLayout = null, _osSingleLayout = null, _osDualLayout = null, _panelRefresh = null;
+var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _hydrated = false, _settingsDirty = false, _settingsRetryTimer = null, _settingsRetryCount = 0, _maxSettingsSaveRetries = 2, SETTINGS_RETRY_MS = 1000, _singleLayout = null, _dualLayout = null, _osSingleLayout = null, _osDualLayout = null, _panelRefresh = null;
 var init_state = __esm(() => {
   init_types();
   init_log();
@@ -22335,7 +22497,7 @@ var init_registry = __esm(() => {
     id: "optionsButtonLocation",
     unconditional: true,
     mount() {
-      reconcileChromeLocations();
+      activateChromeLocations();
       return () => teardownChromeLocations();
     },
     apply() {
@@ -22346,7 +22508,7 @@ var init_registry = __esm(() => {
     id: "startButtonLocation",
     unconditional: true,
     mount() {
-      reconcileChromeLocations();
+      activateChromeLocations();
     },
     apply() {
       applyStartButtonLocationChange();
@@ -22356,7 +22518,7 @@ var init_registry = __esm(() => {
     id: "startButtonAlwaysOnScreenEdge",
     unconditional: true,
     mount() {
-      reconcileChromeLocations();
+      activateChromeLocations();
     },
     apply() {
       reconcileChromeLocations();
@@ -22481,9 +22643,10 @@ function positionPopover(anchor, pop) {
       top = Math.max(gap, vh - p3.height - gap);
     let left = a3.left + a3.width / 2 - p3.width / 2;
     left = Math.max(gap, Math.min(vw - p3.width - gap, left));
+    const uiScale = getUiScale();
     pop.style.position = "fixed";
-    pop.style.top = `${Math.round(top)}px`;
-    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top / uiScale)}px`;
+    pop.style.left = `${Math.round(left / uiScale)}px`;
   } catch {}
 }
 function openHelp(anchor, text) {
@@ -22512,6 +22675,7 @@ function closeHelp() {
   if (!_open2 && !_anchor)
     return;
   _open2 = false;
+  _openedByFocus = false;
   const anchor = _anchor;
   const pop = _popover;
   _anchor = null;
@@ -22546,6 +22710,16 @@ function disposeHelpLayer() {
     _popover = null;
   }
 }
+function refreshHelpPopover() {
+  if (!_open2 || !_anchor || !_popover)
+    return;
+  const get = _tipGetters.get(_anchor);
+  if (!get)
+    return;
+  const next = get();
+  if (_popover.textContent !== next)
+    _popover.textContent = next;
+}
 function buildHelpTip(label, getText) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -22554,13 +22728,20 @@ function buildHelpTip(label, getText) {
   btn.setAttribute("aria-expanded", "false");
   btn.textContent = "?";
   const open = () => openHelp(btn, getText());
+  _tipGetters.set(btn, getText);
   btn.addEventListener("click", (ev) => {
     ev.preventDefault?.();
     ev.stopPropagation?.();
-    if (_open2 && _anchor === btn)
+    if (_open2 && _anchor === btn) {
+      if (_openedByFocus) {
+        _openedByFocus = false;
+        return;
+      }
       closeHelp();
-    else
+    } else {
+      _openedByFocus = false;
       open();
+    }
   });
   btn.addEventListener("pointerenter", () => {
     if (isFinePointer())
@@ -22579,7 +22760,10 @@ function buildHelpTip(label, getText) {
         closeHelp();
     }, 75);
   });
-  btn.addEventListener("focus", () => open());
+  btn.addEventListener("focus", () => {
+    _openedByFocus = true;
+    open();
+  });
   btn.addEventListener("blur", () => {
     if (_anchor === btn)
       closeHelp();
@@ -22620,6 +22804,9 @@ function buildSettingRow(args) {
     },
     setDisabled(disabled) {
       row.classList.toggle("sidebar-ux-panel-row-disabled", disabled);
+      try {
+        args.control.setAttribute?.("aria-disabled", String(disabled));
+      } catch {}
       const control = args.control;
       if (typeof control.disabled === "boolean")
         control.disabled = disabled;
@@ -22696,7 +22883,7 @@ function buildSegmentedControl(options, value, onChange) {
     }
   };
 }
-function buildTileGroup(options, value, onChange) {
+function buildTileGroup(options, value, onChange, opts) {
   const root = document.createElement("div");
   root.className = "sidebar-ux-panel-modes";
   root.setAttribute("role", "radiogroup");
@@ -22711,7 +22898,7 @@ function buildTileGroup(options, value, onChange) {
     }
   };
   const select = (next) => {
-    if (next === current)
+    if (next === current && !opts?.allowReselect)
       return;
     current = next;
     render();
@@ -22800,7 +22987,11 @@ function buildToggleControl(value, onChange, disabled) {
   });
   return btn;
 }
-var HELP_POPOVER_ID = "sidebar-ux-help-popover", _popover = null, _anchor = null, _open2 = false, _closeTimer = null, _uninstallDismiss = null;
+var HELP_POPOVER_ID = "sidebar-ux-help-popover", _popover = null, _anchor = null, _open2 = false, _closeTimer = null, _uninstallDismiss = null, _openedByFocus = false, _tipGetters;
+var init_render = __esm(() => {
+  init_start_menu_motion();
+  _tipGetters = new WeakMap;
+});
 
 // src/settings/panel.ts
 function _isMobileViewportForPanel() {
@@ -22953,6 +23144,14 @@ function injectPanelStyles() {
       outline-offset: 2px;
     }
     /* Mode tiles */
+    .sidebar-ux-panel-modes-wrap {
+      position: relative;
+    }
+    .sidebar-ux-panel-modes-help {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+    }
     .sidebar-ux-panel-modes {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -23199,8 +23398,12 @@ function buildSettingsPanelDOM() {
     return isTaskbarModeEnabled(s3) ? "taskbar" : "vanilla";
   };
   const selectMode = (mode) => {
-    if (mode === effectiveMode())
-      return;
+    if (mode === effectiveMode()) {
+      if (mode !== "vanilla")
+        return;
+      if (!getSettings().taskbarMode)
+        return;
+    }
     if (mode === "os") {
       setSettings({ osMode: true });
       return;
@@ -23216,9 +23419,17 @@ function buildSettingsPanelDOM() {
       moveControlsToOuterEdge: false
     });
   };
-  const modes = buildTileGroup(MODE_TILE_DEFS, effectiveMode(), (v3) => selectMode(v3));
+  const modes = buildTileGroup(MODE_TILE_DEFS, effectiveMode(), (v3) => selectMode(v3), { allowReselect: true });
   modes.root.setAttribute("aria-label", "Drawer chrome mode");
-  drawers.group.appendChild(modes.root);
+  {
+    const modesWrap = document.createElement("div");
+    modesWrap.className = "sidebar-ux-panel-modes-wrap";
+    modesWrap.appendChild(modes.root);
+    const modesHelp = buildHelpTip("Chrome mode", () => MODE_TILES_HINT);
+    modesHelp.classList.add("sidebar-ux-panel-modes-help");
+    modesWrap.appendChild(modesHelp);
+    drawers.group.appendChild(modesWrap);
+  }
   const drawerLocation = buildSegmentedControl([
     { value: "sides", label: "Sides" },
     { value: "top", label: "Top" },
@@ -23245,6 +23456,7 @@ function buildSettingsPanelDOM() {
         await m3.dispatch({ t: "swapSides" });
       } catch (err) {
         dwarn("[settings-panel] swap drawer side failed:", err);
+        refreshSettingsPanel();
       }
     })();
   });
@@ -23258,11 +23470,11 @@ function buildSettingsPanelDOM() {
     { value: "single", label: "Single" },
     { value: "dual", label: "Dual" }
   ], getSettings().secondSidebarEnabled ? "dual" : "single", (v3) => {
-    Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => {
-      m3.requestSecondDrawerMode(v3 === "dual");
-    }).catch((err) => {
+    Promise.resolve().then(() => (init_second_drawer_mode(), exports_second_drawer_mode)).then((m3) => m3.requestSecondDrawerMode(v3 === "dual")).catch((err) => {
       dwarn("[settings-panel] second-drawer-mode import failed:", err);
       setSettings({ secondSidebarEnabled: v3 === "dual" });
+    }).finally(() => {
+      refreshSettingsPanel();
     });
   });
   drawerMode.root.setAttribute("aria-label", "Drawer mode");
@@ -23290,7 +23502,7 @@ function buildSettingsPanelDOM() {
     { value: "both", label: "Both" }
   ], displayChromeSide(getSettings().optionsButtonLocation, safeMainSide()), (v3) => setSettings({ optionsButtonLocation: v3 }));
   optionsLocation.root.setAttribute("aria-label", "Options button location");
-  optionsLocation.setDisabled(isLoadInProgress());
+  optionsLocation.setDisabled(!isSettingsHydrated());
   const optionsLocationRow = appendRow(drawers.group, buildSettingRow({
     label: "Options button location",
     hint: OPTIONS_LOCATION_HINT,
@@ -23421,13 +23633,13 @@ function buildSettingsPanelDOM() {
     startEdge.refresh();
     const s3 = getSettings();
     modes.refresh(effectiveMode());
-    modes.setDisabled(isLoadInProgress());
+    modes.setDisabled(!isSettingsHydrated());
     drawerLocation.refresh(s3.drawerLocation);
-    drawerLocation.setDisabled(isLoadInProgress());
-    drawerLocationRow.setDisabled(isLoadInProgress());
+    drawerLocation.setDisabled(!isSettingsHydrated());
+    drawerLocationRow.setDisabled(!isSettingsHydrated());
     const override = safeMainSideOverride();
     mainSide.refresh(override ?? safeMainSide());
-    const sideLocked = isLoadInProgress() || !isStoreReady() || !isModelReady() || override !== null;
+    const sideLocked = !isSettingsHydrated() || !isStoreReady() || !isModelReady() || override !== null;
     mainSide.setDisabled(sideLocked);
     mainSideRow.setDisabled(sideLocked);
     mainSideRow.setHint(override !== null ? MAIN_SIDE_SWAP_HINT : MAIN_SIDE_HINT);
@@ -23441,6 +23653,7 @@ function buildSettingsPanelDOM() {
       compact.btn.disabled = d3;
       compact.btn.style.cursor = d3 ? "not-allowed" : "pointer";
       compactRow.setDisabled(d3);
+      compactRow.setHint(d3 ? MIRROR_COMPACT_LOCK_HINT : MIRROR_COMPACT_HINT);
     }
     const horizontal = isHorizontalStrip();
     {
@@ -23452,12 +23665,12 @@ function buildSettingsPanelDOM() {
       moveControlsRow.setHint(horizontal ? LOCATION_LOCK_HINT : os ? OS_MODE_TASKBAR_LOCK_HINT : MOVE_CONTROLS_HINT);
     }
     optionsLocation.refresh(displayChromeSide(s3.optionsButtonLocation, safeMainSide()));
-    optionsLocation.setDisabled(isLoadInProgress());
-    optionsLocationRow.setDisabled(isLoadInProgress());
+    optionsLocation.setDisabled(!isSettingsHydrated());
+    optionsLocationRow.setDisabled(!isSettingsHydrated());
     {
       const d3 = !s3.osMode;
       startLocation.refresh(displayChromeSide(s3.startButtonLocation, safeMainSide()));
-      startLocation.setDisabled(d3 || isLoadInProgress());
+      startLocation.setDisabled(d3 || !isSettingsHydrated());
       startLocationRow.setDisabled(d3);
       startLocationRow.setHint(d3 ? START_LOCATION_LOCK_HINT : START_LOCATION_HINT);
     }
@@ -23499,6 +23712,7 @@ function buildSettingsPanelDOM() {
       }
     }
   };
+  refreshHelpPopover();
   return { root, refresh };
 }
 function mountSettingsPanel(ctx) {
@@ -23531,15 +23745,19 @@ function applySettings(prev, next) {
       continue;
     if (prev[feature.id] === next[feature.id])
       continue;
-    feature.apply(prev, next, _settingsPanelCtx);
+    try {
+      feature.apply(prev, next, _settingsPanelCtx);
+    } catch (err) {
+      dwarn(`applySettings: feature ${String(feature.id)} apply threw:`, err);
+    }
   }
 }
-var DRAWER_LAYOUT_HINT = "Where the tab strips live. Top/Bottom pins a full-width strip to that viewport edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which screen edge the main drawer sits on. Mirrors Lumiverse → Display → Drawer side, and also changes with Configure Tabs → Swap drawer locations.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single = one drawer (the main one). Dual = a second drawer on the opposite side. Each mode keeps its own saved layout.", DRAWER_MODE_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the main drawer's compact mode and vertical tab position on the second drawer.", MOVE_CONTROLS_HINT = "Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on (window chrome needs the pinned strips). Disable OS mode to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear. Left/Right are screen sides; if that side has no drawer open, the gear stays on the main drawer.", START_LOCATION_HINT = "OS mode only: which drawer shows the Start button. The Start menu always lists every window from both drawers.", START_LOCATION_LOCK_HINT = "Requires OS mode. Turn it on to choose where Start appears.", START_EDGE_HINT = "Top/Bottom only: pins Start to the outer (screen-edge) end of the tab strip. Off places it next to the tabs.", START_EDGE_INERT_HINT = "Only applies when Drawer layout is Top or Bottom.", HIDE_BUTTONS_HINT = "Hides the small handle that opens/closes the drawer. Requires Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Handles are always hidden while tabs are pinned to the top/bottom edge.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SHADOWS_DESKTOP_HINT = "Show box-shadow on drawers when the viewport is wider than 600px.", SHADOWS_MOBILE_HINT = "Show box-shadow on drawers when the viewport is 600px or narrower.", CHAT_REFLOW_HINT = "Shifts the chat column by the open-drawer widths so neither drawer covers it.", WELCOME_REFLOW_HINT = "Shifts the landing page by the open-drawer widths so neither drawer covers it.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu.", PERSIST_OPEN_HINT = "Persist drawer open/closed state (and active tab) across sessions.", PERSIST_WIDTH_HINT = "Persist drawer widths across sessions.", DRAG_DROP_HINT = "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.", RESIZE_PANELS_HINT = "Adds a 4px grab handle on the inner edge of both drawers.", DEBUG_HINT = "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
+var MODE_TILES_HINT = "How much drawer chrome Canvas adds. Vanilla keeps the stock Lumiverse drawers; Taskbar pins tab strips to the screen edge; OS mode adds window controls and a Start menu.", DRAWER_LAYOUT_HINT = "Where the tab strips live. Top/Bottom pins a full-width strip to that viewport edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which screen edge the main drawer sits on. Mirrors Lumiverse → Display → Drawer side, and also changes with Configure Tabs → Swap drawer locations.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single = one drawer (the main one). Dual = a second drawer on the opposite side. Each mode keeps its own saved layout.", DRAWER_MODE_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the main drawer's compact mode and vertical tab position on the second drawer.", MIRROR_COMPACT_LOCK_HINT = "Requires the second drawer. Switch Drawer mode to Dual to use it.", MOVE_CONTROLS_HINT = "Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on (window chrome needs the pinned strips). Disable OS mode to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear. Left/Right are screen sides; if that side has no drawer open, the gear stays on the main drawer.", START_LOCATION_HINT = "OS mode only: which drawer shows the Start button. The Start menu always lists every window from both drawers.", START_LOCATION_LOCK_HINT = "Requires OS mode. Turn it on to choose where Start appears.", START_EDGE_HINT = "Top/Bottom only: pins Start to the outer (screen-edge) end of the tab strip. Off places it next to the tabs.", START_EDGE_INERT_HINT = "Only applies when Drawer layout is Top or Bottom.", HIDE_BUTTONS_HINT = "Hides the small handle that opens/closes the drawer. Requires Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Handles are always hidden while tabs are pinned to the top/bottom edge.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SHADOWS_DESKTOP_HINT = "Show box-shadow on drawers when the viewport is wider than 600px.", SHADOWS_MOBILE_HINT = "Show box-shadow on drawers when the viewport is 600px or narrower.", CHAT_REFLOW_HINT = "Shifts the chat column by the open-drawer widths so neither drawer covers it.", WELCOME_REFLOW_HINT = "Shifts the landing page by the open-drawer widths so neither drawer covers it.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu.", PERSIST_OPEN_HINT = "Persist drawer open/closed state (and active tab) across sessions.", PERSIST_WIDTH_HINT = "Persist drawer widths across sessions.", DRAG_DROP_HINT = "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.", RESIZE_PANELS_HINT = "Adds a 4px grab handle on the inner edge of both drawers.", DEBUG_HINT = "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
   init_registry();
-  init_layout_load();
+  init_render();
   Promise.resolve().then(() => (init_store(), exports_store)).then((m3) => {
     _storeMod = m3;
     refreshSettingsPanel();
@@ -25109,6 +25327,11 @@ function setup(ctx) {
       dwarn("Canvas: bootstrapFromLayout threw synchronously:", bootstrapErr);
       throw bootstrapErr;
     }
+    try {
+      const { reconcileChromeLocations: reconcileChromeLocations2 } = await Promise.resolve().then(() => (init_chrome_locations(), exports_chrome_locations));
+      reconcileChromeLocations2();
+    } catch {}
+    refreshSettingsPanel();
     registerCleanup(() => {
       shutdown();
       coreHost.shutdown();
