@@ -126,6 +126,10 @@ const START_SEL = 'button[data-canvas-os-start]'
 // The old inline `btn.style.order` was written from getMainDrawerSide() at
 // ensure time only; an S4 in-place side flip (no remount, no ensure) kept the
 // stale value and left the Options dock on the screen edge until a refresh.
+// 2026-09-19: the outer rules are the unstamped default; the inner variant
+// (startButtonAlwaysOnScreenEdge off) is keyed on the root class
+// `.sidebar-ux-start-edge-inner` set by chrome-locations — a root class, not
+// per-pin-host attrs, so host recreation cannot drop the variant.
 {
   assertIncludes(
     HORIZONTAL_STRIP_CSS,
@@ -143,6 +147,33 @@ const START_SEL = 'button[data-canvas-os-start]'
     !HORIZONTAL_STRIP_CSS.includes('order: -2 !important'),
     'the old inline-era -2 value must not be reintroduced',
   )
+  // Inner variant (startButtonAlwaysOnScreenEdge off): Start faces the tabs.
+  assertIncludes(
+    HORIZONTAL_STRIP_CSS,
+    'html.sidebar-ux-start-edge-inner',
+    'inner variant is keyed on the root class',
+  )
+  const leftInnerIdx = HORIZONTAL_STRIP_CSS.indexOf(
+    'html.sidebar-ux-start-edge-inner',
+  )
+  const leftInnerBlock = HORIZONTAL_STRIP_CSS.substring(
+    leftInnerIdx,
+    HORIZONTAL_STRIP_CSS.indexOf('}', leftInnerIdx),
+  )
+  assertIncludes(leftInnerBlock, 'order: 0 !important', 'left inner keeps Start after the gear')
+  // Right side must flip Start BEFORE the gear (dock DOM is [gear, start]) —
+  // plain order:0 would keep it outermost. The right rule follows the left
+  // rule's declaration; anchor the search after `order: 0`.
+  const zeroIdx = HORIZONTAL_STRIP_CSS.indexOf('order: 0 !important')
+  const rightInnerIdx = HORIZONTAL_STRIP_CSS.indexOf(
+    'html.sidebar-ux-start-edge-inner',
+    zeroIdx,
+  )
+  const rightInnerBlock = HORIZONTAL_STRIP_CSS.substring(
+    rightInnerIdx,
+    HORIZONTAL_STRIP_CSS.indexOf('}', rightInnerIdx),
+  )
+  assertIncludes(rightInnerBlock, 'order: -1 !important', 'right inner anchors Start tab-facing')
 }
 
 // ── 5. Mobile rows (both drawers): 52×48 ──

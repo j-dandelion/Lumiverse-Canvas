@@ -34,7 +34,8 @@ import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
 import { mountPanelChrome, teardownPanelChrome, applyOsWindowControlsChange } from '../os/panel-chrome'
-import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'
 import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins, clearWelcomeReflow } from '../chat/reflow'
@@ -472,6 +473,9 @@ const drawerLocationFeature: CanvasFeature = {
     // Spec §4.5: a floating Start menu cannot survive the strip moving
     // underneath it — dismiss before the geometry settles.
     hideStartMenu({ immediate: true })
+    // Location changes recreate the pin hosts (which carry the Start-edge
+    // attr) — re-resolve all location-dependent chrome.
+    reconcileChromeLocations()
   },
 }
 
@@ -700,16 +704,53 @@ const coreTabsHiddenFeature: CanvasFeature = {
   },
 }
 
-/** OS secondary Start menu (default off): the second drawer's Start button +
- *  menu are opt-in. The main drawer's Start menu always lists every window
- *  from both drawers, so hiding the secondary chrome never strands a window.
- *  Registered after osModeFeature so a same-diff OS enable mounts the Start
- *  chrome before this feature removes/re-adds the secondary half. */
-const osSecondaryStartMenuFeature: CanvasFeature = {
-  id: 'osSecondaryStartMenu',
-  apply(prev, next) {
-    if (prev.osSecondaryStartMenu === next.osSecondaryStartMenu) return
-    applySecondaryStartMenuChange(next.osSecondaryStartMenu)
+/** Chrome locations (settings overhaul 2026-09-19): options/Start gear
+ *  placement + the Top/Bottom Start-edge anchor.
+ *
+ *  All three features are `unconditional`: their defaults include falsy values
+ *  (`null`, and the `startButtonAlwaysOnScreenEdge:false` case), so the
+ *  orchestrator's truthiness gate would skip the boot reconcile exactly when
+ *  chrome must be shown/hidden/stamped. Each mount/apply funnels into the one
+ *  idempotent `reconcileChromeLocations` (os/chrome-locations.ts), which is
+ *  also called from every shell/side lifecycle event.
+ *
+ *  `applySettings` keys on `feature.id`, so each new setting needs its own
+ *  feature entry even though the work is shared. */
+const optionsButtonLocationFeature: CanvasFeature = {
+  id: 'optionsButtonLocation',
+  unconditional: true,
+  mount() {
+    reconcileChromeLocations()
+    return () => teardownChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
+  },
+}
+
+/** OS Start button location (literal sides; defaults to main-drawer only).
+ *  Registered after osModeFeature (chrome exists only while OS mode is on). */
+const startButtonLocationFeature: CanvasFeature = {
+  id: 'startButtonLocation',
+  unconditional: true,
+  mount() {
+    reconcileChromeLocations()
+  },
+  apply() {
+    applyStartButtonLocationChange()
+  },
+}
+
+/** Top/Bottom only: anchor Start at the outer strip end (default) vs the
+ *  tab-facing side. The pin hosts carry the attr; CSS owns the order. */
+const startButtonAlwaysOnScreenEdgeFeature: CanvasFeature = {
+  id: 'startButtonAlwaysOnScreenEdge',
+  unconditional: true,
+  mount() {
+    reconcileChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
   },
 }
 
@@ -753,8 +794,11 @@ export const FEATURES: readonly CanvasFeature[] = [
   // M8: coreTabsHidden must apply AFTER osModeFeature (OS-off flips both
   // settings in one diff; feature apply order is FEATURES order).
   coreTabsHiddenFeature,
-  // OS secondary Start chrome: downstream of the OS mount pipeline.
-  osSecondaryStartMenuFeature,
+  // Chrome locations: downstream of the OS mount pipeline (Start chrome) and
+  // the drawer-location geometry pass. Unconditional — see feature docs.
+  startButtonLocationFeature,
+  optionsButtonLocationFeature,
+  startButtonAlwaysOnScreenEdgeFeature,
   // OS header controls: same downstream placement (chrome pass only).
   osWindowControlsFeature,
   dragAndDropDrawerTabsFeature,

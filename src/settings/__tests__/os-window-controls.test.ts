@@ -167,7 +167,7 @@ function byClass(root: El, cls: string): El[] {
 
 function rowByLabel(root: El, label: string): El {
   for (const row of byClass(root, 'sidebar-ux-panel-row')) {
-    const labelEl = row.children[0]?.children[0]
+    const labelEl = row.querySelector('.sidebar-ux-panel-row-label')
     if (labelEl?.textContent === label) return row
   }
   throw new Error(`setting row not found: ${label}`)
@@ -247,7 +247,7 @@ describe('osWindowControls source pins', () => {
   test('panel exposes the row, writes the setting, and locks it', () => {
     expect(panelSrc).toContain("label: 'Separate minimize and close controls'")
     expect(panelSrc).toContain('setSettings({ osWindowControls: v })')
-    expect(panelSrc).toContain('const d = !getSettings().osMode')
+    expect(panelSrc).toContain('const d = !s.osMode')
   })
 
   test('context-menu Close stays unconditional (not gated by the setting)', () => {

@@ -7,7 +7,7 @@
  *     button (D10), the secondary strip's end; Top/Bottom mode → the OUTER
  *     (screen-edge) end of each strip via CSS `order` (the S8 #3 dock-order
  *     trick — single geometry authority stays in tab-position.ts). The
- *     SECONDARY button is opt-in via the `osSecondaryStartMenu` setting
+ *     secondary Start button is placed by the `startButtonLocation` setting
  *     (default off): the main drawer's Start menu still lists every window
  *     from both drawers, so the secondary chrome is a convenience, never the
  *     only return path.
@@ -38,8 +38,9 @@
 
 import type { Side } from '../core/model'
 import { getModel, getHost } from '../recon/dispatch'
-import { getDrawerTabs } from '../store'
+import { getDrawerTabs, getMainDrawerSide } from '../store'
 import { getSettings, isOsModeEnabled } from '../settings/state'
+import { resolveChromeSides } from '../sidebar/chrome-sides'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
@@ -58,6 +59,10 @@ import {
 } from './start-menu-motion'
 
 const START_ATTR = 'data-canvas-os-start'
+/** Which drawer owns a Start button (`primary` | `secondary`). Stamped on
+ *  every ensure so a per-side removal sweep can never take the other side's
+ *  button (pinned lists live outside the shell wrappers). */
+const START_SIDE_ATTR = 'data-canvas-start-side'
 const MENU_ID = 'canvas-os-start-menu'
 /** Secondary Start dock: carries the main-drawer dock chrome (divider + 8px
  *  gap + bottom anchor) so the separator is owned by the container, not the
@@ -599,16 +604,20 @@ function startButtonHtml(): string {
 /**
  * Ensure the side's Start button exists in the right slot (idempotent):
  *   - Sides, main mirror → the bottom dock, beneath the settings button (D10).
- *   - Sides, secondary → its own bottom dock (same `.sidebar-ux-tab-list-bottom`
- *     chrome as the main drawer's Settings dock: divider + 8px gap, anchored
- *     to the strip end). The divider is therefore NOT part of the button.
+ *   - Sides, secondary → the shared secondary dock (same
+ *     `.sidebar-ux-tab-list-bottom` chrome as the main drawer's Settings dock:
+ *     divider + 8px gap, anchored to the strip end). The divider is therefore
+ *     NOT part of the button. The Options gear lives in the same dock when
+ *     its location includes this side — never create a second dock (the
+ *     last-child invariant in docs/pitfalls.md).
  *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end of its dock/list
- *     (HORIZONTAL_STRIP_CSS keys on the wrapper's sidebar-ux-side-* class:
- *     left → -1 first, right → 1 last), so an in-place side flip re-orders
- *     without re-running this ensure. No inline order is kept.
+ *     (HORIZONTAL_STRIP_CSS keys on the pin host's sidebar-ux-side-* class and
+ *     the `sidebar-ux-start-edge-inner` root class; an in-place side flip
+ *     re-orders without
+ *     re-running this ensure). No inline order is kept.
  *
- * The SECONDARY side is gated by the callers on `osSecondaryStartMenu`
- * (default off); this ensure itself is placement-only.
+ * Placement is location-agnostic: the caller decides WHICH sides get a button
+ * (`resolveChromeSides`), this ensure only positions it within the side.
  */
 async function ensureStartButtonForSide(side: Side): Promise<void> {
   const list = side === 'primary' ? await getMainMirrorList() : getSecondaryTabList()
@@ -620,6 +629,7 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
     template.innerHTML = startButtonHtml().trim()
     btn = template.content.firstElementChild as HTMLButtonElement
   }
+  btn.setAttribute(START_SIDE_ATTR, side)
   if (side === 'primary') {
     if (!btn.parentElement) {
       const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null
@@ -627,7 +637,7 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
       else list.appendChild(btn)
     }
   } else {
-    // Secondary: wrap the Start in its own dock so the divider matches the
+    // Secondary: wrap the Start in the shared dock so the divider matches the
     // main drawer's Settings dock exactly (container border, not button).
     let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`) as HTMLElement | null
     if (!dock) {
@@ -658,21 +668,36 @@ async function getMainMirrorList(): Promise<HTMLElement | null> {
 }
 
 /**
- * Remove the second drawer's Start chrome: its button and its dock (the dock
- * carries the divider, so an empty dock must not survive). Idempotent.
+ * Remove one side's Start chrome. Idempotent.
  *
- * The dock is removed DOCUMENT-WIDE because a pinned list can carry a live
- * dock while `getSecondaryTabList()` resolves a remounting in-wrapper list —
- * the class is unique to the secondary Start, so this cannot hit the primary.
- * The BUTTON is only queried through `getSecondaryTabList()`: a document-wide
- * button query would remove the primary Start too.
+ * The button is matched by its stamped side attribute so a document-wide
+ * sweep cannot remove the other side's button (pinned lists live outside the
+ * shell wrappers, and a remount can leave an orphan). For the secondary, the
+ * shared dock is removed only when it has no other content left — the Options
+ * gear may still live in it (settings-dock.ts).
  */
-function removeSecondaryStartChrome(): void {
-  for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
-    dock.remove()
+function removeStartChromeForSide(side: Side): void {
+  for (const btn of Array.from(
+    document.querySelectorAll(`button[${START_ATTR}][${START_SIDE_ATTR}="${side}"]`),
+  )) {
+    btn.remove()
   }
-  getSecondaryTabList()?.querySelector(`button[${START_ATTR}]`)?.remove()
-  if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })
+  if (side === 'secondary') {
+    for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
+      if (!dock.firstElementChild) dock.remove()
+    }
+  }
+  if (_menuOpenFor === side) hideStartMenu({ immediate: true })
+}
+
+/**
+ * Reconcile both sides' Start chrome against the resolved location set
+ * (`startButtonLocation` + live main side + second-drawer state). Exported
+ * for the unified `reconcileChromeLocations` (os/chrome-locations.ts); the
+ * rAF-coalesced `scheduleEnsureButtons` is the feature/shell-event entry.
+ */
+export function reconcileStartChrome(): void {
+  scheduleEnsureButtons()
 }
 
 function scheduleEnsureButtons(): void {
@@ -682,17 +707,21 @@ function scheduleEnsureButtons(): void {
     // A remounted shell can strand an open menu on a dead anchor; the ensure
     // pass is the one place that always runs after a remount.
     reconcileStartMenuPresence()
-    await ensureStartButtonForSide('primary')
-    if (isOsModeEnabled()) {
-      if (getSettings().secondSidebarEnabled && getSettings().osSecondaryStartMenu) {
-        await ensureStartButtonForSide('secondary')
-      } else {
-        // `osSecondaryStartMenu` off (default), or the second drawer disabled
-        // mid-session: the Start button (and its dock) leave with the strip
-        // (F6 companion — the enable path re-ensures on demand).
-        removeSecondaryStartChrome()
-      }
-    }
+    if (!isOsModeEnabled()) return
+    const resolved = resolveChromeSides(
+      getSettings().startButtonLocation,
+      getMainDrawerSide(),
+      !!getSettings().secondSidebarEnabled,
+    )
+    if (resolved.main) await ensureStartButtonForSide('primary')
+    else removeStartChromeForSide('primary')
+    if (resolved.second) await ensureStartButtonForSide('secondary')
+    else removeStartChromeForSide('secondary')
+    // The Start button may have joined/left a dock that was collapsed while
+    // empty — re-evaluate. Dynamic import avoids a settings-dock cycle.
+    void import('../sidebar/settings-dock')
+      .then((m) => m.refreshMainDockEmptyState())
+      .catch(() => { /* module unavailable in some test harnesses */ })
   })
 }
 
@@ -741,15 +770,14 @@ export function mountStartMenu(): void {
 }
 
 /**
- * Live-apply the `osSecondaryStartMenu` setting (feature apply). OS chrome
- * only exists while OS mode is on; the boot / OS-enable path reads the
- * setting inside the ensure pass, so there is nothing to do when OS mode is
- * off.
+ * Live-apply the `startButtonLocation` setting (feature apply). OS chrome
+ * only exists while OS mode is on; the ensure pass resolves the location set
+ * itself (live main side + second-drawer state), so this is a no-op when OS
+ * mode is off.
  */
-export function applySecondaryStartMenuChange(enabled: boolean): void {
+export function applyStartButtonLocationChange(): void {
   if (!isOsModeEnabled()) return
-  if (enabled) scheduleEnsureButtons()
-  else removeSecondaryStartChrome()
+  scheduleEnsureButtons()
 }
 
 /** Teardown: remove buttons + docks + any open menu (feature unmount / disable). */
@@ -763,10 +791,11 @@ export function teardownStartMenu(): void {
   for (const btn of Array.from(document.querySelectorAll(`button[${START_ATTR}]`))) {
     btn.remove()
   }
-  // Remove the secondary Start docks too — an empty dock would leave a stray
-  // divider line in the strip.
+  // Remove the secondary Start docks too — but only when empty: the shared
+  // dock may still host the Options gear (settings-dock.ts), which owns its
+  // own lifecycle.
   for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
-    dock.remove()
+    if (!dock.firstElementChild) dock.remove()
   }
   // The menu stylesheet is only needed while OS-mode Start chrome exists.
   // Never remove it in hideStartMenu — the close animation still needs it.

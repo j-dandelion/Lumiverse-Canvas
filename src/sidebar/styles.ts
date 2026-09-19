@@ -503,7 +503,13 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-lis
    the default order:0; the values also work in the no-dock fallback, where
    the list's sections default to 0. Placed AFTER the 48×48 sizing rule so
    os-start-button-css.test.ts keeps parsing the sizing block as the first
-   [data-canvas-os-start] occurrence. */
+   [data-canvas-os-start] occurrence.
+
+   These outer rules are the unstamped default. The inner variant
+   (startButtonAlwaysOnScreenEdge off, chrome-locations sets
+   .sidebar-ux-start-edge-inner on <html>) overrides them below with higher
+   specificity — a root class, not per-host attrs, so pin-host recreation
+   cannot drop the variant. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: -1 !important;
@@ -511,6 +517,17 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-lef
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: 1 !important;
+}
+/* Inner variant: Start on the TAB-FACING side of its dock. Left side: default
+   order keeps it after the gear. Right side: order:-1 — the dock DOM is
+   [gear, start], so plain order:0 would leave Start outermost. */
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: 0 !important;
+}
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
+  order: -1 !important;
 }
 
 /* Main strip's inner section: row + fills the zone. Cluster anchoring lives

@@ -82,8 +82,8 @@ assertIncludes(startMenu, 'if (anim) _closing = { menu, anim }', '_closing only 
 }
 assertIncludes(
   startMenu,
-  "if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })",
-  'second-drawer disable hides immediately (anchor is about to leave)',
+  "if (_menuOpenFor === side) hideStartMenu({ immediate: true })",
+  'per-side removal hides immediately when its own menu is open (anchor is about to leave)',
 )
 assertIncludes(
   startMenu,
@@ -135,8 +135,13 @@ assertIncludes(motion, '--lumiverse-ui-scale', 'ui-scale coordinate contract is 
 // ── 7. Approved adjacent fixes ──
 assertIncludes(
   registry,
-  "import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'",
-  'registry imports the Start-menu dismissal + the secondary-setting apply hook',
+  "import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'",
+  'registry imports the Start-menu dismissal + the start-location apply hook',
+)
+assertIncludes(
+  registry,
+  "import { reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'",
+  'registry imports the unified chrome-location reconcile',
 )
 assertIncludes(
   registry,

@@ -122,7 +122,7 @@ function byClass(root: El, cls: string): El[] {
 
 function rowByLabel(root: El, label: string): El {
   for (const row of byClass(root, 'sidebar-ux-panel-row')) {
-    const labelEl = row.children[0]?.children[0]
+    const labelEl = row.querySelector('.sidebar-ux-panel-row-label')
     if (labelEl?.textContent === label) return row
   }
   throw new Error(`setting row not found: ${label}`)
@@ -143,9 +143,9 @@ describe('welcomeReflow setting', () => {
     expect(mergeCanvasSettings({ welcomeReflow: false }).welcomeReflow).toBe(false)
   })
 
-  test('panel row lives in Chat, is enabled, and toggles the setting', () => {
+  test('panel row lives in Layout, is enabled, and toggles the setting', () => {
     const root = mountPanel()
-    const row = rowByLabel(root, 'Center the Welcome screen in the visible area')
+    const row = rowByLabel(root, 'Center the landing page in the visible area')
     expect(control(row)).toBeDefined()
     expect(control(row).getAttribute('aria-checked')).toBe('true')
     // Independent of chatReflow — never disabled by the other consumer.

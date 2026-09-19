@@ -28,6 +28,7 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `LayoutState` — persisted drawer state (`types.ts`)
 - `CanvasSettings` — all user-togglable settings (`types.ts`)
 - `DrawerLocation` — `'sides' | 'top' | 'bottom'`; Top/Bottom pins one horizontal tab strip per zone to the viewport edge (`types.ts`)
+- `ChromeSideValue` — `'left' | 'right' | 'both' | null` for `optionsButtonLocation` / `startButtonLocation`; `null` = main drawer only, resolved live by `resolveChromeSides` (`types.ts` → `sidebar/chrome-sides.ts`)
 - `horizontalSplit` — Top/Bottom dual-drawer boundary fraction (0.5 default, normalized 0.1–0.9); dragged via the strip handle, drives `--sidebar-ux-hsplit` (`types.ts` → `sidebar/tab-position.ts`)
 - `FullCanvasSettings` — `Required<CanvasSettings>` with all fields non-optional (`settings/state.ts`)
 - `CanvasFeature` — feature lifecycle hooks (`features/registry.ts`)
@@ -50,6 +51,9 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `src/sidebar/tab-position.ts` — the single strip-geometry writer: pin host chrome (`data-strip-axis`/`data-strip-edge`, zone split), list chrome + clear, spacer sync
 - `src/sidebar/main-tab-pin.ts` — main-mirror pin: exclusive active key, `userPicked` guard, neighbor handoff
 - `src/tabs/assignment.ts` — owned-model facade (TabKey-keyed)
+- `src/sidebar/chrome-sides.ts` — pure resolution of the chrome-location settings against the live main side + dual state
+- `src/sidebar/settings-dock.ts` — Options (Settings gear) location: hides the main mirror gear, clones it into the shared secondary dock, collapses empty docks
+- `src/os/chrome-locations.ts` — unified `reconcileChromeLocations()` fan-out (Options gear + Start sides + the `sidebar-ux-start-edge-inner` root class)
 - `src/slash/runtime.ts` — slash command runtime wiring
 - `src/persist/layout-repo.ts` + `src/persist/layout-load.ts` — layout persistence + IPC
 - `src/persist/settings-repo.ts` — settings persistence + IPC

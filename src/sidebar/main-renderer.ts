@@ -72,7 +72,7 @@ export const MAIN_MIRROR_LIST_MAIN_CLASS = 'sidebar-ux-tab-list-main'
 export const MAIN_MIRROR_LIST_BOTTOM_CLASS = 'sidebar-ux-tab-list-bottom'
 
 /** Fixed mirror key for the Settings chrome button (not a model TabKey). */
-const SETTINGS_MIRROR_KEY = '__canvas-settings__'
+export const SETTINGS_MIRROR_KEY = '__canvas-settings__'
 
 /** Renderer subscription handle (null = not subscribed). */
 let _unsubModelChanged: (() => void) | null = null
@@ -321,7 +321,7 @@ function cssAttrEscape(value: string): string {
 // ---------------------------------------------------------------------------
 
 /** Scan the host sidebar for the Settings chrome button (bottom dock). */
-function findSettingsTwin(): HTMLElement | null {
+export function findSettingsTwin(): HTMLElement | null {
   const sidebar = getMainSidebar()
   if (!sidebar) return null
   const buttons = Array.from(

@@ -1,14 +1,9 @@
-// Drawer location panel control + gating (S8 / WS1).
+// Drawer location / mode panel control tests (S8 + 2026-09-19 overhaul).
 //
-// Drives the REAL settings panel with a minimal DOM stub and a mocked
-// features registry (the live-apply fan-out is irrelevant here). Asserts:
-// segmented-control aria state, taskbar/outer-edge locks, the hide row's
-// inert mode, dynamic hint text, arrow-key selection, and the disabled
-// seam exposed by the control handle (pre-hydration guard).
-//
-// DOM stubs follow the repo convention (see
-// src/settings/__tests__/disable-content-stuck-repro.test.ts): hand-rolled
-// elements, no jsdom.
+// The panel's applySettings fan-out imports the feature graph; the real
+// registry is mocked out (see the mock below) so only the panel DOM is
+// exercised. `rowByLabel` resolves the label inside the new label-head wrapper
+// (label + `?` help button).
 
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 
@@ -25,6 +20,7 @@ class FakeElement {
   textContent = ''
   type = ''
   disabled = false
+  hidden = false
   tabIndex = 0
   style: Record<string, string> = {}
   children: FakeElement[] = []
@@ -54,6 +50,8 @@ class FakeElement {
 
   setAttribute(k: string, v: string) { this._attrs.set(k, v) }
   getAttribute(k: string) { return this._attrs.get(k) ?? null }
+  removeAttribute(k: string) { this._attrs.delete(k) }
+  hasAttribute(k: string) { return this._attrs.has(k) }
   appendChild(child: FakeElement) {
     child.parentElement = this
     this.children.push(child)
@@ -130,7 +128,7 @@ function byClass(root: El, cls: string): El[] {
 
 function rowByLabel(root: El, label: string): El {
   for (const row of byClass(root, 'sidebar-ux-panel-row')) {
-    const labelEl = row.children[0]?.children[0]
+    const labelEl = row.querySelector('.sidebar-ux-panel-row-label')
     if (labelEl?.textContent === label) return row
   }
   throw new Error(`setting row not found: ${label}`)
@@ -139,14 +137,27 @@ function rowByLabel(root: El, label: string): El {
 function control(row: El): El { return row.children[1] }
 function hint(row: El): El { return row.querySelector('.sidebar-ux-panel-row-hint')! }
 
-describe('drawer location panel (WS1)', () => {
+/** The Drawer layout segmented is the first radiogroup in the panel. */
+function layoutGroup(root: El): El {
+  const groups = byClass(root, 'sidebar-ux-panel-segmented')
+  const layout = groups.find((g) => g.getAttribute('aria-label') === 'Drawer layout')
+  if (!layout) throw new Error('Drawer layout group not found')
+  return layout
+}
+
+function modeTiles(root: El): El {
+  const modes = root.querySelector('.sidebar-ux-panel-modes')
+  if (!modes) throw new Error('mode tiles not found')
+  return modes
+}
+
+describe('drawer location panel', () => {
   beforeEach(() => { hydrateSettings(null) })
 
-  test('Sides default: radiogroup aria, taskbar rows gated by stored settings, DnD enabled', () => {
+  test('Sides default: labels + gating', () => {
     const root = mountPanel()
-    const group = root.querySelector('.sidebar-ux-panel-segmented')!
+    const group = layoutGroup(root)
     expect(group.getAttribute('role')).toBe('radiogroup')
-    expect(group.getAttribute('aria-label')).toBe('Drawer location')
     const radios = group.children
     expect(radios.length).toBe(3)
     expect(radios[0].textContent).toBe('Sides')
@@ -154,26 +165,22 @@ describe('drawer location panel (WS1)', () => {
     expect(radios[2].textContent).toBe('Bottom')
     for (const r of radios) expect(r.getAttribute('role')).toBe('radio')
     expect(radios[0].getAttribute('aria-checked')).toBe('true')
-    expect(radios[1].getAttribute('aria-checked')).toBe('false')
-    expect(radios[2].getAttribute('aria-checked')).toBe('false')
 
-    const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
-    const taskbarRow = rowByLabel(root, 'Taskbar mode')
+    const moveRow = rowByLabel(root, 'Move tab strip to outer edge')
     const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
-    const dndRow = rowByLabel(root, 'Drag and drop drawer tabs')
+    const dndRow = rowByLabel(root, 'Drag and drop tabs')
     expect(control(moveRow).disabled).toBe(false)
-    expect(control(taskbarRow).disabled).toBe(true)
     expect(control(hideRow).disabled).toBe(true)
     expect(control(dndRow).disabled).toBe(false)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
-    expect(taskbarRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(moveRow).textContent).toContain('Moves the list of tab buttons')
-    expect(hint(taskbarRow).textContent).toContain('Pins tab buttons to the screen edge')
+    expect(hideRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
+    expect(hint(moveRow).textContent).toContain('Puts the tab strip on the screen edge')
+    expect(hint(hideRow).textContent).toContain('Hides the small handle')
   })
 
-  test('selecting Top auto-enables and locks the taskbar rows; hide row is inert', () => {
+  test('selecting Top auto-enables and locks the chrome rows; hide row is inert', () => {
     const root = mountPanel()
-    const group = root.querySelector('.sidebar-ux-panel-segmented')!
+    const group = layoutGroup(root)
     group.children[1].click() // Top
 
     const s = getSettings()
@@ -183,32 +190,23 @@ describe('drawer location panel (WS1)', () => {
     expect(group.children[1].getAttribute('aria-checked')).toBe('true')
     expect(group.children[0].getAttribute('aria-checked')).toBe('false')
 
-    const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
-    const taskbarRow = rowByLabel(root, 'Taskbar mode')
+    const moveRow = rowByLabel(root, 'Move tab strip to outer edge')
     const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
-    const dndRow = rowByLabel(root, 'Drag and drop drawer tabs')
     expect(control(moveRow).disabled).toBe(true)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(control(taskbarRow).disabled).toBe(true)
-    expect(taskbarRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
     expect(hint(moveRow).textContent).toBe(
-      'Required by Drawer location: Top/Bottom. Switch to Sides to change.',
-    )
-    expect(hint(taskbarRow).textContent).toBe(
-      'Required by Drawer location: Top/Bottom. Switch to Sides to change.',
+      'Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.',
     )
     // Hide row renders inert + checked regardless of the stored false.
     expect(control(hideRow).disabled).toBe(true)
     expect(control(hideRow).getAttribute('aria-checked')).toBe('true')
     expect(control(hideRow).classList.contains('sidebar-ux-panel-toggle-on')).toBe(true)
-    expect(hint(hideRow).textContent).toContain('Handles are hidden')
-    // DnD stays enabled (desktop fine-pointer only is a runtime gate).
-    expect(control(dndRow).disabled).toBe(false)
+    expect(hint(hideRow).textContent).toContain('Handles are always hidden')
   })
 
   test('returning to Sides restores the pre-excursion Sides flags (defaults when unset)', () => {
     const root = mountPanel()
-    const group = root.querySelector('.sidebar-ux-panel-segmented')!
+    const group = layoutGroup(root)
     group.children[2].click() // Bottom (forces taskbar chrome on)
     group.children[0].click() // Sides
 
@@ -219,30 +217,26 @@ describe('drawer location panel (WS1)', () => {
     expect(s.taskbarMode).toBe(false)
     expect(s.moveControlsToOuterEdge).toBe(false)
 
-    const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
-    const taskbarRow = rowByLabel(root, 'Taskbar mode')
+    const moveRow = rowByLabel(root, 'Move tab strip to outer edge')
     const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
     expect(control(moveRow).disabled).toBe(false)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
-    // Taskbar requires outer-edge (now off) → locked off again.
-    expect(control(taskbarRow).disabled).toBe(true)
-    expect(taskbarRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(moveRow).textContent).toContain('Moves the list of tab buttons')
-    expect(hint(taskbarRow).textContent).toContain('Pins tab buttons to the screen edge')
+    expect(hint(moveRow).textContent).toContain('Puts the tab strip on the screen edge')
     // Hide requires taskbar → off + disabled with the normal hint.
     expect(control(hideRow).getAttribute('aria-checked')).toBe('false')
     expect(control(hideRow).disabled).toBe(true)
-    expect(hint(hideRow).textContent).toContain('Hides the small button')
+    expect(hint(hideRow).textContent).toContain('Hides the small handle')
   })
 
   test('returning to Sides restores flags the user explicitly enabled on Sides', () => {
     const root = mountPanel()
-    const group = root.querySelector('.sidebar-ux-panel-segmented')!
-    const moveRow = rowByLabel(root, 'Move tab controls to outer edge')
-    const taskbarRow = rowByLabel(root, 'Taskbar mode')
-    // Record a deliberate on/on choice while on Sides.
+    const group = layoutGroup(root)
+    const tiles = modeTiles(root)
+    const moveRow = rowByLabel(root, 'Move tab strip to outer edge')
+    // Record a deliberate on/on choice while on Sides: outer edge toggle +
+    // Taskbar mode tile (which forces the pair).
     control(moveRow).click()
-    control(taskbarRow).click()
+    tiles.children[1].click() // Taskbar
     expect(getSettings().moveControlsToOuterEdge).toBe(true)
     expect(getSettings().taskbarMode).toBe(true)
 
@@ -253,12 +247,13 @@ describe('drawer location panel (WS1)', () => {
     expect(s.taskbarMode).toBe(true)
     expect(s.moveControlsToOuterEdge).toBe(true)
     expect(control(moveRow).disabled).toBe(false)
-    expect(control(taskbarRow).disabled).toBe(false)
+    const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
+    expect(control(hideRow).disabled).toBe(false)
   })
 
   test('arrow keys move the radio selection', () => {
     const root = mountPanel()
-    const group = root.querySelector('.sidebar-ux-panel-segmented')!
+    const group = layoutGroup(root)
     group.children[0].fireKey('ArrowRight')
     expect(getSettings().drawerLocation).toBe('top')
     expect(group.children[1].getAttribute('aria-checked')).toBe('true')
@@ -268,6 +263,71 @@ describe('drawer location panel (WS1)', () => {
     expect(getSettings().drawerLocation).toBe('sides')
     group.children[0].fireKey('ArrowLeft')
     expect(getSettings().drawerLocation).toBe('bottom')
+  })
+})
+
+describe('mode tiles', () => {
+  beforeEach(() => { hydrateSettings(null) })
+
+  test('derives the effective tile from settings', () => {
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+    expect(tiles.children[0].getAttribute('aria-checked')).toBe('true') // vanilla
+    expect(tiles.children[1].getAttribute('aria-checked')).toBe('false')
+    expect(tiles.children[2].getAttribute('aria-checked')).toBe('false')
+  })
+
+  test('Taskbar tile enables the pair, OS tile enables osMode, Vanilla clears', () => {
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+
+    tiles.children[1].click()
+    expect(getSettings().taskbarMode).toBe(true)
+    expect(getSettings().moveControlsToOuterEdge).toBe(true)
+    expect(getSettings().osMode).toBe(false)
+    refreshSettingsPanel()
+    expect(tiles.children[1].getAttribute('aria-checked')).toBe('true')
+
+    tiles.children[2].click()
+    expect(getSettings().osMode).toBe(true)
+    // Normalize invariant forces the chrome on.
+    expect(getSettings().taskbarMode).toBe(true)
+    expect(getSettings().moveControlsToOuterEdge).toBe(true)
+    expect(getSettings().coreTabsHidden).toBe(true)
+    refreshSettingsPanel()
+    expect(tiles.children[2].getAttribute('aria-checked')).toBe('true')
+
+    tiles.children[0].click()
+    expect(getSettings().osMode).toBe(false)
+    expect(getSettings().taskbarMode).toBe(false)
+    expect(getSettings().moveControlsToOuterEdge).toBe(false)
+    refreshSettingsPanel()
+    expect(tiles.children[0].getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('Vanilla from a Top layout auto-returns to Sides', () => {
+    const root = mountPanel()
+    const group = layoutGroup(root)
+    const tiles = modeTiles(root)
+    group.children[1].click() // Top
+    expect(getSettings().drawerLocation).toBe('top')
+    tiles.children[0].click() // Vanilla
+    expect(getSettings().drawerLocation).toBe('sides')
+    expect(getSettings().taskbarMode).toBe(false)
+    expect(getSettings().moveControlsToOuterEdge).toBe(false)
+  })
+
+  test('arrow keys move the tile selection', () => {
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+    tiles.children[0].fireKey('ArrowRight')
+    expect(getSettings().taskbarMode).toBe(true)
+    expect(tiles.children[1].getAttribute('aria-checked')).toBe('true')
+    tiles.children[1].fireKey('ArrowRight')
+    expect(getSettings().osMode).toBe(true)
+    tiles.children[2].fireKey('ArrowRight')
+    expect(getSettings().taskbarMode).toBe(false)
+    expect(getSettings().osMode).toBe(false)
   })
 })
 

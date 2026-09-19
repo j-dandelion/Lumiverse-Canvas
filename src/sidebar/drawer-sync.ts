@@ -718,6 +718,10 @@ export function checkSideChanged(): void {
     // (model→host) writes it back and the strip snaps back. See
     // convergeModelToHostSide.
     convergeModelToHostSide(currentSide)
+    // The settings panel's Main-drawer-side control is live-derived from
+    // getMainDrawerSide(); re-render only on a real flip (this MO fires on
+    // every wrapper class mutation, including open/close).
+    refreshSettingsPanelForSideChange()
   } else {
     // Same side (override settle echo) — just light-sync + stamp.
     _lastKnownSide = currentSide
@@ -742,6 +746,21 @@ export function checkSideChanged(): void {
 export function resetSideRemountStateAfterDisable(): void {
   setMainDrawerSideOverride(null)
   _lastKnownSide = getMainDrawerSide()
+  // Second-drawer chrome (Options gear / OS Start) must re-resolve against the
+  // now single-drawer world — the disable path tears the shell down without a
+  // DRAWER_SHELL_CREATED_EVENT, and the fallback rule keeps Settings reachable.
+  void import('../os/chrome-locations')
+    .then((m) => m.reconcileChromeLocations())
+    .catch(() => { /* module may be mid-teardown */ })
+  refreshSettingsPanelForSideChange()
+}
+
+/** Re-render the settings panel's live-derived controls (Main drawer side).
+ *  Dynamic import breaks the drawer-sync → state → panel → registry cycle. */
+function refreshSettingsPanelForSideChange(): void {
+  void import('../settings/state')
+    .then((m) => m.refreshSettingsPanel())
+    .catch(() => { /* settings module may be mid-teardown */ })
 }
 
 let _sideObserver: MutationObserver | null = null
@@ -829,6 +848,12 @@ function refreshSideGeometry(): void {
   // S8: a side swap mirrors every zone/host anchor — re-run the location
   // presentation + geometry pass (idempotent; skip-cache busts on side).
   void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
+  // S4 flips are geometry-only (no shell-created event), but they recreate
+  // the pin hosts and invert which drawer sits on which side — re-resolve the
+  // location-dependent chrome (Options gear, Start buttons, edge anchor).
+  void import('../os/chrome-locations')
+    .then((m) => m.reconcileChromeLocations())
+    .catch(() => { /* module may be mid-teardown */ })
 }
 
 /**
@@ -911,6 +936,9 @@ export async function applyCanvasSideChange(
     // subsequent rebind / startSideChangeWatcher cannot re-seed from
     // lagging DOM while shells already sit on desired.
     _lastKnownSide = desired
+    // Configure swap: the wrapper MO reads this as a same-side echo
+    // (lastKnown already stamped), so refresh the panel's side control here.
+    refreshSettingsPanelForSideChange()
 
     // Background settle only — do not block configure commit / next swap.
     // Latest gen owns settle; stale settles exit early via gen checks.

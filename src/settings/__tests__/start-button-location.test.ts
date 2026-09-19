@@ -1,11 +1,11 @@
-// osSecondaryStartMenu (2026-09-16): the second drawer's OS-mode Start
-// button/menu is opt-in (default OFF). Covers setting semantics (default,
-// merge passthrough, OS off/on survival, osChromePrefs non-involvement,
-// normalize no-op), the REAL settings-panel row (locked while OS mode is off
-// or the second drawer is disabled, hint swap, click writes the setting), and
-// source pins for the chrome gating + feature wiring — the applySettings diff
-// contract keys on feature.id, so the setting needs its own feature entry,
-// and the secondary ensure/removal paths must stay gated.
+// startButtonLocation (2026-09-19, replaces osSecondaryStartMenu): which
+// drawer(s) show the OS-mode Start button. Covers setting semantics (default
+// null = main drawer, legacy boolean migration, enum coercion, OS off/on
+// survival, osChromePrefs non-involvement), the REAL settings-panel row
+// (locked while OS mode is off, hint swap, click writes the setting), and
+// source pins for the location-resolved chrome + feature wiring — the
+// applySettings diff contract keys on feature.id, so the setting needs its own
+// feature entry.
 //
 // DOM stubs follow the repo convention (see drawer-location-panel.test.ts):
 // hand-rolled elements, no jsdom.
@@ -27,6 +27,7 @@ class FakeElement {
   textContent = ''
   type = ''
   disabled = false
+  hidden = false
   tabIndex = 0
   style: Record<string, string> = {}
   children: FakeElement[] = []
@@ -56,6 +57,8 @@ class FakeElement {
 
   setAttribute(k: string, v: string) { this._attrs.set(k, v) }
   getAttribute(k: string) { return this._attrs.get(k) ?? null }
+  removeAttribute(k: string) { this._attrs.delete(k) }
+  hasAttribute(k: string) { return this._attrs.has(k) }
   appendChild(child: FakeElement) {
     child.parentElement = this
     this.children.push(child)
@@ -119,36 +122,45 @@ type El = FakeElement
 
 // ── Setting semantics ────────────────────────────────────────────────────────
 
-describe('osSecondaryStartMenu semantics', () => {
+describe('startButtonLocation semantics', () => {
   beforeEach(() => { hydrateSettings(null) })
 
-  test('defaults to off for new and legacy blobs', () => {
-    expect(getSettings().osSecondaryStartMenu).toBe(false)
-    expect(mergeCanvasSettings(null).osSecondaryStartMenu).toBe(false)
-    expect(mergeCanvasSettings({}).osSecondaryStartMenu).toBe(false)
+  test('defaults to null (main drawer only) for new blobs', () => {
+    expect(getSettings().startButtonLocation).toBe(null)
+    expect(mergeCanvasSettings(null).startButtonLocation).toBe(null)
+    expect(mergeCanvasSettings({}).startButtonLocation).toBe(null)
   })
 
-  test('explicit value round-trips; the OS invariant does not touch it', () => {
-    expect(mergeCanvasSettings({ osSecondaryStartMenu: true }).osSecondaryStartMenu).toBe(true)
-    expect(
-      mergeCanvasSettings({ osMode: true, osSecondaryStartMenu: false }).osSecondaryStartMenu,
-    ).toBe(false)
-    const n = normalizeCanvasSettingsFields(
-      mergeCanvasSettings({ osMode: true, osSecondaryStartMenu: false }),
+  test('legacy osSecondaryStartMenu migrates: true → both, false → null', () => {
+    const legacyOn = mergeCanvasSettings({ osSecondaryStartMenu: true } as any)
+    expect(legacyOn.startButtonLocation).toBe('both')
+    const legacyOff = mergeCanvasSettings({ osSecondaryStartMenu: false } as any)
+    expect(legacyOff.startButtonLocation).toBe(null)
+    // Explicit new value wins over the legacy key.
+    const both = mergeCanvasSettings({ startButtonLocation: 'left', osSecondaryStartMenu: true } as any)
+    expect(both.startButtonLocation).toBe('left')
+  })
+
+  test('explicit values round-trip; unknown disk values coerce to null', () => {
+    expect(mergeCanvasSettings({ startButtonLocation: 'left' }).startButtonLocation).toBe('left')
+    expect(mergeCanvasSettings({ startButtonLocation: 'right' }).startButtonLocation).toBe('right')
+    expect(mergeCanvasSettings({ startButtonLocation: 'both' }).startButtonLocation).toBe('both')
+    const corrupt = normalizeCanvasSettingsFields(
+      mergeCanvasSettings({ startButtonLocation: 'middle' as any }),
     )
-    expect(n.osSecondaryStartMenu).toBe(false)
+    expect(corrupt.startButtonLocation).toBe(null)
   })
 
   test('survives OS off/on and is never snapshotted into osChromePrefs', () => {
-    hydrateSettings({ osMode: false, osSecondaryStartMenu: true })
-    expect(getSettings().osSecondaryStartMenu).toBe(true)
+    hydrateSettings({ osMode: false, startButtonLocation: 'both' })
+    expect(getSettings().startButtonLocation).toBe('both')
 
     setSettings({ osMode: true })
-    expect(getSettings().osSecondaryStartMenu).toBe(true)
-    expect((getSettings().osChromePrefs as any)?.osSecondaryStartMenu).toBeUndefined()
+    expect(getSettings().startButtonLocation).toBe('both')
+    expect((getSettings().osChromePrefs as any)?.startButtonLocation).toBeUndefined()
 
     setSettings({ osMode: false })
-    expect(getSettings().osSecondaryStartMenu).toBe(true)
+    expect(getSettings().startButtonLocation).toBe('both')
   })
 })
 
@@ -169,7 +181,7 @@ function byClass(root: El, cls: string): El[] {
 
 function rowByLabel(root: El, label: string): El {
   for (const row of byClass(root, 'sidebar-ux-panel-row')) {
-    const labelEl = row.children[0]?.children[0]
+    const labelEl = row.querySelector('.sidebar-ux-panel-row-label')
     if (labelEl?.textContent === label) return row
   }
   throw new Error(`setting row not found: ${label}`)
@@ -178,43 +190,39 @@ function rowByLabel(root: El, label: string): El {
 function control(row: El): El { return row.children[1] }
 function hint(row: El): El { return row.querySelector('.sidebar-ux-panel-row-hint')! }
 
-describe('osSecondaryStartMenu panel row', () => {
+describe('startButtonLocation panel row', () => {
   beforeEach(() => { hydrateSettings(null) })
 
   test('locked while OS mode is off', () => {
-    hydrateSettings({ osMode: false, secondSidebarEnabled: true, osSecondaryStartMenu: true })
+    hydrateSettings({ osMode: false, secondSidebarEnabled: true, startButtonLocation: 'both' })
     const root = mountPanel()
-    const row = rowByLabel(root, 'Start menu in the second drawer')
+    const row = rowByLabel(root, 'Start button location')
     expect(control(row).disabled).toBe(true)
     expect(row.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode and the second drawer')
+    expect(hint(row).textContent).toContain('Requires OS mode')
   })
 
-  test('locked while the second drawer is disabled', () => {
-    hydrateSettings({ osMode: true, secondSidebarEnabled: false })
+  test('enabled with OS mode on; selection reflects the stored location', () => {
+    hydrateSettings({ osMode: true, secondSidebarEnabled: true, startButtonLocation: 'both' })
     const root = mountPanel()
-    const row = rowByLabel(root, 'Start menu in the second drawer')
-    expect(control(row).disabled).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode and the second drawer')
-  })
-
-  test('enabled with OS mode + second drawer on; click writes the setting', () => {
-    hydrateSettings({ osMode: true, secondSidebarEnabled: true, osSecondaryStartMenu: false })
-    const root = mountPanel()
-    const row = rowByLabel(root, 'Start menu in the second drawer')
+    const row = rowByLabel(root, 'Start button location')
     expect(control(row).disabled).toBe(false)
-    expect(control(row).getAttribute('aria-checked')).toBe('false')
-    expect(hint(row).textContent).toContain('Off by default')
+    expect(hint(row).textContent).toContain('which drawer shows the Start button')
+    const selected = Array.from(control(row).children as unknown as El[])
+      .filter((b) => b.getAttribute('aria-checked') === 'true')
+    expect(selected.length).toBe(1)
+    expect(selected[0].textContent).toBe('Both')
 
-    control(row).click()
-    expect(getSettings().osSecondaryStartMenu).toBe(true)
-    expect(control(row).getAttribute('aria-checked')).toBe('true')
+    // Click the Left drawer option → setting writes 'left'.
+    const left = (control(row).children as unknown as El[])[0]
+    left.click()
+    expect(getSettings().startButtonLocation).toBe('left')
   })
 
   test('OS mode flip re-locks the row in place via refresh', () => {
     hydrateSettings({ osMode: true, secondSidebarEnabled: true })
     const root = mountPanel()
-    const row = rowByLabel(root, 'Start menu in the second drawer')
+    const row = rowByLabel(root, 'Start button location')
     expect(control(row).disabled).toBe(false)
 
     setSettings({ osMode: false })
@@ -224,46 +232,52 @@ describe('osSecondaryStartMenu panel row', () => {
   })
 })
 
-// ── Source pins (chrome gating + feature wiring) ─────────────────────────────
+// ── Source pins (location-resolved chrome + feature wiring) ──────────────────
 
 const startMenuSrc = readFileSync(join(process.cwd(), 'src/os/start-menu.ts'), 'utf8')
 const registrySrc = readFileSync(join(process.cwd(), 'src/features/registry.ts'), 'utf8')
 const panelSrc = readFileSync(join(process.cwd(), 'src/settings/panel.ts'), 'utf8')
+const chromeLocSrc = readFileSync(join(process.cwd(), 'src/os/chrome-locations.ts'), 'utf8')
 
-describe('osSecondaryStartMenu source pins', () => {
-  test('secondary ensure is gated on the setting', () => {
-    expect(startMenuSrc).toContain(
-      'getSettings().secondSidebarEnabled && getSettings().osSecondaryStartMenu',
-    )
+describe('startButtonLocation source pins', () => {
+  test('ensure pass resolves the location set (no boolean gate left)', () => {
+    expect(startMenuSrc).toContain('resolveChromeSides(')
+    expect(startMenuSrc).toContain('getSettings().startButtonLocation')
+    expect(startMenuSrc).not.toContain('osSecondaryStartMenu')
   })
 
   test('apply hook exists and no-ops without OS mode', () => {
-    expect(startMenuSrc).toContain('export function applySecondaryStartMenuChange(')
+    expect(startMenuSrc).toContain('export function applyStartButtonLocationChange(')
     expect(startMenuSrc).toContain('if (!isOsModeEnabled()) return')
   })
 
-  test('removal is document-wide for docks, list-scoped for the button', () => {
-    expect(startMenuSrc).toContain('document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`)')
-    expect(startMenuSrc).toContain('getSecondaryTabList()?.querySelector(`button[${START_ATTR}]`)?.remove()')
-    // The lifecycle pin literal must survive the extraction.
-    expect(startMenuSrc).toContain("if (_menuOpenFor === 'secondary') hideStartMenu({ immediate: true })")
+  test('per-side removal is stamped and dock-empty-safe (gear may remain)', () => {
+    expect(startMenuSrc).toContain("START_SIDE_ATTR")
+    expect(startMenuSrc).toContain('if (!dock.firstElementChild) dock.remove()')
+    expect(startMenuSrc).toContain("if (_menuOpenFor === side) hideStartMenu({ immediate: true })")
   })
 
   test('runtime mount self-registers a teardown (disable-leak fix)', () => {
     expect(startMenuSrc).toContain('registerCleanup(teardownStartMenu)')
   })
 
-  test('registry wires the setting as its own feature id', () => {
-    expect(registrySrc).toContain("id: 'osSecondaryStartMenu'")
-    expect(registrySrc).toContain('applySecondaryStartMenuChange(next.osSecondaryStartMenu)')
-    expect(registrySrc).toContain(
-      "import { applySecondaryStartMenuChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'",
-    )
+  test('registry wires the setting as its own unconditional feature id', () => {
+    expect(registrySrc).toContain("id: 'startButtonLocation'")
+    expect(registrySrc).toContain('applyStartButtonLocationChange()')
+    expect(registrySrc).toContain('startButtonLocationFeature')
+    expect(registrySrc).toContain("import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'")
+  })
+
+  test('chrome lifecycle fans out through the unified reconcile', () => {
+    expect(chromeLocSrc).toContain('export function reconcileChromeLocations(')
+    expect(chromeLocSrc).toContain('resolveChromeSides(s.optionsButtonLocation')
+    expect(registrySrc).toContain('reconcileChromeLocations()')
   })
 
   test('panel exposes the row, writes the setting, and locks it', () => {
-    expect(panelSrc).toContain("label: 'Start menu in the second drawer'")
-    expect(panelSrc).toContain('setSettings({ osSecondaryStartMenu: v })')
-    expect(panelSrc).toContain('!getSettings().osMode || !getSettings().secondSidebarEnabled')
+    expect(panelSrc).toContain("label: 'Start button location'")
+    expect(panelSrc).toContain('setSettings({ startButtonLocation: v })')
+    expect(panelSrc).toContain('START_LOCATION_LOCK_HINT')
+    expect(panelSrc).toContain('const d = !s.osMode')
   })
 })

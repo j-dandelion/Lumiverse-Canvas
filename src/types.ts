@@ -42,6 +42,15 @@ export interface LayoutState {
 export type DrawerLocation = 'sides' | 'top' | 'bottom'
 
 /**
+ * Literal screen-side location for drawer-hosted chrome (Start button,
+ * Settings/Options gear). `null` means "main drawer only" — the historical
+ * behavior for blobs written before the location settings existed. Resolved
+ * against the live main-drawer side + second-drawer state by
+ * `resolveChromeSides` (sidebar/chrome-sides.ts).
+ */
+export type ChromeSideValue = 'left' | 'right' | 'both' | null
+
+/**
  * Canvas user-facing settings. Every field is optional on disk so old
  * layouts (or partial writes) still load; defaults come from
  * `mergeCanvasSettings`. Group order mirrors the settings panel UI.
@@ -126,15 +135,30 @@ export interface CanvasSettings {
    *  single-drawer mode while OS mode is on (see `osForcedSingleDrawer`). */
   osMode?: boolean
 
-  /** User preference (default off): show the OS-mode Start button — and its
-   *  menu — in the second drawer's strip. OS mode only (there is no Start
-   *  chrome without it) and requires the second drawer; the first drawer's
-   *  Start menu always lists every window from both drawers, so a hidden
-   *  secondary Start never strands a window. A plain persistent preference:
-   *  never forced by the OS invariant and never snapshotted into
-   *  `osChromePrefs`; the panel row is locked while OS mode is off or the
-   *  second drawer is disabled. */
-  osSecondaryStartMenu?: boolean
+  /** OS mode only: where the Start button (and its menu) is shown.
+   *  `'left' | 'right'` are LITERAL screen sides; `'both'` shows a button in
+   *  each drawer; `null` (default) keeps the historical main-drawer-only
+   *  chrome. Resolution needs the live main side + second-drawer state — see
+   *  `resolveChromeSides`. When the requested side has no drawer (single-drawer
+   *  mode) the button stays on the main drawer. A menu always lists every
+   *  window from both drawers, so hiding one button never strands a window.
+   *  A plain persistent preference: never forced by the OS invariant and never
+   *  snapshotted into `osChromePrefs`. Replaces the old
+   *  `osSecondaryStartMenu` boolean (migrated in `mergeCanvasSettings`). */
+  startButtonLocation?: ChromeSideValue
+
+  /** Top/Bottom only (default on): anchor the Start button at the outer
+   *  (screen-edge) end of the horizontal tab strip. When off, Start sits on
+   *  the tab-facing side of its dock. Inert on Sides. */
+  startButtonAlwaysOnScreenEdge?: boolean
+
+  /** Where the drawer-hosted Settings ("Options") gear is shown. Literal
+   *  screen sides; `'both'` shows a gear in each drawer; `null` (default)
+   *  keeps the historical main-drawer-only gear. Resolution needs the live
+   *  main side + second-drawer state (`resolveChromeSides`); a requested side
+   *  with no drawer falls back to the main drawer so Settings never becomes
+   *  unreachable. */
+  optionsButtonLocation?: ChromeSideValue
 
   /** OS mode only (default on): the panel header shows BOTH the injected
    *  minimize ("–") control and the close ("X"). When off, only the X shows
@@ -256,7 +280,9 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   taskbarMode: false,
   hideDrawerOpenCloseButtons: false,
   osMode: false,
-  osSecondaryStartMenu: false,
+  startButtonLocation: null,
+  startButtonAlwaysOnScreenEdge: true,
+  optionsButtonLocation: null,
   osWindowControls: true,
   coreTabsHidden: false,
   osForcedSingleDrawer: false,
@@ -385,6 +411,25 @@ export function normalizeCanvasSettingsFields(
   if (typeof (out as { osForcedSingleDrawer?: unknown }).osForcedSingleDrawer !== 'boolean') {
     out = { ...out, osForcedSingleDrawer: false }
   }
+  // Cascade 2f: chrome-location enum coercion. `null` (main drawer only) is
+  // the default for legacy/absent blobs; unknown values coerce to null.
+  {
+    const loc = out.optionsButtonLocation as unknown
+    if (loc !== null && loc !== 'left' && loc !== 'right' && loc !== 'both') {
+      out = { ...out, optionsButtonLocation: null }
+    }
+  }
+  {
+    const loc = out.startButtonLocation as unknown
+    if (loc !== null && loc !== 'left' && loc !== 'right' && loc !== 'both') {
+      out = { ...out, startButtonLocation: null }
+    }
+  }
+  // Cascade 2g: startButtonAlwaysOnScreenEdge boolean coercion (corrupt disk
+  // value → true, the shipped default).
+  if (typeof (out as { startButtonAlwaysOnScreenEdge?: unknown }).startButtonAlwaysOnScreenEdge !== 'boolean') {
+    out = { ...out, startButtonAlwaysOnScreenEdge: true }
+  }
   // Cascade 3: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {
     out = { ...out, hideDrawerOpenCloseButtons: false }
@@ -433,6 +478,12 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     // present on the raw object; only map the zombie key when taskbarMode is absent.
     if (saved.taskbarMode === undefined && typeof raw.keepTabListVisible === 'boolean') {
       out.taskbarMode = raw.keepTabListVisible
+    }
+    // Legacy osSecondaryStartMenu boolean → startButtonLocation. `true` meant
+    // "Start button also in the second drawer" → 'both'; false/absent keeps the
+    // historical main-only chrome → null (the new default).
+    if (saved.startButtonLocation === undefined && raw.osSecondaryStartMenu === true) {
+      out.startButtonLocation = 'both'
     }
   }
   return normalizeCanvasSettingsFields(out)
