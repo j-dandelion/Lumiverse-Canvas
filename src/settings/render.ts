@@ -10,6 +10,8 @@
 // dynamic lock reasons update it via `SettingRowHandle.setHint`, and the
 // popover reads it at open time.
 
+import { getUiScale } from '../os/start-menu-motion'
+
 const HELP_POPOVER_ID = 'sidebar-ux-help-popover'
 
 // ── Help tooltip ─────────────────────────────────────────────────────────────
@@ -19,6 +21,11 @@ let _anchor: HTMLElement | null = null
 let _open = false
 let _closeTimer: ReturnType<typeof setTimeout> | null = null
 let _uninstallDismiss: (() => void) | null = null
+/** True when the current open came from a focus event; a coarse-pointer tap
+ *  fires focus before click, so the click must keep it open (M4 2026-09-19). */
+let _openedByFocus = false
+/** Live hint getters per help button, for refreshHelpPopover (L2). */
+const _tipGetters = new WeakMap<HTMLElement, () => string>()
 
 /** Lazy singleton popover (body-level so host modal overflow cannot clip it). */
 function ensurePopover(): HTMLElement | null {
@@ -109,9 +116,13 @@ function positionPopover(anchor: HTMLElement, pop: HTMLElement): void {
     if (top + p.height > vh - gap) top = Math.max(gap, vh - p.height - gap)
     let left = a.left + a.width / 2 - p.width / 2
     left = Math.max(gap, Math.min(vw - p.width - gap, left))
+    // Body-level popover under the host's `body > * { zoom: var(--lumiverse-ui-scale) }`
+    // contract: rendered rects / inner* are rendered px, inline coords are
+    // layout px. Divide by the UI scale, like start-menu / context-menu (N1).
+    const uiScale = getUiScale()
     pop.style.position = 'fixed'
-    pop.style.top = `${Math.round(top)}px`
-    pop.style.left = `${Math.round(left)}px`
+    pop.style.top = `${Math.round(top / uiScale)}px`
+    pop.style.left = `${Math.round(left / uiScale)}px`
   } catch {
     /* geometry unavailable (test stub) — popover stays at default position */
   }
@@ -143,6 +154,7 @@ function openHelp(anchor: HTMLElement, text: string): void {
 function closeHelp(): void {
   if (!_open && !_anchor) return
   _open = false
+  _openedByFocus = false
   const anchor = _anchor
   const pop = _popover
   _anchor = null
@@ -192,6 +204,19 @@ export function getHelpPopover(): HTMLElement | null {
 }
 
 /**
+ * Re-render the open popover from its anchor's live hint getter. The panel
+ * refresh calls this so dynamic lock reasons update while the popover is open
+ * (L2 2026-09-19).
+ */
+export function refreshHelpPopover(): void {
+  if (!_open || !_anchor || !_popover) return
+  const get = _tipGetters.get(_anchor)
+  if (!get) return
+  const next = get()
+  if (_popover.textContent !== next) _popover.textContent = next
+}
+
+/**
  * Build the small `?` help button. `getText` is read at open time so dynamic
  * lock reasons (updated by the panel refresh) are always current.
  */
@@ -204,11 +229,23 @@ export function buildHelpTip(label: string, getText: () => string): HTMLButtonEl
   btn.textContent = '?'
 
   const open = () => openHelp(btn, getText())
+  _tipGetters.set(btn, getText)
   btn.addEventListener('click', (ev: Event) => {
     ev.preventDefault?.()
     ev.stopPropagation?.()
-    if (_open && _anchor === btn) closeHelp()
-    else open()
+    if (_open && _anchor === btn) {
+      // Coarse-pointer taps focus the button (opening the popover) before the
+      // click lands; treat that click as "keep open" so a single tap works.
+      // A second tap fires no new focus event and closes normally (M4).
+      if (_openedByFocus) {
+        _openedByFocus = false
+        return
+      }
+      closeHelp()
+    } else {
+      _openedByFocus = false
+      open()
+    }
   })
   btn.addEventListener('pointerenter', () => {
     if (isFinePointer()) open()
@@ -222,7 +259,10 @@ export function buildHelpTip(label: string, getText: () => string): HTMLButtonEl
       if (_anchor === btn) closeHelp()
     }, 75)
   })
-  btn.addEventListener('focus', () => open())
+  btn.addEventListener('focus', () => {
+    _openedByFocus = true
+    open()
+  })
   btn.addEventListener('blur', () => {
     if (_anchor === btn) closeHelp()
   })
@@ -287,6 +327,11 @@ export function buildSettingRow(args: {
     },
     setDisabled(disabled: boolean) {
       row.classList.toggle('sidebar-ux-panel-row-disabled', disabled)
+      try {
+        args.control.setAttribute?.('aria-disabled', String(disabled))
+      } catch {
+        /* stub control without attributes */
+      }
       const control = args.control as { disabled?: boolean }
       if (typeof control.disabled === 'boolean') control.disabled = disabled
     },
@@ -413,6 +458,7 @@ export function buildTileGroup<T extends string>(
   options: readonly ModeTileOption<T>[],
   value: T,
   onChange: (next: T) => void,
+  opts?: { allowReselect?: boolean },
 ): TileGroupHandle<T> {
   const root = document.createElement('div')
   root.className = 'sidebar-ux-panel-modes'
@@ -431,7 +477,10 @@ export function buildTileGroup<T extends string>(
   }
 
   const select = (next: T) => {
-    if (next === current) return
+    // Re-selecting the active tile is normally a no-op; callers that derive the
+    // active tile from a projection (the mode tiles) can opt in so they get a
+    // chance to reconcile stale stored fields (L1 2026-09-19).
+    if (next === current && !opts?.allowReselect) return
     current = next
     render()
     onChange(next)

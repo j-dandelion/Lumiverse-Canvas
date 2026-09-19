@@ -20,6 +20,7 @@ mock.module('../../debug/log', () => ({ dlog: () => {}, dwarn: () => {} }))
 
 let secondaryList: FakeEl | null = null
 let mainWrapper: FakeEl | null = null
+let pinnedList: FakeEl | null = null
 let settingsTwin: FakeEl | null = null
 let storeActionCalls: string[] = []
 
@@ -28,6 +29,7 @@ mock.module('../../sidebar/secondary', () => ({
 }))
 mock.module('../../sidebar/main-mirror-drawer', () => ({
   getMainMirrorWrapper: () => mainWrapper,
+  getMainMirrorTabList: () => pinnedList,
 }))
 mock.module('../../sidebar/main-renderer', () => ({
   SETTINGS_MIRROR_KEY: '__canvas-settings__',
@@ -187,6 +189,7 @@ beforeEach(() => {
   body.children = []
   secondaryList = null
   mainWrapper = null
+  pinnedList = null
   settingsTwin = null
   storeActionCalls = []
 })
@@ -195,6 +198,9 @@ describe('main drawer gear', () => {
   test('hides via the shared class when the main drawer is excluded', () => {
     const { gear } = makeMainShell(false)
     mainWrapper = body.children.find((c) => c.classList.contains('sidebar-ux-main-mirror-wrapper')) ?? null
+    // The clone target must exist, otherwise the main gear is deliberately
+    // kept as the reachable fallback (H1).
+    secondaryList = makeSecondaryList().list
     applyOptionsButtonLocation(SECOND)
     expect(gear.classList.contains('sidebar-ux-options-hidden')).toBe(true)
     expect(gear.getAttribute('data-canvas-settings-gear')).toBe('main')
@@ -206,6 +212,7 @@ describe('main drawer gear', () => {
   test('collapses the dock when the gear is hidden and no Start remains', () => {
     const { dock } = makeMainShell(false)
     mainWrapper = body.children.find((c) => c.classList.contains('sidebar-ux-main-mirror-wrapper')) ?? null
+    secondaryList = makeSecondaryList().list
     applyOptionsButtonLocation(SECOND)
     expect(dock.classList.contains('sidebar-ux-dock-empty')).toBe(true)
 
@@ -215,6 +222,43 @@ describe('main drawer gear', () => {
     dock.appendChild(start)
     refreshMainDockEmptyState()
     expect(dock.classList.contains('sidebar-ux-dock-empty')).toBe(false)
+  })
+
+  test('keeps the main gear visible while the secondary clone cannot be created (H1)', () => {
+    const { gear } = makeMainShell(false)
+    mainWrapper = body.children.find((c) => c.classList.contains('sidebar-ux-main-mirror-wrapper')) ?? null
+    // The shell-created event fires before the secondary wrapper exists:
+    // include:true cannot find the tab list yet.
+    secondaryList = null
+    const res = applyOptionsButtonLocation(SECOND)
+    expect(res.pendingSecond).toBe(true)
+    // Never hide the only reachable gear while the clone is pending.
+    expect(gear.classList.contains('sidebar-ux-options-hidden')).toBe(false)
+
+    // Once the list mounts, the deferred reconcile applies the real exclusion.
+    const { list } = makeSecondaryList()
+    secondaryList = list
+    const res2 = applyOptionsButtonLocation(SECOND)
+    expect(res2.pendingSecond).toBe(false)
+    expect(gear.classList.contains('sidebar-ux-options-hidden')).toBe(true)
+    expect(list.querySelector('button[data-canvas-settings-gear="secondary"]')).not.toBeNull()
+  })
+
+  test('finds a pinned (body-level) dock for the empty state (H4)', () => {
+    const { dock } = makeMainShell(true)
+    // Simulate taskbar pinning: the list (dock included) lives outside the
+    // wrapper, so a wrapper-scoped lookup misses it.
+    pinnedList = dock.parentElement
+    mainWrapper = null
+
+    applyOptionsButtonLocation({ sides: [], main: false, second: false })
+    // The Start button keeps the dock alive ...
+    expect(dock.classList.contains('sidebar-ux-dock-empty')).toBe(false)
+
+    // ... and removing it collapses the dock using the pinned list.
+    dock.querySelector('button[data-canvas-os-start]')!.remove()
+    refreshMainDockEmptyState()
+    expect(dock.classList.contains('sidebar-ux-dock-empty')).toBe(true)
   })
 })
 

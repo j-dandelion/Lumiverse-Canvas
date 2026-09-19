@@ -19,7 +19,7 @@
 import { injectStyles } from '../debug/styles'
 import { dwarn } from '../debug/log'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
-import { getMainMirrorWrapper } from './main-mirror-drawer'
+import { getMainMirrorTabList, getMainMirrorWrapper } from './main-mirror-drawer'
 import { getSecondaryTabList } from './secondary'
 import { findSettingsTwin, SETTINGS_MIRROR_KEY } from './main-renderer'
 import type { ResolvedChromeSides } from './chrome-sides'
@@ -113,12 +113,17 @@ function getMainGears(): HTMLElement[] {
 export function refreshMainDockEmptyState(): void {
   try {
     const wrapper = getMainMirrorWrapper()
-    if (!wrapper || typeof wrapper.querySelectorAll !== 'function') return
+    // Pin-aware: taskbar chrome reparents the shell tab list (dock included)
+    // into a body-level pin host, so a wrapper-scoped lookup silently misses
+    // it and a stale `dock-empty` collapse can outlive the unpin (H4
+    // 2026-09-19). Fall back to the wrapper for unpinned/legacy shapes.
+    const list = getMainMirrorTabList()
+      ?? (wrapper?.querySelector('.sidebar-ux-tab-list') as HTMLElement | null)
+    if (!list && !wrapper) return
     const gearHidden = getMainGears().some((g) => g.classList.contains(GEAR_HIDDEN_CLASS))
-    const list = wrapper.querySelector('.sidebar-ux-tab-list')
     const dock =
       (list?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null)
-      ?? (wrapper.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null)
+      ?? (wrapper?.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null)
     if (!dock) return
     const hasStart =
       typeof dock.querySelector === 'function' && !!dock.querySelector(`button[${START_ATTR}]`)
@@ -171,7 +176,7 @@ function buildSecondaryGear(): HTMLButtonElement {
  * The dock is created on demand and left last (same self-heal as the Start
  * ensure); it is removed only when nothing (gear or Start) remains.
  */
-function applySecondaryGear(include: boolean): void {
+function applySecondaryGear(include: boolean): boolean {
   const list = getSecondaryTabList()
   if (!list) {
     // No live list (second drawer disabled/remounting): clean any pinned
@@ -181,8 +186,12 @@ function applySecondaryGear(include: boolean): void {
         gear.remove()
       }
       removeEmptySecondaryDocks()
+      return true
     }
-    return
+    // Include requested but the shell is not mounted yet — the
+    // DRAWER_SHELL_CREATED_EVENT fires BEFORE the secondary wrapper is
+    // assigned. The caller schedules a bounded re-reconcile (H1 2026-09-19).
+    return false
   }
   let dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`) as HTMLElement | null
   if (include && !dock) {
@@ -202,6 +211,7 @@ function applySecondaryGear(include: boolean): void {
     if (dock.nextElementSibling) list.appendChild(dock)
   }
   if (!include) removeEmptySecondaryDocks()
+  return true
 }
 
 function removeEmptySecondaryDocks(): void {
@@ -218,17 +228,24 @@ function removeEmptySecondaryDocks(): void {
  * every chrome lifecycle event (mount, shell-created, side flip, second-drawer
  * disable, location change).
  */
-export function applyOptionsButtonLocation(resolved: ResolvedChromeSides): void {
+export function applyOptionsButtonLocation(resolved: ResolvedChromeSides): { pendingSecond: boolean } {
   try {
     injectStyles(STYLE_ID, SETTINGS_DOCK_CSS)
   } catch (err) {
     dwarn('[settings-dock] style injection failed:', err)
   }
   try {
-    applyMainGear(resolved.main)
+    // H1: never hide the main gear while the requested secondary clone cannot
+    // be created (the shell-created event fires before the wrapper mounts).
+    // Keeping the main gear visible is the reachable fallback; the caller
+    // re-reconciles once the secondary list exists and applies the exclusion.
+    const secondaryReady = !resolved.second || getSecondaryTabList() !== null
+    applyMainGear(resolved.main || !secondaryReady)
     applySecondaryGear(resolved.second)
+    return { pendingSecond: resolved.second && !secondaryReady }
   } catch (err) {
     dwarn('[settings-dock] apply failed:', err)
+    return { pendingSecond: false }
   }
 }
 

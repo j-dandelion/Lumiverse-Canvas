@@ -22,11 +22,18 @@ mock.module('../../store', () => ({
   getMainDrawerSide: () => mainSide,
 }))
 mock.module('../../sidebar/settings-dock', () => ({
-  applyOptionsButtonLocation: (resolved: unknown) => { calls.push(['options', resolved]) },
+  applyOptionsButtonLocation: (resolved: unknown) => {
+    calls.push(['options', resolved])
+    return { pendingSecond: false }
+  },
   teardownSettingsDock: () => { calls.push(['teardown-dock']) },
 }))
 mock.module('../start-menu', () => ({
   reconcileStartChrome: () => { calls.push(['start']) },
+  hideStartMenu: () => { calls.push(['hide-start-menu']) },
+}))
+mock.module('../../recon/dispatch', () => ({
+  onModelChanged: () => () => {},
 }))
 
 // ── Minimal documentElement (classList only) ──

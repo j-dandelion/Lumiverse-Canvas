@@ -32,12 +32,12 @@ import {
   refreshSettingsPanel,
   isHorizontalStrip,
   isTaskbarModeEnabled,
+  isSettingsHydrated,
   type FullCanvasSettings,
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
-import { isLoadInProgress } from '../persist/layout-load'
 import { displayChromeSide } from '../sidebar/chrome-sides'
 
 
@@ -49,7 +49,9 @@ import {
   buildToggleControl,
   buildSegmentedControl,
   buildTileGroup,
+  buildHelpTip,
   disposeHelpLayer,
+  refreshHelpPopover,
   type SettingRowHandle,
 } from './render'
 
@@ -70,6 +72,8 @@ const DRAWER_MODE_OS_MOBILE_HINT =
   'OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.'
 const MIRROR_COMPACT_HINT =
   "Matches the main drawer's compact mode and vertical tab position on the second drawer."
+const MIRROR_COMPACT_LOCK_HINT =
+  'Requires the second drawer. Switch Drawer mode to Dual to use it.'
 const MOVE_CONTROLS_HINT =
   'Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.'
 const LOCATION_LOCK_HINT =
@@ -300,6 +304,14 @@ function injectPanelStyles() {
       outline-offset: 2px;
     }
     /* Mode tiles */
+    .sidebar-ux-panel-modes-wrap {
+      position: relative;
+    }
+    .sidebar-ux-panel-modes-help {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+    }
     .sidebar-ux-panel-modes {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -598,7 +610,13 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     return isTaskbarModeEnabled(s) ? 'taskbar' : 'vanilla'
   }
   const selectMode = (mode: ModeTileDef['value']): void => {
-    if (mode === effectiveMode()) return
+    if (mode === effectiveMode()) {
+      if (mode !== 'vanilla') return
+      // Stale taskbarMode with the outer-edge toggle off derives as Vanilla;
+      // clicking Vanilla must still clear it or re-enabling the edge
+      // resurrects Taskbar mode (L1 2026-09-19).
+      if (!getSettings().taskbarMode) return
+    }
     if (mode === 'os') {
       setSettings({ osMode: true })
       return
@@ -622,9 +640,23 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     MODE_TILE_DEFS,
     effectiveMode(),
     (v) => selectMode(v),
+    // Re-clicking the derived-active tile must reach selectMode so a stale
+    // stored taskbarMode (outer edge off) can be cleared (L1 2026-09-19).
+    { allowReselect: true },
   )
   modes.root.setAttribute('aria-label', 'Drawer chrome mode')
-  drawers.group.appendChild(modes.root)
+  // The tiles are the most complex control in the panel; give them the same
+  // `?` affordance as every row. The button sits OUTSIDE the radiogroup so
+  // the ARIA model stays valid (L5 2026-09-19).
+  {
+    const modesWrap = document.createElement('div')
+    modesWrap.className = 'sidebar-ux-panel-modes-wrap'
+    modesWrap.appendChild(modes.root)
+    const modesHelp = buildHelpTip('Chrome mode', () => MODE_TILES_HINT)
+    modesHelp.classList.add('sidebar-ux-panel-modes-help')
+    modesWrap.appendChild(modesHelp)
+    drawers.group.appendChild(modesWrap)
+  }
 
   // Drawer layout (was "Drawer location").
   const drawerLocation = buildSegmentedControl(
@@ -662,6 +694,8 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
           await m.dispatch({ t: 'swapSides' })
         } catch (err) {
           dwarn('[settings-panel] swap drawer side failed:', err)
+          // Revert the optimistic selection: the swap never happened (L3).
+          refreshSettingsPanel()
         }
       })()
     },
@@ -683,12 +717,15 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     (v) => {
       // Central mode API: dirty confirm, session profile capture, slot
       // orchestration. Never a plain setSettings.
-      void import('./second-drawer-mode').then((m) => {
-        void m.requestSecondDrawerMode(v === 'dual')
-      }).catch((err) => {
-        dwarn('[settings-panel] second-drawer-mode import failed:', err)
-        setSettings({ secondSidebarEnabled: v === 'dual' })
-      })
+      void import('./second-drawer-mode')
+        .then((m) => m.requestSecondDrawerMode(v === 'dual'))
+        .catch((err) => {
+          dwarn('[settings-panel] second-drawer-mode import failed:', err)
+          setSettings({ secondSidebarEnabled: v === 'dual' })
+        })
+        // A cancelled dirty confirm changes nothing, so the optimistic
+        // selection must snap back to the stored value (M5 2026-09-19).
+        .finally(() => { refreshSettingsPanel() })
     },
   )
   drawerMode.root.setAttribute('aria-label', 'Drawer mode')
@@ -731,7 +768,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     (v) => setSettings({ optionsButtonLocation: v }),
   )
   optionsLocation.root.setAttribute('aria-label', 'Options button location')
-  optionsLocation.setDisabled(isLoadInProgress())
+  optionsLocation.setDisabled(!isSettingsHydrated())
   const optionsLocationRow = appendRow(drawers.group, buildSettingRow({
     label: 'Options button location',
     hint: OPTIONS_LOCATION_HINT,
@@ -944,19 +981,19 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
 
     // Mode tiles: effective preset + pre-hydration lock.
     modes.refresh(effectiveMode())
-    modes.setDisabled(isLoadInProgress())
+    modes.setDisabled(!isSettingsHydrated())
 
     // Drawer layout: sync selection; disabled while the settings load is in
     // flight (the load overwrites pre-hydration picks).
     drawerLocation.refresh(s.drawerLocation)
-    drawerLocation.setDisabled(isLoadInProgress())
-    drawerLocationRow.setDisabled(isLoadInProgress())
+    drawerLocation.setDisabled(!isSettingsHydrated())
+    drawerLocationRow.setDisabled(!isSettingsHydrated())
 
     // Main drawer side: live-derived from the host; locked until the store
     // module resolves and while a swap is mid-flight (override active).
     const override = safeMainSideOverride()
     mainSide.refresh(override ?? safeMainSide())
-    const sideLocked = isLoadInProgress() || !isStoreReady() || !isModelReady() || override !== null
+    const sideLocked = !isSettingsHydrated() || !isStoreReady() || !isModelReady() || override !== null
     mainSide.setDisabled(sideLocked)
     mainSideRow.setDisabled(sideLocked)
     mainSideRow.setHint(override !== null ? MAIN_SIDE_SWAP_HINT : MAIN_SIDE_HINT)
@@ -975,6 +1012,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       compact.btn.disabled = d
       compact.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       compactRow.setDisabled(d)
+      compactRow.setHint(d ? MIRROR_COMPACT_LOCK_HINT : MIRROR_COMPACT_HINT)
     }
 
     // Horizontal strip (Top/Bottom) locks the taskbar chrome rows on:
@@ -997,14 +1035,14 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     // Options button location: display the literal side (null shows the main
     // drawer's side); locked only during the settings load.
     optionsLocation.refresh(displayChromeSide(s.optionsButtonLocation, safeMainSide()))
-    optionsLocation.setDisabled(isLoadInProgress())
-    optionsLocationRow.setDisabled(isLoadInProgress())
+    optionsLocation.setDisabled(!isSettingsHydrated())
+    optionsLocationRow.setDisabled(!isSettingsHydrated())
 
     // Start button location: OS chrome only.
     {
       const d = !s.osMode
       startLocation.refresh(displayChromeSide(s.startButtonLocation, safeMainSide()))
-      startLocation.setDisabled(d || isLoadInProgress())
+      startLocation.setDisabled(d || !isSettingsHydrated())
       startLocationRow.setDisabled(d)
       startLocationRow.setHint(
         d ? START_LOCATION_LOCK_HINT : START_LOCATION_HINT,
@@ -1062,8 +1100,9 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     }
   }
 
-  // Placeholder to keep the closure shape explicit; the mode tiles carry
-  // their own captions (no per-tile help button).
+  // Keep an open `?` popover in sync with the lock text it is anchored to.
+  refreshHelpPopover()
+
   return { root, refresh }
 }
 
@@ -1116,6 +1155,12 @@ export function applySettings(prev: FullCanvasSettings, next: FullCanvasSettings
   for (const feature of FEATURES) {
     if (!feature.apply) continue
     if (prev[feature.id] === next[feature.id]) continue
-    feature.apply(prev, next, _settingsPanelCtx)
+    // One throwing feature must not starve the rest of the diff — or, via
+    // setSettings' finally, the panel refresh and the save (N3 2026-09-19).
+    try {
+      feature.apply(prev, next, _settingsPanelCtx)
+    } catch (err) {
+      dwarn(`applySettings: feature ${String(feature.id)} apply threw:`, err)
+    }
   }
 }

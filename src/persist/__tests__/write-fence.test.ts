@@ -85,9 +85,15 @@ import {
   saveSettingsToDisk,
   isSettingsRepoArmed,
   __resetSettingsRepoForTest,
+  __resolveSettingsSave,
 } from '../settings-repo'
 import { flushPendingSaves } from '../layout-load'
-import { persistSettings } from '../../settings/state'
+import { persistSettings, __setSettingsSaveRetriesForTest } from '../../settings/state'
+
+// This suite intentionally leaves saves unanswered (the fence is what is under
+// test); disable the N2 auto-retry so the failed saves don't keep the event
+// loop alive across retry chains.
+__setSettingsSaveRetriesForTest(0)
 
 function reset() {
   __resetLayoutRepoForTest()
@@ -294,6 +300,57 @@ function sleep(ms: number): Promise<void> {
     ctx._saves().some((m: BackendMsg) => m.type === 'SAVE_SETTINGS'),
     '19a: pending settings save flushed despite unarmed layout repo',
   )
+}
+
+// --- 20a: a failed save is retried once the retry window elapses (N2) ---
+{
+  reset()
+  // Let the previous section's reset-resolved save failure settle while
+  // retries are still disabled, so it cannot consume this section's budget.
+  await sleep(10)
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  armSettingsRepo()
+  __setSettingsSaveRetriesForTest(1)
+
+  persistSettings()
+  const firstDeadline = Date.now() + 3000
+  while (ctx._saves().length < 1 && Date.now() < firstDeadline) await sleep(20)
+  assert(ctx._saves().length >= 1, '20a: initial save sent')
+  const first = ctx._saves().find((m: BackendMsg) => m.type === 'SAVE_SETTINGS')!
+  __resolveSettingsSave(first.saveId as number, { status: 'error', reason: 'transient' })
+
+  const retryDeadline = Date.now() + 4000
+  while (ctx._saves().length < 2 && Date.now() < retryDeadline) await sleep(25)
+  assert(ctx._saves().length === 2, '20a: failed save retried once')
+  const second = ctx._saves()[1]
+  assert(second !== undefined, '20a: retry message present')
+  if (second) __resolveSettingsSave(second.saveId as number, { status: 'ok' })
+  // Cleanup for the remaining sections.
+  __setSettingsSaveRetriesForTest(0)
+}
+
+// --- 20b: a retries-exhausted failed write still flushes while owed (N2) ---
+{
+  reset()
+  await sleep(10)
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  armSettingsRepo()
+  __setSettingsSaveRetriesForTest(0)
+
+  persistSettings()
+  const firstDeadline = Date.now() + 3000
+  while (ctx._saves().length < 1 && Date.now() < firstDeadline) await sleep(20)
+  const first = ctx._saves().find((m: BackendMsg) => m.type === 'SAVE_SETTINGS')!
+  __resolveSettingsSave(first.saveId as number, { status: 'error', reason: 'transient' })
+
+  flushPendingSaves()
+  const flushDeadline = Date.now() + 1500
+  while (ctx._saves().length < 2 && Date.now() < flushDeadline) await sleep(20)
+  assert(ctx._saves().length >= 2, '20b: flush fires while a failed write is owed')
+  const second = ctx._saves()[1]
+  if (second) __resolveSettingsSave(second.saveId as number, { status: 'ok' })
 }
 
 console.log(`persist/write-fence: ${passed} passed, ${failed} failed`)

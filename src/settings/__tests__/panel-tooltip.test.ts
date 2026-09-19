@@ -7,8 +7,10 @@
 
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 
+const featureList: Array<{ id: string; apply?: (...args: unknown[]) => void }> = []
+
 mock.module('../../features/registry', () => ({
-  FEATURES: [],
+  FEATURES: featureList,
   alwaysCleanups: () => [],
 }))
 
@@ -63,6 +65,9 @@ class FakeEl {
     if (this.disabled) return
     for (const fn of this._listeners.get('click') ?? []) fn({ preventDefault() {}, stopPropagation() {} })
   }
+  focus() {
+    for (const fn of this._listeners.get('focus') ?? []) fn({})
+  }
   fireKey(key: string) {
     const ev = { key, preventDefault() {}, stopPropagation() {} }
     for (const fn of this._listeners.get('keydown') ?? []) fn(ev)
@@ -95,9 +100,9 @@ const doc = {
 }
 ;(globalThis as any).document = doc
 
-const { hydrateSettings, refreshSettingsPanel, setSettings } = await import('../state')
+const { getSettings, hydrateSettings, refreshSettingsPanel, setSettings } = await import('../state')
 const { mountSettingsPanel } = await import('../panel')
-const { disposeHelpLayer } = await import('../render')
+const { disposeHelpLayer, getHelpPopover } = await import('../render')
 
 type El = FakeEl
 
@@ -125,15 +130,18 @@ describe('panel help tooltips', () => {
   beforeEach(() => {
     hydrateSettings(null)
     disposeHelpLayer()
+    featureList.length = 0
   })
 
   test('every setting row carries a help button', () => {
     const root = mountPanel()
     const rows = byClass(root, 'sidebar-ux-panel-row')
-    const helps = byClass(root, 'sidebar-ux-panel-help')
     expect(rows.length).toBeGreaterThan(0)
-    expect(helps.length).toBe(rows.length)
-    for (const h of helps) expect(h.textContent).toBe('?')
+    // Every row carries one; the mode-tiles group adds its own help button
+    // outside any row (L5 2026-09-19).
+    for (const row of rows) {
+      expect(row.querySelector('.sidebar-ux-panel-help')).not.toBeNull()
+    }
   })
 
   test('click opens the popover with the hint text; second click closes', () => {
@@ -172,6 +180,36 @@ describe('panel help tooltips', () => {
     help.fireKey('Escape')
     expect(popover()!.hidden).toBe(true)
     expect(help.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  test('focus-then-click (touch tap) keeps the popover open; next tap closes (M4)', () => {
+    const root = mountPanel()
+    const help = rowByLabel(root, 'Move tab strip to outer edge').querySelector('.sidebar-ux-panel-help')!
+
+    // Coarse-pointer tap: focus fires before click.
+    help.focus()
+    expect(getHelpPopover()!.hidden).toBe(false)
+    help.click()
+    expect(getHelpPopover()!.hidden).toBe(false)
+    expect(help.getAttribute('aria-expanded')).toBe('true')
+
+    // Second tap: no new focus event, click closes.
+    help.click()
+    expect(getHelpPopover()!.hidden).toBe(true)
+    expect(help.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  test('a throwing feature apply does not block the panel refresh (N3)', () => {
+    const root = mountPanel()
+    featureList.push({
+      id: 'debugMode',
+      apply: () => { throw new Error('boom') },
+    })
+    // setSettings must not throw, and the panel must still reflect the value.
+    setSettings({ debugMode: true })
+    expect(getSettings().debugMode).toBe(true)
+    const toggle = rowByLabel(root, 'Debug mode').querySelector('.sidebar-ux-panel-toggle')!
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
   })
 
   test('re-mount disposes the previous popover (no leak)', () => {

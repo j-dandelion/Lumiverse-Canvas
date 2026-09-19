@@ -160,20 +160,26 @@ const START_SEL = 'button[data-canvas-os-start]'
     leftInnerIdx,
     HORIZONTAL_STRIP_CSS.indexOf('}', leftInnerIdx),
   )
-  assertIncludes(leftInnerBlock, 'order: 0 !important', 'left inner keeps Start after the gear')
-  // Right side must flip Start BEFORE the gear (dock DOM is [gear, start]) —
-  // plain order:0 would keep it outermost. The right rule follows the left
-  // rule's declaration; anchor the search after `order: 0`.
-  const zeroIdx = HORIZONTAL_STRIP_CSS.indexOf('order: 0 !important')
+  assertIncludes(leftInnerBlock, 'order: 1 !important', 'left inner puts Start after the gear regardless of dock DOM order')
+  // Right side must flip Start BEFORE the gear — order:-1 is DOM-independent.
+  // The right rule follows the left rule's declaration; anchor on the right
+  // side selector after the left inner rule (each rule spans two selector lines).
   const rightInnerIdx = HORIZONTAL_STRIP_CSS.indexOf(
-    'html.sidebar-ux-start-edge-inner',
-    zeroIdx,
+    '.sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start]',
+    leftInnerIdx + 1,
   )
   const rightInnerBlock = HORIZONTAL_STRIP_CSS.substring(
     rightInnerIdx,
     HORIZONTAL_STRIP_CSS.indexOf('}', rightInnerIdx),
   )
   assertIncludes(rightInnerBlock, 'order: -1 !important', 'right inner anchors Start tab-facing')
+  // M2: a lone Start has no sibling to reorder against, so the inner variant
+  // must be able to move the DOCK across the tabs when no visible gear shares it.
+  assertIncludes(
+    HORIZONTAL_STRIP_CSS,
+    '.sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden)))',
+    'inner variant flips the dock when no visible gear shares it',
+  )
 }
 
 // ── 5. Mobile rows (both drawers): 52×48 ──

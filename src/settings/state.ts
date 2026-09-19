@@ -33,6 +33,21 @@ export type { FullCanvasSettings }
 let _settings: FullCanvasSettings = mergeCanvasSettings(null)
 let _lastLoadedLayout: any = null
 let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
+/** True once hydrateSettings ran (real settings load completed). The settings
+ *  panel's pre-hydration locks key on this — the legacy layout-load
+ *  `isLoadInProgress()` flag has no writer and was always false (L6
+ *  2026-09-19). */
+let _hydrated = false
+/** A debounced/failed save is owed to disk; retried on failure and flushed on
+ *  unload/teardown (N2 2026-09-19). */
+let _settingsDirty = false
+let _settingsRetryTimer: ReturnType<typeof setTimeout> | null = null
+let _settingsRetryCount = 0
+/** Cap on automatic save retries: a permanently failing backend must not spin
+ *  a retry timer forever (test runners / teardown would never settle). The
+ *  write stays dirty and is retried on the next change or the unload flush. */
+let _maxSettingsSaveRetries = 2
+const SETTINGS_RETRY_MS = 1000
 
 // ── Mode layout profiles (2026-08-16) ──
 //
@@ -168,8 +183,12 @@ export function getStripEdge(
   return loc === 'top' ? 'top' : loc === 'bottom' ? 'bottom' : null
 }
 
+/** True after hydrateSettings applied the loaded settings payload. */
+export function isSettingsHydrated(): boolean { return _hydrated }
+
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
   _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null))
+  _hydrated = true
 }
 
 export function setSettings(patch: Partial<CanvasSettings>): void {
@@ -242,9 +261,15 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
 
   _settings = normalizeCanvasSettings(next)
   setDebug(_settings.debugMode)
-  applySettings(prev, _settings)
-  refreshSettingsPanel()
-  persistSettings()
+  // A throwing feature apply must not strand the panel or the save: refresh
+  // and persist still run (N3 2026-09-19). applySettings itself also guards
+  // each feature, so this is belt-and-braces.
+  try {
+    applySettings(prev, _settings)
+  } finally {
+    refreshSettingsPanel()
+    persistSettings()
+  }
 }
 
 export function refreshSettingsPanel() {
@@ -258,6 +283,10 @@ export function refreshSettingsPanel() {
  */
 function fireSettingsSave(): void {
   _saveSettingsTimer = null
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer)
+    _settingsRetryTimer = null
+  }
   if (!isSettingsRepoArmed()) {
     dlog('persistSettings: not armed at debounce fire, skipping')
     logPersistSave('persistSettings:debounce', null, { skipped: 'not-armed' })
@@ -279,12 +308,44 @@ function fireSettingsSave(): void {
     if (r.status === 'error') {
       // eslint-disable-next-line no-console
       console.warn('[canvas] saveSettingsToDisk failed:', r.reason)
+      scheduleSettingsRetry()
+    } else {
+      _settingsDirty = false
+      _settingsRetryCount = 0
     }
   }).catch((err: unknown) => {
     // eslint-disable-next-line no-console
     console.warn('[canvas] saveSettingsToDisk rejected:', err)
+    scheduleSettingsRetry()
   })
   setLastLoadedLayout({ ...layoutSnapshot, settings: _settings })
+}
+
+/** Re-arm the save after a failure so a transient backend error does not drop
+ *  the setting forever (N2 2026-09-19). Bounded: after
+ *  MAX_SETTINGS_SAVE_RETRIES the write stays dirty for the next change /
+ *  unload flush instead of retrying indefinitely. */
+function scheduleSettingsRetry(): void {
+  if (_settingsRetryTimer !== null) return
+  if (!isSettingsRepoArmed()) return
+  if (_settingsRetryCount >= _maxSettingsSaveRetries) {
+    // eslint-disable-next-line no-console
+    console.warn('[canvas] settings save keeps failing; will retry on the next change or unload')
+    return
+  }
+  _settingsRetryCount++
+  const timer = setTimeout(() => {
+    _settingsRetryTimer = null
+    fireSettingsSave()
+  }, SETTINGS_RETRY_MS)
+  // Never hold the host process open on a retry timer.
+  ;(timer as unknown as { unref?: () => void }).unref?.()
+  _settingsRetryTimer = timer
+}
+
+/** Test hook: cap/disable automatic save retries (0 = no retry). */
+export function __setSettingsSaveRetriesForTest(max: number): void {
+  _maxSettingsSaveRetries = Math.max(0, max)
 }
 
 export function persistSettings(): void {
@@ -298,6 +359,9 @@ export function persistSettings(): void {
     logPersistSave('persistSettings', null, { skipped: 'load-in-progress', loadInProgress: true })
     return
   }
+  _settingsDirty = true
+  // A fresh user change gets a fresh retry budget.
+  _settingsRetryCount = 0
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
   }
@@ -314,8 +378,15 @@ export function persistSettings(): void {
 export function flushSettingsSave(): void {
   if (_saveSettingsTimer !== null) {
     clearTimeout(_saveSettingsTimer)
-    fireSettingsSave()
+    _saveSettingsTimer = null
   }
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer)
+    _settingsRetryTimer = null
+  }
+  // Fire whenever a write is owed — pending debounce OR a failed save whose
+  // retries are exhausted (N2 2026-09-19).
+  if (_settingsDirty) fireSettingsSave()
 }
 
 export function cancelSettingsSave(): void {
@@ -323,4 +394,10 @@ export function cancelSettingsSave(): void {
     clearTimeout(_saveSettingsTimer)
     _saveSettingsTimer = null
   }
+  if (_settingsRetryTimer !== null) {
+    clearTimeout(_settingsRetryTimer)
+    _settingsRetryTimer = null
+  }
+  _settingsDirty = false
+  _settingsRetryCount = 0
 }

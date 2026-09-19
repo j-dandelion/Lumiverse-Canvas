@@ -317,6 +317,19 @@ describe('mode tiles', () => {
     expect(getSettings().moveControlsToOuterEdge).toBe(false)
   })
 
+  test('Vanilla clears a stale taskbarMode with the outer edge off (L1)', () => {
+    // taskbarMode:true + outer off derives as Vanilla; clicking Vanilla must
+    // still clear the stored taskbarMode or re-enabling the edge resurrects
+    // Taskbar mode.
+    hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+    expect(tiles.children[0].getAttribute('aria-checked')).toBe('true') // derived vanilla
+    tiles.children[0].click()
+    expect(getSettings().taskbarMode).toBe(false)
+    expect(getSettings().moveControlsToOuterEdge).toBe(false)
+  })
+
   test('arrow keys move the tile selection', () => {
     const root = mountPanel()
     const tiles = modeTiles(root)

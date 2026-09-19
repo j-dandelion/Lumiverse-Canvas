@@ -444,6 +444,16 @@ export function setup(ctx: SpindleFrontendContext) {
       dwarn('Canvas: bootstrapFromLayout threw synchronously:', bootstrapErr)
       throw bootstrapErr
     }
+
+    // Model now exists: unlock model-gated panel controls (Main drawer side)
+    // and re-apply location chrome — the boot feature-mount pass ran before
+    // the mirror gear was rendered (H3/M1 2026-09-19).
+    try {
+      const { reconcileChromeLocations } = await import('./os/chrome-locations')
+      reconcileChromeLocations()
+    } catch { /* chrome module unavailable in some harnesses */ }
+    refreshSettingsPanel()
+
     // dispatch.shutdown() must run first so _unsubscribeWorldChanged fires
     // before the host's observers are torn down — otherwise a late
     // onWorldChanged callback could enqueue a syncFromHost against a

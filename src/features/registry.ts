@@ -35,7 +35,7 @@ import { setDebug, dlog, dwarn } from '../debug/log'
 import { applyOsModeChange } from '../os/os-mode'
 import { mountPanelChrome, teardownPanelChrome, applyOsWindowControlsChange } from '../os/panel-chrome'
 import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
-import { reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'
+import { activateChromeLocations, reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'
 import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
 import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins, clearWelcomeReflow } from '../chat/reflow'
@@ -720,7 +720,9 @@ const optionsButtonLocationFeature: CanvasFeature = {
   id: 'optionsButtonLocation',
   unconditional: true,
   mount() {
-    reconcileChromeLocations()
+    // activate (not reconcile): clears the teardown tombstone on a
+    // disable → enable cycle (L7 2026-09-19).
+    activateChromeLocations()
     return () => teardownChromeLocations()
   },
   apply() {
@@ -734,7 +736,7 @@ const startButtonLocationFeature: CanvasFeature = {
   id: 'startButtonLocation',
   unconditional: true,
   mount() {
-    reconcileChromeLocations()
+    activateChromeLocations()
   },
   apply() {
     applyStartButtonLocationChange()
@@ -747,7 +749,7 @@ const startButtonAlwaysOnScreenEdgeFeature: CanvasFeature = {
   id: 'startButtonAlwaysOnScreenEdge',
   unconditional: true,
   mount() {
-    reconcileChromeLocations()
+    activateChromeLocations()
   },
   apply() {
     reconcileChromeLocations()

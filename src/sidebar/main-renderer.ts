@@ -33,7 +33,7 @@ import {
   parseExtensionKey,
 } from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
-import { isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
+import { getSettings, isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
 import { toggleWindowByLiveId } from '../os/actions'
 import { isHidden, visibleKeys } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
@@ -511,6 +511,18 @@ export function renderMainMirrorTabs(): void {
     open,
     hidden: model.hidden.length,
   })
+
+  // Location chrome (Options gear hidden state, OS Start) is renderer-owned or
+  // dock-shared DOM: this render can recreate the gear or clear the dock's
+  // other children, dropping the location stamps. Re-resolve after the render
+  // — gated to setting states that actually carry location chrome, rAF
+  // coalesced. Dynamic import breaks the main-renderer ↔ settings-dock cycle.
+  const s = getSettings()
+  if (s.osMode || s.optionsButtonLocation !== null || !s.startButtonAlwaysOnScreenEdge) {
+    void import('../os/chrome-locations')
+      .then((m) => m.scheduleChromeReconcile())
+      .catch(() => { /* module unavailable in test stubs */ })
+  }
 }
 
 // ---------------------------------------------------------------------------

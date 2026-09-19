@@ -518,12 +518,14 @@ html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right 
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
   order: 1 !important;
 }
-/* Inner variant: Start on the TAB-FACING side of its dock. Left side: default
-   order keeps it after the gear. Right side: order:-1 — the dock DOM is
-   [gear, start], so plain order:0 would leave Start outermost. */
+/* Inner variant: Start on the TAB-FACING side of its dock. Left side:
+   order:1 puts Start AFTER the gear regardless of DOM order — the secondary
+   dock appends its gear, so its DOM can be [start, gear], where an order tie
+   at 0 left Start outermost (M3 2026-09-19). Right side: order:-1 — Start
+   before the gear (tab-facing on a right-attached strip). */
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start],
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list button[data-canvas-os-start] {
-  order: 0 !important;
+  order: 1 !important;
 }
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start],
 html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list button[data-canvas-os-start] {
@@ -660,6 +662,32 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-rig
   margin-left: 4px !important;
   padding-left: 4px !important;
   border-left: 1px solid var(--lumiverse-primary-020) !important;
+}
+
+/* Inner variant + no VISIBLE Settings gear: a lone Start has no sibling to
+   reorder within the outer-anchored dock, so the setting would be a silent
+   no-op. Move the DOCK across the tabs (divider/margins mirrored) so Start
+   lands on the tab-facing side. :has counts only a displayed gear — a gear
+   hidden by the location setting must not suppress the flip (M2 2026-09-19). */
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))),
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-left .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))) {
+  order: 1 !important;
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  border-right: none !important;
+  margin-left: 4px !important;
+  padding-left: 4px !important;
+  border-left: 1px solid var(--lumiverse-primary-020) !important;
+}
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))),
+html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"].sidebar-ux-side-right .sidebar-ux-tab-list > .sidebar-ux-tab-list-bottom:not(:has(button[data-canvas-settings-gear]:not(.sidebar-ux-options-hidden))) {
+  order: -1 !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: none !important;
+  margin-right: 4px !important;
+  padding-right: 4px !important;
+  border-right: 1px solid var(--lumiverse-primary-020) !important;
 }
 
 /* Active indicator on the panel-facing side: top-edge strip -> bottom inset,

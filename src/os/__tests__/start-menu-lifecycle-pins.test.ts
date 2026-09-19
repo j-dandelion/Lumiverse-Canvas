@@ -140,7 +140,7 @@ assertIncludes(
 )
 assertIncludes(
   registry,
-  "import { reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'",
+  "import { activateChromeLocations, reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'",
   'registry imports the unified chrome-location reconcile',
 )
 assertIncludes(

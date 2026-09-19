@@ -763,6 +763,21 @@ function refreshSettingsPanelForSideChange(): void {
     .catch(() => { /* settings module may be mid-teardown */ })
 }
 
+/**
+ * Clear the intentional side override and, when one was actually active,
+ * re-render the panel's live-derived Main-drawer-side row so it unlocks.
+ * Every override-clear path must refresh: the panel is only repainted on a
+ * real side flip (checkSideChanged) or on the swap-start refresh, which runs
+ * while the override is still set — so without this the row stays disabled
+ * with the "Swapping drawer sides…" hint until an unrelated settings change
+ * (H2 2026-09-19).
+ */
+function clearSideOverrideWithPanelRefresh(): void {
+  if (getMainDrawerSideOverride() === null) return
+  setMainDrawerSideOverride(null)
+  refreshSettingsPanelForSideChange()
+}
+
 let _sideObserver: MutationObserver | null = null
 /** Wrapper node currently observed by _sideObserver (for rebind-on-replace). */
 let _observedMainWrapper: HTMLElement | null = null
@@ -924,7 +939,7 @@ export async function applyCanvasSideChange(
       // shells must follow it or they sit orphaned on the desired edge. A
       // stuck override here was the enable-toggle poison (2026-08-17).
       const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide
-      setMainDrawerSideOverride(null)
+      clearSideOverrideWithPanelRefresh()
       restyleMainShellSide(realSide)
       restyleSecondaryShellSide(realSide === 'left' ? 'right' : 'left')
       _lastKnownSide = realSide
@@ -989,7 +1004,7 @@ function reconcileSideOverrideFromDom(): void {
   // No readable side yet (wrapper mid-replace) — leave override in place.
   if (domSide === null) return
   if (domSide === override) {
-    setMainDrawerSideOverride(null)
+    clearSideOverrideWithPanelRefresh()
     return
   }
   // DOM lags or host wrote a different side. Prefer host-settings cache
@@ -1002,7 +1017,7 @@ function reconcileSideOverrideFromDom(): void {
   ) {
     // Store + DOM agree on a side other than our intentional override →
     // Settings (or another host write) won. Drop override so remount follows DOM.
-    setMainDrawerSideOverride(null)
+    clearSideOverrideWithPanelRefresh()
   }
   // else: keep override (React lag after our write, or store not yet readable)
 }
@@ -1028,7 +1043,7 @@ function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void
     // Check immediately
     if (readMainWrapperSideFromDom() === desired) {
       if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-        setMainDrawerSideOverride(null)
+        clearSideOverrideWithPanelRefresh()
       }
       resolve()
       return
@@ -1068,7 +1083,7 @@ function waitForSideSettle(desired: 'left' | 'right', gen: number): Promise<void
 
       if (readMainWrapperSideFromDom() === desired) {
         if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-          setMainDrawerSideOverride(null)
+          clearSideOverrideWithPanelRefresh()
         }
         finish()
       }
