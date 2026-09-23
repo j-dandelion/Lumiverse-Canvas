@@ -142,7 +142,7 @@ const {
   setDualLayoutSlot,
   setOsDualLayoutSlot,
 } = await import('../../settings/state')
-const { bootstrap, shutdown, getModel, flush, bootPlacementDone } =
+const { bootstrap, shutdown, getModel, flush, bootPlacementDone, __getPendingRestoreFlagsForTest } =
   await import('../../recon/dispatch')
 const { FakeHost } = await import('../../host/fake/implementation')
 const { builtinKey, createEmptyModel } = await import('../../core/model')
@@ -273,6 +273,14 @@ assertEqual(restoreCalls[0]?.slot, dualSlot, 'C-1: restores THE entering slot (i
 assertEqual(restoreCalls[0]?.opts?.restoreOpen, true, 'C-1: restoreOpen facet forwarded true')
 assertEqual(restoreCalls[0]?.opts?.restoreWidth, true, 'C-1: restoreWidth facet forwarded true')
 assertEqual(restoreCalls[0]?.opts?.osActive, false, 'C-1: osActive follows live OS setting (off)')
+// L3 (2026-09-23): boot recovery must use the plain retry window — never
+// arm persistWhilePending, or an early reload can durably persist a
+// resolved-only dual blob.
+assertEqual(
+  restoreCalls[0]?.opts?.persistWhilePending,
+  false,
+  'C-1: boot recovery forwards persistWhilePending:false (L3)',
+)
 const afterC1 = getModel()
 assert(afterC1 != null, 'C-1: model present after recovery')
 assertEqual(afterC1!.secondary.length, 1, 'C-1: real restore lands the dual model (secondary non-empty)')
@@ -347,6 +355,45 @@ assert(openCalls >= 1, 'C-6: openSecondarySidebar called to apply slot open stat
   await recoverModeLayoutAtBoot(dualSlot)
   assertEqual(unsuppressCalls, 1, 'F3c: host/model-gone early return → best-effort unsuppress')
   await bootSingleModel() // restore a live model for hygiene
+}
+
+// ══ L3 (2026-09-23): boot recovery with 1 resolvable + 1 never-resolving
+//    id must arm the PLAIN retry window (persistWhilePending:false) — a
+//    warm-persist flag would let an early reload durably write a
+//    resolved-only dual blob while the unresolvable entry is still pending. ══
+{
+  hydrateSettings({
+    secondSidebarEnabled: true,
+    persistDrawerOpenState: true,
+    persistDrawerWidth: true,
+    osMode: false,
+  })
+  const partialDualSlot: any = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'profile' },
+    secondary: { open: true, width: 500, activeTabId: 'loom' },
+    // loom resolves against the fixture host; ghost never will.
+    detachedTabs: [{ tabId: 'loom', tabTitle: 'Loom', sidebar: 'secondary' }],
+    tabOrder: ['profile', 'regex', 'loom', 'ghost-never-resolves'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+  setDualLayoutSlot(partialDualSlot)
+  await bootSingleModel()
+  restoreCalls.length = 0
+  await recoverModeLayoutAtBoot(partialDualSlot)
+  await flush()
+  // The restore is still pending (ghost never resolves) — the warm-persist
+  // flag must NOT be armed on the boot-recovery path.
+  const l3flags = __getPendingRestoreFlagsForTest()
+  assertEqual(
+    l3flags.persistResolvedWhilePending,
+    false,
+    'L3: boot recovery leaves persistWhilePending unarmed (plain retry window)',
+  )
+  // Restore hygiene for the F3 block below.
+  setDualLayoutSlot(dualSlot)
+  await bootSingleModel()
 }
 
 // ── Summary ──

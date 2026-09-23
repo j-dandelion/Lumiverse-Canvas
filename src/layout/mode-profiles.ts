@@ -94,6 +94,14 @@ export interface RestoreSingleModeOpts {
   /** Facet gates (boot recovery): default true = current behavior. */
   restoreOpen?: boolean
   restoreWidth?: boolean
+  /**
+   * Boot recovery (L3, 2026-09-23): pass false so the restore uses the
+   * plain retry window (`persistWhilePending: false`). Warm mid-session
+   * restores keep the default true — boot recovery must never durably
+   * persist a resolved-only dual blob during the 30s pending window
+   * (early-reload placement loss).
+   */
+  persistWhilePending?: boolean
 }
 
 export async function restoreSingleModeLayout(
@@ -106,9 +114,12 @@ export async function restoreSingleModeLayout(
     // persist the resolved model even when the slot carries an unresolvable
     // key. Without this the pending-restore gate blocks the write and a
     // reload restores the stale top-level layout — the restored second-drawer
-    // tabs vanish (live bug 2026-09-15). Boot keeps the plain retry window.
+    // tabs vanish (live bug 2026-09-15). Boot recovery passes
+    // `persistWhilePending: false` so it inherits the plain retry window
+    // (L3, 2026-09-23) — no durable write of a resolved-only blob while the
+    // 30s pending window is still converging.
     bootstrapFromLayout(slot, host, CANVAS_VERSION, {
-      persistWhilePending: true,
+      persistWhilePending: opts?.persistWhilePending !== false,
       osActive: opts?.osActive,
     })
     await flushOwnedModel()

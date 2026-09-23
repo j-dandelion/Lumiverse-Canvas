@@ -185,6 +185,10 @@ export async function recoverModeLayoutAtBoot(slot: LegacyLayout): Promise<void>
         restoreOpen: facetOpen,
         restoreWidth: facetWidth,
         osActive: isOsModeEnabled(),
+        // L3 (2026-09-23): boot recovery must use the plain retry window —
+        // never durably persist a resolved-only dual blob during the 30s
+        // pending window (early-reload placement loss).
+        persistWhilePending: false,
       })
     } catch (err) {
       dwarn('[mode-recovery] restoreSingleModeLayout threw:', err)
