@@ -16,6 +16,7 @@
 // so one artifact serves both mode restore and host restore.
 
 import type { LegacyLayout } from '../persist/layout-model'
+import { stripTabIdSuffix } from '../persist/tab-id-heal'
 import { CANVAS_VERSION } from '../persist/backend-ctx'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { isMainDrawerOpen, getMainDrawerSide, getDrawerTabs } from '../store'
@@ -152,9 +153,15 @@ export async function restoreSingleModeLayout(
     // that active (model.active → null) but the DOM restore below would
     // still click it open — a D17 split (UI shows a window the model calls
     // closed). Treat it like any stale saved tab: no active, OS fallback
-    // rules apply after.
-    if (tabId && osActive && Array.isArray(slot.closedTabIds) && slot.closedTabIds.includes(tabId)) {
-      tabId = null
+    // rules apply after. Suffix-heal (L8, 2026-09-23): compare stripped
+    // forms — `resolveStoredId` heals `h:loom:2` ↔ `h:loom`, but a raw
+    // `includes` misses the drift and lets the closed window be clicked open.
+    if (tabId && osActive && Array.isArray(slot.closedTabIds)) {
+      const activeId = tabId
+      const closedActive = slot.closedTabIds.some((c) =>
+        typeof c === 'string' && stripTabIdSuffix(c) === stripTabIdSuffix(activeId),
+      )
+      if (closedActive) tabId = null
     }
     if (tabId && !isTabKnownAndVisible(tabId)) {
       // OS mode: a stale saved tab (gone/hidden) restores NO active — never
