@@ -151,11 +151,11 @@ async function loadSettings() {
     if (!raw) {
       const layoutRaw = await readJsonFile(LAYOUT_KEY);
       if (layoutRaw) {
-        let parsed2;
+        let parsed;
         try {
-          parsed2 = JSON.parse(layoutRaw.data);
+          parsed = JSON.parse(layoutRaw.data);
         } catch {}
-        if (parsed2 && typeof parsed2 === "object" && parsed2.settings !== undefined) {
+        if (parsed && typeof parsed === "object" && parsed.settings !== undefined) {
           const migrated = await tryMigrateV1ToV2(layoutRaw.data);
           if (migrated) {
             const fresh = await readJsonFile(SETTINGS_KEY);
