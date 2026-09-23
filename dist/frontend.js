@@ -2933,6 +2933,21 @@ function serializeModelToSingleLayout(model, resolve, version) {
     drawerSide: model.side
   };
 }
+function foldLayoutToSingleShape(layout) {
+  const detached = layout.detachedTabs ?? [];
+  const order = Array.isArray(layout.tabOrder) ? [...layout.tabOrder] : [];
+  for (const d of detached) {
+    const id = d?.tabId;
+    if (id && !order.includes(id))
+      order.push(id);
+  }
+  return {
+    ...layout,
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: order
+  };
+}
 function layoutHasTabs(layout) {
   if (!layout)
     return false;
@@ -7961,430 +7976,6 @@ var init_configure_model = __esm(() => {
   init_drawer_observer();
 });
 
-// src/tabs/owned-commit.ts
-function plannedMovesForCommit(model, desiredSide) {
-  const moves = [];
-  for (const [key, side] of desiredSide) {
-    const current = sideOfKey(model, key);
-    if (current && current !== side)
-      moves.push({ key, to: side });
-  }
-  return moves;
-}
-function missingSecondaryButtonKeys(model, desiredSide, resolve, hasButton) {
-  const missing = [];
-  for (const [key, side] of desiredSide) {
-    if (side !== "secondary")
-      continue;
-    if (sideOfKey(model, key) !== "secondary")
-      continue;
-    const liveId = resolve(key);
-    if (liveId && !hasButton(liveId))
-      missing.push({ key, to: "secondary" });
-  }
-  return missing;
-}
-async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
-  const host = getHost();
-  if (!host)
-    return { ok: false, error: "Canvas tab model is not ready." };
-  try {
-    const commitBaseModel = getModel();
-    const observedBeforeRebase = host.observe();
-    await dispatchBatch([{ t: "syncFromHost", observed: host.observe() }]);
-    const model = getModel();
-    if (!model)
-      return { ok: false, error: "Canvas tab model is not ready." };
-    dlog("[owned-commit] rebased", {
-      primary: model.primary,
-      secondary: model.secondary
-    });
-    const keyFor = (id) => host.findKey(id);
-    const primary = resolveKeys(draft.primaryIds, keyFor);
-    const secondary = resolveKeys(draft.secondaryIds, keyFor);
-    const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor));
-    if (primary.length !== draft.primaryIds.length || secondary.length !== draft.secondaryIds.length) {
-      dlog("[owned-commit] resolution failed — rolling back rebase", {
-        expectedPrimary: draft.primaryIds.length,
-        gotPrimary: primary.length,
-        expectedSecondary: draft.secondaryIds.length,
-        gotSecondary: secondary.length
-      });
-      await dispatchBatch([{ t: "syncFromHost", observed: observedBeforeRebase }]);
-      return { ok: false, error: "A tab changed while Configure Tabs was open. Please retry." };
-    }
-    const intents = [];
-    if (draft.drawerSide !== model.side) {
-      dlog("[owned-commit] drawer side swap requested", {
-        draftSide: draft.drawerSide,
-        modelSide: model.side
-      });
-      intents.push({ t: "swapSides" });
-    }
-    const desiredSide = new Map;
-    for (const key of primary)
-      desiredSide.set(key, "primary");
-    for (const key of secondary)
-      desiredSide.set(key, "secondary");
-    for (const [key, side] of desiredSide) {
-      const current = sideOfKey(model, key);
-      if (current && current !== side) {
-        intents.push({
-          t: "move",
-          key,
-          to: side,
-          index: visibleKeys(model, side).length,
-          activateDest: false
-        });
-      }
-    }
-    dlog("[owned-commit] reorder index context", {
-      hiddenCount: hidden.size,
-      hiddenKeys: [...hidden],
-      primaryCount: primary.length,
-      secondaryCount: secondary.length,
-      visiblePrimary: model.primary.filter((k) => !hidden.has(k)).length,
-      visibleSecondary: model.secondary.filter((k) => !hidden.has(k)).length
-    });
-    for (const [side, keys] of [["primary", primary], ["secondary", secondary]]) {
-      for (let index = 0;index < keys.length; index++) {
-        const key = keys[index];
-        intents.push({ t: "reorder", key, side, index });
-      }
-    }
-    for (const key of [...model.primary, ...model.secondary]) {
-      intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
-    }
-    for (const key of model.closed) {
-      if (model.hidden.includes(key) && !hidden.has(key)) {
-        intents.push({ t: "setClosed", key, closed: false });
-      }
-    }
-    if (commitBaseModel) {
-      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
-      for (const source of ["primary", "secondary"]) {
-        const active = activeBeforeRebase[source];
-        if (!active || hidden.has(active))
-          continue;
-        const destination = desiredSide.get(active);
-        if (destination === source) {
-          intents.push({ t: "activate", key: active, side: source });
-          continue;
-        }
-        if (destination) {
-          const replacement = activeAfterRemoval(commitBaseModel, source, active);
-          if (replacement && !hidden.has(replacement)) {
-            intents.push({ t: "activate", key: replacement, side: source });
-          }
-          const destinationActive = activeBeforeRebase[destination];
-          if (destinationActive && destinationActive !== active && !hidden.has(destinationActive)) {
-            intents.push({ t: "activate", key: destinationActive, side: destination });
-          }
-        }
-      }
-    }
-    dlog("[owned-commit] dispatching", {
-      intents,
-      primary,
-      secondary
-    });
-    const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide);
-    if (typeof document !== "undefined") {
-      try {
-        await Promise.resolve().then(() => init_buttons());
-        await Promise.resolve().then(() => init_secondary());
-        const missing = missingSecondaryButtonKeys(model, desiredSide, (key) => host.resolve(key), (liveId) => {
-          const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-          return !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
-        });
-        if (missing.length > 0) {
-          dlog("[owned-commit] placement pass: model-vs-DOM divergence healed", {
-            missing: missing.map((m) => m.key)
-          });
-          plannedMoves.push(...missing);
-        }
-      } catch (err) {
-        dwarn("[owned-commit] divergence heal failed:", err);
-      }
-    }
-    const mirrorChrome = new Map;
-    const secondaryChrome = new Map;
-    if (!opts?.skipChrome) {
-      for (const move of plannedMoves) {
-        const liveId = host.resolve(move.key);
-        if (!liveId)
-          continue;
-        if (move.to === "secondary") {
-          mirrorChrome.set(move.key, await captureMainMirrorMoveChrome(liveId, "secondary"));
-        } else {
-          secondaryChrome.set(move.key, await captureSecondaryNeighborForMove(liveId));
-        }
-      }
-    }
-    await dispatchBatch(intents);
-    const committed = getModel();
-    dlog("[owned-commit] committed", {
-      primary: committed?.primary,
-      secondary: committed?.secondary
-    });
-    if (plannedMoves.length > 0 && typeof document !== "undefined") {
-      try {
-        const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
-        setSuppressAutoActivation(true);
-        let placed = 0;
-        const failed = [];
-        try {
-          for (const move of plannedMoves) {
-            const liveId = host.resolve(move.key);
-            if (!liveId) {
-              dlog("[owned-commit] placement pass: host.resolve returned null", {
-                key: move.key,
-                to: move.to
-              });
-              continue;
-            }
-            try {
-              if (move.to === "secondary") {
-                await assignToSecondary(liveId, {
-                  openOnClosed: false,
-                  setActiveWhenReady: false
-                });
-              } else {
-                await unassignFromSecondary(liveId);
-              }
-              placed++;
-            } catch (err) {
-              failed.push(move.key);
-              dwarn("[owned-commit] placement failed for", move.key, String(err));
-            }
-          }
-        } finally {
-          setSuppressAutoActivation(false);
-        }
-        dlog("[owned-commit] placement pass", {
-          moves: plannedMoves.length,
-          placed,
-          failed,
-          toSecondary: plannedMoves.filter((m) => m.to === "secondary").map((m) => m.key),
-          toPrimary: plannedMoves.filter((m) => m.to === "primary").map((m) => m.key)
-        });
-        const modelAfter = getModel();
-        if (modelAfter && modelAfter.secondary.length > 0) {
-          await Promise.resolve().then(() => init_buttons());
-          const ids = modelAfter.secondary.map((k) => host.resolve(k)).filter((id) => !!id);
-          if (secondaryTabButtonsReady(ids))
-            reorderSecondaryTabButtons(ids);
-        }
-      } catch (err) {
-        dwarn("[owned-commit] placement pass failed:", err);
-      }
-    }
-    if (!opts?.skipChrome) {
-      for (const move of plannedMoves) {
-        const liveId = host.resolve(move.key);
-        if (!liveId)
-          continue;
-        try {
-          if (move.to === "secondary") {
-            await applyMainMirrorMoveChrome(mirrorChrome.get(move.key) ?? { neighborBtn: null, reassertId: null }, liveId);
-          } else {
-            await applySecondaryNeighborHandoff(secondaryChrome.get(move.key) ?? { neighborBtn: null }, liveId);
-          }
-        } catch (err) {
-          dwarn("[owned-commit] chrome handoff failed for", move.key, String(err));
-        }
-      }
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-function resolveKeys(ids, resolve) {
-  const keys = [];
-  for (const id of ids) {
-    const key = resolve(id);
-    if (key)
-      keys.push(key);
-  }
-  return keys;
-}
-function activeSelection(world) {
-  return {
-    primary: world.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
-    secondary: world.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
-  };
-}
-var init_owned_commit = __esm(() => {
-  init_dispatch();
-  init_log();
-});
-
-// src/tabs/canvas-hidden.ts
-function normalizeHiddenIds(ids) {
-  if (!Array.isArray(ids))
-    return [];
-  const out = [];
-  const seen = new Set;
-  for (const id of ids) {
-    if (typeof id !== "string" || !id.length)
-      continue;
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
-function getCanvasHiddenTabIds() {
-  return _canvasHiddenTabIds.slice();
-}
-function setCanvasHiddenTabIds(ids) {
-  _canvasHiddenTabIds = normalizeHiddenIds(ids);
-}
-function hydrateCanvasHiddenFromLayout(layout) {
-  if (!layout || typeof layout !== "object")
-    return;
-  const raw = layout.hiddenTabIds;
-  if (!Array.isArray(raw))
-    return;
-  _canvasHiddenTabIds = normalizeHiddenIds(raw);
-}
-function mergeHiddenTabIdLists(hostIds, canvasIds) {
-  const out = [];
-  const seen = new Set;
-  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
-var _canvasHiddenTabIds;
-var init_canvas_hidden = __esm(() => {
-  _canvasHiddenTabIds = [];
-});
-
-// src/tabs/hidden-tabs.ts
-function collectLiveTabIdsForHiddenHeal() {
-  const ids = new Set;
-  for (const id of BUILTIN_TAB_IDS)
-    ids.add(id);
-  for (const t of getDrawerTabs()) {
-    if (t?.id)
-      ids.add(t.id);
-  }
-  try {
-    const list = getSecondaryTabList();
-    if (list) {
-      for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
-        const tid = btn.getAttribute("data-tab-id");
-        if (tid)
-          ids.add(tid);
-      }
-    }
-  } catch {}
-  if (typeof document !== "undefined") {
-    for (const btn of Array.from(document.querySelectorAll('.sidebar button[data-tab-id], [class*="tabList"] button[data-tab-id]'))) {
-      const tid = btn.getAttribute("data-tab-id");
-      if (tid)
-        ids.add(tid);
-    }
-  }
-  return [...ids];
-}
-function scheduleSyncHiddenTabsFromHost(opts) {
-  const delayMs = opts?.delayMs ?? 50;
-  if (_debouncedSyncTimer !== null)
-    clearTimeout(_debouncedSyncTimer);
-  _debouncedSyncTimer = setTimeout(() => {
-    _debouncedSyncTimer = null;
-    try {
-      syncHiddenTabsFromHost();
-    } catch {}
-  }, delayMs);
-}
-function syncHiddenTabsFromHost() {
-  const host = getHostDrawerSettings();
-  const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
-  const canvasStored = getCanvasHiddenTabIds();
-  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
-  const liveIds = collectLiveTabIdsForHiddenHeal();
-  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
-  const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
-  setCanvasHiddenTabIds(forCanvas);
-  const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
-  applyHiddenTabIdsToSecondary(applySet);
-  applyHiddenTabIdsToMirror(applySet);
-  applyHiddenTabIdsToHostMain(applySet);
-  return { hiddenIds: forCanvas };
-}
-function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
-  const stored = normalizeHiddenIds(storedHidden);
-  if (!stored.length)
-    return [];
-  return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
-}
-var _debouncedSyncTimer = null;
-var init_hidden_tabs = __esm(() => {
-  init_host_settings();
-  init_store();
-  init_configure_catalog();
-  init_buttons();
-  init_secondary();
-  init_canvas_hidden();
-  init_canvas_hidden();
-});
-
-// src/tabs/live-tab-order.ts
-function readVisibleTabIdsFromList(list) {
-  if (!list)
-    return [];
-  const out = [];
-  for (const el of Array.from(list.querySelectorAll('button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn, button[class*="tabBtnExtension"]'))) {
-    if (isSettingsButton(el))
-      continue;
-    if (el.style?.display === "none")
-      continue;
-    const hasAttr = el.getAttribute("data-tab-id") !== null;
-    const id = buttonTabId(el);
-    if (id) {
-      if (!hasAttr && !_titleResolvedLogged.has(id)) {
-        _titleResolvedLogged.add(id);
-        dlog("[live-order] no data-tab-id button counted via title fallback", {
-          id,
-          title: el.getAttribute("title") || el.getAttribute("aria-label") || null,
-          cls: String(el.className || ""),
-          parentCls: el.parentElement ? String(el.parentElement.className || "") : null
-        });
-      }
-      out.push(id);
-    }
-  }
-  return out;
-}
-function readLivePrimaryTabIds() {
-  const mirrorMain = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
-  if (mirrorMain)
-    return readVisibleTabIdsFromList(mirrorMain);
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return [];
-  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
-  return readVisibleTabIdsFromList(tabList);
-}
-function readLiveSecondaryTabIds() {
-  return readVisibleTabIdsFromList(getSecondaryTabList());
-}
-var _titleResolvedLogged;
-var init_live_tab_order = __esm(() => {
-  init_buttons();
-  init_secondary();
-  init_log();
-  _titleResolvedLogged = new Set;
-});
-
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
 function m(n, l) {
   for (var u in l)
@@ -8836,6 +8427,171 @@ var init_hooks_module = __esm(() => {
   k2 = typeof requestAnimationFrame == "function";
 });
 
+// src/tabs/canvas-hidden.ts
+function normalizeHiddenIds(ids) {
+  if (!Array.isArray(ids))
+    return [];
+  const out = [];
+  const seen = new Set;
+  for (const id of ids) {
+    if (typeof id !== "string" || !id.length)
+      continue;
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+function getCanvasHiddenTabIds() {
+  return _canvasHiddenTabIds.slice();
+}
+function setCanvasHiddenTabIds(ids) {
+  _canvasHiddenTabIds = normalizeHiddenIds(ids);
+}
+function hydrateCanvasHiddenFromLayout(layout) {
+  if (!layout || typeof layout !== "object")
+    return;
+  const raw = layout.hiddenTabIds;
+  if (!Array.isArray(raw))
+    return;
+  _canvasHiddenTabIds = normalizeHiddenIds(raw);
+}
+function mergeHiddenTabIdLists(hostIds, canvasIds) {
+  const out = [];
+  const seen = new Set;
+  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+var _canvasHiddenTabIds;
+var init_canvas_hidden = __esm(() => {
+  _canvasHiddenTabIds = [];
+});
+
+// src/tabs/hidden-tabs.ts
+function collectLiveTabIdsForHiddenHeal() {
+  const ids = new Set;
+  for (const id of BUILTIN_TAB_IDS)
+    ids.add(id);
+  for (const t of getDrawerTabs()) {
+    if (t?.id)
+      ids.add(t.id);
+  }
+  try {
+    const list = getSecondaryTabList();
+    if (list) {
+      for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+        const tid = btn.getAttribute("data-tab-id");
+        if (tid)
+          ids.add(tid);
+      }
+    }
+  } catch {}
+  if (typeof document !== "undefined") {
+    for (const btn of Array.from(document.querySelectorAll('.sidebar button[data-tab-id], [class*="tabList"] button[data-tab-id]'))) {
+      const tid = btn.getAttribute("data-tab-id");
+      if (tid)
+        ids.add(tid);
+    }
+  }
+  return [...ids];
+}
+function scheduleSyncHiddenTabsFromHost(opts) {
+  const delayMs = opts?.delayMs ?? 50;
+  if (_debouncedSyncTimer !== null)
+    clearTimeout(_debouncedSyncTimer);
+  _debouncedSyncTimer = setTimeout(() => {
+    _debouncedSyncTimer = null;
+    try {
+      syncHiddenTabsFromHost();
+    } catch {}
+  }, delayMs);
+}
+function syncHiddenTabsFromHost() {
+  const host = getHostDrawerSettings();
+  const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
+  const canvasStored = getCanvasHiddenTabIds();
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
+  const liveIds = collectLiveTabIdsForHiddenHeal();
+  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
+  const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
+  setCanvasHiddenTabIds(forCanvas);
+  const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
+  applyHiddenTabIdsToSecondary(applySet);
+  applyHiddenTabIdsToMirror(applySet);
+  applyHiddenTabIdsToHostMain(applySet);
+  return { hiddenIds: forCanvas };
+}
+function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
+  const stored = normalizeHiddenIds(storedHidden);
+  if (!stored.length)
+    return [];
+  return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
+}
+var _debouncedSyncTimer = null;
+var init_hidden_tabs = __esm(() => {
+  init_host_settings();
+  init_store();
+  init_configure_catalog();
+  init_buttons();
+  init_secondary();
+  init_canvas_hidden();
+  init_canvas_hidden();
+});
+
+// src/tabs/live-tab-order.ts
+function readVisibleTabIdsFromList(list) {
+  if (!list)
+    return [];
+  const out = [];
+  for (const el of Array.from(list.querySelectorAll('button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn, button[class*="tabBtnExtension"]'))) {
+    if (isSettingsButton(el))
+      continue;
+    if (el.style?.display === "none")
+      continue;
+    const hasAttr = el.getAttribute("data-tab-id") !== null;
+    const id = buttonTabId(el);
+    if (id) {
+      if (!hasAttr && !_titleResolvedLogged.has(id)) {
+        _titleResolvedLogged.add(id);
+        dlog("[live-order] no data-tab-id button counted via title fallback", {
+          id,
+          title: el.getAttribute("title") || el.getAttribute("aria-label") || null,
+          cls: String(el.className || ""),
+          parentCls: el.parentElement ? String(el.parentElement.className || "") : null
+        });
+      }
+      out.push(id);
+    }
+  }
+  return out;
+}
+function readLivePrimaryTabIds() {
+  const mirrorMain = document.querySelector(".sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main");
+  if (mirrorMain)
+    return readVisibleTabIdsFromList(mirrorMain);
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return [];
+  const tabList = sidebar.querySelector('[class*="tabListWrap"] > [class*="tabList"]') || sidebar.querySelector('[class*="tabList"]');
+  return readVisibleTabIdsFromList(tabList);
+}
+function readLiveSecondaryTabIds() {
+  return readVisibleTabIdsFromList(getSecondaryTabList());
+}
+var _titleResolvedLogged;
+var init_live_tab_order = __esm(() => {
+  init_buttons();
+  init_secondary();
+  init_log();
+  _titleResolvedLogged = new Set;
+});
+
 // node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e, t, n, o, i, u) {
   t || (t = {});
@@ -8945,7 +8701,7 @@ function buildSingleLayoutFromLiveHost() {
 async function restoreSingleModeLayout(slot, host, opts) {
   try {
     bootstrapFromLayout(slot, host, CANVAS_VERSION, {
-      persistWhilePending: true,
+      persistWhilePending: opts?.persistWhilePending !== false,
       osActive: opts?.osActive
     });
     await flush();
@@ -8958,8 +8714,11 @@ async function restoreSingleModeLayout(slot, host, opts) {
     const restoreWidth = opts?.restoreWidth !== false;
     const open = !!slot.primary?.open;
     let tabId = slot.primary?.tabId ?? null;
-    if (tabId && osActive && Array.isArray(slot.closedTabIds) && slot.closedTabIds.includes(tabId)) {
-      tabId = null;
+    if (tabId && osActive && Array.isArray(slot.closedTabIds)) {
+      const activeId = tabId;
+      const closedActive = slot.closedTabIds.some((c) => typeof c === "string" && stripTabIdSuffix(c) === stripTabIdSuffix(activeId));
+      if (closedActive)
+        tabId = null;
     }
     if (tabId && !isTabKnownAndVisible(tabId)) {
       tabId = osActive ? null : pickSafeFallbackTabId();
@@ -9064,29 +8823,16 @@ var init_mode_profiles = __esm(() => {
   init_state();
 });
 
-// src/settings/mode-transition.ts
-function runOsTransition(fn) {
-  const result = _osChain.then(() => runDrawerTransition(fn));
-  _osChain = result.then(noop, noop);
-  return result;
+// src/os/os-configure-gate.ts
+function setOsConfigureWillRestore(value) {
+  _osConfigureWillRestore = value;
 }
-function runDrawerTransition(fn) {
-  const result = _drawerChain.then(fn);
-  _drawerChain = result.then(noop, noop);
-  return result;
+function takeOsConfigureWillRestore() {
+  const value = _osConfigureWillRestore;
+  _osConfigureWillRestore = null;
+  return value;
 }
-function runNestedDrawerTransition(fn) {
-  try {
-    return Promise.resolve(fn());
-  } catch (err) {
-    return Promise.reject(err);
-  }
-}
-var noop = () => {}, _osChain, _drawerChain;
-var init_mode_transition = __esm(() => {
-  _osChain = Promise.resolve();
-  _drawerChain = Promise.resolve();
-});
+var _osConfigureWillRestore = null;
 
 // src/os/os-mode.ts
 function isMobileViewportLocal() {
@@ -9113,8 +8859,16 @@ function syncOsMobileDrawerMode(opts) {
       _mobileDrawerSyncDirty = false;
       await runSyncOsMobileDrawerMode(nested);
     } while (_mobileDrawerSyncDirty && ++i < 5);
+    while (_mobileDrawerSyncDirty && ++i < 5) {
+      _mobileDrawerSyncDirty = false;
+      await runSyncOsMobileDrawerMode(nested);
+    }
   })().finally(() => {
     _mobileDrawerSync = null;
+    if (_mobileDrawerSyncDirty) {
+      _mobileDrawerSyncDirty = false;
+      syncOsMobileDrawerMode({ nested: _mobileDrawerSyncNested });
+    }
   });
   return _mobileDrawerSync;
 }
@@ -9163,19 +8917,21 @@ function activeModeIsDual() {
   return !!model && model.secondary.length > 0;
 }
 function seedOsSlotFromLive(target) {
-  const layout = snapshotOwnedModelLayout();
-  if (!layout) {
+  const raw = snapshotOwnedModelLayout();
+  if (!raw) {
     dlog("[os] enable seed: no live model serialization (boot/teardown) — slot stays empty");
     return;
   }
   const which = target ?? (activeModeIsDual() ? "dual" : "single");
+  const layout = which === "single" ? foldLayoutToSingleShape(raw) : raw;
   if (which === "dual")
     setOsDualLayoutSlot(layout);
   else
     setOsSingleLayoutSlot(layout);
   dlog("[os] enable seed: OS slot written", {
     mode: which,
-    tabs: Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0
+    tabs: Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0,
+    tabOrder: Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0
   });
 }
 function snapshotOsSlotFromLive() {
@@ -9204,44 +8960,47 @@ function osExitSlotHasTabs() {
 async function runOsEnable() {
   setPersistOsOverride(true);
   try {
-    const host = getHost();
-    const mobile = isMobileViewportLocal();
-    const slot = entryOsSlot();
-    const canRestore = !!(slot && host && layoutHasTabs(slot) && slotResolves(slot, (id) => host.findKey(id)));
-    holdMainDrawerReveal();
-    try {
-      if (canRestore) {
-        const result = await restoreSingleModeLayout(slot, host, { osActive: true });
-        if (!result.ok)
-          dwarn(`[os] enable restore partial: ${result.reason ?? "unknown"}`);
-        else
-          dlog("[os] enable: OS slot restored", { mobile });
-      } else {
-        if (!host)
-          dlog("[os] enable: no host — skipping restore (seed path)");
-        seedOsSlotFromLive(mobile ? "single" : undefined);
+    await withModeSwitchBarrier(async () => {
+      const host = getHost();
+      const mobile = isMobileViewportLocal();
+      if (mobile && !getSettings().osForcedSingleDrawer) {
+        setSettings({ osForcedSingleDrawer: true });
       }
+      const slot = entryOsSlot();
+      const canRestore = !!(slot && host && layoutHasTabs(slot) && slotResolves(slot, (id) => host.findKey(id)));
+      holdMainDrawerReveal();
       try {
-        await Promise.race([
-          bootPlacementDone(),
-          new Promise((r) => setTimeout(r, 5000))
-        ]);
-        await flush();
-        await waitForMainContentSettled(1000);
-      } catch {}
-      try {
-        const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-        if (isConfigureTabsModalOpen()) {
-          try {
-            await flushConfigureCommits();
-          } catch {}
-          refreshConfigureDraftFromLive();
+        if (canRestore) {
+          const result = await restoreSingleModeLayout(slot, host, { osActive: true });
+          if (!result.ok)
+            dwarn(`[os] enable restore partial: ${result.reason ?? "unknown"}`);
+          else
+            dlog("[os] enable: OS slot restored", { mobile });
+        } else {
+          if (!host)
+            dlog("[os] enable: no host — skipping restore (seed path)");
+          seedOsSlotFromLive(mobile ? "single" : undefined);
         }
-      } catch {}
-    } finally {
-      releaseMainDrawerReveal();
-    }
-    await syncOsMobileDrawerMode({ nested: true });
+        try {
+          await Promise.race([
+            bootPlacementDone(),
+            new Promise((r) => setTimeout(r, 5000))
+          ]);
+          await flush();
+          await waitForMainContentSettled(1000);
+        } catch {}
+        try {
+          const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+          const willRestore = takeOsConfigureWillRestore();
+          if (willRestore !== false && isConfigureTabsModalOpen()) {
+            refreshConfigureDraftFromLive();
+          }
+        } catch {}
+      } finally {
+        releaseMainDrawerReveal();
+      }
+      await syncOsMobileDrawerMode({ nested: true });
+    });
   } finally {
     setPersistOsOverride(null);
   }
@@ -9249,36 +9008,36 @@ async function runOsEnable() {
 async function runOsDisable() {
   setPersistOsOverride(false);
   try {
-    snapshotOsSlotFromLive();
-    cancelLayoutSave();
-    const dual = getSettings().secondSidebarEnabled;
-    const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot();
-    const host = getHost();
-    const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0);
-    if (slot && host && hasTabs) {
-      const result = await restoreSingleModeLayout(slot, host, { osActive: false });
-      if (!result.ok) {
-        dwarn(`[os] disable restore partial: ${result.reason ?? "unknown"}`);
-      } else {
-        dlog("[os] disable: non-OS slot restored", { mode: dual ? "dual" : "single" });
+    await withModeSwitchBarrier(async () => {
+      snapshotOsSlotFromLive();
+      cancelLayoutSave();
+      const dual = getSettings().secondSidebarEnabled;
+      const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot();
+      const host = getHost();
+      const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0);
+      if (slot && host && hasTabs) {
+        const result = await restoreSingleModeLayout(slot, host, { osActive: false });
+        if (!result.ok) {
+          dwarn(`[os] disable restore partial: ${result.reason ?? "unknown"}`);
+        } else {
+          dlog("[os] disable: non-OS slot restored", { mode: dual ? "dual" : "single" });
+        }
       }
-    }
-    const after = getModel();
-    if (after && after.closed.length > 0) {
-      dlog("[os] disable: clearing residual closed windows", { closed: after.closed.length });
-      const reopen = after.closed.map((key) => ({ t: "setClosed", key, closed: false }));
-      await dispatchBatch(reopen);
-    }
-    await syncOsMobileDrawerMode({ nested: true });
-    try {
-      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-      if (isConfigureTabsModalOpen()) {
-        try {
-          await flushConfigureCommits();
-        } catch {}
-        refreshConfigureDraftFromLive();
+      const after = getModel();
+      if (after && after.closed.length > 0) {
+        dlog("[os] disable: clearing residual closed windows", { closed: after.closed.length });
+        const reopen = after.closed.map((key) => ({ t: "setClosed", key, closed: false }));
+        await dispatchBatch(reopen);
       }
-    } catch {}
+      await syncOsMobileDrawerMode({ nested: true });
+      try {
+        const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+        const willRestore = takeOsConfigureWillRestore();
+        if (willRestore !== false && isConfigureTabsModalOpen()) {
+          refreshConfigureDraftFromLive();
+        }
+      } catch {}
+    });
   } finally {
     setPersistOsOverride(null);
   }
@@ -9534,8 +9293,19 @@ function showModeSwitchDialog() {
   });
 }
 function guardConfigureDirty(opts) {
-  if (opts?.silent)
-    return Promise.resolve("proceed");
+  if (opts?.silent) {
+    return (async () => {
+      try {
+        const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+        if (isConfigureTabsModalOpen()) {
+          await flushConfigureCommits();
+        }
+      } catch (err) {
+        dwarn("[second-drawer-mode] silent flush failed:", err);
+      }
+      return "proceed";
+    })();
+  }
   if (_dirtyGuard)
     return _dirtyGuard;
   _dirtyGuard = runGuardConfigureDirty().finally(() => {
@@ -9575,7 +9345,7 @@ async function runGuardConfigureDirty() {
       const draft = getConfigureDraftRef();
       const base = getConfigureBaseRef();
       if (draft && base) {
-        const result = await commitDraftToOwnedModel(draft);
+        const result = await commitConfigureDraftSerial();
         if (!result.ok) {
           dwarn("[second-drawer-mode] commit failed on mode switch:", result.error);
           return "cancel";
@@ -9697,82 +9467,84 @@ async function runSecondDrawerSwitch(target, opts) {
       dlog("[second-drawer-mode] enable ignored: OS mode forces single drawer on mobile");
       return;
     }
-    const switchDualSlot = getActiveDualSlot();
-    const switchSingleSlot = getActiveSingleSlot();
-    dlog("[second-drawer-mode] switching to dual", {
-      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder) ? switchSingleSlot.tabOrder.length : 0,
-      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs) ? switchDualSlot.detachedTabs.length : 0,
-      modelSecondary: getModel()?.secondary.length ?? 0
-    });
-    const hostNow = getHost();
-    const modelNow = getModel();
-    if (hostNow && modelNow) {
-      const singleSnapshot = serializeModelToSingleLayout(modelNow, (key) => hostNow.resolve(key), CANVAS_VERSION);
-      setActiveSingleSlot(singleSnapshot);
-      dlog("[second-drawer-mode] saved single layout slot:", {
-        primary: singleSnapshot.tabOrder?.length ?? 0,
-        hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0
+    const enableChoice = await guardConfigureDirty({ silent: opts?.silent });
+    if (enableChoice === "cancel")
+      return;
+    await withModeSwitchBarrier(async () => {
+      const switchDualSlot = getActiveDualSlot();
+      const switchSingleSlot = getActiveSingleSlot();
+      dlog("[second-drawer-mode] switching to dual", {
+        singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder) ? switchSingleSlot.tabOrder.length : 0,
+        dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs) ? switchDualSlot.detachedTabs.length : 0,
+        modelSecondary: getModel()?.secondary.length ?? 0
       });
-    }
-    const layoutBefore = getLastLoadedLayout();
-    const dualSlotBefore = getActiveDualSlot();
-    if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(dualSlotBefore)) {
-      dlog("[second-drawer-mode] first enable — seeding dual layout from live");
-      seedDualLayoutFromLive();
-    }
-    const persistMod = await Promise.resolve().then(() => (init_main_persist(), {}));
-    holdMainDrawerReveal();
-    try {
-      setSettings({ secondSidebarEnabled: true });
-      cancelSettingsSave();
-      cancelLayoutSave();
-      const host = getHost();
-      const dualSlot = getActiveDualSlot();
-      const restoreSource = [dualSlot].find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0);
-      if (restoreSource && host) {
-        dlog("[second-drawer-mode] owned-model restore for re-enable:", {
-          tabs: restoreSource.detachedTabs.length,
-          source: "dual-slot"
+      const hostNow = getHost();
+      const modelNow = getModel();
+      if (hostNow && modelNow) {
+        const singleSnapshot = serializeModelToSingleLayout(modelNow, (key) => hostNow.resolve(key), CANVAS_VERSION);
+        setActiveSingleSlot(singleSnapshot);
+        dlog("[second-drawer-mode] saved single layout slot:", {
+          primary: singleSnapshot.tabOrder?.length ?? 0,
+          hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0
         });
-        const result = await restoreSingleModeLayout(restoreSource, host);
-        if (!result.ok) {
-          dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? "unknown"}`);
-        }
       }
-      persistSettings();
+      const layoutBefore = getLastLoadedLayout();
+      const dualSlotBefore = getActiveDualSlot();
+      if (!hasDetachedTabs(layoutBefore) && !hasDetachedTabs(dualSlotBefore)) {
+        dlog("[second-drawer-mode] first enable — seeding dual layout from live");
+        seedDualLayoutFromLive();
+      }
+      const persistMod = await Promise.resolve().then(() => (init_main_persist(), {}));
+      holdMainDrawerReveal();
       try {
-        await Promise.race([
-          bootPlacementDone(),
-          new Promise((r) => setTimeout(r, 5000))
-        ]);
-        await flush();
-        await waitForMainContentSettled(1000);
-      } catch {}
-    } finally {
-      releaseMainDrawerReveal();
-    }
-    try {
-      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-      if (isConfigureTabsModalOpen()) {
+        setSettings({ secondSidebarEnabled: true });
+        cancelSettingsSave();
+        cancelLayoutSave();
+        const host = getHost();
+        const dualSlot = getActiveDualSlot();
+        const restoreSource = [dualSlot].find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0);
+        if (restoreSource && host) {
+          dlog("[second-drawer-mode] owned-model restore for re-enable:", {
+            tabs: restoreSource.detachedTabs.length,
+            source: "dual-slot"
+          });
+          const result = await restoreSingleModeLayout(restoreSource, host);
+          if (!result.ok) {
+            dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? "unknown"}`);
+          }
+        }
+        persistSettings();
         try {
-          await flushConfigureCommits();
+          await Promise.race([
+            bootPlacementDone(),
+            new Promise((r) => setTimeout(r, 5000))
+          ]);
+          await flush();
+          await waitForMainContentSettled(1000);
         } catch {}
-        refreshConfigureDraftFromLive();
+      } finally {
+        releaseMainDrawerReveal();
       }
-    } catch {}
-    const afterModel = getModel();
-    dlog("[second-drawer-mode] dual mode active", {
-      secondSidebarEnabled: true,
-      modelPrimary: afterModel?.primary.length ?? 0,
-      modelSecondary: afterModel?.secondary.length ?? 0,
-      modelSide: afterModel?.side ?? null
+      try {
+        const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+        if (isConfigureTabsModalOpen()) {
+          refreshConfigureDraftFromLive();
+        }
+      } catch {}
+      const afterModel = getModel();
+      dlog("[second-drawer-mode] dual mode active", {
+        secondSidebarEnabled: true,
+        modelPrimary: afterModel?.primary.length ?? 0,
+        modelSecondary: afterModel?.secondary.length ?? 0,
+        modelSide: afterModel?.side ?? null
+      });
+      try {
+        const dl = await Promise.resolve().then(() => (init_drawer_location(), {}));
+        reconcileDrawerLocation();
+      } catch (err) {
+        dwarn("[second-drawer-mode] reconcileDrawerLocation after enable failed:", err);
+      }
     });
-    try {
-      const dl = await Promise.resolve().then(() => (init_drawer_location(), {}));
-      reconcileDrawerLocation();
-    } catch (err) {
-      dwarn("[second-drawer-mode] reconcileDrawerLocation after enable failed:", err);
-    }
   } else {
     if (!getSettings().secondSidebarEnabled)
       return;
@@ -9786,7 +9558,7 @@ async function runSecondDrawerSwitch(target, opts) {
     const choice = await guardConfigureDirty({ silent: opts?.silent });
     if (choice === "cancel")
       return;
-    await finishDisable();
+    await withModeSwitchBarrier(() => finishDisable());
   }
 }
 var HOST_ID = "canvas-mode-switch-dialog", STYLE_ID3 = "canvas-mode-switch-dialog-styles", _dialogHost = null, _dialogKeydown = null, _dirtyGuard = null;
@@ -9797,7 +9569,6 @@ var init_second_drawer_mode = __esm(() => {
   init_snapshot();
   init_dispatch();
   init_layout_model();
-  init_owned_commit();
   init_mode_profiles();
   init_drawer_sync();
   init_log();
@@ -10686,7 +10457,7 @@ async function autoCommit() {
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, null, false);
       }
-    } else {
+    } else if (!result.superseded) {
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, result.error, false);
       }
@@ -10694,7 +10465,10 @@ async function autoCommit() {
     return result;
   })();
   _commitPromise = myWork.then((r) => r).catch(() => ({ ok: false, error: "auto-commit failed" }));
-  await myWork;
+  return await myWork;
+}
+async function commitConfigureDraftSerial() {
+  return autoCommit();
 }
 async function flushConfigureCommits() {
   await autoCommit();
@@ -11276,7 +11050,9 @@ function renderModal(draft, catalog, commitError, committing) {
       if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
         const result = await commitDraftToOwnedModel(_draftRef);
         if (!result.ok) {
-          renderModal(_draftRef, catalog, result.error, false);
+          if (!result.superseded) {
+            renderModal(_draftRef, catalog, result.error, false);
+          }
           return;
         }
         _baseSnapshotRef = baseSnapshotFromDraft(_draftRef);
@@ -11315,6 +11091,323 @@ var init_configure_modal = __esm(() => {
   init_log();
   init_jsxRuntime_module();
   _catalogRef = [];
+});
+
+// src/settings/mode-transition.ts
+function beginModeSwitchBarrier() {
+  _modeSwitchBarrierDepth++;
+}
+function endModeSwitchBarrier() {
+  if (_modeSwitchBarrierDepth > 0)
+    _modeSwitchBarrierDepth--;
+}
+function isModeSwitchBarrierActive() {
+  return _modeSwitchBarrierDepth > 0;
+}
+async function withModeSwitchBarrier(fn) {
+  const nested = isModeSwitchBarrierActive();
+  if (!nested) {
+    try {
+      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+      if (isConfigureTabsModalOpen()) {
+        await flushConfigureCommits();
+      }
+    } catch {}
+  }
+  beginModeSwitchBarrier();
+  try {
+    return await fn();
+  } finally {
+    endModeSwitchBarrier();
+  }
+}
+function runOsTransition(fn) {
+  const result = _osChain.then(() => runDrawerTransition(fn));
+  _osChain = result.then(noop, noop);
+  return result;
+}
+function runDrawerTransition(fn) {
+  const result = _drawerChain.then(fn);
+  _drawerChain = result.then(noop, noop);
+  return result;
+}
+function runNestedDrawerTransition(fn) {
+  try {
+    return Promise.resolve(fn());
+  } catch (err) {
+    return Promise.reject(err);
+  }
+}
+var noop = () => {}, _osChain, _drawerChain, _modeSwitchBarrierDepth = 0;
+var init_mode_transition = __esm(() => {
+  _osChain = Promise.resolve();
+  _drawerChain = Promise.resolve();
+});
+
+// src/tabs/owned-commit.ts
+function plannedMovesForCommit(model, desiredSide) {
+  const moves = [];
+  for (const [key, side] of desiredSide) {
+    const current = sideOfKey(model, key);
+    if (current && current !== side)
+      moves.push({ key, to: side });
+  }
+  return moves;
+}
+function missingSecondaryButtonKeys(model, desiredSide, resolve, hasButton) {
+  const missing = [];
+  for (const [key, side] of desiredSide) {
+    if (side !== "secondary")
+      continue;
+    if (sideOfKey(model, key) !== "secondary")
+      continue;
+    const liveId = resolve(key);
+    if (liveId && !hasButton(liveId))
+      missing.push({ key, to: "secondary" });
+  }
+  return missing;
+}
+async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
+  if (isModeSwitchBarrierActive()) {
+    return { ok: false, error: "mode-switch-in-progress", superseded: true };
+  }
+  const host = getHost();
+  if (!host)
+    return { ok: false, error: "Canvas tab model is not ready." };
+  try {
+    const commitBaseModel = getModel();
+    const observedBeforeRebase = host.observe();
+    await dispatchBatch([{ t: "syncFromHost", observed: host.observe() }]);
+    const model = getModel();
+    if (!model)
+      return { ok: false, error: "Canvas tab model is not ready." };
+    dlog("[owned-commit] rebased", {
+      primary: model.primary,
+      secondary: model.secondary
+    });
+    const keyFor = (id) => host.findKey(id);
+    const primary = resolveKeys(draft.primaryIds, keyFor);
+    const secondary = resolveKeys(draft.secondaryIds, keyFor);
+    const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor));
+    if (primary.length !== draft.primaryIds.length || secondary.length !== draft.secondaryIds.length) {
+      dlog("[owned-commit] resolution failed — rolling back rebase", {
+        expectedPrimary: draft.primaryIds.length,
+        gotPrimary: primary.length,
+        expectedSecondary: draft.secondaryIds.length,
+        gotSecondary: secondary.length
+      });
+      await dispatchBatch([{ t: "syncFromHost", observed: observedBeforeRebase }]);
+      return { ok: false, error: "A tab changed while Configure Tabs was open. Please retry." };
+    }
+    const intents = [];
+    if (draft.drawerSide !== model.side) {
+      dlog("[owned-commit] drawer side swap requested", {
+        draftSide: draft.drawerSide,
+        modelSide: model.side
+      });
+      intents.push({ t: "swapSides" });
+    }
+    const desiredSide = new Map;
+    for (const key of primary)
+      desiredSide.set(key, "primary");
+    for (const key of secondary)
+      desiredSide.set(key, "secondary");
+    for (const [key, side] of desiredSide) {
+      const current = sideOfKey(model, key);
+      if (current && current !== side) {
+        intents.push({
+          t: "move",
+          key,
+          to: side,
+          index: visibleKeys(model, side).length,
+          activateDest: false
+        });
+      }
+    }
+    dlog("[owned-commit] reorder index context", {
+      hiddenCount: hidden.size,
+      hiddenKeys: [...hidden],
+      primaryCount: primary.length,
+      secondaryCount: secondary.length,
+      visiblePrimary: model.primary.filter((k) => !hidden.has(k)).length,
+      visibleSecondary: model.secondary.filter((k) => !hidden.has(k)).length
+    });
+    for (const [side, keys] of [["primary", primary], ["secondary", secondary]]) {
+      for (let index = 0;index < keys.length; index++) {
+        const key = keys[index];
+        intents.push({ t: "reorder", key, side, index });
+      }
+    }
+    for (const key of [...model.primary, ...model.secondary]) {
+      intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
+    }
+    for (const key of model.closed) {
+      if (model.hidden.includes(key) && !hidden.has(key)) {
+        intents.push({ t: "setClosed", key, closed: false });
+      }
+    }
+    if (commitBaseModel) {
+      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
+      for (const source of ["primary", "secondary"]) {
+        const active = activeBeforeRebase[source];
+        if (!active || hidden.has(active))
+          continue;
+        const destination = desiredSide.get(active);
+        if (destination === source) {
+          intents.push({ t: "activate", key: active, side: source });
+          continue;
+        }
+        if (destination) {
+          const replacement = activeAfterRemoval(commitBaseModel, source, active);
+          if (replacement && !hidden.has(replacement)) {
+            intents.push({ t: "activate", key: replacement, side: source });
+          }
+          const destinationActive = activeBeforeRebase[destination];
+          if (destinationActive && destinationActive !== active && !hidden.has(destinationActive)) {
+            intents.push({ t: "activate", key: destinationActive, side: destination });
+          }
+        }
+      }
+    }
+    if (isModeSwitchBarrierActive()) {
+      return { ok: false, error: "mode-switch-in-progress", superseded: true };
+    }
+    dlog("[owned-commit] dispatching", {
+      intents,
+      primary,
+      secondary
+    });
+    const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide);
+    if (typeof document !== "undefined") {
+      try {
+        await Promise.resolve().then(() => init_buttons());
+        await Promise.resolve().then(() => init_secondary());
+        const missing = missingSecondaryButtonKeys(model, desiredSide, (key) => host.resolve(key), (liveId) => {
+          const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+          return !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
+        });
+        if (missing.length > 0) {
+          dlog("[owned-commit] placement pass: model-vs-DOM divergence healed", {
+            missing: missing.map((m) => m.key)
+          });
+          plannedMoves.push(...missing);
+        }
+      } catch (err) {
+        dwarn("[owned-commit] divergence heal failed:", err);
+      }
+    }
+    const mirrorChrome = new Map;
+    const secondaryChrome = new Map;
+    if (!opts?.skipChrome) {
+      for (const move of plannedMoves) {
+        const liveId = host.resolve(move.key);
+        if (!liveId)
+          continue;
+        if (move.to === "secondary") {
+          mirrorChrome.set(move.key, await captureMainMirrorMoveChrome(liveId, "secondary"));
+        } else {
+          secondaryChrome.set(move.key, await captureSecondaryNeighborForMove(liveId));
+        }
+      }
+    }
+    await dispatchBatch(intents);
+    const committed = getModel();
+    dlog("[owned-commit] committed", {
+      primary: committed?.primary,
+      secondary: committed?.secondary
+    });
+    if (plannedMoves.length > 0 && typeof document !== "undefined") {
+      try {
+        const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+        setSuppressAutoActivation(true);
+        let placed = 0;
+        const failed = [];
+        try {
+          for (const move of plannedMoves) {
+            const liveId = host.resolve(move.key);
+            if (!liveId) {
+              dlog("[owned-commit] placement pass: host.resolve returned null", {
+                key: move.key,
+                to: move.to
+              });
+              continue;
+            }
+            try {
+              if (move.to === "secondary") {
+                await assignToSecondary(liveId, {
+                  openOnClosed: false,
+                  setActiveWhenReady: false
+                });
+              } else {
+                await unassignFromSecondary(liveId);
+              }
+              placed++;
+            } catch (err) {
+              failed.push(move.key);
+              dwarn("[owned-commit] placement failed for", move.key, String(err));
+            }
+          }
+        } finally {
+          setSuppressAutoActivation(false);
+        }
+        dlog("[owned-commit] placement pass", {
+          moves: plannedMoves.length,
+          placed,
+          failed,
+          toSecondary: plannedMoves.filter((m) => m.to === "secondary").map((m) => m.key),
+          toPrimary: plannedMoves.filter((m) => m.to === "primary").map((m) => m.key)
+        });
+        const modelAfter = getModel();
+        if (modelAfter && modelAfter.secondary.length > 0) {
+          await Promise.resolve().then(() => init_buttons());
+          const ids = modelAfter.secondary.map((k) => host.resolve(k)).filter((id) => !!id);
+          if (secondaryTabButtonsReady(ids))
+            reorderSecondaryTabButtons(ids);
+        }
+      } catch (err) {
+        dwarn("[owned-commit] placement pass failed:", err);
+      }
+    }
+    if (!opts?.skipChrome) {
+      for (const move of plannedMoves) {
+        const liveId = host.resolve(move.key);
+        if (!liveId)
+          continue;
+        try {
+          if (move.to === "secondary") {
+            await applyMainMirrorMoveChrome(mirrorChrome.get(move.key) ?? { neighborBtn: null, reassertId: null }, liveId);
+          } else {
+            await applySecondaryNeighborHandoff(secondaryChrome.get(move.key) ?? { neighborBtn: null }, liveId);
+          }
+        } catch (err) {
+          dwarn("[owned-commit] chrome handoff failed for", move.key, String(err));
+        }
+      }
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+function resolveKeys(ids, resolve) {
+  const keys = [];
+  for (const id of ids) {
+    const key = resolve(id);
+    if (key)
+      keys.push(key);
+  }
+  return keys;
+}
+function activeSelection(world) {
+  return {
+    primary: world.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
+    secondary: world.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
+  };
+}
+var init_owned_commit = __esm(() => {
+  init_dispatch();
+  init_log();
+  init_mode_transition();
 });
 
 // src/tabs/tab-list-dnd.ts
@@ -14227,7 +14320,6 @@ function enqueueHostSync(host, generation) {
         _pendingLayout = null;
         _persistResolvedWhilePending = false;
         _persistOsBootOverride = null;
-        _persistOsOverride = null;
         return;
       }
       const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
@@ -14757,18 +14849,28 @@ function bootstrapFromLayout(layout, host, version, opts) {
       if (primaryBootLiveId === null)
         return;
       const reassertPrimary = async () => {
+        let mp = null;
+        let mm = null;
         try {
-          const mp = await Promise.resolve().then(() => (init_main_persist(), {}));
-          ensureRestoredPrimaryTab(primaryBootLiveId);
+          mp = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
         } catch {}
         try {
-          const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
-          ensureHostContentParkedPublic();
+          mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        } catch {}
+        if (passGen !== _generation)
+          return;
+        try {
+          mp?.ensureRestoredPrimaryTab(primaryBootLiveId);
+        } catch {}
+        try {
+          mm?.ensureHostContentParkedPublic();
         } catch {}
       };
       if (passGen !== _generation)
         return;
       await reassertPrimary();
+      if (passGen !== _generation)
+        return;
       try {
         const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
         if (isMainMirrorActive()) {
@@ -22828,6 +22930,7 @@ function buildSettingsPanelDOM() {
     return isTaskbarModeEnabled(s) ? "taskbar" : "vanilla";
   };
   const selectMode = (mode) => {
+    const seq = ++selectModeSeq;
     (async () => {
       if (mode === effectiveMode()) {
         if (mode !== "vanilla")
@@ -22836,13 +22939,20 @@ function buildSettingsPanelDOM() {
           return;
       }
       const wasOs = getSettings().osMode;
+      let willRestore = false;
       if (wasOs || mode === "os") {
         try {
           const om = await Promise.resolve().then(() => (init_os_mode(), {}));
-          const willRestore = mode === "os" ? osEntrySlotHasTabs() : osExitSlotHasTabs();
+          if (seq !== selectModeSeq)
+            return;
+          willRestore = mode === "os" ? osEntrySlotHasTabs() : osExitSlotHasTabs();
           if (willRestore) {
             const sdm = await Promise.resolve().then(() => (init_second_drawer_mode(), {}));
+            if (seq !== selectModeSeq)
+              return;
             const choice = await guardConfigureDirty();
+            if (seq !== selectModeSeq)
+              return;
             if (choice === "cancel") {
               refreshSettingsPanel();
               return;
@@ -22852,14 +22962,21 @@ function buildSettingsPanelDOM() {
           dwarn("[settings-panel] mode dirty guard failed:", err);
         }
       }
+      if (seq !== selectModeSeq)
+        return;
       if (mode === "os") {
+        setOsConfigureWillRestore(willRestore);
         setSettings({ osMode: true });
         return;
       }
       if (mode === "taskbar") {
+        if (wasOs)
+          setOsConfigureWillRestore(willRestore);
         setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true });
         return;
       }
+      if (wasOs)
+        setOsConfigureWillRestore(willRestore);
       setSettings({
         drawerLocation: "sides",
         osMode: false,
@@ -23201,7 +23318,7 @@ function applySettings(prev, next) {
     }
   }
 }
-var MODE_TILES_HINT = "How much drawer chrome Canvas adds. Vanilla keeps the stock Lumiverse drawers; Taskbar pins tab strips to the screen edge; OS mode adds window controls and a Start menu.", DRAWER_LAYOUT_HINT = "Where the tab strips live. Top/Bottom pins a full-width strip to that viewport edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which screen edge the main drawer sits on. Mirrors Lumiverse → Display → Drawer side, and also changes with Configure Tabs → Swap drawer locations.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single = one drawer (the main one). Dual = a second drawer on the opposite side. Each mode keeps its own saved layout.", DRAWER_MODE_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the main drawer's compact mode and vertical tab position on the second drawer.", MIRROR_COMPACT_LOCK_HINT = "Requires the second drawer. Switch Drawer mode to Dual to use it.", MOVE_CONTROLS_HINT = "Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on (window chrome needs the pinned strips). Disable OS mode to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear. Left/Right are screen sides; if that side has no drawer open, the gear stays on the main drawer.", START_LOCATION_HINT = "OS mode only: which drawer shows the Start button. The Start menu always lists every window from both drawers.", START_LOCATION_LOCK_HINT = "Requires OS mode. Turn it on to choose where Start appears.", START_EDGE_HINT = "Top/Bottom only: pins Start to the outer (screen-edge) end of the tab strip. Off places it next to the tabs.", START_EDGE_INERT_HINT = "Only applies when Drawer layout is Top or Bottom.", HIDE_BUTTONS_HINT = "Hides the small handle that opens/closes the drawer. Requires Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Handles are always hidden while tabs are pinned to the top/bottom edge.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SHADOWS_DESKTOP_HINT = "Show box-shadow on drawers when the viewport is wider than 600px.", SHADOWS_MOBILE_HINT = "Show box-shadow on drawers when the viewport is 600px or narrower.", CHAT_REFLOW_HINT = "Shifts the chat column by the open-drawer widths so neither drawer covers it.", WELCOME_REFLOW_HINT = "Shifts the landing page by the open-drawer widths so neither drawer covers it.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu.", PERSIST_OPEN_HINT = "Persist drawer open/closed state (and active tab) across sessions.", PERSIST_WIDTH_HINT = "Persist drawer widths across sessions.", DRAG_DROP_HINT = "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.", RESIZE_PANELS_HINT = "Adds a 4px grab handle on the inner edge of both drawers.", DEBUG_HINT = "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
+var selectModeSeq = 0, MODE_TILES_HINT = "How much drawer chrome Canvas adds. Vanilla keeps the stock Lumiverse drawers; Taskbar pins tab strips to the screen edge; OS mode adds window controls and a Start menu.", DRAWER_LAYOUT_HINT = "Where the tab strips live. Top/Bottom pins a full-width strip to that viewport edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which screen edge the main drawer sits on. Mirrors Lumiverse → Display → Drawer side, and also changes with Configure Tabs → Swap drawer locations.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single = one drawer (the main one). Dual = a second drawer on the opposite side. Each mode keeps its own saved layout.", DRAWER_MODE_OS_MOBILE_HINT = "OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the main drawer's compact mode and vertical tab position on the second drawer.", MIRROR_COMPACT_LOCK_HINT = "Requires the second drawer. Switch Drawer mode to Dual to use it.", MOVE_CONTROLS_HINT = "Puts the tab strip on the screen edge instead of the panel edge. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on (window chrome needs the pinned strips). Disable OS mode to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear. Left/Right are screen sides; if that side has no drawer open, the gear stays on the main drawer.", START_LOCATION_HINT = "OS mode only: which drawer shows the Start button. The Start menu always lists every window from both drawers.", START_LOCATION_LOCK_HINT = "Requires OS mode. Turn it on to choose where Start appears.", START_EDGE_HINT = "Top/Bottom only: pins Start to the outer (screen-edge) end of the tab strip. Off places it next to the tabs.", START_EDGE_INERT_HINT = "Only applies when Drawer layout is Top or Bottom.", HIDE_BUTTONS_HINT = "Hides the small handle that opens/closes the drawer. Requires Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Handles are always hidden while tabs are pinned to the top/bottom edge.", OS_WINDOW_CONTROLS_HINT = "On: the panel header shows – (minimize) and X (close). Off: only X, which minimizes — standard Lumiverse behavior. A window can still be closed from its tab button right-click/long-press menu.", OS_WINDOW_CONTROLS_LOCK_HINT = "Requires OS mode. Turn it on to use it.", CORE_TABS_HIDDEN_HINT = "Unlocks the hide toggle for core tabs (Profile, Reasoning, Loom, …) in Configure Tabs. OS mode turns this on automatically: closing a core tab marks it hidden, with the Start menu as its return path.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "Required by OS mode. Disable OS mode to change.", SHADOWS_DESKTOP_HINT = "Show box-shadow on drawers when the viewport is wider than 600px.", SHADOWS_MOBILE_HINT = "Show box-shadow on drawers when the viewport is 600px or narrower.", CHAT_REFLOW_HINT = "Shifts the chat column by the open-drawer widths so neither drawer covers it.", WELCOME_REFLOW_HINT = "Shifts the landing page by the open-drawer widths so neither drawer covers it.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu.", PERSIST_OPEN_HINT = "Persist drawer open/closed state (and active tab) across sessions.", PERSIST_WIDTH_HINT = "Persist drawer widths across sessions.", DRAG_DROP_HINT = "Drag a tab button to reorder it within a drawer or move it to the other drawer (mouse: drag after a short move; touch: long-press). Desktop only (viewport wider than 600px); on mobile use Configure Tabs.", RESIZE_PANELS_HINT = "Adds a 4px grab handle on the inner edge of both drawers.", DEBUG_HINT = "Enables [Canvas] console output and installs window.__canvasDebug() for in-browser fiber tree inspection. Useful when filing a bug report.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
@@ -23312,7 +23429,8 @@ async function recoverModeLayoutAtBoot(slot) {
       result = await restoreSingleModeLayout(slot, host, {
         restoreOpen: facetOpen,
         restoreWidth: facetWidth,
-        osActive: isOsModeEnabled()
+        osActive: isOsModeEnabled(),
+        persistWhilePending: false
       });
     } catch (err) {
       dwarn("[mode-recovery] restoreSingleModeLayout threw:", err);
@@ -24917,11 +25035,19 @@ function setup(ctx) {
         new Promise((resolve) => setTimeout(resolve, 1500))
       ]);
     } catch {}
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded before mode-recovery gen=${generation}`);
+      return;
+    }
     dlog(`applyMainDrawer:pre`);
     const s = getSettings();
     const facetOpen = !!s.persistDrawerOpenState;
     const facetWidth = !!s.persistDrawerWidth;
     await Promise.resolve().then(() => init_mode_recovery());
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded after mode-recovery import gen=${generation}`);
+      return;
+    }
     const entering = planModeRecovery(layout);
     if (entering) {
       dlog(`modeRecovery:enter`);
