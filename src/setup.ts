@@ -478,6 +478,14 @@ export function setup(ctx: SpindleFrontendContext) {
         new Promise<void>((resolve) => setTimeout(resolve, 1500)),
       ])
     } catch { /* non-fatal */ }
+    // L1 (2026-09-23): a newer setup() may have superseded this generation
+    // while placement ran (or during the dynamic import below). Without
+    // this gate a stale generation can still plan/apply mode recovery on
+    // the old layout.
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded before mode-recovery gen=${generation}`)
+      return
+    }
     dlog(`applyMainDrawer:pre`)
     const s = getSettings()
     const facetOpen = !!s.persistDrawerOpenState
@@ -487,6 +495,10 @@ export function setup(ctx: SpindleFrontendContext) {
     // graph unchanged (mode-recovery joins settings/dispatch/mode-profiles,
     // which setup already loads, but only after the decision point runs).
     const { planModeRecovery, recoverModeLayoutAtBoot } = await import('./layout/mode-recovery')
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded after mode-recovery import gen=${generation}`)
+      return
+    }
     const entering = planModeRecovery(layout)
     if (entering) {
       dlog(`modeRecovery:enter`)
