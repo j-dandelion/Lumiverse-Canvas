@@ -699,6 +699,15 @@ async function runSecondDrawerSwitch(
       return
     }
 
+    // Dirty-close confirmation (plan A4) — the ENABLE side (deep-review H1 /
+    // audit F4 residual): previously only disable guarded, so a dirty
+    // Configure draft survived into the dual restore window (and its
+    // post-restore flush re-imposed it onto the restored model). Same
+    // contract as disable: silent skips the dialog; 'cancel' stays in the
+    // old mode with NO state mutation (before the single-slot capture).
+    const enableChoice = await guardConfigureDirty({ silent: opts?.silent })
+    if (enableChoice === 'cancel') return
+
     // Diagnostic: the mode switch decision — which persisted layout slot
     // each mode uses. Verifies "Enable second drawer loads the dual layout
     // (and disable loads the single layout)". Single-slot tabs live in

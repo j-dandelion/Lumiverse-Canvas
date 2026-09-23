@@ -499,6 +499,59 @@ assert(
   clearCreated()
 }
 
+// ── H1: guardConfigureDirty covers the ENABLE path (deep-review H1 / audit
+//    F4 residual) — a dirty Configure draft must not survive into the dual
+//    restore window. Cancel: dialog BEFORE any restore, no state mutation.
+//    Discard: enable lands, exactly one post-restore refresh. ──
+{
+  setSettings({ osMode: false, secondSidebarEnabled: false })
+  await sleep(150)
+  resetModalState()
+  clearCreated()
+  setDualLayoutSlot({
+    version: 2,
+    primary: { open: false, width: 420, tabId: null },
+    secondary: { open: false, width: 420, activeTabId: 'builtin:loom' },
+    detachedTabs: [{ tabId: 'builtin:loom', tabTitle: 'builtin:loom', sidebar: 'secondary' }],
+    hiddenTabIds: [],
+  })
+  modalState.open = true
+  modalState.draft = { x: 1 }
+  modalState.base = { x: 2 }
+  modalState.dirty = true
+
+  // 1. Cancel: the 3-way dialog opens BEFORE any restore; enable does not land.
+  calls.bootstrapFromLayout = 0
+  modalState.flushCalls = 0
+  modalState.refreshCalls = 0
+  const pCancelEnable = requestSecondDrawerMode(true)
+  await sleep(20)
+  const h1CancelBtn = findDialogButton('Cancel')
+  assert(h1CancelBtn != null, 'H1: enable with dirty draft shows the 3-way dialog before restore')
+  assertEqual(calls.bootstrapFromLayout, 0, 'H1: no restore ran while the dialog is up')
+  h1CancelBtn?.click()
+  await pCancelEnable
+  assertEqual(getSettings().secondSidebarEnabled, false, 'H1: cancel leaves the mode off')
+  assertEqual(calls.bootstrapFromLayout, 0, 'H1: cancel runs no dual restore')
+  assertEqual(modalState.refreshCalls, 0, 'H1: cancel refreshes nothing')
+
+  // 2. Discard and switch: enable proceeds; exactly one post-restore refresh.
+  clearCreated()
+  modalState.flushCalls = 0
+  modalState.refreshCalls = 0
+  calls.bootstrapFromLayout = 0
+  const pDiscardEnable = requestSecondDrawerMode(true)
+  await sleep(20)
+  findDialogButton('Discard and switch')?.click()
+  await pDiscardEnable
+  assertEqual(getSettings().secondSidebarEnabled, true, 'H1: discard lands the enable')
+  assertEqual(calls.bootstrapFromLayout, 1, 'H1: dual restore ran after discard')
+  assertEqual(modalState.refreshCalls, 1, 'H1: exactly one post-restore refresh')
+
+  resetModalState()
+  clearCreated()
+}
+
 // ── A5-1: rapid dual→single→dual / single→dual→single → last wins ──
 {
   setSettings({ osMode: false, secondSidebarEnabled: true })
