@@ -42,7 +42,10 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `src/recon/dispatch.ts` — dispatch queue, `placementFirstMoveByLiveId` (the move path), `bootstrapFromLayout` (restore + boot placement)
 - `src/host/lumiverse/implementation.ts` — `LumiverseHost` (HostPort): observe/place/setOrder/activate against live Lumiverse
 - `src/features/registry.ts` — feature registry (add new features here)
-- `src/os/` — OS mode: `actions.ts` (window-state actions), `os-mode.ts` (enable/disable + slot routing), `drawer-command.ts` (shell-command seam), `panel-chrome.ts` (header minimize/X + D17 parking), `start-menu.ts` + `start-menu-motion.ts` (Start button/menu), spec `~/Documents/plans/os-mode-spec.md`
+- `src/os/` — OS mode: `actions.ts` (window-state actions), `os-mode.ts` (enable/disable + four-slot routing + mobile force), `os-configure-gate.ts` (panel willRestore latch for Configure refresh), `drawer-command.ts` (shell-command seam), `panel-chrome.ts` (header minimize/X + D17 parking), `start-menu.ts` + `start-menu-motion.ts` (Start button/menu), spec `~/Documents/plans/os-mode-spec.md`
+- `src/settings/mode-transition.ts` — hierarchical two-chain arbiter (`runOsTransition` ⊃ `runDrawerTransition`) + `withModeSwitchBarrier` commit barrier
+- `src/layout/mode-recovery.ts` — boot-time mode/slot mismatch recovery (5 preconditions, decision/apply split)
+- `src/layout/mode-profiles.ts` — single/dual restore primitive (`restoreSingleModeLayout`)
 - `src/sidebar/secondary.tsx` — secondary sidebar DOM construction + `reassignSecondaryTabsFromModel`
 - `src/sidebar/secondary-drawer.ts` — secondary drawer state machine
 - `src/sidebar/drawer-shell.ts` — shared shell builder for both drawers (wrapper / drawer / panel / header / tab list)

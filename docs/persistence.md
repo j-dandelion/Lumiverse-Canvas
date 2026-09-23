@@ -130,7 +130,7 @@ The main drawer is host-owned — Canvas can't call its API directly. Instead:
 
 **Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host tab (with Canvas active-key update under taskbar mode) since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once host active + content settle.
 
-**Warm-restore persistence (`persistWhilePending`, 2026-09-15)**: `bootstrapFromLayout` arms `_pendingLayout` when a saved tab cannot resolve on the first identity walk (late extension registration); `reconcileAndPersist` refuses to write while it is armed so a partial model never replaces the stored layout. That gate is correct for **boot** (the top-level blob already holds the unresolved keys; the +30s retry window owns the write) but wrong for a **warm mode-switch restore**: enabling the second drawer in OS mode with an unresolvable key in `osDualLayout` blocked every write, and a reload restored the stale top-level single layout — the second drawer came back empty (live bug 2026-09-15). `restoreSingleModeLayout` (second-drawer enable/disable, OS disable) now calls `bootstrapFromLayout(slot, host, version, { persistWhilePending: true })`: the resolved live model is written immediately (still `hasTabs`-guarded against empty writes, byte-deduped) while `_pendingLayout` stays armed, so a merely-late key still merges into the model and re-persists; only keys that never resolve within the retry window are pruned. Boot (`setup.ts`) passes no option and keeps the old contract.
+**Warm-restore persistence (`persistWhilePending`, 2026-09-15)**: `bootstrapFromLayout` arms `_pendingLayout` when a saved tab cannot resolve on the first identity walk (late extension registration); `reconcileAndPersist` refuses to write while it is armed so a partial model never replaces the stored layout. That gate is correct for **boot** (the top-level blob already holds the unresolved keys; the +30s retry window owns the write) but wrong for a **warm mode-switch restore**: enabling the second drawer in OS mode with an unresolvable key in `osDualLayout` blocked every write, and a reload restored the stale top-level single layout — the second drawer came back empty (live bug 2026-09-15). `restoreSingleModeLayout` (second-drawer enable/disable, OS disable) now calls `bootstrapFromLayout(slot, host, version, { persistWhilePending: true })`: the resolved live model is written immediately (still `hasTabs`-guarded against empty writes, byte-deduped) while `_pendingLayout` stays armed, so a merely-late key still merges into the model and re-persists; only keys that never resolve within the retry window are pruned. **Boot recovery** (`layout/mode-recovery.ts` → `restoreSingleModeLayout(..., { persistWhilePending: false })`, L3 2026-09-23) keeps the plain retry window — it must never durably persist a resolved-only dual blob during the 30s pending window (early-reload placement loss). Warm callers omit the option and get the default `true`.
 
 **S5 — persistence rewiring (2026-09-09)**: the owned-model serialization is the single `layout.json` writer, and `drawers.primary.{open,width}` are fed by **shell truth**, not the host wrapper. `LumiverseHost.observe()` reads `CANVAS_MAIN_OPEN_CLASS` + `MAIN_MIRROR_WIDTH_VAR` while canvas-main mode is active AND the boot restore guard has lifted (`isMainDrawerRestorePending()`); during the restore window (and mirror-inactive/mobile) the host reads remain, so boot persists are byte-identical to pre-S5 behavior. Shell open/close dispatch `setDrawer(primary, {open, width})` directly (`main-mirror-drawer.ts` `persistCanvasMainOpenState` — mirrors `persistSecondaryDrawerOpen`), so closing the Canvas shell persists immediately; with observe() reading shell truth, reconcile sees world==model → no drift writes → no loop. `snapshotLayout().tabOrder` sources the model serialization (`snapshotOwnedModelLayout()`, combined primary+secondary live-id order) with the host-settings copy as pre-bootstrap fallback. On disable, `showAllMainTabButtons()` (setup cleanup chain, between `teardownMainMirror` and `unsuppressMainDrawer`) clears every Canvas-owned inline `display:none` from host main tab buttons — the vanilla seam reappears complete.
 
@@ -144,6 +144,48 @@ Each mode (single-drawer / dual-drawer) keeps its **own persisted layout**, so s
 
 - `singleLayout` slot — the layout shown when the second drawer is off (all tabs in the main drawer, single order/hidden set, main open/active).
 - `dualLayout` slot — the layout shown when the second drawer is on (tabs split across main + secondary).
+
+### Four-slot layout (2026-09-23)
+
+While OS mode is on, mode switches save/restore the **OS variants** of the same two modes — the non-OS slots are frozen for the duration of the OS session (`dispatch.buildPersistedBlob` routes OS-mode writes):
+
+| Slot | When written / restored |
+|------|-------------------------|
+| `singleLayout` | Second drawer off, OS **off** |
+| `dualLayout` | Second drawer on, OS **off** |
+| `osSingleLayout` | Second drawer off (or forced single on mobile), OS **on** |
+| `osDualLayout` | Second drawer on, OS **on** (desktop) |
+
+Routing accessors (`os/os-mode.ts`): `getActiveSingleSlot` / `getActiveDualSlot` / `setActiveSingleSlot` / `setActiveDualSlot` read/write the OS or non-OS variant based on `isOsModeEnabled()`. Entry slot for OS enable (`entryOsSlot`): **always `osSingle` on mobile** (R1-7 — the live dual layout is what the force saves into `osDual`); otherwise the OS slot of the active mode (model shape authoritative).
+
+**Single-shape fold (`persist/layout-model.ts: foldLayoutToSingleShape`)**: a slot named "single" (`singleLayout` / `osSingleLayout`) must never carry `detachedTabs`. Restoring a dual-shaped blob from a single slot rebuilds a dual model under `secondSidebarEnabled: false`, stranding tabs in `model.secondary` with no shell. `seedOsSlotFromLive('single')` folds the raw serialization (deep-review M1); `serializeModelToSingleLayout` performs the same projection from the model. Secondary entries fold into `tabOrder`, `detachedTabs` empties, secondary drawer state neutralizes; hidden/closed sets, primary geometry and side are preserved.
+
+### Mode recovery at boot (`layout/mode-recovery.ts`)
+
+When settings say `secondSidebarEnabled: true` but the loaded top-level blob is single-shaped (mid-switch reload), `planModeRecovery` decides **synchronously** whether to restore the dual slot; `recoverModeLayoutAtBoot` applies it. Exactly **one** main-drawer restore runs on this path (setup does not also call `applyMainDrawer`).
+
+**Five preconditions — ALL must hold** (plan C; facet-gated apply):
+
+1. `secondSidebarEnabled === true` (settings).
+2. Boot model is single-shaped: `model.secondary.length === 0`.
+3. Top-level blob has no `detachedTabs` (or empty) — a late-resolving dual boot never recovers (R2-2).
+4. Host is present; the dual (or OS dual on OS+desktop) slot has tabs **and** at least one id resolves (`layoutHasTabs` + `slotResolves`).
+5. **Not** OS+mobile (`osMode && matchMedia('(max-width: 600px)')` — R2-11; the mobile force owns that path).
+
+Apply passes `restoreOpen`/`restoreWidth` from the persisted facets and **`persistWhilePending: false`** (plain retry window). Failure paths best-effort `unsuppressMainDrawer` so a broken recovery cannot leave the drawer suppressed until the 3s watchdog.
+
+**Accepted trade-off (R2-1, locked by test C-3):** an intentionally-emptied dual layout is indistinguishable from a mid-switch reload — recovery resurrects the saved dual layout in both cases. Do not cite H4 as its rationale.
+
+### Mode-switch arbiter (`settings/mode-transition.ts`)
+
+Hierarchical **two-chain** serializer — no deadlocks, rejections swallowed so chains never wedge:
+
+- `runOsTransition(fn)` — OS enable/disable; runs after prior OS transitions, then enters the drawer chain.
+- `runDrawerTransition(fn)` — second-drawer enable/disable; runs after prior drawer transitions.
+- `runNestedDrawerTransition` — re-entrant drawer entry when already inside `runOsTransition`'s fn (inline, no second chain hop).
+- `withModeSwitchBarrier(fn)` — **commit barrier** (H1): outermost switch drains Configure commits, freezes `commitDraftToOwnedModel` across snapshot/restore until terminal `refreshConfigureDraftFromLive`, nested switches stack a depth counter. All four switch paths restructure to `flush → barrier → snapshot/restore → refresh-ONLY`.
+
+`owned-commit.ts` refuses with `superseded` at entry AND after the rebase await; Configure autoCommit/Done drop that result silently (never an error banner).
 
 **Storage:** both slots live at the top level of the layout blob (`dispatch.ts:buildPersistedBlob` embeds them; `hydrateModeLayoutSlots` restores them at boot). The active model serialization fills the slot of the mode it matches (`model.secondary.length > 0` ⟺ dual), so a stale dual model can never clobber the stored single slot.
 
