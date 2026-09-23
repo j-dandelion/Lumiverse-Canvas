@@ -8,15 +8,91 @@
 // reverts on reload. This test drives the real enable path with mocked
 // DOM-heavy deps and asserts the settings save actually reaches the backend.
 
+// Headless document stub. createElement returns a MiniEl rich enough for
+// the A4 mode-switch dialog tree (setAttribute / appendChild / listeners);
+// every created element is recorded so tests can find and click dialog
+// buttons without a real DOM.
+type AnyEl = any
+const createdEls: AnyEl[] = []
+function makeEl(tag: string): AnyEl {
+  const listeners: Record<string, Array<(e: any) => void>> = {}
+  const attrs: Record<string, string> = {}
+  const classes = new Set<string>()
+  const el: AnyEl = {
+    tagName: tag.toUpperCase(),
+    id: '',
+    textContent: '',
+    className: '',
+    type: '',
+    disabled: false,
+    children: [] as AnyEl[],
+    parentElement: null as AnyEl | null,
+    removed: false,
+    style: {
+      setProperty() {},
+      removeProperty() {},
+      getPropertyValue() { return '' },
+    },
+    classList: {
+      add: (...cs: string[]) => { for (const c of cs) classes.add(c) },
+      remove: (...cs: string[]) => { for (const c of cs) classes.delete(c) },
+      toggle: (c: string, force?: boolean) => {
+        if (force === undefined) force = !classes.has(c)
+        if (force) classes.add(c); else classes.delete(c)
+        return force
+      },
+      contains: (c: string) => classes.has(c),
+    },
+    attrs,
+    listeners,
+    appendChild(child: AnyEl) {
+      el.children.push(child)
+      child.parentElement = el
+      return child
+    },
+    removeChild(child: AnyEl) {
+      el.children = el.children.filter((c: AnyEl) => c !== child)
+      return child
+    },
+    replaceChildren(...kids: AnyEl[]) { el.children = kids },
+    remove() {
+      el.removed = true
+      if (el.parentElement) el.parentElement.removeChild(el)
+    },
+    setAttribute(k: string, v: string) { attrs[k] = String(v) },
+    getAttribute(k: string) { return attrs[k] ?? null },
+    removeAttribute(k: string) { delete attrs[k] },
+    addEventListener(type: string, fn: (e: any) => void) {
+      (listeners[type] ||= []).push(fn)
+    },
+    removeEventListener() {},
+    focus() {},
+    click() {
+      if (el.disabled) return
+      for (const fn of listeners['click'] ?? []) fn({})
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  }
+  createdEls.push(el)
+  return el
+}
+function clearCreated(): void { createdEls.length = 0 }
+function findDialogButton(label: string): AnyEl | null {
+  for (const el of createdEls) {
+    if (el.tagName === 'BUTTON' && el.children?.[0]?.textContent === label) return el
+  }
+  return null
+}
 ;(globalThis as any).document = {
   querySelector: () => null,
   querySelectorAll: () => [],
-  createElement: () => ({}),
-  documentElement: {
-    classList: { add() {}, remove() {}, contains() { return false } },
-    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
-  },
-  body: { appendChild() {}, removeChild() {} },
+  createElement: (tag: string) => makeEl(tag),
+  getElementById: () => null,
+  documentElement: makeEl('html'),
+  body: makeEl('body'),
+  addEventListener() {},
+  removeEventListener() {},
 }
 ;(globalThis as any).requestAnimationFrame = (cb: any) => { cb(1); return 1 }
 ;(globalThis as any).cancelAnimationFrame = () => {}
@@ -37,6 +113,35 @@ const calls = {
   // Controllable live-model serialization for finishDisable's dual-slot
   // capture (null = no model, as in the persistence scenarios above).
   ownedModelSnapshot: null as any,
+  // F5: one-shot throw at finishDisable's FIRST uncaught step (the dual
+  // snapshot) — the mode-switch run explodes before the setting flips.
+  snapshotShouldThrow: false,
+}
+
+// Stateful Configure-modal + commit stand-ins (plan A4 scenarios).
+const modalState = {
+  open: false,
+  draft: null as any,
+  base: null as any,
+  dirty: false,
+  flushShouldThrow: false,
+  flushCalls: 0,
+  refreshCalls: 0,
+}
+const commitState = {
+  result: { ok: true } as { ok: boolean; error?: string },
+  shouldThrow: false,
+}
+function resetModalState() {
+  modalState.open = false
+  modalState.draft = null
+  modalState.base = null
+  modalState.dirty = false
+  modalState.flushShouldThrow = false
+  modalState.flushCalls = 0
+  modalState.refreshCalls = 0
+  commitState.result = { ok: true }
+  commitState.shouldThrow = false
 }
 
 // features/registry: mock to empty so setSettings → applySettings iterates
@@ -71,7 +176,13 @@ mock.module('../../recon/dispatch', () => ({
   flush: async () => {},
   getHost: () => ({ resolve: (k: string) => k }),
   getModel: () => null,
-  snapshotOwnedModelLayout: () => calls.ownedModelSnapshot,
+  snapshotOwnedModelLayout: () => {
+    if (calls.snapshotShouldThrow) {
+      calls.snapshotShouldThrow = false // one-shot
+      throw new Error('snapshot boom')
+    }
+    return calls.ownedModelSnapshot
+  },
   onModelChanged: () => () => {},
   dispatchActivateByLiveId: async () => {},
   dispatch: async () => {},
@@ -87,7 +198,10 @@ mock.module('../../recon/dispatch', () => ({
 }))
 
 mock.module('../../tabs/owned-commit', () => ({
-  commitDraftToOwnedModel: async () => ({ ok: true }),
+  commitDraftToOwnedModel: async () => {
+    if (commitState.shouldThrow) throw new Error('commit boom')
+    return commitState.result
+  },
 }))
 
 mock.module('../../sidebar/drawer-sync', () => ({
@@ -102,19 +216,27 @@ mock.module('../../debug/styles', () => ({
   injectStyles: () => {},
 }))
 
-// Dynamic import in the enable path — modal not open → all no-ops.
+// Dynamic import in the enable path + the A4 dirty guard — controllable.
 mock.module('../../tabs/configure-modal', () => ({
-  isConfigureTabsModalOpen: () => false,
-  flushConfigureCommits: async () => {},
-  refreshConfigureDraftFromLive: () => {},
-  getConfigureDraftRef: () => null,
-  getConfigureBaseRef: () => null,
+  isConfigureTabsModalOpen: () => modalState.open,
+  flushConfigureCommits: async () => {
+    modalState.flushCalls++
+    if (modalState.flushShouldThrow) throw new Error('flush boom')
+  },
+  refreshConfigureDraftFromLive: () => { modalState.refreshCalls++ },
+  getConfigureDraftRef: () => modalState.draft,
+  getConfigureBaseRef: () => modalState.base,
+}))
+mock.module('../../tabs/configure-model', () => ({
+  isDraftDirty: () => modalState.dirty,
 }))
 
 // ── Dynamic imports (must be AFTER mock.module calls) ──
-const [{ requestSecondDrawerMode }] = await Promise.all([
+const [{ requestSecondDrawerMode, guardConfigureDirty }] = await Promise.all([
   import('../second-drawer-mode'),
 ])
+// Real leaf arbiter (imports nothing) — F4/F5 hold the drawer chain with it.
+const { runOsTransition } = await import('../mode-transition')
 const [{ getSettings, setSettings, getDualLayoutSlot, setDualLayoutSlot }] = await Promise.all([
   import('../state'),
 ])
@@ -303,6 +425,190 @@ assert(
   sent.filter((m) => m.type === 'SAVE_SETTINGS').length >= 1,
   'M6 desktop: enable proceeded through the persist path',
 )
+
+// ── A4: guardConfigureDirty exact contract ──
+{
+  resetModalState()
+  clearCreated()
+
+  // 1. silent → proceed (no modal work, no dialog).
+  assertEqual(await guardConfigureDirty({ silent: true }), 'proceed', 'A4: silent → proceed')
+  assertEqual(modalState.flushCalls, 0, 'A4: silent does no modal work')
+
+  // 2. modal closed → proceed.
+  assertEqual(await guardConfigureDirty(), 'proceed', 'A4: closed modal → proceed')
+
+  // 3. flush throw → dwarn + proceed (no dialog).
+  modalState.open = true
+  modalState.flushShouldThrow = true
+  assertEqual(await guardConfigureDirty(), 'proceed', 'A4: flush throw → proceed')
+  assertEqual(findDialogButton('Apply and switch'), null, 'A4: flush throw shows no dialog')
+  modalState.flushShouldThrow = false
+
+  // 4. clean (no draft/base, or not dirty) → proceed.
+  modalState.draft = { x: 1 }
+  modalState.base = { x: 1 }
+  modalState.dirty = false
+  assertEqual(await guardConfigureDirty(), 'proceed', 'A4: clean draft → proceed')
+
+  // 5. dirty + dialog cancel → cancel.
+  modalState.dirty = true
+  clearCreated()
+  const pCancel = guardConfigureDirty()
+  await sleep(20)
+  const cancelBtn = findDialogButton('Cancel')
+  assert(cancelBtn != null, 'A4: dirty draft shows the 3-way dialog')
+  cancelBtn?.click()
+  assertEqual(await pCancel, 'cancel', 'A4: dialog cancel → cancel')
+
+  // 6. dirty + apply success → proceed.
+  clearCreated()
+  commitState.result = { ok: true }
+  const pApply = guardConfigureDirty()
+  await sleep(20)
+  findDialogButton('Apply and switch')?.click()
+  assertEqual(await pApply, 'proceed', 'A4: apply success → proceed')
+
+  // 7. dirty + apply failure → cancel (stay in old mode).
+  clearCreated()
+  commitState.result = { ok: false, error: 'nope' }
+  const pApplyFail = guardConfigureDirty()
+  await sleep(20)
+  findDialogButton('Apply and switch')?.click()
+  assertEqual(await pApplyFail, 'cancel', 'A4: apply failure → cancel')
+
+  // 8. reentrancy: concurrent guards share ONE promise + ONE dialog, and
+  //    both callers resolve with the SAME choice.
+  clearCreated()
+  commitState.result = { ok: true }
+  const p1 = guardConfigureDirty()
+  const p2 = guardConfigureDirty()
+  assert(p1 === p2, 'A4: concurrent guards return the SAME promise')
+  await sleep(20)
+  assertEqual(
+    createdEls.filter((el) => el.tagName === 'DIV' && el.id === 'canvas-mode-switch-dialog').length,
+    1,
+    'A4: single-flight opens exactly one dialog',
+  )
+  findDialogButton('Discard and switch')?.click()
+  const [c1, c2] = await Promise.all([p1, p2])
+  assertEqual(c1, 'proceed', 'A4: discard → proceed (caller 1)')
+  assertEqual(c2, 'proceed', 'A4: concurrent callers resolve identically')
+
+  resetModalState()
+  clearCreated()
+}
+
+// ── A5-1: rapid dual→single→dual / single→dual→single → last wins ──
+{
+  setSettings({ osMode: false, secondSidebarEnabled: true })
+  await sleep(150)
+
+  // dual → single → dual, fired without awaiting the first request.
+  const p1 = requestSecondDrawerMode(false)
+  const p2 = requestSecondDrawerMode(true)
+  await Promise.all([p1, p2])
+  assertEqual(
+    getSettings().secondSidebarEnabled,
+    true,
+    'A5-1: rapid dual→single→dual ends dual (last request wins)',
+  )
+
+  // single → dual → single (p3 is a no-op re-request of the live state;
+  // p4 supersedes).
+  const p3 = requestSecondDrawerMode(true)
+  const p4 = requestSecondDrawerMode(false)
+  await Promise.all([p3, p4])
+  assertEqual(
+    getSettings().secondSidebarEnabled,
+    false,
+    'A5-1: rapid single→dual→single ends single (last request wins)',
+  )
+}
+
+// ── F4 (adversarial): per-request opts — a nested silent request must not
+//    steal a QUEUED non-silent request's opts (A4: the plain drawer toggle
+//    still guards) ──
+// Sequence: hold the drawer chain with an OS run → queue a non-silent
+// drawer-off behind it → fire a nested SILENT request (same direction the
+// OS-mobile force issues; no-op on the live state at this instant, but it
+// overwrites module-level opts in the OLD code) → release. The queued
+// non-silent run must consult the dirty guard with ITS OWN opts (dialog),
+// not the stolen silent ones (guard short-circuited to 'proceed').
+{
+  setSettings({ osMode: false, secondSidebarEnabled: true })
+  await sleep(150)
+  resetModalState()
+  clearCreated()
+  modalState.open = true
+  modalState.draft = { x: 1 }
+  modalState.base = { x: 2 }
+  modalState.dirty = true
+
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  let userP: Promise<void> | null = null
+  const osP = runOsTransition(async () => {
+    // User's plain (non-silent) drawer-off queues BEHIND this OS run.
+    userP = requestSecondDrawerMode(false)
+    await sleep(20) // parked on the drawer chain
+    // The OS run's nested silent request (production shape: issued with
+    // opts.nested from inside runOsTransition). Same-direction no-op on the
+    // live state — but in the OLD code it overwrites _lastOpts while the
+    // user's request waits, so the queued run would read silent:true.
+    await requestSecondDrawerMode(true, { silent: true, nested: true })
+    release()
+  })
+  const osWinner = await Promise.race([osP.then(() => 'done'), sleep(2000).then(() => 'timeout')])
+  assertEqual(osWinner, 'done', 'F4: OS run + nested silent request complete (no deadlock)')
+
+  // The queued non-silent run now executes — dirty guard must open the
+  // dialog (OLD code: stolen silent:true → guard skipped → no dialog).
+  await sleep(50)
+  const discardBtn = findDialogButton('Discard and switch')
+  assert(
+    discardBtn != null,
+    'F4: queued non-silent run still consults the dirty guard (dialog shown despite the nested silent request)',
+  )
+  discardBtn?.click()
+  const userWinner = await Promise.race([
+    (userP ?? Promise.resolve()).then(() => 'done'),
+    sleep(2000).then(() => 'timeout'),
+  ])
+  assertEqual(userWinner, 'done', 'F4: queued non-silent request resolves after the dialog')
+  assertEqual(
+    getSettings().secondSidebarEnabled,
+    false,
+    'F4: discard → disable landed after the queued run',
+  )
+  resetModalState()
+  clearCreated()
+}
+
+// ── F5 (adversarial): a throwing drain run still lets the subsequent
+//    queued request execute (per-iteration catch → dwarn → continue,
+//    matching the OS drain / plan A3) ──
+{
+  setSettings({ osMode: false, secondSidebarEnabled: true })
+  await sleep(150)
+  resetModalState() // modal closed → dirty guard proceeds without a dialog
+
+  // One-shot throw inside finishDisable BEFORE the setting flips (the dual
+  // snapshot is its first uncaught step): p1's drain run explodes.
+  calls.snapshotShouldThrow = true
+  const p1 = requestSecondDrawerMode(false)
+  const p2 = requestSecondDrawerMode(false)
+  const r1 = await Promise.race([p1.then(() => 'done'), sleep(2000).then(() => 'timeout')])
+  assertEqual(r1, 'done', 'F5: throwing run resolves without wedging the drawer chain')
+  const r2 = await Promise.race([p2.then(() => 'done'), sleep(2000).then(() => 'timeout')])
+  assertEqual(r2, 'done', 'F5: subsequent queued request still executes after the throw')
+  assertEqual(calls.snapshotShouldThrow, false, 'F5: the one-shot throw fired during p1')
+  assertEqual(
+    getSettings().secondSidebarEnabled,
+    false,
+    'F5: the subsequent request completed the disable',
+  )
+}
 
 // ── Summary ──
 console.log(`PASS: ${passed}`)

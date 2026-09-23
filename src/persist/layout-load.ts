@@ -32,6 +32,8 @@ export function loadSavedLayout(): null {
 
 // Guard: true while a load is awaiting the backend response.
 let _loadInProgress = false
+// Permanent false in the owned-model world — no writer arms `_loadInProgress`;
+// callers keep it as a compat seam.
 export function isLoadInProgress(): boolean { return _loadInProgress }
 
 let _loadCancel: (() => void) | null = null
@@ -56,6 +58,11 @@ export function cancelLoadSavedLayout(options?: { preserveGuard?: boolean }): vo
 // find a defined symbol.
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * Permanent no-op in the owned-model world: the local `_saveLayoutTimer`
+ * is never set (layout writes are immediate in `dispatch.persistModel`);
+ * callers keep it as a compat seam.
+ */
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)

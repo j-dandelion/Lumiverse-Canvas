@@ -610,31 +610,60 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     return isTaskbarModeEnabled(s) ? 'taskbar' : 'vanilla'
   }
   const selectMode = (mode: ModeTileDef['value']): void => {
-    if (mode === effectiveMode()) {
-      if (mode !== 'vanilla') return
-      // Stale taskbarMode with the outer-edge toggle off derives as Vanilla;
-      // clicking Vanilla must still clear it or re-enabling the edge
-      // resurrects Taskbar mode (L1 2026-09-19).
-      if (!getSettings().taskbarMode) return
-    }
-    if (mode === 'os') {
-      setSettings({ osMode: true })
-      return
-    }
-    if (mode === 'taskbar') {
-      // One combined patch: the sidesChromePrefs record branch runs before
-      // the OS-disable restore, so the explicit taskbar pair survives.
-      setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
-      return
-    }
-    // Vanilla: auto-return a Top/Bottom layout to Sides (D5) and clear all
-    // chrome; `chromeTouched` records the new Sides preference first.
-    setSettings({
-      drawerLocation: 'sides',
-      osMode: false,
-      taskbarMode: false,
-      moveControlsToOuterEdge: false,
-    })
+    // Fire-and-forget async (plan A7): tiles that will RESTORE a saved layout
+    // slot guard the Configure Tabs dirty draft first; on cancel the tile
+    // snaps back via refreshSettingsPanel(). NEVER a static import of
+    // os-mode/second-drawer-mode from here (panel tests mock
+    // features/registry to avoid loading that graph).
+    void (async () => {
+      if (mode === effectiveMode()) {
+        if (mode !== 'vanilla') return
+        // Stale taskbarMode with the outer-edge toggle off derives as Vanilla;
+        // clicking Vanilla must still clear it or re-enabling the edge
+        // resurrects Taskbar mode (L1 2026-09-19).
+        if (!getSettings().taskbarMode) return
+      }
+      // A7 dirty guard: entering/leaving OS restores that side's saved slot
+      // (shape-only check — the dialog appearing one keystroke early is safe).
+      const wasOs = getSettings().osMode
+      if (wasOs || mode === 'os') {
+        try {
+          const om = await import('../os/os-mode')
+          const willRestore = mode === 'os'
+            ? om.osEntrySlotHasTabs()
+            : om.osExitSlotHasTabs()
+          if (willRestore) {
+            const sdm = await import('./second-drawer-mode')
+            const choice = await sdm.guardConfigureDirty()
+            if (choice === 'cancel') {
+              refreshSettingsPanel() // tile snaps back (re-derive)
+              return
+            }
+          }
+        } catch (err) {
+          // Guard contract: any throw → proceed (never block the toggle).
+          dwarn('[settings-panel] mode dirty guard failed:', err)
+        }
+      }
+      if (mode === 'os') {
+        setSettings({ osMode: true })
+        return
+      }
+      if (mode === 'taskbar') {
+        // One combined patch: the sidesChromePrefs record branch runs before
+        // the OS-disable restore, so the explicit taskbar pair survives.
+        setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
+        return
+      }
+      // Vanilla: auto-return a Top/Bottom layout to Sides (D5) and clear all
+      // chrome; `chromeTouched` records the new Sides preference first.
+      setSettings({
+        drawerLocation: 'sides',
+        osMode: false,
+        taskbarMode: false,
+        moveControlsToOuterEdge: false,
+      })
+    })()
   }
   const modes = buildTileGroup(
     MODE_TILE_DEFS,

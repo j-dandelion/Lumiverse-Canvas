@@ -34,6 +34,8 @@ mock.module('../start-menu', () => ({
 }))
 mock.module('../../recon/dispatch', () => ({
   onModelChanged: () => () => {},
+  // Run-scoped persist override (adversarial F2 — os-mode static import).
+  setPersistOsOverride: () => {},
 }))
 
 // ── Minimal documentElement (classList only) ──

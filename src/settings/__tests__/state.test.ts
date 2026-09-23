@@ -15,6 +15,15 @@ import {
   isDragAndDropDrawerTabsEnabled,
   getDrawerLocation,
   isHorizontalStrip,
+  hydrateModeLayoutSlots,
+  getSingleLayoutSlot,
+  setSingleLayoutSlot,
+  getDualLayoutSlot,
+  setDualLayoutSlot,
+  getOsSingleLayoutSlot,
+  setOsSingleLayoutSlot,
+  getOsDualLayoutSlot,
+  setOsDualLayoutSlot,
 } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
@@ -143,7 +152,9 @@ assertEqual(
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
-  if (actual !== expected) {
+  if (actual === expected) {
+    passed++
+  } else {
     console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
     failed++
   }
@@ -604,6 +615,46 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(getSettings().taskbarMode, true, 'M7 top: disable keeps forced taskbar on')
   assertEqual(getSettings().moveControlsToOuterEdge, true, 'M7 top: disable keeps forced outer on')
   assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7 top: sides snapshot untouched')
+}
+
+// --- B2-1: hydrateModeLayoutSlots resets ALL FOUR slots unconditionally
+// (disk is authoritative; absent/null clears) ---
+{
+  const single = { version: 'v', tabOrder: ['a'], detachedTabs: [] }
+  const dual = { version: 'v', tabOrder: [], detachedTabs: [{ tabId: 's' }] }
+  const osSingle = { version: 'v', tabOrder: ['os-a'], detachedTabs: [] }
+  const osDual = { version: 'v', tabOrder: [], detachedTabs: [{ tabId: 'os-s' }] }
+
+  // Object blob with all four keys → all four apply.
+  hydrateModeLayoutSlots({ singleLayout: single, dualLayout: dual, osSingleLayout: osSingle, osDualLayout: osDual })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: present singleLayout applies')
+  assertEqual(getDualLayoutSlot(), dual, 'B2: present dualLayout applies')
+  assertEqual(getOsSingleLayoutSlot(), osSingle, 'B2: present osSingleLayout applies')
+  assertEqual(getOsDualLayoutSlot(), osDual, 'B2: present osDualLayout applies')
+
+  // Missing keys clear the previous values (hot-reload stale-slot
+  // preservation is intentionally dropped).
+  hydrateModeLayoutSlots({ singleLayout: single })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: present key re-applies')
+  assert(getDualLayoutSlot() == null, 'B2: absent dualLayout key clears')
+  assert(getOsSingleLayoutSlot() == null, 'B2: absent osSingleLayout key clears')
+  assert(getOsDualLayoutSlot() == null, 'B2: absent osDualLayout key clears')
+
+  // hydrate(null) clears everything too — the reset runs BEFORE the object
+  // guard.
+  setDualLayoutSlot(dual)
+  setOsSingleLayoutSlot(osSingle)
+  setOsDualLayoutSlot(osDual)
+  hydrateModeLayoutSlots(null)
+  assert(getSingleLayoutSlot() == null, 'B2: hydrate(null) clears singleLayout')
+  assert(getDualLayoutSlot() == null, 'B2: hydrate(null) clears dualLayout')
+  assert(getOsSingleLayoutSlot() == null, 'B2: hydrate(null) clears osSingleLayout')
+  assert(getOsDualLayoutSlot() == null, 'B2: hydrate(null) clears osDualLayout')
+
+  // Explicit null values on an object blob clear those slots as well.
+  hydrateModeLayoutSlots({ singleLayout: single, dualLayout: null, osSingleLayout: null, osDualLayout: null })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: explicit present key applies')
+  assert(getDualLayoutSlot() == null, 'B2: explicit null dualLayout clears')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

@@ -43,6 +43,8 @@ mock.module('../../recon/dispatch', () => ({
     modelCb = cb
     return () => { modelCb = null }
   },
+  // Run-scoped persist override (adversarial F2 — os-mode static import).
+  setPersistOsOverride: () => {},
 }))
 
 mock.module('../../tabs/assignment', () => ({

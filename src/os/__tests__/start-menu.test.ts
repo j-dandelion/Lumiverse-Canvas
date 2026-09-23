@@ -66,6 +66,8 @@ mock.module('../../store', () => ({
 mock.module('../../recon/dispatch', () => ({
   getModel: () => makeModel(),
   getHost: () => ({ resolve: (key: string) => liveIds.get(key) ?? null }),
+  // Run-scoped persist override (adversarial F2 — os-mode static import).
+  setPersistOsOverride: () => {},
 }))
 mock.module('../start-menu-styles', () => ({
   injectStartMenuStyles: () => {},

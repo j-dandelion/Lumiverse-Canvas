@@ -38,10 +38,29 @@ mock.module('../../recon/dispatch', () => ({
   getModel: () => null,
   snapshotOwnedModelLayout: () => null,
   dispatchBatch: () => Promise.resolve(),
+  // os-mode statically imports these for the enable hold/tail (plan A2).
+  bootPlacementDone: async () => {},
+  flush: async () => {},
+  // Run-scoped persist override (adversarial F2).
+  setPersistOsOverride: () => {},
 }))
 mock.module('../../persist/layout-load', () => ({ cancelLayoutSave: () => {} }))
 mock.module('../../layout/mode-profiles', () => ({
   restoreSingleModeLayout: () => Promise.resolve({ ok: true }),
+}))
+// os-mode statically imports the reveal hold (plan A2) — keep the real
+// main-persist graph out of this suite.
+mock.module('../../sidebar/main-persist', () => ({
+  holdMainDrawerReveal: () => {},
+  releaseMainDrawerReveal: () => {},
+  waitForMainContentSettled: async () => {},
+}))
+mock.module('../../tabs/configure-modal', () => ({
+  isConfigureTabsModalOpen: () => false,
+  flushConfigureCommits: async () => {},
+  refreshConfigureDraftFromLive: () => {},
+  getConfigureDraftRef: () => null,
+  getConfigureBaseRef: () => null,
 }))
 mock.module('../../settings/state', () => ({
   getSettings: () => ({

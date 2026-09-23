@@ -30,6 +30,8 @@ mock.module('../../recon/dispatch', () => ({
   ...realDispatch,
   getModel: () => model,
   dispatch: async (intent: unknown) => { dispatches.push(intent) },
+  // Run-scoped persist override (adversarial F2 — os-mode static import).
+  setPersistOsOverride: () => {},
 }))
 
 class FakeEl {

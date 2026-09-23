@@ -14,6 +14,30 @@ mock.module('../../features/registry', () => ({
   alwaysCleanups: () => [],
 }))
 
+// Mode tiles (plan A7): selectMode dynamic-imports these only for
+// OS-involving transitions. Mock both so the heavy os-mode/second-drawer
+// graph never loads here; the flags below steer willRestore/cancel for A7-1.
+let entrySlotHasTabs = false
+let exitSlotHasTabs = false
+let guardChoice: 'proceed' | 'cancel' = 'proceed'
+let guardCalls = 0
+mock.module('../../os/os-mode', () => ({
+  osEntrySlotHasTabs: () => entrySlotHasTabs,
+  osExitSlotHasTabs: () => exitSlotHasTabs,
+  // Not exercised by this suite's tile paths, but keep the symbols linked
+  // in case another dynamic import lands here.
+  seedOsSlotFromLive: () => {},
+  applyOsModeChange: async () => {},
+  syncOsMobileDrawerMode: async () => {},
+}))
+mock.module('../../settings/second-drawer-mode', () => ({
+  guardConfigureDirty: async () => {
+    guardCalls++
+    return guardChoice
+  },
+  requestSecondDrawerMode: async () => {},
+}))
+
 class FakeElement {
   tagName: string
   id = ''
@@ -151,6 +175,9 @@ function modeTiles(root: El): El {
   return modes
 }
 
+/** selectMode is fire-and-forget async (plan A7) — let its await points run. */
+const flushSelectMode = () => new Promise<void>((r) => setTimeout(r, 0))
+
 describe('drawer location panel', () => {
   beforeEach(() => { hydrateSettings(null) })
 
@@ -277,11 +304,12 @@ describe('mode tiles', () => {
     expect(tiles.children[2].getAttribute('aria-checked')).toBe('false')
   })
 
-  test('Taskbar tile enables the pair, OS tile enables osMode, Vanilla clears', () => {
+  test('Taskbar tile enables the pair, OS tile enables osMode, Vanilla clears', async () => {
     const root = mountPanel()
     const tiles = modeTiles(root)
 
     tiles.children[1].click()
+    await flushSelectMode()
     expect(getSettings().taskbarMode).toBe(true)
     expect(getSettings().moveControlsToOuterEdge).toBe(true)
     expect(getSettings().osMode).toBe(false)
@@ -289,6 +317,7 @@ describe('mode tiles', () => {
     expect(tiles.children[1].getAttribute('aria-checked')).toBe('true')
 
     tiles.children[2].click()
+    await flushSelectMode()
     expect(getSettings().osMode).toBe(true)
     // Normalize invariant forces the chrome on.
     expect(getSettings().taskbarMode).toBe(true)
@@ -298,6 +327,7 @@ describe('mode tiles', () => {
     expect(tiles.children[2].getAttribute('aria-checked')).toBe('true')
 
     tiles.children[0].click()
+    await flushSelectMode()
     expect(getSettings().osMode).toBe(false)
     expect(getSettings().taskbarMode).toBe(false)
     expect(getSettings().moveControlsToOuterEdge).toBe(false)
@@ -330,17 +360,75 @@ describe('mode tiles', () => {
     expect(getSettings().moveControlsToOuterEdge).toBe(false)
   })
 
-  test('arrow keys move the tile selection', () => {
+  test('arrow keys move the tile selection', async () => {
     const root = mountPanel()
     const tiles = modeTiles(root)
     tiles.children[0].fireKey('ArrowRight')
+    await flushSelectMode()
     expect(getSettings().taskbarMode).toBe(true)
     expect(tiles.children[1].getAttribute('aria-checked')).toBe('true')
     tiles.children[1].fireKey('ArrowRight')
+    await flushSelectMode()
     expect(getSettings().osMode).toBe(true)
     tiles.children[2].fireKey('ArrowRight')
+    await flushSelectMode()
     expect(getSettings().taskbarMode).toBe(false)
     expect(getSettings().osMode).toBe(false)
+  })
+
+  // ── A7-1: a restoring tile guards the Configure dirty draft ──
+  test('tile cancel snaps back; clean proceeds (no dialog when clean)', async () => {
+    // Cancel: entering OS with a restorable slot + dirty draft → guard
+    // cancels → settings unchanged, tile still derives vanilla.
+    entrySlotHasTabs = true
+    guardChoice = 'cancel'
+    guardCalls = 0
+    hydrateSettings(null)
+    let root = mountPanel()
+    let tiles = modeTiles(root)
+    tiles.children[2].click() // OS
+    await flushSelectMode()
+    expect(guardCalls).toBe(1)
+    expect(getSettings().osMode).toBe(false) // snapped back — no patch
+    expect(tiles.children[2].getAttribute('aria-checked')).toBe('false')
+    expect(tiles.children[0].getAttribute('aria-checked')).toBe('true')
+
+    // Proceed: guard clean → the patch runs normally (may refresh mid-flight).
+    guardChoice = 'proceed'
+    guardCalls = 0
+    root = mountPanel()
+    tiles = modeTiles(root)
+    tiles.children[2].click()
+    await flushSelectMode()
+    expect(guardCalls).toBe(1)
+    expect(getSettings().osMode).toBe(true)
+
+    // Leaving OS with a restorable non-OS slot: exit guard consulted too.
+    exitSlotHasTabs = true
+    guardChoice = 'cancel'
+    guardCalls = 0
+    root = mountPanel()
+    tiles = modeTiles(root)
+    tiles.children[0].click() // Vanilla while OS on
+    await flushSelectMode()
+    expect(guardCalls).toBe(1)
+    expect(getSettings().osMode).toBe(true) // cancel keeps OS on
+    entrySlotHasTabs = false
+    exitSlotHasTabs = false
+    guardChoice = 'proceed'
+  })
+
+  test('tile without a restorable slot skips the guard entirely', async () => {
+    entrySlotHasTabs = false
+    exitSlotHasTabs = false
+    guardCalls = 0
+    hydrateSettings(null)
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+    tiles.children[2].click() // OS
+    await flushSelectMode()
+    expect(guardCalls).toBe(0)
+    expect(getSettings().osMode).toBe(true) // no guard → direct patch
   })
 })
 

@@ -20,6 +20,59 @@ let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
 /**
+ * Restore-time OS routing override (2026-09-19, layout-mode fixes F3;
+ * re-scoped 2026-09-19 adversarial F2). `setSettings` flips `osMode`
+ * synchronously BEFORE `applyOsModeChange` runs, so a queued/superseded OS
+ * transition can be restoring while the live setting already reads the NEXT
+ * mode — `buildPersistedBlob` would then route the restore's persist into the
+ * wrong pair of slots (a disable restore writing the non-OS model into
+ * `osSingleLayout` because `osMode` flipped back on mid-run).
+ *
+ * TWO independent slots, run wins (F2 — the old single slot was
+ * bootstrap-scoped and settled-NULL while the OS run was still going, so a
+ * mid-run settings flip routed later persists with the LIVE setting):
+ *
+ *   `_persistOsOverride`     — RUN-scoped. Written ONLY via
+ *                              `setPersistOsOverride`: `runOsEnable` sets
+ *                              true at entry, `runOsDisable` false, each
+ *                              clears to null in its finally at run end.
+ *                              Survives bootstrap settle; shutdown/abort
+ *                              clear it as a backstop.
+ *   `_persistOsBootOverride` — BOOTSTRAP-scoped (the original lifecycle):
+ *                              set at `bootstrapFromLayout` entry from
+ *                              `opts.osActive` (absent → null → live
+ *                              setting), cleared when that bootstrap's task
+ *                              settles (only while its generation is still
+ *                              current — a superseding bootstrap owns the
+ *                              value), on the pending-abort path, and on
+ *                              shutdown. Boot passes no value (null → live
+ *                              setting, unchanged behavior).
+ *
+ * Effective routing: `_persistOsOverride ?? _persistOsBootOverride ??
+ * isOsModeEnabled()` — a run's intent is authoritative whenever a run is
+ * active; outside runs the bootstrap slot behaves exactly as before
+ * (settle → null-ish backstop).
+ *
+ * Scheme note: a one-deep push/restore-prev on a single variable was
+ * considered and rejected — a settle arriving between a run's
+ * `setPersistOsOverride` and its own bootstrap's push (e.g. a prior boot
+ * bootstrap settling while a run is in its pre-restore window, or an enable
+ * run on the seed path that never bootstraps) would restore a pre-run value
+ * and clobber the run's override. Two slots have no such interleaving.
+ */
+let _persistOsOverride: boolean | null = null
+let _persistOsBootOverride: boolean | null = null
+
+/**
+ * Set (or clear, with null) the RUN-scoped OS routing override for the
+ * caller's OS-mode run. See the `_persistOsOverride` doc for the two-slot
+ * lifecycle: OS runs bracket their whole body with this (entry value →
+ * finally null); `bootstrapFromLayout`'s settle never touches it.
+ */
+export function setPersistOsOverride(osActive: boolean | null): void {
+  _persistOsOverride = osActive
+}
+/**
  * Warm-restore persistence gate override (2026-09-15). `reconcileAndPersist`
  * refuses to write while `_pendingLayout` is armed so a partial boot model is
  * never persisted over the stored layout. A warm MODE-SWITCH restore (second
@@ -211,6 +264,12 @@ export function bootstrap(model: LayoutModel, host: HostPort, version?: string):
   _queue = task.catch(() => {}).then(() => {})
   void task.then((next) => {
     if (gen !== _generation || _host !== host) return
+    // This bootstrap's restore window is over: the BOOTSTRAP-scoped OS
+    // override is scoped to it (the RUN-scoped `setPersistOsOverride` value
+    // is untouched here and survives until its OS run's finally — F2). A
+    // SUPERSEDED bootstrap (gen mismatch → returned above) never clears it —
+    // the newer bootstrap owns the value.
+    _persistOsBootOverride = null
     // reconcileAndPersist may have corrected the model (e.g. adopted the
     // observed drawer side when the host could not apply the model's side —
     // NO-GO bridge). Keep that correction.
@@ -221,7 +280,10 @@ export function bootstrap(model: LayoutModel, host: HostPort, version?: string):
       void enqueueHostSync(host, gen).catch(() => {})
     }
   }, () => {
-    if (gen === _generation && _host === host) _bootstrapping = false
+    if (gen === _generation && _host === host) {
+      _persistOsBootOverride = null
+      _bootstrapping = false
+    }
   })
 }
 
@@ -252,8 +314,13 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
         // Persist is NOT forced here: the abort can run while `_model` is
         // still partial (or empty), and only the hasTabs-guarded commit path
         // may write. Clear the warm-restore override too — it exists only
-        // while the retry window is open.
+        // while the retry window is open. Full clear (backstop, F2): both
+        // the bootstrap-scoped slot AND any lingering run-scoped value die
+        // with the expired window; a normal OS run clears its own run slot
+        // in its finally long before this 30s deadline.
         _persistResolvedWhilePending = false
+        _persistOsBootOverride = null
+        _persistOsOverride = null
         return
       }
       const rebuilt = buildModelFromLayout(
@@ -269,6 +336,13 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       // clear it first or the final blob never lands on disk.
       if (resolvedAll) {
         _pendingLayout = null
+        // Lifecycle hygiene (R2-7): both flags only exist while a pending
+        // restore is armed. Placed AFTER mergeResolvedInto (above) on
+        // purpose: the merge reads _pendingWindowUserState for THIS call —
+        // clearing first would drop the user's geometry/hidden on the final
+        // merge.
+        _persistResolvedWhilePending = false
+        _pendingWindowUserState = false
       }
       if (merged !== _model) {
         _restoringPending = true
@@ -346,6 +420,8 @@ export function shutdown(): void {
   _version = 'unknown'
   _pendingLayout = null
   _persistResolvedWhilePending = false
+  _persistOsOverride = null
+  _persistOsBootOverride = null
   _restoringPending = false
   _restoreDeadline = 0
   _pendingWindowUserState = false
@@ -418,7 +494,12 @@ export function snapshotOwnedModelLayout(): LegacyLayout | null {
 function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string | null): PersistedLayout {
   const layout = serializeModelToLayout(model, resolve, _version)
   const isDual = model.secondary.length > 0
-  const os = isOsModeEnabled()
+  // Restore-time override wins (see `_persistOsOverride`): a queued OS
+  // transition restores under the mode IT belongs to even when the live
+  // setting has already been superseded by a later toggle. Run-scoped slot
+  // first (F2 — survives bootstrap settle until the run ends), then the
+  // bootstrap-scoped slot, then the live setting.
+  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled()
   // Non-OS serialization: closedTabIds only survive while OS mode is on.
   const base: LegacyLayout = os ? layout : { ...layout, closedTabIds: [] }
   // Facet freeze — mirrors `layout/snapshot.ts` buildPersistedLayout: a
@@ -1074,9 +1155,24 @@ export function bootstrapFromLayout(
   layout: unknown,
   host: HostPort,
   version?: string,
-  opts?: { persistWhilePending?: boolean },
+  opts?: { persistWhilePending?: boolean; osActive?: boolean },
 ): void {
   let model = buildModelFromLayout(layout as any, (id) => host.findKey(id))
+  // F2 read backstop (mirrors buildPersistedBlob's write backstop): a stale
+  // OS-shaped top-level blob + settings with osMode off (interrupted OS
+  // disable reload, failed layout write, corrupt/missing settings.json)
+  // hydrates model.closed with no Start menu to reopen those windows — the
+  // renderer hides closed membership unconditionally. Clear on restores that
+  // belong to a non-OS session. Gate follows `opts.osActive` when supplied
+  // (a superseded OS-enable run must keep the closed-set of the OS slot it
+  // is restoring; a disable run clears it) and the live setting otherwise
+  // (boot). OS slots keep their stored closed sets in the blob either way.
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.closed.length > 0) {
+    dlog('[dispatch] dropped OS closed-set on non-OS boot/restore', {
+      closed: model.closed.length,
+    })
+    model = { ...model, closed: [] }
+  }
   if (pendingLayoutTabCount(layout) === 0) {
     const observed = host.observe()
     if (inventoryIsReady(observed) && observed.tabs.length > 0) {
@@ -1101,6 +1197,12 @@ export function bootstrapFromLayout(
   // the live layout on disk (see _persistResolvedWhilePending). Boot calls
   // without the option: the retry window owns persistence.
   _persistResolvedWhilePending = opts?.persistWhilePending === true
+  // Restore-time OS routing (see `_persistOsOverride`). Explicit `false` must
+  // override; only an ABSENT option leaves the live setting in charge. This
+  // writes the BOOTSTRAP-scoped slot only — a run-scoped value set by
+  // `setPersistOsOverride` sits independently and is never clobbered here
+  // (F2).
+  _persistOsBootOverride = opts?.osActive === undefined ? null : opts.osActive
   _pendingLayout = layout != null && resolved < expected
     ? layout
     : null
@@ -1112,6 +1214,10 @@ export function bootstrapFromLayout(
     })
   }
   bootstrap(model, host, version)
+  // Placement-pass generation guard: bootstrap() just incremented
+  // _generation — capture it so the async pass below can detect that a
+  // NEWER bootstrap (mode switch) has superseded this one.
+  const passGen = _generation
 
   // Diagnostic: boot restore summary — what the saved layout asked for vs
   // what resolved. Verifies the persisted layout (drawer side, split, order)
@@ -1149,6 +1255,9 @@ export function bootstrapFromLayout(
   // until the model is complete (see the sweep call).
   const restorePending = _pendingLayout !== null
   _bootPlacementPass = (async () => {
+    // A newer bootstrap (mode switch) supersedes an older placement pass —
+    // bail before any work (gate, placement, re-assert).
+    if (passGen !== _generation) return
     // Secondary placement visual gate (2026-09, live-verify #5 final): this
     // pass serializes secondary placements and can outlive the main restore
     // reveal (setup caps its wait at 1.5s). Hold the second drawer + pinned
@@ -1163,6 +1272,10 @@ export function bootstrapFromLayout(
       gateReleased = true
       try { gate?.releaseSecondaryPlacementReveal() } catch { /* non-fatal */ }
     }
+    // A newer bootstrap (mode switch) supersedes an older placement pass —
+    // bail BEFORE the reveal-gate import + hold: this return would skip the
+    // pass's finally (the hold's only release path), so a hold here leaks.
+    if (passGen !== _generation) return
     try {
       gate = await import('../sidebar/main-persist')
       gate.holdSecondaryPlacementReveal()
@@ -1170,6 +1283,9 @@ export function bootstrapFromLayout(
     } catch { /* non-fatal */ }
     try {
       const m = await import('../sidebar/secondary')
+      // A newer bootstrap (mode switch) supersedes an older placement pass —
+      // the stale pass must not place (or sweep/re-assert) below.
+      if (passGen !== _generation) return
       await m.reassignSecondaryTabsFromModel({
         openOnClosed: false,
         setActiveWhenReady: false,
@@ -1185,6 +1301,9 @@ export function bootstrapFromLayout(
       // Skipped on a partial restore: the pending merge may still add
       // secondary keys, which the sweep would wrongly unassign.
       if (!restorePending) {
+        // A newer bootstrap (mode switch) supersedes an older placement pass —
+        // the stale pass must not run the removal sweep.
+        if (passGen !== _generation) return
         try {
           await m.unassignSecondaryTabsNotInModel()
         } catch (err) {
@@ -1213,13 +1332,21 @@ export function bootstrapFromLayout(
           mm.ensureHostContentParkedPublic()
         } catch { /* non-fatal */ }
       }
+      // A newer bootstrap (mode switch) supersedes an older placement pass —
+      // the stale pass must not re-assert the primary.
+      if (passGen !== _generation) return
       await reassertPrimary()
       try {
         const mm = await import('../sidebar/main-mirror-drawer')
         if (mm.isMainMirrorActive()) {
           // Second attempt: covers a coalesced trailing placement run that
           // finishes after this pass (its tail is click-free, but be safe).
-          setTimeout(() => { void reassertPrimary() }, 500)
+          setTimeout(() => {
+            // A newer bootstrap (mode switch) supersedes an older placement
+            // pass — drop the stale 500ms retry.
+            if (passGen !== _generation) return
+            void reassertPrimary()
+          }, 500)
         }
       } catch { /* non-fatal */ }
     } catch (err) {
@@ -1243,4 +1370,19 @@ export function bootPlacementDone(): Promise<void> {
 
 export function flush(): Promise<void> {
   return _queue
+}
+
+/**
+ * Test-only snapshot of the pending-restore lifecycle flags (B3 hygiene).
+ * Both flags are private to this module; the B3-1 test asserts they reset
+ * only AFTER the final merge of a completing pending restore.
+ */
+export function __getPendingRestoreFlagsForTest(): {
+  persistResolvedWhilePending: boolean
+  pendingWindowUserState: boolean
+} {
+  return {
+    persistResolvedWhilePending: _persistResolvedWhilePending,
+    pendingWindowUserState: _pendingWindowUserState,
+  }
 }

@@ -9,7 +9,9 @@ function assert(cond: unknown, msg: string) {
   if (cond) { passed++ } else { failed++; console.error('FAIL:', msg) }
 }
 function assertEqual(actual: unknown, expected: unknown, message: string) {
-  if (actual !== expected) {
+  if (actual === expected) {
+    passed++
+  } else {
     console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
     failed++
   }
@@ -22,15 +24,18 @@ const fake: {
   osMode: boolean
   model: { secondary: unknown[]; closed: string[] } | null
   snapshot: Record<string, unknown> | null
-  host: object | null
+  host: { findKey?: (id: string) => string | null } | null
   osSingle: Record<string, unknown> | null
   osDual: Record<string, unknown> | null
   singleSlot: Record<string, unknown> | null
   dualSlot: Record<string, unknown> | null
   secondSidebarEnabled: boolean
   forcedSingleDrawer: boolean
-  restoreCalls: Array<{ slot: unknown; host: unknown }>
+  restoreCalls: Array<{ slot: unknown; host: unknown; opts?: unknown }>
   restoreResult: { ok: boolean; reason?: string }
+  restoreThrow: boolean
+  restoreGate: Promise<void> | null
+  holdEvents: string[]
   batchCalls: Array<Array<{ t: string; key: string; closed: boolean }>>
   setSettingsCalls: Array<Record<string, unknown>>
   modeCalls: Array<{ next: boolean; opts?: unknown }>
@@ -47,15 +52,18 @@ const fake: {
   forcedSingleDrawer: false,
   restoreCalls: [],
   restoreResult: { ok: true },
+  restoreThrow: false,
+  restoreGate: null,
+  holdEvents: [],
   batchCalls: [],
   setSettingsCalls: [],
   modeCalls: [],
 }
 
-// Desktop viewport: the OS+mobile single-drawer sync must stay inert in this
-// suite (its own suite covers the force/restore).
+// Desktop viewport by default; A2-5 flips `mobile` per scenario.
+let mobile = false
 ;(globalThis as { window?: unknown }).window = {
-  matchMedia: () => ({ matches: false }),
+  matchMedia: () => ({ matches: mobile }),
 }
 
 mock.module('../../recon/dispatch', () => ({
@@ -66,16 +74,51 @@ mock.module('../../recon/dispatch', () => ({
     fake.batchCalls.push(intents)
     return Promise.resolve()
   },
+  // os-mode statically imports these for the enable hold/tail (plan A2).
+  bootPlacementDone: async () => {},
+  flush: async () => {},
+  // Run-scoped persist override (adversarial F2) — recorded so run
+  // enable/disable bracketing stays observable if asserted later.
+  setPersistOsOverride: () => {},
 }))
 mock.module('../../persist/layout-load', () => ({
   cancelLayoutSave: () => {},
 }))
+// os-mode statically imports the reveal hold (plan A2) — mock so the real
+// main-persist graph (mobile-exclusion → shell) never loads here.
+mock.module('../../sidebar/main-persist', () => ({
+  holdMainDrawerReveal: () => { fake.holdEvents.push('hold') },
+  releaseMainDrawerReveal: () => { fake.holdEvents.push('release') },
+  waitForMainContentSettled: async () => {},
+}))
+// Dynamic import in the enable/disable paths — mock so the React modal
+// never loads headless.
+mock.module('../../tabs/configure-modal', () => ({
+  isConfigureTabsModalOpen: () => false,
+  flushConfigureCommits: async () => {},
+  refreshConfigureDraftFromLive: () => {},
+  getConfigureDraftRef: () => null,
+  getConfigureBaseRef: () => null,
+}))
 mock.module('../../layout/mode-profiles', () => ({
-  restoreSingleModeLayout: (slot: unknown, host: unknown) => {
-    fake.restoreCalls.push({ slot, host })
+  restoreSingleModeLayout: (
+    slot: unknown,
+    host: unknown,
+    opts?: { osActive?: boolean; restoreOpen?: boolean; restoreWidth?: boolean },
+  ) => {
+    if (fake.restoreThrow) {
+      fake.restoreThrow = false
+      return Promise.reject(new Error('restore exploded'))
+    }
+    fake.restoreCalls.push({ slot, host, opts })
     // Mirror the real slot-wins bootstrap: a successful restore rebuilds the
     // model from the non-OS slot, so the live closed set empties.
     if (fake.restoreResult.ok && fake.model) fake.model.closed.length = 0
+    if (fake.restoreGate) {
+      const gate = fake.restoreGate
+      fake.restoreGate = null
+      return gate.then(() => fake.restoreResult)
+    }
     return Promise.resolve(fake.restoreResult)
   },
 }))
@@ -109,23 +152,36 @@ const { applyOsModeChange, seedOsSlotFromLive } = await import('../os-mode')
 function fresh() {
   fake.restoreCalls.length = 0
   fake.restoreResult = { ok: true }
+  fake.restoreThrow = false
+  fake.restoreGate = null
+  fake.holdEvents.length = 0
   fake.osSingle = null
   fake.osDual = null
+  fake.singleSlot = null
+  fake.dualSlot = null
   fake.batchCalls.length = 0
   fake.setSettingsCalls.length = 0
   fake.modeCalls.length = 0
   fake.forcedSingleDrawer = false
   fake.osMode = false
   fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = null
+  fake.host = { findKey: (id: string) => id }
+  mobile = false
 }
 
 function tab(id: string, sidebar: 'primary' | 'secondary') {
   return { tabId: id, tabTitle: id.toUpperCase(), sidebar }
 }
 
-// ── Enable (D11: seed all-open) ──
+// ── Enable (A2: restore-if-slot, else D11 seed all-open) ──
+// Note: the live setting is flipped BEFORE apply runs (setSettings →
+// applySettings invariant), so each enable scenario sets fake.osMode=true
+// to mirror that.
 {
   fresh()
+  fake.osMode = true
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('b', 'primary')], tabOrder: ['a', 'b'], closedTabIds: [] }
   await applyOsModeChange({ osMode: false }, { osMode: true })
@@ -144,6 +200,7 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 }
 {
   fresh()
+  fake.osMode = true
   fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
   fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
   await applyOsModeChange({ osMode: false }, { osMode: true })
@@ -291,5 +348,174 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
 }
 
 console.log('---')
+// ── A2-1: pre-existing non-empty osSingle → restore, not seed ──
+{
+  fresh()
+  fake.osMode = true
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('live', 'primary')], tabOrder: ['live'], closedTabIds: [] }
+  const preExisting = { detachedTabs: [], tabOrder: ['a'], closedTabIds: [] }
+  fake.osSingle = preExisting
+  fake.host = { findKey: (id: string) => (id === 'a' ? 'k:a' : null) }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.restoreCalls.length, 1, 'A2-1: pre-existing osSingle restores')
+  assertEqual(fake.restoreCalls[0]?.slot, preExisting, 'A2-1: restore consumes the PRE-EXISTING slot object')
+  assertEqual(fake.osSingle, preExisting, 'A2-1: seed did NOT overwrite the slot')
+  assertEqual(fake.osDual, null, 'A2-1: osDual untouched')
+  assertEqual(
+    (fake.restoreCalls[0]?.opts as { osActive?: boolean } | undefined)?.osActive,
+    true,
+    'A2-1: restore routed with osActive:true',
+  )
+}
+// ── A2-2: pre-existing non-empty osDual (dual model) → restore(osDual) ──
+{
+  fresh()
+  fake.osMode = true
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
+  const preDual = { detachedTabs: [{ tabId: 'x', tabTitle: 'X', sidebar: 'secondary' }], tabOrder: [] }
+  fake.osDual = preDual
+  fake.host = { findKey: (id: string) => (id === 'x' ? 'k:x' : null) }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.restoreCalls.length, 1, 'A2-2: pre-existing osDual restores on a dual model')
+  assertEqual(fake.restoreCalls[0]?.slot, preDual, 'A2-2: restore consumes the osDual slot')
+  assertEqual(fake.osSingle, null, 'A2-2: osSingle untouched (not seeded)')
+}
+// ── A2-3: empty/absent slot → seed (no restore) — covered by the enable
+// blocks above; assert the restore gate explicitly here too. ──
+{
+  fresh()
+  fake.osMode = true
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.osSingle = { detachedTabs: [], tabOrder: [] } // empty
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.restoreCalls.length, 0, 'A2-3: empty slot → no restore')
+  assert(fake.osSingle !== null, 'A2-3: empty slot → seeded from live')
+  assertEqual(
+    (fake.osSingle as { tabOrder?: string[] })?.tabOrder?.join(','),
+    'a',
+    'A2-3: seed wrote the live layout',
+  )
+}
+// ── A2-4: all-unresolvable slot → seed, NOT restore ──
+{
+  fresh()
+  fake.osMode = true
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('live', 'primary')], tabOrder: ['live'], closedTabIds: [] }
+  const unresolvable = { detachedTabs: [], tabOrder: ['renamed-gone'] }
+  fake.osSingle = unresolvable
+  fake.host = { findKey: () => null } // nothing resolves
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.restoreCalls.length, 0, 'A2-4: unresolvable slot → NOT restored')
+  assert(fake.osSingle !== unresolvable, 'A2-4: unresolvable slot → reseeding from live')
+  assertEqual(
+    (fake.osSingle as { tabOrder?: string[] })?.tabOrder?.join(','),
+    'live',
+    'A2-4: seed replaced the dead slot with the live layout',
+  )
+}
+// ── A2-5: mobile + dual model → enters via osSingle, no osDual restore ──
+{
+  fresh()
+  mobile = true // viewport ≤600px
+  fake.osMode = true
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
+  const preDual = { detachedTabs: [{ tabId: 'x', tabTitle: 'X', sidebar: 'secondary' }], tabOrder: [] }
+  fake.osDual = preDual
+  fake.secondSidebarEnabled = true // mobile force will kick in after restore
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.restoreCalls.length, 0, 'A2-5: mobile skips the osDual restore')
+  assertEqual(fake.osDual, preDual, 'A2-5: osDual slot untouched')
+  assert(fake.osSingle !== null, 'A2-5: mobile seeds/enters via osSingle')
+  assert(fake.modeCalls.some((c) => c.next === false), 'A2-5: mobile force disables the second drawer (nested)')
+  assertEqual(
+    (fake.modeCalls.find((c) => c.next === false)?.opts as { nested?: boolean } | undefined)?.nested,
+    true,
+    'A2-5: force runs nested (inline inside the OS transition)',
+  )
+}
+// ── A3-1: rapid off→on: both runs in order; osActive routes per run ──
+{
+  fresh()
+  fake.osMode = false // starting live state: OS off
+  fake.secondSidebarEnabled = true
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
+  fake.dualSlot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'] }
+  const preOsDual = { detachedTabs: [{ tabId: 's', tabTitle: 'S', sidebar: 'secondary' }], tabOrder: [] }
+  fake.osDual = preOsDual
+  fake.host = { findKey: (id: string) => id }
+  // Gate the DISABLE restore so the enable request lands mid-run.
+  let release!: () => void
+  fake.restoreGate = new Promise<void>((r) => { release = r })
+  const pDisable = applyOsModeChange({ osMode: true }, { osMode: false })
+  // Let the drain start and hit the gated restore (the call is recorded,
+  // its completion is gated — the enable restore has not run yet).
+  await new Promise((r) => setTimeout(r, 10))
+  assertEqual(fake.restoreCalls.length, 1, 'A3-1: only the disable restore has entered while gated')
+  // Flip the live setting back on (setSettings invariant) + fire enable
+  // while the disable run is still draining.
+  fake.osMode = true
+  const pEnable = applyOsModeChange({ osMode: false }, { osMode: true })
+  release()
+  await Promise.all([pDisable, pEnable])
+  assertEqual(fake.restoreCalls.length, 2, 'A3-1: both runs executed')
+  assertEqual(
+    (fake.restoreCalls[0]?.opts as { osActive?: boolean } | undefined)?.osActive,
+    false,
+    'A3-1: disable restore routed osActive:false (run intent, not live setting)',
+  )
+  assertEqual(
+    (fake.restoreCalls[1]?.opts as { osActive?: boolean } | undefined)?.osActive,
+    true,
+    'A3-1: enable restore routed osActive:true (no contamination)',
+  )
+  assertEqual(fake.restoreCalls[0]?.slot, fake.dualSlot, 'A3-1: disable restored the non-OS dual slot')
+  // Disable snapshots live OS state into osDual first (close-the-window), so
+  // the enable restores that freshest snapshot — not the pre-test plant.
+  assertEqual(fake.restoreCalls[1]?.slot, fake.snapshot, 'A3-1: enable restored the OS dual slot (disable-time snapshot)')
+}
+// ── A3-2: a throwing run does not strand the drain ──
+{
+  fresh()
+  fake.osMode = false
+  fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
+  fake.host = { findKey: (id: string) => id }
+  fake.restoreThrow = true // first restore call explodes
+  let threw = false
+  try {
+    await applyOsModeChange({ osMode: true }, { osMode: false })
+  } catch { threw = true }
+  assertEqual(threw, false, 'A3-2: throwing disable does not reject the drain')
+  // Next transition still runs (drain ref cleared, chain not wedged).
+  fake.osMode = true
+  fake.osSingle = { detachedTabs: [], tabOrder: ['a'] }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assert(fake.restoreCalls.length >= 1, 'A3-2: the next transition still executes a restore')
+  assertEqual(
+    (fake.restoreCalls[0]?.opts as { osActive?: boolean } | undefined)?.osActive,
+    true,
+    'A3-2: post-failure restore routed with the new run intent',
+  )
+}
+// ── A2-6 shape guard lives in mode-profiles (real) — see
+// os-closed-active-restore.test.ts; here assert the enable hold ordering. ──
+{
+  fresh()
+  fake.osMode = true
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.host = { findKey: (id: string) => id }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(fake.holdEvents.join(','), 'hold,release', 'enable takes the reveal hold synchronously and releases it')
+}
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

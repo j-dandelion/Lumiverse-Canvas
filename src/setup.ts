@@ -480,10 +480,20 @@ export function setup(ctx: SpindleFrontendContext) {
     } catch { /* non-fatal */ }
     dlog(`applyMainDrawer:pre`)
     const s = getSettings()
-    const restoreOpen = !!s.persistDrawerOpenState
-    const restoreWidth = !!s.persistDrawerWidth
-
-    if (restoreOpen || restoreWidth) {
+    const facetOpen = !!s.persistDrawerOpenState
+    const facetWidth = !!s.persistDrawerWidth
+    // Boot recovery (plan C / R2-4): decide FIRST, then apply — exactly ONE
+    // main-drawer restore on this path. Dynamic import keeps setup's static
+    // graph unchanged (mode-recovery joins settings/dispatch/mode-profiles,
+    // which setup already loads, but only after the decision point runs).
+    const { planModeRecovery, recoverModeLayoutAtBoot } = await import('./layout/mode-recovery')
+    const entering = planModeRecovery(layout)
+    if (entering) {
+      dlog(`modeRecovery:enter`)
+      await recoverModeLayoutAtBoot(entering)
+      bootStep(`mode-recovery gen=${generation}`)
+      dlog(`modeRecovery:done`)
+    } else if (facetOpen || facetWidth) {
       dlog(`applyMainDrawer:call`)
       applyMainDrawer(layout)
       dlog(`applyMainDrawer:returned (async restore in flight)`)

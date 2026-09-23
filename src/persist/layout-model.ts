@@ -182,6 +182,61 @@ export function serializeModelToSingleLayout(
 }
 
 /**
+ * True when a layout blob/profile carries at least one tab — either shape:
+ * a single layout lists ids in `tabOrder` (detachedTabs: []), a dual layout
+ * lists entries in `detachedTabs`. Used by the mode-switch and boot-recovery
+ * restore gates ("restore only a slot that has content; an absent/empty slot
+ * means seed from live" — os-mode D11, mode-profiles fallbacks).
+ *
+ * Lives here (a leaf module) rather than layout/snapshot: three test files
+ * mock `layout/snapshot` with under-populated shapes, and Bun throws
+ * `SyntaxError: Export named 'X' not found` when a mocked module lacks a
+ * named export the real module statically imports.
+ */
+export function layoutHasTabs(
+  layout: { tabOrder?: unknown; detachedTabs?: unknown } | null | undefined,
+): boolean {
+  if (!layout) return false
+  return (
+    (Array.isArray(layout.tabOrder) && layout.tabOrder.length > 0) ||
+    (Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0)
+  )
+}
+
+/**
+ * True when at least one id stored in the slot resolves against the host.
+ * Guards the mode-switch restores: a slot whose ids were all renamed/deleted
+ * (or never tagged) must NOT replace a live model with an empty one —
+ * bootstrapFromLayout would then arm a pending restore that suppresses host
+ * adoption for the 30s retry window. Callers fall back to seeding from live
+ * instead. `resolveTitle` (optional) lets dual slots test the authoritative
+ * `tabTitle` key alongside the live-id `tabId`.
+ */
+export function slotResolves(
+  slot: { tabOrder?: unknown; detachedTabs?: unknown } | null | undefined,
+  findKey: (id: string) => string | null,
+): boolean {
+  if (!slot) return false
+  const ids: string[] = []
+  if (Array.isArray(slot.tabOrder)) {
+    for (const id of slot.tabOrder) if (typeof id === 'string') ids.push(id)
+  }
+  if (Array.isArray(slot.detachedTabs)) {
+    for (const tab of slot.detachedTabs) {
+      if (tab && typeof tab === 'object') {
+        const t = tab as { tabId?: unknown; tabTitle?: unknown }
+        if (typeof t.tabId === 'string') ids.push(t.tabId)
+        if (typeof t.tabTitle === 'string') ids.push(t.tabTitle)
+      }
+    }
+  }
+  for (const id of ids) {
+    if (findKey(id)) return true
+  }
+  return false
+}
+
+/**
  * Map a stored tab id (from the layout blob) to a stable TabKey.
  * Tries exact match first, then suffix-stripped match.
  */

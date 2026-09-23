@@ -121,8 +121,11 @@ const host = new FakeHost([
     /typeof slot\.primary\?\.width === 'number'/.test(src),
     'mode restore reads the slot width',
   )
+  // Facet-gated form (boot recovery passes restoreWidth:false): the slot
+  // width still flows into restoreMainDrawerFromDom whenever the facet is on
+  // (the default) — `restoreWidth ? width : undefined`.
   assert(
-    /restoreMainDrawerFromDom\(open, tabId, width,/.test(src),
+    /restoreMainDrawerFromDom\(open, tabId, restoreWidth \? width : undefined,/.test(src),
     'mode restore threads the width into restoreMainDrawerFromDom',
   )
 }

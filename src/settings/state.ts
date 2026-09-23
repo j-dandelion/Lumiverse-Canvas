@@ -94,11 +94,21 @@ export function setOsDualLayoutSlot(layout: any): void { _osDualLayout = layout 
  * loaded layout blob. Called at boot (setup.ts) after hydration so mode
  * switches restore the layout of the other mode even across reloads.
  *
+ * Disk is authoritative (plan B2): ALL four slots reset to null
+ * UNCONDITIONALLY at entry — including for null / non-object input — then
+ * present keys are applied. A slot lost to a failed/late write on hot
+ * reload is accepted; an absent key clears (stale-slot preservation across
+ * partial hydrates is intentionally dropped).
+ *
  * OS slots hydrate the same way. The OS closed-set is model state
  * (`model.closed`) and re-keys from the blob inside buildModelFromLayout —
  * nothing to hydrate separately here.
  */
 export function hydrateModeLayoutSlots(layout: any): void {
+  _singleLayout = null
+  _dualLayout = null
+  _osSingleLayout = null
+  _osDualLayout = null
   if (layout && typeof layout === 'object') {
     if (layout.dualLayout !== undefined) _dualLayout = layout.dualLayout
     if (layout.singleLayout !== undefined) _singleLayout = layout.singleLayout

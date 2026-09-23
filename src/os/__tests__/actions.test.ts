@@ -84,6 +84,8 @@ mock.module('../../recon/dispatch', () => ({
     },
   }),
   getModel: () => fake.model,
+  // Run-scoped persist override (adversarial F2 — os-mode static import).
+  setPersistOsOverride: () => {},
 }))
 // The OS launch path dynamically imports the secondary drawer for the
 // source-drawer cleanup (moves out of the second drawer); record it.
