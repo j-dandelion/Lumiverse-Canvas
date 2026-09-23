@@ -1324,19 +1324,35 @@ export function bootstrapFromLayout(
       // exists, so this is boot-only in effect — then let the repark watch
       // (or the second attempt) park the content React renders.
       const reassertPrimary = async (): Promise<void> => {
+        // Load BOTH modules first, then gate once (L10, 2026-09-23): a
+        // supersede landing inside either dynamic import must drop the
+        // re-assert — the old shape clicked before the second import's await
+        // could observe a mid-flight generation bump.
+        let mp: { ensureRestoredPrimaryTab(id: string): void } | null = null
+        let mm: { ensureHostContentParkedPublic(): void } | null = null
         try {
-          const mp = await import('../sidebar/main-persist')
-          mp.ensureRestoredPrimaryTab(primaryBootLiveId)
+          mp = await import('../sidebar/main-persist')
         } catch { /* non-fatal */ }
         try {
-          const mm = await import('../sidebar/main-mirror-drawer')
-          mm.ensureHostContentParkedPublic()
+          mm = await import('../sidebar/main-mirror-drawer')
+        } catch { /* non-fatal */ }
+        // A newer bootstrap (mode switch) supersedes an older placement pass —
+        // the stale pass must not re-click the pre-switch primary or park.
+        if (passGen !== _generation) return
+        try {
+          mp?.ensureRestoredPrimaryTab(primaryBootLiveId)
+        } catch { /* non-fatal */ }
+        try {
+          mm?.ensureHostContentParkedPublic()
         } catch { /* non-fatal */ }
       }
       // A newer bootstrap (mode switch) supersedes an older placement pass —
       // the stale pass must not re-assert the primary.
       if (passGen !== _generation) return
       await reassertPrimary()
+      // L10: re-check after the awaited re-assert — a supersede that landed
+      // inside reassertPrimary's dynamic imports must not schedule the retry.
+      if (passGen !== _generation) return
       try {
         const mm = await import('../sidebar/main-mirror-drawer')
         if (mm.isMainMirrorActive()) {
