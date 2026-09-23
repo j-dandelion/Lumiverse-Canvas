@@ -165,8 +165,23 @@ export function syncOsMobileDrawerMode(opts?: { nested?: boolean }): Promise<voi
       // viewport are re-read at entry). Cap at 5 to bound pathological
       // flapping.
     } while (_mobileDrawerSyncDirty && ++i < 5)
+    // L7 (2026-09-23): a joiner between the final `while` check and the
+    // `.finally` below sets `_mobileDrawerSyncDirty` with no loop left to
+    // re-read it — drain once more before callers observe resolution.
+    while (_mobileDrawerSyncDirty && ++i < 5) {
+      _mobileDrawerSyncDirty = false
+      await runSyncOsMobileDrawerMode(nested)
+    }
   })().finally(() => {
+    // Null the single-flight slot FIRST so a late joiner starts a fresh
+    // runner instead of setting dirty on a dead one. If dirty still raced
+    // in before the null, re-dispatch (nested-ness preserved) so the
+    // trigger is not dropped on the floor.
     _mobileDrawerSync = null
+    if (_mobileDrawerSyncDirty) {
+      _mobileDrawerSyncDirty = false
+      void syncOsMobileDrawerMode({ nested: _mobileDrawerSyncNested })
+    }
   })
   return _mobileDrawerSync
 }

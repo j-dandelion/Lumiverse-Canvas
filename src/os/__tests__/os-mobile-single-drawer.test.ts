@@ -313,6 +313,32 @@ function reset() {
   )
 }
 
+// ── L7: after the runner settles, the single-flight slot is clear — a later
+//    dispatch must start a fresh run (the post-loop dirty drain / finally
+//    re-dispatch must not leave the slot wedged). ──
+{
+  reset()
+  osMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  let release!: () => void
+  modeGate = new Promise<void>((r) => { release = r })
+  const p1 = syncOsMobileDrawerMode()
+  const p2 = syncOsMobileDrawerMode()
+  assert(p1 === p2, 'L7-pre: join shares the in-flight promise')
+  release()
+  await p1
+  assertEqual(secondSidebarEnabled, false, 'L7-pre: first run forced single')
+  // Simulate a stuck dual after settle — a later dispatch must re-force,
+  // proving _mobileDrawerSync was cleared (not left non-null by a dirty
+  // race that never re-dispatched).
+  secondSidebarEnabled = true
+  modeGate = null
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 2, 'L7: slot is clear after settle — a later dispatch runs a fresh force')
+  assertEqual(secondSidebarEnabled, false, 'L7: fresh force converges single again')
+}
+
 console.log('---')
 if (failed > 0) {
   console.error(`FAILED: ${failed}`)
