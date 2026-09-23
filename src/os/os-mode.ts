@@ -336,6 +336,15 @@ async function runOsEnable(): Promise<void> {
     await withModeSwitchBarrier(async () => {
       const host = getHost()
       const mobile = isMobileViewportLocal()
+      // L12 (2026-09-23): latch osForcedSingleDrawer at enable when entering
+      // on mobile — the entry-slot read and the force's viewport re-read can
+      // disagree if the viewport crosses mid-tail (after restore, before
+      // syncOsMobileDrawerMode). With the latch set, a desktop cross still
+      // takes the restore-dual branch (`!force && osForcedSingleDrawer`)
+      // instead of stranding a single-shaped OS model under a dual setting.
+      if (mobile && !getSettings().osForcedSingleDrawer) {
+        setSettings({ osForcedSingleDrawer: true })
+      }
       // Mobile-first (R1-7): the entering slot is ALWAYS osSingle — the osDual
       // restore is skipped (the live dual layout is what the mode switch saves
       // into the OS dual slot during the force below). Desktop: the OS slot of

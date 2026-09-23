@@ -128,7 +128,19 @@ mock.module('../../settings/state', () => ({
     osMode: fake.osMode,
     osForcedSingleDrawer: fake.forcedSingleDrawer,
   }),
-  setSettings: (patch: Record<string, unknown>) => { fake.setSettingsCalls.push(patch) },
+  setSettings: (patch: Record<string, unknown>) => {
+    fake.setSettingsCalls.push(patch)
+    // Apply the L12 latch so a subsequent getSettings() inside the same
+    // enable run sees osForcedSingleDrawer (production setSettings updates
+    // the live store immediately).
+    if (patch.osForcedSingleDrawer !== undefined) {
+      fake.forcedSingleDrawer = !!patch.osForcedSingleDrawer
+    }
+    if (patch.secondSidebarEnabled !== undefined) {
+      fake.secondSidebarEnabled = !!patch.secondSidebarEnabled
+    }
+    if (patch.osMode !== undefined) fake.osMode = !!patch.osMode
+  },
   isOsModeEnabled: () => fake.osMode,
   getSingleLayoutSlot: () => fake.singleSlot,
   getDualLayoutSlot: () => fake.dualSlot,
@@ -460,6 +472,54 @@ console.log('---')
     true,
     'A2-5: force runs nested (inline inside the OS transition)',
   )
+}
+// ── L12: mobile entry latches osForcedSingleDrawer; a desktop cross after
+//        restore but before syncOsMobileDrawerMode restores dual (no strand) ──
+{
+  fresh()
+  mobile = true // enter on mobile
+  fake.osMode = true
+  fake.secondSidebarEnabled = true
+  fake.forcedSingleDrawer = false
+  fake.model = { secondary: [tab('s', 'secondary')], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary'), tab('s', 'secondary')], tabOrder: ['a', 's'], closedTabIds: [] }
+  // Resolvable osSingle so enable takes the restore (not seed) path — the
+  // mid-tail cross must happen AFTER restore, BEFORE the nested force.
+  fake.osSingle = {
+    detachedTabs: [],
+    tabOrder: ['a', 's'],
+    primary: { open: true, width: 420, tabId: 'a' },
+    secondary: { open: false, width: 420 },
+    drawerSide: 'left',
+  }
+  fake.host = { findKey: (id: string) => id }
+  let release!: () => void
+  fake.restoreGate = new Promise<void>((r) => { release = r })
+  const p = applyOsModeChange({ osMode: false }, { osMode: true })
+  // Restore has entered (gated) — latch should already be written.
+  for (let i = 0; i < 50 && fake.restoreCalls.length === 0; i++) {
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  assertEqual(fake.restoreCalls.length, 1, 'L12-pre: enable restore entered while gated')
+  assert(
+    fake.setSettingsCalls.some((p2) => p2.osForcedSingleDrawer === true),
+    'L12-pre: mobile entry latches osForcedSingleDrawer before restore',
+  )
+  // Viewport crosses to desktop mid-tail (after restore start, before force).
+  mobile = false
+  release()
+  await p
+  // Latch was set → desktop force=false still takes the restore-dual branch
+  // instead of stranding the single-shaped OS model under a dual setting.
+  assert(
+    fake.modeCalls.some((c) => c.next === true),
+    'L12: desktop cross after mobile entry restores the second drawer (latched)',
+  )
+  assert(
+    fake.setSettingsCalls.some((p2) => p2.osForcedSingleDrawer === false),
+    'L12: restore path clears the latch once dual is back',
+  )
+  mobile = false
 }
 // ── A3-1: rapid off→on: both runs in order; osActive routes per run ──
 {
