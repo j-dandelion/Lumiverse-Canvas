@@ -226,6 +226,11 @@ mock.module('../../tabs/configure-modal', () => ({
   refreshConfigureDraftFromLive: () => { modalState.refreshCalls++ },
   getConfigureDraftRef: () => modalState.draft,
   getConfigureBaseRef: () => modalState.base,
+  // H1: the guard's Apply goes through the modal's serial chain now.
+  commitConfigureDraftSerial: async () => {
+    if (commitState.shouldThrow) throw new Error('commit boom')
+    return commitState.result
+  },
 }))
 mock.module('../../tabs/configure-model', () => ({
   isDraftDirty: () => modalState.dirty,
@@ -431,12 +436,21 @@ assert(
   resetModalState()
   clearCreated()
 
-  // 1. silent → proceed (no modal work, no dialog).
+  // 1. silent + modal closed → proceed (no modal work, no dialog).
   assertEqual(await guardConfigureDirty({ silent: true }), 'proceed', 'A4: silent → proceed')
   assertEqual(modalState.flushCalls, 0, 'A4: silent does no modal work')
 
   // 2. modal closed → proceed.
   assertEqual(await guardConfigureDirty(), 'proceed', 'A4: closed modal → proceed')
+
+  // 2b. silent + modal OPEN (H1): still no dialog, but the drain DOES run —
+  //     a silent force must not let in-flight commits race its snapshot.
+  modalState.open = true
+  modalState.flushCalls = 0
+  assertEqual(await guardConfigureDirty({ silent: true }), 'proceed', 'A4: silent + open modal → proceed')
+  assertEqual(modalState.flushCalls, 1, 'A4: silent flushes in-flight commits (no dialog)')
+  assertEqual(findDialogButton('Apply and switch'), null, 'A4: silent never shows the dialog')
+  modalState.open = false
 
   // 3. flush throw → dwarn + proceed (no dialog).
   modalState.open = true

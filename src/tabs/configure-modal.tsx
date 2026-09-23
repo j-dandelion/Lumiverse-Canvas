@@ -1069,7 +1069,7 @@ function cancelDrag(opts?: { revertDraft?: boolean }): void {
  * dirty (e.g. user made another edit during the previous commit).
  * The owned dispatcher serializes with live DnD.
  */
-async function autoCommit(): Promise<void> {
+async function autoCommit(): Promise<CommitResult> {
   // Chain behind any in-flight auto-commit.
   const prev = _commitPromise
 
@@ -1109,7 +1109,9 @@ async function autoCommit(): Promise<void> {
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, null, false)
       }
-    } else {
+    } else if (!result.superseded) {
+      // `superseded` (H1 mode-switch barrier): dropped on purpose — no error
+      // banner; the switch's terminal refresh rebuilds draft+base from live.
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, result.error, false)
       }
@@ -1122,7 +1124,17 @@ async function autoCommit(): Promise<void> {
     () => ({ ok: false as const, error: 'auto-commit failed' }),
   )
 
-  await myWork
+  return await myWork
+}
+
+/**
+ * Mode-switch Apply (deep-review H1): commit the current draft through the
+ * SAME serial chain as autoCommit so it cannot race a concurrent edit commit
+ * (a direct commitDraftToOwnedModel call here used to bypass `_commitPromise`).
+ * Returns the commit result so the mode-switch guard can cancel on failure.
+ */
+export async function commitConfigureDraftSerial(): Promise<CommitResult> {
+  return autoCommit()
 }
 
 /**
@@ -1844,7 +1856,11 @@ function renderModal(
         if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
           const result: CommitResult = await commitDraftToOwnedModel(_draftRef)
           if (!result.ok) {
-            renderModal(_draftRef, catalog, result.error, false)
+            // `superseded` (H1 barrier): a mode switch owns the model and
+            // will refresh the draft from live — stay open, show no error.
+            if (!result.superseded) {
+              renderModal(_draftRef, catalog, result.error, false)
+            }
             return
           }
           _baseSnapshotRef = baseSnapshotFromDraft(_draftRef)

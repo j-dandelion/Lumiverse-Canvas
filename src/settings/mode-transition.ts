@@ -29,6 +29,60 @@ const noop = (): void => {}
 let _osChain: Promise<unknown> = Promise.resolve()
 let _drawerChain: Promise<unknown> = Promise.resolve()
 
+// ── Mode-switch commit barrier (deep-review H1) ──────────────────────────
+// While a drawer/OS mode switch owns the model (snapshot → restore window),
+// Configure/DnD commits must NOT land: a stale pre-switch draft re-applied
+// onto the just-restored model re-imposes the old arrangement (and the next
+// persist makes it durable). `commitDraftToOwnedModel` refuses while the
+// barrier is up and reports `superseded`; the switch's terminal
+// `refreshConfigureDraftFromLive` then installs a fresh draft/base.
+// Nested switches (the OS run's mobile-force drawer switch) stack one depth
+// counter — the outermost `withModeSwitchBarrier` owns the drain.
+//
+// Barrier-only state: configure-modal is imported LAZILY inside
+// `withModeSwitchBarrier` so this module stays import-cycle-free.
+
+let _modeSwitchBarrierDepth = 0
+
+export function beginModeSwitchBarrier(): void {
+  _modeSwitchBarrierDepth++
+}
+
+export function endModeSwitchBarrier(): void {
+  if (_modeSwitchBarrierDepth > 0) _modeSwitchBarrierDepth--
+}
+
+export function isModeSwitchBarrierActive(): boolean {
+  return _modeSwitchBarrierDepth > 0
+}
+
+/**
+ * Run `fn` as one mode-switch unit: drain Configure commits onto the
+ * PRE-switch model first (skipped when an outer barrier already owns the
+ * model — the outermost switch's drain covers the whole run), freeze commit
+ * application across `fn`, unfreeze after `fn` (whose tail must end with
+ * `refreshConfigureDraftFromLive`, which rebuilds draft+base from live).
+ */
+export async function withModeSwitchBarrier<T>(fn: () => Promise<T>): Promise<T> {
+  const nested = isModeSwitchBarrierActive()
+  if (!nested) {
+    try {
+      const m = await import('../tabs/configure-modal')
+      if (m.isConfigureTabsModalOpen()) {
+        await m.flushConfigureCommits()
+      }
+    } catch {
+      // Best-effort drain — never block the switch on a modal failure (A4).
+    }
+  }
+  beginModeSwitchBarrier()
+  try {
+    return await fn()
+  } finally {
+    endModeSwitchBarrier()
+  }
+}
+
 /**
  * Serialize an OS slot transition: runs after prior OS transitions and holds
  * the drawer chain for its whole duration (external drawer requests queue

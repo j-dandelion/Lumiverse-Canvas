@@ -59,7 +59,7 @@ import {
 import { CANVAS_VERSION } from '../persist/backend-ctx'
 import type { LegacyLayout } from '../persist/layout-model'
 import { serializeModelToSingleLayout } from '../persist/layout-model'
-import { commitDraftToOwnedModel } from '../tabs/owned-commit'
+
 import {
   buildSingleLayoutFromLiveHost,
   restoreSingleModeLayout,
@@ -67,7 +67,11 @@ import {
 import { resetSideRemountStateAfterDisable } from '../sidebar/drawer-sync'
 import { injectStyles } from '../debug/styles'
 import { dlog, dwarn } from '../debug/log'
-import { runDrawerTransition, runNestedDrawerTransition } from './mode-transition'
+import {
+  runDrawerTransition,
+  runNestedDrawerTransition,
+  withModeSwitchBarrier,
+} from './mode-transition'
 
 // Local matchMedia helper: importing sidebar/mobile-exclusion would pull the
 // whole shell graph into this module's already-cyclic load chain (see the
@@ -337,20 +341,37 @@ let _dirtyGuard: Promise<'proceed' | 'cancel'> | null = null
 /**
  * Shared Configure-Tabs dirty draft gate (extracted from the disable path,
  * plan A4). Exact contract:
- *   1. `silent` → `'proceed'` (no modal work).
+ *   1. `silent` → drains in-flight commits when the modal is open (H1 — a
+ *      drain needs no dialog) and returns `'proceed'`; never prompts.
  *   2. Modal closed / no draft+base → `'proceed'`.
  *   3. `flushConfigureCommits()` FIRST; any modal/import/flush throw →
  *      `dwarn` + `'proceed'` (today's catch falls through to clean).
  *   4. Clean → `'proceed'`. Dirty → 3-way dialog; `'cancel'` → `'cancel'`.
- *   5. `'apply'` → `commitDraftToOwnedModel`; failure → `'cancel'`
- *      (stay in the old mode); success → `'proceed'`.
+ *   5. `'apply'` → `commitConfigureDraftSerial` (through the `_commitPromise`
+ *      chain, H1); failure → `'cancel'` (stay in the old mode); success →
+ *      `'proceed'`.
  *   6. Reentrancy: a guard already in flight is returned as-is (both callers
  *      await the SAME choice); cleared in `finally`.
  */
 export function guardConfigureDirty(
   opts?: { silent?: boolean },
 ): Promise<'proceed' | 'cancel'> {
-  if (opts?.silent) return Promise.resolve('proceed')
+  if (opts?.silent) {
+    // Silent (OS+mobile automatic force): never prompt and never block —
+    // but DO drain in-flight commits so the switch's snapshot captures
+    // committed state (deep-review H1: flush needs no dialog).
+    return (async () => {
+      try {
+        const m = await import('../tabs/configure-modal')
+        if (m.isConfigureTabsModalOpen()) {
+          await m.flushConfigureCommits()
+        }
+      } catch (err) {
+        dwarn('[second-drawer-mode] silent flush failed:', err)
+      }
+      return 'proceed' as const
+    })()
+  }
   if (_dirtyGuard) return _dirtyGuard
   _dirtyGuard = runGuardConfigureDirty().finally(() => {
     _dirtyGuard = null
@@ -391,12 +412,15 @@ async function runGuardConfigureDirty(): Promise<'proceed' | 'cancel'> {
   if (userChoice === 'apply') {
     // Apply and switch: commit residual draft, then proceed. On commit
     // failure, stay in the old mode so the user can retry (do not tear down).
+    // Goes through the modal's serial commit chain (H1) so it cannot race a
+    // concurrent edit commit the way a direct commitDraftToOwnedModel call
+    // did.
     try {
       const m = await import('../tabs/configure-modal')
       const draft = m.getConfigureDraftRef()
       const base = m.getConfigureBaseRef()
       if (draft && base) {
-        const result = await commitDraftToOwnedModel(draft)
+        const result = await m.commitConfigureDraftSerial()
         if (!result.ok) {
           dwarn('[second-drawer-mode] commit failed on mode switch:', result.error)
           return 'cancel'
@@ -703,185 +727,191 @@ async function runSecondDrawerSwitch(
     // audit F4 residual): previously only disable guarded, so a dirty
     // Configure draft survived into the dual restore window (and its
     // post-restore flush re-imposed it onto the restored model). Same
-    // contract as disable: silent skips the dialog; 'cancel' stays in the
-    // old mode with NO state mutation (before the single-slot capture).
+    // contract as disable: silent drains without a dialog; 'cancel' stays in
+    // the old mode with NO state mutation (before the single-slot capture).
     const enableChoice = await guardConfigureDirty({ silent: opts?.silent })
     if (enableChoice === 'cancel') return
 
-    // Diagnostic: the mode switch decision — which persisted layout slot
-    // each mode uses. Verifies "Enable second drawer loads the dual layout
-    // (and disable loads the single layout)". Single-slot tabs live in
-    // tabOrder (all-primary); dual-slot tabs in detachedTabs.
-    const switchDualSlot = getActiveDualSlot()
-    const switchSingleSlot = getActiveSingleSlot()
-    dlog('[second-drawer-mode] switching to dual', {
-      singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
-        ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length
-        : 0,
-      dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs)
-        ? (switchDualSlot as { detachedTabs: unknown[] }).detachedTabs.length
-        : 0,
-      modelSecondary: getModel()?.secondary.length ?? 0,
-    })
-
-    // Save the single-drawer layout BEFORE any dual UI mount. While the
-    // second drawer is off, the owned model's single-projection IS the
-    // single-drawer layout, so serialize it into the singleLayout profile
-    // slot — that is what finishDisable restores on the way back. The slot
-    // is ALSO the durable vanilla baseline (REFACTOR-PLAN v2 §4.6).
-    //
-    // Capture is a SINGLE projection of the current model, not the raw
-    // serialization: when the drawer is off but the model still holds
-    // secondary tabs (the documented disable-fallback boot anomaly — a dual
-    // top-level blob while secondSidebarEnabled=false), a raw dual
-    // serialization would corrupt this slot with detachedTabs, and SKIPPING
-    // the capture leaves a STALE slot that disable then restores wholesale
-    // (live-verify #2: enable→disable reverted hidden/side/order of a
-    // pre-hidden-tabs slot). The fold is lossless for mode purposes: all
-    // tabs primary (primary-then-secondary order), hidden preserved,
-    // geometry + side from the live primary drawer.
-    const hostNow = getHost()
-    const modelNow = getModel()
-    if (hostNow && modelNow) {
-      const singleSnapshot = serializeModelToSingleLayout(
-        modelNow,
-        (key) => hostNow.resolve(key),
-        CANVAS_VERSION,
-      )
-      setActiveSingleSlot(singleSnapshot)
-      dlog('[second-drawer-mode] saved single layout slot:', {
-        primary: singleSnapshot.tabOrder?.length ?? 0,
-        hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0,
+    // H1 commit barrier: withModeSwitchBarrier = flush (post-dialog edits
+    // land on the PRE-switch model) → freeze commit application across the
+    // capture → restore → refresh window → unfreeze after the terminal
+    // refreshConfigureDraftFromLive installs a fresh draft/base.
+    await withModeSwitchBarrier(async () => {
+      // Diagnostic: the mode switch decision — which persisted layout slot
+      // each mode uses. Verifies "Enable second drawer loads the dual layout
+      // (and disable loads the single layout)". Single-slot tabs live in
+      // tabOrder (all-primary); dual-slot tabs in detachedTabs.
+      const switchDualSlot = getActiveDualSlot()
+      const switchSingleSlot = getActiveSingleSlot()
+      dlog('[second-drawer-mode] switching to dual', {
+        singleSlotTabs: Array.isArray(switchSingleSlot?.tabOrder)
+          ? (switchSingleSlot as { tabOrder: unknown[] }).tabOrder.length
+          : 0,
+        dualSlotTabs: Array.isArray(switchDualSlot?.detachedTabs)
+          ? (switchDualSlot as { detachedTabs: unknown[] }).detachedTabs.length
+          : 0,
+        modelSecondary: getModel()?.secondary.length ?? 0,
       })
-    }
 
-    // First-enable seed: if no dual tabs exist anywhere (lastLoaded has no
-    // detachedTabs AND no persisted dual layout slot), this is the first
-    // time dual mode has ever been enabled. Seed lastLoaded from the
-    // current live single-drawer layout so feature.apply's mount reads a
-    // clean state (secondary closed/empty, primary preserved from live).
-    //
-    // Must happen BEFORE setSettings so secondSidebarFeature.apply sees the
-    // seeded state (not stale pre-dual layout with a ghost secondary).
-    const layoutBefore = getLastLoadedLayout()
-    const dualSlotBefore = getActiveDualSlot()
-    if (
-      !hasDetachedTabs(layoutBefore) &&
-      !hasDetachedTabs(dualSlotBefore)
-    ) {
-      dlog('[second-drawer-mode] first enable — seeding dual layout from live')
-      seedDualLayoutFromLive()
-    }
-
-    // ── Atomic mode-switch reveal (2026-09 live-verify #4) ──
-    // The restore below queues the boot PLACEMENT pass, which pre-activates
-    // each secondary built-in in the host main drawer (lazy panel-data load).
-    // With the main mirror already visible, every activation paints that
-    // panel into the parked node for a frame or two — enabling the drawer
-    // showed the panels flashing one by one. Hold a VISUAL-ONLY guard across
-    // mount + placement + content settle, then release once so both drawers
-    // appear settled. NOT the restore-pending class: its gate controls
-    // observe() shell truth / setDrawer suppression (S1/S5) and must stay
-    // off mid-session.
-    const persistMod = await import('../sidebar/main-persist')
-    persistMod.holdMainDrawerReveal()
-    try {
-      setSettings({ secondSidebarEnabled: true })
-
-      // Restore dual assignments. The persisted dualLayout slot is the
-      // freshest saved dual layout (written by finishDisable + by the owned
-      // model's persist path while dual is active, and hydrated back at boot).
-      // The lastLoaded and session-profile fallbacks are retired — the slot
-      // is the only mode state (REFACTOR-PLAN v2 §4.6).
+      // Save the single-drawer layout BEFORE any dual UI mount. While the
+      // second drawer is off, the owned model's single-projection IS the
+      // single-drawer layout, so serialize it into the singleLayout profile
+      // slot — that is what finishDisable restores on the way back. The slot
+      // is ALSO the durable vanilla baseline (REFACTOR-PLAN v2 §4.6).
       //
-      // After a first-enable seed, the dual slot is empty and lastLoaded has
-      // detachedTabs: [], so no restore branch runs — the secondary stays
-      // empty/closed.
-      //
-      // Belt-and-braces first: cancelSettingsSave keeps the mid-restore empty
-      // layout out of the settings snapshot (real 100ms debounce);
-      // cancelLayoutSave is a compat no-op — layout writes are immediate.
-      cancelSettingsSave()
-      cancelLayoutSave()
-      const host = getHost()
-      const dualSlot = getActiveDualSlot()
-      const restoreSource = [dualSlot]
-        .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
-      if (restoreSource && host) {
-        dlog('[second-drawer-mode] owned-model restore for re-enable:', {
-          tabs: (restoreSource.detachedTabs as unknown[]).length,
-          source: 'dual-slot',
+      // Capture is a SINGLE projection of the current model, not the raw
+      // serialization: when the drawer is off but the model still holds
+      // secondary tabs (the documented disable-fallback boot anomaly — a dual
+      // top-level blob while secondSidebarEnabled=false), a raw dual
+      // serialization would corrupt this slot with detachedTabs, and SKIPPING
+      // the capture leaves a STALE slot that disable then restores wholesale
+      // (live-verify #2: enable→disable reverted hidden/side/order of a
+      // pre-hidden-tabs slot). The fold is lossless for mode purposes: all
+      // tabs primary (primary-then-secondary order), hidden preserved,
+      // geometry + side from the live primary drawer.
+      const hostNow = getHost()
+      const modelNow = getModel()
+      if (hostNow && modelNow) {
+        const singleSnapshot = serializeModelToSingleLayout(
+          modelNow,
+          (key) => hostNow.resolve(key),
+          CANVAS_VERSION,
+        )
+        setActiveSingleSlot(singleSnapshot)
+        dlog('[second-drawer-mode] saved single layout slot:', {
+          primary: singleSnapshot.tabOrder?.length ?? 0,
+          hidden: Array.isArray(singleSnapshot.hiddenTabIds) ? singleSnapshot.hiddenTabIds.length : 0,
         })
-        const result = await restoreSingleModeLayout(restoreSource, host)
-        if (!result.ok) {
-          dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? 'unknown'}`)
-        }
       }
 
-      // Re-arm the debounced settings save. setSettings above armed it, but the
-      // cancelSettingsSave() right after (to keep the mid-restore empty layout
-      // out of the snapshot) killed that timer — and layout saves never write
-      // settings. Without this re-arm, an enable would only live in memory and
-      // revert on the next hard refresh. The restore is awaited above, so the
-      // 100ms-debounced fire now snapshots the post-restore live state.
-      persistSettings()
+      // First-enable seed: if no dual tabs exist anywhere (lastLoaded has no
+      // detachedTabs AND no persisted dual layout slot), this is the first
+      // time dual mode has ever been enabled. Seed lastLoaded from the
+      // current live single-drawer layout so feature.apply's mount reads a
+      // clean state (secondary closed/empty, primary preserved from live).
+      //
+      // Must happen BEFORE setSettings so secondSidebarFeature.apply sees the
+      // seeded state (not stale pre-dual layout with a ghost secondary).
+      const layoutBefore = getLastLoadedLayout()
+      const dualSlotBefore = getActiveDualSlot()
+      if (
+        !hasDetachedTabs(layoutBefore) &&
+        !hasDetachedTabs(dualSlotBefore)
+      ) {
+        dlog('[second-drawer-mode] first enable — seeding dual layout from live')
+        seedDualLayoutFromLive()
+      }
 
-      // The restore above queues the boot PLACEMENT pass (secondary tab
-      // placements + host moves + primary re-assert), which runs OUTSIDE the
-      // dispatch queue. Awaiting flush() alone does not wait for it — the
-      // still-open Configure modal used to be refreshed from a mid-placement
-      // state (primary column stale, restored tabs invisible in the secondary
-      // column) until it was closed and reopened (live-verify #3). Wait for
-      // the pass to settle (capped), plus any intents it scheduled, THEN
-      // refresh the modal.
+      // ── Atomic mode-switch reveal (2026-09 live-verify #4) ──
+      // The restore below queues the boot PLACEMENT pass, which pre-activates
+      // each secondary built-in in the host main drawer (lazy panel-data load).
+      // With the main mirror already visible, every activation paints that
+      // panel into the parked node for a frame or two — enabling the drawer
+      // showed the panels flashing one by one. Hold a VISUAL-ONLY guard across
+      // mount + placement + content settle, then release once so both drawers
+      // appear settled. NOT the restore-pending class: its gate controls
+      // observe() shell truth / setDrawer suppression (S1/S5) and must stay
+      // off mid-session.
+      const persistMod = await import('../sidebar/main-persist')
+      persistMod.holdMainDrawerReveal()
       try {
-        await Promise.race([
-          bootPlacementDone(),
-          new Promise((r) => setTimeout(r, 5000)),
-        ])
-        await flush()
-        // The pass re-asserts the persisted primary and re-parks its content
-        // node; wait for the React commit so the reveal below never shows a
-        // stale panel for a frame.
-        await persistMod.waitForMainContentSettled(1000)
-      } catch { /* best-effort */ }
-    } finally {
-      persistMod.releaseMainDrawerReveal()
-    }
+        setSettings({ secondSidebarEnabled: true })
 
-    // If the Configure Tabs modal is still open, refresh its draft from
-    // the now-enabled live state so it reflects the re-enabled layout.
-    // Runs AFTER the restore + placement pass above so the modal shows the
-    // dual tabs (not the pre-restore empty state). Flush any in-flight
-    // commits first so refresh does not clobber a mid-flight rebase.
-    try {
-      const m = await import('../tabs/configure-modal')
-      if (m.isConfigureTabsModalOpen()) {
+        // Restore dual assignments. The persisted dualLayout slot is the
+        // freshest saved dual layout (written by finishDisable + by the owned
+        // model's persist path while dual is active, and hydrated back at boot).
+        // The lastLoaded and session-profile fallbacks are retired — the slot
+        // is the only mode state (REFACTOR-PLAN v2 §4.6).
+        //
+        // After a first-enable seed, the dual slot is empty and lastLoaded has
+        // detachedTabs: [], so no restore branch runs — the secondary stays
+        // empty/closed.
+        //
+        // Belt-and-braces first: cancelSettingsSave keeps the mid-restore empty
+        // layout out of the settings snapshot (real 100ms debounce);
+        // cancelLayoutSave is a compat no-op — layout writes are immediate.
+        cancelSettingsSave()
+        cancelLayoutSave()
+        const host = getHost()
+        const dualSlot = getActiveDualSlot()
+        const restoreSource = [dualSlot]
+          .find((l) => l && Array.isArray(l.detachedTabs) && l.detachedTabs.length > 0)
+        if (restoreSource && host) {
+          dlog('[second-drawer-mode] owned-model restore for re-enable:', {
+            tabs: (restoreSource.detachedTabs as unknown[]).length,
+            source: 'dual-slot',
+          })
+          const result = await restoreSingleModeLayout(restoreSource, host)
+          if (!result.ok) {
+            dwarn(`[second-drawer-mode] dual-layout restore partial: ${result.reason ?? 'unknown'}`)
+          }
+        }
+
+        // Re-arm the debounced settings save. setSettings above armed it, but the
+        // cancelSettingsSave() right after (to keep the mid-restore empty layout
+        // out of the snapshot) killed that timer — and layout saves never write
+        // settings. Without this re-arm, an enable would only live in memory and
+        // revert on the next hard refresh. The restore is awaited above, so the
+        // 100ms-debounced fire now snapshots the post-restore live state.
+        persistSettings()
+
+        // The restore above queues the boot PLACEMENT pass (secondary tab
+        // placements + host moves + primary re-assert), which runs OUTSIDE the
+        // dispatch queue. Awaiting flush() alone does not wait for it — the
+        // still-open Configure modal used to be refreshed from a mid-placement
+        // state (primary column stale, restored tabs invisible in the secondary
+        // column) until it was closed and reopened (live-verify #3). Wait for
+        // the pass to settle (capped), plus any intents it scheduled, THEN
+        // refresh the modal.
         try {
-          await m.flushConfigureCommits()
+          await Promise.race([
+            bootPlacementDone(),
+            new Promise((r) => setTimeout(r, 5000)),
+          ])
+          await flush()
+          // The pass re-asserts the persisted primary and re-parks its content
+          // node; wait for the React commit so the reveal below never shows a
+          // stale panel for a frame.
+          await persistMod.waitForMainContentSettled(1000)
         } catch { /* best-effort */ }
-        m.refreshConfigureDraftFromLive()
+      } finally {
+        persistMod.releaseMainDrawerReveal()
       }
-    } catch { /* module may not be loaded */ }
 
-    // Diagnostic: post-switch model state — the mode's layout is now the
-    // live model, and the next owned-model persist embeds both slots.
-    const afterModel = getModel()
-    dlog('[second-drawer-mode] dual mode active', {
-      secondSidebarEnabled: true,
-      modelPrimary: afterModel?.primary.length ?? 0,
-      modelSecondary: afterModel?.secondary.length ?? 0,
-      modelSide: afterModel?.side ?? null,
+      // If the Configure Tabs modal is still open, refresh its draft from
+      // the now-enabled live state so it reflects the re-enabled layout.
+      // Runs AFTER the restore + placement pass above so the modal shows the
+      // dual tabs (not the pre-restore empty state). Refresh ONLY (H1): the
+      // barrier froze commits across the switch, so a post-restore flush
+      // here was exactly the stale-draft-onto-restored-model bug — the
+      // terminal refresh installs a fresh draft/base and is what releases
+      // those edits.
+      try {
+        const m = await import('../tabs/configure-modal')
+        if (m.isConfigureTabsModalOpen()) {
+          m.refreshConfigureDraftFromLive()
+        }
+      } catch { /* module may not be loaded */ }
+
+      // Diagnostic: post-switch model state — the mode's layout is now the
+      // live model, and the next owned-model persist embeds both slots.
+      const afterModel = getModel()
+      dlog('[second-drawer-mode] dual mode active', {
+        secondSidebarEnabled: true,
+        modelPrimary: afterModel?.primary.length ?? 0,
+        modelSecondary: afterModel?.secondary.length ?? 0,
+        modelSide: afterModel?.side ?? null,
+      })
+
+      // S8: the secondary zone is live again — re-split the strip zones (main
+      // back to 50%) after the restore settles.
+      try {
+        const dl = await import('../sidebar/drawer-location')
+        dl.reconcileDrawerLocation()
+      } catch (err) {
+        dwarn('[second-drawer-mode] reconcileDrawerLocation after enable failed:', err)
+      }
     })
-
-    // S8: the secondary zone is live again — re-split the strip zones (main
-    // back to 50%) after the restore settles.
-    try {
-      const dl = await import('../sidebar/drawer-location')
-      dl.reconcileDrawerLocation()
-    } catch (err) {
-      dwarn('[second-drawer-mode] reconcileDrawerLocation after enable failed:', err)
-    }
   } else {
     // ── DISABLE ──
     if (!getSettings().secondSidebarEnabled) return
@@ -902,11 +932,13 @@ async function runSecondDrawerSwitch(
 
     // Dirty-close confirmation (plan A4). `silent` (OS+mobile automatic
     // force) skips the dialog: an automatic mode switch must not pop a
-    // modal; finishDisable refreshes the still-open modal from the
-    // now-disabled live state either way.
+    // modal (but still drains commits — H1); finishDisable refreshes the
+    // still-open modal from the now-disabled live state either way.
     const choice = await guardConfigureDirty({ silent: opts?.silent })
     if (choice === 'cancel') return
 
-    await finishDisable()
+    // H1 commit barrier across finishDisable's snapshot → restore → refresh
+    // (its own drain catches edits made while the dialog was up).
+    await withModeSwitchBarrier(() => finishDisable())
   }
 }

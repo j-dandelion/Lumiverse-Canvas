@@ -56,7 +56,7 @@ import {
 } from '../sidebar/main-persist'
 import { layoutHasTabs, slotResolves } from '../persist/layout-model'
 import type { LegacyLayout } from '../persist/layout-model'
-import { runOsTransition } from '../settings/mode-transition'
+import { runOsTransition, withModeSwitchBarrier } from '../settings/mode-transition'
 import {
   getSettings,
   setSettings,
@@ -320,66 +320,72 @@ async function runOsEnable(): Promise<void> {
   // loop (see the `_persistOsOverride` doc in dispatch.ts).
   setPersistOsOverride(true)
   try {
-    const host = getHost()
-    const mobile = isMobileViewportLocal()
-    // Mobile-first (R1-7): the entering slot is ALWAYS osSingle — the osDual
-    // restore is skipped (the live dual layout is what the mode switch saves
-    // into the OS dual slot during the force below). Desktop: the OS slot of
-    // the active mode (model shape is authoritative). Shared with
-    // osEntrySlotHasTabs (F6).
-    const slot = entryOsSlot()
-    // Restore gate (R1-6): restore only a slot that has content AND whose ids
-    // still resolve against the host — an all-unresolvable slot must not
-    // replace the live model with an empty one (30s adoption suppression).
-    const canRestore = !!(
-      slot &&
-      host &&
-      layoutHasTabs(slot) &&
-      slotResolves(slot, (id) => host.findKey(id))
-    )
-    // Hold BEFORE the restore (R1-3): static import — main-persist is already
-    // in this module's graph via mode-profiles. The tail runs INSIDE the hold
-    // so both drawers appear settled when it releases.
-    holdMainDrawerReveal()
-    try {
-      if (canRestore) {
-        const result = await restoreSingleModeLayout(slot as LegacyLayout, host!, { osActive: true })
-        if (!result.ok) dwarn(`[os] enable restore partial: ${result.reason ?? 'unknown'}`)
-        else dlog('[os] enable: OS slot restored', { mobile })
-      } else {
-        // First enable (D11), missing host, empty, or unresolvable slot →
-        // seed the entering OS slot from live (mobile always seeds osSingle).
-        if (!host) dlog('[os] enable: no host — skipping restore (seed path)')
-        seedOsSlotFromLive(mobile ? 'single' : undefined)
-      }
-      // Mirror the drawer-enable tail INSIDE the hold: wait for the placement
-      // pass the restore queued (capped), drain intents, settle content.
+    // H1 commit barrier: drain → freeze commits across the OS-slot
+    // seed/restore → refresh-only tail → unfreeze. The nested mobile-force
+    // drawer switch stacks inside this barrier (its own withModeSwitchBarrier
+    // is a nested no-drain pass).
+    await withModeSwitchBarrier(async () => {
+      const host = getHost()
+      const mobile = isMobileViewportLocal()
+      // Mobile-first (R1-7): the entering slot is ALWAYS osSingle — the osDual
+      // restore is skipped (the live dual layout is what the mode switch saves
+      // into the OS dual slot during the force below). Desktop: the OS slot of
+      // the active mode (model shape is authoritative). Shared with
+      // osEntrySlotHasTabs (F6).
+      const slot = entryOsSlot()
+      // Restore gate (R1-6): restore only a slot that has content AND whose ids
+      // still resolve against the host — an all-unresolvable slot must not
+      // replace the live model with an empty one (30s adoption suppression).
+      const canRestore = !!(
+        slot &&
+        host &&
+        layoutHasTabs(slot) &&
+        slotResolves(slot, (id) => host.findKey(id))
+      )
+      // Hold BEFORE the restore (R1-3): static import — main-persist is already
+      // in this module's graph via mode-profiles. The tail runs INSIDE the hold
+      // so both drawers appear settled when it releases.
+      holdMainDrawerReveal()
       try {
-        await Promise.race([
-          bootPlacementDone(),
-          new Promise((r) => setTimeout(r, 5000)),
-        ])
-        await flush()
-        await waitForMainContentSettled(1000)
-      } catch { /* best-effort */ }
-      // Modal (R1-4): inside the hold, after the tail — flush commits first,
-      // then refresh the still-open Configure draft from the restored live
-      // state (same gate as second-drawer-mode's enable path).
-      try {
-        const m = await import('../tabs/configure-modal')
-        if (m.isConfigureTabsModalOpen()) {
-          try { await m.flushConfigureCommits() } catch { /* best-effort */ }
-          m.refreshConfigureDraftFromLive()
+        if (canRestore) {
+          const result = await restoreSingleModeLayout(slot as LegacyLayout, host!, { osActive: true })
+          if (!result.ok) dwarn(`[os] enable restore partial: ${result.reason ?? 'unknown'}`)
+          else dlog('[os] enable: OS slot restored', { mobile })
+        } else {
+          // First enable (D11), missing host, empty, or unresolvable slot →
+          // seed the entering OS slot from live (mobile always seeds osSingle).
+          if (!host) dlog('[os] enable: no host — skipping restore (seed path)')
+          seedOsSlotFromLive(mobile ? 'single' : undefined)
         }
-      } catch { /* module may not be loaded */ }
-    } finally {
-      releaseMainDrawerReveal()
-    }
-    // Mobile: force single-drawer mode after the OS slot seed/restore (the
-    // live dual layout is what the mode switch saves into the OS dual slot).
-    // No-op on desktop / when the second drawer is already off. Nested: this
-    // run holds the drawer chain of the mode-transition arbiter.
-    await syncOsMobileDrawerMode({ nested: true })
+        // Mirror the drawer-enable tail INSIDE the hold: wait for the placement
+        // pass the restore queued (capped), drain intents, settle content.
+        try {
+          await Promise.race([
+            bootPlacementDone(),
+            new Promise((r) => setTimeout(r, 5000)),
+          ])
+          await flush()
+          await waitForMainContentSettled(1000)
+        } catch { /* best-effort */ }
+        // Modal (R1-4 / H1): inside the hold, after the tail — REFRESH ONLY.
+        // The barrier dropped any mid-switch commit; flushing here was the
+        // stale-draft-onto-restored-model bug — the refresh installs a fresh
+        // draft/base and is what legitimately discards those edits.
+        try {
+          const m = await import('../tabs/configure-modal')
+          if (m.isConfigureTabsModalOpen()) {
+            m.refreshConfigureDraftFromLive()
+          }
+        } catch { /* module may not be loaded */ }
+      } finally {
+        releaseMainDrawerReveal()
+      }
+      // Mobile: force single-drawer mode after the OS slot seed/restore (the
+      // live dual layout is what the mode switch saves into the OS dual slot).
+      // No-op on desktop / when the second drawer is already off. Nested: this
+      // run holds the drawer chain of the mode-transition arbiter.
+      await syncOsMobileDrawerMode({ nested: true })
+    })
   } finally {
     setPersistOsOverride(null)
   }
@@ -401,54 +407,58 @@ async function runOsDisable(): Promise<void> {
   // runOsEnable's parallel comment).
   setPersistOsOverride(false)
   try {
-    snapshotOsSlotFromLive()
-    // Belt-and-braces: cancelLayoutSave is a compat no-op (layout writes are
-    // immediate); kept as a seam.
-    cancelLayoutSave()
-    // D12 slot-wins: restore the non-OS slot of the current mode
-    // (`secondSidebarEnabled` is unchanged by an OS toggle — the mode the
-    // user will land in). Empty/missing slot → nothing to restore (first
-    // enable + immediate disable: the live state IS the non-OS state).
-    const dual = getSettings().secondSidebarEnabled
-    const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot()
-    const host = getHost()
-    const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0)
-    if (slot && host && hasTabs) {
-      const result = await restoreSingleModeLayout(slot, host, { osActive: false })
-      if (!result.ok) {
-        dwarn(`[os] disable restore partial: ${result.reason ?? 'unknown'}`)
-      } else {
-        dlog('[os] disable: non-OS slot restored', { mode: dual ? 'dual' : 'single' })
+    // H1 commit barrier: drain → freeze commits across snapshot → restore →
+    // refresh-only tail → unfreeze (nested mobile-force switch stacks inside).
+    await withModeSwitchBarrier(async () => {
+      snapshotOsSlotFromLive()
+      // Belt-and-braces: cancelLayoutSave is a compat no-op (layout writes are
+      // immediate); kept as a seam.
+      cancelLayoutSave()
+      // D12 slot-wins: restore the non-OS slot of the current mode
+      // (`secondSidebarEnabled` is unchanged by an OS toggle — the mode the
+      // user will land in). Empty/missing slot → nothing to restore (first
+      // enable + immediate disable: the live state IS the non-OS state).
+      const dual = getSettings().secondSidebarEnabled
+      const slot = dual ? getDualLayoutSlot() : getSingleLayoutSlot()
+      const host = getHost()
+      const hasTabs = !!slot && ((slot.detachedTabs?.length ?? 0) > 0 || (slot.tabOrder?.length ?? 0) > 0)
+      if (slot && host && hasTabs) {
+        const result = await restoreSingleModeLayout(slot, host, { osActive: false })
+        if (!result.ok) {
+          dwarn(`[os] disable restore partial: ${result.reason ?? 'unknown'}`)
+        } else {
+          dlog('[os] disable: non-OS slot restored', { mode: dual ? 'dual' : 'single' })
+        }
       }
-    }
-    // Invariant: OS mode off ⇒ model.closed empty. A successful slot restore
-    // bootstraps from a non-OS slot (which carries no closedTabIds), but a
-    // missing/empty slot or a partial restore leaves the live closed-set —
-    // and with the Start menu gone those windows would stay hidden forever
-    // (no reopen path). Clear any survivors through the ordinary model path.
-    const after = getModel()
-    if (after && after.closed.length > 0) {
-      dlog('[os] disable: clearing residual closed windows', { closed: after.closed.length })
-      const reopen: Intent[] = after.closed.map((key) => ({ t: 'setClosed', key, closed: false }))
-      await dispatchBatch(reopen)
-    }
-    // Mobile single-drawer restore: if OS mode had forced the second drawer
-    // off (mobile), bring the user's dual mode back through the full
-    // mode-switch API. Runs after the non-OS single restore above so the
-    // switch saves the restored single state as the entering-mode baseline and
-    // restores the non-OS dual slot. No-op when nothing was forced. Nested:
-    // this run holds the drawer chain of the mode-transition arbiter.
-    await syncOsMobileDrawerMode({ nested: true })
-    // R1-13: refresh the still-open Configure modal from the now-restored
-    // non-OS live state — symmetric with the enable-side refresh. Runs last
-    // so it sees the settled state (including any mobile dual restore).
-    try {
-      const m = await import('../tabs/configure-modal')
-      if (m.isConfigureTabsModalOpen()) {
-        try { await m.flushConfigureCommits() } catch { /* best-effort */ }
-        m.refreshConfigureDraftFromLive()
+      // Invariant: OS mode off ⇒ model.closed empty. A successful slot restore
+      // bootstraps from a non-OS slot (which carries no closedTabIds), but a
+      // missing/empty slot or a partial restore leaves the live closed-set —
+      // and with the Start menu gone those windows would stay hidden forever
+      // (no reopen path). Clear any survivors through the ordinary model path.
+      const after = getModel()
+      if (after && after.closed.length > 0) {
+        dlog('[os] disable: clearing residual closed windows', { closed: after.closed.length })
+        const reopen: Intent[] = after.closed.map((key) => ({ t: 'setClosed', key, closed: false }))
+        await dispatchBatch(reopen)
       }
-    } catch { /* module may not be loaded */ }
+      // Mobile single-drawer restore: if OS mode had forced the second drawer
+      // off (mobile), bring the user's dual mode back through the full
+      // mode-switch API. Runs after the non-OS single restore above so the
+      // switch saves the restored single state as the entering-mode baseline and
+      // restores the non-OS dual slot. No-op when nothing was forced. Nested:
+      // this run holds the drawer chain of the mode-transition arbiter.
+      await syncOsMobileDrawerMode({ nested: true })
+      // R1-13 / H1: refresh the still-open Configure modal from the
+      // now-restored non-OS live state — REFRESH ONLY (a flush here would
+      // re-apply a pre-switch draft onto the restored model). Runs last so it
+      // sees the settled state (including any mobile dual restore).
+      try {
+        const m = await import('../tabs/configure-modal')
+        if (m.isConfigureTabsModalOpen()) {
+          m.refreshConfigureDraftFromLive()
+        }
+      } catch { /* module may not be loaded */ }
+    })
   } finally {
     setPersistOsOverride(null)
   }

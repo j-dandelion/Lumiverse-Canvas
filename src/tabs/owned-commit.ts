@@ -15,8 +15,11 @@ import { activeAfterRemoval, sideOfKey, visibleKeys } from '../core/select'
 import type { TabKey, Side, ObservedWorld, LayoutModel } from '../core/model'
 import type { LiveTabId } from '../host/port'
 import { dlog, dwarn } from '../debug/log'
+import { isModeSwitchBarrierActive } from '../settings/mode-transition'
 
-export type OwnedCommitResult = { ok: true } | { ok: false; error: string }
+export type OwnedCommitResult =
+  | { ok: true }
+  | { ok: false; error: string; superseded?: boolean }
 export type ActiveSelection = Record<Side, TabKey | null>
 
 /**
@@ -86,6 +89,15 @@ export async function commitDraftToOwnedModel(
   activeAtGestureStart?: ActiveSelection,
   opts?: OwnedCommitOpts,
 ): Promise<OwnedCommitResult> {
+  // Mode-switch barrier (deep-review H1): a drawer/OS switch owns the model
+  // right now — a commit (Configure auto-commit, Done, live DnD) would land
+  // a pre-switch draft onto the just-restored model. Drop it as `superseded`;
+  // the switch's terminal refreshConfigureDraftFromLive rebuilds draft+base
+  // from live. Checked at entry AND again after the rebase await (a commit
+  // that started before the barrier must not dispatch intents after it).
+  if (isModeSwitchBarrierActive()) {
+    return { ok: false, error: 'mode-switch-in-progress', superseded: true }
+  }
   const host = getHost()
   if (!host) return { ok: false, error: 'Canvas tab model is not ready.' }
 
@@ -223,6 +235,14 @@ export async function commitDraftToOwnedModel(
           }
         }
       }
+    }
+
+    // Barrier re-check (H1): the rebase above awaited the dispatch queue —
+    // a mode switch may have claimed the model mid-flight. Intents would now
+    // target the restored model; drop instead (syncFromHost is host-truth,
+    // leaving it applied is neutral).
+    if (isModeSwitchBarrierActive()) {
+      return { ok: false, error: 'mode-switch-in-progress', superseded: true }
     }
 
     dlog('[owned-commit] dispatching', {

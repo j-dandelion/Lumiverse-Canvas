@@ -515,6 +515,54 @@ async function test_OC10_unhideDropsClosed() {
 // ── OC11 (H2): a commit that observes the OS-closed key as active must not
 // write it into the model's active — the raw observed active is reopen
 // memory, not a live selection. ──
+// ── OC12 (H1): mode-switch barrier — commits are dropped as `superseded`
+// while a drawer/OS switch owns the model (a stale pre-switch draft must not
+// land on the just-restored model) and work again after the barrier lifts. ──
+async function test_OC12_modeSwitchBarrier() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A, B],
+    secondary: [],
+    hidden: [],
+    closed: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a', 'h:b'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a', 'h:b'],
+    hiddenIds: new Set(),
+  })
+
+  const { beginModeSwitchBarrier, endModeSwitchBarrier } = await import('../../settings/mode-transition')
+  beginModeSwitchBarrier()
+  const dropped = await commitDraftToOwnedModel(draft)
+  assertEqual(dropped.ok, false, 'OC12a: commit under the barrier is refused')
+  if (!dropped.ok) {
+    assertEqual(dropped.superseded, true, 'OC12b: refusal is marked superseded (silent drop)')
+  }
+  const during = getModel()
+  if (during) {
+    assertEqual(during.secondary.length, 0, 'OC12c: model untouched while the barrier is up')
+  }
+
+  endModeSwitchBarrier()
+  const landed = await commitDraftToOwnedModel(draft)
+  assertEqual(landed.ok, true, 'OC12d: commit works again after the barrier lifts')
+  shutdown()
+}
+
 async function test_OC11_closedObservedActiveIgnored() {
   shutdown()
   const host = new FakeHost([
@@ -562,6 +610,7 @@ await test_OC6_hideIntent()
 await test_OC8_skipChrome()
 await test_OC10_unhideDropsClosed()
 await test_OC11_closedObservedActiveIgnored()
+await test_OC12_modeSwitchBarrier()
 
 console.log(`tabs/owned-commit: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
