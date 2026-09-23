@@ -54,7 +54,7 @@ import {
   releaseMainDrawerReveal,
   waitForMainContentSettled,
 } from '../sidebar/main-persist'
-import { layoutHasTabs, slotResolves } from '../persist/layout-model'
+import { foldLayoutToSingleShape, layoutHasTabs, slotResolves } from '../persist/layout-model'
 import type { LegacyLayout } from '../persist/layout-model'
 import { runOsTransition, withModeSwitchBarrier } from '../settings/mode-transition'
 import {
@@ -242,19 +242,28 @@ function activeModeIsDual(): boolean {
  * Seed the current mode's OS slot from the live model (D11 — all open).
  * `target` overrides the mode-derived slot choice (the OS+mobile enable path
  * always enters via osSingle, even when the live model is dual-shaped).
+ *
+ * The single slot is ALWAYS written single-shaped (deep-review M1): on the
+ * mobile path the live model can still be dual at seed time (the seed runs
+ * before the nested mobile force), and a raw dual serialization in
+ * `osSingleLayout` would restore as a dual model with
+ * `secondSidebarEnabled: false` on every later mobile OS enable. The fold is
+ * a no-op for an already-single live serialization.
  */
 export function seedOsSlotFromLive(target?: 'single' | 'dual'): void {
-  const layout = snapshotOwnedModelLayout()
-  if (!layout) {
+  const raw = snapshotOwnedModelLayout()
+  if (!raw) {
     dlog('[os] enable seed: no live model serialization (boot/teardown) — slot stays empty')
     return
   }
   const which = target ?? (activeModeIsDual() ? 'dual' : 'single')
+  const layout = which === 'single' ? foldLayoutToSingleShape(raw) : raw
   if (which === 'dual') setOsDualLayoutSlot(layout)
   else setOsSingleLayoutSlot(layout)
   dlog('[os] enable seed: OS slot written', {
     mode: which,
     tabs: Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0,
+    tabOrder: Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0,
   })
 }
 

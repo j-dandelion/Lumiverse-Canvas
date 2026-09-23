@@ -182,6 +182,34 @@ export function serializeModelToSingleLayout(
 }
 
 /**
+ * Fold a raw serialization into SINGLE shape (deep-review M1): a slot named
+ * "single" must never carry `detachedTabs` — restoring a dual-shaped blob
+ * from `osSingleLayout` rebuilds a dual model under
+ * `secondSidebarEnabled: false`, stranding tabs in `model.secondary` with no
+ * shell and contaminating later persist routing. Secondary entries fold into
+ * `tabOrder` (appended after the existing ids when a stale/old bundle left
+ * them out — `buildModelFromLayout` tolerates that asymmetry, a single
+ * restore cannot), `detachedTabs` empties, and the secondary drawer state
+ * neutralizes — the same projection `serializeModelToSingleLayout` performs
+ * from the model. Hidden set, closed set, primary geometry and side are
+ * preserved.
+ */
+export function foldLayoutToSingleShape(layout: LegacyLayout): LegacyLayout {
+  const detached = layout.detachedTabs ?? []
+  const order = Array.isArray(layout.tabOrder) ? [...layout.tabOrder] : []
+  for (const d of detached) {
+    const id = d?.tabId
+    if (id && !order.includes(id)) order.push(id)
+  }
+  return {
+    ...layout,
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: order,
+  }
+}
+
+/**
  * True when a layout blob/profile carries at least one tab — either shape:
  * a single layout lists ids in `tabOrder` (detachedTabs: []), a dual layout
  * lists entries in `detachedTabs`. Used by the mode-switch and boot-recovery

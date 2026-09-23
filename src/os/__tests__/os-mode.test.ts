@@ -188,9 +188,14 @@ function tab(id: string, sidebar: 'primary' | 'secondary') {
   assert(fake.osSingle !== null, 'enable (single) seeds the osSingle slot')
   assertEqual(fake.osDual, null, 'enable (single) leaves the osDual slot untouched')
   assertEqual(
-    (fake.osSingle as { detachedTabs?: unknown[] })?.detachedTabs?.length,
-    2,
-    'seed carries the live tabs',
+    (fake.osSingle as { detachedTabs?: unknown[] })?.detachedTabs?.length ?? 0,
+    0,
+    'single seed is SINGLE-shaped (detachedTabs folded away — M1)',
+  )
+  assertEqual(
+    (fake.osSingle as { tabOrder?: string[] })?.tabOrder?.join(','),
+    'a,b',
+    'seed carries the live tabs (folded into tabOrder)',
   )
   assertEqual(
     (fake.osSingle as { closedTabIds?: string[] })?.closedTabIds?.length,
@@ -431,6 +436,24 @@ console.log('---')
   assertEqual(fake.restoreCalls.length, 0, 'A2-5: mobile skips the osDual restore')
   assertEqual(fake.osDual, preDual, 'A2-5: osDual slot untouched')
   assert(fake.osSingle !== null, 'A2-5: mobile seeds/enters via osSingle')
+  // M1: the mobile seed runs while the live model is still dual-shaped — the
+  // osSingle slot must still be SINGLE-shaped (no detachedTabs), or every
+  // later mobile OS enable restores a dual model with the drawer feature off.
+  assertEqual(
+    (fake.osSingle as { detachedTabs?: unknown[] })?.detachedTabs?.length ?? 0,
+    0,
+    'A2-5: osSingle seed is SINGLE-shaped (dual model folded — M1)',
+  )
+  assertEqual(
+    (fake.osSingle as { tabOrder?: string[] })?.tabOrder?.join(','),
+    'a,s',
+    'A2-5: folded tabOrder carries every tab (primary-then-secondary)',
+  )
+  assertEqual(
+    (fake.osSingle as { secondary?: { open?: boolean } })?.secondary?.open,
+    false,
+    'A2-5: folded secondary drawer state is neutral',
+  )
   assert(fake.modeCalls.some((c) => c.next === false), 'A2-5: mobile force disables the second drawer (nested)')
   assertEqual(
     (fake.modeCalls.find((c) => c.next === false)?.opts as { nested?: boolean } | undefined)?.nested,
