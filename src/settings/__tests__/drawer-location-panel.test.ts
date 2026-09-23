@@ -21,6 +21,7 @@ let entrySlotHasTabs = false
 let exitSlotHasTabs = false
 let guardChoice: 'proceed' | 'cancel' = 'proceed'
 let guardCalls = 0
+let guardDelayMs = 0
 mock.module('../../os/os-mode', () => ({
   osEntrySlotHasTabs: () => entrySlotHasTabs,
   osExitSlotHasTabs: () => exitSlotHasTabs,
@@ -33,6 +34,9 @@ mock.module('../../os/os-mode', () => ({
 mock.module('../../settings/second-drawer-mode', () => ({
   guardConfigureDirty: async () => {
     guardCalls++
+    if (guardDelayMs > 0) {
+      await new Promise<void>((r) => setTimeout(r, guardDelayMs))
+    }
     return guardChoice
   },
   requestSecondDrawerMode: async () => {},
@@ -429,6 +433,29 @@ describe('mode tiles', () => {
     await flushSelectMode()
     expect(guardCalls).toBe(0)
     expect(getSettings().osMode).toBe(true) // no guard → direct patch
+  })
+
+  // ── L14: last-click-wins — a slower earlier selectMode must not overwrite
+  //    a later click's setSettings (unsequenced fire-and-forget race). ──
+  test('later tile click wins when an earlier selectMode is still awaiting the guard', async () => {
+    entrySlotHasTabs = true
+    exitSlotHasTabs = false
+    guardChoice = 'proceed'
+    guardDelayMs = 40
+    hydrateSettings(null)
+    const root = mountPanel()
+    const tiles = modeTiles(root)
+    // Click OS (enters selectMode, stalls on the delayed dirty guard)…
+    tiles.children[2].click()
+    // …then immediately click Vanilla while OS is still in flight.
+    await flushSelectMode() // let OS reach the guard await
+    tiles.children[0].click()
+    // Wait past the guard delay so the stale OS continuation would have run.
+    await new Promise<void>((r) => setTimeout(r, 60))
+    await flushSelectMode()
+    expect(getSettings().osMode).toBe(false) // Vanilla (later click) wins
+    guardDelayMs = 0
+    entrySlotHasTabs = false
   })
 })
 

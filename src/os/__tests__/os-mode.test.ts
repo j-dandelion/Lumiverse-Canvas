@@ -92,11 +92,13 @@ mock.module('../../sidebar/main-persist', () => ({
   waitForMainContentSettled: async () => {},
 }))
 // Dynamic import in the enable/disable paths — mock so the React modal
-// never loads headless.
+// never loads headless. Controllable so L13 can assert refresh gating.
+let modalOpen = false
+let modalRefreshCount = 0
 mock.module('../../tabs/configure-modal', () => ({
-  isConfigureTabsModalOpen: () => false,
+  isConfigureTabsModalOpen: () => modalOpen,
   flushConfigureCommits: async () => {},
-  refreshConfigureDraftFromLive: () => {},
+  refreshConfigureDraftFromLive: () => { modalRefreshCount++ },
   getConfigureDraftRef: () => null,
   getConfigureBaseRef: () => null,
 }))
@@ -159,6 +161,8 @@ mock.module('../../settings/second-drawer-mode', () => ({
 
 // Module under test — imports AFTER mocks (repo convention).
 const { applyOsModeChange, seedOsSlotFromLive } = await import('../os-mode')
+const { setOsConfigureWillRestore, takeOsConfigureWillRestore } =
+  await import('../os-configure-gate')
 
 // Every test starts from clean fakes.
 function fresh() {
@@ -179,6 +183,10 @@ function fresh() {
   fake.secondSidebarEnabled = false
   fake.model = { secondary: [], closed: [] }
   fake.snapshot = null
+  modalOpen = false
+  modalRefreshCount = 0
+  setOsConfigureWillRestore(null)
+  takeOsConfigureWillRestore() // clear any leftover gate
   fake.host = { findKey: (id: string) => id }
   mobile = false
 }
@@ -588,6 +596,61 @@ console.log('---')
     'A3-2: post-failure restore routed with the new run intent',
   )
 }
+// ── L13: Configure modal refresh is gated on the panel's willRestore ──
+// willRestore=false (no dirty dialog was shown) → refresh must NOT discard
+// the draft. willRestore=true / non-panel (null) → refresh still runs.
+{
+  // Enable, willRestore=false: skip refresh. (Live setting already flipped —
+  // applyOsModeChange reads getSettings().osMode as the desired state.)
+  fresh()
+  modalOpen = true
+  setOsConfigureWillRestore(false)
+  fake.osMode = true // desired state after the panel's setSettings
+  fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.host = { findKey: (id: string) => id }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(modalRefreshCount, 0, 'L13a: willRestore=false → modal refresh skipped on enable')
+
+  // Enable, willRestore=true: refresh runs.
+  fresh()
+  modalOpen = true
+  setOsConfigureWillRestore(true)
+  fake.osMode = true
+  fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.host = { findKey: (id: string) => id }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(modalRefreshCount, 1, 'L13b: willRestore=true → modal refresh runs on enable')
+
+  // Enable, non-panel (gate null): refresh runs (compat).
+  fresh()
+  modalOpen = true
+  setOsConfigureWillRestore(null)
+  fake.osMode = true
+  fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.host = { findKey: (id: string) => id }
+  await applyOsModeChange({ osMode: false }, { osMode: true })
+  assertEqual(modalRefreshCount, 1, 'L13c: non-panel (null gate) → modal refresh still runs')
+
+  // Disable, willRestore=false: skip refresh.
+  fresh()
+  modalOpen = true
+  setOsConfigureWillRestore(false)
+  fake.osMode = false // desired state after the panel's setSettings
+  fake.secondSidebarEnabled = false
+  fake.model = { secondary: [], closed: [] }
+  fake.snapshot = { detachedTabs: [tab('a', 'primary')], tabOrder: ['a'], closedTabIds: [] }
+  fake.singleSlot = { detachedTabs: [], tabOrder: ['a'] }
+  fake.host = { findKey: (id: string) => id }
+  await applyOsModeChange({ osMode: true }, { osMode: false })
+  assertEqual(modalRefreshCount, 0, 'L13d: willRestore=false → modal refresh skipped on disable')
+}
+
 // ── A2-6 shape guard lives in mode-profiles (real) — see
 // os-closed-active-restore.test.ts; here assert the enable hold ordering. ──
 {

@@ -71,6 +71,7 @@ import {
   setOsDualLayoutSlot,
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
+import { takeOsConfigureWillRestore } from './os-configure-gate'
 
 // ── OS + mobile single-drawer force ──────────────────────────────────────────
 //
@@ -400,13 +401,14 @@ async function runOsEnable(): Promise<void> {
           await flush()
           await waitForMainContentSettled(1000)
         } catch { /* best-effort */ }
-        // Modal (R1-4 / H1): inside the hold, after the tail — REFRESH ONLY.
-        // The barrier dropped any mid-switch commit; flushing here was the
-        // stale-draft-onto-restored-model bug — the refresh installs a fresh
-        // draft/base and is what legitimately discards those edits.
+        // Modal (R1-4 / H1 / L13): inside the hold, after the tail — REFRESH
+        // ONLY when the panel's willRestore gate fired (or this run was not
+        // initiated by the panel). willRestore=false means no dirty dialog was
+        // shown — refreshing would silently discard a dirty Configure draft.
         try {
           const m = await import('../tabs/configure-modal')
-          if (m.isConfigureTabsModalOpen()) {
+          const willRestore = takeOsConfigureWillRestore()
+          if (willRestore !== false && m.isConfigureTabsModalOpen()) {
             m.refreshConfigureDraftFromLive()
           }
         } catch { /* module may not be loaded */ }
@@ -481,13 +483,14 @@ async function runOsDisable(): Promise<void> {
       // restores the non-OS dual slot. No-op when nothing was forced. Nested:
       // this run holds the drawer chain of the mode-transition arbiter.
       await syncOsMobileDrawerMode({ nested: true })
-      // R1-13 / H1: refresh the still-open Configure modal from the
-      // now-restored non-OS live state — REFRESH ONLY (a flush here would
-      // re-apply a pre-switch draft onto the restored model). Runs last so it
+      // R1-13 / H1 / L13: refresh the still-open Configure modal from the
+      // now-restored non-OS live state — REFRESH ONLY, and only when the
+      // panel's willRestore gate fired (or non-panel caller). Runs last so it
       // sees the settled state (including any mobile dual restore).
       try {
         const m = await import('../tabs/configure-modal')
-        if (m.isConfigureTabsModalOpen()) {
+        const willRestore = takeOsConfigureWillRestore()
+        if (willRestore !== false && m.isConfigureTabsModalOpen()) {
           m.refreshConfigureDraftFromLive()
         }
       } catch { /* module may not be loaded */ }

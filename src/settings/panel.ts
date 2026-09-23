@@ -39,6 +39,11 @@ import { dlog, dwarn } from '../debug/log'
 import { FEATURES } from '../features/registry'
 import { injectStyles } from '../debug/styles'
 import { displayChromeSide } from '../sidebar/chrome-sides'
+import { setOsConfigureWillRestore } from '../os/os-configure-gate'
+
+// L14: last-click-wins sequence for fire-and-forget selectMode. Each tile
+// click bumps the token; a stale async continuation returns before writing.
+let selectModeSeq = 0
 
 
 // CSS class names are namespaced (sidebar-ux-*) to avoid colliding with
@@ -615,6 +620,11 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     // snaps back via refreshSettingsPanel(). NEVER a static import of
     // os-mode/second-drawer-mode from here (panel tests mock
     // features/registry to avoid loading that graph).
+    //
+    // L14 (2026-09-23): last-click-wins. Each click takes a sequence token;
+    // after every await (and before each setSettings) a stale token returns
+    // so a slower earlier click cannot overwrite a later one's write.
+    const seq = ++selectModeSeq
     void (async () => {
       if (mode === effectiveMode()) {
         if (mode !== 'vanilla') return
@@ -626,15 +636,19 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       // A7 dirty guard: entering/leaving OS restores that side's saved slot
       // (shape-only check — the dialog appearing one keystroke early is safe).
       const wasOs = getSettings().osMode
+      let willRestore = false
       if (wasOs || mode === 'os') {
         try {
           const om = await import('../os/os-mode')
-          const willRestore = mode === 'os'
+          if (seq !== selectModeSeq) return
+          willRestore = mode === 'os'
             ? om.osEntrySlotHasTabs()
             : om.osExitSlotHasTabs()
           if (willRestore) {
             const sdm = await import('./second-drawer-mode')
+            if (seq !== selectModeSeq) return
             const choice = await sdm.guardConfigureDirty()
+            if (seq !== selectModeSeq) return
             if (choice === 'cancel') {
               refreshSettingsPanel() // tile snaps back (re-derive)
               return
@@ -645,11 +659,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
           dwarn('[settings-panel] mode dirty guard failed:', err)
         }
       }
+      if (seq !== selectModeSeq) return
       if (mode === 'os') {
+        // L13: tell the OS run whether the panel's shape-only restore gate
+        // fired — runOsEnable/Disable must not refresh (discard) a dirty
+        // Configure draft when willRestore was false (no dialog was shown).
+        setOsConfigureWillRestore(willRestore)
         setSettings({ osMode: true })
         return
       }
       if (mode === 'taskbar') {
+        if (wasOs) setOsConfigureWillRestore(willRestore)
         // One combined patch: the sidesChromePrefs record branch runs before
         // the OS-disable restore, so the explicit taskbar pair survives.
         setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
@@ -657,6 +677,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       }
       // Vanilla: auto-return a Top/Bottom layout to Sides (D5) and clear all
       // chrome; `chromeTouched` records the new Sides preference first.
+      if (wasOs) setOsConfigureWillRestore(willRestore)
       setSettings({
         drawerLocation: 'sides',
         osMode: false,
