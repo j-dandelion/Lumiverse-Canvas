@@ -314,13 +314,14 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
         // Persist is NOT forced here: the abort can run while `_model` is
         // still partial (or empty), and only the hasTabs-guarded commit path
         // may write. Clear the warm-restore override too — it exists only
-        // while the retry window is open. Full clear (backstop, F2): both
-        // the bootstrap-scoped slot AND any lingering run-scoped value die
-        // with the expired window; a normal OS run clears its own run slot
-        // in its finally long before this 30s deadline.
+        // while the retry window is open. Clear the BOOTSTRAP-scoped OS
+        // override (F2): it is scoped to this bootstrap's window. NEVER touch
+        // the RUN-scoped `_persistOsOverride` here (L4, 2026-09-23): a normal
+        // OS run clears its own run slot in its finally — the 30s deadline is
+        // not a reliable run-end signal, and nulling the run slot mid-run
+        // would re-route persists with the live setting.
         _persistResolvedWhilePending = false
         _persistOsBootOverride = null
-        _persistOsOverride = null
         return
       }
       const rebuilt = buildModelFromLayout(

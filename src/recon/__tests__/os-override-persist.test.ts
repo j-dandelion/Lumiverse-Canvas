@@ -23,6 +23,10 @@
 // triggered AFTER flush() still routes with the run's value (the old single
 // slot was nulled by settle here, the exact F2 defect), and (3) fall back
 // to the live setting only after setPersistOsOverride(null).
+// Scenario D (L4, 2026-09-23): a pending-layout restore whose 30s retry
+// window expires must clear ONLY the bootstrap-scoped override — never the
+// RUN-scoped slot (a normal OS run clears its own run slot in its finally;
+// the deadline is not a reliable run-end signal).
 
 ;(globalThis as any).document = {
   documentElement: {
@@ -249,6 +253,80 @@ setOsSingleLayoutSlot({ marker: 'stored-os-single' })
   assertEqual(
     cBlob3?.osSingleLayout?.marker, 'stored-os-single-c',
     'C7: osSingleLayout passes through stored once the run override is cleared',
+  )
+}
+
+// ── D (L4): pending-expiry clears only the boot override, not the run slot ──
+{
+  shutdown()
+  writes.length = 0
+  // Live says OS OFF — discriminates against the run override TRUE below.
+  hydrateSettings({ osMode: false })
+  setSingleLayoutSlot({ marker: 'stored-single-d' })
+  setOsSingleLayoutSlot({ marker: 'stored-os-single-d' })
+  const host = makeHost()
+
+  // Pending layout: loom+weaver resolve, ghost never will → armed window.
+  const pendingLayout = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'loom' },
+    secondary: { open: false, width: 420, activeTabId: 'ghost' },
+    tabOrder: ['loom', 'weaver', 'ghost'],
+    detachedTabs: [{ tabId: 'ghost', tabTitle: 'Ghost', sidebar: 'secondary' }],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+
+  // An OS-enable run is in flight: run-scoped override set at run entry.
+  setPersistOsOverride(true)
+  bootstrapFromLayout(pendingLayout, host, 'test-version', { persistWhilePending: false })
+  await flush()
+
+  // Jump past the 30s deadline, then fire a world change so enqueueHostSync
+  // hits the pending-expiry branch (which must NOT null the run slot).
+  const realNow = Date.now.bind(Date)
+  Date.now = () => realNow() + 31_000
+  try {
+    host.addTab(builtinKey('late'), 'late', 'primary')
+    await flush()
+  } finally {
+    Date.now = realNow
+  }
+
+  // A later persist during the still-open run must route with the RUN value
+  // (live OFF, run ON → OS routing: osSingleLayout carries the model).
+  writes.length = 0
+  await dispatchBatch([{ t: 'setClosed', key: WEAVER, closed: true }])
+  await flush()
+  assert(writes.length >= 1, 'D0: post-expiry persist during the run wrote a blob')
+  const dBlob = writes[writes.length - 1]
+  assert(
+    dBlob?.osSingleLayout != null
+      && Array.isArray(dBlob.osSingleLayout.tabOrder)
+      && dBlob.osSingleLayout.tabOrder.includes('weaver'),
+    'D1: pending-expiry left the RUN override intact (post-expiry write still routes OS-despite-live-OFF)',
+  )
+  assertEqual(
+    dBlob?.singleLayout?.marker, 'stored-single-d',
+    'D2: singleLayout passes through stored under the surviving run override',
+  )
+
+  // Run end: clearing the run override falls back to the LIVE setting (OFF).
+  setPersistOsOverride(null)
+  writes.length = 0
+  await dispatchBatch([{ t: 'setClosed', key: WEAVER, closed: false }])
+  await flush()
+  assert(writes.length >= 1, 'D3: post-run-end persist wrote a blob')
+  const dBlob2 = writes[writes.length - 1]
+  assert(
+    dBlob2?.singleLayout != null
+      && Array.isArray(dBlob2.singleLayout.tabOrder)
+      && dBlob2.singleLayout.marker !== 'stored-single-d',
+    'D4: after setPersistOsOverride(null) the write routes with the LIVE setting (non-OS)',
+  )
+  assertEqual(
+    dBlob2?.osSingleLayout?.marker, 'stored-os-single-d',
+    'D5: osSingleLayout passes through stored once the run override is cleared',
   )
 }
 
