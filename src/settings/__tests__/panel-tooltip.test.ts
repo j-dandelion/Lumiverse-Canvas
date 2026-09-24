@@ -152,7 +152,7 @@ describe('panel help tooltips', () => {
     help.click()
     const pop = popover()
     expect(pop).not.toBeNull()
-    expect(pop!.textContent).toContain('Puts the tab strip on the screen edge')
+    expect(pop!.textContent).toContain('Moves the tab strip from the drawer panel out to the screen edge')
     expect(help.getAttribute('aria-expanded')).toBe('true')
     expect(help.getAttribute('aria-describedby')).toBe('sidebar-ux-help-popover')
 
@@ -168,7 +168,7 @@ describe('panel help tooltips', () => {
     setSettings({ drawerLocation: 'top' })
     help.click()
     expect(popover()!.textContent).toBe(
-      'Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.',
+      'Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.',
     )
   })
 

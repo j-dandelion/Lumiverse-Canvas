@@ -199,7 +199,7 @@ describe('startButtonLocation panel row', () => {
     const row = rowByLabel(root, 'Start button location')
     expect(control(row).disabled).toBe(true)
     expect(row.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode')
+    expect(hint(row).textContent).toContain('Only used in OS mode')
   })
 
   test('enabled with OS mode on; selection reflects the stored location', () => {
@@ -207,7 +207,7 @@ describe('startButtonLocation panel row', () => {
     const root = mountPanel()
     const row = rowByLabel(root, 'Start button location')
     expect(control(row).disabled).toBe(false)
-    expect(hint(row).textContent).toContain('which drawer shows the Start button')
+    expect(hint(row).textContent).toContain('shows the Start button')
     const selected = Array.from(control(row).children as unknown as El[])
       .filter((b) => b.getAttribute('aria-checked') === 'true')
     expect(selected.length).toBe(1)
@@ -228,7 +228,7 @@ describe('startButtonLocation panel row', () => {
     setSettings({ osMode: false })
     expect(control(row).disabled).toBe(true)
     expect(row.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode')
+    expect(hint(row).textContent).toContain('Only used in OS mode')
   })
 })
 

@@ -185,7 +185,7 @@ describe('osWindowControls panel row', () => {
     const row = rowByLabel(root, 'Separate minimize and close controls')
     expect(control(row).disabled).toBe(true)
     expect(row.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode')
+    expect(hint(row).textContent).toContain('Only used in OS mode')
   })
 
   test('enabled with OS mode on; click writes the setting', () => {
@@ -194,7 +194,8 @@ describe('osWindowControls panel row', () => {
     const row = rowByLabel(root, 'Separate minimize and close controls')
     expect(control(row).disabled).toBe(false)
     expect(control(row).getAttribute('aria-checked')).toBe('true')
-    expect(hint(row).textContent).toContain('– (minimize) and X (close)')
+    expect(hint(row).textContent).toContain('minimize (–)')
+    expect(hint(row).textContent).toContain('close (X)')
 
     control(row).click()
     expect(getSettings().osWindowControls).toBe(false)
@@ -212,7 +213,7 @@ describe('osWindowControls panel row', () => {
     setSettings({ osMode: false })
     expect(control(row).disabled).toBe(true)
     expect(row.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(row).textContent).toContain('Requires OS mode')
+    expect(hint(row).textContent).toContain('Only used in OS mode')
   })
 })
 

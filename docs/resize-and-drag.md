@@ -6,7 +6,7 @@ Drag-to-resize handles on both the main and secondary drawers.
 
 ### Handle Structure
 
-Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing the content area). The settings panel UI says "4px grab handle" but the actual rendered width is 8px:
+Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing the content area):
 - `position: absolute` within the drawer
 - `cursor: col-resize`
 - `z-index: 99999`

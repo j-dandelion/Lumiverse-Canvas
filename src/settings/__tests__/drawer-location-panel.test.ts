@@ -205,7 +205,7 @@ describe('drawer location panel', () => {
     expect(control(dndRow).disabled).toBe(false)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
     expect(hideRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
-    expect(hint(moveRow).textContent).toContain('Puts the tab strip on the screen edge')
+    expect(hint(moveRow).textContent).toContain('Moves the tab strip from the drawer panel out to the screen edge')
     expect(hint(hideRow).textContent).toContain('Hides the small handle')
   })
 
@@ -226,13 +226,13 @@ describe('drawer location panel', () => {
     expect(control(moveRow).disabled).toBe(true)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
     expect(hint(moveRow).textContent).toBe(
-      'Locked while Drawer layout is Top or Bottom — the horizontal strip is already edge-anchored.',
+      'Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.',
     )
     // Hide row renders inert + checked regardless of the stored false.
     expect(control(hideRow).disabled).toBe(true)
     expect(control(hideRow).getAttribute('aria-checked')).toBe('true')
     expect(control(hideRow).classList.contains('sidebar-ux-panel-toggle-on')).toBe(true)
-    expect(hint(hideRow).textContent).toContain('Handles are always hidden')
+    expect(hint(hideRow).textContent).toContain('the full-width strip has no open/close handles')
   })
 
   test('returning to Sides restores the pre-excursion Sides flags (defaults when unset)', () => {
@@ -252,7 +252,7 @@ describe('drawer location panel', () => {
     const hideRow = rowByLabel(root, 'Hide drawer open/close buttons')
     expect(control(moveRow).disabled).toBe(false)
     expect(moveRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
-    expect(hint(moveRow).textContent).toContain('Puts the tab strip on the screen edge')
+    expect(hint(moveRow).textContent).toContain('Moves the tab strip from the drawer panel out to the screen edge')
     // Hide requires taskbar → off + disabled with the normal hint.
     expect(control(hideRow).getAttribute('aria-checked')).toBe('false')
     expect(control(hideRow).disabled).toBe(true)
@@ -312,6 +312,30 @@ describe('drawer location panel', () => {
     // Toggle rows keep the inline label + control layout.
     const toggleRow = rowByLabel(root, 'Move tab strip to outer edge')
     expect(toggleRow.classList.contains('sidebar-ux-panel-row-stacked')).toBe(false)
+  })
+
+  test('row order: Drawer mode above Main drawer side; handle rows directly above Options button location — 2026-09-23g', () => {
+    const root = mountPanel()
+    const labels = byClass(root, 'sidebar-ux-panel-row').map(
+      (row) => row.querySelector('.sidebar-ux-panel-row-label')?.textContent ?? '',
+    )
+    const idx = (label: string) => labels.indexOf(label)
+    for (const label of [
+      'Drawer layout',
+      'Drawer mode',
+      'Main drawer side',
+      'Move tab strip to outer edge',
+      'Hide drawer open/close buttons',
+      'Mirror drawer open/close buttons',
+      'Options button location',
+    ]) {
+      expect(idx(label)).toBeGreaterThanOrEqual(0)
+    }
+    expect(idx('Drawer mode')).toBeGreaterThan(idx('Drawer layout'))
+    expect(idx('Main drawer side')).toBeGreaterThan(idx('Drawer mode'))
+    expect(idx('Hide drawer open/close buttons')).toBe(idx('Move tab strip to outer edge') + 1)
+    expect(idx('Mirror drawer open/close buttons')).toBe(idx('Hide drawer open/close buttons') + 1)
+    expect(idx('Options button location')).toBe(idx('Mirror drawer open/close buttons') + 1)
   })
 })
 
