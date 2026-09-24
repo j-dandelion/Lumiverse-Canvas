@@ -9,7 +9,7 @@
 // full re-mount.
 //
 // 2026-09-19 overhaul — section structure (mirrors the user-facing layout):
-//   - Drawers / Taskbars (mode tiles + layout/side/mode + chrome + shadows)
+//   - Drawers / Taskbars (mode tiles + layout/side/mode + chrome/mirror + shadows)
 //   - Layout (chat reflow, landing reflow, tab DnD, panel resize)
 //   - Persistence (open state, drag-resize width)
 //   - Misc (slash commands, debug)
@@ -76,7 +76,7 @@ const DRAWER_MODE_HINT =
 const DRAWER_MODE_OS_MOBILE_HINT =
   'OS mode uses single-drawer mode on mobile. Disable OS mode to use the second drawer.'
 const MIRROR_COMPACT_HINT =
-  "Matches the main drawer's compact mode and vertical tab position on the second drawer."
+  "Makes the second drawer's open/close handle match the main drawer's size and vertical position."
 const MIRROR_COMPACT_LOCK_HINT =
   'Requires the second drawer. Switch Drawer mode to Dual to use it.'
 const MOVE_CONTROLS_HINT =
@@ -891,18 +891,6 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     stacked: true,
   }))
 
-  const compact = makeToggle(
-    () => getSettings().mirrorCompactPosition,
-    (v) => setSettings({ mirrorCompactPosition: v }),
-    { disabled: () => !getSettings().secondSidebarEnabled }
-  )
-  const compactRow = appendRow(drawers.group, buildSettingRow({
-    label: 'Mirror compact mode + vertical position',
-    hint: MIRROR_COMPACT_HINT,
-    control: compact.btn,
-    disabled: !getSettings().secondSidebarEnabled,
-  }))
-
   const moveControlsToOuter = makeToggle(
     () => getSettings().moveControlsToOuterEdge,
     (v) => setSettings({ moveControlsToOuterEdge: v })
@@ -972,6 +960,18 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     hint: HIDE_BUTTONS_HINT,
     control: hideDrawerTabToggle.btn,
     disabled: !getSettings().taskbarMode,
+  }))
+
+  const compact = makeToggle(
+    () => getSettings().mirrorCompactPosition,
+    (v) => setSettings({ mirrorCompactPosition: v }),
+    { disabled: () => !getSettings().secondSidebarEnabled }
+  )
+  const compactRow = appendRow(drawers.group, buildSettingRow({
+    label: 'Mirror drawer open/close buttons',
+    hint: MIRROR_COMPACT_HINT,
+    control: compact.btn,
+    disabled: !getSettings().secondSidebarEnabled,
   }))
 
   const osWindowControls = makeToggle(
@@ -1164,7 +1164,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     drawerModeRow.setDisabled(osMobile)
     drawerModeRow.setHint(osMobile ? DRAWER_MODE_OS_MOBILE_HINT : DRAWER_MODE_HINT)
 
-    // Mirror compact: gated by the second-drawer master toggle.
+    // Mirror open/close handle: gated by the second-drawer master toggle.
     {
       const d = !s.secondSidebarEnabled
       compact.btn.disabled = d

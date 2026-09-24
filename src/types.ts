@@ -64,7 +64,7 @@ export interface CanvasSettings {
   /** Drag-to-resize handle on both drawers (main + secondary). */
   resizeSidebars?: boolean
 
-  /** Mirror the main drawer's compact mode + vertical position. */
+  /** Mirror the main drawer's open/close handle (size + vertical position). */
   mirrorCompactPosition?: boolean
 
   // showTabLabels was removed — the second drawer always follows the
