@@ -9950,18 +9950,22 @@ function injectModalStyles() {
       color: var(--lumiverse-text-dim, #888);
     }
 
-    /* ── Toggle switch ── */
+    /* ── Toggle switch (unified Canvas switch spec — shared with the
+       settings panel: 36×20 border-box track, 14px knob inset 2px, 16px
+       travel; knob colors off = text, on = primary-contrast) ── */
     .canvas-configure-tabs-toggle {
       position: relative;
       flex-shrink: 0;
+      box-sizing: border-box;
       width: 36px;
       height: 20px;
       padding: 0;
-      border: none;
-      border-radius: 10px;
-      background: var(--lumiverse-border, #555);
+      border: 1px solid var(--lumiverse-border, #555);
+      border-radius: 999px;
+      background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.3));
       cursor: pointer;
-      transition: background var(--lumiverse-transition-fast, 120ms ease);
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease);
       touch-action: manipulation;
     }
     .canvas-configure-tabs-toggle::after {
@@ -9969,21 +9973,29 @@ function injectModalStyles() {
       position: absolute;
       top: 2px;
       left: 2px;
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
-      background: #fff;
-      transition: transform var(--lumiverse-transition-fast, 120ms ease);
+      background: var(--lumiverse-text);
+      transition: transform var(--lumiverse-transition-fast, 150ms ease),
+        background var(--lumiverse-transition-fast, 150ms ease);
+      transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .canvas-configure-tabs-toggle.toggle-on {
       background: var(--lumiverse-primary, #4a9eff);
+      border-color: var(--lumiverse-primary, #4a9eff);
     }
     .canvas-configure-tabs-toggle.toggle-on::after {
       transform: translateX(16px);
+      background: var(--lumiverse-primary-contrast, #fff);
     }
     .canvas-configure-tabs-toggle:disabled {
-      opacity: 0.4;
+      opacity: 0.55;
       cursor: not-allowed;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .canvas-configure-tabs-toggle,
+      .canvas-configure-tabs-toggle::after { transition: none; }
     }
 
     /* ── Empty column hint ── */
@@ -22572,32 +22584,39 @@ function injectPanelStyles() {
       padding: 2px 0 0;
       margin: 0;
     }
+    /* Host panel h2 (ProductivitySettings.module.css) — 16px/650. */
     .sidebar-ux-panel-header-title {
       margin: 0;
-      font-size: calc(17px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
+      font-size: calc(16px * var(--lumiverse-font-scale, 1));
+      font-weight: 650;
       line-height: 1.2;
       color: var(--lumiverse-text);
     }
+    /* Host .cardMeta / small — 11px text-dim. */
     .sidebar-ux-panel-header-sub {
       margin-top: 3px;
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.4;
-      color: var(--lumiverse-text-muted);
+      color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
     }
     .sidebar-ux-panel-section { min-width: 0; }
+    /* Host .subsectionTitle (SettingsModal.module.css) verbatim. */
     .sidebar-ux-panel-section-title {
       margin: 0 0 8px 2px;
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--lumiverse-text-muted);
+      letter-spacing: 0.05em;
+      color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
     }
+    /* Trough-on-card: the Spindle extension shell card is already
+       --lumiverse-fill-subtle, so groups step to --lumiverse-fill (host
+       .segmented trough relationship) and the mode tiles stay fill-subtle
+       to pop off the trough. */
     .sidebar-ux-panel-group {
-      border: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
-      border-radius: var(--lumiverse-radius-md, 10px);
-      background: color-mix(in srgb, var(--lumiverse-text) 2.5%, transparent);
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius, 10px);
+      background: var(--lumiverse-fill, color-mix(in srgb, var(--lumiverse-text) 4%, transparent));
       overflow: hidden;
     }
     .sidebar-ux-panel-row {
@@ -22607,15 +22626,17 @@ function injectPanelStyles() {
       gap: 14px;
       padding: 11px 13px;
       min-width: 0;
-      transition: background 0.15s ease, opacity 0.15s ease;
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        opacity var(--lumiverse-transition-fast, 150ms ease);
     }
-    .sidebar-ux-panel-row + .sidebar-ux-panel-row {
-      border-top: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
+    .sidebar-ux-panel-row + .sidebar-ux-panel-row,
+    .sidebar-ux-panel-modes-wrap + .sidebar-ux-panel-row {
+      border-top: 1px solid var(--lumiverse-border);
     }
     .sidebar-ux-panel-row:hover {
-      background: color-mix(in srgb, var(--lumiverse-text) 2%, transparent);
+      background: var(--lumiverse-fill-hover, var(--lumiverse-fill-subtle));
     }
-    .sidebar-ux-panel-row-disabled { opacity: 0.45; }
+    .sidebar-ux-panel-row-disabled { opacity: 0.55; }
     .sidebar-ux-panel-row-text { flex: 1 1 auto; min-width: 0; }
     .sidebar-ux-panel-row-label-head {
       display: flex;
@@ -22648,6 +22669,7 @@ function injectPanelStyles() {
     }
     /* Help button */
     .sidebar-ux-panel-help {
+      position: relative;
       flex-shrink: 0;
       width: 16px;
       height: 16px;
@@ -22663,7 +22685,9 @@ function injectPanelStyles() {
       font-weight: 700;
       line-height: 1;
       cursor: pointer;
-      transition: all 0.15s ease;
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease),
+        color var(--lumiverse-transition-fast, 150ms ease);
     }
     .sidebar-ux-panel-help:hover,
     .sidebar-ux-panel-help[aria-expanded="true"] {
@@ -22675,20 +22699,29 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
-    /* Mode tiles */
-    .sidebar-ux-panel-modes-wrap {
-      position: relative;
+    /* Mode tiles — host .headerRow/.label (SpindleSettings) eyebrow + help
+       line above the grid. (The old absolutely-positioned help chip sat on
+       top of the selected tile's corner dot.) */
+    .sidebar-ux-panel-modes-wrap { min-width: 0; }
+    .sidebar-ux-panel-modes-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 13px 0;
     }
-    .sidebar-ux-panel-modes-help {
-      position: absolute;
-      top: 8px;
-      right: 8px;
+    .sidebar-ux-panel-modes-eyebrow {
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
     }
     .sidebar-ux-panel-modes {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 8px;
-      padding: 12px 13px 10px;
+      padding: 10px 13px 12px;
       margin-bottom: 0;
     }
     .sidebar-ux-panel-mode {
@@ -22706,12 +22739,17 @@ function injectPanelStyles() {
       cursor: pointer;
       text-align: center;
       font-family: inherit;
-      transition: all 0.15s ease;
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease),
+        color var(--lumiverse-transition-fast, 150ms ease);
       position: relative;
     }
     .sidebar-ux-panel-mode:hover:not(:disabled) {
       border-color: var(--lumiverse-border-hover);
       color: var(--lumiverse-text);
+    }
+    .sidebar-ux-panel-mode:not(.sidebar-ux-panel-mode-selected):active:not(:disabled) {
+      background: var(--lumiverse-fill-hover, var(--lumiverse-fill-subtle));
     }
     .sidebar-ux-panel-mode-icon {
       display: inline-flex;
@@ -22727,9 +22765,9 @@ function injectPanelStyles() {
       color: var(--lumiverse-text);
     }
     .sidebar-ux-panel-mode-caption {
-      font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.25;
-      color: var(--lumiverse-text-muted);
+      color: var(--lumiverse-text-dim, var(--lumiverse-text-muted));
     }
     .sidebar-ux-panel-mode-selected {
       border-color: var(--lumiverse-primary);
@@ -22753,11 +22791,16 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
-    .sidebar-ux-panel-mode:disabled { opacity: 0.5; cursor: not-allowed; }
-    /* Toggle */
+    .sidebar-ux-panel-mode:disabled { opacity: 0.55; cursor: not-allowed; }
+    /* Toggle — the one Canvas-invented binary control (unified spec shared
+       with Configure Tabs): 36x20 border-box track, 14px knob inset 2px,
+       16px travel. Knob colors: off = text on fill-strong, on =
+       primary-contrast on primary (engine-emitted token — keep the #fff
+       fallback). */
     .sidebar-ux-panel-toggle {
       flex-shrink: 0;
       position: relative;
+      box-sizing: border-box;
       width: 36px;
       height: 20px;
       border-radius: 999px;
@@ -22765,7 +22808,8 @@ function injectPanelStyles() {
       border: 1px solid var(--lumiverse-border);
       cursor: pointer;
       padding: 0;
-      transition: background 0.15s ease, border-color 0.15s ease;
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease);
     }
     .sidebar-ux-panel-toggle-knob {
       position: absolute;
@@ -22775,7 +22819,9 @@ function injectPanelStyles() {
       height: 14px;
       border-radius: 50%;
       background: var(--lumiverse-text);
-      transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.15s ease;
+      transition: transform var(--lumiverse-transition-fast, 150ms ease),
+        background var(--lumiverse-transition-fast, 150ms ease);
+      transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .sidebar-ux-panel-toggle-on {
       background: var(--lumiverse-primary);
@@ -22783,55 +22829,61 @@ function injectPanelStyles() {
     }
     .sidebar-ux-panel-toggle-on .sidebar-ux-panel-toggle-knob {
       transform: translateX(16px);
-      background: white;
+      background: var(--lumiverse-primary-contrast, #fff);
     }
     .sidebar-ux-panel-toggle:focus-visible {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
-    /* Host-style segmented control (Lumiverse SettingsModal .segmented). */
+    /* Host .segmented (ProductivitySettings.module.css) verbatim chassis:
+       2px-gap pill-in-trough (fill trough, 6px inner buttons), per-button
+       ellipsis, 36px min-height, primary-010 active. Radiogroup semantics
+       stay ours (render.ts). */
     .sidebar-ux-panel-segmented {
       display: flex;
       flex-shrink: 0;
       min-width: 150px;
       max-width: 100%;
+      gap: 2px;
+      padding: 2px;
       border-radius: 8px;
-      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
+      background: var(--lumiverse-fill, var(--lumiverse-fill-subtle));
       border: 1px solid var(--lumiverse-border);
-      overflow: hidden;
     }
     .sidebar-ux-panel-segmented-btn {
       flex: 1 1 0;
-      padding: 7px 10px;
+      min-width: 0;
+      min-height: 36px;
+      padding: 7px 12px;
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
       font-family: inherit;
       text-align: center;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       color: var(--lumiverse-text-muted);
       background: transparent;
-      border: none;
+      border: 0;
+      border-radius: 6px;
       cursor: pointer;
-      transition: all 0.15s ease;
-    }
-    .sidebar-ux-panel-segmented-btn:not(:last-child) {
-      border-right: 1px solid var(--lumiverse-border);
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        color var(--lumiverse-transition-fast, 150ms ease);
     }
     .sidebar-ux-panel-segmented-btn:hover:not(:disabled) {
       color: var(--lumiverse-text);
-      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
+      background: var(--lumiverse-fill-subtle);
     }
     .sidebar-ux-panel-segmented-btn-active {
-      background: var(--lumiverse-primary-020, rgba(255,255,255,0.08));
+      background: var(--lumiverse-primary-010, var(--lumiverse-primary-020));
       color: var(--lumiverse-primary);
     }
     .sidebar-ux-panel-segmented-btn:disabled {
-      opacity: 0.5;
+      opacity: 0.55;
       cursor: not-allowed;
     }
     .sidebar-ux-panel-segmented-btn:focus-visible {
       outline: 2px solid var(--lumiverse-primary);
-      outline-offset: -2px;
+      outline-offset: 2px;
     }
     /* Help popover (body-level, fixed) */
     .sidebar-ux-help-popover {
@@ -22840,13 +22892,13 @@ function injectPanelStyles() {
       max-width: 260px;
       padding: 8px 10px;
       border: 1px solid var(--lumiverse-border);
-      border-radius: 10px;
-      background: var(--lumiverse-bg-elevated, var(--lumiverse-bg-opaque, var(--lumiverse-surface, #1a1a1e)));
+      border-radius: var(--lumiverse-radius-md, 10px);
+      background: var(--lumiverse-bg-elevated, var(--lumiverse-surface, #1a1a1e));
       color: var(--lumiverse-text);
       box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0,0,0,0.4));
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
-      animation: sidebar-ux-help-in 120ms ease;
+      animation: sidebar-ux-help-in var(--lumiverse-transition-fast, 150ms ease);
     }
     [data-glass] .sidebar-ux-help-popover {
       background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated, #1a1a1e));
@@ -22862,7 +22914,10 @@ function injectPanelStyles() {
       .sidebar-ux-panel-toggle,
       .sidebar-ux-panel-toggle-knob,
       .sidebar-ux-panel-mode,
-      .sidebar-ux-panel-help { transition: none; }
+      .sidebar-ux-panel-help,
+      .sidebar-ux-panel-segmented,
+      .sidebar-ux-panel-segmented-btn { transition: none; }
+      .sidebar-ux-panel-toggle-knob { transition-timing-function: linear; }
     }
     /* Narrow layouts: stack the control under the label. */
     @media (max-width: 600px), (pointer: coarse) {
@@ -22874,9 +22929,23 @@ function injectPanelStyles() {
       .sidebar-ux-panel-row > .sidebar-ux-panel-segmented { min-width: 0; width: 100%; }
       .sidebar-ux-panel-row > .sidebar-ux-panel-toggle { align-self: flex-end; }
       .sidebar-ux-panel-help { width: 20px; height: 20px; }
-      .sidebar-ux-panel-mode-caption { display: none; }
       .sidebar-ux-panel-sub { padding-left: 22px; }
       .sidebar-ux-panel-sub::before { left: 9px; }
+      /* Invisible hit expanders: the 16/20px help chip and the 36x20
+         toggle are under the 24px minimum target. Inset stays small so
+         the expander cannot steal the neighboring row's hits and barely
+         clips at group edges (overflow:hidden). */
+      .sidebar-ux-panel-toggle::before,
+      .sidebar-ux-panel-help::before {
+        content: '';
+        position: absolute;
+        inset: -4px;
+      }
+    }
+    /* Tile captions only drop on phone-width viewports — a coarse tablet
+       in portrait still needs the mode differentiators. */
+    @media (max-width: 420px) {
+      .sidebar-ux-panel-mode-caption { display: none; }
     }
   `);
 }
@@ -22907,7 +22976,7 @@ function buildSettingsPanelDOM() {
   const section = (title) => {
     const sec = document.createElement("div");
     sec.className = "sidebar-ux-panel-section";
-    const h = document.createElement("h4");
+    const h = document.createElement("h3");
     h.className = "sidebar-ux-panel-section-title";
     h.textContent = title;
     sec.appendChild(h);
@@ -22986,14 +23055,19 @@ function buildSettingsPanelDOM() {
     })();
   };
   const modes = buildTileGroup(MODE_TILE_DEFS, effectiveMode(), (v) => selectMode(v), { allowReselect: true });
-  modes.root.setAttribute("aria-label", "Drawer chrome mode");
+  modes.root.setAttribute("aria-label", "Chrome mode");
   {
     const modesWrap = document.createElement("div");
     modesWrap.className = "sidebar-ux-panel-modes-wrap";
+    const modesHeader = document.createElement("div");
+    modesHeader.className = "sidebar-ux-panel-modes-header";
+    const modesEyebrow = document.createElement("span");
+    modesEyebrow.className = "sidebar-ux-panel-modes-eyebrow";
+    modesEyebrow.textContent = "Chrome mode";
+    modesHeader.appendChild(modesEyebrow);
+    modesHeader.appendChild(buildHelpTip("Chrome mode", () => MODE_TILES_HINT));
+    modesWrap.appendChild(modesHeader);
     modesWrap.appendChild(modes.root);
-    const modesHelp = buildHelpTip("Chrome mode", () => MODE_TILES_HINT);
-    modesHelp.classList.add("sidebar-ux-panel-modes-help");
-    modesWrap.appendChild(modesHelp);
     drawers.group.appendChild(modesWrap);
   }
   const drawerLocation = buildSegmentedControl([
