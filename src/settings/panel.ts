@@ -282,21 +282,6 @@ function injectPanelStyles() {
     }
     /* Hint text is the popover's source only — never painted inline. */
     .sidebar-ux-panel-row-hint { display: none; }
-    /* Sub-rows (second-drawer / OS-scoped options) read as children of the
-       row above them. */
-    .sidebar-ux-panel-sub {
-      padding-left: 26px;
-      position: relative;
-    }
-    .sidebar-ux-panel-sub::before {
-      content: '';
-      position: absolute;
-      left: 12px;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      background: var(--lumiverse-primary-020);
-    }
     /* Help button */
     .sidebar-ux-panel-help {
       position: relative;
@@ -583,8 +568,6 @@ function injectPanelStyles() {
       .sidebar-ux-panel-row > .sidebar-ux-panel-segmented { min-width: 0; width: 100%; }
       .sidebar-ux-panel-row > .sidebar-ux-panel-toggle { align-self: flex-end; }
       .sidebar-ux-panel-help { width: 20px; height: 20px; }
-      .sidebar-ux-panel-sub { padding-left: 22px; }
-      .sidebar-ux-panel-sub::before { left: 9px; }
       /* Invisible hit expanders: the 16/20px help chip and the 36x20
          toggle are under the 24px minimum target. Inset stays small so
          the expander cannot steal the neighboring row's hits and barely
@@ -618,8 +601,6 @@ function injectPanelStyles() {
       }
       .sidebar-ux-panel-row > .sidebar-ux-panel-toggle { align-self: flex-end; }
       .sidebar-ux-panel-help { width: 20px; height: 20px; }
-      .sidebar-ux-panel-sub { padding-left: 22px; }
-      .sidebar-ux-panel-sub::before { left: 9px; }
     }
     /* Below this, even a full-width 3-option control cannot show "Left
        drawer"/"Right drawer"; drop the shared " drawer" suffix (the row
@@ -714,8 +695,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     return { sec, group }
   }
 
-  const appendRow = (group: HTMLElement, handle: SettingRowHandle, sub = false): SettingRowHandle => {
-    if (sub) handle.row.classList.add('sidebar-ux-panel-sub')
+  const appendRow = (group: HTMLElement, handle: SettingRowHandle): SettingRowHandle => {
     group.appendChild(handle.row)
     return handle
   }
@@ -921,7 +901,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     hint: MIRROR_COMPACT_HINT,
     control: compact.btn,
     disabled: !getSettings().secondSidebarEnabled,
-  }), true)
+  }))
 
   const moveControlsToOuter = makeToggle(
     () => getSettings().moveControlsToOuterEdge,
@@ -980,7 +960,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     hint: START_EDGE_HINT,
     control: startEdge.btn,
     disabled: !isHorizontalStrip(),
-  }), true)
+  }))
 
   const hideDrawerTabToggle = makeToggle(
     () => getSettings().hideDrawerOpenCloseButtons,
