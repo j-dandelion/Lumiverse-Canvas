@@ -477,18 +477,22 @@ function injectModalStyles(): void {
       color: var(--lumiverse-text-dim, #888);
     }
 
-    /* ── Toggle switch ── */
+    /* ── Toggle switch (unified Canvas switch spec — shared with the
+       settings panel: 36×20 border-box track, 14px knob inset 2px, 16px
+       travel; knob colors off = text, on = primary-contrast) ── */
     .canvas-configure-tabs-toggle {
       position: relative;
       flex-shrink: 0;
+      box-sizing: border-box;
       width: 36px;
       height: 20px;
       padding: 0;
-      border: none;
-      border-radius: 10px;
-      background: var(--lumiverse-border, #555);
+      border: 1px solid var(--lumiverse-border, #555);
+      border-radius: 999px;
+      background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.3));
       cursor: pointer;
-      transition: background var(--lumiverse-transition-fast, 120ms ease);
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease);
       touch-action: manipulation;
     }
     .canvas-configure-tabs-toggle::after {
@@ -496,21 +500,29 @@ function injectModalStyles(): void {
       position: absolute;
       top: 2px;
       left: 2px;
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
-      background: #fff;
-      transition: transform var(--lumiverse-transition-fast, 120ms ease);
+      background: var(--lumiverse-text);
+      transition: transform var(--lumiverse-transition-fast, 150ms ease),
+        background var(--lumiverse-transition-fast, 150ms ease);
+      transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .canvas-configure-tabs-toggle.toggle-on {
       background: var(--lumiverse-primary, #4a9eff);
+      border-color: var(--lumiverse-primary, #4a9eff);
     }
     .canvas-configure-tabs-toggle.toggle-on::after {
       transform: translateX(16px);
+      background: var(--lumiverse-primary-contrast, #fff);
     }
     .canvas-configure-tabs-toggle:disabled {
-      opacity: 0.4;
+      opacity: 0.55;
       cursor: not-allowed;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .canvas-configure-tabs-toggle,
+      .canvas-configure-tabs-toggle::after { transition: none; }
     }
 
     /* ── Empty column hint ── */
