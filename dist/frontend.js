@@ -22321,6 +22321,8 @@ function buildHelpTip(label, getText) {
 function buildSettingRow(args) {
   const row = document.createElement("div");
   row.className = "sidebar-ux-panel-row";
+  if (args.stacked)
+    row.classList.add("sidebar-ux-panel-row-stacked");
   if (args.disabled)
     row.classList.add("sidebar-ux-panel-row-disabled");
   const text = document.createElement("div");
@@ -22383,7 +22385,16 @@ function buildSegmentedControl(options, value, onChange) {
     btn.type = "button";
     btn.className = "sidebar-ux-panel-segmented-btn";
     btn.setAttribute("role", "radio");
-    btn.textContent = opt.label;
+    if (opt.suffix && opt.label.endsWith(opt.suffix)) {
+      btn.setAttribute("aria-label", opt.label);
+      btn.textContent = opt.label.slice(0, opt.label.length - opt.suffix.length);
+      const suffixEl = document.createElement("span");
+      suffixEl.className = "sidebar-ux-panel-seg-label-suffix";
+      suffixEl.textContent = opt.suffix;
+      btn.appendChild(suffixEl);
+    } else {
+      btn.textContent = opt.label;
+    }
     btn.addEventListener("click", () => {
       if (btn.disabled)
         return;
@@ -22579,6 +22590,11 @@ function injectPanelStyles() {
       flex-direction: column;
       gap: 20px;
       min-width: 0;
+      /* Width-true container: the drawer is drag-resizable at ANY viewport
+         width, so viewport media queries alone cannot detect a narrow
+         drawer (see the @container blocks at the end of the sheet). */
+      container-type: inline-size;
+      container-name: canvas-settings;
     }
     .sidebar-ux-panel-header {
       padding: 2px 0 0;
@@ -22637,7 +22653,11 @@ function injectPanelStyles() {
       background: var(--lumiverse-fill-hover, var(--lumiverse-fill-subtle));
     }
     .sidebar-ux-panel-row-disabled { opacity: 0.55; }
-    .sidebar-ux-panel-row-text { flex: 1 1 auto; min-width: 0; }
+    /* Inline rows (toggles): the label column takes only what it needs and
+       may shrink (wrapping); it must NOT grow, or it would soak up the free
+       space the control needs (that pushed controls against the right edge
+       and clipped their longest option — "Bot…"). */
+    .sidebar-ux-panel-row-text { flex: 0 1 auto; min-width: 0; }
     .sidebar-ux-panel-row-label-head {
       display: flex;
       align-items: center;
@@ -22835,27 +22855,30 @@ function injectPanelStyles() {
       outline: 2px solid var(--lumiverse-primary);
       outline-offset: 2px;
     }
-    /* Host .segmented (ProductivitySettings.module.css) verbatim chassis:
-       2px-gap pill-in-trough (fill trough, 6px inner buttons), per-button
-       ellipsis, 36px min-height, primary-010 active. Radiogroup semantics
-       stay ours (render.ts). */
+    /* Segmented control — REVERTED to the pre-refinement Canvas skin by user
+       preference (flat cells + hairline dividers, 12px/600, primary-020
+       active). The host .segmented pill-in-trough parity is deliberately
+       NOT applied here; only the motion token + ellipsis fallback are kept
+       from the 2026-09-23 pass. Radiogroup semantics stay ours (render.ts).
+       The control lives in STACKED rows since 2026-09-23d (label above, full
+       width below), so every option gets the whole row width; the flex rules
+       below keep it usable if it is ever placed inline again. */
     .sidebar-ux-panel-segmented {
       display: flex;
-      flex-shrink: 0;
-      min-width: 150px;
+      flex: 1 1 auto;
+      min-width: 0;
       max-width: 100%;
-      gap: 2px;
-      padding: 2px;
       border-radius: 8px;
-      background: var(--lumiverse-fill, var(--lumiverse-fill-subtle));
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
       border: 1px solid var(--lumiverse-border);
+      overflow: hidden;
     }
     .sidebar-ux-panel-segmented-btn {
       flex: 1 1 0;
       min-width: 0;
-      min-height: 36px;
-      padding: 7px 12px;
+      padding: 7px 10px;
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
       font-family: inherit;
       text-align: center;
       white-space: nowrap;
@@ -22864,17 +22887,19 @@ function injectPanelStyles() {
       color: var(--lumiverse-text-muted);
       background: transparent;
       border: 0;
-      border-radius: 6px;
       cursor: pointer;
       transition: background var(--lumiverse-transition-fast, 150ms ease),
         color var(--lumiverse-transition-fast, 150ms ease);
     }
+    .sidebar-ux-panel-segmented-btn:not(:last-child) {
+      border-right: 1px solid var(--lumiverse-border);
+    }
     .sidebar-ux-panel-segmented-btn:hover:not(:disabled) {
       color: var(--lumiverse-text);
-      background: var(--lumiverse-fill-subtle);
+      background: var(--lumiverse-fill-subtle, rgba(0,0,0,0.15));
     }
     .sidebar-ux-panel-segmented-btn-active {
-      background: var(--lumiverse-primary-010, var(--lumiverse-primary-020));
+      background: var(--lumiverse-primary-020, rgba(255,255,255,0.08));
       color: var(--lumiverse-primary);
     }
     .sidebar-ux-panel-segmented-btn:disabled {
@@ -22883,7 +22908,26 @@ function injectPanelStyles() {
     }
     .sidebar-ux-panel-segmented-btn:focus-visible {
       outline: 2px solid var(--lumiverse-primary);
-      outline-offset: 2px;
+      outline-offset: -2px;
+    }
+    /* Stacked segmented rows: label on top, control full width below — the
+       host SettingsModal .field pattern (Chat → Content Width). Full-width
+       buttons get real room for their longest option instead of sharing the
+       row with the label column. The label takes the host .fieldLabel
+       treatment (12px text-muted). Sits after the segmented base rules so
+       the source pins keep matching the base block first. */
+    .sidebar-ux-panel-row-stacked {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+    .sidebar-ux-panel-row-stacked .sidebar-ux-panel-row-label {
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      color: var(--lumiverse-text-muted);
+    }
+    .sidebar-ux-panel-row-stacked > .sidebar-ux-panel-segmented {
+      width: 100%;
+      min-width: 0;
     }
     /* Help popover (body-level, fixed) */
     .sidebar-ux-help-popover {
@@ -22946,6 +22990,32 @@ function injectPanelStyles() {
        in portrait still needs the mode differentiators. */
     @media (max-width: 420px) {
       .sidebar-ux-panel-mode-caption { display: none; }
+    }
+    /* Width-true narrow-panel layout. A viewport media query cannot see a
+       narrow drawer on a wide screen, which left segmented controls squeezed
+       to the right and ellipsized ("Left Draw…" / "Bot…"). When the PANEL is
+       narrow, stack the control under its label and give segmented controls
+       the full row width. */
+    @container canvas-settings (max-width: 420px) {
+      .sidebar-ux-panel-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 9px;
+      }
+      .sidebar-ux-panel-row > .sidebar-ux-panel-segmented {
+        min-width: 0;
+        width: 100%;
+      }
+      .sidebar-ux-panel-row > .sidebar-ux-panel-toggle { align-self: flex-end; }
+      .sidebar-ux-panel-help { width: 20px; height: 20px; }
+      .sidebar-ux-panel-sub { padding-left: 22px; }
+      .sidebar-ux-panel-sub::before { left: 9px; }
+    }
+    /* Below this, even a full-width 3-option control cannot show "Left
+       drawer"/"Right drawer"; drop the shared " drawer" suffix (the row
+       label + aria-label + ? hint keep the full meaning). */
+    @container canvas-settings (max-width: 300px) {
+      .sidebar-ux-panel-seg-label-suffix { display: none; }
     }
   `);
 }
@@ -23079,7 +23149,8 @@ function buildSettingsPanelDOM() {
   const drawerLocationRow = appendRow(drawers.group, buildSettingRow({
     label: "Drawer layout",
     hint: DRAWER_LAYOUT_HINT,
-    control: drawerLocation.root
+    control: drawerLocation.root,
+    stacked: true
   }));
   const mainSide = buildSegmentedControl([
     { value: "left", label: "Left" },
@@ -23104,7 +23175,8 @@ function buildSettingsPanelDOM() {
   const mainSideRow = appendRow(drawers.group, buildSettingRow({
     label: "Main drawer side",
     hint: MAIN_SIDE_HINT,
-    control: mainSide.root
+    control: mainSide.root,
+    stacked: true
   }));
   const drawerMode = buildSegmentedControl([
     { value: "single", label: "Single" },
@@ -23121,7 +23193,8 @@ function buildSettingsPanelDOM() {
   const drawerModeRow = appendRow(drawers.group, buildSettingRow({
     label: "Drawer mode",
     hint: DRAWER_MODE_HINT,
-    control: drawerMode.root
+    control: drawerMode.root,
+    stacked: true
   }));
   const compact = makeToggle(() => getSettings().mirrorCompactPosition, (v) => setSettings({ mirrorCompactPosition: v }), { disabled: () => !getSettings().secondSidebarEnabled });
   const compactRow = appendRow(drawers.group, buildSettingRow({
@@ -23137,8 +23210,8 @@ function buildSettingsPanelDOM() {
     control: moveControlsToOuter.btn
   }));
   const optionsLocation = buildSegmentedControl([
-    { value: "left", label: "Left drawer" },
-    { value: "right", label: "Right drawer" },
+    { value: "left", label: "Left drawer", suffix: " drawer" },
+    { value: "right", label: "Right drawer", suffix: " drawer" },
     { value: "both", label: "Both" }
   ], displayChromeSide(getSettings().optionsButtonLocation, safeMainSide()), (v) => setSettings({ optionsButtonLocation: v }));
   optionsLocation.root.setAttribute("aria-label", "Options button location");
@@ -23146,11 +23219,12 @@ function buildSettingsPanelDOM() {
   const optionsLocationRow = appendRow(drawers.group, buildSettingRow({
     label: "Options button location",
     hint: OPTIONS_LOCATION_HINT,
-    control: optionsLocation.root
+    control: optionsLocation.root,
+    stacked: true
   }));
   const startLocation = buildSegmentedControl([
-    { value: "left", label: "Left drawer" },
-    { value: "right", label: "Right drawer" },
+    { value: "left", label: "Left drawer", suffix: " drawer" },
+    { value: "right", label: "Right drawer", suffix: " drawer" },
     { value: "both", label: "Both" }
   ], displayChromeSide(getSettings().startButtonLocation, safeMainSide()), (v) => setSettings({ startButtonLocation: v }));
   startLocation.root.setAttribute("aria-label", "Start button location");
@@ -23158,7 +23232,8 @@ function buildSettingsPanelDOM() {
     label: "Start button location",
     hint: START_LOCATION_HINT,
     control: startLocation.root,
-    disabled: !getSettings().osMode
+    disabled: !getSettings().osMode,
+    stacked: true
   }));
   const startEdge = makeToggle(() => getSettings().startButtonAlwaysOnScreenEdge, (v) => setSettings({ startButtonAlwaysOnScreenEdge: v }));
   const startEdgeRow = appendRow(drawers.group, buildSettingRow({
