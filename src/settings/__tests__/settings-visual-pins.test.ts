@@ -13,6 +13,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 
 const panelSrc = readFileSync(join(process.cwd(), 'src/settings/panel.ts'), 'utf8')
+const renderSrc = readFileSync(join(process.cwd(), 'src/settings/render.ts'), 'utf8')
 const configureSrc = readFileSync(
   join(process.cwd(), 'src/tabs/configure-modal.tsx'),
   'utf8',
@@ -35,38 +36,38 @@ const coarseBlock = coarseStart >= 0 ? sheet.slice(coarseStart, c420Start < 0 ? 
 /** The phone-width caption block. */
 const c420Block = c420Start >= 0 ? sheet.slice(c420Start) : ''
 
-describe('settings visual pins — host .segmented chassis', () => {
-  test('trough is the host pill-in-trough (gap 2px, padding 2px, fill, no clipping)', () => {
+describe('settings visual pins — Canvas segmented skin (reverted by preference)', () => {
+  test('flat-cell trough: fill-subtle, clipping, no host pill gap/padding', () => {
     const trough = sheet.match(/\.sidebar-ux-panel-segmented\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(trough).toContain('gap: 2px')
-    expect(trough).toContain('padding: 2px')
-    expect(trough).toContain('background: var(--lumiverse-fill,')
+    expect(trough).toContain('background: var(--lumiverse-fill-subtle,')
     expect(trough).toContain('border: 1px solid var(--lumiverse-border)')
     expect(trough).toContain('border-radius: 8px')
-    expect(trough).not.toContain('overflow: hidden')
+    expect(trough).toContain('overflow: hidden')
+    expect(trough).not.toContain('gap: 2px')
+    expect(trough).not.toContain('padding: 2px')
   })
 
-  test('buttons: ellipsis + host min-height, no hairline dividers', () => {
+  test('buttons: 12px/600, 7px 10px padding, ellipsis fallback', () => {
     const btn = sheet.match(/\.sidebar-ux-panel-segmented-btn\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(btn).toContain('font-size: calc(12px *')
+    expect(btn).toContain('font-weight: 600')
+    expect(btn).toContain('padding: 7px 10px')
     expect(btn).toContain('text-overflow: ellipsis')
-    expect(btn).toContain('overflow: hidden')
-    expect(btn).toContain('white-space: nowrap')
-    expect(btn).toContain('min-height: 36px')
-    expect(btn).toContain('border-radius: 6px')
-    // Host buttons set no font-weight (inherit) — 600 would be a drift.
-    expect(btn).not.toContain('font-weight')
+    expect(btn).not.toContain('min-height: 36px')
+    expect(btn).not.toContain('border-radius: 6px')
   })
 
-  test('active = host primary-010; focus ring is uniform outline-offset 2px', () => {
+  test('active = primary-020; inset focus ring; hairline divider restored', () => {
     const active = sheet.match(/\.sidebar-ux-panel-segmented-btn-active\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(active).toContain('background: var(--lumiverse-primary-010,')
+    expect(active).toContain('background: var(--lumiverse-primary-020,')
     expect(active).toContain('color: var(--lumiverse-primary)')
-    expect(sheet).not.toContain('outline-offset: -2px')
     expect(
-      sheet.match(/\.sidebar-ux-panel-segmented-btn:focus-visible\s*\{[^}]*outline-offset: 2px/),
+      sheet.match(
+        /\.sidebar-ux-panel-segmented-btn:focus-visible\s*\{[^}]*outline-offset: -2px/,
+      ),
     ).toBeTruthy()
-    // The old divider language is gone.
-    expect(sheet).not.toContain('border-right: 1px solid var(--lumiverse-border)')
+    expect(sheet).toContain('.sidebar-ux-panel-segmented-btn:not(:last-child)')
+    expect(sheet).toContain('border-right: 1px solid var(--lumiverse-border)')
   })
 })
 
@@ -219,5 +220,75 @@ describe('settings visual pins — responsive + touch (P2-14/16)', () => {
         /\.sidebar-ux-panel-mode:not\(\.sidebar-ux-panel-mode-selected\):active:not\(:disabled\)/,
       ),
     ).toBeTruthy()
+  })
+})
+
+describe('settings visual pins — stacked segmented rows (2026-09-23d)', () => {
+  test('row stacks the control under the label (host .field pattern)', () => {
+    const row = sheet.match(/\.sidebar-ux-panel-row-stacked\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(row).toContain('flex-direction: column')
+    expect(row).toContain('align-items: stretch')
+    expect(row).toContain('gap: 8px')
+  })
+
+  test('stacked label = host .fieldLabel (12px text-muted)', () => {
+    const label = sheet.match(
+      /\.sidebar-ux-panel-row-stacked \.sidebar-ux-panel-row-label\s*\{[^}]*\}/,
+    )?.[0] ?? ''
+    expect(label).toContain('font-size: calc(12px *')
+    expect(label).toContain('var(--lumiverse-text-muted)')
+  })
+
+  test('control spans the full row width', () => {
+    const seg = sheet.match(
+      /\.sidebar-ux-panel-row-stacked > \.sidebar-ux-panel-segmented\s*\{[^}]*\}/,
+    )?.[0] ?? ''
+    expect(seg).toContain('width: 100%')
+    expect(seg).toContain('min-width: 0')
+  })
+
+  test('all five segmented rows opt in; render.ts supports the flag', () => {
+    expect((panelSrc.match(/stacked: true/g) ?? []).length).toBe(5)
+    expect(renderSrc).toContain("'sidebar-ux-panel-row-stacked'")
+    expect(renderSrc).toContain('stacked?: boolean')
+  })
+})
+
+describe('settings visual pins — narrow-drawer room (2026-09-23 follow-up)', () => {
+  test('segmented stretches into the row free space (2026-09-23c)', () => {
+    const trough = sheet.match(/\.sidebar-ux-panel-segmented\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(trough).toContain('flex: 1 1 auto')
+    expect(trough).not.toContain('flex-shrink: 0')
+    expect(trough).not.toContain('min-width: 150px')
+    // The label column must not grow, or it steals the control's room.
+    const label = sheet.match(/\.sidebar-ux-panel-row-text\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(label).toContain('flex: 0 1 auto')
+  })
+
+  test('segmented keeps the Canvas skin while the container query adds room', () => {
+    const btn = sheet.match(/\.sidebar-ux-panel-segmented-btn\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(btn).toContain('font-size: calc(12px *')
+    expect(btn).toContain('padding: 7px 10px')
+    expect(btn).toContain('text-overflow: ellipsis')
+  })
+
+  test('panel is a width-true container and stacks controls when narrow', () => {
+    const root = sheet.match(/\.sidebar-ux-panel-root\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(root).toContain('container-type: inline-size')
+    expect(root).toContain('container-name: canvas-settings')
+    expect(sheet).toContain('@container canvas-settings (max-width: 420px)')
+    expect(
+      sheet.match(
+        /@container canvas-settings \(max-width: 420px\)[\s\S]*?\.sidebar-ux-panel-row > \.sidebar-ux-panel-segmented\s*\{[^}]*width: 100%/,
+      ),
+    ).toBeTruthy()
+  })
+
+  test('label suffix collapses to the stem below 300px; full name stays accessible', () => {
+    expect(sheet).toContain('@container canvas-settings (max-width: 300px)')
+    expect(sheet).toContain('.sidebar-ux-panel-seg-label-suffix { display: none; }')
+    expect(panelSrc).toContain("suffix: ' drawer'")
+    expect(renderSrc).toContain("'sidebar-ux-panel-seg-label-suffix'")
+    expect(renderSrc).toContain("btn.setAttribute('aria-label', opt.label)")
   })
 })

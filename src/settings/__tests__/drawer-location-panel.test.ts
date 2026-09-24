@@ -295,6 +295,24 @@ describe('drawer location panel', () => {
     group.children[0].fireKey('ArrowLeft')
     expect(getSettings().drawerLocation).toBe('bottom')
   })
+
+  test('segmented rows stack: label above, control below — 2026-09-23d', () => {
+    const root = mountPanel()
+    for (const label of [
+      'Drawer layout',
+      'Main drawer side',
+      'Drawer mode',
+      'Options button location',
+      'Start button location',
+    ]) {
+      const row = rowByLabel(root, label)
+      expect(row.classList.contains('sidebar-ux-panel-row-stacked')).toBe(true)
+      expect(control(row).classList.contains('sidebar-ux-panel-segmented')).toBe(true)
+    }
+    // Toggle rows keep the inline label + control layout.
+    const toggleRow = rowByLabel(root, 'Move tab strip to outer edge')
+    expect(toggleRow.classList.contains('sidebar-ux-panel-row-stacked')).toBe(false)
+  })
 })
 
 describe('mode tiles', () => {

@@ -293,9 +293,16 @@ export function buildSettingRow(args: {
   hint?: string
   control: HTMLElement
   disabled?: boolean
+  /**
+   * Stack the control under the label instead of beside it — the host
+   * SettingsModal `.field` layout (Chat → Content Width). Every segmented row
+   * opts in so its buttons take the full panel width.
+   */
+  stacked?: boolean
 }): SettingRowHandle {
   const row = document.createElement('div')
   row.className = 'sidebar-ux-panel-row'
+  if (args.stacked) row.classList.add('sidebar-ux-panel-row-stacked')
   if (args.disabled) row.classList.add('sidebar-ux-panel-row-disabled')
 
   const text = document.createElement('div')
@@ -341,6 +348,12 @@ export function buildSettingRow(args: {
 export interface SegmentedOption<T extends string> {
   value: T
   label: string
+  /**
+   * Optional trailing fragment that may be dropped visually when the panel is
+   * too narrow to show `label` in full (e.g. " drawer" in "Left drawer").
+   * The full `label` always remains the button's accessible name.
+   */
+  suffix?: string
 }
 
 export interface SegmentedControlHandle<T extends string> {
@@ -391,7 +404,19 @@ export function buildSegmentedControl<T extends string>(
     btn.type = 'button'
     btn.className = 'sidebar-ux-panel-segmented-btn'
     btn.setAttribute('role', 'radio')
-    btn.textContent = opt.label
+    if (opt.suffix && opt.label.endsWith(opt.suffix)) {
+      // Keep the visible stem as text and the droppable suffix in a span so a
+      // narrow-panel container query can hide just the suffix
+      // ("Left drawer" -> "Left") instead of ellipsizing the whole word.
+      btn.setAttribute('aria-label', opt.label)
+      btn.textContent = opt.label.slice(0, opt.label.length - opt.suffix.length)
+      const suffixEl = document.createElement('span')
+      suffixEl.className = 'sidebar-ux-panel-seg-label-suffix'
+      suffixEl.textContent = opt.suffix
+      btn.appendChild(suffixEl)
+    } else {
+      btn.textContent = opt.label
+    }
     btn.addEventListener('click', () => {
       if (btn.disabled) return
       select(opt.value)
