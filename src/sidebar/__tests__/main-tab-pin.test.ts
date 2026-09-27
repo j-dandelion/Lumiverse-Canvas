@@ -308,6 +308,10 @@ class StubElement {
       this.children[i].nextSibling = this.children[i + 1] ?? null
     }
   }
+  get nextElementSibling(): StubElement | null { return this.nextSibling }
+  // Element-only children make firstElementChild coincide with firstChild
+  // (matches the renderer's fallback assumption; some stubs only track firstChild).
+  get firstElementChild(): StubElement | null { return this.firstChild }
 }
 
 const bodyStub = new StubElement()
@@ -1666,6 +1670,38 @@ shutdownModel()
   renderMainMirrorTabs()
   assertEqual(list.children[0], startBtn, 'ST1: order stable across a second render')
   assertEqual(list.children.indexOf(startBtn as unknown as StubElement), 0, 'ST1: Start index 0')
+
+  // LUMI-15: with the strip-top divider present (ensureStartButtonForSide
+  // places it directly after Start), the renderer must treat button +
+  // divider as the PINNED HEAD: main inserts after the divider, never
+  // between button and divider — otherwise every render pushes the divider
+  // below the whole tab section (reproduced displacement, review blocker).
+  const dividerEl = new StubElement()
+  dividerEl.className = 'sidebar-ux-start-strip-top-divider'
+  list.insertBefore(dividerEl, startBtn.nextSibling)
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1+divider: Start still first')
+  assertEqual(list.children[1], dividerEl, 'ST1+divider: divider directly follows Start across renders')
+  assert(
+    list.children[2]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1+divider: main section directly follows the divider (not inserted between button and divider)',
+  )
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1+divider: order stable across a second render')
+  assertEqual(list.children[1], dividerEl, 'ST1+divider: divider still index 1 after re-render')
+  // A divider that is NOT a direct child right after Start must not pin the
+  // structure: remove the real one, drop a stray divider at the list end —
+  // main must insert right after Start again (cleanup owns stray dividers).
+  dividerEl.parentElement!.removeChild(dividerEl)
+  const strayDivider = new StubElement()
+  strayDivider.className = 'sidebar-ux-start-strip-top-divider'
+  list.appendChild(strayDivider)
+  renderMainMirrorTabs()
+  assert(
+    list.children[1]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1+divider: a stray divider elsewhere does not displace main (only a direct child after Start pins)',
+  )
+  strayDivider.parentElement!.removeChild(strayDivider)
 
   // Gate off → canonical order is absolute again (Start no longer pinned;
   // the ensure's re-dock path owns the move — here it just must not be

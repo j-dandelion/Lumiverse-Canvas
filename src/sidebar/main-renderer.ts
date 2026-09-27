@@ -52,6 +52,7 @@ import {
   deriveShortName,
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
+import { START_STRIP_TOP_DIVIDER_CLASS } from './styles'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -153,8 +154,20 @@ export function ensureMirrorListStructure(list: HTMLElement): {
     // them coincide, and test stubs often only track firstChild.
     const firstEl = (list.firstElementChild ?? list.firstChild) as ChildNode | null
     if (firstEl !== startBtn) list.insertBefore(startBtn, firstEl)
+    // The strip-top divider is part of the PINNED HEAD (LUMI-15): it sits
+    // between Start and the strip, so main must be inserted AFTER it, not at
+    // startBtn.nextSibling — that slot is the divider's, and inserting there
+    // pushes the divider below the whole tab section on every render (the
+    // same displacement class pitfalls §26 exists to prevent). Only a
+    // direct-child divider that already follows Start is honored: gate-off
+    // cleanup and removeStartChromeForSide own removing it (os/start-menu.ts),
+    // so a stray divider elsewhere never pins the structure. Shared gate per
+    // §26 — no forked predicate.
+    const headEnd = startBtn.nextElementSibling?.classList?.contains(START_STRIP_TOP_DIVIDER_CLASS)
+      ? startBtn.nextElementSibling
+      : startBtn
     // nextSibling (not previousSibling) — stubs often only relink next.
-    if (startBtn.nextSibling !== main) list.insertBefore(main, startBtn.nextSibling)
+    if (headEnd.nextSibling !== main) list.insertBefore(main, headEnd.nextSibling)
   } else {
     if (list.firstChild !== main) list.insertBefore(main, list.firstChild)
   }
