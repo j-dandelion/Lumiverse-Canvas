@@ -39,11 +39,12 @@
 import type { Side } from '../core/model'
 import { getModel, getHost } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
+import { getMainWrapper } from '../dom/lumiverse'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { isStartAtStripTopGate } from './start-strip-top-gate'
 import { resolveChromeSides } from '../sidebar/chrome-sides'
 import { openWindowInDrawerByLiveId } from './actions'
-import { getSecondaryTabList } from '../sidebar/secondary'
+import { getSecondaryTabList, getSecondaryWrapper, isSecondarySidebarOpen } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { START_STRIP_TOP_DIVIDER_CLASS } from '../sidebar/styles'
@@ -404,6 +405,51 @@ function cancelClosing(): void {
 }
 
 /**
+ * True when `button` lives in a vertical (Sides) tab strip — any of the
+ * three vertical hosts: the pinned main mirror list, the main wrapper's
+ * tab list, or the secondary tab list. Used to unify the Sides menu
+ * placement across drawers (LUMI-15): Top/Bottom strips keep their own
+ * open direction, and a body-anchored menu with no live wrapper falls
+ * back to the non-Sides placement.
+ */
+function isVerticalSidesStrip(button: HTMLElement): boolean {
+  // closest is unavailable on test fakes: absence of the method means the
+  // stub can't be inside the secondary wrapper — fall through to the main
+  // wrapper check rather than crashing the open path.
+  const anyBtn = button as HTMLElement & { closest?: (sel: string) => HTMLElement | null }
+  const wrapper = anyBtn.closest?.('.sidebar-ux-secondary-wrapper') as HTMLElement | null
+  if (wrapper) {
+    if (wrapper === getSecondaryWrapper()) return true
+  }
+  // getMainWrapper needs document.querySelector — absent in some test fakes;
+  // treat as "not the main strip" and fall back to the non-Sides placement.
+  const main = getMainWrapper()
+  if (!main) return false
+  // Main drawer's wrapper — Start rides the main strip in Sides mode.
+  if (main.contains(button)) {
+    // Vertical = Sides (not Top/Bottom): distinguishable by the strip's
+    // axis stamp; absent (e.g. test stubs) treat as vertical since the main
+    // mirror list is a vertical column by construction.
+    const axis = main.querySelector('[data-strip-axis]')?.getAttribute('data-strip-axis')
+    return axis !== 'horizontal'
+  }
+  return false
+}
+
+/**
+ * The SCREEN side of a drawer role ('primary' | 'secondary'). The main
+ * drawer's side is user-swappable (`getMainDrawerSide`); the second drawer
+ * always sits on the opposite screen side, and only exists when open.
+ */
+function drawerScreenSide(side: Side): 'left' | 'right' | null {
+  if (side === 'secondary') {
+    if (!isSecondarySidebarOpen() || !getSecondaryWrapper()) return null
+    return getMainDrawerSide() === 'left' ? 'right' : 'left'
+  }
+  return getMainDrawerSide()
+}
+
+/**
  * Dismiss a menu whose invoking button left the DOM (shell remount, side
  * change, second-drawer disable): a body-level menu must not outlive its
  * anchor. Runs from the ensure pass — the same signal that recreates the
@@ -454,21 +500,29 @@ export function openStartMenu(side: Side, button: HTMLElement): void {
     // strip it opens from — stamp the direction so CSS can mirror the Y
     // offset (live report 2026-09-16).
     menu.toggleAttribute('data-open-upward', openUpward)
-    // Sides strip-top: the Start button heads a VERTICAL strip — opening
-    // straight below overlaps the tabs under it (live report, LUMI-14). Fly
-    // out beside the strip, away from the screen edge: left strip → right of
-    // the button, right strip → left of it. Vertical anchor stays at the
-    // button (below its top when it heads the strip).
-    const preferredLeft = isStartAtStripTop()
-      ? (getMainDrawerSide() === 'right'
-        ? rect.left - mRect.width - 8
-        : rect.right + 8)
+    // Sides placement (LUMI-15, member-unified for both drawers): a vertical
+    // strip's menu flies out BESIDE the strip, away from the screen edge —
+    // left drawer → right of the button/tab strip, right drawer → left of it
+    // (button-anchored so a docked button keeps its own edge too). Vertical
+    // anchor (both variants): strip-top button → as high as possible; dock
+    // (bottom) button → as low as possible. Top/Bottom strips keep theirs
+    // (open up/downward from the button).
+    const screenSide = drawerScreenSide(side)
+    const inSides = isStartAtStripTop() || isVerticalSidesStrip(button)
+    const preferredLeft = inSides
+      ? (screenSide === 'right' ? rect.left - mRect.width - 8 : rect.right + 8)
       : rect.left
     const renderedLeft = Math.max(8, Math.min(preferredLeft, window.innerWidth - mRect.width - 8))
-    const renderedTop = Math.max(8, Math.min(
-      openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8,
-      window.innerHeight - mRect.height - 8,
-    ))
+    // Sides, strip-top button → as high as possible; Sides, dock button → as
+    // low as possible. Non-Sides keeps the up/down open-direction clamp.
+    const renderedTop = inSides
+      ? (isStartAtStripTop()
+        ? 8
+        : Math.max(8, window.innerHeight - mRect.height - 8))
+      : Math.max(8, Math.min(
+        openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8,
+        window.innerHeight - mRect.height - 8,
+      ))
     menu.style.left = `${renderedLeft / uiScale}px`
     menu.style.top = `${renderedTop / uiScale}px`
     // Origin from the PLACED box, never the pre-position rect: with auto
