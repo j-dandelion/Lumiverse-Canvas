@@ -1595,7 +1595,7 @@ html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio
   START_STRIP_TOP_DIVIDER_CSS = `
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > .${START_STRIP_TOP_DIVIDER_CLASS} {
     flex-shrink: 0;
-    margin: 8px 0;
+    margin: 4px 0;
     border-top: 1px solid var(--lumiverse-primary-020);
   }
 `;
