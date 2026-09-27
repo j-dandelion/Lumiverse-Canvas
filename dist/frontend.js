@@ -1155,10 +1155,6 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start] {
     margin-bottom: 8px;
     border-bottom: 1px solid var(--lumiverse-primary-020);
-    border-radius: 8px 8px 0 0;
-  }
-  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start]:hover {
-    border-radius: 8px 8px 0 0;
   }
 `;
 var init_styles = __esm(() => {
@@ -4477,6 +4473,23 @@ var init_tab_position = __esm(() => {
   init_drawer_shell();
 });
 
+// src/os/start-strip-top-gate.ts
+function isStartAtStripTopGate() {
+  try {
+    if (!getSettings().startButtonAtStripTop)
+      return false;
+    if (isHorizontalStrip())
+      return false;
+    return !isMobileViewport();
+  } catch {
+    return !!getSettings().startButtonAtStripTop && getSettings().drawerLocation === "sides";
+  }
+}
+var init_start_strip_top_gate = __esm(() => {
+  init_state();
+  init_mobile_exclusion();
+});
+
 // src/tabs/core-tabs.ts
 function isCoreTabId(id) {
   return CORE_HIDE_LOCKED.has(id);
@@ -6479,7 +6492,8 @@ function openStartMenu(side, button) {
     const uiScale = getUiScale();
     const openUpward = rect.bottom > window.innerHeight / 2;
     menu.toggleAttribute("data-open-upward", openUpward);
-    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8));
+    const preferredLeft = isStartAtStripTop() ? getMainDrawerSide() === "right" ? rect.left - mRect.width - 8 : rect.right + 8 : rect.left;
+    const renderedLeft = Math.max(8, Math.min(preferredLeft, window.innerWidth - mRect.width - 8));
     const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
     menu.style.left = `${renderedLeft / uiScale}px`;
     menu.style.top = `${renderedTop / uiScale}px`;
@@ -6590,16 +6604,7 @@ function startButtonHtml() {
   return `<button type="button" ${START_ATTR2}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`;
 }
 function isStartAtStripTop() {
-  try {
-    if (!getSettings().startButtonAtStripTop)
-      return false;
-    if (isHorizontalStrip())
-      return false;
-    return !isMobileViewport();
-  } catch {
-    const s = getSettings();
-    return !!s.startButtonAtStripTop && s.drawerLocation === "sides";
-  }
+  return isStartAtStripTopGate();
 }
 async function ensureStartButtonForSide(side) {
   const list = side === "primary" ? await getMainMirrorList() : getSecondaryTabList();
@@ -6737,7 +6742,7 @@ var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
   init_state();
-  init_mobile_exclusion();
+  init_start_strip_top_gate();
   init_actions();
   init_secondary();
   init_drawer_shell();
@@ -6931,8 +6936,24 @@ function ensureMirrorListStructure(list) {
       main.appendChild(child);
     }
   }
-  if (list.firstChild !== main)
-    list.insertBefore(main, list.firstChild);
+  let startBtn = null;
+  for (const child of Array.from(list.children)) {
+    const el = child;
+    if (el.getAttribute("data-canvas-os-start") !== null) {
+      startBtn = el;
+      break;
+    }
+  }
+  if (startBtn && isStartAtStripTopGate() && startBtn.parentElement === list) {
+    const firstEl = list.firstElementChild ?? list.firstChild;
+    if (firstEl !== startBtn)
+      list.insertBefore(startBtn, firstEl);
+    if (startBtn.nextSibling !== main)
+      list.insertBefore(main, startBtn.nextSibling);
+  } else {
+    if (list.firstChild !== main)
+      list.insertBefore(main, list.firstChild);
+  }
   if (main.nextSibling !== bottom)
     list.appendChild(bottom);
   if (list.style.overflowY !== "hidden")
@@ -7152,7 +7173,7 @@ function renderMainMirrorTabs() {
   }
   for (const child of Array.from(mainSection.children)) {
     const el = child;
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS) && !(el.getAttribute?.("data-canvas-os-start") !== null && isStartAtStripTopGate())) {
       mainSection.removeChild(el);
     }
   }
@@ -7328,6 +7349,7 @@ var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_
 var init_main_renderer = __esm(() => {
   init_dispatch();
   init_state();
+  init_start_strip_top_gate();
   init_actions();
   init_drawer_sync();
   init_main_mirror_drawer();
