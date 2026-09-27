@@ -238,7 +238,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "1.9.3";
+var _backendCtx = null, CANVAS_VERSION = "";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -8802,10 +8802,36 @@ function syncHiddenTabsFromHost() {
   const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
   setCanvasHiddenTabIds(forCanvas);
-  const applySet = new Set([...forDom, ...stored.filter((id) => liveIds.includes(id))]);
-  applyHiddenTabIdsToSecondary(applySet);
-  applyHiddenTabIdsToMirror(applySet);
-  applyHiddenTabIdsToHostMain(applySet);
+  const closedOnlyLiveIds = new Set;
+  try {
+    Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
+      const model = getModel();
+      if (!model || model.closed.length === 0)
+        return applySets(forDom, stored, liveIds);
+      const hiddenKeys = new Set(model.hidden);
+      const resolved = new Set;
+      const hostMod = getHost();
+      for (const key of model.closed) {
+        if (hiddenKeys.has(key))
+          continue;
+        const liveId = hostMod?.resolve(key);
+        if (liveId)
+          resolved.add(liveId);
+      }
+      applySets(forDom, stored, liveIds, resolved);
+    }).catch(() => {});
+  } catch {}
+  function applySets(dom, all, live, extra) {
+    const applySet = new Set([
+      ...dom,
+      ...all.filter((id) => live.includes(id)),
+      ...extra ?? []
+    ]);
+    applyHiddenTabIdsToSecondary(applySet);
+    applyHiddenTabIdsToMirror(applySet);
+    applyHiddenTabIdsToHostMain(applySet);
+  }
+  applySets(forDom, stored, liveIds);
   return { hiddenIds: forCanvas };
 }
 function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
@@ -25080,8 +25106,30 @@ class LumiverseHost {
           sideIds.add(key);
       }
       const canvasOtherSide = getCanvasHiddenTabIds().filter((id) => !sideIds.has(id));
-      setCanvasHiddenTabIds([...canvasOtherSide, ...ids]);
-      const effective = new Set([...canvasOtherSide, ...ids]);
+      const closedOnlyLiveIds = new Set;
+      try {
+        await Promise.resolve().then(() => init_dispatch());
+        const model = getModel();
+        if (model && model.closed.length > 0) {
+          const hiddenKeys = new Set(model.hidden);
+          for (const key of model.closed) {
+            if (hiddenKeys.has(key))
+              continue;
+            const liveId = resolveTabKey(key);
+            if (liveId)
+              closedOnlyLiveIds.add(liveId);
+          }
+        }
+      } catch {}
+      setCanvasHiddenTabIds([
+        ...canvasOtherSide,
+        ...ids.filter((id) => !closedOnlyLiveIds.has(id))
+      ]);
+      const effective = new Set([
+        ...canvasOtherSide,
+        ...ids,
+        ...closedOnlyLiveIds
+      ]);
       applyHiddenTabIdsToMirror(effective);
       applyHiddenTabIdsToSecondary(effective);
       applyHiddenTabIdsToHostMain(effective);
