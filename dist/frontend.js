@@ -6975,8 +6975,9 @@ function ensureMirrorListStructure(list) {
     const firstEl = list.firstElementChild ?? list.firstChild;
     if (firstEl !== startBtn)
       list.insertBefore(startBtn, firstEl);
-    if (startBtn.nextSibling !== main)
-      list.insertBefore(main, startBtn.nextSibling);
+    const headEnd = startBtn.nextElementSibling?.classList?.contains(START_STRIP_TOP_DIVIDER_CLASS) ? startBtn.nextElementSibling : startBtn;
+    if (headEnd.nextSibling !== main)
+      list.insertBefore(main, headEnd.nextSibling);
   } else {
     if (list.firstChild !== main)
       list.insertBefore(main, list.firstChild);
@@ -7382,6 +7383,7 @@ var init_main_renderer = __esm(() => {
   init_main_mirror_drawer();
   init_buttons();
   init_log();
+  init_styles();
 });
 
 // src/sidebar/main-tab-pin.ts
