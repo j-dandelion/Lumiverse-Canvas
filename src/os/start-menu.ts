@@ -405,24 +405,33 @@ function cancelClosing(): void {
 }
 
 /**
- * True when `button` lives in a vertical (Sides) tab strip — any of the
- * three vertical hosts: the pinned main mirror list, the main wrapper's
- * tab list, or the secondary tab list. Used to unify the Sides menu
- * placement across drawers (LUMI-15): Top/Bottom strips keep their own
- * open direction, and a body-anchored menu with no live wrapper falls
- * back to the non-Sides placement.
+ * True when `button` lives in a vertical (Sides) tab strip. The strip may
+ * live in three places: a BODY-LEVEL pin host (`.sidebar-ux-tab-list-pin-host`
+ * — the drawer's list is reparented there when pinned, so a pinned button is
+ * NOT inside its drawer wrapper), the secondary wrapper, or the main
+ * wrapper. Vertical = Sides (not Top/Bottom), stamped on the pin host as
+ * `data-strip-axis`; the wrappers are vertical by construction in Sides.
+ * Used to unify Sides menu placement across drawers (LUMI-15); a body-
+ * anchored menu with no live host falls back to the non-Sides placement.
  */
 function isVerticalSidesStrip(button: HTMLElement): boolean {
   // closest is unavailable on test fakes: absence of the method means the
-  // stub can't be inside the secondary wrapper — fall through to the main
-  // wrapper check rather than crashing the open path.
+  // stub can't be matched against any host — fall back to the non-Sides
+  // placement rather than crashing the open path.
   const anyBtn = button as HTMLElement & { closest?: (sel: string) => HTMLElement | null }
+  // 1) Pinned strip: body-level pin host carries the axis stamp directly.
+  const pinHost = anyBtn.closest?.('.sidebar-ux-tab-list-pin-host') as HTMLElement | null
+  if (pinHost) {
+    return pinHost.getAttribute('data-strip-axis') !== 'horizontal'
+  }
+  // 2) Unpinned secondary drawer: inside its own wrapper (and that wrapper
+  // must be the live one — a detached shell's button can't open a menu).
   const wrapper = anyBtn.closest?.('.sidebar-ux-secondary-wrapper') as HTMLElement | null
   if (wrapper) {
     if (wrapper === getSecondaryWrapper()) return true
   }
-  // getMainWrapper needs document.querySelector — absent in some test fakes;
-  // treat as "not the main strip" and fall back to the non-Sides placement.
+  // 3) Main drawer: getMainWrapper needs document.querySelector — absent in
+  // some test fakes; treat as "not the main strip" and fall back.
   const main = getMainWrapper()
   if (!main) return false
   // Main drawer's wrapper — Start rides the main strip in Sides mode.

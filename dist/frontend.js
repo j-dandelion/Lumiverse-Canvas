@@ -6472,6 +6472,10 @@ function cancelClosing() {
 }
 function isVerticalSidesStrip(button) {
   const anyBtn = button;
+  const pinHost = anyBtn.closest?.(".sidebar-ux-tab-list-pin-host");
+  if (pinHost) {
+    return pinHost.getAttribute("data-strip-axis") !== "horizontal";
+  }
   const wrapper = anyBtn.closest?.(".sidebar-ux-secondary-wrapper");
   if (wrapper) {
     if (wrapper === getSecondaryWrapper())
