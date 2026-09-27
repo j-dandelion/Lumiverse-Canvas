@@ -34,6 +34,7 @@ import {
   HORIZONTAL_STRIP_CSS,
   SECONDARY_MOBILE_CSS,
   MAIN_MIRROR_MOBILE_CSS,
+  START_STRIP_TOP_DIVIDER_CSS,
 } from '../styles'
 
 /** The injected sheet wraps START_STRIP_TOP_CSS in the desktop media query —
@@ -246,10 +247,18 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(START_STRIP_TOP_CSS,
     '.sidebar-ux-tab-list > button[data-canvas-os-start]',
     'strip-top selector must be a DIRECT list child (lifted position only — a docked Start keeps its dock chrome)')
-  assertIncludes(START_STRIP_TOP_CSS, 'margin-bottom: 8px',
-    'strip-top Start separates from the tabs with the dock gap')
-  assertIncludes(START_STRIP_TOP_CSS, 'border-bottom: 1px solid var(--lumiverse-primary-020)',
-    'strip-top divider faces the tabs (container-token border)')
+  // LUMI-15: the divider is NOT the button's chrome — a separate element
+  // carries the line, with the gaps on the divider itself (matching normal
+  // mode's dock-owned border-top + padding-top construction).
+  assert(!START_STRIP_TOP_CSS.includes('border-bottom'),
+    'the button must not carry the divider (LUMI-15: separate element, not button border)')
+  assertIncludes(START_STRIP_TOP_DIVIDER_CSS, `> .sidebar-ux-start-strip-top-divider`,
+    'the divider is a dedicated direct-child element of the tab list')
+  assertIncludes(START_STRIP_TOP_DIVIDER_CSS,
+    'border-top: 1px solid var(--lumiverse-primary-020)',
+    'divider line uses the container-token border, matching normal Sides mode')
+  assertIncludes(START_STRIP_TOP_DIVIDER_CSS, 'margin: 8px 0',
+    'divider owns BOTH gaps — one dock gap above and below the line')
   assert(!START_STRIP_TOP_CSS.includes('margin-top: auto'),
     'the strip-top variant must not touch the dock bottom anchor')
   // Radius (LUMI-14): the base 8px from OS_START_BUTTON_CSS applies in every
@@ -267,12 +276,22 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(injectStartStripTopSheet(), '@media (min-width: 601px)',
     'strip-top styles must be desktop-scoped (mobile list is a row)')
 
-  // Source pins: DOM move owned by the ensure, placement = first list child.
+  // Source pins: DOM move owned by the ensure, placement = first list child,
+  // divider element owned by the ensure/remove lifecycle (LUMI-15).
   const src = readFileSync(join(process.cwd(), 'src/os/start-menu.ts'), 'utf8')
   assertIncludes(src, 'list.insertBefore(btn, list.firstElementChild)',
     'the lift inserts Start as the FIRST child of the vertical tab list')
   assertIncludes(src, 'isStartAtStripTop',
     'the ensure gates the lift through the shared helper')
+  assertIncludes(src, 'START_STRIP_TOP_DIVIDER_CLASS',
+    'the ensure places the divider element (LUMI-15 — container-owned line)')
+  assertIncludes(src, "list.insertBefore(divider, btn.nextElementSibling)",
+    'the divider sits BELOW the lifted Start (margin on the tab side)')
+  assertIncludes(src, ':scope > .${START_STRIP_TOP_DIVIDER_CLASS}`)?.remove()',
+    'gate-off re-dock drops the divider (no orphan line)')
+  const removeSrc = src.substring(src.indexOf('function removeStartChromeForSide'))
+  assertIncludes(removeSrc, 'START_STRIP_TOP_DIVIDER_CLASS',
+    'the remove path drops the divider when the button is gone (per-side scoped)')
   assert(!src.includes('dock.className = \`\${TAB_LIST_BOTTOM_CLASS}\`'),
     'dock creation must keep the shared class string (no new dock variants)')
 

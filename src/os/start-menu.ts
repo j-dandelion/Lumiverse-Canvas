@@ -46,6 +46,7 @@ import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
+import { START_STRIP_TOP_DIVIDER_CLASS } from '../sidebar/styles'
 import { BUILTIN_ICON_SVGS } from '../tabs/builtin-icons'
 import { injectStartMenuStyles, START_MENU_STYLE_ID } from './start-menu-styles'
 import { dlog } from '../debug/log'
@@ -631,10 +632,13 @@ function isStartAtStripTop(): boolean {
  *     its location includes this side — never create a second dock (the
  *     last-child invariant in docs/pitfalls.md).
  *   - Sides + startButtonAtStripTop (desktop) → FIRST child of the vertical
- *     tab list, above the tabs; the dock (and the gear inside it) stays
- *     bottom-anchored. Returned to the shared dock when the setting turns
- *     off. The root class `sidebar-ux-start-at-strip-top` is the CSS carrier;
- *     the dock-last-child invariant is untouched (tabs never cross the dock).
+ *     tab list, above the tabs, with a dedicated divider element between the
+ *     button and the strip (container-owned line, LUMI-15 — same visual
+ *     grammar as normal mode's dock divider). The dock (and the gear inside
+ *     it) stays bottom-anchored. Returned to the shared dock when the setting
+ *     turns off. The root class `sidebar-ux-start-at-strip-top` is the CSS
+ *     carrier; the dock-last-child invariant is untouched (tabs never cross
+ *     the dock).
  *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end of its dock/list
  *     (HORIZONTAL_STRIP_CSS keys on the pin host's sidebar-ux-side-* class and
  *     the `sidebar-ux-start-edge-inner` root class; an in-place side flip
@@ -660,9 +664,34 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
   // Start to the FIRST slot of the vertical tab list instead of its dock.
   // The dock — gear inside — stays bottom-anchored in both variants.
   const atStripTop = isStartAtStripTop()
+  if (!atStripTop) {
+    // Setting turned off (or Top/Bottom/mobile): the divider's owner moved
+    // back to a dock — drop the strip-top divider so it cannot paint an
+    // orphan line inside the list (LUMI-15 lifecycle).
+    list.querySelector(`:scope > .${START_STRIP_TOP_DIVIDER_CLASS}`)?.remove()
+  }
   if (atStripTop) {
+    // The divider is its own element (LUMI-15) — a container-owned line, not
+    // button chrome — inserted between the button and the strip. The ensure
+    // and removeStartChromeForSide own its lifecycle: it must never paint
+    // without the lifted button.
+    let divider = list.querySelector(`:scope > .${START_STRIP_TOP_DIVIDER_CLASS}`) as HTMLElement | null
+    if (!divider) {
+      divider = document.createElement('div')
+      divider.className = START_STRIP_TOP_DIVIDER_CLASS
+    }
     if (btn.parentElement !== list || btn.previousElementSibling !== null) {
       list.insertBefore(btn, list.firstElementChild)
+    }
+    // Insert the divider AFTER pinning the button (normally its
+    // nextElementSibling): the renderer's structure pass
+    // (main-renderer.ts ensureMirrorListStructure) pins Start as the first
+    // list child and inserts main right behind it, so a divider placed above
+    // Start gets displaced to index 2 on every render — the one-frame
+    // flicker (pitfalls §26). Below Start, between it and the strip, is the
+    // member-asked-for construction (margin on the tab side).
+    if (divider.parentElement !== list || divider.previousElementSibling !== btn) {
+      list.insertBefore(divider, btn.nextElementSibling)
     }
     if (side === 'secondary') {
       // Lifting out can strand the shared dock empty (gear excluded from this
@@ -730,6 +759,19 @@ function removeStartChromeForSide(side: Side): void {
   if (side === 'secondary') {
     for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
       if (!dock.firstElementChild) dock.remove()
+    }
+  }
+  // Strip-top divider: removed only when THIS side's button is gone from its
+  // list (same per-side discipline as the button itself — a document-wide
+  // sweep could remove the OTHER side's divider). The ensure owns
+  // repositioning it while the button exists.
+  for (const divider of Array.from(
+    document.querySelectorAll(`.${START_STRIP_TOP_DIVIDER_CLASS}`),
+  )) {
+    const list = divider.parentElement
+    if (!list) continue
+    if (!list.querySelector(`button[${START_ATTR}][${START_SIDE_ATTR}="${side}"]`)) {
+      divider.remove()
     }
   }
   if (_menuOpenFor === side) hideStartMenu({ immediate: true })

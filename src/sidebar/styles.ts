@@ -802,31 +802,53 @@ export function injectHorizontalStripStyles(): void {
   injectStyles('sidebar-ux-location-horizontal', HORIZONTAL_STRIP_CSS)
 }
 
+/** Divider element inserted above the strip-top Start button (LUMI-15). */
+export const START_STRIP_TOP_DIVIDER_CLASS = 'sidebar-ux-start-strip-top-divider'
+
 /**
  * Sides strip-top Start variant (startButtonAtStripTop, desktop only).
  * Keyed on the ROOT class `sidebar-ux-start-at-strip-top` (pin hosts are
  * recreated with a wholesale className assignment — see chrome-locations.ts),
  * scoped to vertical (Sides) strips and desktop widths. The DOM move is owned
  * by ensureStartButtonForSide (os/start-menu.ts); CSS only restyles the top
- * slot: a bottom divider so the lifted Start reads as the strip's head, and
- * the tab list stops pushing the bottom dock away (margin-top: auto → 0 would
- * collapse the tabs upward — the dock keeps its auto margin, the list just
- * owns less free space). No border-radius overrides: the base 8px from
- * OS_START_BUTTON_CSS applies in every state (hover included) so the lifted
- * button keeps its rounded corners (LUMI-14). Mobile sheets keep their
- * !important row layout — the media gate here matches that boundary (600px).
+ * slot. The divider is NOT the button's chrome: a separate element inserted
+ * above the button carries the line, with the margins on the divider itself —
+ * one dock gap above the line, one below it — exactly how normal Sides mode
+ * builds it (the dock's `border-top` + `padding-top: 8px`,
+ * canvas-main-mirror-tab-list-structure below; LUMI-15 fixed the original
+ * button-owned `border-bottom` + `margin-bottom`). The tab list stops pushing
+ * the bottom dock away (margin-top: auto → 0 would collapse the tabs upward —
+ * the dock keeps its auto margin, the list just owns less free space). No
+ * border-radius overrides: the base 8px from OS_START_BUTTON_CSS applies in
+ * every state (hover included) so the lifted button keeps its rounded corners
+ * (LUMI-14). Mobile sheets keep their !important row layout — the media gate
+ * here matches that boundary (600px).
  */
 export const START_STRIP_TOP_CSS = `
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start] {
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--lumiverse-primary-020);
+    margin-bottom: 0;
+  }
+`
+
+/**
+ * Strip-top divider chrome — the line between the lifted Start button and
+ * the tab strip, owned by its own element, not by either neighbor (LUMI-15).
+ * Same container-token border and dock-gap rhythm as normal Sides mode's
+ * dock divider: 8px gap above the line (between strip head and line), 8px
+ * gap below it (between line and first tab).
+ */
+export const START_STRIP_TOP_DIVIDER_CSS = `
+  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > .${START_STRIP_TOP_DIVIDER_CLASS} {
+    flex-shrink: 0;
+    margin: 8px 0;
+    border-top: 1px solid var(--lumiverse-primary-020);
   }
 `
 
 /** Inject the Sides strip-top Start variant once (idempotent by id). */
 export function injectStartStripTopStyles(): void {
   injectStyles('sidebar-ux-start-strip-top',
-    `@media (min-width: 601px) {\n${START_STRIP_TOP_CSS}\n  }`)
+    `@media (min-width: 601px) {\n${START_STRIP_TOP_CSS}\n${START_STRIP_TOP_DIVIDER_CSS}\n  }`)
 }
 
 export function injectDrawerTabStyles(): void {
