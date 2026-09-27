@@ -369,7 +369,8 @@ var init_persist_debug = __esm(() => {
 
 // src/dom/lumiverse.ts
 function getMainSidebar() {
-  return document.querySelector('[data-spindle-mount="sidebar"]');
+  const d = document;
+  return d.querySelector?.('[data-spindle-mount="sidebar"]') ?? null;
 }
 function getMainDrawer() {
   const sidebar = getMainSidebar();
@@ -400,7 +401,8 @@ function getMainPanelHeader() {
 }
 function getMainWrapper() {
   const sidebar = getMainSidebar();
-  return sidebar?.closest('[class*="_wrapper_"]');
+  const host = sidebar;
+  return host?.closest?.('[class*="_wrapper_"]');
 }
 function getChatColumn() {
   const body = document.querySelector('[class*="_body_"][data-chat-constrained]') || document.querySelector('[class*="_body_"]');
@@ -6468,6 +6470,30 @@ function cancelClosing() {
   }
   menu.remove();
 }
+function isVerticalSidesStrip(button) {
+  const anyBtn = button;
+  const wrapper = anyBtn.closest?.(".sidebar-ux-secondary-wrapper");
+  if (wrapper) {
+    if (wrapper === getSecondaryWrapper())
+      return true;
+  }
+  const main = getMainWrapper();
+  if (!main)
+    return false;
+  if (main.contains(button)) {
+    const axis = main.querySelector("[data-strip-axis]")?.getAttribute("data-strip-axis");
+    return axis !== "horizontal";
+  }
+  return false;
+}
+function drawerScreenSide(side) {
+  if (side === "secondary") {
+    if (!isSecondarySidebarOpen() || !getSecondaryWrapper())
+      return null;
+    return getMainDrawerSide() === "left" ? "right" : "left";
+  }
+  return getMainDrawerSide();
+}
 function reconcileStartMenuPresence() {
   if (_menu && (!_menuButton || !_menuButton.isConnected)) {
     hideStartMenu({ immediate: true });
@@ -6499,9 +6525,11 @@ function openStartMenu(side, button) {
     const uiScale = getUiScale();
     const openUpward = rect.bottom > window.innerHeight / 2;
     menu.toggleAttribute("data-open-upward", openUpward);
-    const preferredLeft = isStartAtStripTop() ? getMainDrawerSide() === "right" ? rect.left - mRect.width - 8 : rect.right + 8 : rect.left;
+    const screenSide = drawerScreenSide(side);
+    const inSides = isStartAtStripTop() || isVerticalSidesStrip(button);
+    const preferredLeft = inSides ? screenSide === "right" ? rect.left - mRect.width - 8 : rect.right + 8 : rect.left;
     const renderedLeft = Math.max(8, Math.min(preferredLeft, window.innerWidth - mRect.width - 8));
-    const renderedTop = Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
+    const renderedTop = inSides ? isStartAtStripTop() ? 8 : Math.max(8, window.innerHeight - mRect.height - 8) : Math.max(8, Math.min(openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8, window.innerHeight - mRect.height - 8));
     menu.style.left = `${renderedLeft / uiScale}px`;
     menu.style.top = `${renderedTop / uiScale}px`;
     const placedRect = menu.getBoundingClientRect();
