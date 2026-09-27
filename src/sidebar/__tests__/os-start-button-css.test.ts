@@ -257,7 +257,7 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(START_STRIP_TOP_DIVIDER_CSS,
     'border-top: 1px solid var(--lumiverse-primary-020)',
     'divider line uses the container-token border, matching normal Sides mode')
-  assertIncludes(START_STRIP_TOP_DIVIDER_CSS, 'margin: 4px 0',
+  assertIncludes(START_STRIP_TOP_DIVIDER_CSS, 'margin: 3px 0',
     'divider owns BOTH gaps — one dock gap above and below the line')
   assert(!START_STRIP_TOP_CSS.includes('margin-top: auto'),
     'the strip-top variant must not touch the dock bottom anchor')
