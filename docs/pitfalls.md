@@ -26,6 +26,8 @@ Cross-cutting traps and hard-won facts from live debugging (2026-07-31 round: se
 
 **Rule:** placement state changes go through `dispatch({ t: 'move' | 'activate' | ... })`, never through facade writes.
 
+**Tracked-active ↔ reconcile feedback (S0b):** ANY path where a reconcile-issued chrome write feeds back into the dispatch queue is a loop risk. Model→chrome echoes must be `silent`; writer-side dispatch must coalesce.
+
 ## 3. Main-mirror active key: Canvas key is truth, host `tabBtnActive` is not
 
 In taskbar mode the mirror highlight, header title, and toggle-close decision are all driven by the **Canvas exclusive key** (`_state.activeKey` in `sidebar/main-tab-pin.ts`), not the host's `tabBtnActive` class:
@@ -206,3 +208,67 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
   `FAILED: [1-9]`); import only leaf modules so `bun run` does not drag the
   store/dispatch graph.
 
+## 16. Store reads: prefer `getHostStoreState()` (2026-09-17)
+
+`getStoreSnapshot()` is sidebar-anchored: `findStoreData` starts from the main host sidebar and returns early when it is absent — exactly the mirror/taskbar layouts where Canvas owns main chrome. Store *actions* still worked (`findHostStoreApi` anchors on `#root`/`body`), so the failure mode was "writes work, reads are empty": favorites/hidden/gallery reads silently returned nothing and hidden cards reappeared on remount.
+
+**Rule:** read live store fields via `getHostStoreState()` (Zustand `getState` through the robust lookup); keep `getStoreSnapshot()` only as the existing drawer-tab fallback.
+
+## 17. Host stacking context: in-app z-order can never beat the drawer shells (2026-09-15)
+
+The host `.app` root is `isolation: isolate` and Canvas shells are body-level fixed at z-index 9990 (pin host 10000), so a z-index inside the app subtree is confined to `.app`'s stacking context. A "shadow over chat" fix must therefore suppress the real shell shadow and paint an inset shadow on the chat column (root `data-canvas-chat-shadow` + `injectReflowStyles`), never raise the chat. **Top/Bottom does NOT change the panel geometry** — only the tab strip moves; panels stay left/right columns there (S8), so the L/R shadow lane (and its `openLeft`/`openRight` truth) applies in every location.
+
+**Drawer shadow — the REAL box-shadow only (2026-09-15 final):** the inline `var(--lumiverse-shadow-xl)` on `.sidebar-ux-drawer` is the only drawer shadow; it is a child of the shell wrapper, so it fades/micro-scales with the rail bloom and fades with the shell during the boot/mode-switch reveal guards with no special handling. A chat-owned inset-shadow mechanism (real-shadow suppression + inset on the chat column) was built and **removed by user choice** — the real shadow painting above chat content while a drawer is open is accepted. Do not resurrect it; `animation.ts` no longer fires `canvas:panel-motion-changed`. Supporting traps that remain: (a) the closed-drawer suppression (`[data-drawer-open="false"]`) must carry `:not([data-canvas-panel-animating])` — `data-drawer-open` flips false at close-start, so the unguarded rule kills the shadow for the whole close fade; (b) a FRESH chat element's first margin application must snap (`data-canvas-reflow-instant`, transition: none, dropped after one painted frame via double rAF) so load never animates the chat reflow; (c) Top/Bottom chat margin duration is matched to the 270 ms panel.
+
+## 18. Vanilla teardown is generation-gated (#15/#16)
+
+The host invalidates the extension frontend generation BEFORE the cleanup chain. Every `ctx.ui.*` / `ctx.containers.*` call in teardown throws `SPINDLE_FRONTEND_INACTIVE`. Teardown must be pure-DOM or use the raw store; `unregisterContainer` specifically is generation-gated — reach the real zustand API via `findHostStoreApi()` / `callHostStoreAction()` (fiber hook deps; snapshot cache as fallback).
+
+**Swap crash root causes** (full detail: `backup/canvas-owns-drawers-wip` + `~/Documents/plans/` docs): duplicate `unregisterContainer` → host `Node.removeChild` on detached `shell.content` (4th Swap); `registerContainer` called before `document.body.appendChild` → `content.isConnected:false`. Epic "fixes" (orphan wrappers, setTimeout/rAF, window error handler) were symptom-hacks — nail the host contract instead.
+
+## 19. Configure Tabs icons are generated (2026-09-13)
+
+`src/tabs/builtin-icons.ts` + `scripts/generate-builtin-icons.mjs`. Never hand-edit the map; rerun the script after Lumiverse icon updates. Hidden tabs have no host DOM button, so the static map is the only complete source — do not replace it with live-DOM sourcing. Naive regex copying of lucide files silently drops multi-line main paths (the original disfigurement); the script uses balanced-bracket extraction and follows alias re-exports (`wand-2 → wand-sparkles`).
+
+## 20. S1 semantics (do not regress)
+
+- The main shell is ALWAYS mounted on desktop — `taskbarMode` only gates PIN chrome (`isTaskbarModeEnabled()` = taskbarMode && outer-edge). `applyMainTabListPin(false)` UNPINS (keeps shell + sync); full teardown = `teardownMainPin` (feature teardown, mobile).
+- `_state.enabled` (main-tab-pin) = PIN chrome; sync gates use `isMainMirrorActive()` (shell liveness) — scheduleReconcile, adoptMainMirrorHostActivation/Neighbor, reconcileMainMirror. Do NOT reintroduce `_state.enabled` gates on the sync.
+- `getMainMirrorTabList()` must never call `ensureMainPinHost` (side effect). Pin reparent = `pinMainMirrorShellTabList` (idempotent, no settings gate — callers gate).
+- Reflow mainStrip reserve keys on `isMainTabListPinActive()` — closed unpinned shell leaves only the drawerTab (overlay, like secondary). S8 gates the L/R reserve on `!isHorizontalStrip()`.
+- Settings cascade 1 is GONE: outer-edge off no longer clears taskbarMode. Runtime outer-edge flips reconcile pins via tabPositionFeature.apply (the taskbar feature's apply won't fire). The SECONDARY pin reconcile uses the effective gate too (`reconcileTabListPin` → `isTaskbarModeEnabled()`).
+- The VISIBLE main shell's flex/borders are refreshed at every `reconcileMainTabListPin()` (shell-targeted `applyTabListPosition` with `getMainMirrorDrawer/TabList/Panel`). No-opts `applyTabListPosition(enabled)` resolves the HIDDEN host main drawer — never rely on it for live main-shell behavior (live-verify #7/#8 class).
+- `teardownMainMirror` removes `#sidebar-ux-host-main-hide`; registered in setup.ts BEFORE `unsuppressMainDrawer` (FIFO) so disable restores content while the guard still hides.
+- `pushCurrentState`/restore paths use `isMainMirrorActive()` — NOT taskbarMode.
+
+## 21. Resize widths are owned-model writes (#9)
+
+Any path that changes a drawer width in DOM/CSS must commit it via `handles.ts:persistResizeWidth` (dispatch `setDrawer{width}`). The retired `persistLayout()` stubs still surface as "Persist via the owned model" comments with EMPTY bodies — that pattern is the trap; check it when a state change doesn't survive reload.
+
+## 22. Glyphs and handles are owner-aware (#10, #11)
+
+- **Drawer-tab glyph** (#10): main shell = vanilla lucide `Sparkles` markup (`ViewportDrawer.tsx`), secondary = Canvas panel glyph. Don't collapse them back into one hardcoded icon.
+- **Drawer-tab vertical sync precedence** (#11): `_runSyncDrawerTabSettings` must source the MAIN's EFFECTIVE position — `mainDrawerTabOverrideVh` first, then host `posVh`. Side changes reset `_lastKnownVerticalPos` (`checkSideChanged`), so raw `posVh` snaps dragged handles back to default on swap. S8: while horizontal, skip the vertical mirror entirely and clear stale `marginTop`.
+- **Boot reveal vs mid-session reveal** (#12): the MAIN pin strip is hidden only by the BOOT restore guard. Its fade rides the boot-only companion class (`sidebar-ux-main-reveal-in-host`, passed via `playRevealIn({ mainPinHost: true })`); adding it to the shared REVEAL_IN rule would make a mid-session release restart the already-visible strip from opacity 0 (flicker).
+
+## 23. Host NO-GOs: hidden state, closed-set, mobile
+
+- **Hidden is model-owned (S2):** `implementation.setHidden` does NOT patch the host `hiddenTabIds`; the Canvas copy (`tabs/canvas-hidden.ts`) is truth and `applyHiddenTabIds*` applies the DOM hides. `set-hidden.test.ts` asserts no host write.
+- **Hidden-tab reapply must never hide all regular tabs** (keeps first visible).
+- **OS close ≠ hidden, except for core tabs (six-concern #3):** OS close sets `model.closed`; with `coreTabsHidden` on, `closeWindowByLiveId` ALSO appends `setHidden` for core built-ins (resolved key → `parseBuiltinKey` → `tabs/core-tabs.ts`, never `isHideLocked(liveId)` — `:N` drift). The intent order matters: `setHidden` must come AFTER `setClosed`/`setDrawer`, or `applySetHidden`'s active-replacement re-focuses a neighbor and D17 breaks. The Configure unhide brings the window back via a `setClosed(false)` emitted in `owned-commit.ts` on a genuine hidden→visible transition — **never put that in `reduce.applySetHidden`**: the commit emits one `setHidden` intent per model key on every Apply, so a reducer-side drop would un-close every OS window on any Configure save.
+- **OS+mobile single-drawer force must run on a real model (six-concern #6):** a boot-time settings-only flip (`secondSidebarEnabled:false` at hydration) leaves the owned model dual with no secondary shell — secondary-assigned tabs become unreachable. The boot sync belongs at the END of `setup()` (after `bootstrapFromLayout` + boot placement + `applyMainDrawer`) and goes through `requestSecondDrawerMode(false, { silent: true })`; the `osForcedSingleDrawer` flag records the auto-disable so OS-off/cross-up restores the non-OS dual slot. Single-flight + re-fire-while-enabled guards the OS-toggle/crossing race.
+- **Mobile exclusion is interactive, and programmatic opens are not user opens:** hide the covered shell with `pointer-events:none` on the wrapper + descendants (naming the Canvas `.sidebar-ux-drawer-tab` class explicitly — the host `[class*="drawerTab"]` selector misses it), ignore host `wrapperOpen` class churn in `main-persist` while `isMainMirrorActive()` (Canvas pre-activation clicks open the headless host drawer), and hide the host mobile backdrop (it sits above Canvas drawers and swallows taps). Mobile active-tab taps DO toggle-close while effective taskbar mode / OS mode is on (both strips); plain-mobile taps remain a no-op.
+- **Mobile shell is kept (review B4 + S8):** the Sides-mobile branches of `applyMainTabListPin` / `reconcileMainTabListPin` mount/keep the shell and unpin — they must NOT tear it down. `teardownMainPin` is the extension-disable path only. **S8 exception:** the mobile gate is `isMobileViewport() && !isHorizontalStrip()` — a horizontal strip pins on mobile too. Cross-down injects `MAIN_MIRROR_MOBILE_CSS`; `teardownMainMirror` clears `_desktopWidth`.
+
+## 24. Persistence hardening
+
+- **Backend save failures surface (review B2/B3):** `saveLayout`/`saveSettings` rethrow after logging → the IPC ack is `{status:'error'}`; `persistModel` clears `_lastPersistedLayout` on failure so the next reconcile retries. Do not re-swallow the error.
+- **Canvas width vars are the ONLY live names (review B5):** `--sidebar-ux-secondary-w` / `--sidebar-ux-main-mirror-w` from `styles.ts`. `--canvas-secondary-width` / `--canvas-main-mirror-width` are DEAD — `observe()` reading the dead name adopted 420 over a user resize.
+- **Hidden-secondary order diff (review B4):** `diffSetOrder` excludes hidden keys on BOTH sides for `secondary` (the host derives secondary order from visible buttons and appends hidden ones — an included hidden key can never converge). `primary` keeps every id because `reorderHostMainTabButtons` needs the full list. Do not "unify" the two sides.
+- **Pending-restore merge guard (review B4):** `mergeResolvedInto` keeps the user's drawers/hidden/side once `markPendingWindowUserIntent` flagged a `setDrawer`/`swapSides`/`setHidden` inside the `_pendingLayout` window. Keep the guard when editing the merge.
+- **#13 host reset:** `moveTabTo` sets `pendingActiveTabReset` for ANY move-out; `clearSpuriousActiveTabReset` clears it only when the moved tab is provably not the host active (DOM first, store `drawerTab` fallback; unknown → KEEP the reset). The pre-activation restore never clicks a hidden/moved-out button.
+- **Taskbar remount width (review B4):** `mountMainMirror` prefers the existing `MAIN_MIRROR_WIDTH_VAR` over the hidden host drawer's width, so a chrome toggle cannot snap a Canvas-resized width back.
+
+## 25. Resize handles re-appear via queued side checks
+
+Resize handles re-appeared after disable via a queued `checkSideChanged` → guard with `!getHostBridge()`; sweep all handles on teardown.

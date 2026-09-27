@@ -1,14 +1,15 @@
 # Canvas — Agent Guide
 
-Canvas is a Spindle extension for Lumiverse (an AI chat frontend) that adds a second sidebar drawer, chat reflow, drag-to-resize, slash commands, and more. It is a pure-frontend TypeScript extension running in the browser.
+Canvas is a Spindle extension for Lumiverse (an AI chat frontend) that adds a second sidebar drawer, chat reflow, drag-to-resize, slash commands, OS mode, and more. It is a pure-frontend TypeScript extension running in the browser.
 
-## WORKFLOW.md (session catch-up)
+## Session catch-up (start here)
 
-**Global protocol:** `~/.grok/AGENTS.md` → Session catch-up (WORKFLOW.md). Skill: `/workflow`.
+1. Load the repo skill **`canvas`** (`.agents/skills/canvas/SKILL.md`) — deploy gate, test conventions, key invariants, commit discipline.
+2. Read `docs/README.md` for durable architecture and reading order.
+3. Read `docs/pitfalls.md` before touching tab moves, the main-mirror, boot restore, or drawer motion.
+4. Check `.agents/skills/canvas/references/open-items.md` for still-open live-verifies and review items.
 
-This repo keeps a **product-only** local `WORKFLOW.md` (main-mirror epic, pitfalls, deploy notes). Read it first for Canvas WIP/gotchas; then `docs/README.md` for durable architecture. Prefer WORKFLOW over session memory for open bugs. **Never commit** `WORKFLOW.md` (gitignored).
-
-Meta/process work on the **global WORKFLOW system** (hooks, gates, template) lives in `~/WORKFLOW.md` and `~/.grok/docs/workflow-md.md` — do not dump that into this repo’s WORKFLOW.
+Do not create or expect a `WORKFLOW.md` here; session work-state lives in the LUMI issue threads, not in the repo.
 
 ## Build / deploy when finalizing
 
@@ -23,7 +24,7 @@ If a “fix didn’t work” after a correct code change, the usual miss is buil
 
 ## Documentation
 
-For durable architecture and in-depth documentation, start with the /docs/ folder: `/docs/README.md` (reading order and quick reference). For *current* WIP and gotchas, prioritize `WORKFLOW.md` first when it exists.
+Durable architecture and in-depth documentation live in `/docs/`: start with `/docs/README.md` (reading order and quick reference); `/docs/pitfalls.md` is the "check this first" cross-cutting trap store.
 
 ```
 docs/
@@ -78,3 +79,7 @@ window.dispatchEvent(new CustomEvent('canvas:slash-register', {
 }))
 ```
 Unregister: `window.dispatchEvent(new CustomEvent('canvas:slash-unregister', { detail: { name: 'my-cmd' } }))`
+
+## Commit discipline
+
+Commit only when the user asks or approves. Never commit work-state journals (`WORKFLOW.md`, `REFACTOR-PLAN.md`, `.release-notes-*.md` — gitignored on purpose) or scratch files under `references/`.
