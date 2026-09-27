@@ -37,8 +37,9 @@
  */
 
 import type { Side } from '../core/model'
-import { getModel, getHost } from '../recon/dispatch'
-import { getDrawerTabs, getMainDrawerSide } from '../store'
+import { parseBuiltinKey } from '../core/model'
+import { getModel, getHost, dispatchBatch } from '../recon/dispatch'
+import { getDrawerTabs, getMainDrawerSide, type DrawerTab } from '../store'
 import { getMainWrapper } from '../dom/lumiverse'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { isStartAtStripTopGate } from './start-strip-top-gate'
@@ -49,6 +50,7 @@ import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { START_STRIP_TOP_DIVIDER_CLASS } from '../sidebar/styles'
 import { BUILTIN_ICON_SVGS } from '../tabs/builtin-icons'
+import { isCoreTabId } from '../tabs/core-tabs'
 import { injectStartMenuStyles, START_MENU_STYLE_ID } from './start-menu-styles'
 import { dlog } from '../debug/log'
 import {
@@ -87,6 +89,9 @@ let _menuRevealed = false
 let _closing: { menu: HTMLElement; anim: Animation | null } | null = null
 let _buttonRaf = 0
 let _unsubDocListeners: (() => void) | null = null
+/** Manage (eye) mode: transient per menu-open. The eye button in the header
+ *  toggles it; closing the menu resets it so the next open is NORMAL view. */
+let _manageMode = false
 
 // ── Entry derivation (pure, exported for tests) ──────────────────────────────
 
@@ -100,6 +105,17 @@ export interface StartMenuEntry {
   iconSvg?: string
   iconUrl?: string
   state: 'open' | 'minimized' | 'closed'
+  /** Eye-hidden per the model's `hidden` set. NORMAL projection emits only
+   *  `hidden: false` entries (hidden tabs are manage mode's rows); MANAGE
+   *  projection carries both. Drives the dimmed row + checkbox state. */
+  hidden: boolean
+  /** The model TabKey the entry was resolved from — the setHidden intent's
+   *  keying (the toggle path dispatches by key, never by liveId). */
+  key: string
+  /** Core hide-locked (CORE_HIDE_LOCKED): the manage-mode checkbox is
+   *  disabled unless the `coreTabsHidden` setting is on — the Configure
+   *  Tabs rule, mirrored here. */
+  locked: boolean
 }
 
 // ── Icon resolution (fixes the empty-icon bug) ───────────────────────────────
@@ -157,17 +173,29 @@ export function resolveEntryIcon(
 }
 
 /**
- * Derive the Start menu entries: every tab of BOTH drawers — hidden and
- * closed included — alphabetized by title (case-insensitive, stable tie-break
- * on liveId). The inventory is drawer-agnostic (both Start buttons list every
- * window) but the LAUNCH is not: each entry opens in the invoking menu's
- * drawer, and a window whose button was not already there lands at that
- * drawer's launch end (`openWindowInDrawerByLiveId`). Hidden tabs are listed
- * on purpose (the menu is the recovery path for eye-hidden tabs) and present
- * like closed — no mark, "Launch" verb — because they have no strip button;
- * the action un-hides them before activating (activation is hidden-gated in
- * the reducer). Unresolvable extension keys are skipped (they cannot open this
- * session).
+ * Derive the Start menu entries for one projection mode.
+ *
+ * NORMAL mode (the default launch surface): every VISIBLE tab of BOTH
+ * drawers — closed included, eye-hidden EXCLUDED — alphabetized by title
+ * (case-insensitive, stable tie-break on liveId). Un-hiding is the manage
+ * (eye) mode's job, not a launch action, so hidden tabs no longer occupy
+ * launch rows; the manage projection below is the recovery path.
+ *
+ * MANAGE mode: the same inventory WITH the hidden tabs re-listed (dimmed,
+ * checkbox rows — the Configure Tabs precedent), so eye-hidden tabs stay
+ * reachable.
+ *
+ * The inventory is drawer-agnostic (both Start buttons list every window)
+ * but the LAUNCH is not: each entry opens in the invoking menu's drawer, and
+ * a window whose button was not already there lands at that drawer's launch
+ * end (`openWindowInDrawerByLiveId`). Hidden entries present like closed —
+ * no mark, "Launch" verb — because they have no strip button; in manage
+ * mode their row carries the checkbox instead of relying on the state mark.
+ * Unresolvable extension keys are skipped (they cannot open this session).
+ *
+ * Pure over its inputs: the tab inventory is a PARAMETER (no module-global
+ * `getDrawerTabs()` read inside the body — the default argument only wires
+ * the production caller), so both projections are testable.
  */
 export function deriveStartMenuEntries(
   model: {
@@ -178,9 +206,12 @@ export function deriveStartMenuEntries(
     active: { primary: string | null; secondary: string | null }
   },
   resolve: (key: string) => string | null,
+  tabs: readonly DrawerTab[] = getDrawerTabs(),
+  opts: { manageMode?: boolean } = {},
 ): StartMenuEntry[] {
-  // One store scan for titles/icons (was a per-key find).
-  const tabs = new Map(getDrawerTabs().map((t) => [t.id, t]))
+  const manageMode = opts.manageMode ?? false
+  // One scan for titles/icons (was a per-key find).
+  const tabsById = new Map(tabs.map((t) => [t.id, t]))
   const seen = new Set<string>()
   const out: StartMenuEntry[] = []
   for (const side of ['primary', 'secondary'] as const) {
@@ -190,14 +221,20 @@ export function deriveStartMenuEntries(
       const liveId = resolve(key)
       if (!liveId || seen.has(liveId)) continue
       seen.add(liveId)
+      const isHidden = model.hidden.includes(key)
+      // NORMAL view drops hidden rows (manage mode is their recovery path).
+      if (isHidden && !manageMode) continue
       // Closed OR eye-hidden → 'closed' (no strip button, so no mark):
       // 'minimized' means "parked WITH a strip button" — a hidden tab has
       // none. The click un-hides + launches either way.
-      const state = model.closed.includes(key) || model.hidden.includes(key)
+      const state = model.closed.includes(key) || isHidden
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
-      const tab = tabs.get(liveId)
+      const tab = tabsById.get(liveId)
       const icon = resolveEntryIcon(tab, liveId)
+      // Core hide-lock: resolved from the MODEL key's bare builtin id (the
+      // same resolution the OS close path uses — never isHideLocked(liveId)).
+      const coreId = parseBuiltinKey(key)
       out.push({
         liveId,
         side,
@@ -205,6 +242,9 @@ export function deriveStartMenuEntries(
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
+        hidden: isHidden,
+        key,
+        locked: coreId !== null && isCoreTabId(coreId),
       })
     }
   }
@@ -291,6 +331,59 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
 }
 
 /**
+ * Manage (eye) mode row: the same launch button as a NORMAL row, plus a
+ * visibility checkbox on the right — checked = VISIBLE (the Configure Tabs
+ * semantics, mirrored). Hidden rows render dimmed (`row-hidden` precedent).
+ *
+ * The checkbox dispatches the model intent `{t:'setHidden', key, hidden}` —
+ * NOT the Configure draft mutation (`configure-model.setHidden` mutates the
+ * modal's draft; this menu has no draft). The dispatchBatch reconciliation
+ * is the whole commit bridge: applySetHidden commits the model, the
+ * reconcile diff calls `host.setHidden` which converges the Canvas hidden
+ * copy (setCanvasHiddenTabIds) + applies the DOM strips, and
+ * reconcileAndPersist saves the layout (persistLayout is a retired no-op —
+ * owned-model persistence is automatic after every reconcile).
+ *
+ * Core hide-locked rows (CORE_HIDE_LOCKED) keep the checkbox disabled
+ * unless the `coreTabsHidden` setting is on — the same unlock rule the
+ * Configure toggle applies. Hidden-core rows appear only when OS mode is on
+ * (which forces the setting), so the lock only shows on visible core rows.
+ */
+function createManageRow(entry: StartMenuEntry, targetSide: Side): HTMLElement {
+  const row = createMenuEntry(entry, targetSide)
+  row.classList.add('canvas-os-start-menu__item--manage')
+  if (entry.hidden) row.classList.add('row-hidden')
+
+  const coreUnlocked = !!getSettings().coreTabsHidden
+  const isLocked = entry.locked && !coreUnlocked
+
+  const checkbox = document.createElement('input')
+  checkbox.type = 'checkbox'
+  checkbox.className = 'canvas-os-start-menu__check'
+  checkbox.checked = !entry.hidden
+  checkbox.disabled = isLocked
+  checkbox.title = isLocked
+    ? 'Cannot hide this panel'
+    : entry.hidden ? 'Show panel' : 'Hide panel'
+  checkbox.setAttribute('aria-label', `${entry.title} — ${checkbox.title}`)
+  checkbox.addEventListener('click', (ev) => ev.stopPropagation())
+  checkbox.addEventListener('change', () => {
+    // Toggle the model's hidden membership by TabKey. The dispatch's
+    // reconcile pass performs the Canvas-copy converge + DOM application
+    // (host.setHidden) and the persist — nothing else to do here.
+    void dispatchBatch([{ t: 'setHidden', key: entry.key, hidden: !checkbox.checked }])
+    // Optimistic in-place row update: the intent re-projects on the next
+    // open; flipping the classes + state now keeps the surface live.
+    const nowHidden = !checkbox.checked
+    entry.hidden = nowHidden
+    row.classList.toggle('row-hidden', nowHidden)
+    row.setAttribute('data-os-state', 'closed')
+  })
+  row.appendChild(checkbox)
+  return row
+}
+
+/**
  * Fill a tile with the entry icon: resolved SVG → `<img>` → monogram.
  * The tile is decorative (`aria-hidden`); the label carries the name.
  */
@@ -315,22 +408,54 @@ export function renderEntryIcon(
   tile.classList.add('canvas-os-start-menu__tile--monogram')
 }
 
-/** Header strip: brand glyph + deck label + window count (chrome, not content). */
-function createHeader(count: number): HTMLElement {
+/** Manage (eye) toggle glyph — an eye, `currentColor` strokes. */
+const MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>'
+
+/**
+ * Header strip: brand glyph + deck label + [manage toggle] + window count.
+ *
+ * LUMI-16a: the header is NO LONGER wholesale `aria-hidden` — the manage
+ * (eye) toggle is a REAL control and must be reachable by assistive tech.
+ * The decorative chrome (brand glyph, title, count) is individually
+ * aria-hidden inside a chrome wrapper; the eye button is a sibling of that
+ * wrapper, left of the count, and carries its own accessible name + pressed
+ * state. Visually unchanged: same flex row, same order.
+ */
+function createHeader(count: number, hiddenCount: number, manageMode: boolean): HTMLElement {
   const header = document.createElement('div')
   header.className = 'canvas-os-start-menu__header'
   header.setAttribute('role', 'presentation')
-  header.setAttribute('aria-hidden', 'true')
+
+  const chrome = document.createElement('span')
+  chrome.className = 'canvas-os-start-menu__header-chrome'
+  chrome.setAttribute('aria-hidden', 'true')
   const brand = document.createElement('span')
   brand.className = 'canvas-os-start-menu__brand'
   brand.innerHTML = START_GLYPH_SVG
   const title = document.createElement('span')
   title.className = 'canvas-os-start-menu__title'
-  title.textContent = 'Start menu'
+  title.textContent = 'Start'
+  chrome.append(brand, title)
+
+  const manageBtn = document.createElement('button')
+  manageBtn.type = 'button'
+  manageBtn.className = `canvas-os-start-menu__manage${manageMode ? ' manage-on' : ''}`
+  manageBtn.innerHTML = MANAGE_EYE_SVG
+  manageBtn.setAttribute('aria-pressed', manageMode ? 'true' : 'false')
+  const manageLabel = manageMode ? 'Done managing panels' : 'Manage panels'
+  manageBtn.setAttribute('aria-label', manageLabel)
+  manageBtn.title = manageLabel
+
   const countEl = document.createElement('span')
   countEl.className = 'canvas-os-start-menu__count'
-  countEl.textContent = count === 1 ? '1 panel' : `${count} panels`
-  header.append(brand, title, countEl)
+  countEl.setAttribute('aria-hidden', 'true')
+  // Count reads from the FULL inventory (both drawers); the hidden tally is
+  // manage mode's second line ("N panels · M hidden", LUMI-16a).
+  countEl.textContent = manageMode
+    ? `${count === 1 ? '1 panel' : `${count} panels`} · ${hiddenCount === 1 ? '1 hidden' : `${hiddenCount} hidden`}`
+    : count === 1 ? '1 panel' : `${count} panels`
+
+  header.append(chrome, manageBtn, countEl)
   return header
 }
 
@@ -353,23 +478,48 @@ function createEmptyState(): HTMLElement {
   return empty
 }
 
-/** Build the menu surface for the invoking drawer; the caller positions it. */
+/**
+ * Build the menu surface for the invoking drawer; the caller positions it.
+ * MANAGE (eye) mode projects hidden tabs back into the list as dimmed
+ * checkbox rows (the Configure Tabs precedent); NORMAL view lists visible
+ * tabs only. The manage toggle lives in the header and flips the mode in
+ * place (fresh projection, count line swap) without rebuilding the sheet.
+ */
 function buildMenu(targetSide: Side): HTMLElement | null {
   const host = getHost()
   const model = getModel()
   if (!host || !model) return null
-  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key))
+  const resolve = (key: string) => host.resolve(key)
+  const entries = deriveStartMenuEntries(model, resolve, getDrawerTabs(), {
+    manageMode: _manageMode,
+  })
   injectStartMenuStyles()
   const menu = document.createElement('div')
   menu.id = MENU_ID
   menu.className = 'canvas-os-start-menu'
+  if (_manageMode) menu.setAttribute('data-manage-mode', 'true')
   menu.setAttribute('role', 'menu')
   menu.setAttribute('aria-label', 'Start menu')
   if (entries.length === 0) {
+    // Manage mode's empty-state swap: hidden-only inventories show rows in
+    // NORMAL view too (all hidden → empty). Rebuild on toggle covers it.
     menu.appendChild(createEmptyState())
     return menu
   }
-  menu.appendChild(createHeader(entries.length))
+  const header = createHeader(
+    entries.length,
+    entries.filter((e) => e.hidden).length,
+    _manageMode,
+  )
+  // Manage toggle: flips the projection in place. Rebuild the list rows +
+  // count line; keep the menu open and anchored (transient per open — the
+  // close path resets the module flag, see hideStartMenu).
+  const manageBtn = header.querySelector('button.canvas-os-start-menu__manage') as HTMLButtonElement | null
+  manageBtn?.addEventListener('click', (ev) => {
+    ev.stopPropagation()
+    toggleManageMode(targetSide)
+  })
+  menu.appendChild(header)
   const divider = document.createElement('div')
   divider.className = 'canvas-os-start-menu__divider'
   divider.setAttribute('role', 'separator')
@@ -378,10 +528,36 @@ function buildMenu(targetSide: Side): HTMLElement | null {
   list.className = 'canvas-os-start-menu__list'
   list.setAttribute('role', 'presentation')
   for (const entry of entries) {
-    list.appendChild(createMenuEntry(entry, targetSide))
+    list.appendChild(
+      _manageMode ? createManageRow(entry, targetSide) : createMenuEntry(entry, targetSide),
+    )
   }
   menu.appendChild(list)
   return menu
+}
+
+/**
+ * Flip manage mode and re-render the open menu in place: fresh projection,
+ * fresh header (pressed state + count line), fresh rows. Keeps the sheet's
+ * geometry (no re-open animation) — the anchored surface stays put.
+ */
+function toggleManageMode(targetSide: Side): void {
+  _manageMode = !_manageMode
+  const menu = _menu
+  if (!menu || !_menuButton?.isConnected) return
+  const next = buildMenu(targetSide)
+  if (!next) return
+  // Swap in the next surface's children, keeping the SAME positioned node
+  // (left/top/zoom attrs already applied by the open rAF).
+  menu.className = next.className
+  for (const attr of ['data-manage-mode']) {
+    const v = next.getAttribute(attr)
+    if (v === null) menu.removeAttribute(attr)
+    else menu.setAttribute(attr, v)
+  }
+  for (const child of Array.from(menu.children)) child.remove()
+  for (const child of Array.from(next.children)) menu.appendChild(child)
+  dlog('[os] start menu manage toggle', { manage: _manageMode })
 }
 
 /** Cancel the pending menu-position rAF (if any). */
@@ -481,6 +657,9 @@ export function openStartMenu(side: Side, button: HTMLElement): void {
     return
   }
   hideStartMenu({ immediate: true })
+  // Manage mode is transient per menu-open: every open starts in NORMAL
+  // view (the launch surface); the eye toggle re-enters manage mode.
+  _manageMode = false
   const menu = buildMenu(side)
   if (!menu) return
   document.body.appendChild(menu)
@@ -572,6 +751,8 @@ export function hideStartMenu(opts?: { immediate?: boolean }): void {
   _menuOpenFor = null
   _menuButton = null
   _menuRevealed = false
+  // Manage mode is transient per menu-open — the next open is NORMAL view.
+  _manageMode = false
   cancelMenuRaf()
 
   // Focus must not stay on a surface that is leaving the DOM.

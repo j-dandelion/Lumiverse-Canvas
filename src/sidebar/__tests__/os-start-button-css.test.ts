@@ -303,8 +303,8 @@ const START_SEL = 'button[data-canvas-os-start]'
   assertIncludes(featBlock, 'unconditional: true',
     'strip-top feature must be unconditional (default false)')
 
-  // Header copy (LUMI-11): Start menu / N panels.
-  assertIncludes(src, "title.textContent = 'Start menu'", 'header title reads Start menu')
+  // Header copy (LUMI-11, renamed LUMI-16a): Start / N panels.
+  assertIncludes(src, "title.textContent = 'Start'", 'header title reads Start')
   assertIncludes(src, "count === 1 ? '1 panel' : `${count} panels`", 'header count reads panels')
   assert(!src.includes("title.textContent = 'Windows'"), 'no Windows header title')
   assert(!src.includes("'1 window'"), 'no singular-window count')

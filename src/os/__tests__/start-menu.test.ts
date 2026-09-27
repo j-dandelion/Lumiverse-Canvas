@@ -30,6 +30,7 @@ import {
   STATE_VERB,
 } from '../start-menu'
 import { BUILTIN_ICON_SVGS } from '../../tabs/builtin-icons'
+import type { DrawerTab } from '../../store'
 import { PUZZLE_ICON_SVG } from '../../sidebar/secondary'
 
 const KEY_A = 'builtin:a'
@@ -43,14 +44,15 @@ const liveIds = new Map<string, string>([
   [KEY_B, 'b:2'],
   [KEY_C, 'c:2'],
   [KEY_HIDDEN, 'h:2'],
+  ['builtin:profile', 'profile:2'],
 ])
 // Deliberately NOT in alphabetical order — the derivation must sort.
 const storeTabs = [
-  { id: 'h:2', title: 'Hidden' },
-  { id: 'c:2', title: 'Gamma' },
-  { id: 'a:2', title: 'Alpha', iconSvg: '<svg/>' },
-  { id: 'b:2', title: 'Beta' },
-]
+  { id: 'h:2', extensionId: '', title: 'Hidden', root: null },
+  { id: 'c:2', extensionId: 'x/c', title: 'Gamma', root: null },
+  { id: 'a:2', extensionId: '', title: 'Alpha', iconSvg: '<svg/>', root: null },
+  { id: 'b:2', extensionId: '', title: 'Beta', root: null },
+] as unknown as DrawerTab[]
 
 // getDrawerTabs is consumed inside deriveStartMenuEntries — bun:test mock.
 import { mock } from 'bun:test'
@@ -68,7 +70,13 @@ mock.module('../../recon/dispatch', () => ({
   getHost: () => ({ resolve: (key: string) => liveIds.get(key) ?? null }),
   // Run-scoped persist override (adversarial F2 — os-mode static import).
   setPersistOsOverride: () => {},
+  // Manage-mode checkbox clicks dispatch the model intent; the tests record
+  // the calls instead of running the reconcile graph.
+  dispatchBatch: (intents: unknown[]) => {
+    for (const i of intents) dispatchedIntents.push(i as { t: string; key?: string; hidden?: boolean })
+  },
 }))
+const dispatchedIntents: Array<{ t: string; key?: string; hidden?: boolean }> = []
 mock.module('../start-menu-styles', () => ({
   injectStartMenuStyles: () => {},
   START_MENU_STYLE_ID: 'canvas-os-start-menu-styles',
@@ -86,13 +94,13 @@ function makeModel() {
 
 const resolve = (key: string) => liveIds.get(key) ?? null
 
-// ── deriveStartMenuEntries: both drawers, hidden included, alphabetical ──
+// ── deriveStartMenuEntries: both drawers, hidden EXCLUDED (normal view), alphabetical ──
 {
   const entries = deriveStartMenuEntries(makeModel(), resolve)
-  assertEqual(entries.length, 4, 'both drawers listed, hidden included, unresolvable skipped')
+  assertEqual(entries.length, 3, 'both drawers listed, hidden EXCLUDED, unresolvable skipped')
   assertEqual(
     entries.map((e) => e.title).join(','),
-    'Alpha,Beta,Gamma,Hidden',
+    'Alpha,Beta,Gamma',
     'alphabetized by title (not strip order)',
   )
   assertEqual(entries[0]?.liveId, 'a:2', 'alpha entry first')
@@ -101,19 +109,54 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(entries[1]?.state, 'closed', 'closed-set membership → closed')
   assertEqual(entries[2]?.side, 'secondary', 'secondary entry carries secondary')
   assertEqual(entries[2]?.state, 'minimized', 'inactive in-drawer → minimized')
-  assertEqual(entries[3]?.liveId, 'h:2', 'hidden tab is listed (recovery path)')
-  assertEqual(entries[3]?.side, 'secondary', 'hidden tab keeps its drawer')
-  assertEqual(entries[3]?.state, 'closed', 'hidden non-active tab → closed (no strip button, no ○)')
   assertEqual(entries[0]?.iconSvg, '<svg/>', 'icon from the store')
   assertEqual(entries[0]?.title, 'Alpha', 'title from the store')
+  assert(entries.every((e) => !e.hidden), 'normal projection: every entry visible')
+  assert(entries.every((e) => typeof e.key === 'string'), 'entries carry their TabKey')
 }
 
-// ── hidden presents like closed; a visible inactive tab stays minimized ──
+// ── manage mode: hidden tabs re-enter the list (dimmed recovery rows) ──
+{
+  const entries = deriveStartMenuEntries(makeModel(), resolve, storeTabs, { manageMode: true })
+  assertEqual(entries.length, 4, 'manage projection: hidden tabs listed again')
+  assertEqual(
+    entries.map((e) => e.title).join(','),
+    'Alpha,Beta,Gamma,Hidden',
+    'manage projection: alphabetized with the hidden row included',
+  )
+  const hiddenEntry = entries.find((e) => e.liveId === 'h:2')
+  assertEqual(hiddenEntry?.hidden, true, 'manage projection: hidden entry flagged')
+  assertEqual(hiddenEntry?.side, 'secondary', 'hidden tab keeps its drawer')
+  assertEqual(hiddenEntry?.state, 'closed', 'hidden non-active tab → closed (no strip button)')
+  assertEqual(hiddenEntry?.key, KEY_HIDDEN, 'hidden entry carries its TabKey (setHidden keying)')
+  assert(entries.find((e) => e.liveId === 'a:2')?.hidden === false, 'visible tab not flagged')
+}
+
+// ── core hide-lock: resolved from the model key's bare builtin id ──
+{
+  const coreModel = {
+    ...makeModel(),
+    primary: ['builtin:profile'],
+    secondary: [KEY_C],
+    hidden: [] as string[],
+    closed: [] as string[],
+    active: { primary: 'builtin:profile', secondary: null as string | null },
+  }
+  const entries = deriveStartMenuEntries(coreModel, resolve, storeTabs, { manageMode: true })
+  assertEqual(entries.find((e) => e.key === 'builtin:profile')?.locked, true, 'core tab → locked')
+  assertEqual(entries.find((e) => e.key === KEY_C)?.locked, false, 'extension tab → not locked')
+  // Normal (non-manage) projection keeps the same flag — the manage row is
+  // the only consumer today, but the field is part of the entry contract.
+  const normal = deriveStartMenuEntries(coreModel, resolve)
+  assertEqual(normal.find((e) => e.key === 'builtin:profile')?.locked, true, 'lock flag in normal projection too')
+}
+
+// ── hidden presents like closed (manage projection); a visible inactive tab stays minimized ──
 {
   // Same model minus the OS closure: the eye-hidden tab must still show as
   // closed (it has no strip button), while a plain inactive tab keeps the
   // minimized ○.
-  const entries = deriveStartMenuEntries({ ...makeModel(), closed: [] }, resolve)
+  const entries = deriveStartMenuEntries({ ...makeModel(), closed: [] }, resolve, storeTabs, { manageMode: true })
   assertEqual(
     entries.find((e) => e.liveId === 'h:2')?.state,
     'closed',
@@ -124,7 +167,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
     'minimized',
     'visible inactive tab → minimized (mark)',
   )
-  const both = deriveStartMenuEntries({ ...makeModel(), closed: [KEY_HIDDEN] }, resolve)
+  const both = deriveStartMenuEntries({ ...makeModel(), closed: [KEY_HIDDEN] }, resolve, storeTabs, { manageMode: true })
   assertEqual(
     both.find((e) => e.liveId === 'h:2')?.state,
     'closed',
@@ -135,23 +178,22 @@ const resolve = (key: string) => liveIds.get(key) ?? null
 // ── case-insensitive collation, stable on ties ──
 {
   const mixed = [
-    { id: 'g:2', title: 'gamma' },
-    { id: 'b:2', title: 'Beta' },
-    { id: 'a:2', title: 'alpha' },
-  ]
+    { id: 'g:2', extensionId: 'x/g', title: 'gamma', root: null },
+    { id: 'b:2', extensionId: '', title: 'Beta', root: null },
+    { id: 'a:2', extensionId: '', title: 'alpha', root: null },
+  ] as unknown as DrawerTab[]
   const mixedResolve = (key: string) =>
     key === KEY_A ? 'a:2' : key === KEY_B ? 'b:2' : key === KEY_C ? 'g:2' : null
-  const saved = storeTabs.slice()
-  storeTabs.length = 0
-  storeTabs.push(...mixed)
-  const entries = deriveStartMenuEntries(makeModel(), mixedResolve)
+  const entries = deriveStartMenuEntries(
+    { ...makeModel(), hidden: [] },
+    mixedResolve,
+    mixed,
+  )
   assertEqual(
     entries.map((e) => e.title).join(','),
     'alpha,Beta,gamma',
     'case-insensitive alphabetical order',
   )
-  storeTabs.length = 0
-  storeTabs.push(...saved)
 }
 
 // ── unresolvable keys are skipped (cannot open this session) ──
@@ -160,7 +202,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
     { ...makeModel(), primary: [KEY_A, KEY_GONE] },
     resolve,
   )
-  assertEqual(entries.length, 3, 'unresolvable key skipped')
+  assertEqual(entries.length, 2, 'unresolvable key skipped (hidden also excluded in normal view)')
   assertEqual(entries[0]?.liveId, 'a:2', 'resolvable entry kept')
 }
 
@@ -312,6 +354,12 @@ class FakeEl {
     add: (...cs: string[]) => { for (const c of cs) this._classes.add(c) },
     remove: (...cs: string[]) => { for (const c of cs) this._classes.delete(c) },
     contains: (c: string) => this._classes.has(c),
+    toggle: (c: string, force?: boolean) => {
+      const on = force === undefined ? !this._classes.has(c) : force
+      if (on) this._classes.add(c)
+      else this._classes.delete(c)
+      return on
+    },
   }
 
   setAttribute(k: string, v: string) { this._attrs.set(k, v) }
@@ -340,10 +388,47 @@ class FakeEl {
   contains(el: unknown): boolean {
     return el === this || this.children.some((c) => c.contains(el))
   }
-  addEventListener() { /* element-level listeners are not under test */ }
-  removeEventListener() { /* element-level listeners are not under test */ }
+  // Element-level listeners are not under test except the manage-mode
+  // handlers (eye click, checkbox change) — record them so tests can drive
+  // the intent path directly.
+  _listeners = new Map<string, Array<(ev: unknown) => void>>()
+  addEventListener(type: string, fn: () => void) {
+    const list = this._listeners.get(type) ?? []
+    list.push(fn)
+    this._listeners.set(type, list)
+  }
+  removeEventListener(type: string, fn: () => void) {
+    const list = (this._listeners.get(type) ?? []).filter((f) => f !== fn)
+    this._listeners.set(type, list)
+  }
+  click(_ev?: unknown) {
+    for (const fn of this._listeners.get('click') ?? []) fn({ stopPropagation() {} })
+  }
+  fireChange() {
+    for (const fn of this._listeners.get('change') ?? []) fn({})
+  }
   focus() { /* no-op */ }
-  querySelector(): FakeEl | null { return null }
+  querySelector(selector: string): FakeEl | null {
+    // Minimal selector support for the manage-toggle lookup:
+    // 'button.canvas-os-start-menu__manage' — TAG.class match, first hit in
+    // document order (depth-first), same as the real DOM for this shape.
+    const m = /^([a-z]+)((?:\.[\w-]+)*)$/.exec(selector.trim())
+    if (!m) return null
+    const tag = m[1]!.toUpperCase()
+    const classes = m[2] ? m[2].slice(1).split('.') : []
+    const walk = (el: FakeEl): FakeEl | null => {
+      for (const child of el.children) {
+        if (
+          child.tagName === tag
+          && classes.every((c) => child.classList.contains(c))
+        ) return child
+        const hit = walk(child)
+        if (hit) return hit
+      }
+      return null
+    }
+    return walk(this)
+  }
   querySelectorAll(): FakeEl[] { return [] }
   getBoundingClientRect() {
     return { left: 16, top: 600, width: 120, height: 40, right: 136, bottom: 640 }
@@ -504,7 +589,7 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   const { menu } = openFreshMenu()
   const list = menu.children[2] as FakeEl
   const items = list.children.filter((c) => c.tagName === 'BUTTON')
-  assertEqual(items.length, 4, 'L5 control: one menuitem per derived entry')
+  assertEqual(items.length, 3, 'L5 control: one menuitem per derived entry (normal view, hidden excluded)')
   menu.querySelectorAll = () => items
   ;(fakeDoc as any).activeElement = items[0]
   let focused: unknown = null
@@ -520,6 +605,91 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   assert(escPrevented, 'L5 control: Escape still preventDefaults')
   assert(menu.removed, 'L5 control: Escape still closes the menu')
   assertEqual(activeCount(docRec, 'keydown'), 0, 'L5 control: Escape teardown intact')
+}
+
+// ── (6) Manage mode: eye toggle + checkbox hide/unhide intent path (LUMI-16a) ─
+{
+  dispatchedIntents.length = 0
+  const { menu } = openFreshMenu()
+  // NORMAL view: hidden tab absent.
+  const list = menu.children[2] as FakeEl
+  const normalItems = list.children.filter((c) => c.tagName === 'BUTTON')
+  assertEqual(normalItems.length, 3, 'manage: normal view lists visible tabs only')
+  assertEqual(menu.getAttribute('data-manage-mode'), null, 'manage: normal view has no manage attr')
+
+  // The eye toggle in the header (LEFT of the count): a real button.
+  const header = menu.children[0] as FakeEl
+  const eye = header.children.find(
+    (c) => c.tagName === 'BUTTON' && c.className.includes('__manage'),
+  )
+  assert(eye, 'manage: eye toggle present in the header row')
+  assertEqual(eye!.getAttribute('aria-pressed'), 'false', 'manage: toggle starts unpressed')
+  assertEqual(header.children.indexOf(eye!) < header.children.length - 1, true, 'manage: eye sits LEFT of the count span')
+  assertEqual((header.children[0] as FakeEl).getAttribute('aria-hidden'), 'true', 'manage: decorative chrome is aria-hidden (toggle reachable)')
+  assertEqual(header.getAttribute('aria-hidden'), null, 'manage: header row itself is NOT aria-hidden')
+
+  // Flip to manage mode: hidden row re-enters, dimmed, with a checkbox.
+  eye!.click()
+  assertEqual(menu.getAttribute('data-manage-mode'), 'true', 'manage: manage attr stamped')
+  // toggleManageMode swaps in a fresh header — re-query from the live menu.
+  const header2 = menu.children[0] as FakeEl
+  const eye2 = header2.children.find(
+    (c) => c.tagName === 'BUTTON' && c.className.includes('__manage'),
+  )!
+  assertEqual(eye2.getAttribute('aria-pressed'), 'true', 'manage: toggle pressed after flip')
+  const countText = (header2.children[header2.children.length - 1] as FakeEl).textContent
+  assertEqual(countText, '4 panels · 1 hidden', 'manage: count reads N panels · M hidden')
+  const manageItems = ((menu.children[2] as FakeEl).children).filter((c) => c.tagName === 'BUTTON')
+  assertEqual(manageItems.length, 4, 'manage: hidden tab re-enters the list')
+  const hiddenRow = manageItems.find((r) => r.className.includes('row-hidden'))
+  assert(hiddenRow, 'manage: the eye-hidden row is dimmed (row-hidden)')
+  const hiddenCheckbox = hiddenRow!.children.find(
+    (c) => c.tagName === 'INPUT' && c.className.includes('__check'),
+  ) as FakeEl | undefined
+  assert(hiddenCheckbox, 'manage: hidden row carries a checkbox')
+  assertEqual(hiddenCheckbox!.getAttribute('aria-label'), 'Hidden — Show panel', 'manage: checkbox aria-label names the action')
+
+  // Un-hide: checkbox change dispatches the model intent (checked = visible;
+  // a real click sets .checked before change fires).
+  ;(hiddenCheckbox as unknown as { checked: boolean }).checked = true
+  hiddenCheckbox!.fireChange()
+  assertEqual(dispatchedIntents.length, 1, 'manage: un-hide dispatches exactly one intent')
+  assertEqual(dispatchedIntents[0]?.t, 'setHidden', 'manage: the intent is setHidden')
+  assertEqual(dispatchedIntents[0]?.key, KEY_HIDDEN, 'manage: keyed by the model TabKey')
+  assertEqual(dispatchedIntents[0]?.hidden, false, 'manage: un-hide sets hidden=false')
+  assert(!hiddenRow!.className.includes('row-hidden'), 'manage: un-hidden row loses the dim')
+
+  // Hide a visible row: same intent path, hidden=true.
+  const visibleRow = manageItems.find((r) => !r.className.includes('row-hidden'))!
+  const visibleCheckbox = visibleRow.children.find(
+    (c) => c.tagName === 'INPUT',
+  ) as FakeEl
+  ;(visibleCheckbox as unknown as { checked: boolean }).checked = false
+  visibleCheckbox.fireChange()
+  assertEqual(dispatchedIntents.length, 2, 'manage: hide dispatches a second intent')
+  assertEqual(dispatchedIntents[1]?.hidden, true, 'manage: hide sets hidden=true')
+  assert(visibleRow.className.includes('row-hidden'), 'manage: hidden row dims immediately')
+
+  // Core-locked rule: a locked row's checkbox is disabled without the
+  // coreTabsHidden setting (default off in this harness).
+  dispatchedIntents.length = 0
+  const coreModel = {
+    ...makeModel(),
+    primary: ['builtin:profile'],
+    secondary: [] as string[],
+    hidden: [] as string[],
+    closed: [] as string[],
+    active: { primary: 'builtin:profile', secondary: null as string | null },
+  }
+  const coreEntries = deriveStartMenuEntries(coreModel, resolve, storeTabs, { manageMode: true })
+  assertEqual(coreEntries[0]?.locked, true, 'manage: core tab flagged locked')
+
+  // Close resets the mode: the next open is NORMAL view again.
+  hideStartMenu({ immediate: true })
+  const reopened = openFreshMenu()
+  assertEqual(reopened.menu.getAttribute('data-manage-mode'), null, 'manage: close resets the mode (transient per open)')
+  const reopenedItems = ((reopened.menu.children[2] as FakeEl).children).filter((c) => c.tagName === 'BUTTON')
+  assertEqual(reopenedItems.length, 3, 'manage: reopened menu is the normal projection')
 }
 
 console.log('---')

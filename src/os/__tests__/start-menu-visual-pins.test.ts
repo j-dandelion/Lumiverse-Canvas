@@ -162,12 +162,16 @@ function blockOf(css: string, needle: string): string {
 {
   for (const cls of [
     '__header',
+    '__header-chrome',
     '__brand',
     '__title',
     '__count',
+    '__manage',
+    '__check',
     '__divider',
     '__list',
     '__item',
+    '__item--manage',
     '__rail',
     '__tile',
     '__tile--monogram',
@@ -189,6 +193,18 @@ function blockOf(css: string, needle: string): string {
   assertIncludes(START_MENU_CSS, '@media (pointer: coarse)', 'touch hook')
   assertIncludes(START_MENU_CSS, 'font-size: calc(10.5px * var(--lumiverse-font-scale, 1))', 'verb type scale')
   assertIncludes(START_MENU_CSS, '--csm-status-w: calc(58px * var(--lumiverse-font-scale, 1))', 'status slot scales with font scale')
+  // Manage-mode pins (LUMI-16a): eye toggle + checkbox + dimmed hidden rows.
+  assertIncludes(START_MENU_CSS, '.canvas-os-start-menu__item.row-hidden', 'hidden row dimming (Configure .row-hidden precedent)')
+  assertIncludes(src, "textContent = 'Start'", 'header label is Start (not Start menu)')
+  assertIncludes(src, "manageBtn.setAttribute('aria-pressed'", 'manage toggle is a pressed-state control')
+  assertIncludes(START_MENU_CSS, '.canvas-os-start-menu__item--manage', 'manage row modifier class')
+  assertIncludes(src, "'canvas-os-start-menu__item--manage'", 'manage row modifier applied in DOM')
+  assertIncludes(src, "manageBtn.setAttribute('aria-label', manageLabel)", 'manage toggle carries its own accessible name')
+  assertIncludes(src, '· ${hiddenCount === 1', 'manage count line reads N panels · M hidden')
+  assertIncludes(src, "checkbox.checked = !entry.hidden", 'checkbox checked = visible (Configure semantics)')
+  assertIncludes(src, "dispatchBatch([{ t: 'setHidden', key: entry.key, hidden: !checkbox.checked }])", 'toggle dispatches the model setHidden intent (never the Configure draft)')
+  assertIncludes(src, "!!getSettings().coreTabsHidden", 'core hide-lock reads the coreTabsHidden setting')
+  assert(!src.includes("from '../tabs/configure-model'"), 'menu must not import the Configure draft model')
 }
 
 // ── 4. DOM wiring in start-menu.ts ───────────────────────────────────────────
@@ -197,7 +213,8 @@ function blockOf(css: string, needle: string): string {
   assertIncludes(src, "item.className = 'canvas-os-start-menu__item'", 'item class hook')
   assertIncludes(src, "item.setAttribute('data-os-state', entry.state)", 'state hook')
   assertIncludes(src, "item.setAttribute('aria-label',", 'accessible name per item')
-  assertIncludes(src, "header.setAttribute('aria-hidden', 'true')", 'header is chrome for AT')
+  assertIncludes(src, "header.setAttribute('role', 'presentation')", 'header is chrome for AT')
+  assertIncludes(src, "chrome.setAttribute('aria-hidden', 'true')", 'decorative chrome is aria-hidden (the manage toggle stays reachable)')
   assertIncludes(src, "mark.innerHTML = markSvg", 'mark markup is data-driven')
   assertIncludes(src, "tile.setAttribute('aria-hidden', 'true')", 'icon tile is decorative')
   assertIncludes(src, 'document.getElementById(START_MENU_STYLE_ID)?.remove()', 'teardown removes the sheet')

@@ -87,6 +87,15 @@ export const START_MENU_CSS = `
     height: 30px;
     padding: 0 9px;
   }
+  /* Decorative chrome (brand + title) wrapped so the manage toggle stays a
+     reachable control: the wrapper carries the aria-hidden, not the row. */
+  .canvas-os-start-menu__header-chrome {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+  }
   .canvas-os-start-menu__brand {
     display: flex;
     width: 14px;
@@ -101,11 +110,61 @@ export const START_MENU_CSS = `
     font-weight: 600;
     color: var(--lumiverse-text-muted);
   }
+  /* Manage (eye) toggle — left of the count. A real button (the header is
+     no longer wholesale aria-hidden): visible hover/focus, pressed state. */
+  .canvas-os-start-menu__manage {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    cursor: pointer;
+  }
+  .canvas-os-start-menu__manage:hover {
+    color: var(--lumiverse-text);
+    background: var(--lumiverse-bg-hover);
+  }
+  .canvas-os-start-menu__manage.manage-on {
+    color: var(--lumiverse-primary);
+    background: var(--lumiverse-primary-015, rgba(74, 158, 255, 0.15));
+  }
   .canvas-os-start-menu__count {
     flex-shrink: 0;
     font-size: calc(11px * var(--lumiverse-font-scale, 1));
     color: var(--lumiverse-text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Manage mode rows (LUMI-16a) ─────────────────────────────── */
+  .canvas-os-start-menu__item--manage {
+    /* Checkbox rows read as form controls, not launch targets: drop the
+       hover verb (the checkbox carries the action) and keep the row at its
+       natural height so the checkbox column lines up. */
+    padding-right: 8px;
+  }
+  /* Eye-hidden row: dimmed — the Configure Tabs .row-hidden precedent
+     (blend into the surface, keep the cue). */
+  .canvas-os-start-menu__item.row-hidden {
+    opacity: 0.55;
+  }
+  /* Visibility checkbox — checked = visible (Configure semantics). */
+  .canvas-os-start-menu__check {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    margin: 0 2px 0 6px;
+    accent-color: var(--lumiverse-primary);
+    cursor: pointer;
+  }
+  .canvas-os-start-menu__check:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   /* ── Divider — context-menu token parity ─────────────────────────────── */
