@@ -39,7 +39,8 @@
 import type { Side } from '../core/model'
 import { getModel, getHost } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
-import { getSettings, isOsModeEnabled } from '../settings/state'
+import { getDrawerLocation, getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
+import { isMobileViewport } from '../sidebar/mobile-exclusion'
 import { resolveChromeSides } from '../sidebar/chrome-sides'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
@@ -323,10 +324,10 @@ function createHeader(count: number): HTMLElement {
   brand.innerHTML = START_GLYPH_SVG
   const title = document.createElement('span')
   title.className = 'canvas-os-start-menu__title'
-  title.textContent = 'Windows'
+  title.textContent = 'Start menu'
   const countEl = document.createElement('span')
   countEl.className = 'canvas-os-start-menu__count'
-  countEl.textContent = count === 1 ? '1 window' : `${count} windows`
+  countEl.textContent = count === 1 ? '1 panel' : `${count} panels`
   header.append(brand, title, countEl)
   return header
 }
@@ -601,6 +602,24 @@ function startButtonHtml(): string {
   return `<button type="button" ${START_ATTR}="1" aria-label="Start" title="Start" aria-haspopup="menu" aria-expanded="false">${START_GLYPH_SVG}</button>`
 }
 
+/** True when the Start button should ride the TOP of the vertical tab strip
+ *  (startButtonAtStripTop). Sides desktop only — the gate mirrors the panel
+ *  row's inverse-`isHorizontalStrip()` gating, and mobile Sides turns the
+ *  strip into a horizontal row, so the variant is a no-op there. Top/Bottom
+ *  placement is owned by HORIZONTAL_STRIP_CSS instead. */
+function isStartAtStripTop(): boolean {
+  try {
+    if (!getSettings().startButtonAtStripTop) return false
+    if (isHorizontalStrip()) return false
+    return !isMobileViewport()
+  } catch {
+    // matchMedia/state unavailable in some harnesses — trust the setting plus
+    // the drawer location alone so the reconcile still converges.
+    const s = getSettings()
+    return !!s.startButtonAtStripTop && s.drawerLocation === 'sides'
+  }
+}
+
 /**
  * Ensure the side's Start button exists in the right slot (idempotent):
  *   - Sides, main mirror → the bottom dock, beneath the settings button (D10).
@@ -610,6 +629,11 @@ function startButtonHtml(): string {
  *     NOT part of the button. The Options gear lives in the same dock when
  *     its location includes this side — never create a second dock (the
  *     last-child invariant in docs/pitfalls.md).
+ *   - Sides + startButtonAtStripTop (desktop) → FIRST child of the vertical
+ *     tab list, above the tabs; the dock (and the gear inside it) stays
+ *     bottom-anchored. Returned to the shared dock when the setting turns
+ *     off. The root class `sidebar-ux-start-at-strip-top` is the CSS carrier;
+ *     the dock-last-child invariant is untouched (tabs never cross the dock).
  *   - Top/Bottom → CSS `order` at the OUTER (screen-edge) end of its dock/list
  *     (HORIZONTAL_STRIP_CSS keys on the pin host's sidebar-ux-side-* class and
  *     the `sidebar-ux-start-edge-inner` root class; an in-place side flip
@@ -630,11 +654,31 @@ async function ensureStartButtonForSide(side: Side): Promise<void> {
     btn = template.content.firstElementChild as HTMLButtonElement
   }
   btn.setAttribute(START_SIDE_ATTR, side)
-  if (side === 'primary') {
-    if (!btn.parentElement) {
-      const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null
-      if (dock) dock.appendChild(btn)
-      else list.appendChild(btn)
+  // Strip-top variant (Sides desktop only — mobile turns the strip into a
+  // horizontal row, Top/Bottom placement is HORIZONTAL_STRIP_CSS's): lift
+  // Start to the FIRST slot of the vertical tab list instead of its dock.
+  // The dock — gear inside — stays bottom-anchored in both variants.
+  const atStripTop = isStartAtStripTop()
+  if (atStripTop) {
+    if (btn.parentElement !== list || btn.previousElementSibling !== null) {
+      list.insertBefore(btn, list.firstElementChild)
+    }
+    if (side === 'secondary') {
+      // Lifting out can strand the shared dock empty (gear excluded from this
+      // side) — an empty dock still paints its divider. Same removal contract
+      // as removeStartChromeForSide: only when nothing is left in it.
+      const dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`) as HTMLElement | null
+      if (dock && !dock.firstElementChild) dock.remove()
+    }
+  } else if (side === 'primary') {
+    // Re-dock a button a previous strip-top session lifted to a direct list
+    // child (setting turned off): parent === list means lifted, parent ===
+    // dock means already placed, no parent means fresh.
+    const dock = list.querySelector(`.${TAB_LIST_BOTTOM_CLASS}`) as HTMLElement | null
+    if (dock) {
+      if (btn.parentElement !== dock) dock.appendChild(btn)
+    } else if (!btn.parentElement) {
+      list.appendChild(btn)
     }
   } else {
     // Secondary: wrap the Start in the shared dock so the divider matches the

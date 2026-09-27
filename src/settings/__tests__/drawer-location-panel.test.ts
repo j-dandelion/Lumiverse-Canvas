@@ -314,6 +314,35 @@ describe('drawer location panel', () => {
     expect(toggleRow.classList.contains('sidebar-ux-panel-row-stacked')).toBe(false)
   })
 
+  test('Start strip-top row: enabled on Sides, disabled + inert hint on Top — 2026-09-27', () => {
+    const root = mountPanel()
+    const topRow = rowByLabel(root, 'Start button at top of tab strip')
+    expect(control(topRow).disabled).toBe(false)
+    expect(topRow.classList.contains('sidebar-ux-panel-row-disabled')).toBe(false)
+    expect(hint(topRow).textContent).toContain('Sides layout only')
+    expect(hint(topRow).textContent).toContain('Settings gear button stays at the bottom')
+
+    // Toggle writes the setting.
+    control(topRow).click()
+    expect(getSettings().startButtonAtStripTop).toBe(true)
+    expect(control(topRow).getAttribute('aria-checked')).toBe('true')
+
+    // Top layout disables the row (inverse of the edge-anchor gate) and
+    // swaps in the inert hint; the stored value survives the excursion.
+    const group = layoutGroup(root)
+    group.children[1].click() // Top
+    const topRowAfter = rowByLabel(root, 'Start button at top of tab strip')
+    expect(control(topRowAfter).disabled).toBe(true)
+    expect(topRowAfter.classList.contains('sidebar-ux-panel-row-disabled')).toBe(true)
+    expect(hint(topRowAfter).textContent).toContain('Only applies to the Sides layout')
+    expect(getSettings().startButtonAtStripTop).toBe(true)
+
+    group.children[0].click() // Sides — enabled again, value restored
+    const topRowBack = rowByLabel(root, 'Start button at top of tab strip')
+    expect(control(topRowBack).disabled).toBe(false)
+    expect(control(topRowBack).getAttribute('aria-checked')).toBe('true')
+  })
+
   test('row order: Drawer mode above Main drawer side; handle rows directly above Options button location — 2026-09-23g', () => {
     const root = mountPanel()
     const labels = byClass(root, 'sidebar-ux-panel-row').map(

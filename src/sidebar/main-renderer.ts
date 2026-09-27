@@ -517,8 +517,17 @@ export function renderMainMirrorTabs(): void {
   // other children, dropping the location stamps. Re-resolve after the render
   // — gated to setting states that actually carry location chrome, rAF
   // coalesced. Dynamic import breaks the main-renderer ↔ settings-dock cycle.
+  // startButtonAtStripTop joins the gate: the strip-top Start is a direct
+  // list child, and the main-section sweep below removes any non-mirror
+  // node from `.sidebar-ux-tab-list-main` — the render would strand the
+  // lifted Start if the dock-based ensure never re-ran.
   const s = getSettings()
-  if (s.osMode || s.optionsButtonLocation !== null || !s.startButtonAlwaysOnScreenEdge) {
+  if (
+    s.osMode ||
+    s.optionsButtonLocation !== null ||
+    !s.startButtonAlwaysOnScreenEdge ||
+    s.startButtonAtStripTop
+  ) {
     void import('../os/chrome-locations')
       .then((m) => m.scheduleChromeReconcile())
       .catch(() => { /* module unavailable in test stubs */ })

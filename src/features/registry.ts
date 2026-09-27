@@ -756,6 +756,22 @@ const startButtonAlwaysOnScreenEdgeFeature: CanvasFeature = {
   },
 }
 
+/** Sides only: lift the Start button to the top of the vertical tab strip
+ *  (default off = the shared bottom dock). The root class carries the CSS
+ *  variant; ensureStartButtonForSide owns the DOM move. Unconditional like
+ *  the other chrome-location features (default false would be skipped by
+ *  setup's truthiness gate). */
+const startButtonAtStripTopFeature: CanvasFeature = {
+  id: 'startButtonAtStripTop',
+  unconditional: true,
+  mount() {
+    activateChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
+  },
+}
+
 /** OS panel-header controls (default on): "- minimizes, X closes" vs the
  *  vanilla single X that minimizes. OS chrome only — the feature id must stay
  *  distinct (`applySettings` keys on `feature.id`, so `osModeFeature` never
@@ -801,6 +817,7 @@ export const FEATURES: readonly CanvasFeature[] = [
   startButtonLocationFeature,
   optionsButtonLocationFeature,
   startButtonAlwaysOnScreenEdgeFeature,
+  startButtonAtStripTopFeature,
   // OS header controls: same downstream placement (chrome pass only).
   osWindowControlsFeature,
   dragAndDropDrawerTabsFeature,

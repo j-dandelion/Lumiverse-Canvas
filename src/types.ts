@@ -152,6 +152,13 @@ export interface CanvasSettings {
    *  the tab-facing side of its dock. Inert on Sides. */
   startButtonAlwaysOnScreenEdge?: boolean
 
+  /** Sides layout only (default off): lift the Start button to the TOP of
+   *  the vertical tab strip (first child, above the tabs) instead of the
+   *  shared bottom dock. The Options gear dock stays bottom-anchored in both
+   *  variants. Inert on Top/Bottom (the horizontal strip has no top slot —
+   *  `startButtonAlwaysOnScreenEdge` owns that layout's placement). */
+  startButtonAtStripTop?: boolean
+
   /** Where the drawer-hosted Settings ("Options") gear is shown. Literal
    *  screen sides; `'both'` shows a gear in each drawer; `null` (default)
    *  keeps the historical main-drawer-only gear. Resolution needs the live
@@ -282,6 +289,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   osMode: false,
   startButtonLocation: null,
   startButtonAlwaysOnScreenEdge: true,
+  startButtonAtStripTop: false,
   optionsButtonLocation: null,
   osWindowControls: true,
   coreTabsHidden: false,
@@ -429,6 +437,11 @@ export function normalizeCanvasSettingsFields(
   // value → true, the shipped default).
   if (typeof (out as { startButtonAlwaysOnScreenEdge?: unknown }).startButtonAlwaysOnScreenEdge !== 'boolean') {
     out = { ...out, startButtonAlwaysOnScreenEdge: true }
+  }
+  // Cascade 2h: startButtonAtStripTop boolean coercion (corrupt disk value →
+  // false, the shipped default — bottom dock placement).
+  if (typeof (out as { startButtonAtStripTop?: unknown }).startButtonAtStripTop !== 'boolean') {
+    out = { ...out, startButtonAtStripTop: false }
   }
   // Cascade 3: hide requires taskbar mode
   if (out.hideDrawerOpenCloseButtons && !out.taskbarMode) {

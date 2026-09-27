@@ -36,6 +36,13 @@ import {
   MAIN_MIRROR_MOBILE_CSS,
 } from '../styles'
 
+/** The injected sheet wraps START_STRIP_TOP_CSS in the desktop media query —
+ *  grab it through the same template the runtime uses. */
+import { START_STRIP_TOP_CSS } from '../styles'
+function injectStartStripTopSheet(): string {
+  return `@media (min-width: 601px) {\n${START_STRIP_TOP_CSS}\n  }`
+}
+
 const START_SEL = 'button[data-canvas-os-start]'
 
 // ── 1. Base chrome — same box as the Options row ──
@@ -225,6 +232,53 @@ const START_SEL = 'button[data-canvas-os-start]'
     'inline Start-order logic must not return (CSS owns the horizontal end-order)')
   assert(!src.includes('btn.style.order ='),
     'no inline order assignment; use removeProperty to clear legacy values')
+}
+
+// ── 7. Sides strip-top variant (startButtonAtStripTop, 2026-09-27) ──
+// The Sides bottom dock is pinned by `margin-top: auto`, not DOM order, so
+// the lift moves the BUTTON to the first child of the vertical list (JS,
+// owned by the reconcile path). CSS styles only the top position; the dock
+// (gear inside) stays bottom-anchored. Root-class carrier on <html> —
+// per-host attrs are wiped by applyPinHostChrome's wholesale className write.
+{
+  assertIncludes(START_STRIP_TOP_CSS, 'html.sidebar-ux-start-at-strip-top',
+    'strip-top CSS is keyed on the root class carrier')
+  assertIncludes(START_STRIP_TOP_CSS,
+    '.sidebar-ux-tab-list > button[data-canvas-os-start]',
+    'strip-top selector must be a DIRECT list child (lifted position only — a docked Start keeps its dock chrome)')
+  assertIncludes(START_STRIP_TOP_CSS, 'margin-bottom: 8px',
+    'strip-top Start separates from the tabs with the dock gap')
+  assertIncludes(START_STRIP_TOP_CSS, 'border-bottom: 1px solid var(--lumiverse-primary-020)',
+    'strip-top divider faces the tabs (container-token border)')
+  assert(!START_STRIP_TOP_CSS.includes('margin-top: auto'),
+    'the strip-top variant must not touch the dock bottom anchor')
+  // Mobile no-op: the sheet is scoped to desktop viewport widths (the mobile
+  // Sides list is a horizontal row — no separate top slot exists there).
+  assertIncludes(injectStartStripTopSheet(), '@media (min-width: 601px)',
+    'strip-top styles must be desktop-scoped (mobile list is a row)')
+
+  // Source pins: DOM move owned by the ensure, placement = first list child.
+  const src = readFileSync(join(process.cwd(), 'src/os/start-menu.ts'), 'utf8')
+  assertIncludes(src, 'list.insertBefore(btn, list.firstElementChild)',
+    'the lift inserts Start as the FIRST child of the vertical tab list')
+  assertIncludes(src, 'isStartAtStripTop',
+    'the ensure gates the lift through the shared helper')
+  assert(!src.includes('dock.className = \`\${TAB_LIST_BOTTOM_CLASS}\`'),
+    'dock creation must keep the shared class string (no new dock variants)')
+
+  // Registry: unconditional so the boot reconcile runs on falsy default.
+  const reg = readFileSync(join(process.cwd(), 'src/features/registry.ts'), 'utf8')
+  const featIdx = reg.indexOf("id: 'startButtonAtStripTop'")
+  assert(featIdx !== -1, 'startButtonAtStripTop feature registered')
+  const featBlock = reg.substring(featIdx, reg.indexOf('}', featIdx))
+  assertIncludes(featBlock, 'unconditional: true',
+    'strip-top feature must be unconditional (default false)')
+
+  // Header copy (LUMI-11): Start menu / N panels.
+  assertIncludes(src, "title.textContent = 'Start menu'", 'header title reads Start menu')
+  assertIncludes(src, "count === 1 ? '1 panel' : `${count} panels`", 'header count reads panels')
+  assert(!src.includes("title.textContent = 'Windows'"), 'no Windows header title')
+  assert(!src.includes("'1 window'"), 'no singular-window count')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

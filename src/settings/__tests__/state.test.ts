@@ -386,19 +386,32 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     )
   }
 
-  // top/bottom force taskbar chrome on.
-  const top = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'top' }))
-  assertEqual(top.drawerLocation, 'top', 'top is kept')
-  assertEqual(top.taskbarMode, true, 'top forces taskbarMode on')
-  assertEqual(top.moveControlsToOuterEdge, true, 'top forces moveControlsToOuterEdge on')
-  assertEqual(isTaskbarModeEnabled(top), true, 'top → effective taskbar gate on')
-  assertEqual(isHorizontalStrip(top), true, 'isHorizontalStrip true for top')
-
-  const bottom = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'bottom' }))
-  assertEqual(bottom.drawerLocation, 'bottom', 'bottom is kept')
-  assertEqual(bottom.taskbarMode, true, 'bottom forces taskbarMode on')
-  assertEqual(bottom.moveControlsToOuterEdge, true, 'bottom forces outer-edge on')
-  assertEqual(isHorizontalStrip(bottom), true, 'isHorizontalStrip true for bottom')
+  // Cascade 2h: startButtonAtStripTop boolean coercion (corrupt disk value →
+  // false, the shipped default — bottom dock placement).
+  {
+    const def = mergeCanvasSettings({})
+    assertEqual(def.startButtonAtStripTop, false, 'startButtonAtStripTop defaults to false')
+    for (const bad of [1, 0, null, undefined, 'true', '', {}]) {
+      const coerced = normalizeCanvasSettings(
+        mergeCanvasSettings({ startButtonAtStripTop: bad } as any),
+      )
+      assertEqual(
+        coerced.startButtonAtStripTop,
+        false,
+        `corrupt startButtonAtStripTop ${JSON.stringify(bad)} coerces to false`,
+      )
+    }
+    assertEqual(
+      normalizeCanvasSettings(mergeCanvasSettings({ startButtonAtStripTop: true })).startButtonAtStripTop,
+      true,
+      'startButtonAtStripTop true is kept',
+    )
+    assertEqual(
+      normalizeCanvasSettings(mergeCanvasSettings({ startButtonAtStripTop: false })).startButtonAtStripTop,
+      false,
+      'startButtonAtStripTop false is kept',
+    )
+  }
 
   // Ordering: the location invariant runs BEFORE the hide cascade, so a
   // hide:true + taskbar:false + location:top blob keeps hide (the invariant
@@ -412,6 +425,20 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(ordering.hideDrawerOpenCloseButtons, true, 'hide survives the location invariant (ordering)')
   assertEqual(ordering.taskbarMode, true, 'ordering: taskbar forced on')
   assertEqual(isHideDrawerOpenCloseButtonsEnabled(ordering), true, 'ordering: effective hide gate on')
+
+  // top/bottom force taskbar chrome on.
+  const top = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'top' }))
+  assertEqual(top.drawerLocation, 'top', 'top is kept')
+  assertEqual(top.taskbarMode, true, 'top forces taskbarMode on')
+  assertEqual(top.moveControlsToOuterEdge, true, 'top forces moveControlsToOuterEdge on')
+  assertEqual(isTaskbarModeEnabled(top), true, 'top → effective taskbar gate on')
+  assertEqual(isHorizontalStrip(top), true, 'isHorizontalStrip true for top')
+
+  const bottom = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'bottom' }))
+  assertEqual(bottom.drawerLocation, 'bottom', 'bottom is kept')
+  assertEqual(bottom.taskbarMode, true, 'bottom forces taskbarMode on')
+  assertEqual(bottom.moveControlsToOuterEdge, true, 'bottom forces outer-edge on')
+  assertEqual(isHorizontalStrip(bottom), true, 'isHorizontalStrip true for bottom')
 
   // Normalize alone never forces the flags off on Sides (setSettings owns the
   // restore — see the S8 excursion block below).

@@ -65,7 +65,7 @@ import {
 // *_INERT_HINT variants via row.setHint().
 
 const MODE_TILES_HINT =
-  'Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode adds window-style headers with minimize/close buttons and a Start menu that lists every tab.'
+  'Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.'
 const DRAWER_LAYOUT_HINT =
   'Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically.'
 const MAIN_SIDE_HINT =
@@ -95,6 +95,10 @@ const START_EDGE_HINT =
   'Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.'
 const START_EDGE_INERT_HINT =
   'Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.'
+const START_STRIP_TOP_HINT =
+  'Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.'
+const START_STRIP_TOP_INERT_HINT =
+  'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).'
 const HIDE_BUTTONS_HINT =
   'Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.'
 const HIDE_BUTTONS_INERT_HINT =
@@ -642,7 +646,7 @@ const MODE_TILE_DEFS: readonly ModeTileDef[] = [
   {
     value: 'os',
     label: 'OS mode',
-    caption: 'Windows + Start menu',
+    caption: 'Start menu + minimize/close',
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18"/><path d="M6 6h.01"/><path d="M9 6h.01"/><path d="M9 16h6"/></svg>',
   },
 ]
@@ -982,6 +986,17 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     disabled: !isHorizontalStrip(),
   }))
 
+  const startStripTop = makeToggle(
+    () => getSettings().startButtonAtStripTop,
+    (v) => setSettings({ startButtonAtStripTop: v })
+  )
+  const startStripTopRow = appendRow(drawers.group, buildSettingRow({
+    label: 'Start button at top of tab strip',
+    hint: START_STRIP_TOP_HINT,
+    control: startStripTop.btn,
+    disabled: isHorizontalStrip(),
+  }))
+
   const osWindowControls = makeToggle(
     () => getSettings().osWindowControls,
     (v) => setSettings({ osWindowControls: v }),
@@ -1142,6 +1157,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     shadowsDesktop.refresh()
     shadowsMobile.refresh()
     startEdge.refresh()
+    startStripTop.refresh()
 
     const s = getSettings()
 
@@ -1222,6 +1238,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
       startEdge.btn.style.cursor = d ? 'not-allowed' : 'pointer'
       startEdgeRow.setDisabled(d)
       startEdgeRow.setHint(d ? START_EDGE_INERT_HINT : START_EDGE_HINT)
+    }
+
+    // Start strip-top: Sides only (inverse of the edge anchor's gate — inert
+    // while horizontal, stored value kept for the return to Sides).
+    {
+      const d = horizontal
+      startStripTop.btn.disabled = d
+      startStripTop.btn.style.cursor = d ? 'not-allowed' : 'pointer'
+      startStripTopRow.setDisabled(d)
+      startStripTopRow.setHint(d ? START_STRIP_TOP_INERT_HINT : START_STRIP_TOP_HINT)
     }
 
     // coreTabsHidden: locked on while OS mode forces it (a closed window

@@ -802,6 +802,35 @@ export function injectHorizontalStripStyles(): void {
   injectStyles('sidebar-ux-location-horizontal', HORIZONTAL_STRIP_CSS)
 }
 
+/**
+ * Sides strip-top Start variant (startButtonAtStripTop, desktop only).
+ * Keyed on the ROOT class `sidebar-ux-start-at-strip-top` (pin hosts are
+ * recreated with a wholesale className assignment — see chrome-locations.ts),
+ * scoped to vertical (Sides) strips and desktop widths. The DOM move is owned
+ * by ensureStartButtonForSide (os/start-menu.ts); CSS only restyles the top
+ * slot: a bottom divider so the lifted Start reads as the strip's head, and
+ * the tab list stops pushing the bottom dock away (margin-top: auto → 0 would
+ * collapse the tabs upward — the dock keeps its auto margin, the list just
+ * owns less free space). Mobile sheets keep their !important row layout —
+ * the media gate here matches that boundary (600px).
+ */
+export const START_STRIP_TOP_CSS = `
+  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start] {
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--lumiverse-primary-020);
+    border-radius: 8px 8px 0 0;
+  }
+  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start]:hover {
+    border-radius: 8px 8px 0 0;
+  }
+`
+
+/** Inject the Sides strip-top Start variant once (idempotent by id). */
+export function injectStartStripTopStyles(): void {
+  injectStyles('sidebar-ux-start-strip-top',
+    `@media (min-width: 601px) {\n${START_STRIP_TOP_CSS}\n  }`)
+}
+
 export function injectDrawerTabStyles(): void {
   injectStyles('sidebar-ux-drawer-tab-styles', `
     .sidebar-ux-drawer-tab {

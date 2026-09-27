@@ -5,6 +5,7 @@
 //   - optionsButtonLocation → Settings gear per drawer
 //   - startButtonLocation   → OS Start button per drawer
 //   - startButtonAlwaysOnScreenEdge → Start order in Top/Bottom strips
+//   - startButtonAtStripTop → Start at the top of the vertical Sides strip
 //
 // One function keeps them consistent. It MUST be called from every chrome
 // lifecycle event, not just `applySettings`:
@@ -24,6 +25,7 @@
 import { getSettings } from '../settings/state'
 import { getMainDrawerSide } from '../store'
 import { resolveChromeSides } from '../sidebar/chrome-sides'
+import { injectStartStripTopStyles } from '../sidebar/styles'
 import { applyOptionsButtonLocation, teardownSettingsDock } from '../sidebar/settings-dock'
 import { hideStartMenu, reconcileStartChrome } from './start-menu'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
@@ -137,6 +139,14 @@ export function scheduleChromeReconcile(): void {
  *  every Top/Bottom reconcile — can never drop the variant. */
 export const START_EDGE_INNER_CLASS = 'sidebar-ux-start-edge-inner'
 
+/** Marks `<html>` while the Sides Start button sits at the TOP of the vertical
+ *  tab strip (startButtonAtStripTop on). Root class again: pin hosts are
+ *  recreated by the pin modules and applyPinHostChrome's className assignment
+ *  is wholesale, so a per-host attr would drop the variant (docs/pitfalls.md).
+ *  CSS styles only the top position (divider spacing); the DOM move itself is
+ *  owned by ensureStartButtonForSide (os/start-menu.ts). */
+export const START_STRIP_TOP_CLASS = 'sidebar-ux-start-at-strip-top'
+
 /** Apply/clear the Start-order variant on `<html>`. `inner` (setting off) puts
  *  Start on the tab-facing side of its dock; absent keeps the shipped
  *  screen-edge anchoring. CSS owns the order rules. */
@@ -155,6 +165,27 @@ function applyStartEdgeClass(): void {
 export function clearStartEdgeClass(): void {
   try {
     document.documentElement?.classList?.remove(START_EDGE_INNER_CLASS)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Apply/clear the Sides strip-top variant on `<html>`. */
+function applyStartStripTopClass(): void {
+  try {
+    const el = document.documentElement
+    if (!el || typeof el.classList?.toggle !== 'function') return
+    injectStartStripTopStyles()
+    el.classList.toggle(START_STRIP_TOP_CLASS, !!getSettings().startButtonAtStripTop)
+  } catch {
+    /* no document (stub/headless) */
+  }
+}
+
+/** Remove the strip-top class (teardown). */
+export function clearStartStripTopClass(): void {
+  try {
+    document.documentElement?.classList?.remove(START_STRIP_TOP_CLASS)
   } catch {
     /* ignore */
   }
@@ -183,6 +214,7 @@ export function reconcileChromeLocations(): void {
     resolveChromeSides(s.optionsButtonLocation, mainSide, secondEnabled),
   )
   applyStartEdgeClass()
+  applyStartStripTopClass()
   reconcileStartChrome()
   if (applied?.pendingSecond) {
     // The shell-created event fires BEFORE the secondary wrapper is assigned;
@@ -223,6 +255,7 @@ export function teardownChromeLocations(): void {
   removeShellCreatedListener()
   teardownSettingsDock()
   clearStartEdgeClass()
+  clearStartStripTopClass()
   _lastMainSide = null
   _pendingSecondRetries = 0
 }

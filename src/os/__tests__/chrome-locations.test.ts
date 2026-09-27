@@ -10,6 +10,7 @@ let settings: any = {
   optionsButtonLocation: null,
   startButtonLocation: null,
   startButtonAlwaysOnScreenEdge: true,
+  startButtonAtStripTop: false,
   secondSidebarEnabled: true,
 }
 let mainSide: 'left' | 'right' = 'right'
@@ -60,9 +61,12 @@ const documentElement = new FakeRoot()
 
 const {
   reconcileChromeLocations,
+  activateChromeLocations,
   teardownChromeLocations,
   clearStartEdgeClass,
+  clearStartStripTopClass,
   START_EDGE_INNER_CLASS,
+  START_STRIP_TOP_CLASS,
 } = await import('../chrome-locations')
 
 beforeEach(() => {
@@ -72,6 +76,7 @@ beforeEach(() => {
     optionsButtonLocation: null,
     startButtonLocation: null,
     startButtonAlwaysOnScreenEdge: true,
+    startButtonAtStripTop: false,
     secondSidebarEnabled: true,
   }
   mainSide = 'right'
@@ -104,6 +109,19 @@ describe('reconcileChromeLocations', () => {
     expect(documentElement.classes.has(START_EDGE_INNER_CLASS)).toBe(false)
   })
 
+  test('toggles the strip-top root class from startButtonAtStripTop', () => {
+    reconcileChromeLocations()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(false)
+
+    settings.startButtonAtStripTop = true
+    reconcileChromeLocations()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(true)
+
+    settings.startButtonAtStripTop = false
+    reconcileChromeLocations()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(false)
+  })
+
   test('delegates the Start chrome reconcile exactly once per call', () => {
     reconcileChromeLocations()
     expect(calls.filter(([name]) => name === 'start').length).toBe(1)
@@ -119,5 +137,17 @@ describe('reconcileChromeLocations', () => {
     documentElement.classes.add(START_EDGE_INNER_CLASS)
     clearStartEdgeClass()
     expect(documentElement.classes.has(START_EDGE_INNER_CLASS)).toBe(false)
+  })
+
+  test('teardown clears the strip-top class', () => {
+    settings.startButtonAtStripTop = true
+    activateChromeLocations()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(true)
+    teardownChromeLocations()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(false)
+
+    documentElement.classes.add(START_STRIP_TOP_CLASS)
+    clearStartStripTopClass()
+    expect(documentElement.classes.has(START_STRIP_TOP_CLASS)).toBe(false)
   })
 })
