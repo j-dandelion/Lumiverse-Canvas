@@ -39,8 +39,8 @@
 import type { Side } from '../core/model'
 import { getModel, getHost } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide } from '../store'
-import { getDrawerLocation, getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
-import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { getSettings, isOsModeEnabled } from '../settings/state'
+import { isStartAtStripTopGate } from './start-strip-top-gate'
 import { resolveChromeSides } from '../sidebar/chrome-sides'
 import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList } from '../sidebar/secondary'
@@ -453,7 +453,17 @@ export function openStartMenu(side: Side, button: HTMLElement): void {
     // strip it opens from — stamp the direction so CSS can mirror the Y
     // offset (live report 2026-09-16).
     menu.toggleAttribute('data-open-upward', openUpward)
-    const renderedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - mRect.width - 8))
+    // Sides strip-top: the Start button heads a VERTICAL strip — opening
+    // straight below overlaps the tabs under it (live report, LUMI-14). Fly
+    // out beside the strip, away from the screen edge: left strip → right of
+    // the button, right strip → left of it. Vertical anchor stays at the
+    // button (below its top when it heads the strip).
+    const preferredLeft = isStartAtStripTop()
+      ? (getMainDrawerSide() === 'right'
+        ? rect.left - mRect.width - 8
+        : rect.right + 8)
+      : rect.left
+    const renderedLeft = Math.max(8, Math.min(preferredLeft, window.innerWidth - mRect.width - 8))
     const renderedTop = Math.max(8, Math.min(
       openUpward ? rect.top - mRect.height - 8 : rect.bottom + 8,
       window.innerHeight - mRect.height - 8,
@@ -603,21 +613,12 @@ function startButtonHtml(): string {
 }
 
 /** True when the Start button should ride the TOP of the vertical tab strip
- *  (startButtonAtStripTop). Sides desktop only — the gate mirrors the panel
- *  row's inverse-`isHorizontalStrip()` gating, and mobile Sides turns the
- *  strip into a horizontal row, so the variant is a no-op there. Top/Bottom
- *  placement is owned by HORIZONTAL_STRIP_CSS instead. */
+ *  (startButtonAtStripTop). Shared gate: `isStartAtStripTopGate()` in
+ *  os/start-strip-top-gate.ts is the single definition (the renderer consumes
+ *  the same helper so its structure pass pins the lifted button — LUMI-14);
+ *  this wrapper is the in-module name the ensure/clear paths read. */
 function isStartAtStripTop(): boolean {
-  try {
-    if (!getSettings().startButtonAtStripTop) return false
-    if (isHorizontalStrip()) return false
-    return !isMobileViewport()
-  } catch {
-    // matchMedia/state unavailable in some harnesses — trust the setting plus
-    // the drawer location alone so the reconcile still converges.
-    const s = getSettings()
-    return !!s.startButtonAtStripTop && s.drawerLocation === 'sides'
-  }
+  return isStartAtStripTopGate()
 }
 
 /**

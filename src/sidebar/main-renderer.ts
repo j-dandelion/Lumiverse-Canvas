@@ -34,6 +34,7 @@ import {
 } from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
 import { getSettings, isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
+import { isStartAtStripTopGate } from '../os/start-strip-top-gate'
 import { toggleWindowByLiveId } from '../os/actions'
 import { isHidden, visibleKeys } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
@@ -129,8 +130,34 @@ export function ensureMirrorListStructure(list: HTMLElement): {
     }
   }
 
-  // Canonical order: main then bottom (only structural children).
-  if (list.firstChild !== main) list.insertBefore(main, list.firstChild)
+  // Canonical order: main then bottom (only structural children) — except the
+  // Sides strip-top Start variant, where the lifted Start button is a PINNED
+  // first child (os/start-menu.ts ensureStartButtonForSide lifts it to
+  // list.firstElementChild): inserting main at list.firstChild would displace
+  // it one slot down every render — the one-frame flicker (LUMI-14). When the
+  // variant is off (gate false, e.g. Top/Bottom strips, mobile) the canonical
+  // sweep stays absolute so the structure keeps converging without Start.
+  // Direct-children walk (not querySelector): the pinned state requires Start
+  // to be a DIRECT list child — exactly ensureStartButtonForSide's
+  // postcondition — and keeps the structure pass stub/test friendly.
+  let startBtn: HTMLElement | null = null
+  for (const child of Array.from(list.children)) {
+    const el = child as HTMLElement
+    if (el.getAttribute('data-canvas-os-start') !== null) {
+      startBtn = el
+      break
+    }
+  }
+  if (startBtn && isStartAtStripTopGate() && startBtn.parentElement === list) {
+    // firstElementChild falls back to firstChild: element-only children make
+    // them coincide, and test stubs often only track firstChild.
+    const firstEl = (list.firstElementChild ?? list.firstChild) as ChildNode | null
+    if (firstEl !== startBtn) list.insertBefore(startBtn, firstEl)
+    // nextSibling (not previousSibling) — stubs often only relink next.
+    if (startBtn.nextSibling !== main) list.insertBefore(main, startBtn.nextSibling)
+  } else {
+    if (list.firstChild !== main) list.insertBefore(main, list.firstChild)
+  }
   if (main.nextSibling !== bottom) list.appendChild(bottom)
 
   // Outer list fills the pin host; scroll lives in main so Settings stays docked.
@@ -455,9 +482,16 @@ export function renderMainMirrorTabs(): void {
   }
 
   // Remove extra non-mirror nodes left in the main section (shouldn't happen).
+  // The strip-top Start button is a pinned first child of the LIST (not of
+  // main) — it never lands in mainSection, but guard anyway in case a legacy
+  // shell left it inside: sweeping it would break ensureStartButtonForSide's
+  // pinned-position invariant (LUMI-14).
   for (const child of Array.from(mainSection.children)) {
     const el = child as HTMLElement
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS)) {
+    if (
+      !el.classList.contains(MAIN_MIRROR_BTN_CLASS) &&
+      !(el.getAttribute?.('data-canvas-os-start') !== null && isStartAtStripTopGate())
+    ) {
       mainSection.removeChild(el)
     }
   }

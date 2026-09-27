@@ -252,6 +252,16 @@ const START_SEL = 'button[data-canvas-os-start]'
     'strip-top divider faces the tabs (container-token border)')
   assert(!START_STRIP_TOP_CSS.includes('margin-top: auto'),
     'the strip-top variant must not touch the dock bottom anchor')
+  // Radius (LUMI-14): the base 8px from OS_START_BUTTON_CSS applies in every
+  // state — the strip-top sheet must NOT flatten the button's top corners.
+  assert(!START_STRIP_TOP_CSS.includes('border-radius'),
+    'strip-top sheet must not override border-radius (base 8px wins in every state)')
+  const baseCss = readFileSync(join(process.cwd(), 'src/sidebar/styles.ts'), 'utf8')
+  const baseStart = baseCss.indexOf('OS_START_BUTTON_CSS = `')
+  assert(baseStart !== -1, 'OS_START_BUTTON_CSS sheet present')
+  const baseBlock = baseCss.substring(baseStart, baseCss.indexOf('}', baseStart))
+  assertIncludes(baseBlock, 'border-radius: 8px',
+    'base Start button keeps the full 8px rounding the lifted button inherits')
   // Mobile no-op: the sheet is scoped to desktop viewport widths (the mobile
   // Sides list is a horizontal row — no separate top slot exists there).
   assertIncludes(injectStartStripTopSheet(), '@media (min-width: 601px)',

@@ -811,17 +811,15 @@ export function injectHorizontalStripStyles(): void {
  * slot: a bottom divider so the lifted Start reads as the strip's head, and
  * the tab list stops pushing the bottom dock away (margin-top: auto → 0 would
  * collapse the tabs upward — the dock keeps its auto margin, the list just
- * owns less free space). Mobile sheets keep their !important row layout —
- * the media gate here matches that boundary (600px).
+ * owns less free space). No border-radius overrides: the base 8px from
+ * OS_START_BUTTON_CSS applies in every state (hover included) so the lifted
+ * button keeps its rounded corners (LUMI-14). Mobile sheets keep their
+ * !important row layout — the media gate here matches that boundary (600px).
  */
 export const START_STRIP_TOP_CSS = `
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start] {
     margin-bottom: 8px;
     border-bottom: 1px solid var(--lumiverse-primary-020);
-    border-radius: 8px 8px 0 0;
-  }
-  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start]:hover {
-    border-radius: 8px 8px 0 0;
   }
 `
 

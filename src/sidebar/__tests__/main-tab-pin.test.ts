@@ -1634,5 +1634,75 @@ function reset(): void {
 }
 shutdownModel()
 
+// ST1 (LUMI-14): strip-top Start is a PINNED first child across renders —
+// renderMainMirrorTabs must keep the lifted Start at list child 0 and main
+// right behind it, synchronously (no rAF reconcile needed). Also pins the
+// sweep guard: Start inside the main section survives when the gate is on.
+{
+  reset()
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: true })
+  const host = await bootMirror()
+  const pinHost = getMainPinHost() as unknown as StubElement
+  const list = mirrorListIn(pinHost)
+  // Simulate the ensure's lift: a direct list child above the main section,
+  // exactly what os/start-menu.ts ensureStartButtonForSide produces.
+  const startBtn = new StubElement()
+  startBtn.tagName = 'BUTTON'
+  startBtn.setAttribute('data-canvas-os-start', '1')
+  startBtn.setAttribute('data-canvas-start-side', 'primary')
+  startBtn.setAttribute('aria-label', 'Start')
+  list.insertBefore(startBtn, list.firstChild)
+
+  // Render 1: Start stays first child, main follows it.
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1: Start still the first list child after render')
+  assert(
+    list.children[1]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1: main section directly follows the pinned Start',
+  )
+  assert(startBtn.parentElement === list, 'ST1: Start not swept into a section')
+
+  // Render 2 (idempotence): no flicker reorder — same order again.
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1: order stable across a second render')
+  assertEqual(list.children.indexOf(startBtn as unknown as StubElement), 0, 'ST1: Start index 0')
+
+  // Gate off → canonical order is absolute again (Start no longer pinned;
+  // the ensure's re-dock path owns the move — here it just must not be
+  // special-cased by the renderer anymore).
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: false })
+  renderMainMirrorTabs()
+  assert(
+    list.children[0] !== startBtn || startBtn.parentElement !== list,
+    'ST1: gate off → renderer stops pinning Start (canonical main-first order resumes)',
+  )
+
+  // Sweep guard: a legacy Start INSIDE the main section survives the sweep
+  // while the gate is on (it is the pinned child; sweeping it breaks the
+  // ensure's invariant).
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: true })
+  renderMainMirrorTabs()
+  const mainSection = list.children.find((c) => c.className.includes('sidebar-ux-tab-list-main'))!
+  const stray = new StubElement()
+  stray.tagName = 'BUTTON'
+  stray.setAttribute('data-canvas-os-start', '1')
+  mainSection.appendChild(stray)
+  renderMainMirrorTabs()
+  assert(
+    mainSection.children.includes(stray),
+    'ST1: Start inside the main section survives the non-mirror sweep while pinned',
+  )
+
+  // Control: a genuinely foreign node in the main section is still swept.
+  const junk = new StubElement()
+  junk.className = 'legacy-stray'
+  mainSection.appendChild(junk)
+  renderMainMirrorTabs()
+  assert(!mainSection.children.includes(junk), 'ST1: foreign nodes still swept from the main section')
+
+  shutdownModel()
+  void host
+}
+
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

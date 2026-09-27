@@ -272,3 +272,7 @@ Any path that changes a drawer width in DOM/CSS must commit it via `handles.ts:p
 ## 25. Resize handles re-appear via queued side checks
 
 Resize handles re-appeared after disable via a queued `checkSideChanged` → guard with `!getHostBridge()`; sweep all handles on teardown.
+
+## 26. Strip-top Start is a pinned first child (LUMI-14)
+
+The Sides strip-top lift (Start = first child of the vertical list, `ensureStartButtonForSide`) collides with the renderer's structure passes: `ensureMirrorListStructure` inserts `main` at `list.firstChild` and the main-section sweep removes non-mirror nodes — either pass displacing the lifted Start costs a one-frame reorder (the reported flicker). The renderer therefore treats the lifted Start as a **pinned first child** when `isStartAtStripTopGate()` (os/start-strip-top-gate.ts — the one gate shared by the ensure and the renderer) is on: `main` is inserted *after* Start instead of at `list.firstChild`, a Start inside the main section survives the sweep, and Start is re-pinned synchronously inside `renderMainMirrorTabs` (no rAF reconcile needed). Keep the gate shared: if you add a new variant predicate, extend the gate module — do not fork per-site predicates. When the gate is off, canonical order is absolute again (`main` at `list.firstChild`); the ensure owns re-docking the button.
