@@ -604,6 +604,7 @@ function injectHorizontalStripStyles() {
 function injectStartStripTopStyles() {
   injectStyles("sidebar-ux-start-strip-top", `@media (min-width: 601px) {
 ${START_STRIP_TOP_CSS}
+${START_STRIP_TOP_DIVIDER_CSS}
   }`);
 }
 function injectDrawerTabStyles() {
@@ -1151,12 +1152,11 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   .sidebar-ux-tab-list button[data-canvas-os-start]:hover > svg {
     color: var(--lumiverse-text);
   }
-`, START_STRIP_TOP_CSS = `
+`, START_STRIP_TOP_DIVIDER_CLASS = "sidebar-ux-start-strip-top-divider", START_STRIP_TOP_CSS = `
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > button[data-canvas-os-start] {
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--lumiverse-primary-020);
+    margin-bottom: 0;
   }
-`;
+`, START_STRIP_TOP_DIVIDER_CSS;
 var init_styles = __esm(() => {
   HORIZONTAL_STRIP_CSS = `
 /* List fills the fixed zone host absolutely (never fixed + width:100% —
@@ -1591,6 +1591,13 @@ html.${LOCATION_CLASS_TOP} [data-component="LandingPage"]:not(#__theme_studio_au
 html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio_authority_a__):not(#__theme_studio_authority_b__) {
   margin-bottom: var(--sidebar-ux-strip-h, 56px) !important;
 }
+`;
+  START_STRIP_TOP_DIVIDER_CSS = `
+  html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > .${START_STRIP_TOP_DIVIDER_CLASS} {
+    flex-shrink: 0;
+    margin: 8px 0;
+    border-top: 1px solid var(--lumiverse-primary-020);
+  }
 `;
 });
 
@@ -6620,9 +6627,20 @@ async function ensureStartButtonForSide(side) {
   }
   btn.setAttribute(START_SIDE_ATTR, side);
   const atStripTop = isStartAtStripTop();
+  if (!atStripTop) {
+    list.querySelector(`:scope > .${START_STRIP_TOP_DIVIDER_CLASS}`)?.remove();
+  }
   if (atStripTop) {
+    let divider = list.querySelector(`:scope > .${START_STRIP_TOP_DIVIDER_CLASS}`);
+    if (!divider) {
+      divider = document.createElement("div");
+      divider.className = START_STRIP_TOP_DIVIDER_CLASS;
+    }
     if (btn.parentElement !== list || btn.previousElementSibling !== null) {
       list.insertBefore(btn, list.firstElementChild);
+    }
+    if (divider.parentElement !== list || divider.previousElementSibling !== btn) {
+      list.insertBefore(divider, btn.nextElementSibling);
     }
     if (side === "secondary") {
       const dock = list.querySelector(`:scope > .${SECONDARY_START_DOCK_CLASS}`);
@@ -6667,6 +6685,14 @@ function removeStartChromeForSide(side) {
     for (const dock of Array.from(document.querySelectorAll(`.${SECONDARY_START_DOCK_CLASS}`))) {
       if (!dock.firstElementChild)
         dock.remove();
+    }
+  }
+  for (const divider of Array.from(document.querySelectorAll(`.${START_STRIP_TOP_DIVIDER_CLASS}`))) {
+    const list = divider.parentElement;
+    if (!list)
+      continue;
+    if (!list.querySelector(`button[${START_ATTR2}][${START_SIDE_ATTR}="${side}"]`)) {
+      divider.remove();
     }
   }
   if (_menuOpenFor === side)
@@ -6746,6 +6772,7 @@ var init_start_menu = __esm(() => {
   init_actions();
   init_secondary();
   init_drawer_shell();
+  init_styles();
   init_builtin_icons();
   init_start_menu_styles();
   init_log();
