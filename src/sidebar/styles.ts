@@ -833,14 +833,14 @@ export const START_STRIP_TOP_CSS = `
 /**
  * Strip-top divider chrome — the line between the lifted Start button and
  * the tab strip, owned by its own element, not by either neighbor (LUMI-15).
- * Same container-token border and dock-gap rhythm as normal Sides mode's
- * dock divider: 8px gap above the line (between strip head and line), 8px
- * gap below it (between line and first tab).
+ * Same container-token border as normal Sides mode's dock divider, with a
+ * tighter member-requested rhythm: 4px gap above the line (between strip
+ * head and line), 4px below it (between line and first tab).
  */
 export const START_STRIP_TOP_DIVIDER_CSS = `
   html.sidebar-ux-start-at-strip-top .sidebar-ux-tab-list > .${START_STRIP_TOP_DIVIDER_CLASS} {
     flex-shrink: 0;
-    margin: 8px 0;
+    margin: 4px 0;
     border-top: 1px solid var(--lumiverse-primary-020);
   }
 `
