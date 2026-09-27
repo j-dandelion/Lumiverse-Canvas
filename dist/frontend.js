@@ -5945,6 +5945,15 @@ var init_start_menu_styles = __esm(() => {
     height: 30px;
     padding: 0 9px;
   }
+  /* Decorative chrome (brand + title) wrapped so the manage toggle stays a
+     reachable control: the wrapper carries the aria-hidden, not the row. */
+  .canvas-os-start-menu__header-chrome {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+  }
   .canvas-os-start-menu__brand {
     display: flex;
     width: 14px;
@@ -5959,11 +5968,61 @@ var init_start_menu_styles = __esm(() => {
     font-weight: 600;
     color: var(--lumiverse-text-muted);
   }
+  /* Manage (eye) toggle — left of the count. A real button (the header is
+     no longer wholesale aria-hidden): visible hover/focus, pressed state. */
+  .canvas-os-start-menu__manage {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lumiverse-text-muted);
+    cursor: pointer;
+  }
+  .canvas-os-start-menu__manage:hover {
+    color: var(--lumiverse-text);
+    background: var(--lumiverse-bg-hover);
+  }
+  .canvas-os-start-menu__manage.manage-on {
+    color: var(--lumiverse-primary);
+    background: var(--lumiverse-primary-015, rgba(74, 158, 255, 0.15));
+  }
   .canvas-os-start-menu__count {
     flex-shrink: 0;
     font-size: calc(11px * var(--lumiverse-font-scale, 1));
     color: var(--lumiverse-text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Manage mode rows (LUMI-16a) ─────────────────────────────── */
+  .canvas-os-start-menu__item--manage {
+    /* Checkbox rows read as form controls, not launch targets: drop the
+       hover verb (the checkbox carries the action) and keep the row at its
+       natural height so the checkbox column lines up. */
+    padding-right: 8px;
+  }
+  /* Eye-hidden row: dimmed — the Configure Tabs .row-hidden precedent
+     (blend into the surface, keep the cue). */
+  .canvas-os-start-menu__item.row-hidden {
+    opacity: 0.55;
+  }
+  /* Visibility checkbox — checked = visible (Configure semantics). */
+  .canvas-os-start-menu__check {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    margin: 0 2px 0 6px;
+    accent-color: var(--lumiverse-primary);
+    cursor: pointer;
+  }
+  .canvas-os-start-menu__check:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   /* ── Divider — context-menu token parity ─────────────────────────────── */
@@ -6306,8 +6365,9 @@ function resolveEntryIcon(tab, liveId) {
   const builtin = BUILTIN_ICON_SVGS[builtinBaseId(liveId)];
   return builtin ? { svg: builtin } : {};
 }
-function deriveStartMenuEntries(model, resolve) {
-  const tabs = new Map(getDrawerTabs().map((t) => [t.id, t]));
+function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {}) {
+  const manageMode = opts.manageMode ?? false;
+  const tabsById = new Map(tabs.map((t) => [t.id, t]));
   const seen = new Set;
   const out = [];
   for (const side of ["primary", "secondary"]) {
@@ -6318,16 +6378,23 @@ function deriveStartMenuEntries(model, resolve) {
       if (!liveId || seen.has(liveId))
         continue;
       seen.add(liveId);
-      const state = model.closed.includes(key) || model.hidden.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
-      const tab = tabs.get(liveId);
+      const isHidden = model.hidden.includes(key);
+      if (isHidden && !manageMode)
+        continue;
+      const state = model.closed.includes(key) || isHidden ? "closed" : key === activeKey ? "open" : "minimized";
+      const tab = tabsById.get(liveId);
       const icon = resolveEntryIcon(tab, liveId);
+      const coreId = parseBuiltinKey(key);
       out.push({
         liveId,
         side,
         title: tab?.title ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
-        state
+        state,
+        hidden: isHidden,
+        key,
+        locked: coreId !== null && isCoreTabId(coreId)
       });
     }
   }
@@ -6372,6 +6439,31 @@ function createMenuEntry(entry, targetSide) {
   });
   return item;
 }
+function createManageRow(entry, targetSide) {
+  const row = createMenuEntry(entry, targetSide);
+  row.classList.add("canvas-os-start-menu__item--manage");
+  if (entry.hidden)
+    row.classList.add("row-hidden");
+  const coreUnlocked = !!getSettings().coreTabsHidden;
+  const isLocked = entry.locked && !coreUnlocked;
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "canvas-os-start-menu__check";
+  checkbox.checked = !entry.hidden;
+  checkbox.disabled = isLocked;
+  checkbox.title = isLocked ? "Cannot hide this panel" : entry.hidden ? "Show panel" : "Hide panel";
+  checkbox.setAttribute("aria-label", `${entry.title} — ${checkbox.title}`);
+  checkbox.addEventListener("click", (ev) => ev.stopPropagation());
+  checkbox.addEventListener("change", () => {
+    dispatchBatch([{ t: "setHidden", key: entry.key, hidden: !checkbox.checked }]);
+    const nowHidden = !checkbox.checked;
+    entry.hidden = nowHidden;
+    row.classList.toggle("row-hidden", nowHidden);
+    row.setAttribute("data-os-state", "closed");
+  });
+  row.appendChild(checkbox);
+  return row;
+}
 function renderEntryIcon(tile, entry) {
   if (entry.iconSvg) {
     tile.innerHTML = entry.iconSvg;
@@ -6389,21 +6481,33 @@ function renderEntryIcon(tile, entry) {
   tile.textContent = entryMonogram(entry.title);
   tile.classList.add("canvas-os-start-menu__tile--monogram");
 }
-function createHeader(count) {
+function createHeader(count, hiddenCount, manageMode) {
   const header = document.createElement("div");
   header.className = "canvas-os-start-menu__header";
   header.setAttribute("role", "presentation");
-  header.setAttribute("aria-hidden", "true");
+  const chrome = document.createElement("span");
+  chrome.className = "canvas-os-start-menu__header-chrome";
+  chrome.setAttribute("aria-hidden", "true");
   const brand = document.createElement("span");
   brand.className = "canvas-os-start-menu__brand";
   brand.innerHTML = START_GLYPH_SVG;
   const title = document.createElement("span");
   title.className = "canvas-os-start-menu__title";
-  title.textContent = "Start menu";
+  title.textContent = "Start";
+  chrome.append(brand, title);
+  const manageBtn = document.createElement("button");
+  manageBtn.type = "button";
+  manageBtn.className = `canvas-os-start-menu__manage${manageMode ? " manage-on" : ""}`;
+  manageBtn.innerHTML = MANAGE_EYE_SVG;
+  manageBtn.setAttribute("aria-pressed", manageMode ? "true" : "false");
+  const manageLabel = manageMode ? "Done managing panels" : "Manage panels";
+  manageBtn.setAttribute("aria-label", manageLabel);
+  manageBtn.title = manageLabel;
   const countEl = document.createElement("span");
   countEl.className = "canvas-os-start-menu__count";
-  countEl.textContent = count === 1 ? "1 panel" : `${count} panels`;
-  header.append(brand, title, countEl);
+  countEl.setAttribute("aria-hidden", "true");
+  countEl.textContent = manageMode ? `${count === 1 ? "1 panel" : `${count} panels`} · ${hiddenCount === 1 ? "1 hidden" : `${hiddenCount} hidden`}` : count === 1 ? "1 panel" : `${count} panels`;
+  header.append(chrome, manageBtn, countEl);
   return header;
 }
 function createEmptyState() {
@@ -6428,18 +6532,29 @@ function buildMenu(targetSide) {
   const model = getModel();
   if (!host || !model)
     return null;
-  const entries = deriveStartMenuEntries(model, (key) => host.resolve(key));
+  const resolve = (key) => host.resolve(key);
+  const entries = deriveStartMenuEntries(model, resolve, getDrawerTabs(), {
+    manageMode: _manageMode
+  });
   injectStartMenuStyles();
   const menu = document.createElement("div");
   menu.id = MENU_ID;
   menu.className = "canvas-os-start-menu";
+  if (_manageMode)
+    menu.setAttribute("data-manage-mode", "true");
   menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", "Start menu");
   if (entries.length === 0) {
     menu.appendChild(createEmptyState());
     return menu;
   }
-  menu.appendChild(createHeader(entries.length));
+  const header = createHeader(entries.length, entries.filter((e) => e.hidden).length, _manageMode);
+  const manageBtn = header.querySelector("button.canvas-os-start-menu__manage");
+  manageBtn?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleManageMode(targetSide);
+  });
+  menu.appendChild(header);
   const divider = document.createElement("div");
   divider.className = "canvas-os-start-menu__divider";
   divider.setAttribute("role", "separator");
@@ -6448,10 +6563,32 @@ function buildMenu(targetSide) {
   list.className = "canvas-os-start-menu__list";
   list.setAttribute("role", "presentation");
   for (const entry of entries) {
-    list.appendChild(createMenuEntry(entry, targetSide));
+    list.appendChild(_manageMode ? createManageRow(entry, targetSide) : createMenuEntry(entry, targetSide));
   }
   menu.appendChild(list);
   return menu;
+}
+function toggleManageMode(targetSide) {
+  _manageMode = !_manageMode;
+  const menu = _menu;
+  if (!menu || !_menuButton?.isConnected)
+    return;
+  const next = buildMenu(targetSide);
+  if (!next)
+    return;
+  menu.className = next.className;
+  for (const attr of ["data-manage-mode"]) {
+    const v = next.getAttribute(attr);
+    if (v === null)
+      menu.removeAttribute(attr);
+    else
+      menu.setAttribute(attr, v);
+  }
+  for (const child of Array.from(menu.children))
+    child.remove();
+  for (const child of Array.from(next.children))
+    menu.appendChild(child);
+  dlog("[os] start menu manage toggle", { manage: _manageMode });
 }
 function cancelMenuRaf() {
   if (_menuRaf) {
@@ -6509,6 +6646,7 @@ function openStartMenu(side, button) {
     return;
   }
   hideStartMenu({ immediate: true });
+  _manageMode = false;
   const menu = buildMenu(side);
   if (!menu)
     return;
@@ -6559,6 +6697,7 @@ function hideStartMenu(opts) {
   _menuOpenFor = null;
   _menuButton = null;
   _menuRevealed = false;
+  _manageMode = false;
   cancelMenuRaf();
   const active = document.activeElement;
   if (menu && active && menu.contains(active)) {
@@ -6795,7 +6934,7 @@ function teardownStartMenu() {
   document.getElementById(START_MENU_STYLE_ID)?.remove();
   dlog("[os] start menu chrome unmounted");
 }
-var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
+var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _manageMode = false, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>', START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_dispatch();
   init_store();
@@ -6806,6 +6945,7 @@ var init_start_menu = __esm(() => {
   init_drawer_shell();
   init_styles();
   init_builtin_icons();
+  init_core_tabs();
   init_start_menu_styles();
   init_log();
   init_start_menu_motion();
