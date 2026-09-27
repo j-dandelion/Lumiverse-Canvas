@@ -145,6 +145,16 @@ mock.module('../../../tabs/live-tab-order', () => ({
   readVisibleTabIdsFromList: () => [],
 }))
 
+// Dispatch seam (lazy-imported by implementation.ts setHidden). Default:
+// no model → the closed∧unhidden merge is a no-op. Cases D/E reassign
+// _dispatchModel / _resolveMap to drive the merge.
+let _dispatchModel: { hidden: Set<string>; closed: string[] } | null = null
+const _resolveMap = new Map<string, string>()
+mock.module('../../../recon/dispatch', () => ({
+  getModel: () => _dispatchModel,
+  getHost: () => ({ resolve: (key: string) => _resolveMap.get(key) ?? null }),
+}))
+
 const { LumiverseHost } = await import('../implementation')
 const {
   getCanvasHiddenTabIds,
@@ -249,6 +259,69 @@ function host() {
   assertNotIncludes(state.hostSettings.hiddenTabIds, HONE_LIVE, 'C4: host list NOT patched (S2 model-owned)')
   assertIncludes(getCanvasHiddenTabIds(), HONE_LIVE, 'C5: canvas hidden list persisted the secondary hide')
   state.patchResult = true
+}
+
+// ── D: closed∧unhidden tabs stay suppressed on the strips (OS mode, D3) ──
+// A Start-menu manage un-hide drops the key from model.hidden only — the
+// window is still CLOSED, so its strip button must stay hidden. The merge
+// must touch the STRIP applies only: the Canvas copy stays pure model.hidden
+// (no closed residue → no hiddenTabIds persist leak).
+{
+  __resetCanvasHiddenTabIdsForTest()
+  state.assignments = new Map([[HONE_KEY, 'secondary']])
+  state.observerTabs = [
+    observerTab(HONE_KEY, HONE_LIVE, 'Hone', 'ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d'),
+  ]
+  state.hostSettings = { tabOrder: [], hiddenTabIds: [] }
+  setCanvasHiddenTabIds([])
+  state.mirrorCalls = []
+  state.secondaryCalls = []
+  state.hostMainCalls = []
+  _dispatchModel = { hidden: new Set<string>(), closed: [HONE_KEY] }
+  _resolveMap.set(HONE_KEY, HONE_LIVE)
+
+  const h = host()
+  // The un-hide commit: reconcile sends the model.hidden projection — HONE
+  // is NOT in it (it was just un-hidden); only the closed merge keeps the
+  // button off the strip.
+  await h.setHidden('secondary', [])
+  assertIncludes(state.secondaryCalls, HONE_LIVE, 'D1: closed∧unhidden tab stays suppressed on the secondary strip')
+  assertIncludes(state.mirrorCalls, HONE_LIVE, 'D1b: closed∧unhidden tab stays suppressed on the mirror strip')
+  assertIncludes(state.hostMainCalls, HONE_LIVE, 'D1c: closed∧unhidden tab stays suppressed on the host-main strip')
+  assertNotIncludes(getCanvasHiddenTabIds(), HONE_LIVE, 'D2: Canvas copy stays PURE model.hidden — no closed residue (no hiddenTabIds persist leak)')
+
+  // A closed∧HIDDEN key is carried by `ids` (model projection) — the merge
+  // skips it, so no double-add and the Canvas copy keeps it via ids.
+  const CLOSED_HIDDEN_KEY = 'builtin:profile'
+  const CLOSED_HIDDEN_LIVE = 'builtin:profile' // liveIdForKey passes builtins through
+  _dispatchModel = { hidden: new Set<string>([CLOSED_HIDDEN_KEY]), closed: [CLOSED_HIDDEN_KEY, HONE_KEY] }
+  state.assignments = new Map([
+    [CLOSED_HIDDEN_KEY, 'primary'],
+    [HONE_KEY, 'secondary'],
+  ])
+  state.observerTabs = [
+    observerTab(CLOSED_HIDDEN_KEY, CLOSED_HIDDEN_LIVE, 'Profile', ''),
+    observerTab(HONE_KEY, HONE_LIVE, 'Hone', 'ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d'),
+  ]
+  state.mirrorCalls = []
+  state.secondaryCalls = []
+  state.hostMainCalls = []
+  await h.setHidden('primary', [CLOSED_HIDDEN_LIVE])
+  const profileCount = state.mirrorCalls.filter((id) => id === CLOSED_HIDDEN_LIVE).length
+  assertEqual(profileCount, 1, 'D3: closed∧hidden id applied exactly once (carried by ids, not re-added by the closed merge)')
+  assertIncludes(getCanvasHiddenTabIds(), CLOSED_HIDDEN_LIVE, 'D4: closed∧hidden id stays in the Canvas copy via the model projection')
+  assertIncludes(state.secondaryCalls, HONE_LIVE, 'D5: the other side still gets the closed∧unhidden merge')
+
+  // E: a closed key with NO live resolution must not crash the apply.
+  _dispatchModel = { hidden: new Set<string>(), closed: ['ext:dead/Key'] }
+  state.mirrorCalls = []
+  state.secondaryCalls = []
+  state.hostMainCalls = []
+  const res = await h.setHidden('primary', [])
+  assertEqual(res, 'ok', 'E1: unresolvable closed key → setHidden still returns ok')
+
+  _dispatchModel = null
+  _resolveMap.clear()
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

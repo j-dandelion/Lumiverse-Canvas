@@ -521,8 +521,40 @@ export class LumiverseHost implements HostPort {
         if ((assignedSide === 'secondary') === (_side === 'secondary')) sideIds.add(key)
       }
       const canvasOtherSide = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
-      setCanvasHiddenTabIds([...canvasOtherSide, ...ids])
-      const effective = new Set<string>([...canvasOtherSide, ...ids])
+
+      // OS mode (D3): a CLOSED window keeps its strip button suppressed even
+      // after a Start-menu manage un-hide — menu-hidden (model.hidden) and
+      // strip-presence are independent; reopening is the launch path's job
+      // (openWindowInDrawerByLiveId clears closed + hidden together). Merge
+      // the closed set — resolved to live ids — into the STRIP applies only:
+      // the Canvas copy stays pure model.hidden (closed∧unhidden ids must
+      // never leak into hiddenTabIds persist / Configure draft state), and
+      // closed∧hidden ids stay in the copy via `ids` as before.
+      const closedOnlyLiveIds = new Set<string>()
+      try {
+        const { getModel } = await import('../../recon/dispatch')
+        const model = getModel()
+        if (model && model.closed.length > 0) {
+          const hiddenKeys = new Set<string>(model.hidden)
+          for (const key of model.closed) {
+            if (hiddenKeys.has(key)) continue // carried by `ids` already
+            const liveId = resolveTabKey(key)
+            if (liveId) closedOnlyLiveIds.add(liveId)
+          }
+        }
+      } catch {
+        /* dispatch unavailable (stub env) — closed-set merge is best-effort */
+      }
+
+      setCanvasHiddenTabIds([
+        ...canvasOtherSide,
+        ...ids.filter(id => !closedOnlyLiveIds.has(id)),
+      ])
+      const effective = new Set<string>([
+        ...canvasOtherSide,
+        ...ids,
+        ...closedOnlyLiveIds,
+      ])
 
       // Canvas-owned strip applies. The mirror strip's hidden state is
       // renderer-owned (model.hidden) — applyHiddenTabIdsToMirror skips

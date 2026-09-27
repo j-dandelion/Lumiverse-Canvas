@@ -84,6 +84,15 @@ mock.module('../../sidebar/secondary', () => ({
   getClosedTransformPx: () => 0,
 }))
 
+// Dispatch seam (lazy-imported by syncHiddenTabsFromHost for the OS closed∧
+// unhidden suppression pass). Default: no model → merge is a no-op.
+let _dispatchModel: { hidden: Set<string>; closed: string[] } | null = null
+let _resolveMap = new Map<string, string>()
+mock.module('../../recon/dispatch', () => ({
+  getModel: () => _dispatchModel,
+  getHost: () => ({ resolve: (key: string) => _resolveMap.get(key) ?? null }),
+}))
+
 const {
   syncHiddenTabsFromHost,
   resolveHiddenTabIdsForDraft,
@@ -192,6 +201,58 @@ assertEqual(getCanvasHiddenTabIds().length, 0, 'H8: empty array clears canvas hi
   const m = mergeHiddenTabIdLists(['a', 'b'], ['b', 'c'])
   assertEqual(m.join(','), 'a,b,c', 'H9: merge de-dupes')
 }
+
+// H10/H11: OS closed∧unhidden suppression (D3). The dispatch-driven async
+// pass re-applies with the closed set merged into the DOM applies only —
+// the Canvas copy (returned hiddenIds) stays pure hidden-list truth.
+const flushAsync = () => new Promise<void>((r) => setTimeout(r, 0))
+
+// H10: closed∧unhidden live id is suppressed on strips, NOT added to canvas.
+resetCanvas()
+_dispatchModel = { hidden: new Set<string>(), closed: ['ext:ec535e94/Hone'] }
+_resolveMap = new Map([['ext:ec535e94/Hone', 'spindle:uuid:tab:prompt-viewer:1']])
+_appliedSecondary = []
+_appliedMirror = []
+_hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+{
+  const r = syncHiddenTabsFromHost()
+  assertEqual(r.hiddenIds.includes('spindle:uuid:tab:prompt-viewer:1'), false, 'H10: canvas copy has NO closed residue (immediate pass, pre-merge)')
+  await flushAsync()
+  assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H10: secondary strip suppresses closed∧unhidden id')
+  assert(_appliedMirror.includes('spindle:uuid:tab:prompt-viewer:1'), 'H10b: mirror strip suppresses closed∧unhidden id')
+  assertEqual(getCanvasHiddenTabIds().includes('spindle:uuid:tab:prompt-viewer:1'), false, 'H10c: canvas copy stays PURE after the async merge pass (no hiddenTabIds persist leak)')
+}
+
+// H11: closed∧hidden keys are skipped by the merge (hidden-set apply covers
+// them) — and with an empty closed set the merge pass is a plain re-apply.
+resetCanvas()
+_dispatchModel = { hidden: new Set<string>(['ext:ec535e94/Hone']), closed: ['ext:ec535e94/Hone'] }
+_resolveMap = new Map([['ext:ec535e94/Hone', 'spindle:uuid:tab:prompt-viewer:1']])
+setCanvasHiddenTabIds(['spindle:uuid:tab:prompt-viewer:1'])
+await flushAsync()
+_appliedSecondary = []
+_appliedMirror = []
+{
+  const r = syncHiddenTabsFromHost()
+  assert(r.hiddenIds.includes('spindle:uuid:tab:prompt-viewer:1'), 'H11: hidden∧closed id stays in the canvas copy via the hidden list')
+  await flushAsync()
+  assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H11b: hidden∧closed id still applied (via hidden list, not double-added)')
+}
+
+// H12: getModel() throwing / unavailable → plain apply already ran, no crash.
+resetCanvas()
+_dispatchModel = null
+_resolveMap = new Map()
+_hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['weaver'] }
+await flushAsync()
+{
+  const r = syncHiddenTabsFromHost()
+  assert(r.hiddenIds.includes('weaver'), 'H12: no model → merge no-op, canvas copy unaffected')
+  await flushAsync()
+}
+
+_dispatchModel = null
+_resolveMap = new Map()
 
 console.log(`PASS: ${passed}`)
 if (failed) {
