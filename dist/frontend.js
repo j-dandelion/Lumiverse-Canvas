@@ -19075,6 +19075,10 @@ function isSecondaryShellLive() {
 function ensureSecondaryShellMounted(options) {
   if (!getSettings().secondSidebarEnabled)
     return false;
+  if (!isInstanceActive())
+    return false;
+  if (!getSettings().secondSidebarEnabled)
+    return false;
   if (isSecondaryShellLive())
     return true;
   if (_secondaryWrapper && !_secondaryWrapper.isConnected) {
@@ -19089,6 +19093,8 @@ function ensureSecondaryShellMounted(options) {
   return isSecondaryShellLive();
 }
 function mountSecondarySidebar(options) {
+  if (!isInstanceActive())
+    return;
   if (_secondaryWrapper?.isConnected)
     return;
   if (_secondaryWrapper && !_secondaryWrapper.isConnected) {
@@ -24190,6 +24196,7 @@ init_mobile_exclusion();
 init_drawer_sync();
 init_drawer_observer();
 init_secondary_drawer();
+init_tab_position();
 init_main_mirror_drawer();
 
 // src/context-menu/index.ts
@@ -25603,6 +25610,7 @@ function setup(ctx) {
     dlog(`startWeaverLane done`);
     registerCleanup(() => {
       teardownSecondaryDrawer();
+      clearTabListPosition();
     });
     dlog(`new LumiverseHost`);
     const coreHost = new LumiverseHost;
@@ -25626,6 +25634,7 @@ function setup(ctx) {
       shutdown();
       coreHost.shutdown();
     });
+    registerCleanup(clearTabListPosition);
     try {
       await Promise.race([
         bootPlacementDone(),
