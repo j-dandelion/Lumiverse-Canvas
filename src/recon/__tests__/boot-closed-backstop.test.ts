@@ -161,6 +161,55 @@ const HONE = builtinKey('Hone')
   hydrateSettings(null)
 }
 
+// ── B1-3 (LUMI-16b): the START-MENU-only menuHidden set follows the same
+// backstop — dropped on a non-OS boot, kept while OS mode is on, and never
+// resurrected by a late pending-key resolve. ──
+{
+  const host = new FakeHost([
+    makeLiveTab(LOOM, 'loom', 'primary', { activeInPrimary: true }),
+    makeLiveTab(WEAVER, 'weaver', 'primary'),
+  ])
+  const layout = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'loom' },
+    secondary: { open: false, width: 420, activeTabId: null },
+    tabOrder: ['loom', 'weaver'],
+    detachedTabs: [],
+    hiddenTabIds: [],
+    menuHiddenTabIds: ['weaver'],
+    drawerSide: 'left' as const,
+  }
+
+  hydrateSettings({ osMode: false })
+  shutdown()
+  bootstrapFromLayout(layout, host, 't')
+  await flush()
+  let model = getModel()
+  assert(model != null, 'B1-3a: model present after non-OS boot')
+  assertEqual(
+    model!.menuHidden.length, 0,
+    'B1-3b: osMode off → menu-hidden set dropped on boot (Start menu is OS chrome)',
+  )
+  shutdown()
+
+  hydrateSettings({ osMode: true })
+  shutdown()
+  bootstrapFromLayout(layout, host, 't')
+  await flush()
+  model = getModel()
+  assert(model != null, 'B1-3c: model present after OS-mode boot')
+  assert(
+    model!.menuHidden.includes(WEAVER),
+    'B1-3d: osMode on → menu-hidden set kept (WEAVER menu-hidden in the Start menu)',
+  )
+  assertEqual(
+    model!.hidden.length, 0,
+    'B1-3e: menu-hidden hydration never touches the strip hidden set',
+  )
+  shutdown()
+  hydrateSettings(null)
+}
+
 if (failed > 0) {
   console.error(`FAILED: ${failed}`)
   process.exitCode = 1

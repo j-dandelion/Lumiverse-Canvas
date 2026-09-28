@@ -21,6 +21,12 @@ export interface LegacyLayout {
   detachedTabs?: StoredTab[]
   tabOrder?: string[]
   hiddenTabIds?: string[]
+  /** START-MENU-only hidden set (LUMI-16b) — live tab ids resolved from the
+   *  model's `menuHidden` TabKeys. Meaningful only while OS mode is on (the
+   *  Start menu is OS chrome); non-OS serializations drop it like
+   *  `closedTabIds`, and older layouts without the field hydrate an empty
+   *  set. Consumed ONLY by the Start-menu projections — never by strips. */
+  menuHiddenTabIds?: string[]
   /** OS-mode closed-set — live tab ids (resolved from the model's closed
    *  TabKeys). Present in the active serialization and the OS slots; the
    *  non-OS slots carry it only as an empty array while OS is off. */
@@ -99,6 +105,17 @@ export function buildModelFromLayout(
     }
   }
 
+  // START-MENU-only hidden set (LUMI-16b) → menuHidden TabKeys. Same healing
+  // rules as the hidden set (unresolvable ids are dropped). Strip surfaces
+  // never read this set.
+  const menuHidden: TabKey[] = []
+  for (const storedId of (layout.menuHiddenTabIds ?? [])) {
+    const key = resolveStoredId(storedId, findKey)
+    if (key && (primary.includes(key) || secondary.includes(key)) && !menuHidden.includes(key)) {
+      menuHidden.push(key)
+    }
+  }
+
   // OS-mode closed-set (spec §3.3) → closed TabKeys. Unresolvable ids are
   // dropped (GC at boot — spec §3.4: ghosts of deleted/renamed tabs never
   // survive a restore pass). Same healing rules as the hidden set.
@@ -135,6 +152,7 @@ export function buildModelFromLayout(
     primary,
     secondary,
     hidden,
+    menuHidden,
     closed,
     active: {
       primary: activePrimary ?? null,
@@ -176,6 +194,7 @@ export function serializeModelToSingleLayout(
     // live ids exactly like a dual serialization's tabOrder.
     tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
     hiddenTabIds: model.hidden.map(key => resolve(key)).filter(Boolean) as string[],
+    menuHiddenTabIds: model.menuHidden.map(key => resolve(key)).filter(Boolean) as string[],
     closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
     drawerSide: model.side,
   }
@@ -320,6 +339,7 @@ export function serializeModelToLayout(
     detachedTabs,
     tabOrder,
     hiddenTabIds,
+    menuHiddenTabIds: model.menuHidden.map(key => resolve(key)).filter(Boolean) as string[],
     closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
     drawerSide: model.side,
   }

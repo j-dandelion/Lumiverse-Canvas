@@ -9,6 +9,15 @@ export interface LayoutModel {
   readonly primary: readonly TabKey[]
   readonly secondary: readonly TabKey[]
   readonly hidden: readonly TabKey[]
+  /** START-MENU-only visibility state (LUMI-16b, member decision 2026-09-28):
+   *  membership = the panel is hidden from the START MENU listing. Consumed
+   *  ONLY by the Start-menu projections — never by the strips, never by
+   *  reconcile's host writes. Strip visibility stays owned by `hidden`
+   *  (Configure Tabs) + the OS window lifecycle (`closed`/active). Persisted
+   *  as layout `menuHiddenTabIds`; meaningful only while OS mode is on (the
+   *  menu is OS chrome), so non-OS restores/serializations drop it like
+   *  `closed` (same keying as `hidden`). */
+  readonly menuHidden: readonly TabKey[]
   /** OS-mode closed-set (TabKeys, same keying as `hidden`). Membership is
    *  OS-mode-specific: only meaningful while `osMode` is on, and the boot
    *  model hydrates it from the loaded blob's `closedTabIds`. */
@@ -87,6 +96,7 @@ export function createEmptyModel(side: DrawerSide = 'left'): LayoutModel {
     primary: [],
     secondary: [],
     hidden: [],
+    menuHidden: [],
     closed: [],
     active: { primary: null, secondary: null },
     drawers: {

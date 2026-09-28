@@ -204,6 +204,11 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
 
   const isClosed = model.closed.includes(key)
   const isHidden = model.hidden.includes(key)
+  // START-MENU-only set (LUMI-16b): a launch is a stronger signal than a
+  // manage-mode un-check — the launched window must re-enter the menu's
+  // NORMAL list (the menu toggle itself never touches the strips, and this
+  // intent does not either).
+  const menuHidden = model.menuHidden.includes(key)
   const livesInTarget = side === 'primary' ? model.primary.includes(key) : model.secondary.includes(key)
   // Launch placement: a button already in the TARGET drawer keeps its slot;
   // every other window (other drawer / closed / hidden) lands at the end.
@@ -263,6 +268,11 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   // already reordered in the un-hide batch).
   const open: Promise<void> = dispatchBatch([
     { t: 'setClosed', key, closed: false },
+    // LUMI-16b: launching a menu-hidden panel re-enters it into the menu's
+    // NORMAL listing (the set is menu-projection-only — no strip effect).
+    ...(menuHidden
+      ? [{ t: 'setMenuHidden', key, hidden: false } as const]
+      : []),
     ...(isClosed && !isHidden && livesInTarget
       ? [{ t: 'reorder', key, side, index: launchIndex } as const]
       : []),

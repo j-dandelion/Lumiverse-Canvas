@@ -87,6 +87,7 @@ function makeModel() {
     primary: [KEY_A, KEY_B],
     secondary: [KEY_C, KEY_HIDDEN],
     hidden: [KEY_HIDDEN],
+    menuHidden: [KEY_HIDDEN],
     closed: [KEY_B],
     active: { primary: KEY_A, secondary: null as string | null },
   }
@@ -94,7 +95,7 @@ function makeModel() {
 
 const resolve = (key: string) => liveIds.get(key) ?? null
 
-// ── deriveStartMenuEntries: both drawers, hidden EXCLUDED (normal view), alphabetical ──
+// ── deriveStartMenuEntries: both drawers, menu-hidden EXCLUDED (normal view), alphabetical ──
 {
   const entries = deriveStartMenuEntries(makeModel(), resolve)
   assertEqual(entries.length, 3, 'both drawers listed, hidden EXCLUDED, unresolvable skipped')
@@ -111,25 +112,62 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(entries[2]?.state, 'minimized', 'inactive in-drawer → minimized')
   assertEqual(entries[0]?.iconSvg, '<svg/>', 'icon from the store')
   assertEqual(entries[0]?.title, 'Alpha', 'title from the store')
-  assert(entries.every((e) => !e.hidden), 'normal projection: every entry visible')
+  assert(entries.every((e) => !e.menuHidden), 'normal projection: every entry menu-visible')
   assert(entries.every((e) => typeof e.key === 'string'), 'entries carry their TabKey')
 }
 
-// ── manage mode: hidden tabs re-enter the list (dimmed recovery rows) ──
+// ── manage mode: menu-hidden tabs re-enter the list (dimmed recovery rows) ──
 {
   const entries = deriveStartMenuEntries(makeModel(), resolve, storeTabs, { manageMode: true })
-  assertEqual(entries.length, 4, 'manage projection: hidden tabs listed again')
+  assertEqual(entries.length, 4, 'manage projection: menu-hidden tabs listed again')
   assertEqual(
     entries.map((e) => e.title).join(','),
     'Alpha,Beta,Gamma,Hidden',
-    'manage projection: alphabetized with the hidden row included',
+    'manage projection: alphabetized with the menu-hidden row included',
   )
   const hiddenEntry = entries.find((e) => e.liveId === 'h:2')
-  assertEqual(hiddenEntry?.hidden, true, 'manage projection: hidden entry flagged')
-  assertEqual(hiddenEntry?.side, 'secondary', 'hidden tab keeps its drawer')
-  assertEqual(hiddenEntry?.state, 'closed', 'hidden non-active tab → closed (no strip button)')
-  assertEqual(hiddenEntry?.key, KEY_HIDDEN, 'hidden entry carries its TabKey (setHidden keying)')
-  assert(entries.find((e) => e.liveId === 'a:2')?.hidden === false, 'visible tab not flagged')
+  assertEqual(hiddenEntry?.menuHidden, true, 'manage projection: menu-hidden entry flagged')
+  assertEqual(hiddenEntry?.side, 'secondary', 'menu-hidden tab keeps its drawer')
+  assertEqual(hiddenEntry?.key, KEY_HIDDEN, 'menu-hidden entry carries its TabKey (setMenuHidden keying)')
+  assert(entries.find((e) => e.liveId === 'a:2')?.menuHidden === false, 'menu-visible tab not flagged')
+}
+
+// ── menu projection reads ONLY menuHidden (LUMI-16b) — strip `hidden` is not a menu concern ──
+{
+  // A Configure-hidden (strip-hidden) panel that is NOT menu-hidden stays
+  // listed in BOTH projections: the two sets are independent by design, and
+  // Configure Tabs must not remove rows from the Start menu.
+  const configureHiddenOnly = {
+    ...makeModel(),
+    hidden: [KEY_C],
+    menuHidden: [] as string[],
+  }
+  const normal = deriveStartMenuEntries(configureHiddenOnly, resolve)
+  assertEqual(normal.length, 4, 'strip-hidden but menu-visible: still listed in normal view')
+  assertEqual(normal.find((e) => e.liveId === 'c:2')?.menuHidden, false, 'strip-hidden entry is menu-visible')
+  // And the reverse: menu-hidden regardless of the strip set.
+  const menuHiddenOnly = { ...makeModel(), hidden: [] as string[], menuHidden: [KEY_A] }
+  const menuView = deriveStartMenuEntries(menuHiddenOnly, resolve)
+  assertEqual(menuView.length, 3, 'menu-hidden excluded from normal view even when strip-visible')
+  assertEqual(menuView.find((e) => e.liveId === 'a:2'), undefined, 'menu-hidden key dropped from normal projection')
+  const manageView = deriveStartMenuEntries(menuHiddenOnly, resolve, storeTabs, { manageMode: true })
+  assertEqual(manageView.find((e) => e.liveId === 'a:2')?.menuHidden, true, 'menu-hidden row flagged in manage view')
+  // The state mark is the WINDOW lifecycle, not the menu set: a menu-hidden
+  // OPEN window keeps its strip button, so it must show 'open' (never the
+  // old forced 'closed' presentation — that belonged to the shared bit).
+  const menuHiddenOpen = { ...makeModel(), hidden: [] as string[], menuHidden: [KEY_A] }
+  assertEqual(
+    deriveStartMenuEntries(menuHiddenOpen, resolve, storeTabs, { manageMode: true }).find((e) => e.liveId === 'a:2')?.state,
+    'open',
+    'menu-hidden open window → open (strips never react to the menu set)',
+  )
+  // A menu-hidden OS-CLOSED window still presents 'closed' (model.closed).
+  const menuHiddenClosed = { ...makeModel(), closed: [KEY_HIDDEN], menuHidden: [KEY_HIDDEN] }
+  assertEqual(
+    deriveStartMenuEntries(menuHiddenClosed, resolve, storeTabs, { manageMode: true }).find((e) => e.liveId === 'h:2')?.state,
+    'closed',
+    'menu-hidden closed window → closed',
+  )
 }
 
 // ── core hide-lock: resolved from the model key's bare builtin id ──
@@ -139,6 +177,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
     primary: ['builtin:profile'],
     secondary: [KEY_C],
     hidden: [] as string[],
+    menuHidden: [] as string[],
     closed: [] as string[],
     active: { primary: 'builtin:profile', secondary: null as string | null },
   }
@@ -151,27 +190,34 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(normal.find((e) => e.key === 'builtin:profile')?.locked, true, 'lock flag in normal projection too')
 }
 
-// ── hidden presents like closed (manage projection); a visible inactive tab stays minimized ──
+// ── menu-hidden state marks reflect the window lifecycle (manage projection) ──
 {
-  // Same model minus the OS closure: the eye-hidden tab must still show as
-  // closed (it has no strip button), while a plain inactive tab keeps the
-  // minimized ○.
+  // Same model minus the OS closure: the menu-hidden tab is not OS-closed, so
+  // its mark follows the window (inactive → minimized ○), never the menu set.
   const entries = deriveStartMenuEntries({ ...makeModel(), closed: [] }, resolve, storeTabs, { manageMode: true })
   assertEqual(
     entries.find((e) => e.liveId === 'h:2')?.state,
-    'closed',
-    'eye-hidden tab → closed state (no mark)',
+    'minimized',
+    'menu-hidden non-closed inactive tab → minimized (window lifecycle)',
   )
   assertEqual(
     entries.find((e) => e.liveId === 'b:2')?.state,
     'minimized',
-    'visible inactive tab → minimized (mark)',
+    'menu-visible non-closed inactive tab → minimized (mark)',
+  )
+  // With the OS closure kept: the closed window presents 'closed' regardless
+  // of its menu visibility.
+  const withClosed = deriveStartMenuEntries(makeModel(), resolve, storeTabs, { manageMode: true })
+  assertEqual(
+    withClosed.find((e) => e.liveId === 'b:2')?.state,
+    'closed',
+    'OS-closed tab → closed (no mark)',
   )
   const both = deriveStartMenuEntries({ ...makeModel(), closed: [KEY_HIDDEN] }, resolve, storeTabs, { manageMode: true })
   assertEqual(
     both.find((e) => e.liveId === 'h:2')?.state,
     'closed',
-    'hidden + OS-closed → closed',
+    'menu-hidden + OS-closed → closed',
   )
 }
 
@@ -185,7 +231,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   const mixedResolve = (key: string) =>
     key === KEY_A ? 'a:2' : key === KEY_B ? 'b:2' : key === KEY_C ? 'g:2' : null
   const entries = deriveStartMenuEntries(
-    { ...makeModel(), hidden: [] },
+    { ...makeModel(), menuHidden: [] },
     mixedResolve,
     mixed,
   )
@@ -649,12 +695,12 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   assert(hiddenCheckbox, 'manage: hidden row carries a checkbox')
   assertEqual(hiddenCheckbox!.getAttribute('aria-label'), 'Hidden — Show panel', 'manage: checkbox aria-label names the action')
 
-  // Un-hide: checkbox change dispatches the model intent (checked = visible;
-  // a real click sets .checked before change fires).
+  // Un-hide: checkbox change dispatches the START-MENU-ONLY intent (checked =
+  // menu-visible; a real click sets .checked before change fires).
   ;(hiddenCheckbox as unknown as { checked: boolean }).checked = true
   hiddenCheckbox!.fireChange()
   assertEqual(dispatchedIntents.length, 1, 'manage: un-hide dispatches exactly one intent')
-  assertEqual(dispatchedIntents[0]?.t, 'setHidden', 'manage: the intent is setHidden')
+  assertEqual(dispatchedIntents[0]?.t, 'setMenuHidden', 'manage: the intent is setMenuHidden (LUMI-16b — never the strip setHidden)')
   assertEqual(dispatchedIntents[0]?.key, KEY_HIDDEN, 'manage: keyed by the model TabKey')
   assertEqual(dispatchedIntents[0]?.hidden, false, 'manage: un-hide sets hidden=false')
   assert(!hiddenRow!.className.includes('row-hidden'), 'manage: un-hidden row loses the dim')
@@ -669,6 +715,9 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   assertEqual(dispatchedIntents.length, 2, 'manage: hide dispatches a second intent')
   assertEqual(dispatchedIntents[1]?.hidden, true, 'manage: hide sets hidden=true')
   assert(visibleRow.className.includes('row-hidden'), 'manage: hidden row dims immediately')
+  // The optimistic update must NOT touch the state mark — the window
+  // lifecycle is unaffected by a menu toggle (LUMI-16b).
+  assertEqual(visibleRow.getAttribute('data-os-state'), 'open', 'manage: menu hide keeps the window state mark')
 
   // Core-locked rule: a locked row's checkbox is disabled without the
   // coreTabsHidden setting (default off in this harness).
@@ -678,6 +727,7 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
     primary: ['builtin:profile'],
     secondary: [] as string[],
     hidden: [] as string[],
+    menuHidden: [] as string[],
     closed: [] as string[],
     active: { primary: 'builtin:profile', secondary: null as string | null },
   }

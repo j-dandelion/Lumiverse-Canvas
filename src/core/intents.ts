@@ -4,6 +4,7 @@ export type Intent =
   | { readonly t: 'move';        readonly key: TabKey; readonly to: Side; readonly index: number; readonly activateDest: boolean }
   | { readonly t: 'reorder';     readonly key: TabKey; readonly side: Side; readonly index: number }
   | { readonly t: 'setHidden';   readonly key: TabKey; readonly hidden: boolean }
+  | { readonly t: 'setMenuHidden'; readonly key: TabKey; readonly hidden: boolean }
   | { readonly t: 'setClosed';   readonly key: TabKey; readonly closed: boolean }
   | { readonly t: 'activate';    readonly key: TabKey; readonly side: Side }
   | { readonly t: 'deactivate';  readonly side: Side }

@@ -134,6 +134,21 @@ function applySetHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutM
 }
 
 /**
+ * START-MENU visibility toggle (LUMI-16b): membership in the model's
+ * menuHidden set. STRIP-INDEPENDENT by design — unlike applySetHidden there
+ * is NO active replacement and NO other surface reads this bit: the manage
+ * checkbox's hide/unhide changes ONLY the Start-menu listing (the member's
+ * explicit requirement, 2026-09-28). Strips stay owned by `hidden` (Configure
+ * Tabs) + the OS window lifecycle. Identity-preserving for no-op rounds.
+ */
+function applySetMenuHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutModel {
+  if (!keyExists(model, key)) return model
+  const nextMenuHidden = toggleMembership(model.menuHidden, key, hide)
+  if (nextMenuHidden === model.menuHidden) return model
+  return { ...model, menuHidden: nextMenuHidden }
+}
+
+/**
  * OS-mode window close (spec D3/D9/D17): membership in the model's closed
  * set. Unlike hide, closing the ACTIVE window leaves its drawer with NO
  * active window (D17 — a closed window is not auto-succeeded; nothing is
@@ -317,6 +332,11 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
   next = {
     ...next,
     hidden: next.hidden.filter(k => observedKeys.has(k)),
+    // START-MENU-only set (LUMI-16b): pruned against the same observed
+    // inventory so removed tabs cannot leave ghosts behind — but NEVER
+    // derived from the host: no host write consumes menuHidden (the strips
+    // must not react to it), and the host has no voice in the menu listing.
+    menuHidden: next.menuHidden.filter(k => observedKeys.has(k)),
   }
 
   // Host is the source of truth for the currently-active tab on each side.
@@ -396,6 +416,7 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
     sameKeys(next.primary, model.primary) &&
     sameKeys(next.secondary, model.secondary) &&
     sameKeys(next.hidden, model.hidden) &&
+    sameKeys(next.menuHidden, model.menuHidden) &&
     next.active.primary === model.active.primary &&
     next.active.secondary === model.active.secondary &&
     next.side === model.side &&
@@ -425,6 +446,8 @@ export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
       return applyReorder(model, intent.key, intent.side, intent.index)
     case 'setHidden':
       return applySetHidden(model, intent.key, intent.hidden)
+    case 'setMenuHidden':
+      return applySetMenuHidden(model, intent.key, intent.hidden)
     case 'setClosed':
       return applySetClosed(model, intent.key, intent.closed)
     case 'activate':

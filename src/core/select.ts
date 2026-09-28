@@ -13,6 +13,13 @@ export function isHidden(model: LayoutModel, key: TabKey): boolean {
   return model.hidden.includes(key)
 }
 
+/** START-MENU-only visibility (LUMI-16b): membership = hidden from the Start
+ *  menu listing. Strip surfaces must NEVER consult this — strip visibility is
+ *  `isHidden` (Configure Tabs) + the OS window lifecycle. */
+export function isMenuHidden(model: LayoutModel, key: TabKey): boolean {
+  return model.menuHidden.includes(key)
+}
+
 export function visibleToAbsoluteIndex(
   model: LayoutModel,
   side: Side,

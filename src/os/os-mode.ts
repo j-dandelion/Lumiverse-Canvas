@@ -476,6 +476,16 @@ async function runOsDisable(): Promise<void> {
         const reopen: Intent[] = after.closed.map((key) => ({ t: 'setClosed', key, closed: false }))
         await dispatchBatch(reopen)
       }
+      // Same invariant for the START-MENU-only set (LUMI-16b): the Start menu
+      // is gone, so residual menu-hidden membership must not survive the
+      // disable (the OS slots keep their stored copies for the next enable —
+      // symmetric with closedTabIds).
+      const afterHidden = getModel()
+      if (afterHidden && afterHidden.menuHidden.length > 0) {
+        dlog('[os] disable: clearing residual menu-hidden panels', { menuHidden: afterHidden.menuHidden.length })
+        const unmenu: Intent[] = afterHidden.menuHidden.map((key) => ({ t: 'setMenuHidden', key, hidden: false }))
+        await dispatchBatch(unmenu)
+      }
       // Mobile single-drawer restore: if OS mode had forced the second drawer
       // off (mobile), bring the user's dual mode back through the full
       // mode-switch API. Runs after the non-OS single restore above so the

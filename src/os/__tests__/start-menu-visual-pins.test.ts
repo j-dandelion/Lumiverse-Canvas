@@ -201,8 +201,10 @@ function blockOf(css: string, needle: string): string {
   assertIncludes(src, "'canvas-os-start-menu__item--manage'", 'manage row modifier applied in DOM')
   assertIncludes(src, "manageBtn.setAttribute('aria-label', manageLabel)", 'manage toggle carries its own accessible name')
   assertIncludes(src, '· ${hiddenCount === 1', 'manage count line reads N panels · M hidden')
-  assertIncludes(src, "checkbox.checked = !entry.hidden", 'checkbox checked = visible (Configure semantics)')
-  assertIncludes(src, "dispatchBatch([{ t: 'setHidden', key: entry.key, hidden: !checkbox.checked }])", 'toggle dispatches the model setHidden intent (never the Configure draft)')
+  assertIncludes(src, "checkbox.checked = !entry.menuHidden", 'checkbox checked = menu-visible (Configure semantics, LUMI-16b menu-only set)')
+  assertIncludes(src, "dispatchBatch([{ t: 'setMenuHidden', key: entry.key, hidden: !checkbox.checked }])", 'toggle dispatches the START-MENU-ONLY setMenuHidden intent (never the strip bit, never the Configure draft)')
+  assert(!src.includes("t: 'setHidden'"), 'the menu NEVER dispatches the strip setHidden intent (LUMI-16b: menu toggle must not touch strips)')
+  assertIncludes(src, 'model.menuHidden.includes(key)', 'the menu projection reads ONLY the menuHidden set (strip hidden is not a menu concern)')
   assertIncludes(src, "!!getSettings().coreTabsHidden", 'core hide-lock reads the coreTabsHidden setting')
   assert(!src.includes("from '../tabs/configure-model'"), 'menu must not import the Configure draft model')
 }

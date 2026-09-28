@@ -138,6 +138,7 @@ const baseModel = () => ({
   secondary: ['builtin:sec'],
   closed: [],
   hidden: [],
+  menuHidden: [],
   active: { primary: KEY, secondary: 'builtin:sec' },
   drawers: {
     primary: { open: true, width: 420 },
@@ -542,6 +543,22 @@ const baseModel = () => ({
   assert(
     fake.dispatches.findIndex((d: any) => d.t === 'activate') > 0,
     'activate follows the un-hide',
+  )
+}
+{
+  // LUMI-16b: a menu-hidden target launches AND re-enters the menu's NORMAL
+  // list (setMenuHidden:false rides the open batch). The strip `hidden` set
+  // is untouched — no setHidden may fire for a menu-only hide.
+  fresh({ ...baseModel(), menuHidden: [KEY] })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'primary')
+  const menuIntent = fake.dispatches.find((d: any) => d.t === 'setMenuHidden')
+  assertEqual(menuIntent?.hidden, false, 'menu-hidden launch → setMenuHidden:false (re-enters the menu list)')
+  assertEqual(menuIntent?.key, KEY, 'menu un-hide targets the resolved key')
+  assertEqual(
+    fake.dispatches.filter((d: any) => d.t === 'setHidden').length,
+    0,
+    'menu-hidden launch never touches the strip hidden set',
   )
 }
 {

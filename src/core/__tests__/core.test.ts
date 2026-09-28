@@ -497,6 +497,56 @@ function test_setClosed() {
 test_setClosed()
 
 // ═══════════════════════════════════════════════════════════════════
+// setMenuHidden intent (LUMI-16b): membership in the START-MENU-only
+// menuHidden set. STRIP-INDEPENDENT: unlike setHidden there is NO active
+// replacement and the `hidden`/`closed` sets are never touched — the menu
+// toggle must change only the Start-menu listing (member requirement
+// 2026-09-28). Strips stay owned by `hidden` (Configure Tabs) + the window
+// lifecycle.
+// ═══════════════════════════════════════════════════════════════════
+
+function test_setMenuHidden() {
+  const m = modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: PRESETS,
+  })
+
+  // Menu-hide a window: membership in menuHidden ONLY.
+  const hidden = reduce(m, { t: 'setMenuHidden', key: PROFILE, hidden: true })
+  assert(hidden.menuHidden.includes(PROFILE), 'setMenuHidden adds to menuHidden')
+  assertArraysEqual(hidden.hidden, m.hidden, 'setMenuHidden NEVER touches the strip hidden set')
+  assertArraysEqual(hidden.closed, m.closed, 'setMenuHidden never touches the closed set')
+  assertEqual(hidden.active.primary, PRESETS, 'menu-hiding the ACTIVE window keeps it active (no strip semantics)')
+  assert(hidden.primary.includes(PROFILE), 'menu-hidden tab stays in its list')
+
+  // Menu-hide an inactive window: no lifecycle change either.
+  const minHidden = reduce(m, { t: 'setMenuHidden', key: LOOM, hidden: true })
+  assertEqual(minHidden.active.primary, PRESETS, 'menu-hiding an inactive window keeps the active')
+
+  // Menu-unhide: membership removal only, still strip-neutral.
+  const unhidden = reduce(hidden, { t: 'setMenuHidden', key: PROFILE, hidden: false })
+  assert(!unhidden.menuHidden.includes(PROFILE), 'setMenuHidden false removes from menuHidden')
+  assertArraysEqual(unhidden.hidden, m.hidden, 'menu un-hide never touches the strip hidden set')
+
+  // Coexistence: the two sets are independent — a strip-hidden tab can be
+  // menu-visible and vice versa.
+  const both = reduce(
+    modelWith({ primary: [PROFILE, PRESETS], activePrimary: PRESETS }),
+    { t: 'setHidden', key: PROFILE, hidden: true },
+  )
+  const menuHiddenOnly = reduce(both, { t: 'setMenuHidden', key: PRESETS, hidden: true })
+  assert(menuHiddenOnly.hidden.includes(PROFILE) && !menuHiddenOnly.menuHidden.includes(PROFILE), 'strip-hidden tab stays menu-visible')
+  assert(menuHiddenOnly.menuHidden.includes(PRESETS) && !menuHiddenOnly.hidden.includes(PRESETS), 'menu-hidden tab stays strip-visible')
+
+  // Identity no-ops: redundant toggle and unknown keys.
+  const once = reduce(m, { t: 'setMenuHidden', key: PROFILE, hidden: true })
+  assert(reduce(once, { t: 'setMenuHidden', key: PROFILE, hidden: true }) === once, 'redundant menu-hide is identity (dispatch no-op gate)')
+  assert(reduce(m, { t: 'setMenuHidden', key: builtinKey('nonexistent'), hidden: true }) === m, 'setMenuHidden unknown key identity no-op')
+}
+
+test_setMenuHidden()
+
+// ═══════════════════════════════════════════════════════════════════
 // activate intent
 // ═══════════════════════════════════════════════════════════════════
 
@@ -814,6 +864,41 @@ function test_syncFromHost() {
   })
   assertArraysEqual(gone.primary, [], 'syncFromHost removes gone tabs')
   assertEqual(gone.active.primary, null, 'syncFromHost clears active when tab gone')
+
+  // menuHidden (LUMI-16b) survives a host sync untouched when the tab is
+  // still present — and is NEVER derived from the host (no host write
+  // consumes it; the strips must not react to it).
+  const menuM = { ...modelWith({ primary: [PROFILE, PRESETS] }), menuHidden: [PROFILE] }
+  const menuSynced = reduce(menuM, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PROFILE, liveId: 'profile', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+        { key: PRESETS, liveId: 'presets', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: false, isActiveInSecondary: false, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: false,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    } as any,
+  })
+  assertArraysEqual(menuSynced.menuHidden, [PROFILE], 'syncFromHost keeps menuHidden membership for present tabs')
+  // A tab that left the observed inventory cannot leave a menu-hidden ghost.
+  const goneMenu = reduce(menuM, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PRESETS, liveId: 'presets', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: false,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    } as any,
+  })
+  assertArraysEqual(goneMenu.menuHidden, [], 'syncFromHost prunes menuHidden entries whose tab is gone')
 }
 
 test_syncFromHost()

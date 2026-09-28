@@ -186,6 +186,9 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
   const primary = mergeSide('primary')
   const secondary = mergeSide('secondary')
   const hidden = rebuilt.hidden.filter((k) => inModel.has(k))
+  // START-MENU-only set (LUMI-16b): adopts the rebuild exactly like `hidden`
+  // (the rebuild was built from the same layout blob).
+  const menuHidden = rebuilt.menuHidden.filter((k) => inModel.has(k))
   // User actions inside the pending window win over the layout for the
   // fields the rebuild would otherwise overwrite wholesale (drawer geometry,
   // hidden set, side). Only active had this guard before.
@@ -195,6 +198,7 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
     primary,
     secondary,
     hidden: keepUser ? current.hidden : hidden,
+    menuHidden: keepUser ? current.menuHidden : menuHidden,
     active: {
       primary: current.active.primary ?? rebuilt.active.primary,
       secondary: current.active.secondary ?? rebuilt.active.secondary,
@@ -207,6 +211,7 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
     sameKeys(next.primary, current.primary) &&
     sameKeys(next.secondary, current.secondary) &&
     sameKeys(next.hidden, current.hidden) &&
+    sameKeys(next.menuHidden, current.menuHidden) &&
     next.active.primary === current.active.primary &&
     next.active.secondary === current.active.secondary &&
     next.drawers.primary.open === current.drawers.primary.open &&
@@ -230,7 +235,7 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
 function markPendingWindowUserIntent(intent: Intent): void {
   if (_pendingLayout === null) return
   const t = intent.t
-  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden') {
+  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden' || t === 'setMenuHidden') {
     _pendingWindowUserState = true
   }
 }
@@ -502,7 +507,12 @@ function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string
   // bootstrap-scoped slot, then the live setting.
   const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled()
   // Non-OS serialization: closedTabIds only survive while OS mode is on.
-  const base: LegacyLayout = os ? layout : { ...layout, closedTabIds: [] }
+  // menuHiddenTabIds follows the same rule (LUMI-16b): the Start menu is OS
+  // chrome, so the menu-hidden set is not durable state outside an OS
+  // session — the OS slots keep their stored copies, symmetric with closed.
+  const base: LegacyLayout = os
+    ? layout
+    : { ...layout, closedTabIds: [], menuHiddenTabIds: [] }
   // Facet freeze — mirrors `layout/snapshot.ts` buildPersistedLayout: a
   // disabled persistDrawerOpenState / persistDrawerWidth facet keeps the
   // LAST-LOADED main-drawer open/width on disk instead of the latest live
@@ -1173,6 +1183,15 @@ export function bootstrapFromLayout(
       closed: model.closed.length,
     })
     model = { ...model, closed: [] }
+  }
+  // Same backstop for the START-MENU-only set (LUMI-16b): with OS mode off
+  // the Start menu does not exist, so a stale menu-hidden set must never
+  // survive into a non-OS session (the OS slots keep their stored copies).
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.menuHidden.length > 0) {
+    dlog('[dispatch] dropped OS menu-hidden set on non-OS boot/restore', {
+      menuHidden: model.menuHidden.length,
+    })
+    model = { ...model, menuHidden: [] }
   }
   if (pendingLayoutTabCount(layout) === 0) {
     const observed = host.observe()

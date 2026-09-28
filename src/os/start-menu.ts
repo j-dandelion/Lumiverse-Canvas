@@ -11,16 +11,24 @@
  *     (default off): the main drawer's Start menu still lists every window
  *     from both drawers, so the secondary chrome is a convenience, never the
  *     only return path.
- *   - the **menu**: the full tab inventory — BOTH drawers, hidden and closed
- *     tabs included — alphabetized by title (case-insensitive) with a state
+ *   - the **menu**: the full tab inventory — BOTH drawers, closed tabs
+ *     included — alphabetized by title (case-insensitive) with a state
  *     mark (D18 direction: filled dot = open, hollow circle = minimized, no
  *     mark = closed) and the tab's icon. Clicking LAUNCHES into the invoking
  *     drawer (the menu's own side is authoritative, user direction
  *     2026-09-16): closed → launch fresh, minimized → restore, open → focus;
  *     the window moves to the invoking drawer when needed and, unless its
  *     button was already there, lands at that drawer's launch end (middle-
- *     facing end in Top/Bottom). A hidden tab is un-hidden first so its strip
- *     button returns (D19 auto-opens a closed target drawer).
+ *     facing end in Top/Bottom). A Configure-hidden tab is un-hidden first so
+ *     its strip button returns (D19 auto-opens a closed target drawer).
+ *
+ * MENU vs STRIP visibility (LUMI-16b, member decision 2026-09-28): the
+ * manage checkbox toggles the model's START-MENU-ONLY set (`menuHidden`) —
+ * hiding/unhiding from the menu changes ONLY the menu's listing and never
+ * the strips. Strip visibility stays owned by the window lifecycle
+ * (`closed`/active) and Configure Tabs' `hidden` set; the launch path clears
+ * BOTH sets for the launched window (a launched panel re-enters the menu's
+ * normal list, and a Configure-hidden target still needs its button back).
  *
  * Lifecycle: ONE menu open at a time across drawers; Escape or click-outside
  * dismisses; entries derive on every open (never stale). The menu anchors
@@ -105,10 +113,13 @@ export interface StartMenuEntry {
   iconSvg?: string
   iconUrl?: string
   state: 'open' | 'minimized' | 'closed'
-  /** Eye-hidden per the model's `hidden` set. NORMAL projection emits only
-   *  `hidden: false` entries (hidden tabs are manage mode's rows); MANAGE
-   *  projection carries both. Drives the dimmed row + checkbox state. */
-  hidden: boolean
+  /** MENU-hidden per the model's START-MENU-only `menuHidden` set (LUMI-16b)
+   *  — NOT the strip `hidden` set. NORMAL projection emits only
+   *  `menuHidden: false` entries; MANAGE projection carries both, driving the
+   *  dimmed row + checkbox state. A menu-hidden row's state mark still
+   *  reflects the WINDOW lifecycle (an open window shows the open mark even while
+   *  menu-hidden — the strips never react to this set). */
+  menuHidden: boolean
   /** The model TabKey the entry was resolved from — the setHidden intent's
    *  keying (the toggle path dispatches by key, never by liveId). */
   key: string
@@ -175,23 +186,26 @@ export function resolveEntryIcon(
 /**
  * Derive the Start menu entries for one projection mode.
  *
- * NORMAL mode (the default launch surface): every VISIBLE tab of BOTH
- * drawers — closed included, eye-hidden EXCLUDED — alphabetized by title
- * (case-insensitive, stable tie-break on liveId). Un-hiding is the manage
- * (eye) mode's job, not a launch action, so hidden tabs no longer occupy
- * launch rows; the manage projection below is the recovery path.
+ * Visibility here is the START-MENU-ONLY set (`model.menuHidden`, LUMI-16b)
+ * — NOT the strip `hidden` set. NORMAL mode (the default launch surface):
+ * every menu-visible tab of BOTH drawers — closed included, menu-hidden
+ * EXCLUDED — alphabetized by title (case-insensitive, stable tie-break on
+ * liveId). Un-hiding is the manage (eye) mode's job, not a launch action, so
+ * menu-hidden tabs do not occupy launch rows; the manage projection below is
+ * the recovery path.
  *
- * MANAGE mode: the same inventory WITH the hidden tabs re-listed (dimmed,
- * checkbox rows — the Configure Tabs precedent), so eye-hidden tabs stay
- * reachable.
+ * MANAGE mode: the same inventory WITH the menu-hidden tabs re-listed
+ * (dimmed, checkbox rows — the Configure Tabs precedent), so menu-hidden
+ * tabs stay reachable.
  *
  * The inventory is drawer-agnostic (both Start buttons list every window)
  * but the LAUNCH is not: each entry opens in the invoking menu's drawer, and
  * a window whose button was not already there lands at that drawer's launch
- * end (`openWindowInDrawerByLiveId`). Hidden entries present like closed —
- * no mark, "Launch" verb — because they have no strip button; in manage
- * mode their row carries the checkbox instead of relying on the state mark.
- * Unresolvable extension keys are skipped (they cannot open this session).
+ * end (`openWindowInDrawerByLiveId`). The state mark ALWAYS reflects the
+ * WINDOW lifecycle (open/minimized/closed) — even for a menu-hidden row,
+ * because the menu-hidden set never touches the strips: an open window keeps
+ * its button (and its open mark) while menu-hidden. Unresolvable extension keys
+ * are skipped (they cannot open this session).
  *
  * Pure over its inputs: the tab inventory is a PARAMETER (no module-global
  * `getDrawerTabs()` read inside the body — the default argument only wires
@@ -202,6 +216,7 @@ export function deriveStartMenuEntries(
     primary: readonly string[]
     secondary: readonly string[]
     hidden: readonly string[]
+    menuHidden: readonly string[]
     closed: readonly string[]
     active: { primary: string | null; secondary: string | null }
   },
@@ -221,13 +236,17 @@ export function deriveStartMenuEntries(
       const liveId = resolve(key)
       if (!liveId || seen.has(liveId)) continue
       seen.add(liveId)
-      const isHidden = model.hidden.includes(key)
-      // NORMAL view drops hidden rows (manage mode is their recovery path).
-      if (isHidden && !manageMode) continue
-      // Closed OR eye-hidden → 'closed' (no strip button, so no mark):
-      // 'minimized' means "parked WITH a strip button" — a hidden tab has
-      // none. The click un-hides + launches either way.
-      const state = model.closed.includes(key) || isHidden
+      // MENU-hidden (LUMI-16b): the Start-menu-only set. The strip `hidden`
+      // set is deliberately NOT consulted here — strip visibility is not a
+      // menu concern.
+      const isMenuHidden = model.menuHidden.includes(key)
+      // NORMAL view drops menu-hidden rows (manage mode is their recovery
+      // path).
+      if (isMenuHidden && !manageMode) continue
+      // The state mark is the WINDOW lifecycle only: a menu-hidden tab can
+      // still be open (button on the strip) or minimized — 'closed' comes
+      // from model.closed membership alone.
+      const state = model.closed.includes(key)
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
       const tab = tabsById.get(liveId)
@@ -242,7 +261,7 @@ export function deriveStartMenuEntries(
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
-        hidden: isHidden,
+        menuHidden: isMenuHidden,
         key,
         locked: coreId !== null && isCoreTabId(coreId),
       })
@@ -349,10 +368,30 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
  * Configure toggle applies. Hidden-core rows appear only when OS mode is on
  * (which forces the setting), so the lock only shows on visible core rows.
  */
+/**
+ * Manage (eye) mode row: the same launch button as a NORMAL row, plus a
+ * visibility checkbox on the right — checked = VISIBLE in the START MENU
+ * (Configure Tabs semantics, mirrored for the menu's own set).
+ * Hidden-in-menu rows render dimmed (`row-hidden` precedent).
+ *
+ * The checkbox dispatches the START-MENU-ONLY intent
+ * `{t:'setMenuHidden', key, hidden}` (LUMI-16b) — NEVER the strip
+ * `setHidden` (that bit drives the strips via Configure Tabs) and NOT the
+ * Configure draft mutation (`configure-model.setHidden` mutates the modal's
+ * draft; this menu has no draft). The set is consumed ONLY by the Start-menu
+ * projections: reconcile has no menuHidden diff, so no host write fires and
+ * the strips cannot react; the dispatch's reconcileAndPersist saves the
+ * layout automatically. Launching a menu-hidden panel clears the set for
+ * that window (the launch path, actions.ts).
+ *
+ * Core hide-locked rows (CORE_HIDE_LOCKED) keep the checkbox disabled
+ * unless the `coreTabsHidden` setting is on — the same unlock rule the
+ * Configure toggle applies.
+ */
 function createManageRow(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   const row = createMenuEntry(entry, targetSide)
   row.classList.add('canvas-os-start-menu__item--manage')
-  if (entry.hidden) row.classList.add('row-hidden')
+  if (entry.menuHidden) row.classList.add('row-hidden')
 
   const coreUnlocked = !!getSettings().coreTabsHidden
   const isLocked = entry.locked && !coreUnlocked
@@ -360,24 +399,24 @@ function createManageRow(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   const checkbox = document.createElement('input')
   checkbox.type = 'checkbox'
   checkbox.className = 'canvas-os-start-menu__check'
-  checkbox.checked = !entry.hidden
+  checkbox.checked = !entry.menuHidden
   checkbox.disabled = isLocked
   checkbox.title = isLocked
     ? 'Cannot hide this panel'
-    : entry.hidden ? 'Show panel' : 'Hide panel'
+    : entry.menuHidden ? 'Show panel' : 'Hide panel'
   checkbox.setAttribute('aria-label', `${entry.title} — ${checkbox.title}`)
   checkbox.addEventListener('click', (ev) => ev.stopPropagation())
   checkbox.addEventListener('change', () => {
-    // Toggle the model's hidden membership by TabKey. The dispatch's
-    // reconcile pass performs the Canvas-copy converge + DOM application
-    // (host.setHidden) and the persist — nothing else to do here.
-    void dispatchBatch([{ t: 'setHidden', key: entry.key, hidden: !checkbox.checked }])
+    // Toggle the START-MENU-ONLY membership by TabKey (LUMI-16b). The set is
+    // menu-projection-only: no strip applicator receives these ids, and the
+    // persist rides reconcileAndPersist — nothing else to do here.
+    void dispatchBatch([{ t: 'setMenuHidden', key: entry.key, hidden: !checkbox.checked }])
     // Optimistic in-place row update: the intent re-projects on the next
-    // open; flipping the classes + state now keeps the surface live.
-    const nowHidden = !checkbox.checked
-    entry.hidden = nowHidden
-    row.classList.toggle('row-hidden', nowHidden)
-    row.setAttribute('data-os-state', 'closed')
+    // open; flipping the dim now keeps the surface live. The state mark is
+    // untouched — the window lifecycle did not change.
+    const nowMenuHidden = !checkbox.checked
+    entry.menuHidden = nowMenuHidden
+    row.classList.toggle('row-hidden', nowMenuHidden)
   })
   row.appendChild(checkbox)
   return row
@@ -449,8 +488,9 @@ function createHeader(count: number, hiddenCount: number, manageMode: boolean): 
   const countEl = document.createElement('span')
   countEl.className = 'canvas-os-start-menu__count'
   countEl.setAttribute('aria-hidden', 'true')
-  // Count reads from the FULL inventory (both drawers); the hidden tally is
-  // manage mode's second line ("N panels · M hidden", LUMI-16a).
+  // Count reads from the FULL inventory (both drawers); the menu-hidden
+  // tally is manage mode's second line ("N panels · M hidden", LUMI-16a —
+  // the tally reads the START-MENU-only set since LUMI-16b).
   countEl.textContent = manageMode
     ? `${count === 1 ? '1 panel' : `${count} panels`} · ${hiddenCount === 1 ? '1 hidden' : `${hiddenCount} hidden`}`
     : count === 1 ? '1 panel' : `${count} panels`
@@ -508,7 +548,7 @@ function buildMenu(targetSide: Side): HTMLElement | null {
   }
   const header = createHeader(
     entries.length,
-    entries.filter((e) => e.hidden).length,
+    entries.filter((e) => e.menuHidden).length,
     _manageMode,
   )
   // Manage toggle: flips the projection in place. Rebuild the list rows +
