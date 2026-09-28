@@ -6461,7 +6461,7 @@ function createMenuEntry(entry, targetSide) {
   });
   return item;
 }
-function createManageRow(entry, targetSide) {
+function createManageRow(entry, targetSide, onMenuHiddenChange) {
   const row = createMenuEntry(entry, targetSide);
   row.classList.add("canvas-os-start-menu__item--manage");
   if (entry.menuHidden)
@@ -6481,6 +6481,7 @@ function createManageRow(entry, targetSide) {
     const nowMenuHidden = !checkbox.checked;
     entry.menuHidden = nowMenuHidden;
     row.classList.toggle("row-hidden", nowMenuHidden);
+    onMenuHiddenChange?.(nowMenuHidden);
   });
   row.appendChild(checkbox);
   return row;
@@ -6501,6 +6502,10 @@ function renderEntryIcon(tile, entry) {
   }
   tile.textContent = entryMonogram(entry.title);
   tile.classList.add("canvas-os-start-menu__tile--monogram");
+}
+function countLine(count, hiddenCount, manageMode) {
+  const panels = count === 1 ? "1 panel" : `${count} panels`;
+  return manageMode ? `${panels} · ${hiddenCount === 1 ? "1 hidden" : `${hiddenCount} hidden`}` : panels;
 }
 function createHeader(count, hiddenCount, manageMode) {
   const header = document.createElement("div");
@@ -6527,7 +6532,7 @@ function createHeader(count, hiddenCount, manageMode) {
   const countEl = document.createElement("span");
   countEl.className = "canvas-os-start-menu__count";
   countEl.setAttribute("aria-hidden", "true");
-  countEl.textContent = manageMode ? `${count === 1 ? "1 panel" : `${count} panels`} · ${hiddenCount === 1 ? "1 hidden" : `${hiddenCount} hidden`}` : count === 1 ? "1 panel" : `${count} panels`;
+  countEl.textContent = countLine(count, hiddenCount, manageMode);
   header.append(chrome, manageBtn, countEl);
   return header;
 }
@@ -6575,6 +6580,12 @@ function buildMenu(targetSide) {
     ev.stopPropagation();
     toggleManageMode(targetSide);
   });
+  const countEl = header.querySelector("span.canvas-os-start-menu__count");
+  const refreshCount = () => {
+    if (!countEl)
+      return;
+    countEl.textContent = countLine(entries.length, entries.filter((e) => e.menuHidden).length, _manageMode);
+  };
   menu.appendChild(header);
   const divider = document.createElement("div");
   divider.className = "canvas-os-start-menu__divider";
@@ -6584,7 +6595,7 @@ function buildMenu(targetSide) {
   list.className = "canvas-os-start-menu__list";
   list.setAttribute("role", "presentation");
   for (const entry of entries) {
-    list.appendChild(_manageMode ? createManageRow(entry, targetSide) : createMenuEntry(entry, targetSide));
+    list.appendChild(_manageMode ? createManageRow(entry, targetSide, refreshCount) : createMenuEntry(entry, targetSide));
   }
   menu.appendChild(list);
   return menu;
