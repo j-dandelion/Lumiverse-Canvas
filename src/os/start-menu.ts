@@ -47,6 +47,7 @@
 import type { Side, TabKey } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
 import { humanTabTitleForKey, RECOVERED_WAITING_DESCRIPTION } from '../tabs/configure-catalog'
+import { restoreVanillaHiddenTab } from '../dom/host-settings'
 import { getLayoutOwnedTabTitle } from '../persist/layout-model'
 import { getModel, getHost, dispatchBatch } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide, type DrawerTab } from '../store'
@@ -368,6 +369,9 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   const status = document.createElement('span')
   status.className = 'canvas-os-start-menu__status'
   status.setAttribute('aria-hidden', 'true')
+  // Amendment 4: the unbacked row's live hint element (restore progress /
+  // failure message lands here).
+  let unbackedHint: HTMLElement | null = null
   if (entry.launchable) {
     const markSvg = STATE_MARK_SVG[entry.state]
     if (markSvg) {
@@ -388,6 +392,7 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
     hint.className = 'canvas-os-start-menu__unbacked-hint'
     hint.textContent = RECOVERED_WAITING_DESCRIPTION
     status.appendChild(hint)
+    unbackedHint = hint
   }
 
   item.append(rail, tile, label, status)
@@ -400,8 +405,35 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
       // already there.
       void openWindowInDrawerByLiveId(entry.liveId, targetSide)
     })
+  } else {
+    // Amendment 4: the unbacked manage row IS the restore action — the
+    // remove-only host-settings bridge replaces the off/on dance. The
+    // checkbox stays the menu-visibility control (its stopPropagation keeps
+    // the two actions separate).
+    item.addEventListener('click', () => {
+      void clickRestoreVanilla(entry, unbackedHint)
+    })
   }
   return item
+}
+
+/**
+ * Restore click handler for a host-unbacked manage row: runs the restore
+ * bridge for the row's vanilla id, then reloads so the host re-renders the
+ * button. Failure is surfaced inline (the row keeps working for the
+ * checkbox); 'not-hidden' also reloads (the tab is not vanilla-hidden — a
+ * refresh lets convergence materialize it).
+ */
+async function clickRestoreVanilla(entry: StartMenuEntry, hintEl: HTMLElement | null): Promise<void> {
+  const vanillaId = parseBuiltinKey(entry.key) ?? entry.key
+  if (hintEl) hintEl.textContent = 'Restoring…'
+  const result = await restoreVanillaHiddenTab(vanillaId)
+  if (result === 'failed') {
+    if (hintEl) hintEl.textContent = 'Restore failed — try again or use Lumiverse\u2019s Configure Tabs'
+    return
+  }
+  hideStartMenu()
+  window.location.reload()
 }
 
 /**

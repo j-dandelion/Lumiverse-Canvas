@@ -272,7 +272,7 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   ]
   const hinted = filterCatalogToLive(withDesc, host, new Set(['create']))
   assertEqual(hinted[0]?.description, 'Backed blurb', 'AAC3: host-backed row keeps its real description')
-  assert(/unhide/i.test(hinted[1]?.description ?? ''), 'AAC3: model-only row carries the waiting-on-vanilla hint')
+  assert(/restore/i.test(hinted[1]?.description ?? ''), 'AAC3: model-only row carries the waiting-on-vanilla hint')
   assertEqual(hinted[1]?.id, 'create', 'AAC3: hint swap preserves the row id/manageability')
 }
 
@@ -297,7 +297,7 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   assertEqual(rec.extensionId, 'hone', 'SUP1c: extensionId from the parsed key')
   assertEqual(rec.kind, 'extension', 'SUP1d: kind extension')
   assertEqual(rec.hideLocked, false, 'SUP1e: recovered entries are never hide-locked')
-  assert(/unhide/i.test(rec.description ?? ''), 'AAC3: recovered row carries the waiting-on-vanilla hint')
+  assert(/restore/i.test(rec.description ?? ''), 'AAC3: recovered row carries the waiting-on-vanilla hint')
   assert(!/Open /.test(rec.description ?? ''), 'AAC3: no launch blurb promising host presence')
   // Present ids are never duplicated.
   assertEqual(out.filter(t => t.id === 'loom').length, 1, 'SUP2: existing catalog ids not duplicated')
@@ -311,7 +311,7 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
     primary: ['builtin:Hone'], secondary: [], hidden: [],
   })
   assert(masq.some(t => t.id === 'builtin:Hone'), 'SUP4: legacy masquerade key supplemented')
-  assert(/unhide/i.test(masq.find(t => t.id === 'builtin:Hone')?.description ?? ''),
+  assert(/restore/i.test(masq.find(t => t.id === 'builtin:Hone')?.description ?? ''),
     'AAC3: masquerade recovered row carries the hint too')
   // Null model → unchanged.
   assertEqual(supplementCatalogWithRecoveredEntries(catalog, null), catalog, 'SUP5: no model → catalog unchanged')

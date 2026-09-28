@@ -337,6 +337,79 @@ export async function writeHostDrawerSettingsViaApi(
   }
 }
 
+/** Result of a user-gestured vanilla-hide restore (LUMI-26 Amendment 4). */
+export type RestoreVanillaResult = 'restored' | 'not-hidden' | 'failed'
+
+/**
+ * LUMI-26 Amendment 4 — the restore bridge: clear ONE tab's vanilla hide
+ * through Lumiverse's own settings API (the same GET/PUT its Configure Tabs
+ * uses), so the host re-renders the button and Canvas's convergence
+ * materializes the strip/Start surfaces again — one click instead of the
+ * Canvas off → Lumiverse Configure → on dance.
+ *
+ * Guardrails (Chief design call, member-approved 2026-09-28):
+ * - REMOVE-ONLY: the write is exactly the freshly-read list minus the one
+ *   entry — Canvas never adds an entry, never reorders, never touches
+ *   any other drawerSettings field.
+ * - READ-MODIFY-WRITE: the list is re-read immediately before the write
+ *   (never a cached copy), so a hide added in Lumiverse moments earlier
+ *   cannot be clobbered.
+ * - No sync-back: the host list is never read into Canvas state; the
+ *   LUMI-25 decoupling is untouched.
+ * - Graceful no-op: an id not in the list → 'not-hidden' (no write);
+ *   an unreachable/refusing API → 'failed' (no throw).
+ *
+ * @param vanillaId the HOST tab id exactly as it appears in the host's
+ *   hiddenTabIds (bare builtin id or `spindle:…:tab:…` extension id — the
+ *   catalog row id, not Canvas's model key).
+ */
+export async function restoreVanillaHiddenTab(vanillaId: string): Promise<RestoreVanillaResult> {
+  try {
+    const doFetch = _settingsApiFetch ?? ((url: string, init?: RequestInit) => fetch(url, init))
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      ? AbortSignal.timeout(5000)
+      : undefined
+    const initBase: RequestInit = signal ? { signal } : {}
+    // Read-modify-write: always GET the current row first.
+    const res = await doFetch('/api/v1/settings/drawerSettings', {
+      ...initBase,
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) {
+      dlog('restoreVanillaHiddenTab: read failed', res.status)
+      return 'failed'
+    }
+    const row = (await res.json()) as { value?: unknown } | null
+    let current: HostDrawerSettings = {}
+    if (row && typeof row.value === 'object' && row.value !== null) {
+      current = row.value as HostDrawerSettings
+    }
+    const list = Array.isArray(current.hiddenTabIds) ? current.hiddenTabIds : []
+    // Remove-only: if the tab is not vanilla-hidden there is nothing to
+    // restore — do not write.
+    if (!list.includes(vanillaId)) return 'not-hidden'
+    const next = list.filter((id) => id !== vanillaId)
+    const put = await doFetch('/api/v1/settings/drawerSettings', {
+      ...initBase,
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: { ...current, hiddenTabIds: next } }),
+    })
+    if (!put.ok) {
+      dlog('restoreVanillaHiddenTab: write rejected', put.status)
+      return 'failed'
+    }
+    dlog('restoreVanillaHiddenTab: ok', { vanillaId, removed: 1 })
+    return 'restored'
+  } catch (err) {
+    dlog('restoreVanillaHiddenTab: failed', String(err))
+    return 'failed'
+  }
+}
+
 /**
  * True when a writable `setSetting` was found in the fiber tree (or a
  * test seam is active), meaning patchHostDrawerSettings will succeed.

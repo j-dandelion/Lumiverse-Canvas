@@ -32,6 +32,7 @@ import {
   getFullCatalog,
   filterCatalogToLive,
   supplementCatalogWithRecoveredEntries,
+  RECOVERED_WAITING_DESCRIPTION,
   type CatalogTab,
 } from './configure-catalog'
 import { BUILTIN_ICON_SVGS } from './builtin-icons'
@@ -39,7 +40,12 @@ import {
   getCanvasHiddenTabIds,
 } from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
-import { getHostDrawerSettings } from '../dom/host-settings'
+import { getHostDrawerSettings, restoreVanillaHiddenTab } from '../dom/host-settings'
+
+/** The restore action proceeded far enough to refresh the surface. */
+function restoreStateOk(r: 'restored' | 'not-hidden' | 'failed'): boolean {
+  return r === 'restored' || r === 'not-hidden'
+}
 import { getMainDrawerSide } from '../store'
 import { getLiveIdAssignments } from './assignment'
 import type { OwnedCommitResult as CommitResult } from './owned-commit'
@@ -479,6 +485,24 @@ function injectModalStyles(): void {
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       color: var(--lumiverse-text-dim, #888);
+    }
+    /* LUMI-26 Amendment 4: Restore button on vanilla-hidden recovered rows. */
+    .canvas-configure-tabs-restore {
+      flex-shrink: 0;
+      margin-left: 8px;
+      padding: 4px 10px;
+      border: 1px solid var(--lumiverse-border, #555);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--lumiverse-primary, #7c9cff) 22%, transparent);
+      color: var(--lumiverse-text-primary, #eee);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .canvas-configure-tabs-restore:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
 
     /* ── Toggle switch (unified Canvas switch spec — shared with the
@@ -1407,6 +1431,39 @@ function ConfigureTabsModalInner(props: ModalProps) {
             )}
           </div>
         </div>
+
+        {/* LUMI-26 Amendment 4: vanilla-hidden recovered row — a
+            user-gestured Restore clears the vanilla hide through
+            Lumiverse's own settings API (remove-only, read-modify-write,
+            one tab per click). Success reloads the page so the host React
+            re-renders the button and Canvas converges. */}
+        {description === RECOVERED_WAITING_DESCRIPTION && (
+          <button
+            class="canvas-configure-tabs-restore"
+            title="Hidden in Lumiverse's settings — click to bring it back"
+            onClick={async (e) => {
+              e.stopPropagation()
+              const btn = e.currentTarget as HTMLButtonElement
+              btn.disabled = true
+              btn.textContent = 'Restoring…'
+              const result = await restoreVanillaHiddenTab(tab.id)
+              if (restoreStateOk(result)) {
+                btn.textContent = 'Restored — reloading…'
+                setTimeout(() => { window.location.reload() }, 900)
+              } else {
+                btn.disabled = false
+                btn.textContent = result === 'not-hidden'
+                  ? 'Already restored — reloading…'
+                  : 'Restore failed — retry'
+                if (result === 'not-hidden') {
+                  setTimeout(() => { window.location.reload() }, 900)
+                }
+              }
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >Restore</button>
+        )}
 
         {/* Toggle switch (checked = visible = !hidden) */}
         <button

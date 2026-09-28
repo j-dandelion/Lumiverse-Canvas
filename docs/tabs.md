@@ -238,9 +238,13 @@ their launch cannot resolve, so a row would be a dead control; D6 applies to clo
 backed rows only). All title fallbacks go layout-blob tabTitle → `humanTabTitleForKey` —
 a raw key never renders on a Canvas surface. Configure Tabs is the recovered tab's
 management surface until the vanilla side backs it again; supplemented rows carry a
-waiting-on-vanilla hint instead of a launch blurb, and a recovered tab's secondary-strip
-placement is skipped gracefully (no host button to move). Building DOM-less render
-machinery is out of scope (pitfalls §23 residual).
+waiting-on-vanilla hint ("Hidden in Lumiverse's settings — restore to bring it back
+here") plus the Amendment 4 **Restore action** (`restoreVanillaHiddenTab`: a
+user-gestured, remove-only, read-modify-write clear of that one tab's vanilla hide via
+Lumiverse's own settings API — the same GET/PUT Lumiverse's Configure Tabs uses; see
+pitfalls §23 for the guardrails), and a recovered tab's secondary-strip placement is
+skipped gracefully (no host button to move). Building DOM-less render machinery is out
+of scope (pitfalls §23 residual).
 
 ## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
 
