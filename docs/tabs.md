@@ -68,10 +68,19 @@ Built-in placement: `requestTabLocation` to the container is an allowlist silent
 
 ### Secondary Sidebar
 
-- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu). While OS mode is on the click handler is the D4 window-state toggle (`os/actions.toggleWindowByLiveId`) on every viewport — displayed window → minimize, minimized/closed → open/restore. Non-OS, tapping the active tab toggle-closes the drawer; on mobile that path requires effective taskbar mode (plain mobile is a no-op — see `docs/mobile.md`)
+- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu). While OS mode is on the click handler is the D4 window-state toggle (`os/actions.toggleWindowByLiveId`) on every viewport — displayed window → minimize, minimized/closed → open/restore. Non-OS, tapping the active tab toggle-closes the drawer; on mobile that path requires effective taskbar mode (plain mobile is a no-op — see `docs/mobile.md`). The button is stamped with `data-canvas-facade-key` (the model TabKey it was created for) so the ghost sweeper can find it after its liveId stops resolving
 - `removeSecondaryTabButton(tabId)` — removes the button
 - `showSecondaryTab(tabId)` — activates a tab by setting `data-canvas-active` on the matching root, updating header title, toggling `sidebar-ux-tab-active` class on buttons
 - `updateDrawerTabVisibility()` — shows/hides the drawer tab button based on whether any tabs are assigned
+
+### Tab removal: extension teardown & ghost tabs (LUMI-29)
+
+When an extension that owns a tab is turned off, the host removes its button and content root, but the OWNED MODEL would keep the key forever: `observe()`'s synthesis loop re-derives an entry from the assignment facade (which derives from the model), so the dead key re-feeds `applySyncFromHost` and every surface keeps rendering it — a ghost strip button (label-only mirror twin, no icon; click/contextmenu forward to the missing host twin and do nothing).
+
+Two mechanisms clean this up:
+
+1. **Ghost grace in `LumiverseHost.observe()`** — a missing EXTENSION key gets a 10 s grace window (`_facadeMissingSince`); absence that outlives it stops being synthesized, so the next authoritative host-sync drops the key from the model (and prunes `hidden`/`menuHidden` with it). The first absence arms a one-shot retry (`emitWorldChanged` fan-out in `onWorldChanged`) that re-syncs after the window — without it the arming sync would be the last round and the ghost would persist. Built-ins are never purged (DOM-placed built-ins legitimately have no live button). `shutdown()` clears the timers/tracker (LUMI-21 continuation class).
+2. **Ghost-tab sweeper (`tabs/ghost-tabs.ts`)** — subscribes to model commits and removes the Canvas-OWNED secondary strip button when its facade key (`data-canvas-facade-key`) leaves the model entirely (a secondary→primary move keeps the key in `model.primary` and is not swept). Also removes orphaned `[data-canvas-moved]` roots, clears the tracked active when it pointed at the dead tab, and auto-closes the drawer when no secondary tabs remain. Wired in `setup.ts` via `registerCleanup`.
 
 ### Settings Button Detection
 

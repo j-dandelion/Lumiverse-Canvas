@@ -54,6 +54,69 @@ import { currentLifecycleGeneration, isLifecycleCurrent } from '../../lifecycle/
 
 const DEFAULT_WIDTH = 420
 
+// -----------------------------------------------------------------------
+// Ghost facade keys (LUMI-29): a model TabKey absent from the live
+// inventory re-feeds itself into applySyncFromHost forever through the
+// synthesis loop in observe() — the model keeps a tab whose extension was
+// turned off, and every Canvas surface renders a dead strip button
+// (label-only mirror twin with no icon; click and right-click are no-ops
+// because both forward to the missing host twin).
+//
+// The tracker gives a missing EXTENSION key a grace window: absence that
+// outlives GHOST_FACADE_GRACE_MS across observe() rounds means the
+// extension was disabled/uninstalled, and observe() stops synthesizing the
+// entry — the authoritative host-sync then drops the key from the model
+// (and prunes hidden/menuHidden with it). Transient host re-renders
+// (button removed and re-added within the window) never expire the clock,
+// and a re-registered tab clears it. The first absence arms a one-shot
+// retry that re-fires the world-change signal after the window — without
+// it the sync that armed the clock would be the LAST round (nothing else
+// changes, so nothing re-observes) and the ghost would persist.
+//
+// Extension keys only: DOM-placed built-ins legitimately have no live
+// button while their registry root lives in a Canvas shell, and must keep
+// the synthesis lifeline (observe() contract comment above).
+// -----------------------------------------------------------------------
+const GHOST_FACADE_GRACE_MS = 10_000
+const _facadeMissingSince = new Map<TabKey, number>()
+const _ghostRetryTimers = new Map<TabKey, ReturnType<typeof setTimeout>>()
+
+function clearGhostRetry(key: TabKey): void {
+  const timer = _ghostRetryTimers.get(key)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    _ghostRetryTimers.delete(key)
+  }
+}
+
+/** One-shot re-sync after the grace window (see tracker comment above). */
+function armGhostRetry(key: TabKey): void {
+  clearGhostRetry(key)
+  const gen = currentLifecycleGeneration()
+  const timer = setTimeout(() => {
+    _ghostRetryTimers.delete(key)
+    if (!isLifecycleCurrent(gen)) return
+    emitWorldChanged()
+  }, GHOST_FACADE_GRACE_MS + 250)
+  _ghostRetryTimers.set(key, timer)
+}
+
+/** Forget a key's absence state (tab re-registered, left the model, or purged). */
+function forgetMissingFacadeKey(key: TabKey): void {
+  _facadeMissingSince.delete(key)
+  clearGhostRetry(key)
+}
+
+/**
+ * World-change signal fan-out. `onWorldChanged` registers its notify
+ * closure here so module-internal paths (the ghost-retry timer) can ask
+ * the dispatcher for a fresh host-sync without a static dispatch import.
+ */
+const _worldNotifies = new Set<() => void>()
+function emitWorldChanged(): void {
+  for (const notify of Array.from(_worldNotifies)) notify()
+}
+
 // ---------------------------------------------------------------------------
 // Helper: read secondary width from CSS custom property
 // ---------------------------------------------------------------------------
@@ -275,6 +338,11 @@ export class LumiverseHost implements HostPort {
   shutdown(): void {
     this._dispose?.()
     this._dispose = null
+    // Ghost tracker (LUMI-29): cancel pending grace retries and forget
+    // absence state — a re-enabled session must re-derive it, never inherit
+    // the disabled session's timers (LUMI-21 continuation class).
+    for (const key of Array.from(_ghostRetryTimers.keys())) clearGhostRetry(key)
+    _facadeMissingSince.clear()
   }
 
   // -----------------------------------------------------------------------
@@ -301,10 +369,12 @@ export class LumiverseHost implements HostPort {
     const entries: HostTabEntry[] = []
 
     // Tabs from the live host inventory (frozen keys from the registry —
-    // never re-derived from tagging state).
+    // never re-derived from tagging state). A key back in the inventory is
+    // alive — forget any ghost-absence state (LUMI-29).
     for (const t of liveTabs) {
       const key = t.key
       seen.add(key)
+      if (_facadeMissingSince.has(key)) forgetMissingFacadeKey(key)
       entries.push(buildHostEntry(t))
     }
 
@@ -332,8 +402,34 @@ export class LumiverseHost implements HostPort {
       if (seen.has(tabKey)) continue
       const title = parseBuiltinKey(tabKey) ?? parseExtensionKey(tabKey)?.tabName
       if (title && liveByTitle.has(title)) continue
+      // Ghost grace (LUMI-29): an extension key the live inventory has been
+      // missing past the grace window is dead — its extension was turned
+      // off. Skip the synthesis so the authoritative sync drops the key
+      // from the model instead of sustaining it forever.
+      if (isExtensionKey(tabKey)) {
+        const nowMs = Date.now()
+        let missingSince = _facadeMissingSince.get(tabKey)
+        if (missingSince === undefined) {
+          missingSince = nowMs
+          _facadeMissingSince.set(tabKey, missingSince)
+          armGhostRetry(tabKey)
+        }
+        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
+          dlog('[host] observe: extension key absent past ghost grace — dropping from observed world', {
+            key: tabKey,
+            missingForMs: nowMs - missingSince,
+          })
+          forgetMissingFacadeKey(tabKey)
+          continue
+        }
+      }
       entries.push(buildEntryFromAssignment(tabKey))
       seen.add(tabKey)
+    }
+
+    // Keys that left the facade (model) no longer need absence state.
+    for (const key of Array.from(_facadeMissingSince.keys())) {
+      if (!assignments.has(key)) forgetMissingFacadeKey(key)
     }
 
     // Secondary order is Canvas-owned: derive it from the actual secondary
@@ -739,6 +835,9 @@ export class LumiverseHost implements HostPort {
         if (!disposed) cb()
       })
     }
+    // Ghost-retry fan-out (LUMI-29): the grace timer re-fires the world
+    // change through this set so the dispatcher re-syncs after the window.
+    _worldNotifies.add(notify)
 
     // DrawerObserver can report several registrations during one React commit.
     // Route those events through the same microtask gate as DOM readiness
@@ -792,6 +891,7 @@ export class LumiverseHost implements HostPort {
 
     const dispose = () => {
       disposed = true
+      _worldNotifies.delete(notify)
       unreg1()
       unreg2()
       sidebarObserver?.disconnect()

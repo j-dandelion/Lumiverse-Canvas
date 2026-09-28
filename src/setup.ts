@@ -54,6 +54,7 @@ import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
+import { startGhostTabSweeper } from './tabs/ghost-tabs'
 import { clearTabListPosition } from './sidebar/tab-position'
 import { teardownMainMirror } from './sidebar/main-mirror-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
@@ -418,6 +419,11 @@ export function setup(ctx: SpindleFrontendContext) {
     dlog(`initSecondaryDrawer`)
     initSecondaryDrawer(ctx)
     dlog(`initSecondaryDrawer done`)
+    // Ghost-tab sweeper (LUMI-29): an extension turned off drops its tab
+    // from the owned model (observe()'s ghost grace); this removes the dead
+    // Canvas-owned secondary strip button the model-driven surfaces cannot
+    // reach. Runs on model commits; stopped with the lifecycle.
+    registerCleanup(startGhostTabSweeper())
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     dlog(`startContextMenuListener`)

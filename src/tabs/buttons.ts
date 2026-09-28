@@ -35,6 +35,7 @@ import {
   isTaskbarModeEnabled,
 } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
+import { getHost } from '../recon/dispatch'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
 import { appendSecondaryTabNode } from './secondary-start-dock'
@@ -302,6 +303,13 @@ interface SecondaryTabDescriptor {
   iconSvg?: string
   iconUrl?: string
   root: HTMLElement
+  /**
+   * Model TabKey the button was created for ('ext:foo/Bar', 'builtin:x').
+   * Stamped as `data-canvas-facade-key` so the ghost-tab sweeper (LUMI-29)
+   * can find a Canvas-owned button after its key left the model — a dead
+   * extension's liveId no longer resolves, so id-based lookup cannot find it.
+   */
+  facadeKey?: string
 }
 
 /**
@@ -358,6 +366,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.setAttribute('data-tab-id', tab.id)
   btn.setAttribute('title', tab.title)
   if (showLabels) btn.classList.add('sidebar-ux-tab-labeled')
+  // LUMI-29: freeze the model TabKey on the button. Explicit overrides win;
+  // otherwise resolve once from the live inventory (buttons are created while
+  // the tab is alive, so the frozen key resolves here).
+  const facadeKey = tab.facadeKey ?? getHost()?.findKey(tab.id) ?? null
+  if (facadeKey) btn.setAttribute('data-canvas-facade-key', facadeKey)
   btn.style.cssText = `
     width: 100%;
     height: ${showLabels ? '56px' : '48px'};
