@@ -5592,7 +5592,6 @@ function openWindowInDrawerByLiveId(liveId, side) {
   }
   const isClosed = model.closed.includes(key);
   const isHidden = model.hidden.includes(key);
-  const menuHidden = model.menuHidden.includes(key);
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
   const placeAtEnd = !livesInTarget || isClosed || isHidden;
   const launchIndex = placeAtEnd ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
@@ -5609,7 +5608,6 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false, launchIndex);
   const open = dispatchBatch([
     { t: "setClosed", key, closed: false },
-    ...menuHidden ? [{ t: "setMenuHidden", key, hidden: false }] : [],
     ...isClosed && !isHidden && livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : [],
     { t: "activate", key, side }
   ]);
