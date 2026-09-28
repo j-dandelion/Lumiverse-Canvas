@@ -2874,7 +2874,7 @@ function healHiddenTabIds(storedHidden, liveIds, opts) {
 }
 
 // src/persist/layout-model.ts
-function buildModelFromLayout(layout, findKey, side, findKeyHost) {
+function buildModelFromLayout(layout, findKey, side) {
   const model = createEmptyModel(side ?? "left");
   if (!layout)
     return model;
@@ -2907,16 +2907,8 @@ function buildModelFromLayout(layout, findKey, side, findKeyHost) {
     appendOnce(isSecondaryStoredId(storedId) ? secondary : primary, key);
   }
   for (const d of detached) {
-    let key = null;
-    if (d.tabTitle) {
-      key = findKeyHost ? findKeyHost(d.tabTitle) : null;
-      if (!key) {
-        const viaId = resolveStoredId(d.tabId, findKey);
-        key = viaId ?? resolveStoredId(d.tabTitle, findKey);
-      }
-    } else {
-      key = resolveStoredId(d.tabId, findKey);
-    }
+    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null;
+    const key = fromTitle ?? resolveStoredId(d.tabId, findKey);
     if (key && !primary.includes(key) && !secondary.includes(key)) {
       appendOnce(secondary, key);
     }
@@ -3040,67 +3032,6 @@ function resolveStoredId(storedId, findKey) {
     return null;
   return findKey(stripped) ?? null;
 }
-function resolveLayoutOwnedStoredId(storedId, layout, builtinIds, hostTabOrder) {
-  if (!layout || typeof layout !== "object" || !storedId)
-    return null;
-  const blob = layout;
-  const owned = new Set;
-  const add = (v) => {
-    if (typeof v === "string" && v.length)
-      owned.add(v);
-  };
-  if (Array.isArray(blob.tabOrder))
-    blob.tabOrder.forEach(add);
-  if (Array.isArray(blob.hiddenTabIds))
-    blob.hiddenTabIds.forEach(add);
-  const detachedByTabId = new Map;
-  if (Array.isArray(blob.detachedTabs)) {
-    for (const d of blob.detachedTabs) {
-      if (!d || typeof d !== "object")
-        continue;
-      const rec = d;
-      add(rec.tabId);
-      add(rec.tabTitle);
-      if (typeof rec.tabId === "string")
-        detachedByTabId.set(rec.tabId, rec);
-    }
-  }
-  const candidates = [storedId];
-  const stripped = stripTabIdSuffix(storedId);
-  if (stripped !== storedId)
-    candidates.push(stripped);
-  for (const c of candidates) {
-    if (owned.has(c) && (isBuiltinKey(c) || isExtensionKey(c))) {
-      return c;
-    }
-  }
-  for (const c of candidates) {
-    const parsedBuiltin = parseBuiltinKey(c);
-    if (parsedBuiltin && (owned.has(c) || owned.has(parsedBuiltin) || [...owned].some((o) => stripTabIdSuffix(o) === parsedBuiltin))) {
-      return builtinKey(parsedBuiltin);
-    }
-  }
-  for (const c of candidates) {
-    const rec = detachedByTabId.get(c);
-    const title = typeof rec?.tabTitle === "string" ? rec.tabTitle : null;
-    if (title && (isBuiltinKey(title) || isExtensionKey(title))) {
-      return title;
-    }
-  }
-  for (const c of candidates) {
-    if (c.includes(":"))
-      continue;
-    if (!builtinIds.includes(c))
-      continue;
-    const hostKnows = hostTabOrder ? hostTabOrder.includes(c) : true;
-    if (!hostKnows)
-      continue;
-    if (owned.has(c) || [...owned].some((o) => stripTabIdSuffix(o) === c)) {
-      return builtinKey(c);
-    }
-  }
-  return null;
-}
 function serializeModelToLayout(model, resolve, version) {
   const primary = resolveList(model.primary, resolve);
   const secondary = resolveList(model.secondary, resolve);
@@ -3137,199 +3068,131 @@ function resolveList(keys, resolve) {
 }
 var init_layout_model = () => {};
 
-// src/tabs/core-tabs.ts
-function isCoreTabId(id) {
-  return CORE_HIDE_LOCKED.has(id);
+// src/persist/layout-repo.ts
+function getBootLoadWindowMs() {
+  return _windowMs;
 }
-var CORE_HIDE_LOCKED;
-var init_core_tabs = __esm(() => {
-  CORE_HIDE_LOCKED = new Set([
-    "profile",
-    "presets",
-    "loom",
-    "characters",
-    "personas",
-    "branches",
-    "spindle",
-    "theme",
-    "lorebook"
-  ]);
-});
-
-// src/tabs/configure-catalog.ts
-function humanizeTabId(id) {
-  const known = BUILTIN_TAB_TITLES[id];
-  if (known)
-    return known;
-  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
-  return words.join(" ");
+function getBootLoadIntervalMs() {
+  return _intervalMs;
 }
-function getBuiltinCatalog() {
-  return BUILTIN_TAB_IDS.map((id) => ({
-    id,
-    kind: "builtin",
-    title: humanizeTabId(id),
-    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
-    hideLocked: CORE_HIDE_LOCKED.has(id)
-  }));
+function setLayoutRepoBackendCtx(ctx) {
+  _ctx = ctx;
 }
-function isExtensionDrawerTab(t) {
-  if (t.extensionId)
-    return true;
-  const root = t.root;
-  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
-    return true;
+function isLayoutRepoArmed() {
+  return _armed;
+}
+function armLayoutRepo() {
+  _armed = true;
+}
+function disarmLayoutRepo() {
+  _armed = false;
+  for (const [id, { reject, timer }] of _pendingSaves) {
+    clearTimeout(timer);
+    _pendingSaves.delete(id);
+    reject(new Error("layout repo disarmed"));
   }
-  return t.id.includes(":");
 }
-function getExtensionCatalog() {
-  const tabs = getDrawerTabs();
-  if (!tabs || tabs.length === 0)
-    return [];
-  return tabs.filter(isExtensionDrawerTab).map((t) => ({
-    id: t.id,
-    kind: "extension",
-    title: t.title || humanizeTabId(t.id),
-    description: t.description || `Open ${t.title || t.id} extension tab`,
-    hideLocked: false,
-    extensionId: t.extensionId || undefined,
-    iconSvg: t.iconSvg || undefined,
-    iconUrl: t.iconUrl || undefined
-  }));
-}
-function getFullCatalog() {
-  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
-}
-function filterCatalogToLive(catalog, host, knownLiveIds) {
-  if (!host)
-    return catalog;
-  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
-}
-function supplementCatalogWithRecoveredEntries(catalog, model) {
-  if (!model)
-    return catalog;
-  const ids = new Set(catalog.map((t) => t.id));
-  const out = catalog.slice();
-  const seen = new Set;
-  for (const raw of [...model.primary, ...model.secondary, ...model.hidden]) {
-    if (seen.has(raw))
-      continue;
-    seen.add(raw);
-    if (ids.has(raw))
-      continue;
-    const parsedExt = parseExtensionKey(raw);
-    if (parsedExt) {
-      out.push({
-        id: raw,
-        kind: "extension",
-        title: parsedExt.tabName,
-        description: `Open ${parsedExt.tabName} extension tab`,
-        hideLocked: false,
-        extensionId: parsedExt.extensionId
-      });
-      continue;
+function loadLayoutFromDisk() {
+  const ctx = _ctx;
+  if (!ctx)
+    return Promise.resolve({ status: "error", reason: "no backend" });
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsub = null;
+    let attempts = 0;
+    const startedAt = Date.now();
+    function attempt() {
+      if (settled)
+        return;
+      const handler = (payload) => {
+        if (payload.type !== "LAYOUT_DATA")
+          return;
+        if (settled)
+          return;
+        settled = true;
+        if (typeof unsub === "function")
+          unsub();
+        const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
+        if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
+          bootStep(`layout-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt}ms (${result.status})`);
+          resolve(result);
+        } else {
+          resolve({ status: "error", reason: "malformed response" });
+        }
+      };
+      unsub = ctx.onBackendMessage(handler);
+      attempts++;
+      ctx.sendToBackend({ type: "LOAD_LAYOUT" });
+      setTimeout(() => {
+        if (settled)
+          return;
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < getBootLoadWindowMs()) {
+          if (typeof unsub === "function")
+            unsub();
+          if (attempts > 1 && attempts % 5 === 1) {
+            bootWarn(`layout-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
+          }
+          attempt();
+        } else {
+          settled = true;
+          if (typeof unsub === "function")
+            unsub();
+          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
+          bootWarn(`layout-load-timeout`, reason);
+          resolve({ status: "error", reason });
+        }
+      }, getBootLoadIntervalMs());
     }
-    const parsedBuiltin = parseBuiltinKey(raw);
-    if (parsedBuiltin && !ids.has(parsedBuiltin)) {
-      out.push({
-        id: raw,
-        kind: "builtin",
-        title: humanizeTabId(parsedBuiltin),
-        hideLocked: isCoreTabId(parsedBuiltin)
-      });
+    attempt();
+  });
+}
+function saveLayoutToDisk(layout) {
+  const ctx = _ctx;
+  if (!ctx)
+    return Promise.resolve({ status: "error", reason: "no backend" });
+  if (!_armed)
+    return Promise.resolve({ status: "error", reason: "not armed" });
+  const id = ++_saveCounter;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (_pendingSaves.has(id)) {
+        _pendingSaves.delete(id);
+        resolve({ status: "error", reason: "save timed out" });
+      }
+    }, 5000);
+    _pendingSaves.set(id, { resolve, reject, timer });
+    ctx.sendToBackend({ type: "SAVE_LAYOUT", layout, saveId: id });
+  });
+}
+function __resolveLayoutSave(saveId, result) {
+  const pending = _pendingSaves.get(saveId);
+  if (!pending)
+    return;
+  _pendingSaves.delete(saveId);
+  clearTimeout(pending.timer);
+  pending.resolve(result);
+}
+function bindLayoutSaveResultBridge() {
+  const ctx = _ctx;
+  if (!ctx)
+    return () => {};
+  return ctx.onBackendMessage((payload) => {
+    if (!payload || payload.type !== "SAVE_LAYOUT_RESULT")
+      return;
+    const saveId = typeof payload.saveId === "number" ? payload.saveId : 0;
+    const result = payload.result;
+    if (result && typeof result === "object" && (result.status === "ok" || result.status === "error")) {
+      __resolveLayoutSave(saveId, result);
     }
-  }
-  return out;
+  });
 }
-function isHideLocked(tabId) {
-  return isCoreTabId(tabId);
-}
-var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
-var init_configure_catalog = __esm(() => {
-  init_store();
-  init_core_tabs();
-  init_core_tabs();
-  BUILTIN_TAB_IDS = [
-    "profile",
-    "presets",
-    "loom",
-    "weaver",
-    "connections",
-    "browser",
-    "characters",
-    "personas",
-    "multiplayer",
-    "lorebook",
-    "cortex",
-    "databank",
-    "create",
-    "ooc",
-    "prompt",
-    "council",
-    "summary",
-    "feedback",
-    "worldinfo",
-    "imagegen",
-    "wallpaper",
-    "regex",
-    "branches",
-    "theme",
-    "spindle"
-  ];
-  BUILTIN_TAB_TITLES = {
-    profile: "Profile",
-    presets: "Reasoning",
-    loom: "Loom",
-    weaver: "Weaver",
-    connections: "Connections",
-    browser: "Pack Browser",
-    characters: "Characters",
-    personas: "Personas",
-    multiplayer: "Multiplayer",
-    lorebook: "Lorebook",
-    cortex: "Memory Cortex",
-    databank: "Databank",
-    create: "Creator Workshop",
-    ooc: "OOC",
-    prompt: "Composition",
-    council: "Council",
-    summary: "Summary",
-    feedback: "Council Feedback",
-    worldinfo: "World Info",
-    imagegen: "Image Generation",
-    wallpaper: "Wallpaper",
-    regex: "Regex Scripts",
-    branches: "Branch Tree",
-    theme: "Theme",
-    spindle: "Extensions"
-  };
-  BUILTIN_TAB_DESCRIPTIONS = {
-    profile: "View and edit the active character",
-    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
-    loom: "Configure narrative structure and story beats",
-    weaver: "Craft a character from your idea",
-    connections: "Manage API connections and providers",
-    browser: "Browse and manage content packs",
-    characters: "Browse and manage your character cards",
-    personas: "Manage your user personas",
-    multiplayer: "Host or join a room and chat with bots alongside friends",
-    lorebook: "Edit world book and lorebook entries",
-    cortex: "View and manage memory cortex entries",
-    databank: "Upload and manage reference documents for AI context",
-    create: "Create and edit Lumia items and Loom presets",
-    ooc: "Out-of-character comment display settings",
-    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
-    council: "Configure the Lumia Council and tool functions",
-    summary: "Configure context summarization and truncation",
-    feedback: "View the latest council execution results",
-    worldinfo: "View currently activated world info entries",
-    imagegen: "Configure and control AI scene generation",
-    wallpaper: "Set global or per-chat background wallpapers",
-    regex: "Create and manage regex find/replace scripts",
-    branches: "View and navigate the chat branch history",
-    theme: "Customize colors, accent, and visual style",
-    spindle: "Manage Spindle extensions"
-  };
+var BOOT_LOAD_WINDOW_MS = 15000, BOOT_LOAD_INTERVAL_MS = 1000, _windowMs, _intervalMs, _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
+var init_layout_repo = __esm(() => {
+  init_boot_diag();
+  _windowMs = BOOT_LOAD_WINDOW_MS;
+  _intervalMs = BOOT_LOAD_INTERVAL_MS;
+  _pendingSaves = new Map;
 });
 
 // src/dom/host-settings.ts
@@ -3497,133 +3360,6 @@ var init_host_settings = __esm(() => {
   init_fiber();
   init_log();
   init_store();
-});
-
-// src/persist/layout-repo.ts
-function getBootLoadWindowMs() {
-  return _windowMs;
-}
-function getBootLoadIntervalMs() {
-  return _intervalMs;
-}
-function setLayoutRepoBackendCtx(ctx) {
-  _ctx = ctx;
-}
-function isLayoutRepoArmed() {
-  return _armed;
-}
-function armLayoutRepo() {
-  _armed = true;
-}
-function disarmLayoutRepo() {
-  _armed = false;
-  for (const [id, { reject, timer }] of _pendingSaves) {
-    clearTimeout(timer);
-    _pendingSaves.delete(id);
-    reject(new Error("layout repo disarmed"));
-  }
-}
-function loadLayoutFromDisk() {
-  const ctx = _ctx;
-  if (!ctx)
-    return Promise.resolve({ status: "error", reason: "no backend" });
-  return new Promise((resolve) => {
-    let settled = false;
-    let unsub = null;
-    let attempts = 0;
-    const startedAt = Date.now();
-    function attempt() {
-      if (settled)
-        return;
-      const handler = (payload) => {
-        if (payload.type !== "LAYOUT_DATA")
-          return;
-        if (settled)
-          return;
-        settled = true;
-        if (typeof unsub === "function")
-          unsub();
-        const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
-        if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
-          bootStep(`layout-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt}ms (${result.status})`);
-          resolve(result);
-        } else {
-          resolve({ status: "error", reason: "malformed response" });
-        }
-      };
-      unsub = ctx.onBackendMessage(handler);
-      attempts++;
-      ctx.sendToBackend({ type: "LOAD_LAYOUT" });
-      setTimeout(() => {
-        if (settled)
-          return;
-        const elapsed = Date.now() - startedAt;
-        if (elapsed < getBootLoadWindowMs()) {
-          if (typeof unsub === "function")
-            unsub();
-          if (attempts > 1 && attempts % 5 === 1) {
-            bootWarn(`layout-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
-          }
-          attempt();
-        } else {
-          settled = true;
-          if (typeof unsub === "function")
-            unsub();
-          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
-          bootWarn(`layout-load-timeout`, reason);
-          resolve({ status: "error", reason });
-        }
-      }, getBootLoadIntervalMs());
-    }
-    attempt();
-  });
-}
-function saveLayoutToDisk(layout) {
-  const ctx = _ctx;
-  if (!ctx)
-    return Promise.resolve({ status: "error", reason: "no backend" });
-  if (!_armed)
-    return Promise.resolve({ status: "error", reason: "not armed" });
-  const id = ++_saveCounter;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (_pendingSaves.has(id)) {
-        _pendingSaves.delete(id);
-        resolve({ status: "error", reason: "save timed out" });
-      }
-    }, 5000);
-    _pendingSaves.set(id, { resolve, reject, timer });
-    ctx.sendToBackend({ type: "SAVE_LAYOUT", layout, saveId: id });
-  });
-}
-function __resolveLayoutSave(saveId, result) {
-  const pending = _pendingSaves.get(saveId);
-  if (!pending)
-    return;
-  _pendingSaves.delete(saveId);
-  clearTimeout(pending.timer);
-  pending.resolve(result);
-}
-function bindLayoutSaveResultBridge() {
-  const ctx = _ctx;
-  if (!ctx)
-    return () => {};
-  return ctx.onBackendMessage((payload) => {
-    if (!payload || payload.type !== "SAVE_LAYOUT_RESULT")
-      return;
-    const saveId = typeof payload.saveId === "number" ? payload.saveId : 0;
-    const result = payload.result;
-    if (result && typeof result === "object" && (result.status === "ok" || result.status === "error")) {
-      __resolveLayoutSave(saveId, result);
-    }
-  });
-}
-var BOOT_LOAD_WINDOW_MS = 15000, BOOT_LOAD_INTERVAL_MS = 1000, _windowMs, _intervalMs, _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
-var init_layout_repo = __esm(() => {
-  init_boot_diag();
-  _windowMs = BOOT_LOAD_WINDOW_MS;
-  _intervalMs = BOOT_LOAD_INTERVAL_MS;
-  _pendingSaves = new Map;
 });
 
 // src/sidebar/drawer-shell.ts
@@ -4811,6 +4547,25 @@ function isStartAtStripTopGate() {
 var init_start_strip_top_gate = __esm(() => {
   init_state();
   init_mobile_exclusion();
+});
+
+// src/tabs/core-tabs.ts
+function isCoreTabId(id) {
+  return CORE_HIDE_LOCKED.has(id);
+}
+var CORE_HIDE_LOCKED;
+var init_core_tabs = __esm(() => {
+  CORE_HIDE_LOCKED = new Set([
+    "profile",
+    "presets",
+    "loom",
+    "characters",
+    "personas",
+    "branches",
+    "spindle",
+    "theme",
+    "lorebook"
+  ]);
 });
 
 // src/os/drawer-command.ts
@@ -8078,6 +7833,146 @@ var init_main_tab_pin = __esm(() => {
   _state2 = { ...initialState };
 });
 
+// src/tabs/configure-catalog.ts
+function humanizeTabId(id) {
+  const known = BUILTIN_TAB_TITLES[id];
+  if (known)
+    return known;
+  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  return words.join(" ");
+}
+function getBuiltinCatalog() {
+  return BUILTIN_TAB_IDS.map((id) => ({
+    id,
+    kind: "builtin",
+    title: humanizeTabId(id),
+    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
+    hideLocked: CORE_HIDE_LOCKED.has(id)
+  }));
+}
+function isExtensionDrawerTab(t) {
+  if (t.extensionId)
+    return true;
+  const root = t.root;
+  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
+    return true;
+  }
+  return t.id.includes(":");
+}
+function getExtensionCatalog() {
+  const tabs = getDrawerTabs();
+  if (!tabs || tabs.length === 0)
+    return [];
+  return tabs.filter(isExtensionDrawerTab).map((t) => ({
+    id: t.id,
+    kind: "extension",
+    title: t.title || humanizeTabId(t.id),
+    description: t.description || `Open ${t.title || t.id} extension tab`,
+    hideLocked: false,
+    extensionId: t.extensionId || undefined,
+    iconSvg: t.iconSvg || undefined,
+    iconUrl: t.iconUrl || undefined
+  }));
+}
+function getFullCatalog() {
+  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
+}
+function filterCatalogToLive(catalog, host, knownLiveIds) {
+  if (!host)
+    return catalog;
+  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
+}
+function isHideLocked(tabId) {
+  return isCoreTabId(tabId);
+}
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
+var init_configure_catalog = __esm(() => {
+  init_store();
+  init_core_tabs();
+  init_core_tabs();
+  BUILTIN_TAB_IDS = [
+    "profile",
+    "presets",
+    "loom",
+    "weaver",
+    "connections",
+    "browser",
+    "characters",
+    "personas",
+    "multiplayer",
+    "lorebook",
+    "cortex",
+    "databank",
+    "create",
+    "ooc",
+    "prompt",
+    "council",
+    "summary",
+    "feedback",
+    "worldinfo",
+    "imagegen",
+    "wallpaper",
+    "regex",
+    "branches",
+    "theme",
+    "spindle"
+  ];
+  BUILTIN_TAB_TITLES = {
+    profile: "Profile",
+    presets: "Reasoning",
+    loom: "Loom",
+    weaver: "Weaver",
+    connections: "Connections",
+    browser: "Pack Browser",
+    characters: "Characters",
+    personas: "Personas",
+    multiplayer: "Multiplayer",
+    lorebook: "Lorebook",
+    cortex: "Memory Cortex",
+    databank: "Databank",
+    create: "Creator Workshop",
+    ooc: "OOC",
+    prompt: "Composition",
+    council: "Council",
+    summary: "Summary",
+    feedback: "Council Feedback",
+    worldinfo: "World Info",
+    imagegen: "Image Generation",
+    wallpaper: "Wallpaper",
+    regex: "Regex Scripts",
+    branches: "Branch Tree",
+    theme: "Theme",
+    spindle: "Extensions"
+  };
+  BUILTIN_TAB_DESCRIPTIONS = {
+    profile: "View and edit the active character",
+    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
+    loom: "Configure narrative structure and story beats",
+    weaver: "Craft a character from your idea",
+    connections: "Manage API connections and providers",
+    browser: "Browse and manage content packs",
+    characters: "Browse and manage your character cards",
+    personas: "Manage your user personas",
+    multiplayer: "Host or join a room and chat with bots alongside friends",
+    lorebook: "Edit world book and lorebook entries",
+    cortex: "View and manage memory cortex entries",
+    databank: "Upload and manage reference documents for AI context",
+    create: "Create and edit Lumia items and Loom presets",
+    ooc: "Out-of-character comment display settings",
+    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
+    council: "Configure the Lumia Council and tool functions",
+    summary: "Configure context summarization and truncation",
+    feedback: "View the latest council execution results",
+    worldinfo: "View currently activated world info entries",
+    imagegen: "Configure and control AI scene generation",
+    wallpaper: "Set global or per-chat background wallpapers",
+    regex: "Create and manage regex find/replace scripts",
+    branches: "View and navigate the chat branch history",
+    theme: "Customize colors, accent, and visual style",
+    spindle: "Manage Spindle extensions"
+  };
+});
+
 // src/tabs/identity.ts
 function liveIdForKey(key, tabs) {
   const frozen = tabs.find((t) => t.key === key);
@@ -8907,6 +8802,17 @@ function hydrateCanvasHiddenFromLayout(layout) {
     return;
   _canvasHiddenTabIds = normalizeHiddenIds(raw);
 }
+function mergeHiddenTabIdLists(hostIds, canvasIds) {
+  const out = [];
+  const seen = new Set;
+  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
 function resetCanvasHiddenTabIds() {
   _canvasHiddenTabIds = [];
 }
@@ -8966,7 +8872,10 @@ function scheduleSyncHiddenTabsFromHost(opts) {
 function syncHiddenTabsFromHost() {
   if (!isInstanceActive())
     return { hiddenIds: getCanvasHiddenTabIds() };
-  const stored = getCanvasHiddenTabIds();
+  const host = getHostDrawerSettings();
+  const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
+  const canvasStored = getCanvasHiddenTabIds();
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
   const liveIds = collectLiveTabIdsForHiddenHeal();
   const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
@@ -9014,6 +8923,7 @@ function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
 }
 var _debouncedSyncTimer = null;
 var init_hidden_tabs = __esm(() => {
+  init_host_settings();
   init_store();
   init_configure_catalog();
   init_buttons();
@@ -11376,7 +11286,7 @@ function ConfigureTabsModalInner(props) {
   });
 }
 function buildLiveDraftAndBase() {
-  const catalog = supplementCatalogWithRecoveredEntries(filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys())), getModel());
+  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getLiveIdAssignments());
   const hostSide = hostSettings?.side;
@@ -11385,7 +11295,7 @@ function buildLiveDraftAndBase() {
   const model = getModel();
   const host = getHost();
   if (model && host) {
-    const resolveId = (key) => host.resolve(key) ?? (isExtensionKey(key) ? key : null);
+    const resolveId = (key) => host.resolve(key);
     const toIds = (keys) => {
       const out = [];
       for (const key of keys) {
@@ -11417,7 +11327,7 @@ function buildLiveDraftAndBase() {
     });
     return { draft, base, catalog };
   }
-  const healedHidden = resolveHiddenTabIdsForDraft(getCanvasHiddenTabIds(), catalog.map((t) => t.id));
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t) => t.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
@@ -11672,8 +11582,8 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
     return { ok: false, error: "Canvas tab model is not ready." };
   try {
     const commitBaseModel = getModel();
-    const observedBeforeRebase = withRecoveredOwnedEntries(host.observe(), commitBaseModel, host);
-    await dispatchBatch([{ t: "syncFromHost", observed: withRecoveredOwnedEntries(host.observe(), commitBaseModel, host) }]);
+    const observedBeforeRebase = host.observe();
+    await dispatchBatch([{ t: "syncFromHost", observed: host.observe() }]);
     const model = getModel();
     if (!model)
       return { ok: false, error: "Canvas tab model is not ready." };
@@ -11681,23 +11591,7 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
       primary: model.primary,
       secondary: model.secondary
     });
-    const keyFor = (id) => {
-      const direct = host.findKey(id);
-      if (direct)
-        return direct;
-      const m = commitBaseModel;
-      if (!m)
-        return null;
-      if (isBuiltinKey(id) || isExtensionKey(id)) {
-        return m.primary.includes(id) || m.secondary.includes(id) ? id : null;
-      }
-      const base = stripTabIdSuffix(id);
-      if (!base.includes(":") && BUILTIN_TAB_IDS.includes(base)) {
-        const key = builtinKey(base);
-        return m.primary.includes(key) || m.secondary.includes(key) ? key : null;
-      }
-      return null;
-    };
+    const keyFor = (id) => host.findKey(id);
     const primary = resolveKeys(draft.primaryIds, keyFor);
     const secondary = resolveKeys(draft.secondaryIds, keyFor);
     const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor));
@@ -11910,33 +11804,6 @@ function resolveKeys(ids, resolve) {
   }
   return keys;
 }
-function withRecoveredOwnedEntries(observed, owned, host) {
-  if (!owned)
-    return observed;
-  const present = new Set(observed.tabs.map((t) => t.key));
-  const extra = [];
-  for (const key of [...owned.primary, ...owned.secondary]) {
-    if (present.has(key))
-      continue;
-    if (!(isBuiltinKey(key) || isExtensionKey(key)))
-      continue;
-    if (host.findKey(key))
-      continue;
-    extra.push({
-      key,
-      liveId: "",
-      isBuiltin: false,
-      location: owned.primary.includes(key) ? "primary" : "secondary",
-      isHidden: owned.hidden.includes(key),
-      isActiveInPrimary: owned.active.primary === key,
-      isActiveInSecondary: owned.active.secondary === key,
-      hasContentRoot: false
-    });
-  }
-  if (extra.length === 0)
-    return observed;
-  return { ...observed, tabs: [...observed.tabs, ...extra] };
-}
 function activeSelection(world) {
   return {
     primary: world.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
@@ -11946,7 +11813,6 @@ function activeSelection(world) {
 var init_owned_commit = __esm(() => {
   init_dispatch();
   init_log();
-  init_configure_catalog();
   init_mode_transition();
 });
 
@@ -12259,14 +12125,11 @@ function getButtonsInContainer(container, _secondary, excludeTabId) {
   });
 }
 function buildDraftAndBase() {
-  const host = getHost();
-  const catalog = supplementCatalogWithRecoveredEntries(filterCatalogToLive(getFullCatalog(), host, new Set(getLiveIdAssignments().keys())), getModel());
+  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
   const hostSettings = getHostDrawerSettings();
   const currentAssignments = new Map(getLiveIdAssignments());
   const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const model = getModel();
-  const modelHiddenIds = model && host ? model.hidden.map((k) => host.resolve(k) ?? (isExtensionKey(k) ? k : null)).filter((x) => !!x) : null;
-  const healedHidden = modelHiddenIds ? modelHiddenIds : resolveHiddenTabIdsForDraft(getCanvasHiddenTabIds(), catalog.map((t) => t.id));
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t) => t.id));
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],
@@ -14463,7 +14326,7 @@ function addSecondaryTabButton(tab) {
     e.stopPropagation();
     showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn);
   });
-  const effectiveHidden = getCanvasHiddenTabIds();
+  const effectiveHidden = mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, getCanvasHiddenTabIds());
   if (effectiveHidden.length > 0) {
     const liveOnStrip = [];
     for (const el of Array.from(tabList.querySelectorAll("button[data-tab-id]"))) {
@@ -14692,6 +14555,7 @@ function showSecondaryTab(tabId, opts) {
 }
 var _hideMainTabButtonOverride = null, _showMainTabButtonOverride = null, _buttonTabIdLogged;
 var init_buttons = __esm(() => {
+  init_host_settings();
   init_store();
   init_log();
   init_drawer_sync();
@@ -14874,7 +14738,7 @@ function enqueueHostSync(host, generation) {
         _persistOsBootOverride = null;
         return;
       }
-      const rebuilt = buildModelFromLayout(_pendingLayout, bootStoredIdResolver(host, _pendingLayout), observed.drawerSide, (id) => host.findKey(id));
+      const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
       const expected = pendingLayoutTabCount(_pendingLayout);
       const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected;
       const merged = mergeResolvedInto(_model, rebuilt);
@@ -15314,18 +15178,8 @@ async function placementFirstMoveByLiveId(liveId, target) {
     await applyMainMirrorMoveChrome(chrome, liveId);
   }
 }
-function bootStoredIdResolver(host, layout) {
-  const hostTabOrder = (() => {
-    try {
-      return getHostDrawerSettings()?.tabOrder ?? null;
-    } catch {
-      return null;
-    }
-  })();
-  return (id) => host.findKey(id) ?? resolveLayoutOwnedStoredId(id, layout, BUILTIN_TAB_IDS, hostTabOrder);
-}
 function bootstrapFromLayout(layout, host, version, opts) {
-  let model = buildModelFromLayout(layout, bootStoredIdResolver(host, layout), undefined, (id) => host.findKey(id));
+  let model = buildModelFromLayout(layout, (id) => host.findKey(id));
   if (!(opts?.osActive ?? isOsModeEnabled()) && model.closed.length > 0) {
     dlog("[dispatch] dropped OS closed-set on non-OS boot/restore", {
       closed: model.closed.length
@@ -15475,8 +15329,6 @@ var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
   init_layout_model();
-  init_configure_catalog();
-  init_host_settings();
   init_layout_repo();
   init_state();
   init_log();
@@ -18762,7 +18614,7 @@ function reapplyOsClosedVisibility() {
     return;
   try {
     closedLiveIdsCache = resolveClosedLiveIds();
-    applyHiddenTabIdsToSecondary(new Set([...getCanvasHiddenTabIds(), ...closedLiveIdsCache]));
+    applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds(), ...closedLiveIdsCache])));
   } catch (err) {
     dwarn("[os] reapply closed visibility failed:", err instanceof Error ? err.message : err);
   }
@@ -18853,7 +18705,7 @@ function teardownPanelChrome() {
     surface.closeBtn.removeAttribute(HIDDEN_ATTR);
   }
   setCanvasMainNoActive(false);
-  applyHiddenTabIdsToSecondary(new Set([...getCanvasHiddenTabIds()]));
+  applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
   dlog("[os] panel chrome unmounted");
 }
 var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active4 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged3 = null;
@@ -18862,6 +18714,7 @@ var init_panel_chrome = __esm(() => {
   init_main_mirror_drawer();
   init_secondary();
   init_animation();
+  init_host_settings();
   init_state();
   init_actions();
   init_dispatch();
