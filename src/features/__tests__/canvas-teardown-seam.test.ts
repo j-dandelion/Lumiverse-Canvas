@@ -188,5 +188,30 @@ const stubWindow: any = {
   )
 }
 
+// ── 5: LUMI-21 residual — the positional reset is the FIFO chain's LAST word
+// tearDownSecondarySidebar (→ applyTabListPin(false) → unpinTabList →
+// applyTabListPosition) re-writes `flex-direction: row-reverse` INLINE on the
+// HOST main drawer DURING teardown — after alwaysCleanups' early
+// clearTabListPosition ran. The disable chain must therefore clear the
+// positional writes AFTER that writer: (a) adjacent to teardownSecondary
+// Drawer in its own registration, and (b) as the chain-final registration
+// (after shutdownCore). Source-pinned: both clears must exist and must be
+// positioned after their writers.
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/setup.ts'), 'utf8')
+
+  const secWriterIdx = src.indexOf('teardownSecondaryDrawer()')
+  const adjacentClearIdx = src.indexOf('clearTabListPosition()', secWriterIdx)
+  assert(secWriterIdx >= 0, 'setup.ts registers teardownSecondaryDrawer')
+  assert(adjacentClearIdx > secWriterIdx, 'clearTabListPosition runs adjacent-after teardownSecondaryDrawer')
+
+  const shutdownIdx = src.lastIndexOf('coreHost.shutdown()')
+  const finalClearIdx = src.indexOf('registerCleanup(clearTabListPosition)')
+  assert(shutdownIdx >= 0, 'setup.ts registers the core-host shutdown cleanup')
+  assert(finalClearIdx > shutdownIdx, 'the chain-final clearTabListPosition registration comes after the shutdown registration')
+}
+
 console.log(`PASS: ${passed}`)
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exit(1) }

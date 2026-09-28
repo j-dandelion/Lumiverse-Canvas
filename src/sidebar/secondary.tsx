@@ -28,6 +28,7 @@ import { isMobileViewport, enforceExclusionOnOpen, setMobileOpenClass } from './
 import { cancelWrapperAnimation } from './animation'
 import { animateDrawerClose, animateDrawerOpen } from './panel-motion'
 import { SECONDARY_WIDTH_VAR } from './styles'
+import { isInstanceActive } from '../lifecycle/instance'
 import {
   applyTabListPin,
   applyTabListPosition,
@@ -822,6 +823,19 @@ export function ensureSecondaryShellMounted(options?: {
   initialOpen?: boolean
 }): boolean {
   if (!getSettings().secondSidebarEnabled) return false
+  // LUMI-21 residual (2026-09-28 member report): the same applicator family
+  // as the rework's AC1/AC2 — a post-teardown continuation reaching
+  // openSecondarySidebar healed the (already torn-down) shell by REMOUNTING
+  // it, and the mount's trailing applyTabListPosition re-wrote
+  // `flex-direction: row-reverse` INLINE on the HOST main drawer after the
+  // teardown chain's final clearTabListPosition had run (vanilla tab strip
+  // displaced to the outer edge, sidebarRect.x 1020→1384 — intermittent
+  // because the continuation only sometimes resolved after teardown).
+  // Mount-capable entry: no-op once the instance is ended. Teardown-critical
+  // removals (tearDownSecondarySidebar / unmountSecondarySidebar) stay
+  // unguarded — they must run while the lifecycle is inactive.
+  if (!isInstanceActive()) return false
+  if (!getSettings().secondSidebarEnabled) return false
   if (isSecondaryShellLive()) return true
   // Drop stale refs so mountSecondarySidebar does not early-return on a
   // detached node (would leave getSecondaryWrapper non-null but invisible).
@@ -838,6 +852,13 @@ export function ensureSecondaryShellMounted(options?: {
 }
 
 export function mountSecondarySidebar(options?: { initialWidth?: number; initialOpen?: boolean }) {
+  // LUMI-21 residual: the single secondary-shell mount choke point (same
+  // role as mountMainMirror for the main mirror). A post-teardown
+  // continuation (openSecondarySidebar's heal path, restore flows) must not
+  // remount the shell over the restored vanilla drawer — the mount's
+  // trailing applyTabListPosition re-writes the host drawer's inline
+  // flex-direction after the teardown chain's positional reset.
+  if (!isInstanceActive()) return
   // Treat detached wrappers as absent — early-return only when live in DOM.
   if (_secondaryWrapper?.isConnected) return
   if (_secondaryWrapper && !_secondaryWrapper.isConnected) {

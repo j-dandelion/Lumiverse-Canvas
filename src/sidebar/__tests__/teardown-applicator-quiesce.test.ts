@@ -144,6 +144,7 @@ const {
   pinMainMirrorShellTabList,
   teardownMainMirror,
 } = await import('../main-mirror-drawer')
+const { ensureSecondaryShellMounted, mountSecondarySidebar } = await import('../secondary')
 const { CANVAS_MAIN_ACTIVE_CLASS } = await import('../styles')
 
 const bodyChildCount = () => bodyStub.children.length
@@ -188,6 +189,16 @@ describe('LUMI-21 rework: teardown applicator quiesce', () => {
     // teardownMainMirror itself stays functional (pure removal, no mounts):
     expect(() => teardownMainMirror()).not.toThrow()
     expect(htmlStub.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)).toBe(false)
+
+    // LUMI-21 residual (2026-09-28): the traced late re-writer — a
+    // post-teardown continuation reaching openSecondarySidebar heals the
+    // torn-down shell via ensureSecondaryShellMounted → mountSecondarySidebar,
+    // whose trailing applyTabListPosition re-wrote the HOST drawer's inline
+    // flex-direction AFTER the teardown chain's final clearTabListPosition.
+    // Both mount-capable entries must no-op once the instance is ended.
+    expect(ensureSecondaryShellMounted()).toBe(false)
+    expect(() => mountSecondarySidebar()).not.toThrow()
+    expect(bodyChildCount()).toBe(0)
   })
 
   test('off→on: the re-enabled instance passes the guards again', () => {

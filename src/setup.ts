@@ -54,6 +54,7 @@ import { startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
+import { clearTabListPosition } from './sidebar/tab-position'
 import { teardownMainMirror } from './sidebar/main-mirror-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dlog, dwarn } from './debug/log'
@@ -445,8 +446,17 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
     // on extension disable.
+    // LUMI-21 residual (2026-09-28 member report): teardownSecondarySidebar
+    // (via applyTabListPin(false) → unpinTabList → applyTabListPosition)
+    // re-writes `flex-direction: row-reverse` INLINE on the HOST main drawer
+    // — AFTER alwaysCleanups' clearTabListPosition ran earlier in the FIFO
+    // (this registration is later, so its teardown runs later). The vanilla
+    // drawer came back with the strip displaced to the outer edge
+    // (drawerInline 'flex-direction: row-reverse;', sidebarRect.x 1020→1384).
+    // Strip the positional writes immediately after the last writer.
     registerCleanup(() => {
       teardownSecondaryDrawer()
+      clearTabListPosition()
     })
 
     // The owned model is the sole tab placement/ordering state owner.
@@ -485,6 +495,19 @@ export function setup(ctx: SpindleFrontendContext) {
       shutdownCore()
       coreHost.shutdown()
     })
+
+    // LUMI-21 residual: the FIFO chain's LAST positional word. Registered
+    // after every teardown that can write inline positional styles on the
+    // HOST drawer elements (teardownMainMirror's unpin, teardownSecondary
+    // Sidebar → applyTabListPin(false) → unpinTabList → applyTabListPosition
+    // — the traced re-writer). alwaysCleanups' clearTabListPosition runs
+    // EARLY (registered before the feature teardowns) and loses to any of
+    // those writers; this one runs after all of them so the off-state DOM
+    // byte-matches the vanilla baseline (empty drawerInline, strip at the
+    // vanilla edge). Pure DOM + idempotent — safe to run while the
+    // lifecycle is inactive and alongside the adjacent-writer clear in the
+    // teardownSecondaryDrawer registration above.
+    registerCleanup(clearTabListPosition)
 
     // Restore drawer geometry separately. Tab placement, order, hidden state,
     // active tabs, and drawer metadata are restored by the owned model above.
