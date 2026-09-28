@@ -2948,13 +2948,7 @@ function getFullCatalog() {
 function filterCatalogToLive(catalog, host, knownLiveIds) {
   if (!host)
     return catalog;
-  return catalog.flatMap((tab) => {
-    if (host.findKey(tab.id) !== null)
-      return [tab];
-    if (!knownLiveIds.has(tab.id))
-      return [];
-    return [{ ...tab, description: RECOVERED_WAITING_DESCRIPTION }];
-  });
+  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
 }
 function supplementCatalogWithRecoveredEntries(catalog, model) {
   if (!model)
@@ -2974,7 +2968,7 @@ function supplementCatalogWithRecoveredEntries(catalog, model) {
         id: raw,
         kind: "extension",
         title: parsedExt.tabName,
-        description: RECOVERED_WAITING_DESCRIPTION,
+        description: `Open ${parsedExt.tabName} extension tab`,
         hideLocked: false,
         extensionId: parsedExt.extensionId
       });
@@ -2986,7 +2980,6 @@ function supplementCatalogWithRecoveredEntries(catalog, model) {
         id: raw,
         kind: "builtin",
         title: humanizeTabId(parsedBuiltin),
-        description: RECOVERED_WAITING_DESCRIPTION,
         hideLocked: isCoreTabId(parsedBuiltin)
       });
     }
@@ -2996,7 +2989,7 @@ function supplementCatalogWithRecoveredEntries(catalog, model) {
 function isHideLocked(tabId) {
   return isCoreTabId(tabId);
 }
-var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS, RECOVERED_WAITING_DESCRIPTION = "Hidden in Lumiverse — unhide it in Lumiverse’s Configure Tabs to bring it back here";
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
 var init_configure_catalog = __esm(() => {
   init_store();
   init_core_tabs();
@@ -6729,7 +6722,7 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
         continue;
       const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
       const tab = tabsById.get(liveId);
-      if (!tab)
+      if (!tab && !model.closed.includes(key))
         continue;
       const icon = resolveEntryIcon(tab, liveId);
       const coreId = parseBuiltinKey(key);
@@ -7695,6 +7688,7 @@ function renderMainMirrorTabs() {
   for (const key of regularKeys)
     twins.set(key, twinForKey(key));
   const renderableKeys = regularKeys.filter((key) => !!twins.get(key).btn || model.closed.includes(key));
+  console.error("DBG renderable", Array.from(twins.entries()).map(([k, v]) => [k, !!v.btn, v.liveId]));
   const hiddenCount = renderableKeys.filter((k) => isHidden(model, k)).length;
   const forceVisibleKey = renderableKeys.length > 0 && hiddenCount >= renderableKeys.length && !isOsModeEnabled() ? renderableKeys[0] : null;
   let insertBefore = mainSection.firstChild;
