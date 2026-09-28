@@ -44,8 +44,10 @@
  * start-menu-motion.ts for the coordinate contract).
  */
 
-import type { Side } from '../core/model'
+import type { Side, TabKey } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
+import { humanTabTitleForKey } from '../tabs/configure-catalog'
+import { getLayoutOwnedTabTitle } from '../persist/layout-model'
 import { getModel, getHost, dispatchBatch } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide, type DrawerTab } from '../store'
 import { getMainWrapper } from '../dom/lumiverse'
@@ -250,6 +252,13 @@ export function deriveStartMenuEntries(
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
       const tab = tabsById.get(liveId)
+      // LUMI-26 rework: launchable windows only, in BOTH projections. A
+      // resolved live id with no drawer-inventory backing is fabricated
+      // (builtin identity passthrough) or stale — the host does not back
+      // this tab, so there is no window to launch/focus. Closed rows keep
+      // listing (D6 reopen memory); manage mode recovers MENU-hidden tabs,
+      // not unbacked ones — Configure Tabs is the recovered tabs' surface.
+      if (!tab && !model.closed.includes(key)) continue
       const icon = resolveEntryIcon(tab, liveId)
       // Core hide-lock: resolved from the MODEL key's bare builtin id (the
       // same resolution the OS close path uses — never isHideLocked(liveId)).
@@ -257,7 +266,9 @@ export function deriveStartMenuEntries(
       out.push({
         liveId,
         side,
-        title: tab?.title ?? key,
+        // LUMI-26 rework: never a raw `builtin:`/`ext:` key — layout-blob
+        // title first, then the humanized key chain.
+        title: tab?.title ?? getLayoutOwnedTabTitle(key as TabKey) ?? humanTabTitleForKey(key) ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,

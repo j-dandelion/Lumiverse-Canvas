@@ -230,6 +230,17 @@ reapply, OS-off teardown restore) — the Canvas copy is the sole hidden-truth
 input; the host list is consulted only by `mode-profiles.ts` safe-fallback
 picking.
 
+**Presentation rule (LUMI-26 rework):** recovery is state-layer only. A model
+key the host does not back (no drawer-DOM twin via id or title fallback, not in
+`model.closed`) renders NO strip button (`renderMainMirrorTabs` backing pass;
+mid-session backing loss is swept) and NO Start-menu row in either projection
+(`deriveStartMenuEntries` skips it; closed rows keep listing per D6). All
+title fallbacks go layout-blob tabTitle → `humanTabTitleForKey` — a raw key
+never renders on a Canvas surface. Configure Tabs is the recovered tab's
+management surface until the vanilla side backs it again; a recovered tab's
+secondary-strip placement is skipped gracefully (no host button to move).
+Building DOM-less render machinery is out of scope (pitfalls §23 residual).
+
 ## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
 
 Live strip DnD reorders within a list and moves tabs across drawers; the commit
