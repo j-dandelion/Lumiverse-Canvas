@@ -2873,6 +2873,210 @@ function healHiddenTabIds(storedHidden, liveIds, opts) {
   return out;
 }
 
+// src/tabs/core-tabs.ts
+function isCoreTabId(id) {
+  return CORE_HIDE_LOCKED.has(id);
+}
+var CORE_HIDE_LOCKED;
+var init_core_tabs = __esm(() => {
+  CORE_HIDE_LOCKED = new Set([
+    "profile",
+    "presets",
+    "loom",
+    "characters",
+    "personas",
+    "branches",
+    "spindle",
+    "theme",
+    "lorebook"
+  ]);
+});
+
+// src/tabs/configure-catalog.ts
+function humanizeTabId(id) {
+  const known = BUILTIN_TAB_TITLES[id];
+  if (known)
+    return known;
+  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  return words.join(" ");
+}
+function humanTabTitleForKey(key) {
+  const builtin = parseBuiltinKey(key);
+  if (builtin)
+    return humanizeTabId(builtin);
+  const ext = parseExtensionKey(key);
+  if (ext)
+    return ext.tabName;
+  return null;
+}
+function getBuiltinCatalog() {
+  return BUILTIN_TAB_IDS.map((id) => ({
+    id,
+    kind: "builtin",
+    title: humanizeTabId(id),
+    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
+    hideLocked: CORE_HIDE_LOCKED.has(id)
+  }));
+}
+function isExtensionDrawerTab(t) {
+  if (t.extensionId)
+    return true;
+  const root = t.root;
+  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
+    return true;
+  }
+  return t.id.includes(":");
+}
+function getExtensionCatalog() {
+  const tabs = getDrawerTabs();
+  if (!tabs || tabs.length === 0)
+    return [];
+  return tabs.filter(isExtensionDrawerTab).map((t) => ({
+    id: t.id,
+    kind: "extension",
+    title: t.title || humanizeTabId(t.id),
+    description: t.description || `Open ${t.title || t.id} extension tab`,
+    hideLocked: false,
+    extensionId: t.extensionId || undefined,
+    iconSvg: t.iconSvg || undefined,
+    iconUrl: t.iconUrl || undefined
+  }));
+}
+function getFullCatalog() {
+  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
+}
+function filterCatalogToLive(catalog, host, knownLiveIds) {
+  if (!host)
+    return catalog;
+  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
+}
+function supplementCatalogWithRecoveredEntries(catalog, model) {
+  if (!model)
+    return catalog;
+  const ids = new Set(catalog.map((t) => t.id));
+  const out = catalog.slice();
+  const seen = new Set;
+  for (const raw of [...model.primary, ...model.secondary, ...model.hidden]) {
+    if (seen.has(raw))
+      continue;
+    seen.add(raw);
+    if (ids.has(raw))
+      continue;
+    const parsedExt = parseExtensionKey(raw);
+    if (parsedExt) {
+      out.push({
+        id: raw,
+        kind: "extension",
+        title: parsedExt.tabName,
+        description: `Open ${parsedExt.tabName} extension tab`,
+        hideLocked: false,
+        extensionId: parsedExt.extensionId
+      });
+      continue;
+    }
+    const parsedBuiltin = parseBuiltinKey(raw);
+    if (parsedBuiltin && !ids.has(parsedBuiltin)) {
+      out.push({
+        id: raw,
+        kind: "builtin",
+        title: humanizeTabId(parsedBuiltin),
+        hideLocked: isCoreTabId(parsedBuiltin)
+      });
+    }
+  }
+  return out;
+}
+function isHideLocked(tabId) {
+  return isCoreTabId(tabId);
+}
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
+var init_configure_catalog = __esm(() => {
+  init_store();
+  init_core_tabs();
+  init_core_tabs();
+  BUILTIN_TAB_IDS = [
+    "profile",
+    "presets",
+    "loom",
+    "weaver",
+    "connections",
+    "browser",
+    "characters",
+    "personas",
+    "multiplayer",
+    "lorebook",
+    "cortex",
+    "databank",
+    "create",
+    "ooc",
+    "prompt",
+    "council",
+    "summary",
+    "feedback",
+    "worldinfo",
+    "imagegen",
+    "wallpaper",
+    "regex",
+    "branches",
+    "theme",
+    "spindle"
+  ];
+  BUILTIN_TAB_TITLES = {
+    profile: "Profile",
+    presets: "Reasoning",
+    loom: "Loom",
+    weaver: "Weaver",
+    connections: "Connections",
+    browser: "Pack Browser",
+    characters: "Characters",
+    personas: "Personas",
+    multiplayer: "Multiplayer",
+    lorebook: "Lorebook",
+    cortex: "Memory Cortex",
+    databank: "Databank",
+    create: "Creator Workshop",
+    ooc: "OOC",
+    prompt: "Composition",
+    council: "Council",
+    summary: "Summary",
+    feedback: "Council Feedback",
+    worldinfo: "World Info",
+    imagegen: "Image Generation",
+    wallpaper: "Wallpaper",
+    regex: "Regex Scripts",
+    branches: "Branch Tree",
+    theme: "Theme",
+    spindle: "Extensions"
+  };
+  BUILTIN_TAB_DESCRIPTIONS = {
+    profile: "View and edit the active character",
+    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
+    loom: "Configure narrative structure and story beats",
+    weaver: "Craft a character from your idea",
+    connections: "Manage API connections and providers",
+    browser: "Browse and manage content packs",
+    characters: "Browse and manage your character cards",
+    personas: "Manage your user personas",
+    multiplayer: "Host or join a room and chat with bots alongside friends",
+    lorebook: "Edit world book and lorebook entries",
+    cortex: "View and manage memory cortex entries",
+    databank: "Upload and manage reference documents for AI context",
+    create: "Create and edit Lumia items and Loom presets",
+    ooc: "Out-of-character comment display settings",
+    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
+    council: "Configure the Lumia Council and tool functions",
+    summary: "Configure context summarization and truncation",
+    feedback: "View the latest council execution results",
+    worldinfo: "View currently activated world info entries",
+    imagegen: "Configure and control AI scene generation",
+    wallpaper: "Set global or per-chat background wallpapers",
+    regex: "Create and manage regex find/replace scripts",
+    branches: "View and navigate the chat branch history",
+    theme: "Customize colors, accent, and visual style",
+    spindle: "Manage Spindle extensions"
+  };
+});
+
 // src/persist/layout-model.ts
 function buildModelFromLayout(layout, findKey, side, findKeyHost) {
   const model = createEmptyModel(side ?? "left");
@@ -3135,202 +3339,42 @@ function serializeModelToLayout(model, resolve, version) {
 function resolveList(keys, resolve) {
   return keys.map((key) => resolve(key)).filter(Boolean);
 }
+function getLayoutOwnedTabTitle(key) {
+  let layout = null;
+  try {
+    const state = (init_state(), {});
+    layout = getLastLoadedLayout?.() ?? null;
+  } catch {
+    return null;
+  }
+  if (!layout || typeof layout !== "object")
+    return null;
+  const detached = layout.detachedTabs;
+  if (!Array.isArray(detached))
+    return null;
+  let builtinIds = [];
+  try {
+    const catalog = (init_configure_catalog(), {});
+    builtinIds = BUILTIN_TAB_IDS ?? [];
+  } catch {
+    return null;
+  }
+  for (const d of detached) {
+    if (!d || typeof d !== "object")
+      continue;
+    const { tabId, tabTitle } = d;
+    if (typeof tabTitle !== "string" || !tabTitle || typeof tabId !== "string" || !tabId)
+      continue;
+    if (tabTitle === key)
+      return null;
+    if (isBuiltinKey(tabTitle) || isExtensionKey(tabTitle))
+      continue;
+    if (resolveLayoutOwnedStoredId(tabId, layout, builtinIds, null) === key)
+      return tabTitle;
+  }
+  return null;
+}
 var init_layout_model = () => {};
-
-// src/tabs/core-tabs.ts
-function isCoreTabId(id) {
-  return CORE_HIDE_LOCKED.has(id);
-}
-var CORE_HIDE_LOCKED;
-var init_core_tabs = __esm(() => {
-  CORE_HIDE_LOCKED = new Set([
-    "profile",
-    "presets",
-    "loom",
-    "characters",
-    "personas",
-    "branches",
-    "spindle",
-    "theme",
-    "lorebook"
-  ]);
-});
-
-// src/tabs/configure-catalog.ts
-function humanizeTabId(id) {
-  const known = BUILTIN_TAB_TITLES[id];
-  if (known)
-    return known;
-  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
-  return words.join(" ");
-}
-function getBuiltinCatalog() {
-  return BUILTIN_TAB_IDS.map((id) => ({
-    id,
-    kind: "builtin",
-    title: humanizeTabId(id),
-    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
-    hideLocked: CORE_HIDE_LOCKED.has(id)
-  }));
-}
-function isExtensionDrawerTab(t) {
-  if (t.extensionId)
-    return true;
-  const root = t.root;
-  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
-    return true;
-  }
-  return t.id.includes(":");
-}
-function getExtensionCatalog() {
-  const tabs = getDrawerTabs();
-  if (!tabs || tabs.length === 0)
-    return [];
-  return tabs.filter(isExtensionDrawerTab).map((t) => ({
-    id: t.id,
-    kind: "extension",
-    title: t.title || humanizeTabId(t.id),
-    description: t.description || `Open ${t.title || t.id} extension tab`,
-    hideLocked: false,
-    extensionId: t.extensionId || undefined,
-    iconSvg: t.iconSvg || undefined,
-    iconUrl: t.iconUrl || undefined
-  }));
-}
-function getFullCatalog() {
-  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
-}
-function filterCatalogToLive(catalog, host, knownLiveIds) {
-  if (!host)
-    return catalog;
-  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
-}
-function supplementCatalogWithRecoveredEntries(catalog, model) {
-  if (!model)
-    return catalog;
-  const ids = new Set(catalog.map((t) => t.id));
-  const out = catalog.slice();
-  const seen = new Set;
-  for (const raw of [...model.primary, ...model.secondary, ...model.hidden]) {
-    if (seen.has(raw))
-      continue;
-    seen.add(raw);
-    if (ids.has(raw))
-      continue;
-    const parsedExt = parseExtensionKey(raw);
-    if (parsedExt) {
-      out.push({
-        id: raw,
-        kind: "extension",
-        title: parsedExt.tabName,
-        description: `Open ${parsedExt.tabName} extension tab`,
-        hideLocked: false,
-        extensionId: parsedExt.extensionId
-      });
-      continue;
-    }
-    const parsedBuiltin = parseBuiltinKey(raw);
-    if (parsedBuiltin && !ids.has(parsedBuiltin)) {
-      out.push({
-        id: raw,
-        kind: "builtin",
-        title: humanizeTabId(parsedBuiltin),
-        hideLocked: isCoreTabId(parsedBuiltin)
-      });
-    }
-  }
-  return out;
-}
-function isHideLocked(tabId) {
-  return isCoreTabId(tabId);
-}
-var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
-var init_configure_catalog = __esm(() => {
-  init_store();
-  init_core_tabs();
-  init_core_tabs();
-  BUILTIN_TAB_IDS = [
-    "profile",
-    "presets",
-    "loom",
-    "weaver",
-    "connections",
-    "browser",
-    "characters",
-    "personas",
-    "multiplayer",
-    "lorebook",
-    "cortex",
-    "databank",
-    "create",
-    "ooc",
-    "prompt",
-    "council",
-    "summary",
-    "feedback",
-    "worldinfo",
-    "imagegen",
-    "wallpaper",
-    "regex",
-    "branches",
-    "theme",
-    "spindle"
-  ];
-  BUILTIN_TAB_TITLES = {
-    profile: "Profile",
-    presets: "Reasoning",
-    loom: "Loom",
-    weaver: "Weaver",
-    connections: "Connections",
-    browser: "Pack Browser",
-    characters: "Characters",
-    personas: "Personas",
-    multiplayer: "Multiplayer",
-    lorebook: "Lorebook",
-    cortex: "Memory Cortex",
-    databank: "Databank",
-    create: "Creator Workshop",
-    ooc: "OOC",
-    prompt: "Composition",
-    council: "Council",
-    summary: "Summary",
-    feedback: "Council Feedback",
-    worldinfo: "World Info",
-    imagegen: "Image Generation",
-    wallpaper: "Wallpaper",
-    regex: "Regex Scripts",
-    branches: "Branch Tree",
-    theme: "Theme",
-    spindle: "Extensions"
-  };
-  BUILTIN_TAB_DESCRIPTIONS = {
-    profile: "View and edit the active character",
-    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
-    loom: "Configure narrative structure and story beats",
-    weaver: "Craft a character from your idea",
-    connections: "Manage API connections and providers",
-    browser: "Browse and manage content packs",
-    characters: "Browse and manage your character cards",
-    personas: "Manage your user personas",
-    multiplayer: "Host or join a room and chat with bots alongside friends",
-    lorebook: "Edit world book and lorebook entries",
-    cortex: "View and manage memory cortex entries",
-    databank: "Upload and manage reference documents for AI context",
-    create: "Create and edit Lumia items and Loom presets",
-    ooc: "Out-of-character comment display settings",
-    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
-    council: "Configure the Lumia Council and tool functions",
-    summary: "Configure context summarization and truncation",
-    feedback: "View the latest council execution results",
-    worldinfo: "View currently activated world info entries",
-    imagegen: "Configure and control AI scene generation",
-    wallpaper: "Set global or per-chat background wallpapers",
-    regex: "Create and manage regex find/replace scripts",
-    branches: "View and navigate the chat branch history",
-    theme: "Customize colors, accent, and visual style",
-    spindle: "Manage Spindle extensions"
-  };
-});
 
 // src/dom/host-settings.ts
 function scanForHostSettings(fiber, depth, maxDepth, visited) {
@@ -6678,12 +6722,14 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
         continue;
       const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
       const tab = tabsById.get(liveId);
+      if (!tab && !model.closed.includes(key))
+        continue;
       const icon = resolveEntryIcon(tab, liveId);
       const coreId = parseBuiltinKey(key);
       out.push({
         liveId,
         side,
-        title: tab?.title ?? key,
+        title: tab?.title ?? getLayoutOwnedTabTitle(key) ?? humanTabTitleForKey(key) ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
@@ -7241,6 +7287,8 @@ function teardownStartMenu() {
 }
 var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _manageMode = false, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>', START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
+  init_configure_catalog();
+  init_layout_model();
   init_dispatch();
   init_store();
   init_state();
@@ -7497,13 +7545,10 @@ function ensureMirrorListStructure(list) {
   return { main, bottom };
 }
 function keyTitle(key) {
-  const builtin = parseBuiltinKey(key);
-  if (builtin)
-    return builtin;
-  const ext = parseExtensionKey(key);
-  if (ext)
-    return ext.tabName;
-  return null;
+  const stored = getLayoutOwnedTabTitle(key);
+  if (stored)
+    return stored;
+  return humanTabTitleForKey(key);
 }
 function twinForKey(key) {
   const host = getHost();
@@ -7639,11 +7684,16 @@ function renderMainMirrorTabs() {
   const open = isCanvasMainOpen();
   const activeKey = model.active.primary;
   const regularKeys = model.primary;
-  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
-  const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
+  const twins = new Map;
+  for (const key of regularKeys)
+    twins.set(key, twinForKey(key));
+  const renderableKeys = regularKeys.filter((key) => !!twins.get(key).btn || model.closed.includes(key));
+  console.error("DBG renderable", Array.from(twins.entries()).map(([k, v]) => [k, !!v.btn, v.liveId]));
+  const hiddenCount = renderableKeys.filter((k) => isHidden(model, k)).length;
+  const forceVisibleKey = renderableKeys.length > 0 && hiddenCount >= renderableKeys.length && !isOsModeEnabled() ? renderableKeys[0] : null;
   let insertBefore = mainSection.firstChild;
-  for (const key of regularKeys) {
-    const twin = twinForKey(key);
+  for (const key of renderableKeys) {
+    const twin = twins.get(key);
     const mirror = ensureMirrorButton(mainSection, list, key, insertBefore);
     insertBefore = mirror.nextSibling;
     if (twin.liveId)
@@ -7669,7 +7719,7 @@ function renderMainMirrorTabs() {
     }
     applyMirrorButtonChrome(mirror, labeled);
   }
-  const wantedKeys = new Set(regularKeys);
+  const wantedKeys = new Set(renderableKeys);
   for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
     const key = btn.getAttribute("data-mirror-key") || "";
     if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
@@ -7853,6 +7903,8 @@ function teardownMainRenderer() {
 var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged2 = null, _renderRaf = null;
 var init_main_renderer = __esm(() => {
   init_dispatch();
+  init_configure_catalog();
+  init_layout_model();
   init_state();
   init_start_strip_top_gate();
   init_actions();
