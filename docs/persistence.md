@@ -53,6 +53,7 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 ## Backend (`backend.ts`)
 
 - `loadLayout()` — reads `layout.json` via `spindle.storage.read()`
+- `readJsonFile()` normalizes either a string or `{ data: string }` storage payload. Only the host's `File not found` rejection means the file is absent; other read failures return `{status: 'error'}` so the frontend leaves that repo unarmed and cannot overwrite the existing file on a later save.
 - `saveLayout(state)` — atomic write: writes to `layout.json.tmp`, then `storage.move()` to `layout.json`. Falls back to direct write on cross-device/Windows errors.
 - Uses `spindle.storage.*` (not raw `fs`) because the host resolves paths against a per-extension, per-user storage root.
 - Serializes `SAVE_LAYOUT` requests and makes `LOAD_LAYOUT` wait for queued saves. Extension updates can overlap IPC handlers; without this ordering, an older slower write can overwrite a newer layout or a reload can read stale settings.

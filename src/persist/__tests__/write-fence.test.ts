@@ -107,21 +107,51 @@ function sleep(ms: number): Promise<void> {
 // --- 14a: error load → repo NOT armed → saves are dropped ---
 {
   reset()
-  const ctx = makeBackendCtx()
+  const ctx = makeRespondingCtx('SETTINGS_DATA', {
+    status: 'error',
+    reason: 'read failed: temporary storage failure',
+  })
   setLayoutRepoBackendCtx(ctx)
   setSettingsRepoBackendCtx(ctx)
 
-  // Simulate error load for settings
   const settingsResult = await loadSettingsFromDisk()
-  // Our fake doesn't auto-respond; the first attempt times out after retries
-  // That returns { status: 'error' }
+  assertEqual(settingsResult.status, 'error', '14a: read error returns error')
+  assert(!isSettingsRepoArmed(), '14a: read error leaves settings repo unarmed')
 
-  const isNotArmed = (result: any) => result.status === 'error'
-  if (isNotArmed(settingsResult)) {
-    // Error → arm NOT called → save should do nothing
-    saveSettingsToDisk({ debugMode: true })
-    assertEqual(ctx._saves().length, 0, '14a: error load → no SAVE_SETTINGS sent')
+  saveSettingsToDisk({ debugMode: true })
+  assertEqual(ctx._saves().length, 0, '14a: error load → no SAVE_SETTINGS sent')
+}
+
+// --- 14e: layout read error → repo NOT armed → existing file stays intact ---
+{
+  reset()
+  const originalLayout = '{"version":2,"primary":{"open":true}}'
+  let storedLayout = originalLayout
+  const ctx = makeBackendCtx()
+  const sendToBackend = ctx.sendToBackend
+  ctx.sendToBackend = (msg: BackendMsg) => {
+    sendToBackend(msg)
+    if (msg.type === 'SAVE_LAYOUT') storedLayout = JSON.stringify(msg.layout)
   }
+  setLayoutRepoBackendCtx(ctx)
+
+  const loadPromise = loadLayoutFromDisk()
+  await sleep(100)
+  ctx._respond('LAYOUT_DATA', {
+    status: 'error',
+    reason: 'read failed: temporary storage failure',
+  })
+  const result = await loadPromise
+  assertEqual(result.status, 'error', '14e: read error returns error')
+  assert(!isLayoutRepoArmed(), '14e: read error leaves layout repo unarmed')
+
+  saveLayoutToDisk({ version: 2, primary: { open: false } })
+  assertEqual(
+    ctx._saves().filter((msg) => msg.type === 'SAVE_LAYOUT').length,
+    0,
+    '14e: error load → no SAVE_LAYOUT sent',
+  )
+  assertEqual(storedLayout, originalLayout, '14e: later save leaves existing layout bytes intact')
 }
 
 // --- 14b: empty load → repo ARMED → saves go through ---

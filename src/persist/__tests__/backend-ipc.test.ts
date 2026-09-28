@@ -2,13 +2,11 @@
 //
 // This drives the REAL backend module in a worker-like environment: the
 // `spindle` global is stubbed with an in-memory storage that mirrors the
-// host contract EXACTLY — `storage.read` REJECTS with `Error: File not
-// found` when the key is missing (worker-host-storage-api.ts
-// handleStorageRead → fail). The regression: the 08-16 persistence rewrite
-// dropped the try/catch around `spindle.storage.read` in `readJsonFile`, so a
-// missing file surfaced as `{status:'error'}` instead of `{status:'empty'}`
-// → the frontend never armed the persistence repos → settings/layout were
-// never saved on a fresh install → every refresh reset Canvas settings.
+// host contract — `storage.read` REJECTS with `Error: File not found` when
+// the key is missing (worker-host-storage-api.ts handleStorageRead → fail)
+// and can return either a string or `{ data: string }`. Missing files must
+// stay distinct from other read failures so the frontend write fence protects
+// existing files after a transient storage or IPC error.
 
 let passed = 0
 let failed = 0
@@ -80,6 +78,51 @@ async function main(): Promise<void> {
   assertEqual(lastSent('SETTINGS_DATA')?.result?.status, 'empty', 'B1a missing settings.json → status empty')
   await dispatch({ type: 'LOAD_LAYOUT' })
   assertEqual(lastSent('LAYOUT_DATA')?.result?.status, 'empty', 'B1b missing layout.json → status empty')
+
+  // B1c — a non-missing read rejection must surface as an error, preserving
+  // the existing bytes instead of treating the file as absent.
+  {
+    const storage = (globalThis as any).spindle.storage
+    const originalRead = storage.read
+    const original = JSON.stringify({ version: 2, marker: 'keep-existing-layout' })
+    mem.clear(); written.length = 0; sent.length = 0
+    mem.set('layout.json', original)
+    storage.read = async (key: string) => {
+      if (key === 'layout.json') throw new Error('temporary storage failure')
+      return originalRead(key)
+    }
+    try {
+      await dispatch({ type: 'LOAD_LAYOUT' })
+      const result = lastSent('LAYOUT_DATA')?.result
+      assertEqual(result?.status, 'error', 'B1c read failure → status error')
+      assertEqual(result?.reason, 'read failed: temporary storage failure', 'B1c read failure is reported')
+      assertEqual(mem.get('layout.json'), original, 'B1c existing layout bytes remain unchanged')
+      assertEqual(written.length, 0, 'B1c read failure writes nothing')
+    } finally {
+      storage.read = originalRead
+    }
+  }
+
+  // B1d — accept the wrapper-shaped storage payload as readable JSON.
+  {
+    const storage = (globalThis as any).spindle.storage
+    const originalRead = storage.read
+    const wrappedLayout = JSON.stringify({ version: 2, marker: 'wrapped-read' })
+    mem.clear(); written.length = 0; sent.length = 0
+    mem.set('layout.json', wrappedLayout)
+    storage.read = async (key: string) => {
+      const value = await originalRead(key)
+      return { data: value }
+    }
+    try {
+      await dispatch({ type: 'LOAD_LAYOUT' })
+      const result = lastSent('LAYOUT_DATA')?.result
+      assertEqual(result?.status, 'ok', 'B1d wrapper-shaped read → status ok')
+      assertEqual(result?.data?.marker, 'wrapped-read', 'B1d wrapper payload is parsed')
+    } finally {
+      storage.read = originalRead
+    }
+  }
 
   // B2 — fresh-install regression: save → reload round-trips through disk.
   mem.clear(); written.length = 0; sent.length = 0

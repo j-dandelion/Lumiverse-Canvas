@@ -272,6 +272,7 @@ Any path that changes a drawer width in DOM/CSS must commit it via `handles.ts:p
 
 ## 24. Persistence hardening
 
+- **Backend read failures (LUMI-34):** storage reads accept a string or `{ data: string }`; only the host's `File not found` rejection means absent. Propagate other failures as `read failed` so the frontend leaves the affected repo unarmed and the next save cannot replace a layout it failed to read.
 - **Backend save failures surface (review B2/B3):** `saveLayout`/`saveSettings` rethrow after logging → the IPC ack is `{status:'error'}`; `persistModel` clears `_lastPersistedLayout` on failure so the next reconcile retries. Do not re-swallow the error.
 - **Canvas width vars are the ONLY live names (review B5):** `--sidebar-ux-secondary-w` / `--sidebar-ux-main-mirror-w` from `styles.ts`. `--canvas-secondary-width` / `--canvas-main-mirror-width` are DEAD — `observe()` reading the dead name adopted 420 over a user resize.
 - **Hidden-secondary order diff (review B4):** `diffSetOrder` excludes hidden keys on BOTH sides for `secondary` (the host derives secondary order from visible buttons and appends hidden ones — an included hidden key can never converge). `primary` keeps every id because `reorderHostMainTabButtons` needs the full list. Do not "unify" the two sides.

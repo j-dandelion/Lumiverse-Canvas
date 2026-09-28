@@ -22,7 +22,6 @@ Migrated from WORKFLOW.md (dropped 2026-09-27; full archive: `~/Documents/plans/
 
 ## Low-severity review items (report §L, 2026-09-12 adversarial round)
 
-- `readJsonFile` maps any storage read error to "missing".
 - `hydrateModeLayoutSlots` keeps absent slots across hot reloads.
 - Header title ignores the never-hide-all rescue tab.
 - `applySyncFromHost` duplicate-key active (boundary case).
