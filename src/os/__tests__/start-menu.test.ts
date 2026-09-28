@@ -85,9 +85,13 @@ mock.module('../start-menu-styles', () => ({
   START_MENU_STYLE_ID: 'canvas-os-start-menu-styles',
 }))
 
+// MAC1 DOM tests inject host-unbacked recovered keys into the model
+// without disturbing the other blocks (makeModel is re-read on every open).
+const extraPrimary: string[] = []
+
 function makeModel() {
   return {
-    primary: [KEY_A, KEY_B],
+    primary: [KEY_A, KEY_B, ...extraPrimary],
     secondary: [KEY_C, KEY_HIDDEN],
     hidden: [KEY_HIDDEN],
     menuHidden: [KEY_HIDDEN],
@@ -135,7 +139,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assert(entries.find((e) => e.liveId === 'a:2')?.menuHidden === false, 'menu-visible tab not flagged')
 }
 
-// ── RAC2/AAC1 (LUMI-26): launchable windows only — unbacked keys are skipped in BOTH projections ──
+// ── RAC2 (LUMI-26): launchable windows only — the NORMAL projection skips unbacked keys ──
 {
   // A builtin key whose resolved live id has NO drawer-inventory backing:
   // identity's bare-builtin passthrough fabricates 'ghost' — the host does
@@ -143,30 +147,24 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   // keys resolve to null and were already skipped.
   const unbackedModel = {
     ...makeModel(),
-    primary: [KEY_A, 'builtin:ghost'] as string[],
+    primary: [KEY_A, 'builtin:ghost', 'ext:hone/Main'] as string[],
     closed: [] as string[],
   }
   const ghostResolve = (key: string) => (key === 'builtin:ghost' ? 'ghost' : liveIds.get(key) ?? null)
   const normal = deriveStartMenuEntries(unbackedModel, ghostResolve)
   assertEqual(normal.length, 2, 'RAC2: unbacked non-closed key absent from the NORMAL projection')
   assert(!normal.some((e) => e.key === 'builtin:ghost'), 'RAC2: no ghost row (normal)')
-  const manage = deriveStartMenuEntries(unbackedModel, ghostResolve, storeTabs, { manageMode: true })
-  assert(!manage.some((e) => e.key === 'builtin:ghost'), 'RAC2: unbacked key absent from the MANAGE projection too')
+  assert(!normal.some((e) => e.key === 'ext:hone/Main'), 'RAC2: unresolvable ext key absent (normal)')
 
-  // Amendment 2 (AAC1): a CLOSED unbacked key is skipped in BOTH projections
-  // too — a listed row whose launch cannot resolve is a dead control; the
-  // D6 reopen memory only applies to backed windows (their host button
-  // survives a close). Configure Tabs is the unbacked tabs' surface.
+  // Amendment 2 (AAC1): a CLOSED unbacked key is skipped from the NORMAL
+  // projection too — a listed row whose launch cannot resolve is a dead
+  // control; the D6 reopen memory only applies to backed windows (their
+  // host button survives a close).
   const closedUnbacked = { ...unbackedModel, closed: ['builtin:ghost'] as string[] }
   assertEqual(
     deriveStartMenuEntries(closedUnbacked, ghostResolve).some((e) => e.key === 'builtin:ghost'),
     false,
     'AAC1: closed unbacked key skipped from the NORMAL projection (dead-row guard)',
-  )
-  assertEqual(
-    deriveStartMenuEntries(closedUnbacked, ghostResolve, storeTabs, { manageMode: true }).some((e) => e.key === 'builtin:ghost'),
-    false,
-    'AAC1: closed unbacked key skipped from the MANAGE projection too',
   )
 
   // D6 regression guard: a CLOSED + BACKED key still lists (launch resolves).
@@ -182,6 +180,45 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   const backed = deriveStartMenuEntries(backedModel, backedResolve)
   assert(backed.some((e) => e.key === 'builtin:profile' && e.title === 'Profile'),
     'RAC2: backed key keeps its inventory title and row')
+}
+
+// ── MAC1 (LUMI-26 Amendment 3): the MANAGE projection is the COMPLETE model inventory ──
+// Unbacked keys — fabricated-builtin or unresolvable-ext — list as
+// non-launchable rows (launchable: false); NORMAL stays launchable-only.
+{
+  const unbackedModel = {
+    ...makeModel(),
+    primary: [KEY_A, 'builtin:ghost', 'ext:hone/Main'] as string[],
+    closed: [] as string[],
+  }
+  const ghostResolve = (key: string) => (key === 'builtin:ghost' ? 'ghost' : liveIds.get(key) ?? null)
+  const manage = deriveStartMenuEntries(unbackedModel, ghostResolve, storeTabs, { manageMode: true })
+  const ghost = manage.find((e) => e.key === 'builtin:ghost')
+  const ext = manage.find((e) => e.key === 'ext:hone/Main')
+  assert(!!ghost, 'MAC1: fabricated-builtin unbacked key listed in MANAGE projection')
+  assert(!!ext, 'MAC1: unresolvable ext key listed in MANAGE projection too')
+  assertEqual(ghost?.launchable, false, 'MAC1: unbacked builtin row is non-launchable')
+  assertEqual(ext?.launchable, false, 'MAC1: unbacked ext row is non-launchable')
+  assertEqual(ghost?.title, 'Ghost', 'MAC1: unbacked row title humanized (never a raw key)')
+  assertEqual(ext?.title, 'Main', 'MAC1: unbacked ext row title from the humanized key chain')
+  assertEqual(ext?.liveId, '', 'MAC1: unresolvable ext row carries no live id (nothing to launch)')
+  // Backed rows in the same projection stay launchable.
+  assert(manage.find((e) => e.key === KEY_A)?.launchable === true,
+    'MAC1: backed rows stay launchable in the manage projection')
+
+  // Amendment 3 keeps amendment 2's NORMAL rule intact.
+  const normal = deriveStartMenuEntries(unbackedModel, ghostResolve)
+  assert(!normal.some((e) => !e.launchable), 'MAC1: NORMAL projection still lists launchable windows only')
+
+  // Tally: the manage inventory count includes unbacked rows — it derives
+  // from the entries array (entries.length / menuHidden filter in buildMenu,
+  // verified at DOM level in the MAC1 DOM block below).
+  const closedUnbacked = { ...unbackedModel, closed: ['builtin:ghost'] as string[] }
+  const closedManage = deriveStartMenuEntries(closedUnbacked, ghostResolve, storeTabs, { manageMode: true })
+  const closedGhost = closedManage.find((e) => e.key === 'builtin:ghost')
+  assert(!!closedGhost, 'MAC1: closed unbacked key lists in MANAGE (complete inventory)')
+  assertEqual(closedGhost?.launchable, false, 'MAC1: closed unbacked manage row stays non-launchable')
+  assertEqual(closedGhost?.state, 'closed', 'MAC1: closed unbacked row keeps its window-lifecycle mark')
 }
 
 // ── menu projection reads ONLY menuHidden (LUMI-16b) — strip `hidden` is not a menu concern ──
@@ -792,9 +829,66 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   }
   const coreEntries = deriveStartMenuEntries(coreModel, resolve, storeTabs, { manageMode: true })
   assertEqual(coreEntries[0]?.locked, true, 'manage: core tab flagged locked')
+}
 
-  // Close resets the mode: the next open is NORMAL view again.
+// ── (6b) MAC1 (Amendment 3): manage projection lists host-unbacked keys ──
+{
+  dispatchedIntents.length = 0
+  extraPrimary.length = 0
+  extraPrimary.push('builtin:ghost', 'ext:hone/Main')
+  // Test (6) left the menu open in MANAGE mode — reset so the fresh open
+  // starts in NORMAL view.
   hideStartMenu({ immediate: true })
+  const { menu } = openFreshMenu()
+  try {
+    // NORMAL view: unbacked keys still skipped (amendment 2 stands).
+    const normalItems = ((menu.children[2] as FakeEl).children).filter((c) => c.tagName === 'BUTTON')
+    assertEqual(normalItems.length, 3, 'MAC1 DOM: normal view lists launchable windows only (unbacked skipped)')
+
+    // Flip to manage mode: the recovered rows re-enter as dimmed, hinted,
+    // non-launchable checkbox rows.
+    const header = menu.children[0] as FakeEl
+    ;(header.children.find((c) => c.tagName === 'BUTTON' && c.className.includes('__manage')) as FakeEl)!.click()
+    const manageItems = ((menu.children[2] as FakeEl).children).filter((c) => c.tagName === 'BUTTON')
+    assertEqual(manageItems.length, 6, 'MAC1 DOM: manage lists the COMPLETE model inventory (4 backed + 2 unbacked)')
+    const unbackedRows = manageItems.filter((r) => r.className.includes('row-unbacked'))
+    assertEqual(unbackedRows.length, 2, 'MAC1 DOM: both unbacked rows dimmed (row-unbacked)')
+    for (const row of unbackedRows) {
+      assertEqual(row.getAttribute('aria-disabled'), 'true', 'MAC1 DOM: unbacked row aria-disabled (no launch)')
+      assert(!row.children.some((c) => c.className.includes('__verb')),
+        'MAC1 DOM: unbacked row has no launch verb')
+      // The hint lives inside the status span (where the launch verb sits).
+      const status = row.children.find((c) => c.className.includes('__status'))
+      assert(!!status && status.children.some((c) => c.className.includes('__unbacked-hint') && /unhide/i.test(c.textContent)),
+        'MAC1 DOM: unbacked row carries the waiting-on-vanilla hint')
+      const cb = row.children.find((c) => c.tagName === 'INPUT' && c.className.includes('__check')) as FakeEl | undefined
+      assert(!!cb, 'MAC1 DOM: unbacked row carries a working eye checkbox')
+    }
+    // Tally counts the full manage inventory (derives from the entries array).
+    const header2 = menu.children[0] as FakeEl
+    const countText = (header2.children[header2.children.length - 1] as FakeEl).textContent
+    assertEqual(countText, '6 panels · 1 hidden', 'MAC1 DOM: tally counts the full manage inventory')
+
+    // The checkbox is functional on an unbacked row (menuHidden is Canvas
+    // state, independent of host backing).
+    dispatchedIntents.length = 0
+    const ghostRow = manageItems.find(
+      (r) => r.className.includes('row-unbacked') && (r.children.find((c) => c.className.includes('__label')) as FakeEl | undefined)?.textContent === 'Ghost',
+    )!
+    const ghostCb = ghostRow.children.find((c) => c.tagName === 'INPUT') as FakeEl
+    ;(ghostCb as unknown as { checked: boolean }).checked = false
+    ghostCb.fireChange()
+    assertEqual(dispatchedIntents.length, 1, 'MAC1 DOM: unbacked row checkbox dispatches the menu intent')
+    assertEqual(dispatchedIntents[0]?.t, 'setMenuHidden', 'MAC1 DOM: unbacked checkbox uses setMenuHidden (never the strip axis)')
+    assertEqual(dispatchedIntents[0]?.key, 'builtin:ghost', 'MAC1 DOM: intent keyed by the model TabKey')
+  } finally {
+    extraPrimary.length = 0
+    hideStartMenu({ immediate: true })
+  }
+}
+
+// ── (7) close resets the mode (transient per open) ──
+{
   const reopened = openFreshMenu()
   assertEqual(reopened.menu.getAttribute('data-manage-mode'), null, 'manage: close resets the mode (transient per open)')
   const reopenedItems = ((reopened.menu.children[2] as FakeEl).children).filter((c) => c.tagName === 'BUTTON')

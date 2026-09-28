@@ -257,7 +257,7 @@ export type RecoveredEntriesModel = {
  * prevents, so it carries a waiting-on-vanilla hint instead of the regular
  * launch blurb.
  */
-const RECOVERED_WAITING_DESCRIPTION =
+export const RECOVERED_WAITING_DESCRIPTION =
   'Hidden in Lumiverse — unhide it in Lumiverse\u2019s Configure Tabs to bring it back here'
 
 export function supplementCatalogWithRecoveredEntries(

@@ -153,6 +153,19 @@ export const START_MENU_CSS = `
   .canvas-os-start-menu__item.row-hidden {
     opacity: 0.55;
   }
+  /* LUMI-26 Amendment 3: host-unbacked manage row — dimmed (waiting on the
+     vanilla side); the hint text sits where the launch verb would be. */
+  .canvas-os-start-menu__item.row-unbacked {
+    opacity: 0.55;
+  }
+  .canvas-os-start-menu__unbacked-hint {
+    font-size: 10px;
+    opacity: 0.75;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Visibility checkbox — checked = visible (Configure semantics). */
   .canvas-os-start-menu__check {
     flex-shrink: 0;
