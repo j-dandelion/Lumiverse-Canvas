@@ -16569,9 +16569,15 @@ function createResizeHandle(direction, onResize, onResizeEnd, enabled) {
       const delta = dragDirection === "right" ? e.clientX - startX : startX - e.clientX;
       onResize(startWidth, delta);
     };
-    const onUp = () => {
+    let finished = false;
+    const onFinish = () => {
+      if (finished)
+        return;
+      finished = true;
       document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointerup", onFinish);
+      document.removeEventListener("pointercancel", onFinish);
+      window.removeEventListener("blur", onFinish);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       _resizeDragging = false;
@@ -16580,7 +16586,9 @@ function createResizeHandle(direction, onResize, onResizeEnd, enabled) {
       onResizeEnd();
     };
     document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointerup", onFinish);
+    document.addEventListener("pointercancel", onFinish);
+    window.addEventListener("blur", onFinish);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   });
