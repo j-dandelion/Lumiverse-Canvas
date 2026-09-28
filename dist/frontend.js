@@ -2996,7 +2996,7 @@ function supplementCatalogWithRecoveredEntries(catalog, model) {
 function isHideLocked(tabId) {
   return isCoreTabId(tabId);
 }
-var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS, RECOVERED_WAITING_DESCRIPTION = "Hidden in Lumiverse — unhide it in Lumiverse’s Configure Tabs to bring it back here";
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS, RECOVERED_WAITING_DESCRIPTION = "Hidden in Lumiverse’s settings — restore to bring it back here";
 var init_configure_catalog = __esm(() => {
   init_store();
   init_core_tabs();
@@ -3541,6 +3541,48 @@ async function writeHostDrawerSettingsViaApi(patch) {
   } catch (err) {
     dlog("writeHostDrawerSettingsViaApi: failed", String(err));
     return false;
+  }
+}
+async function restoreVanillaHiddenTab(vanillaId) {
+  try {
+    const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
+    const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(5000) : undefined;
+    const initBase = signal ? { signal } : {};
+    const res = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    if (!res.ok) {
+      dlog("restoreVanillaHiddenTab: read failed", res.status);
+      return "failed";
+    }
+    const row = await res.json();
+    let current = {};
+    if (row && typeof row.value === "object" && row.value !== null) {
+      current = row.value;
+    }
+    const list = Array.isArray(current.hiddenTabIds) ? current.hiddenTabIds : [];
+    if (!list.includes(vanillaId))
+      return "not-hidden";
+    const next = list.filter((id) => id !== vanillaId);
+    const put = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: { ...current, hiddenTabIds: next } })
+    });
+    if (!put.ok) {
+      dlog("restoreVanillaHiddenTab: write rejected", put.status);
+      return "failed";
+    }
+    dlog("restoreVanillaHiddenTab: ok", { vanillaId, removed: 1 });
+    return "restored";
+  } catch (err) {
+    dlog("restoreVanillaHiddenTab: failed", String(err));
+    return "failed";
   }
 }
 var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
@@ -6793,6 +6835,7 @@ function createMenuEntry(entry, targetSide) {
   const status = document.createElement("span");
   status.className = "canvas-os-start-menu__status";
   status.setAttribute("aria-hidden", "true");
+  let unbackedHint = null;
   if (entry.launchable) {
     const markSvg = STATE_MARK_SVG[entry.state];
     if (markSvg) {
@@ -6810,6 +6853,7 @@ function createMenuEntry(entry, targetSide) {
     hint.className = "canvas-os-start-menu__unbacked-hint";
     hint.textContent = RECOVERED_WAITING_DESCRIPTION;
     status.appendChild(hint);
+    unbackedHint = hint;
   }
   item.append(rail, tile, label, status);
   if (entry.launchable) {
@@ -6817,8 +6861,25 @@ function createMenuEntry(entry, targetSide) {
       hideStartMenu();
       openWindowInDrawerByLiveId(entry.liveId, targetSide);
     });
+  } else {
+    item.addEventListener("click", () => {
+      clickRestoreVanilla(entry, unbackedHint);
+    });
   }
   return item;
+}
+async function clickRestoreVanilla(entry, hintEl) {
+  const vanillaId = parseBuiltinKey(entry.key) ?? entry.key;
+  if (hintEl)
+    hintEl.textContent = "Restoring…";
+  const result = await restoreVanillaHiddenTab(vanillaId);
+  if (result === "failed") {
+    if (hintEl)
+      hintEl.textContent = "Restore failed — try again or use Lumiverse’s Configure Tabs";
+    return;
+  }
+  hideStartMenu();
+  window.location.reload();
 }
 function createManageRow(entry, targetSide, onMenuHiddenChange) {
   const row = createMenuEntry(entry, targetSide);
@@ -7332,6 +7393,7 @@ function teardownStartMenu() {
 var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _manageMode = false, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>', START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
   init_configure_catalog();
+  init_host_settings();
   init_layout_model();
   init_dispatch();
   init_store();
@@ -10155,6 +10217,9 @@ var init_second_drawer_mode = __esm(() => {
 });
 
 // src/tabs/configure-modal.tsx
+function restoreStateOk(r) {
+  return r === "restored" || r === "not-hidden";
+}
 function injectModalStyles() {
   if (typeof document === "undefined")
     return;
@@ -10527,6 +10592,24 @@ function injectModalStyles() {
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       color: var(--lumiverse-text-dim, #888);
+    }
+    /* LUMI-26 Amendment 4: Restore button on vanilla-hidden recovered rows. */
+    .canvas-configure-tabs-restore {
+      flex-shrink: 0;
+      margin-left: 8px;
+      padding: 4px 10px;
+      border: 1px solid var(--lumiverse-border, #555);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--lumiverse-primary, #7c9cff) 22%, transparent);
+      color: var(--lumiverse-text-primary, #eee);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .canvas-configure-tabs-restore:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
 
     /* ── Toggle switch (unified Canvas switch spec — shared with the
@@ -11291,6 +11374,34 @@ function ConfigureTabsModalInner(props) {
               ]
             })
           ]
+        }),
+        description === RECOVERED_WAITING_DESCRIPTION && /* @__PURE__ */ u3("button", {
+          class: "canvas-configure-tabs-restore",
+          title: "Hidden in Lumiverse's settings — click to bring it back",
+          onClick: async (e) => {
+            e.stopPropagation();
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            btn.textContent = "Restoring…";
+            const result = await restoreVanillaHiddenTab(tab.id);
+            if (restoreStateOk(result)) {
+              btn.textContent = "Restored — reloading…";
+              setTimeout(() => {
+                window.location.reload();
+              }, 900);
+            } else {
+              btn.disabled = false;
+              btn.textContent = result === "not-hidden" ? "Already restored — reloading…" : "Restore failed — retry";
+              if (result === "not-hidden") {
+                setTimeout(() => {
+                  window.location.reload();
+                }, 900);
+              }
+            }
+          },
+          onPointerDown: (e) => e.stopPropagation(),
+          onMouseDown: (e) => e.stopPropagation(),
+          children: "Restore"
         }),
         /* @__PURE__ */ u3("button", {
           class: `canvas-configure-tabs-toggle${!isHidden ? " toggle-on" : ""}`,
