@@ -14,6 +14,7 @@ import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { isMobileViewport } from './mobile-exclusion'
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { updateDockOffsets } from './dock-offset'
+import { isInstanceActive } from '../lifecycle/instance'
 
 /** html class while strip gutters are active. */
 export const STRIP_GUTTER_CLASS = 'sidebar-ux-strip-gutters'
@@ -133,6 +134,7 @@ export function clearStripGutters(): void {
  * presence. Does not read open-drawer widths.
  */
 export function updateStripGutters(): void {
+  if (!isInstanceActive()) return
   // S8: Top/Bottom has no left/right strip gutter on any platform — the
   // Landing/chat top-bottom reserve is CSS-owned (HORIZONTAL_STRIP_CSS).
   if (isHorizontalStrip()) {

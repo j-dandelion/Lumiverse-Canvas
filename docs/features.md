@@ -21,6 +21,10 @@ interface CanvasFeature {
 2. **`mount()`** — Runs when the feature's setting is truthy. Returns a teardown function added to the global cleanup chain.
 3. **`apply()`** — Called on every settings diff where `prev[id] !== next[id]`. Mounts/unmounts at runtime.
 
+### Teardown quiescence
+
+`setup()` ends the lifecycle before running cleanups. The cleanup chain performs its final `flushPendingSaves()` while the persistence repos are still armed; the returned teardown then disarms both repos, clears the settings-repo backend context, and releases the settings panel context. A stale `setSettings()` after teardown therefore reaches neither feature `apply()` nor `SAVE_SETTINGS`. Boot/apply entries `updateStripGutters`, `updateDockOffsets`, and `syncOsMobileDrawerMode` also return when `isInstanceActive()` is false; teardown removals remain callable. See [pitfalls.md §27](pitfalls.md#27-post-teardown-async-continuations-are-lifecycle-guarded-lumi-21) for the complete guard family and regression coverage.
+
 ### Registered Features (in order)
 
 | Feature | Setting ID | Description |

@@ -67,12 +67,36 @@ class StubElement {
 
 const bodyStub = new StubElement()
 const htmlStub = new StubElement()
+const htmlStyleValues = new Map<string, string>()
+const dockInsetValues = new Map<string, string>([
+  ['--spindle-dock-left', '36px'],
+  ['--spindle-dock-right', '0px'],
+])
+const dockAppStub = new StubElement()
+const dockPanelStub = new StubElement()
+const dockStripStub = new StubElement()
+let dockScenarioEnabled = false
+let mobileViewportMatch = false
+const testSettings: Record<string, any> = {
+  secondSidebarEnabled: true,
+  taskbarMode: true,
+  moveControlsToOuterEdge: true,
+  drawerLocation: 'sides',
+  osMode: false,
+  osForcedSingleDrawer: false,
+}
+const settingsPatches: Array<Record<string, unknown>> = []
+const modeSwitchRequests: unknown[][] = []
 // Reflow/style writes go through documentElement.style.
 ;(htmlStub as any).style = {
-  setProperty: () => {},
-  removeProperty: () => {},
-  getPropertyValue: () => '',
+  setProperty: (key: string, value: string) => { htmlStyleValues.set(key, value) },
+  removeProperty: (key: string) => { htmlStyleValues.delete(key) },
+  getPropertyValue: (key: string) => htmlStyleValues.get(key) ?? '',
 }
+;(dockAppStub as any).style = {
+  getPropertyValue: (key: string) => dockInsetValues.get(key) ?? '',
+}
+dockStripStub.classList.add('sidebar-ux-side-left')
 
 ;(globalThis as any).document = {
   documentElement: htmlStub,
@@ -80,19 +104,31 @@ const htmlStub = new StubElement()
   head: new StubElement(),
   createElement: (_tag: string) => new StubElement(),
   getElementById: (_id: string) => null,
-  querySelector: (_sel: string) => null,
-  querySelectorAll: (_sel: string) => [] as StubElement[],
+  querySelector: (sel: string) =>
+    dockScenarioEnabled && sel === '[data-app-root]' ? dockAppStub : null,
+  querySelectorAll: (sel: string) => {
+    if (!dockScenarioEnabled) return [] as StubElement[]
+    if (sel === '.sidebar-ux-tab-list-pin-host') return [dockStripStub]
+    if (sel === 'div') return [dockPanelStub]
+    return [] as StubElement[]
+  },
   addEventListener() {},
   removeEventListener() {},
 }
 ;(globalThis as any).window = {
-  matchMedia: (_q: string) => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  matchMedia: (_q: string) => ({ matches: mobileViewportMatch, addEventListener() {}, removeEventListener() {} }),
   addEventListener() {},
   removeEventListener() {},
+  getComputedStyle: (el: any) => el === dockPanelStub
+    ? {
+        position: 'fixed', zIndex: '9980', top: '0px', bottom: '0px',
+        left: el.style.left || '0px', right: el.style.right || 'auto',
+      }
+    : { display: '', visibility: '' },
 }
 ;(globalThis as any).MutationObserver = class { observe() {} disconnect() {} }
 ;(globalThis as any).ResizeObserver = class { observe() {} disconnect() {} }
-;(globalThis as any).getComputedStyle = () => ({ display: '', visibility: '' })
+;(globalThis as any).getComputedStyle = (el: any) => (globalThis as any).window.getComputedStyle(el)
 // Synchronous presence path (no rAF in this harness).
 ;(globalThis as any).requestAnimationFrame = undefined
 
@@ -103,11 +139,12 @@ mock.module('../../settings/state', () => ({
   isHorizontalStrip: () => false,
   getStripEdge: () => null,
   getSettings: () => ({
-    secondSidebarEnabled: true,
-    taskbarMode: true,
-    moveControlsToOuterEdge: true,
-    drawerLocation: 'sides',
+    ...testSettings,
   }),
+  setSettings: (patch: Record<string, unknown>) => {
+    Object.assign(testSettings, patch)
+    settingsPatches.push({ ...patch })
+  },
   isTaskbarModeEnabled: () => true,
 }))
 
@@ -129,6 +166,12 @@ mock.module('../../store', () => ({
   getDrawerTabs: () => [],
 }))
 
+mock.module('../../settings/second-drawer-mode', () => ({
+  requestSecondDrawerMode: async (...args: unknown[]) => {
+    modeSwitchRequests.push(args)
+  },
+}))
+
 // ── Imports (real guard seams under test) ────────────────────────────────
 
 const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
@@ -146,6 +189,9 @@ const {
 } = await import('../main-mirror-drawer')
 const { ensureSecondaryShellMounted, mountSecondarySidebar } = await import('../secondary')
 const { CANVAS_MAIN_ACTIVE_CLASS } = await import('../styles')
+const { updateStripGutters, clearStripGutters, STRIP_GUTTER_CLASS, STRIP_L_VAR } = await import('../strip-gutter')
+const { updateDockOffsets, __resetDockOffsetForTest, DOCK_EDGE_OFFSET_PX } = await import('../dock-offset')
+const { syncOsMobileDrawerMode } = await import('../../os/os-mode')
 
 const bodyChildCount = () => bodyStub.children.length
 
@@ -202,11 +248,89 @@ describe('LUMI-21 rework: teardown applicator quiesce', () => {
   })
 
   test('off→on: the re-enabled instance passes the guards again', () => {
-    beginLifecycle() // fresh boot (fresh module graph in production)
+    const gen = beginLifecycle() // fresh boot (fresh module graph in production)
     const host = ensureMainPinHost('left')
     expect(host).not.toBeNull()
     expect(bodyChildCount()).toBe(1)
     destroyMainPinHost()
     expect(bodyChildCount()).toBe(0)
+    endLifecycle(gen)
+  })
+
+  test('strip gutters work live, no-op after teardown, and work after re-enable', () => {
+    const gen = beginLifecycle()
+    clearStripGutters()
+    updateStripGutters()
+    expect(htmlStub.classList.contains(STRIP_GUTTER_CLASS)).toBe(true)
+    expect(htmlStyleValues.get(STRIP_L_VAR)).toBe('56px')
+
+    endLifecycle(gen)
+    clearStripGutters() // teardown's explicit clear remains allowed
+    updateStripGutters()
+    expect(htmlStub.classList.contains(STRIP_GUTTER_CLASS)).toBe(false)
+    expect(htmlStyleValues.has(STRIP_L_VAR)).toBe(false)
+
+    const nextGen = beginLifecycle()
+    updateStripGutters()
+    expect(htmlStub.classList.contains(STRIP_GUTTER_CLASS)).toBe(true)
+    expect(htmlStyleValues.get(STRIP_L_VAR)).toBe('56px')
+    clearStripGutters()
+    endLifecycle(nextGen)
+  })
+
+  test('dock offsets work live, no-op after teardown, and work after re-enable', () => {
+    __resetDockOffsetForTest()
+    dockScenarioEnabled = true
+    const gen = beginLifecycle()
+    updateDockOffsets()
+    expect(dockPanelStub.style.left).toBe(`${DOCK_EDGE_OFFSET_PX}px`)
+
+    endLifecycle(gen)
+    dockPanelStub.style.left = ''
+    updateDockOffsets()
+    expect(dockPanelStub.style.left).toBe('')
+
+    const nextGen = beginLifecycle()
+    updateDockOffsets()
+    expect(dockPanelStub.style.left).toBe(`${DOCK_EDGE_OFFSET_PX}px`)
+    endLifecycle(nextGen)
+    dockScenarioEnabled = false
+    __resetDockOffsetForTest()
+    dockPanelStub.style.left = ''
+  })
+
+  test('OS mobile sync works live, no-ops after teardown, and works after re-enable', async () => {
+    mobileViewportMatch = true
+    testSettings.osMode = true
+    testSettings.secondSidebarEnabled = true
+    testSettings.osForcedSingleDrawer = false
+    settingsPatches.length = 0
+    modeSwitchRequests.length = 0
+
+    const gen = beginLifecycle()
+    await syncOsMobileDrawerMode()
+    expect(settingsPatches).toEqual([{ osForcedSingleDrawer: true }])
+    expect(modeSwitchRequests).toEqual([[false, { silent: true }]])
+
+    endLifecycle(gen)
+    settingsPatches.length = 0
+    modeSwitchRequests.length = 0
+    await syncOsMobileDrawerMode()
+    expect(settingsPatches).toEqual([])
+    expect(modeSwitchRequests).toEqual([])
+
+    testSettings.osForcedSingleDrawer = false
+    const nextGen = beginLifecycle()
+    await syncOsMobileDrawerMode()
+    expect(settingsPatches).toEqual([{ osForcedSingleDrawer: true }])
+    expect(modeSwitchRequests).toEqual([[false, { silent: true }]])
+    endLifecycle(nextGen)
+
+    mobileViewportMatch = false
+    Object.assign(testSettings, {
+      osMode: false,
+      secondSidebarEnabled: true,
+      osForcedSingleDrawer: false,
+    })
   })
 })

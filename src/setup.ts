@@ -32,7 +32,7 @@
 // (+ activeTabId) are always saved and restored.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
-import { mountSettingsPanel } from './settings/panel'
+import { clearSettingsPanelContext, mountSettingsPanel } from './settings/panel'
 import { getBackendCtx, setBackendCtx, CANVAS_VERSION } from './persist/backend-ctx'
 import { applyMainDrawer } from './layout/main-restore'
 import { flushPendingSaves, cancelLayoutSave, cancelLoadSavedLayout } from './persist/layout-load'
@@ -622,8 +622,15 @@ export function setup(ctx: SpindleFrontendContext) {
     cleanupAll()
     // Keep the load guard active while cleanup tears down observers. This
     // prevents stopMainDrawerPersistence from saving host defaults during
-    // hydration; cancellation is the final teardown step.
+    // hydration; cancel the load before disarming persistence below.
     cancelLoadSavedLayout()
+    // The cleanup chain above owns the intended final persistence flush.
+    // Disarm only after it has run so later continuations cannot write through
+    // either repo or the settings panel's retained backend context.
+    disarmLayoutRepo()
+    disarmSettingsRepo()
+    setSettingsRepoBackendCtx(null)
+    clearSettingsPanelContext()
     if (getBackendCtx() === ctx) setBackendCtx(null)
     // Clear the host-bridge context only AFTER the cleanup chain has fully
     // run (2026-09-12): feature teardowns use ctx.ui for built-in tab restore.

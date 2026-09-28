@@ -135,6 +135,11 @@ const DEBUG_HINT =
 // ctx to feed feature.apply().
 let _settingsPanelCtx: SpindleFrontendContext | null = null
 
+/** Release the setup context once the owning extension instance is torn down. */
+export function clearSettingsPanelContext(): void {
+  _settingsPanelCtx = null
+}
+
 /** Mobile viewport check local to this module (no sidebar/mobile-exclusion
  *  import — that module pulls the whole shell graph). */
 function _isMobileViewportForPanel(): boolean {

@@ -72,6 +72,7 @@ import {
 } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 import { takeOsConfigureWillRestore } from './os-configure-gate'
+import { isInstanceActive } from '../lifecycle/instance'
 
 // ── OS + mobile single-drawer force ──────────────────────────────────────────
 //
@@ -132,6 +133,7 @@ let _mobileDrawerSyncNested = false
  * other joins await the shared promise as before.
  */
 export function syncOsMobileDrawerMode(opts?: { nested?: boolean }): Promise<void> {
+  if (!isInstanceActive()) return Promise.resolve()
   const nested = !!opts?.nested
   if (_mobileDrawerSync) {
     if (nested && !_mobileDrawerSyncNested) {

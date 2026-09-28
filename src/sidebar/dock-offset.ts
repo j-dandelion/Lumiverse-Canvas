@@ -25,6 +25,7 @@
 
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { dlog } from '../debug/log'
+import { isInstanceActive } from '../lifecycle/instance'
 
 /** Strip width dock panels are shifted by (matches TAB_LIST_WIDTH_PX). */
 export const DOCK_EDGE_OFFSET_PX = TAB_LIST_WIDTH_PX
@@ -146,6 +147,7 @@ function dockEdgeOf(
  * add/remove/expand/collapse/resize) — recomputes from the live DOM.
  */
 export function updateDockOffsets(): void {
+  if (!isInstanceActive()) return
   if (typeof document === 'undefined' || typeof window === 'undefined') return
   // No dock inset anywhere → no dock panel to offset.
   const dock = getDockInsets()
