@@ -203,6 +203,15 @@ Instrument the *decision points* (open gates, heal, adoption, restore clicks) wi
 - **Sheet lifecycle:** inject in `buildMenu` (`injectStyles` is idempotent),
   remove in `teardownStartMenu` + the `setup.ts` cleanup sweep. Removing it in
   `hideStartMenu` would strip the styles mid-close-animation.
+- **The count line renders once per `buildMenu`.** The header's `N panels ·
+  M hidden` text is written by `createHeader` at build time and is not
+  reactive: on a manage-checkbox toggle it moves only via the optimistic
+  handler's callback (`refreshCount` re-reads the shared `entries` array
+  AFTER `entry.menuHidden` flips — LUMI-24). A `menuHidden` writer outside
+  the checkbox (there are none today — LUMI-23 keeps the launch path a
+  no-writer — but future ones count) will NOT move the tally until the next
+  rebuild (manage flip / reopen); refresh it there too rather than assuming
+  the line live-tracks the model.
 - **Test-harness footer:** the visual-pins file must keep `FAILED: ${failed}` +
   `process.exitCode = 1` (the runner only fails on non-zero exit /
   `FAILED: [1-9]`); import only leaf modules so `bun run` does not drag the

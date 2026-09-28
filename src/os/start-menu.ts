@@ -355,6 +355,9 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
  * (Configure Tabs semantics, mirrored for the menu's own set).
  * Hidden-in-menu rows render dimmed (`row-hidden` precedent).
  *
+ * `onMenuHiddenChange` (LUMI-24) fires after the optimistic entry flip so
+ * the caller can refresh the header's "N panels · M hidden" tally live.
+ *
  * The checkbox dispatches the START-MENU-ONLY intent
  * `{t:'setMenuHidden', key, hidden}` (LUMI-16b) — NEVER the strip
  * `setHidden` (that bit drives the strips via Configure Tabs) and NOT the
@@ -371,7 +374,11 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
  * unless the `coreTabsHidden` setting is on — the same unlock rule the
  * Configure toggle applies.
  */
-function createManageRow(entry: StartMenuEntry, targetSide: Side): HTMLElement {
+function createManageRow(
+  entry: StartMenuEntry,
+  targetSide: Side,
+  onMenuHiddenChange?: (nowMenuHidden: boolean) => void,
+): HTMLElement {
   const row = createMenuEntry(entry, targetSide)
   row.classList.add('canvas-os-start-menu__item--manage')
   if (entry.menuHidden) row.classList.add('row-hidden')
@@ -400,6 +407,9 @@ function createManageRow(entry: StartMenuEntry, targetSide: Side): HTMLElement {
     const nowMenuHidden = !checkbox.checked
     entry.menuHidden = nowMenuHidden
     row.classList.toggle('row-hidden', nowMenuHidden)
+    // Live header tally (LUMI-24): runs AFTER the entry flip above so the
+    // refresh re-reads the shared entries array with the new membership.
+    onMenuHiddenChange?.(nowMenuHidden)
   })
   row.appendChild(checkbox)
   return row
@@ -432,6 +442,18 @@ export function renderEntryIcon(
 
 /** Manage (eye) toggle glyph — an eye, `currentColor` strokes. */
 const MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>'
+
+/**
+ * Count-line text: "N panels", plus manage mode's "· M hidden" tally.
+ * Shared by the header build AND the manage checkbox's live refresh
+ * (LUMI-24) so the two renderings can never drift.
+ */
+function countLine(count: number, hiddenCount: number, manageMode: boolean): string {
+  const panels = count === 1 ? '1 panel' : `${count} panels`
+  return manageMode
+    ? `${panels} · ${hiddenCount === 1 ? '1 hidden' : `${hiddenCount} hidden`}`
+    : panels
+}
 
 /**
  * Header strip: brand glyph + deck label + [manage toggle] + window count.
@@ -474,9 +496,7 @@ function createHeader(count: number, hiddenCount: number, manageMode: boolean): 
   // Count reads from the FULL inventory (both drawers); the menu-hidden
   // tally is manage mode's second line ("N panels · M hidden", LUMI-16a —
   // the tally reads the START-MENU-only set since LUMI-16b).
-  countEl.textContent = manageMode
-    ? `${count === 1 ? '1 panel' : `${count} panels`} · ${hiddenCount === 1 ? '1 hidden' : `${hiddenCount} hidden`}`
-    : count === 1 ? '1 panel' : `${count} panels`
+  countEl.textContent = countLine(count, hiddenCount, manageMode)
 
   header.append(chrome, manageBtn, countEl)
   return header
@@ -542,6 +562,19 @@ function buildMenu(targetSide: Side): HTMLElement | null {
     ev.stopPropagation()
     toggleManageMode(targetSide)
   })
+  // Live tally (LUMI-24): the manage checkbox's optimistic handler calls
+  // this to re-render the "N panels · M hidden" line in place — same shape
+  // as the row's in-place dim update, no rebuild. Re-reads the shared
+  // entries array, which the handler has already flipped.
+  const countEl = header.querySelector('span.canvas-os-start-menu__count') as HTMLSpanElement | null
+  const refreshCount = (): void => {
+    if (!countEl) return
+    countEl.textContent = countLine(
+      entries.length,
+      entries.filter((e) => e.menuHidden).length,
+      _manageMode,
+    )
+  }
   menu.appendChild(header)
   const divider = document.createElement('div')
   divider.className = 'canvas-os-start-menu__divider'
@@ -552,7 +585,9 @@ function buildMenu(targetSide: Side): HTMLElement | null {
   list.setAttribute('role', 'presentation')
   for (const entry of entries) {
     list.appendChild(
-      _manageMode ? createManageRow(entry, targetSide) : createMenuEntry(entry, targetSide),
+      _manageMode
+        ? createManageRow(entry, targetSide, refreshCount)
+        : createMenuEntry(entry, targetSide),
     )
   }
   menu.appendChild(list)

@@ -704,6 +704,10 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   assertEqual(dispatchedIntents[0]?.key, KEY_HIDDEN, 'manage: keyed by the model TabKey')
   assertEqual(dispatchedIntents[0]?.hidden, false, 'manage: un-hide sets hidden=false')
   assert(!hiddenRow!.className.includes('row-hidden'), 'manage: un-hidden row loses the dim')
+  // Live tally (LUMI-24): the header count line refreshes in place on the
+  // same optimistic update — no reopen, no manage flip needed.
+  const countAfterUnhide = (header2.children[header2.children.length - 1] as FakeEl).textContent
+  assertEqual(countAfterUnhide, '4 panels · 0 hidden', 'manage: tally drops to 0 hidden live on un-hide')
 
   // Hide a visible row: same intent path, hidden=true.
   const visibleRow = manageItems.find((r) => !r.className.includes('row-hidden'))!
@@ -718,6 +722,9 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
   // The optimistic update must NOT touch the state mark — the window
   // lifecycle is unaffected by a menu toggle (LUMI-16b).
   assertEqual(visibleRow.getAttribute('data-os-state'), 'open', 'manage: menu hide keeps the window state mark')
+  // Live tally (LUMI-24): hiding a visible row bumps the tally back up.
+  const countAfterHide = (header2.children[header2.children.length - 1] as FakeEl).textContent
+  assertEqual(countAfterHide, '4 panels · 1 hidden', 'manage: tally climbs back to 1 hidden live on hide')
 
   // Core-locked rule: a locked row's checkbox is disabled without the
   // coreTabsHidden setting (default off in this harness).
