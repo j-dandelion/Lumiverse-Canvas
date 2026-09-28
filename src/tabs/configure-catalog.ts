@@ -14,7 +14,6 @@
 
 import { type DrawerTab, getDrawerTabs } from '../store'
 import { CORE_HIDE_LOCKED, isCoreTabId } from './core-tabs'
-import { parseExtensionKey, parseBuiltinKey, type TabKey } from '../core/model'
 
 export { CORE_HIDE_LOCKED } from './core-tabs'
 
@@ -200,72 +199,6 @@ export function filterCatalogToLive(
   return catalog.filter(
     (tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id),
   )
-}
-
-/** Minimal model shape the supplement reads (LayoutModel subset). */
-export type RecoveredEntriesModel = {
-  primary: readonly string[]
-  secondary: readonly string[]
-  hidden: readonly string[]
-} | null
-
-/**
- * LUMI-26 Part 2: supplement the catalog with model-owned tabs the live
- * inventory lost.
- *
- * When the host React filters a tab's button out of the drawer DOM (vanilla
- * `drawerSettings.hiddenTabIds`), the observer inventory loses it — the
- * full catalog (live-inventory-derived extension entries) no longer names
- * it and `filterCatalogToLive` drops it, so the tab VANISHED from Canvas's
- * Configure Tabs with no recovery path. The owned model still holds the
- * tab's key (boot re-adopts layout-owned ids — resolveLayoutOwnedStoredId);
- * this supplement re-adds one entry per model-owned key-shaped id missing
- * from the filtered catalog, carrying the KEY itself as the entry id. The
- * commit resolves key ids via its model-owned fallback (owned-commit.ts),
- * so a recovered entry never trips the resolution guard.
- *
- * The phantom-id guard stays intact: ids the model does NOT own are never
- * supplemented — a stale catalog id still fails the commit guard exactly as
- * before. Builtins are always fully enumerated by the static catalog and
- * their keys resolve totally (liveIdForKey), so they never need this path.
- */
-export function supplementCatalogWithRecoveredEntries(
-  catalog: CatalogTab[],
-  model: RecoveredEntriesModel,
-): CatalogTab[] {
-  if (!model) return catalog
-  const ids = new Set(catalog.map((t) => t.id))
-  const out = catalog.slice()
-  const seen = new Set<string>()
-  for (const raw of [...model.primary, ...model.secondary, ...model.hidden]) {
-    if (seen.has(raw)) continue
-    seen.add(raw)
-    if (ids.has(raw)) continue
-    const parsedExt = parseExtensionKey(raw)
-    if (parsedExt) {
-      out.push({
-        id: raw,
-        kind: 'extension',
-        title: parsedExt.tabName,
-        description: `Open ${parsedExt.tabName} extension tab`,
-        hideLocked: false,
-        extensionId: parsedExt.extensionId,
-      })
-      continue
-    }
-    const parsedBuiltin = parseBuiltinKey(raw)
-    if (parsedBuiltin && !ids.has(parsedBuiltin)) {
-      // Legacy masquerade key ('builtin:{title}') — keep the key id so the
-      // commit's model-owned fallback resolves it.
-      out.push({
-        id: raw,
-        kind: 'builtin',
-        title: humanizeTabId(parsedBuiltin),
-        hideLocked: isCoreTabId(parsedBuiltin),
-      })
-    }
-  }
-  return out
 }
 
 /** True when the given tab id is in the CORE_HIDE_LOCKED set. */

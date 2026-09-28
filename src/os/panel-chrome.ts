@@ -42,6 +42,7 @@ import {
 } from '../sidebar/main-mirror-drawer'
 import { getSecondaryWrapper } from '../sidebar/secondary'
 import { isPanelAnimating, whenPanelMotionSettles } from '../sidebar/animation'
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { closeWindowByLiveId, getDisplayedLiveId, minimizeWindowByLiveId } from './actions'
 import { setPanelHeaderCloseHandler } from './header-close'
@@ -51,6 +52,7 @@ import {
 } from '../tabs/buttons'
 import {
   getCanvasHiddenTabIds,
+  mergeHiddenTabIdLists,
 } from '../tabs/canvas-hidden'
 import { dlog, dwarn } from '../debug/log'
 
@@ -253,11 +255,13 @@ export function reapplyOsClosedVisibility(): void {
   if (!isOsModeEnabled()) return
   try {
     closedLiveIdsCache = resolveClosedLiveIds()
-    // LUMI-26: Canvas-owned copy + the OS closed set only — the host
-    // hiddenTabIds list is never merged into a Canvas-owned surface apply
-    // (vanilla-made hides must not reach the strips, pitfalls §23).
     applyHiddenTabIdsToSecondary(
-      new Set([...getCanvasHiddenTabIds(), ...closedLiveIdsCache]),
+      new Set(
+        mergeHiddenTabIdLists(
+          getHostDrawerSettings()?.hiddenTabIds,
+          [...getCanvasHiddenTabIds(), ...closedLiveIdsCache],
+        ),
+      ),
     )
   } catch (err) {
     dwarn('[os] reapply closed visibility failed:', err instanceof Error ? err.message : err)
@@ -388,9 +392,13 @@ export function teardownPanelChrome(): void {
   setCanvasMainNoActive(false)
   // Restore the secondary strip: re-run the plain hidden applicator so
   // closed-hidden buttons reappear in non-OS mode (the closed set is gone).
-  // LUMI-26: Canvas-owned copy only — no host hiddenTabIds merge.
   void applyHiddenTabIdsToSecondary(
-    new Set([...getCanvasHiddenTabIds()]),
+    new Set(
+      mergeHiddenTabIdLists(
+        getHostDrawerSettings()?.hiddenTabIds,
+        [...getCanvasHiddenTabIds()],
+      ),
+    ),
   )
   dlog('[os] panel chrome unmounted')
 }

@@ -200,36 +200,6 @@ permanently hidden strip button. The sweep guard matters: the commit emits a
 `setHidden` intent for every model key on every Apply, so the closed-drop is keyed
 on the membership transition, never on "key is in the closed set".
 
-### Off-world tab recovery (LUMI-26)
-
-A tab the host React has filtered out of the drawer DOM (vanilla-made hide,
-pre-enable state) used to vanish from Canvas: the boot model GC'd its id once
-the `_pendingLayout` retry window expired, and Configure Tabs filtered it from
-the catalog. Recovery is layered (see `docs/pitfalls.md` §23 for the NO-GOs):
-
-1. **Boot/model layer** — `resolveLayoutOwnedStoredId` (`persist/layout-model.ts`)
-   resolves ids the layout blob owns (tabOrder ∪ hiddenTabIds ∪ detachedTabs) when
-   the host cannot: key-shaped ids → themselves; extension liveIds → detached
-   `tabId→tabTitle` mapping; bare builtin ids → host tabOrder (static
-   `BUILTIN_TAB_IDS` only as a headless fallback). Wired into both
-   `buildModelFromLayout` sites via `bootStoredIdResolver` (`recon/dispatch.ts`);
-   detached-loop precedence is host-resolved tabTitle → tabId → tabTitle.
-2. **Catalog layer** — `supplementCatalogWithRecoveredEntries`
-   (`tabs/configure-catalog.ts`) re-adds model-owned key-shaped entries the live
-   filter dropped, so host-filtered tabs stay visible and manageable in Configure
-   Tabs.
-3. **Commit layer** — `keyFor` in `owned-commit.ts` resolves model-owned
-   key-shaped ids on a `host.findKey` miss (bare-builtin fallback included), and
-   the rebase/rollback snapshots carry facade-style entries
-   (`withRecoveredOwnedEntries`) so a `syncFromHost` cannot GC the entries the
-   commit is saving.
-
-The host `drawerSettings.hiddenTabIds` list is NEVER read into any Canvas
-surface (hidden sync, DnD draft, Configure draft, per-button hides, OS closed
-reapply, OS-off teardown restore) — the Canvas copy is the sole hidden-truth
-input; the host list is consulted only by `mode-profiles.ts` safe-fallback
-picking.
-
 ## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
 
 Live strip DnD reorders within a list and moves tabs across drawers; the commit

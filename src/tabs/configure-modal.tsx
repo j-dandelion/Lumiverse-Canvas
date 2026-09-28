@@ -28,15 +28,11 @@ import {
   type BaseSnapshot,
   type DrawerSide,
 } from './configure-model'
-import {
-  getFullCatalog,
-  filterCatalogToLive,
-  supplementCatalogWithRecoveredEntries,
-  type CatalogTab,
-} from './configure-catalog'
+import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
 import { BUILTIN_ICON_SVGS } from './builtin-icons'
 import {
   getCanvasHiddenTabIds,
+  mergeHiddenTabIdLists,
 } from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
@@ -45,7 +41,7 @@ import { getLiveIdAssignments } from './assignment'
 import type { OwnedCommitResult as CommitResult } from './owned-commit'
 import { commitDraftToOwnedModel } from './owned-commit'
 import { getHost, getModel } from '../recon/dispatch'
-import { isExtensionKey, type TabKey } from '../core/model'
+import type { TabKey } from '../core/model'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -1589,13 +1585,10 @@ function buildLiveDraftAndBase(): {
   base: BaseSnapshot
   catalog: CatalogTab[]
 } {
-  const catalog = supplementCatalogWithRecoveredEntries(
-    filterCatalogToLive(
-      getFullCatalog(),
-      getHost(),
-      new Set(getLiveIdAssignments().keys()),
-    ),
-    getModel(),
+  const catalog = filterCatalogToLive(
+    getFullCatalog(),
+    getHost(),
+    new Set(getLiveIdAssignments().keys()),
   )
   const hostSettings = getHostDrawerSettings()
   // LiveId-keyed projection of the model — the base facade is TabKey-keyed
@@ -1620,12 +1613,7 @@ function buildLiveDraftAndBase(): {
   const model = getModel()
   const host = getHost()
   if (model && host) {
-    // LUMI-26: recovered model-owned extension keys have no live button to
-    // resolve (host React filtered it out) — the key itself is the draft id
-    // (the catalog supplement carries it; the commit's model-owned fallback
-    // resolves it).
-    const resolveId = (key: TabKey): string | null =>
-      host.resolve(key) ?? (isExtensionKey(key) ? key : null)
+    const resolveId = (key: TabKey): string | null => host.resolve(key)
     const toIds = (keys: readonly TabKey[]): string[] => {
       const out: string[] = []
       for (const key of keys) {
@@ -1669,12 +1657,10 @@ function buildLiveDraftAndBase(): {
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
   // what the user sees in the drawers.
-  // LUMI-26: Canvas-owned hidden copy ONLY — the host hiddenTabIds list is
-  // never merged into the draft (vanilla-made hides must not leak into the
-  // model via one Configure Apply, pitfalls §23); heal extension :N drift so
-  // toggles match live catalog after refresh.
+  // Merge host + Canvas-owned hide (host DB often never got Configure hides);
+  // heal extension :N drift so toggles match live catalog after refresh.
   const healedHidden = resolveHiddenTabIdsForDraft(
-    getCanvasHiddenTabIds(),
+    mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()),
     catalog.map((t) => t.id),
   )
 

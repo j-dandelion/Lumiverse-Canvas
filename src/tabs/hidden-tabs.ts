@@ -1,13 +1,15 @@
 // Hidden-tab sync: re-apply Configure hide after hard refresh, and heal
 // extension id suffix drift so hide survives re-registration.
 //
+// Host React filters primary buttons by exact drawerSettings.hiddenTabIds.
+// Canvas-owned secondary / main-mirror buttons only got display:none at
+// Configure commit — finishRestore and late assigns never re-read host.
+//
 // S2 (2026-09): the host write-back is GONE (model owns `hidden`; the
-// Canvas copy is the hydrate/converge bridge). LUMI-26: the host READ
-// union is gone too — the Canvas copy (layout.json hiddenTabIds, hydrated
-// at boot) is the SOLE state input end-to-end. Hides made in the vanilla
-// Lumiverse Configure Tabs menu while Canvas was off are NOT adopted:
-// vanilla stays pristine in both directions (pitfalls §23).
+// Canvas copy is the hydrate/converge bridge). This sync now reads host +
+// Canvas, heals, keeps the Canvas copy aligned, and DOM-applies the strips.
 
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { getDrawerTabs } from '../store'
 import {
   healHiddenTabIds,
@@ -23,6 +25,7 @@ import { getSecondaryTabList } from '../sidebar/secondary'
 import {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
+  mergeHiddenTabIdLists,
   normalizeHiddenIds,
   resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
@@ -38,6 +41,7 @@ export { healHiddenTabIds, isTabIdHidden } from '../persist/tab-id-heal'
 export {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
+  mergeHiddenTabIdLists,
   resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
   __resetCanvasHiddenTabIdsForTest,
@@ -126,13 +130,11 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
 }
 
 /**
- * Re-read the Canvas hidden copy (layout.json `hiddenTabIds` — the sole
- * truth; the host `drawerSettings.hiddenTabIds` list is NEVER merged —
- * LUMI-26), heal against live tabs, keep the Canvas copy aligned, and
+ * Re-read host + Canvas hiddenTabIds, heal against live tabs, keep the
+ * Canvas copy (hydrate/converge bridge — the model owns `hidden`), and
  * apply to Canvas secondary + main strips.
  *
- * The name is historical (minimal diff); there is no host read anymore.
- * Safe to call repeatedly (on tab register, setup).
+ * Safe to call repeatedly (on finishRestore, tab register, setup).
  */
 export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
   // LUMI-21: no hidden-sync work once the instance is torn down. The
@@ -142,7 +144,10 @@ export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
   // tab buttons (AC1). Boot runs with the instance active, so boot restore
   // is unaffected.
   if (!isInstanceActive()) return { hiddenIds: getCanvasHiddenTabIds() }
-  const stored = getCanvasHiddenTabIds()
+  const host = getHostDrawerSettings()
+  const hostStored = normalizeHiddenIds(host?.hiddenTabIds)
+  const canvasStored = getCanvasHiddenTabIds()
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored)
 
   const liveIds = collectLiveTabIdsForHiddenHeal()
   // Canvas-copy path: never drop unmatched (late extension register).
@@ -215,10 +220,8 @@ export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
 }
 
 /**
- * Resolve the Canvas-owned hidden list for Configure draft construction:
- * heal against the live catalog so toggles match what the user sees after
- * refresh. Callers pass the Canvas copy (layout.json `hiddenTabIds`) — the
- * host list is never merged (LUMI-26).
+ * Resolve host + Canvas hidden list for Configure draft construction: heal
+ * against live catalog so toggles match what the user sees after refresh.
  */
 export function resolveHiddenTabIdsForDraft(
   storedHidden: readonly string[] | undefined | null,

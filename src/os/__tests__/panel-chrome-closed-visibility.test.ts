@@ -4,10 +4,8 @@
 // model commit, so `refreshOsVisibility` had already run — a tab in the
 // entering slot's closed set (presets) kept its strip button visible until
 // the next commit. `reapplyOsClosedVisibility` (called from the reassign
-// drain tail) must merge Canvas-hidden + the OS closed set and hand it to
-// the secondary applicator; it must not run when OS mode is off.
-// LUMI-26: the host hiddenTabIds list is never merged (Canvas copy is the
-// sole hidden-truth input — pitfalls §23).
+// drain tail) must merge host-hidden + Canvas-hidden + the OS closed set and
+// hand it to the secondary applicator; it must not run when OS mode is off.
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -59,6 +57,11 @@ mock.module('../../dom/host-settings', () => ({
 mock.module('../../tabs/canvas-hidden', () => ({
   ...actualCanvasHidden,
   getCanvasHiddenTabIds: () => ['regex'],
+  mergeHiddenTabIdLists: (...lists: Array<readonly string[] | undefined>) => {
+    const out: string[] = []
+    for (const l of lists) for (const id of l ?? []) if (!out.includes(id)) out.push(id)
+    return out
+  },
 }))
 mock.module('../../tabs/buttons', () => ({
   ...actualButtons,
@@ -67,9 +70,7 @@ mock.module('../../tabs/buttons', () => ({
 
 const { reapplyOsClosedVisibility } = await import('../panel-chrome')
 
-// ── V1: OS on → Canvas-hidden + OS closed set handed to the applicator ──
-// LUMI-26: the HOST hiddenTabIds list is never merged into a Canvas-owned
-// surface apply — vanilla-made hides must not reach the strips (§23).
+// ── V1: OS on → merged set handed to the secondary applicator ──
 {
   osOn = true
   appliedSets.length = 0
@@ -78,8 +79,8 @@ const { reapplyOsClosedVisibility } = await import('../panel-chrome')
   const set = appliedSets[0]!
   assert(set.has('presets'), 'V1: OS closed live id in the effective hidden set')
   assert(set.has('regex'), 'V1: Canvas-hidden id preserved')
-  assert(!set.has('multiplayer'), 'V1: host-hidden id NOT merged (Canvas copy is sole truth)')
-  assertEqual(set.size, 2, 'V1: exactly canvas + closed')
+  assert(set.has('multiplayer'), 'V1: host-hidden id preserved')
+  assertEqual(set.size, 3, 'V1: deduped merge')
 }
 
 // ── V2: OS off → no-op ──
