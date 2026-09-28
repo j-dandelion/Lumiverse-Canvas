@@ -16,7 +16,10 @@ Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing t
 
 1. `pointerdown`: record start position and drawer width
 2. `pointermove`: compute delta based on direction, apply `clampSidebarWidth(startWidth + delta)`
-3. `pointerup`: persist layout
+3. `pointerup`, `pointercancel`, or window blur: remove drag listeners and
+   the iframe-blocking overlay, restore body cursor/selection, and persist the
+   last live width exactly once. A cancelled drag keeps the width already
+   applied during the drag.
 
 **Direction encoding**:
 - `'right'` = expand on rightward drag (drawer is on left)

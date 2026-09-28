@@ -116,9 +116,17 @@ export function createResizeHandle(
       onResize(startWidth, delta)
     }
 
-    const onUp = () => {
+    // pointercancel and window blur can happen without a later pointerup.
+    // Route every terminal event through one idempotent path so the overlay
+    // cannot remain mounted and the last live width still gets committed.
+    let finished = false
+    const onFinish = () => {
+      if (finished) return
+      finished = true
       document.removeEventListener('pointermove', onMove)
-      document.removeEventListener('pointerup', onUp)
+      document.removeEventListener('pointerup', onFinish)
+      document.removeEventListener('pointercancel', onFinish)
+      window.removeEventListener('blur', onFinish)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       _resizeDragging = false
@@ -128,7 +136,9 @@ export function createResizeHandle(
     }
 
     document.addEventListener('pointermove', onMove)
-    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointerup', onFinish)
+    document.addEventListener('pointercancel', onFinish)
+    window.addEventListener('blur', onFinish)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   })

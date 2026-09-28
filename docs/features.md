@@ -33,7 +33,7 @@ interface CanvasFeature {
 | `chatReflowFeature` | `chatReflow` | Centers chat column by adjusting margins |
 | `welcomeReflowFeature` | `welcomeReflow` | Centers the Welcome/Landing screen by the same open-drawer margins |
 | `secondSidebarFeature` | `secondSidebarEnabled` | Master toggle for the secondary drawer |
-| `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers |
+| `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers; pointer cancellation and window blur clean up the drag |
 | `drawerSyncFeature` | `mirrorCompactPosition` | Mirrors main drawer's open/close handle (size + vertical position) |
 | `shadowsDesktopFeature` | `drawerShadowsDesktop` | Box-shadow on drawers (>=601px) |
 | `shadowsMobileFeature` | `drawerShadowsMobile` | Box-shadow on drawers (<=600px) |

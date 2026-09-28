@@ -328,3 +328,12 @@ The full off-world-tab series — the LUMI-25 fix (host hidden-list union remova
 - **Built-ins are never ghost-purged.** DOM-placed built-ins have no live button while their registry root lives in a Canvas shell — the synthesis is their lifeline. Gate the purge on `isExtensionKey`.
 - **A Canvas-owned secondary button needs a key-based removal path.** A dead extension's liveId no longer resolves, so the id-keyed removal paths (unreg → `removeSecondaryTabButton`, `unassignSecondaryTabsNotInModel`'s `findKey` skip) can never find the button. `addSecondaryTabButton` therefore stamps `data-canvas-facade-key` at creation, and `tabs/ghost-tabs.ts` sweeps buttons whose key a model commit dropped entirely (a secondary→primary move keeps the key in `model.primary` — never sweep those).
 - **Known scope boundary:** the OS `closed` set is NOT pruned by the drop (a dead extension's OS-minimized window keeps its Start-menu row) — that surface belongs to the reverted LUMI-25/LUMI-26 series (§28); do not re-land it casually.
+
+## 30. Resize drag cancellation must run the normal finish path
+
+The resize handle's content overlay blocks iframe pointer capture during a
+drag. Finish pointerup, pointercancel, and window blur through the same
+idempotent cleanup: remove all drag listeners and the overlay, restore body
+cursor/selection, clear `_resizeDragging`, and commit the last live width once.
+Cancellation keeps the width already applied; if pointercancel or blur skips
+cleanup, the drawer content can remain unclickable.
