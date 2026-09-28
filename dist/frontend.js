@@ -25183,8 +25183,9 @@ function buildHostEntry(tab) {
 function buildEntryFromAssignment(tabKey) {
   const assignments = getTabAssignments();
   const location = assignments.get(tabKey) === "secondary" ? "secondary" : "primary";
+  const liveId = resolveTabKey(tabKey);
   const canvasHidden = new Set(getCanvasHiddenTabIds());
-  const isHidden = canvasHidden.has(tabKey);
+  const isHidden = liveId !== null && canvasHidden.has(liveId);
   const primaryActive = resolvePrimaryActiveTabId();
   const secondaryActive = getActiveSecondaryTabId();
   return {
@@ -25193,8 +25194,8 @@ function buildEntryFromAssignment(tabKey) {
     isBuiltin: false,
     location,
     isHidden,
-    isActiveInPrimary: primaryActive === tabKey,
-    isActiveInSecondary: secondaryActive === tabKey,
+    isActiveInPrimary: liveId !== null && primaryActive === liveId,
+    isActiveInSecondary: liveId !== null && secondaryActive === liveId,
     hasContentRoot: false
   };
 }
