@@ -12,9 +12,12 @@ import {
   type SecondaryMoveChrome,
 } from '../recon/dispatch'
 import { activeAfterRemoval, sideOfKey, visibleKeys } from '../core/select'
-import type { TabKey, Side, ObservedWorld, LayoutModel } from '../core/model'
+import type { TabKey, Side, ObservedWorld, LayoutModel, HostTabEntry } from '../core/model'
+import { isBuiltinKey, isExtensionKey, builtinKey } from '../core/model'
 import type { LiveTabId } from '../host/port'
 import { dlog, dwarn } from '../debug/log'
+import { stripTabIdSuffix } from '../persist/tab-id-heal'
+import { BUILTIN_TAB_IDS } from './configure-catalog'
 import { isModeSwitchBarrierActive } from '../settings/mode-transition'
 
 export type OwnedCommitResult =
@@ -108,11 +111,17 @@ export async function commitDraftToOwnedModel(
     // rebase at line 29 then reads host.observe() again — it MUST be a
     // fresh call, not the cached snapshot, because the snapshot is the
     // rollback target, not the rebase input.
-    const observedBeforeRebase = host.observe()
+    //
+    // LUMI-26: both snapshots carry facade-style entries for model-owned
+    // recovered keys (same shape buildEntryFromAssignment emits — the real
+    // host's observe() derives them from the assignment map, so a live
+    // host-sync never drops them). Without them the rebase/rollback
+    // syncFromHost would GC the very entries this feature recovers.
+    const observedBeforeRebase = withRecoveredOwnedEntries(host.observe(), commitBaseModel, host)
 
     // Rebase against the latest host world before translating live ids. This
     // preserves late registrations and host-side reorder changes.
-    await dispatchBatch([{ t: 'syncFromHost', observed: host.observe() }])
+    await dispatchBatch([{ t: 'syncFromHost', observed: withRecoveredOwnedEntries(host.observe(), commitBaseModel, host) }])
     const model = getModel()
     if (!model) return { ok: false, error: 'Canvas tab model is not ready.' }
     dlog('[owned-commit] rebased', {
@@ -120,7 +129,29 @@ export async function commitDraftToOwnedModel(
       secondary: model.secondary,
     })
 
-    const keyFor = (id: string): TabKey | null => host.findKey(id)
+    const keyFor = (id: string): TabKey | null => {
+      const direct = host.findKey(id as LiveTabId)
+      if (direct) return direct
+    // LUMI-26: recovered model-owned entries. A tab the host React has
+    // filtered out of the drawer DOM cannot resolve through findKey; the
+    // draft carries it as a model-owned key-shaped id (modal path) or a
+    // bare builtin id (liveIdForKey is total for builtins). Resolve ONLY
+    // through the owned model — never invent keys, never consult the host
+    // store — so truly-phantom ids still fail the resolution guard.
+    const m = commitBaseModel
+    if (!m) return null
+    if (isBuiltinKey(id) || isExtensionKey(id)) {
+      return m.primary.includes(id as TabKey) || m.secondary.includes(id as TabKey)
+        ? (id as TabKey)
+        : null
+    }
+    const base = stripTabIdSuffix(id)
+    if (!base.includes(':') && BUILTIN_TAB_IDS.includes(base)) {
+      const key = builtinKey(base)
+      return m.primary.includes(key) || m.secondary.includes(key) ? key : null
+    }
+    return null
+    }
     const primary = resolveKeys(draft.primaryIds, keyFor)
     const secondary = resolveKeys(draft.secondaryIds, keyFor)
     const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor))
@@ -437,6 +468,41 @@ function resolveKeys(ids: readonly string[], resolve: (id: string) => TabKey | n
     if (key) keys.push(key)
   }
   return keys
+}
+
+/**
+ * LUMI-26: append facade-style entries for model-owned recovered keys that
+ * the observed world lacks. Mirrors buildEntryFromAssignment in the real
+ * host adapter (whose observe() derives missing entries from the assignment
+ * map, so model-owned keys without host buttons survive host syncs). Used
+ * ONLY inside the commit's rebase/rollback syncs — the keyFor resolution
+ * guard below is what decides which ids may join the model.
+ */
+function withRecoveredOwnedEntries(
+  observed: ObservedWorld,
+  owned: LayoutModel | null,
+  host: NonNullable<ReturnType<typeof getHost>>,
+): ObservedWorld {
+  if (!owned) return observed
+  const present = new Set<TabKey>(observed.tabs.map((t) => t.key))
+  const extra: HostTabEntry[] = []
+  for (const key of [...owned.primary, ...owned.secondary]) {
+    if (present.has(key)) continue
+    if (!(isBuiltinKey(key) || isExtensionKey(key))) continue
+    if (host.findKey(key as LiveTabId)) continue // live-resolvable → host entry covers it
+    extra.push({
+      key,
+      liveId: '',
+      isBuiltin: false,
+      location: owned.primary.includes(key) ? 'primary' : 'secondary',
+      isHidden: owned.hidden.includes(key),
+      isActiveInPrimary: owned.active.primary === key,
+      isActiveInSecondary: owned.active.secondary === key,
+      hasContentRoot: false,
+    })
+  }
+  if (extra.length === 0) return observed
+  return { ...observed, tabs: [...observed.tabs, ...extra] }
 }
 
 function activeSelection(world: ObservedWorld): ActiveSelection {

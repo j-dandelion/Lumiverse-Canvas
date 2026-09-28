@@ -14,7 +14,7 @@
 //   commit helpers.
 // - deriveShortName: short name adapter matching Lumiverse's logic.
 import { getMainSidebar } from '../dom/lumiverse'
-import { getHostDrawerSettings } from '../dom/host-settings'
+import { isTabIdHidden } from '../persist/tab-id-heal'
 import { getDrawerTabs } from '../store'
 import { dlog, dwarn } from '../debug/log'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
@@ -36,11 +36,9 @@ import {
 } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
 import { showAssignmentMenu } from './tab-context-menu'
-import { isTabIdHidden } from '../persist/tab-id-heal'
 import { appendSecondaryTabNode } from './secondary-start-dock'
 import {
   getCanvasHiddenTabIds,
-  mergeHiddenTabIdLists,
 } from './canvas-hidden'
 
 // Test seams for hideMainTabButton / showMainTabButton — allows tests to override the real implementations
@@ -439,13 +437,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     showAssignmentMenu(e.clientX, e.clientY, tab.id, tab.title, btn)
   })
 
-  // Configure hide: merge host + Canvas-owned lists. Host DB often never
-  // persisted builtins; layout.hiddenTabIds is the durable copy. finishRestore
-  // also re-syncs, but mid-restore assigns land before that pass.
-  const effectiveHidden = mergeHiddenTabIdLists(
-    getHostDrawerSettings()?.hiddenTabIds,
-    getCanvasHiddenTabIds(),
-  )
+  // Configure hide: the Canvas-owned copy ONLY (layout.hiddenTabIds — the
+  // durable truth; LUMI-26 removed the host merge, so vanilla-made hides
+  // never reach the strips). The sync re-applies after restore; this covers
+  // mid-restore assigns that land before that pass.
+  const effectiveHidden = getCanvasHiddenTabIds()
   if (effectiveHidden.length > 0) {
     const liveOnStrip: string[] = []
     for (const el of Array.from(

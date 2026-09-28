@@ -1,7 +1,7 @@
 // Headless persistence contract for the rewrite model.
 // Covers invariant 13 through the legacy-compatible v2 layout seam.
 import { builtinKey, createEmptyModel, extensionKey, type LayoutModel } from '../../core/model'
-import { buildModelFromLayout, serializeModelToLayout } from '../layout-model'
+import { buildModelFromLayout, serializeModelToLayout, resolveLayoutOwnedStoredId } from '../layout-model'
 
 let passed = 0
 let failed = 0
@@ -279,6 +279,114 @@ testMenuHiddenRoundTrip()
 testMenuHiddenGcDropsUnresolvableIds()
 testMenuHiddenAbsentBuildsEmpty()
 testMenuHiddenSerializerOmitsUnresolvedIds()
+
+// ── LUMI-26: layout-owned stored-id fallback (resolveLayoutOwnedStoredId) ──
+function testLayoutOwnedResolver(): void {
+  const BUILTIN_IDS = ['profile', 'presets', 'loom', 'weaver', 'create', 'council']
+  const layout = {
+    version: 't',
+    tabOrder: ['profile', 'weaver', 'create'],
+    hiddenTabIds: ['council'],
+    detachedTabs: [
+      { tabId: 'spindle:hone:tab:main:3', tabTitle: extensionKey('hone', 'Main'), sidebar: 'secondary' },
+    ],
+  }
+
+  // Bare builtin owned by the blob + known to the host tabOrder → key.
+  assertEqual(
+    resolveLayoutOwnedStoredId('create', layout, BUILTIN_IDS, ['profile', 'weaver', 'create']),
+    builtinKey('create'),
+    'R1: owned bare builtin + host tabOrder resolves',
+  )
+  // Bare builtin NOT owned by the blob → null (static-list presence alone is not enough).
+  assertEqual(
+    resolveLayoutOwnedStoredId('cortex', layout, BUILTIN_IDS, ['cortex']),
+    null,
+    'R2: unowned bare builtin stays unresolved (ghost protection)',
+  )
+  // Owned but the host tabOrder does not know the tab → null.
+  assertEqual(
+    resolveLayoutOwnedStoredId('create', layout, BUILTIN_IDS, ['profile', 'weaver']),
+    null,
+    'R3: instance-unknown builtin stays unresolved',
+  )
+  // No host tabOrder available (headless tests) → the static builtin list decides.
+  assertEqual(
+    resolveLayoutOwnedStoredId('create', layout, BUILTIN_IDS, null),
+    builtinKey('create'),
+    'R4: hostTabOrder absent → static builtin list decides',
+  )
+  // Key-shaped stored id owned by the blob → itself.
+  assertEqual(
+    resolveLayoutOwnedStoredId('builtin:create', layout, BUILTIN_IDS, []),
+    builtinKey('create'),
+    'R5: owned key-shaped builtin resolves to itself',
+  )
+  // Key-shaped masquerade whose PARSED base the blob owns as a bare id.
+  assertEqual(
+    resolveLayoutOwnedStoredId('builtin:weaver', layout, BUILTIN_IDS, []),
+    builtinKey('weaver'),
+    'R5b: key-shaped masquerade over an owned bare id resolves',
+  )
+  assertEqual(
+    resolveLayoutOwnedStoredId(String(extensionKey('hone', 'Main')), layout, BUILTIN_IDS, []),
+    extensionKey('hone', 'Main'),
+    'R6: owned extension key resolves to itself',
+  )
+  // Extension live id → detachedTabs tabTitle mapping (the model-stored
+  // liveId/key mapping).
+  assertEqual(
+    resolveLayoutOwnedStoredId('spindle:hone:tab:main:3', layout, BUILTIN_IDS, []),
+    extensionKey('hone', 'Main'),
+    'R7: extension liveId resolves through the detached tabId→tabTitle mapping',
+  )
+  // Unowned extension liveId (primary ext tab, no detached record) → null
+  // (deferred-restore retry semantics for late registration untouched).
+  assertEqual(
+    resolveLayoutOwnedStoredId('spindle:other:tab:x:1', layout, BUILTIN_IDS, []),
+    null,
+    'R8: unowned extension liveId stays unresolved',
+  )
+  // Title-valued stored id (legacy partial-restore shape) → null.
+  assertEqual(
+    resolveLayoutOwnedStoredId('Hone', layout, BUILTIN_IDS, []),
+    null,
+    'R9: human-title stored id stays unresolved (retry semantics preserved)',
+  )
+  // Suffix drift on a bare builtin.
+  const driftLayout = { tabOrder: ['regex:2'], hiddenTabIds: [], detachedTabs: [] }
+  assertEqual(
+    resolveLayoutOwnedStoredId('regex:4', driftLayout, ['regex'], null),
+    builtinKey('regex'),
+    'R10: suffix-drifted bare builtin resolves to the canonical key',
+  )
+}
+
+function testBootReadoptsHostFilteredBuiltin(): void {
+  // The LUMI-25 leak repro shape: the host React filters a builtin's button
+  // out of the drawer DOM; only the layout blob still knows the tab. The
+  // model build must re-adopt it (strips + Configure menu recover).
+  const layout = {
+    version: 't',
+    primary: { open: false, width: 420, tabId: 'profile' },
+    secondary: { open: false, width: 420, activeTabId: null },
+    detachedTabs: [],
+    tabOrder: ['profile', 'create', 'council'],
+    hiddenTabIds: ['council'],
+    drawerSide: 'left',
+  }
+  const findKeyHost = (id: string) => (id === 'profile' ? builtinKey('profile') : null)
+  // Mirror dispatch's bootStoredIdResolver composition: host first, then the
+  // layout-owned fallback.
+  const findKey = (id: string) =>
+    findKeyHost(id) ?? resolveLayoutOwnedStoredId(id, layout, ['profile', 'create', 'council'], null)
+  const m = buildModelFromLayout(layout as any, findKey, 'left', findKeyHost)
+  assert(m.primary.includes(builtinKey('create')), 'R11: host-filtered builtin re-adopted from the layout blob')
+  assert(m.hidden.includes(builtinKey('council')), 'R12: host-filtered canvas-made hide re-adopted')
+}
+
+testLayoutOwnedResolver()
+testBootReadoptsHostFilteredBuiltin()
 
 console.log(`persist/layout-model: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

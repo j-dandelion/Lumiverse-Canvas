@@ -1,8 +1,10 @@
 // Canvas-owned Configure hide list (layout.json `hiddenTabIds`).
 //
 // Lives in a tiny zero-dep module so buttons.ts, persist, and hidden-tabs
-// can all read/write without circular imports. Host drawerSettings.hiddenTabIds
-// is best-effort; this is the durable source for dual-drawer strips.
+// can all read/write without circular imports. LUMI-26: this copy is the
+// SOLE hidden-truth input end-to-end — the host drawerSettings.hiddenTabIds
+// list is never merged into it (vanilla stays pristine in both directions,
+// pitfalls §23).
 
 let _canvasHiddenTabIds: string[] = []
 
@@ -43,21 +45,6 @@ export function hydrateCanvasHiddenFromLayout(layout: unknown): void {
   const raw = (layout as { hiddenTabIds?: unknown }).hiddenTabIds
   if (!Array.isArray(raw)) return
   _canvasHiddenTabIds = normalizeHiddenIds(raw)
-}
-
-/** Union host + canvas lists (order: host first, then canvas-only). */
-export function mergeHiddenTabIdLists(
-  hostIds: readonly string[] | undefined | null,
-  canvasIds: readonly string[] | undefined | null,
-): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out
 }
 
 /**

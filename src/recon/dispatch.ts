@@ -5,7 +5,9 @@ import { sideOfKey, visibleKeys } from '../core/select'
 import { listForSide } from '../core/select'
 import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
-import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
+import { serializeModelToLayout, buildModelFromLayout, resolveLayoutOwnedStoredId, type LegacyLayout } from '../persist/layout-model'
+import { BUILTIN_TAB_IDS } from '../tabs/configure-catalog'
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { saveLayoutToDisk } from '../persist/layout-repo'
 import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled, getSettings, getLastLoadedLayout } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
@@ -331,8 +333,9 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       }
       const rebuilt = buildModelFromLayout(
         _pendingLayout as any,
-        (id) => host.findKey(id),
+        bootStoredIdResolver(host, _pendingLayout),
         observed.drawerSide,
+        (id) => host.findKey(id as LiveTabId),
       )
       const expected = pendingLayoutTabCount(_pendingLayout)
       const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected
@@ -1162,13 +1165,42 @@ export async function placementFirstMoveByLiveId(
   // activate covers the stale-active and already-in-target cases.
 }
 
+/**
+ * LUMI-26: the boot stored-id resolver. Host resolution first (frozen keys,
+ * suffix drift, legacy inputs — tabs/identity.ts), then the LAYOUT-OWNED
+ * fallback (resolveLayoutOwnedStoredId): a stored id the layout blob owns
+ * still resolves when the host React has filtered the tab's button out of
+ * the drawer DOM (vanilla hiddenTabIds) — otherwise buildModelFromLayout
+ * GC'd the tab and Canvas lost it (strips + Configure menu) until the
+ * vanilla hide was undone. Strictly read-only w.r.t. the host.
+ */
+function bootStoredIdResolver(
+  host: HostPort,
+  layout: unknown,
+): (id: string) => TabKey | null {
+  const hostTabOrder = (() => {
+    try {
+      return getHostDrawerSettings()?.tabOrder ?? null
+    } catch {
+      return null
+    }
+  })()
+  return (id: string) =>
+    host.findKey(id as LiveTabId) ?? resolveLayoutOwnedStoredId(id, layout, BUILTIN_TAB_IDS, hostTabOrder)
+}
+
 export function bootstrapFromLayout(
   layout: unknown,
   host: HostPort,
   version?: string,
   opts?: { persistWhilePending?: boolean; osActive?: boolean },
 ): void {
-  let model = buildModelFromLayout(layout as any, (id) => host.findKey(id))
+  let model = buildModelFromLayout(
+    layout as any,
+    bootStoredIdResolver(host, layout),
+    undefined,
+    (id) => host.findKey(id as LiveTabId),
+  )
   // F2 read backstop (mirrors buildPersistedBlob's write backstop): a stale
   // OS-shaped top-level blob + settings with osMode off (interrupted OS
   // disable reload, failed layout write, corrupt/missing settings.json)

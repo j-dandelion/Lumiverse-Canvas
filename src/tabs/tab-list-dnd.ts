@@ -49,9 +49,11 @@ import {
   type BaseSnapshot,
   type DrawerSide,
 } from './configure-model'
+import { isExtensionKey, type TabKey } from '../core/model'
 import { commitDraftToOwnedModel, type ActiveSelection } from './owned-commit'
 import {
   getHost,
+  getModel,
   captureMainMirrorMoveChrome,
   applyMainMirrorMoveChrome,
   captureSecondaryNeighborForMove,
@@ -59,10 +61,14 @@ import {
   type MainMirrorMoveChrome,
   type SecondaryMoveChrome,
 } from '../recon/dispatch'
-import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
+import {
+  getFullCatalog,
+  filterCatalogToLive,
+  supplementCatalogWithRecoveredEntries,
+  type CatalogTab,
+} from './configure-catalog'
 import {
   getCanvasHiddenTabIds,
-  mergeHiddenTabIdLists,
 } from './canvas-hidden'
 import { resolveHiddenTabIdsForDraft } from './hidden-tabs'
 import { getHostDrawerSettings } from '../dom/host-settings'
@@ -690,10 +696,14 @@ function buildDraftAndBase(): {
   base: BaseSnapshot
   catalog: CatalogTab[]
 } {
-  const catalog = filterCatalogToLive(
-    getFullCatalog(),
-    getHost(),
-    new Set(getLiveIdAssignments().keys()),
+  const host = getHost()
+  const catalog = supplementCatalogWithRecoveredEntries(
+    filterCatalogToLive(
+      getFullCatalog(),
+      host,
+      new Set(getLiveIdAssignments().keys()),
+    ),
+    getModel(),
   )
   const hostSettings = getHostDrawerSettings()
   // LiveId-keyed projection of the model: the base facade is TabKey-keyed
@@ -708,10 +718,24 @@ function buildDraftAndBase(): {
   // Host tabOrder alone can disagree with what the strips actually show
   // (especially before the first live DnD commit). Align both sides to
   // live DOM so commit does not reshuffle to host/catalog order.
-  const healedHidden = resolveHiddenTabIdsForDraft(
-    mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()),
-    catalog.map((t) => t.id),
-  )
+  // LUMI-26: the host hiddenTabIds list is NEVER merged into the draft
+  // (vanilla-made hides must not leak into the model via one DnD commit,
+  // pitfalls §23). Hidden truth = the OWNED MODEL when it exists (same
+  // source the Configure modal's model path uses; recovered model-owned
+  // extension keys carry their key id — no live button to resolve),
+  // falling back to the Canvas layout copy pre-bootstrap.
+  const model = getModel()
+  const modelHiddenIds = model && host
+    ? model.hidden
+        .map((k) => host.resolve(k) ?? (isExtensionKey(k) ? k : null))
+        .filter((x): x is string => !!x)
+    : null
+  const healedHidden = modelHiddenIds
+    ? modelHiddenIds
+    : resolveHiddenTabIdsForDraft(
+        getCanvasHiddenTabIds(),
+        catalog.map((t) => t.id),
+      )
   const draftFromHost = createDraft({
     catalog,
     tabOrder: hostSettings?.tabOrder || [],

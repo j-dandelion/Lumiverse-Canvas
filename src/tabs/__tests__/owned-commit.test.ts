@@ -598,6 +598,71 @@ async function test_OC11_closedObservedActiveIgnored() {
   shutdown()
 }
 
+// ── OC13: recovered model-owned key commits even though the host can't resolve it (LUMI-26) ──
+async function test_OC13_recoveredKeyCommits() {
+  shutdown()
+  // Host knows only profile; 'ext:hone/Rec' is a layout-recovered tab whose
+  // host button no longer exists (findKey misses) but the owned model keeps it.
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+  ])
+  const REC = 'ext:hone/Rec' as TabKey
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, REC],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', REC],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: [REC],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, true, 'OC13a: recovered model-owned key commits')
+  const after = getModel()
+  assert(after?.primary.includes(REC) === true, 'OC13b: recovered key survives the commit')
+  assertEqual(after?.active.primary, PROFILE, 'OC13c: active preserved')
+  shutdown()
+}
+
+// ── OC14: UNOWNED key-shaped id is still blocked (phantom guard intact) ──
+async function test_OC14_unownedKeyStillBlocked() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const GHOST = 'ext:ghost/Missing' as TabKey
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', GHOST],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: [GHOST],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, false, 'OC14a: unowned key-shaped id still fails the commit')
+  shutdown()
+}
+
 test_plannedMoves()
 test_missingSecondaryButtonKeys()
 
@@ -611,6 +676,8 @@ await test_OC8_skipChrome()
 await test_OC10_unhideDropsClosed()
 await test_OC11_closedObservedActiveIgnored()
 await test_OC12_modeSwitchBarrier()
+await test_OC13_recoveredKeyCommits()
+await test_OC14_unownedKeyStillBlocked()
 
 console.log(`tabs/owned-commit: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

@@ -101,7 +101,6 @@ const {
   hydrateCanvasHiddenFromLayout,
   __resetCanvasHiddenTabIdsForTest,
   resetCanvasHiddenTabIds,
-  mergeHiddenTabIdLists,
   scheduleSyncHiddenTabsFromHost,
   cancelScheduledHiddenTabsSync,
 } = await import('../hidden-tabs')
@@ -110,7 +109,10 @@ function resetCanvas() {
   __resetCanvasHiddenTabIdsForTest()
 }
 
-// H1: after hard refresh, stored :2 heals to live :1 and write-backs + applies
+// H1 (LUMI-26): the host hiddenTabIds list is NEVER adopted. Canvas copy
+// empty + host list non-empty → the Canvas copy is unchanged and the DOM
+// apply sets exclude host-only ids (vanilla stays pristine in both
+// directions, pitfalls §23).
 resetCanvas()
 _hostSettings = {
   side: 'right',
@@ -122,16 +124,31 @@ _appliedSecondary = []
 _appliedMirror = []
 
 const r1 = syncHiddenTabsFromHost()
-assert(r1.hiddenIds.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1: healed to :1')
-assert(r1.hiddenIds.includes('weaver'), 'H1: weaver stays hidden')
-// S2: no host write-back — the healed ids land on the Canvas bridge copy.
+assertEqual(r1.hiddenIds.length, 0, 'H1: host list NOT adopted into the Canvas copy')
+// S2: no host write-back; LUMI-26: no host read-merge either.
 assertEqual(_patchCalls.length, 0, 'H1: no host patch (write-back deleted)')
-assert(getCanvasHiddenTabIds().includes('spindle:uuid:tab:prompt-viewer:1'), 'H1: canvas bridge copy keeps healed id')
-assert(getCanvasHiddenTabIds().includes('weaver'), 'H1: canvas bridge copy keeps weaver')
-assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1: apply secondary healed')
-assert(_appliedMirror.includes('weaver'), 'H1: apply mirror weaver')
+assertEqual(getCanvasHiddenTabIds().length, 0, 'H1: canvas bridge copy unchanged by the host list')
+assert(!_appliedSecondary.includes('weaver'), 'H1a: DOM apply excludes host-only builtin id')
+assert(!_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:2'), 'H1b: DOM apply excludes host-only extension id')
+assertEqual(_appliedSecondary.length, 0, 'H1c: apply secondary empty (nothing Canvas-owned is hidden)')
+assertEqual(_appliedMirror.length, 0, 'H1d: apply mirror empty')
 
-// H2: no write-back when already healed (and canvas matches host)
+// H1c (regression): suffix-drift heal still applies to the CANVAS copy —
+// a stored :2 heals to the live :1 and the strips get the healed id.
+resetCanvas()
+setCanvasHiddenTabIds(['spindle:uuid:tab:prompt-viewer:2'])
+_appliedSecondary = []
+_appliedMirror = []
+{
+  const r = syncHiddenTabsFromHost()
+  assert(r.hiddenIds.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1c: healed to :1')
+  assert(getCanvasHiddenTabIds().includes('spindle:uuid:tab:prompt-viewer:1'), 'H1c: canvas bridge copy keeps healed id')
+  assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1c: apply secondary healed')
+  assert(_appliedMirror.includes('spindle:uuid:tab:prompt-viewer:1'), 'H1c: apply mirror healed')
+}
+
+// H2: host list differing from the Canvas copy is ignored — the copy
+// (and its healed form) is the sole truth.
 resetCanvas()
 _patchCalls = []
 _hostSettings = {
@@ -143,6 +160,7 @@ setCanvasHiddenTabIds(['spindle:uuid:tab:prompt-viewer:1', 'weaver'])
 const r2 = syncHiddenTabsFromHost()
 assertEqual(_patchCalls.length, 0, 'H2: no write-back when ids match live')
 assertEqual(r2.hiddenIds.includes('spindle:uuid:tab:prompt-viewer:1'), true, 'H2: canvas copy unchanged')
+assertEqual(r2.hiddenIds.length, 2, 'H2: exactly the Canvas copy (host extras not merged)')
 
 // H3: resolveHiddenTabIdsForDraft for Configure open
 {
@@ -199,10 +217,12 @@ assertEqual(getCanvasHiddenTabIds()[0], 'council', 'H7: missing field does not w
 hydrateCanvasHiddenFromLayout({ hiddenTabIds: [] })
 assertEqual(getCanvasHiddenTabIds().length, 0, 'H8: empty array clears canvas hide')
 
-// H9: merge lists de-dupes
+// H9 (LUMI-26): mergeHiddenTabIdLists was removed with the host union —
+// the Canvas copy is the sole hidden-truth input end-to-end.
 {
-  const m = mergeHiddenTabIdLists(['a', 'b'], ['b', 'c'])
-  assertEqual(m.join(','), 'a,b,c', 'H9: merge de-dupes')
+  const mod = await import('../hidden-tabs')
+  assertEqual((mod as unknown as Record<string, unknown>).mergeHiddenTabIdLists, undefined,
+    'H9: host∪canvas merge helper is gone (Canvas copy is sole truth)')
 }
 
 // H10/H11: OS closed∧unhidden suppression (D3). The dispatch-driven async
@@ -242,15 +262,17 @@ _appliedMirror = []
   assert(_appliedSecondary.includes('spindle:uuid:tab:prompt-viewer:1'), 'H11b: hidden∧closed id still applied (via hidden list, not double-added)')
 }
 
-// H12: getModel() throwing / unavailable → plain apply already ran, no crash.
+// H12: no model available → the sync still applies the Canvas copy (the
+// host list is never read — LUMI-26); no crash, copy unaffected.
 resetCanvas()
 _dispatchModel = null
 _resolveMap = new Map()
 _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['weaver'] }
+setCanvasHiddenTabIds(['weaver'])
 await flushAsync()
 {
   const r = syncHiddenTabsFromHost()
-  assert(r.hiddenIds.includes('weaver'), 'H12: no model → merge no-op, canvas copy unaffected')
+  assert(r.hiddenIds.includes('weaver'), 'H12: canvas copy drives the apply (host list irrelevant, merge no-op safe)')
   await flushAsync()
 }
 
@@ -284,7 +306,8 @@ const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance'
 {
   const gen = beginLifecycle() // re-enabled instance
   resetCanvasHiddenTabIds()
-  _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['weaver'] }
+  setCanvasHiddenTabIds(['weaver'])
+  _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
   _appliedSecondary = []
   _appliedMirror = []
   scheduleSyncHiddenTabsFromHost({ delayMs: 20 })

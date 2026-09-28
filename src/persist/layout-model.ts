@@ -1,5 +1,5 @@
 import type { LayoutModel, TabKey, Side, DrawerSide } from '../core/model'
-import { createEmptyModel, builtinKey, extensionKey, parseBuiltinKey, parseExtensionKey, isBuiltinKey } from '../core/model'
+import { createEmptyModel, builtinKey, extensionKey, parseBuiltinKey, parseExtensionKey, isBuiltinKey, isExtensionKey } from '../core/model'
 import { stripTabIdSuffix } from './tab-id-heal'
 
 /**
@@ -42,6 +42,7 @@ export function buildModelFromLayout(
   layout: LegacyLayout,
   findKey: (id: string) => TabKey | null,
   side?: DrawerSide,
+  findKeyHost?: (id: string) => TabKey | null,
 ): LayoutModel {
   const model = createEmptyModel(side ?? 'left')
 
@@ -89,8 +90,21 @@ export function buildModelFromLayout(
   // resolve through the same resolver (key-shaped inputs included). The
   // live-id tabId is the fallback for bundles that never wrote tabTitle.
   for (const d of detached) {
-    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null
-    const key = fromTitle ?? resolveStoredId(d.tabId, findKey)
+    // LUMI-26 precedence: a HOST-resolved tabTitle (the authoritative TabKey)
+    // wins; otherwise the tabId (a stale/garbage tabTitle must not override a
+    // live id the host still resolves — enable-captures-single-slot); the
+    // layout-owned fallback for the tabTitle applies LAST (the recovered
+    // record whose live id the host no longer renders).
+    let key: TabKey | null = null
+    if (d.tabTitle) {
+      key = findKeyHost ? findKeyHost(d.tabTitle) : null
+      if (!key) {
+        const viaId = resolveStoredId(d.tabId, findKey)
+        key = viaId ?? resolveStoredId(d.tabTitle, findKey)
+      }
+    } else {
+      key = resolveStoredId(d.tabId, findKey)
+    }
     if (key && !primary.includes(key) && !secondary.includes(key)) {
       appendOnce(secondary, key)
     }
@@ -300,6 +314,101 @@ function resolveStoredId(
   if (stripped === storedId) return null
 
   return findKey(stripped) ?? null
+}
+
+/**
+ * LUMI-26: layout-owned stored-id → TabKey fallback for the boot resolver.
+ *
+ * Live finding (LUMI-25 repro): when the HOST React filters a tab's button
+ * out of the drawer DOM (vanilla `drawerSettings.hiddenTabIds`), the
+ * observer inventory loses it and `host.findKey` can no longer resolve its
+ * stored id — `buildModelFromLayout` GC'd the tab from the model at boot,
+ * the strips dropped it, and Canvas's Configure menu lost it. The ONLY
+ * Canvas-side namespace that still knows the tab is the LAYOUT BLOB
+ * (tabOrder / detachedTabs tabId↔tabTitle / hiddenTabIds) — never the host
+ * store (S2/da972ae: Canvas never writes host drawerSettings, and the host
+ * list must not be re-adopted as truth), never the fiber walk.
+ *
+ * This resolver is the boot-path supplement: a stored id the layout blob
+ * owns resolves to a canonical TabKey even with no live button. Strictness
+ * (ghost protection — spec §3.4):
+ *   - key-shaped ids (`builtin:x` / `ext:e/N`) must be OWNED by the blob;
+ *   - bare builtin ids must be owned AND known to this Lumiverse instance
+ *     (host `tabOrder`, else the static builtin list as the test-mode
+ *     fallback) — a builtin id the instance never had stays unresolved;
+ *   - extension live ids (`spindle:…`) resolve ONLY through a
+ *     `detachedTabs` tabId→tabTitle mapping — a primary extension tab (no
+ *     detached record) stays unresolved (deferred-restore retry semantics
+ *     for late registration are untouched — partial-restore-retry.test).
+ * Pure: no host/DOM access — unit-testable (layout-model.test.ts).
+ */
+export function resolveLayoutOwnedStoredId(
+  storedId: string,
+  layout: unknown,
+  builtinIds: readonly string[],
+  hostTabOrder?: readonly string[] | null,
+): TabKey | null {
+  if (!layout || typeof layout !== 'object' || !storedId) return null
+  const blob = layout as {
+    tabOrder?: unknown
+    hiddenTabIds?: unknown
+    detachedTabs?: unknown
+  }
+  const owned = new Set<string>()
+  const add = (v: unknown): void => {
+    if (typeof v === 'string' && v.length) owned.add(v)
+  }
+  if (Array.isArray(blob.tabOrder)) blob.tabOrder.forEach(add)
+  if (Array.isArray(blob.hiddenTabIds)) blob.hiddenTabIds.forEach(add)
+  const detachedByTabId = new Map<string, { tabId?: unknown; tabTitle?: unknown }>()
+  if (Array.isArray(blob.detachedTabs)) {
+    for (const d of blob.detachedTabs) {
+      if (!d || typeof d !== 'object') continue
+      const rec = d as { tabId?: unknown; tabTitle?: unknown }
+      add(rec.tabId)
+      add(rec.tabTitle)
+      if (typeof rec.tabId === 'string') detachedByTabId.set(rec.tabId, rec)
+    }
+  }
+
+  const candidates = [storedId]
+  const stripped = stripTabIdSuffix(storedId)
+  if (stripped !== storedId) candidates.push(stripped)
+
+  // 1. Key-shaped stored ids (canonical TabKeys written by detachedTabs
+  //    tabTitle) — resolve to themselves when the blob owns them.
+  for (const c of candidates) {
+    if (owned.has(c) && (isBuiltinKey(c) || isExtensionKey(c))) { return c as TabKey }
+  }
+  // 1b. Key-shaped masquerade whose PARSED base the blob owns as a bare id
+  //     (legacy 'builtin:{title}' slots over bare stored ids).
+  for (const c of candidates) {
+    const parsedBuiltin = parseBuiltinKey(c as TabKey)
+    if (parsedBuiltin && (owned.has(c) || owned.has(parsedBuiltin) || [...owned].some((o) => stripTabIdSuffix(o) === parsedBuiltin))) {
+      return builtinKey(parsedBuiltin)
+    }
+  }
+
+  // 2. detachedTabs liveId → tabTitle key mapping (extension live ids whose
+  //    key the layout also carries — the model-stored liveId/key mapping).
+  for (const c of candidates) {
+    const rec = detachedByTabId.get(c)
+    const title = typeof rec?.tabTitle === 'string' ? rec.tabTitle : null
+    if (title && (isBuiltinKey(title) || isExtensionKey(title))) { return title as TabKey }
+  }
+
+  // 3. Bare builtin id — owned + known to this Lumiverse instance.
+  for (const c of candidates) {
+    if (c.includes(':')) continue
+    if (!builtinIds.includes(c)) continue
+    const hostKnows = hostTabOrder ? hostTabOrder.includes(c) : true
+    if (!hostKnows) continue
+    if (owned.has(c) || [...owned].some((o) => stripTabIdSuffix(o) === c)) {
+      return builtinKey(c)
+    }
+  }
+
+  return null
 }
 
 /**

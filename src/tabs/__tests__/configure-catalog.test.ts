@@ -9,6 +9,7 @@ import {
   filterCatalogToLive,
   isHideLocked,
   humanizeTabId,
+  supplementCatalogWithRecoveredEntries,
   type CatalogTab,
 } from '../configure-catalog'
 import { __setDrawerTabsForTest, __setStoreSnapshotForTest } from '../../store'
@@ -260,6 +261,48 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   // Empty projection → only live-resolvable ids remain.
   const onlyLive = filterCatalogToLive(catalog, host, new Set())
   assertEqual(onlyLive.map(t => t.id).join(','), 'loom,spindle:foo:tab:Bar:0', 'FL3: no model projection → live only')
+}
+
+// =====================================================================
+// supplementCatalogWithRecoveredEntries (LUMI-26 Part 2)
+// =====================================================================
+{
+  const catalog: CatalogTab[] = [
+    { id: 'loom', kind: 'builtin', title: 'Loom', hideLocked: true },
+    { id: 'spindle:live:tab:Here:0', kind: 'extension', title: 'LiveExt', hideLocked: false, extensionId: 'live' },
+  ]
+  const model = {
+    primary: ['builtin:loom', 'builtin:profile'] as string[],
+    secondary: ['ext:hone/Main'] as string[],
+    hidden: [] as string[],
+  }
+
+  const out = supplementCatalogWithRecoveredEntries(catalog, model)
+  assert(out.some(t => t.id === 'ext:hone/Main'), 'SUP1: recovered model-owned extension key added')
+  const rec = out.find(t => t.id === 'ext:hone/Main')!
+  assertEqual(rec.title, 'Main', 'SUP1b: title from the parsed tabName')
+  assertEqual(rec.extensionId, 'hone', 'SUP1c: extensionId from the parsed key')
+  assertEqual(rec.kind, 'extension', 'SUP1d: kind extension')
+  assertEqual(rec.hideLocked, false, 'SUP1e: recovered entries are never hide-locked')
+  // Present ids are never duplicated.
+  assertEqual(out.filter(t => t.id === 'loom').length, 1, 'SUP2: existing catalog ids not duplicated')
+  // Ids the model does NOT own are never supplemented (phantom guard intact).
+  const phantomOut = supplementCatalogWithRecoveredEntries([], {
+    primary: ['builtin:loom'], secondary: [], hidden: [],
+  })
+  assert(!phantomOut.some(t => t.id === 'create'), 'SUP3: unowned ids not supplemented (stale catalog ids still filtered)')
+  // Legacy masquerade key ('builtin:{title}') over an unlisted builtin.
+  const masq = supplementCatalogWithRecoveredEntries([], {
+    primary: ['builtin:Hone'], secondary: [], hidden: [],
+  })
+  assert(masq.some(t => t.id === 'builtin:Hone'), 'SUP4: legacy masquerade key supplemented')
+  // Null model → unchanged.
+  assertEqual(supplementCatalogWithRecoveredEntries(catalog, null), catalog, 'SUP5: no model → catalog unchanged')
+  // Hidden-only model ownership still recovers the entry.
+  const hidOnly = supplementCatalogWithRecoveredEntries([], {
+    primary: [], secondary: [], hidden: ['ext:gone/Panel'],
+  })
+  assert(hidOnly.some(t => t.id === 'ext:gone/Panel'), 'SUP6: hidden-only model ownership still recovers')
 }
 
 // =====================================================================

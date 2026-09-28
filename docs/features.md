@@ -28,7 +28,7 @@ interface CanvasFeature {
 | `debugFeature` | `debugMode` | Enables `[Canvas]` console output + `window.__canvasDebug()` |
 | `chatReflowFeature` | `chatReflow` | Centers chat column by adjusting margins |
 | `welcomeReflowFeature` | `welcomeReflow` | Centers the Welcome/Landing screen by the same open-drawer margins |
-| `secondSidebarFeature` | `secondSidebarEnabled` | Master toggle for the secondary drawer |
+| `secondSidebarFeature` | `secondSidebarEnabled` | Master toggle for the secondary drawer. On re-enable, tab state restores ONLY from Canvas-owned namespaces (dual slot + layout blob — LUMI-26): the host `hiddenTabIds` list is never adopted (the LUMI-25 leak — vanilla-made hides must not adopt into Canvas), and tabs the host has filtered out of the drawer DOM are re-adopted from the layout blob (`resolveLayoutOwnedStoredId`) so they stay on the strips and manageable in Configure Tabs (recovery layers documented in `docs/tabs.md` §Off-world tab recovery) |
 | `resizeSidebarsFeature` | `resizeSidebars` | Drag-to-resize handles on both drawers |
 | `drawerSyncFeature` | `mirrorCompactPosition` | Mirrors main drawer's open/close handle (size + vertical position) |
 | `shadowsDesktopFeature` | `drawerShadowsDesktop` | Box-shadow on drawers (>=601px) |
