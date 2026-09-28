@@ -252,16 +252,13 @@ export function deriveStartMenuEntries(
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
       const tab = tabsById.get(liveId)
-      // LUMI-26 Amendment 2: launchable windows only, in BOTH projections —
-      // a listed row's launch must resolve. A resolved live id with no
-      // drawer-inventory backing is fabricated (builtin identity
-      // passthrough) or stale — the host does not back this tab, so there
-      // is no window to launch/focus; closed unbacked rows would be dead
-      // controls (`openWindowInDrawerByLiveId` no-ops on the findKey miss).
-      // Closed + backed rows keep listing and launching (D6 reopen memory);
-      // manage mode recovers MENU-hidden tabs, not unbacked ones — Configure
-      // Tabs is the recovered tabs' surface.
-      if (!tab) continue
+      // LUMI-26 rework: launchable windows only, in BOTH projections. A
+      // resolved live id with no drawer-inventory backing is fabricated
+      // (builtin identity passthrough) or stale — the host does not back
+      // this tab, so there is no window to launch/focus. Closed rows keep
+      // listing (D6 reopen memory); manage mode recovers MENU-hidden tabs,
+      // not unbacked ones — Configure Tabs is the recovered tabs' surface.
+      if (!tab && !model.closed.includes(key)) continue
       const icon = resolveEntryIcon(tab, liveId)
       // Core hide-lock: resolved from the MODEL key's bare builtin id (the
       // same resolution the OS close path uses — never isHideLocked(liveId)).

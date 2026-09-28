@@ -211,16 +211,9 @@ export function filterCatalogToLive(
   knownLiveIds: ReadonlySet<string>,
 ): CatalogTab[] {
   if (!host) return catalog
-  return catalog.flatMap((tab) => {
-    if (host.findKey(tab.id) !== null) return [tab]
-    if (!knownLiveIds.has(tab.id)) return []
-    // Amendment 2: kept ONLY via the model's liveId projection — the host
-    // does not back this tab (findKey miss, no live drawer tab), so the row
-    // must not promise a presence the host prevents. Swap the blurb for the
-    // waiting-on-vanilla hint. (DOM-placed tabs have live drawer tabs, so
-    // their findKey hits and they keep their real description.)
-    return [{ ...tab, description: RECOVERED_WAITING_DESCRIPTION }]
-  })
+  return catalog.filter(
+    (tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id),
+  )
 }
 
 /** Minimal model shape the supplement reads (LayoutModel subset). */
@@ -250,16 +243,6 @@ export type RecoveredEntriesModel = {
  * before. Builtins are always fully enumerated by the static catalog and
  * their keys resolve totally (liveIdForKey), so they never need this path.
  */
-/**
- * LUMI-26 Amendment 2: a host-unbacked recovered tab (supplemented row, or a
- * row kept only via the model's liveId projection) is a tab the host
- * currently does not back — the row must not promise a presence the host
- * prevents, so it carries a waiting-on-vanilla hint instead of the regular
- * launch blurb.
- */
-const RECOVERED_WAITING_DESCRIPTION =
-  'Hidden in Lumiverse — unhide it in Lumiverse\u2019s Configure Tabs to bring it back here'
-
 export function supplementCatalogWithRecoveredEntries(
   catalog: CatalogTab[],
   model: RecoveredEntriesModel,
@@ -278,7 +261,7 @@ export function supplementCatalogWithRecoveredEntries(
         id: raw,
         kind: 'extension',
         title: parsedExt.tabName,
-        description: RECOVERED_WAITING_DESCRIPTION,
+        description: `Open ${parsedExt.tabName} extension tab`,
         hideLocked: false,
         extensionId: parsedExt.extensionId,
       })
@@ -292,7 +275,6 @@ export function supplementCatalogWithRecoveredEntries(
         id: raw,
         kind: 'builtin',
         title: humanizeTabId(parsedBuiltin),
-        description: RECOVERED_WAITING_DESCRIPTION,
         hideLocked: isCoreTabId(parsedBuiltin),
       })
     }
