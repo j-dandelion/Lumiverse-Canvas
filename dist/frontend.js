@@ -3642,6 +3642,28 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
+// src/lifecycle/instance.ts
+function beginLifecycle() {
+  _generation++;
+  _active = true;
+  return _generation;
+}
+function endLifecycle(generation) {
+  if (generation !== _generation)
+    return;
+  _active = false;
+}
+function currentLifecycleGeneration() {
+  return _generation;
+}
+function isInstanceActive() {
+  return _generation === 0 || _active;
+}
+function isLifecycleCurrent(generation) {
+  return generation === _generation && (_generation === 0 || _active);
+}
+var _generation = 0, _active = false;
+
 // src/sidebar/strip-gutter.ts
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
@@ -3788,6 +3810,8 @@ function getMainPinHost() {
   return _mainPinHost;
 }
 function ensureMainPinHost(side) {
+  if (!isInstanceActive())
+    return null;
   if (typeof document === "undefined" || !document.body)
     return null;
   if (!_mainPinHost) {
@@ -4021,6 +4045,8 @@ function clearTabListPosition() {
   clearProps(getMainPanel(), ["borderLeft", "borderRight"]);
 }
 function reconcileTabListPin() {
+  if (!isInstanceActive())
+    return;
   if (isMobileViewport() && !isHorizontalStrip()) {
     applyTabListPin(false, { force: true });
     Promise.resolve().then(() => (init_strip_gutter(), {})).then((m) => updateStripGutters());
@@ -4076,6 +4102,8 @@ function ensurePinHost(side) {
   return _pinHost;
 }
 function sweepStrayPinHosts() {
+  if (!isInstanceActive())
+    return;
   if (typeof document === "undefined" || !document.querySelectorAll)
     return;
   const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`);
@@ -7638,6 +7666,8 @@ function unpinMainMirrorForChromeOff() {
   destroyMainPinHost();
 }
 function reconcileMainTabListPin() {
+  if (!isInstanceActive())
+    return;
   if (isMobileViewport() && !isHorizontalStrip()) {
     applyMainTabListPin(false);
     Promise.resolve().then(() => (init_strip_gutter(), {})).then((m) => updateStripGutters());
@@ -7696,6 +7726,8 @@ function scheduleReconcile() {
   }));
 }
 function reconcileMainMirror() {
+  if (!isInstanceActive())
+    return;
   if (!isMainMirrorActive())
     return;
   const side = getMainDrawerSide();
@@ -8788,28 +8820,6 @@ var _canvasHiddenTabIds;
 var init_canvas_hidden = __esm(() => {
   _canvasHiddenTabIds = [];
 });
-
-// src/lifecycle/instance.ts
-function beginLifecycle() {
-  _generation++;
-  _active = true;
-  return _generation;
-}
-function endLifecycle(generation) {
-  if (generation !== _generation)
-    return;
-  _active = false;
-}
-function currentLifecycleGeneration() {
-  return _generation;
-}
-function isInstanceActive() {
-  return _generation === 0 || _active;
-}
-function isLifecycleCurrent(generation) {
-  return generation === _generation && (_generation === 0 || _active);
-}
-var _generation = 0, _active = false;
 
 // src/tabs/hidden-tabs.ts
 function collectLiveTabIdsForHiddenHeal() {
@@ -13140,6 +13150,8 @@ function computeKey(loc) {
   ].join("|");
 }
 function reconcileDrawerLocation(opts) {
+  if (!isInstanceActive())
+    return;
   if (_pending) {
     _dirty = true;
     return;
@@ -15900,6 +15912,8 @@ function injectHostHideStyles() {
   el.textContent = css;
 }
 function mountMainMirror(opts) {
+  if (!isInstanceActive())
+    return;
   injectHostHideStyles();
   document.documentElement.classList.add(CANVAS_MAIN_ACTIVE_CLASS);
   const side = getMainDrawerSide();
@@ -15994,6 +16008,8 @@ function pinShellTabList(side) {
   pinMainMirrorShellTabList(side);
 }
 function pinMainMirrorShellTabList(side) {
+  if (!isInstanceActive())
+    return null;
   if (!_shell)
     return null;
   const tabList = _shell.tabList;
