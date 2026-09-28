@@ -6357,6 +6357,19 @@ var init_start_menu_styles = __esm(() => {
   .canvas-os-start-menu__item.row-hidden {
     opacity: 0.55;
   }
+  /* LUMI-26 Amendment 3: host-unbacked manage row — dimmed (waiting on the
+     vanilla side); the hint text sits where the launch verb would be. */
+  .canvas-os-start-menu__item.row-unbacked {
+    opacity: 0.55;
+  }
+  .canvas-os-start-menu__unbacked-hint {
+    font-size: 10px;
+    opacity: 0.75;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Visibility checkbox — checked = visible (Configure semantics). */
   .canvas-os-start-menu__check {
     flex-shrink: 0;
@@ -6698,6 +6711,10 @@ function entryMonogram(title) {
   const first = Array.from(title.trim())[0];
   return first ? first.toUpperCase() : "?";
 }
+function staticIconForUnbacked(liveId) {
+  const builtin = liveId ? BUILTIN_ICON_SVGS[builtinBaseId(liveId)] : undefined;
+  return builtin ? { svg: builtin } : {};
+}
 function resolveEntryIcon(tab, liveId) {
   const dom = extractButtonIcon(tab?.root);
   if (dom.svg)
@@ -6721,25 +6738,29 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
     const activeKey = model.active[side];
     for (const key of keys) {
       const liveId = resolve(key);
-      if (!liveId || seen.has(liveId))
+      if (!liveId && !manageMode)
         continue;
-      seen.add(liveId);
+      const seenId = liveId ?? `unbacked:${key}`;
+      if (seen.has(seenId))
+        continue;
+      seen.add(seenId);
       const isMenuHidden = model.menuHidden.includes(key);
       if (isMenuHidden && !manageMode)
         continue;
       const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
-      const tab = tabsById.get(liveId);
-      if (!tab)
+      const tab = liveId ? tabsById.get(liveId) : undefined;
+      if (!tab && !manageMode)
         continue;
-      const icon = resolveEntryIcon(tab, liveId);
+      const icon = tab ? resolveEntryIcon(tab, liveId) : staticIconForUnbacked(liveId);
       const coreId = parseBuiltinKey(key);
       out.push({
-        liveId,
+        liveId: liveId ?? "",
         side,
         title: tab?.title ?? getLayoutOwnedTabTitle(key) ?? humanTabTitleForKey(key) ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
+        launchable: !!tab,
         menuHidden: isMenuHidden,
         key,
         locked: coreId !== null && isCoreTabId(coreId)
@@ -6755,7 +6776,10 @@ function createMenuEntry(entry, targetSide) {
   item.className = "canvas-os-start-menu__item";
   item.setAttribute("role", "menuitem");
   item.setAttribute("data-os-state", entry.state);
-  item.setAttribute("aria-label", `${entry.title} — ${STATE_LABEL[entry.state]}`);
+  if (!entry.launchable)
+    item.setAttribute("aria-disabled", "true");
+  const itemAriaLabel = entry.launchable ? `${entry.title} — ${STATE_LABEL[entry.state]}` : `${entry.title} — ${RECOVERED_WAITING_DESCRIPTION}`;
+  item.setAttribute("aria-label", itemAriaLabel);
   const rail = document.createElement("span");
   rail.className = "canvas-os-start-menu__rail";
   rail.setAttribute("aria-hidden", "true");
@@ -6769,22 +6793,31 @@ function createMenuEntry(entry, targetSide) {
   const status = document.createElement("span");
   status.className = "canvas-os-start-menu__status";
   status.setAttribute("aria-hidden", "true");
-  const markSvg = STATE_MARK_SVG[entry.state];
-  if (markSvg) {
-    const mark = document.createElement("span");
-    mark.className = "canvas-os-start-menu__mark";
-    mark.innerHTML = markSvg;
-    status.appendChild(mark);
+  if (entry.launchable) {
+    const markSvg = STATE_MARK_SVG[entry.state];
+    if (markSvg) {
+      const mark = document.createElement("span");
+      mark.className = "canvas-os-start-menu__mark";
+      mark.innerHTML = markSvg;
+      status.appendChild(mark);
+    }
+    const verb = document.createElement("span");
+    verb.className = "canvas-os-start-menu__verb";
+    verb.textContent = STATE_VERB[entry.state];
+    status.appendChild(verb);
+  } else {
+    const hint = document.createElement("span");
+    hint.className = "canvas-os-start-menu__unbacked-hint";
+    hint.textContent = RECOVERED_WAITING_DESCRIPTION;
+    status.appendChild(hint);
   }
-  const verb = document.createElement("span");
-  verb.className = "canvas-os-start-menu__verb";
-  verb.textContent = STATE_VERB[entry.state];
-  status.appendChild(verb);
   item.append(rail, tile, label, status);
-  item.addEventListener("click", () => {
-    hideStartMenu();
-    openWindowInDrawerByLiveId(entry.liveId, targetSide);
-  });
+  if (entry.launchable) {
+    item.addEventListener("click", () => {
+      hideStartMenu();
+      openWindowInDrawerByLiveId(entry.liveId, targetSide);
+    });
+  }
   return item;
 }
 function createManageRow(entry, targetSide, onMenuHiddenChange) {
@@ -6792,6 +6825,10 @@ function createManageRow(entry, targetSide, onMenuHiddenChange) {
   row.classList.add("canvas-os-start-menu__item--manage");
   if (entry.menuHidden)
     row.classList.add("row-hidden");
+  if (!entry.launchable) {
+    row.classList.add("row-unbacked");
+    row.title = RECOVERED_WAITING_DESCRIPTION;
+  }
   const coreUnlocked = !!getSettings().coreTabsHidden;
   const isLocked = entry.locked && !coreUnlocked;
   const checkbox = document.createElement("input");
