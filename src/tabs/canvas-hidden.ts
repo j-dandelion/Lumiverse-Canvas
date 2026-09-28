@@ -60,7 +60,20 @@ export function mergeHiddenTabIdLists(
   return out
 }
 
+/**
+ * Clear the Canvas-owned hidden list (extension teardown, LUMI-21).
+ *
+ * `_canvasHiddenTabIds` is module-level and survives an off→on toggle; a
+ * stale set used to feed the re-enabled session (AC2/AC3: Canvas UI broken
+ * until refresh). The teardown chain calls this so the re-enabled session
+ * re-seeds from the hydrated layout (`hydrateCanvasHiddenFromLayout`)
+ * instead of inheriting the disabled session's in-memory set.
+ */
+export function resetCanvasHiddenTabIds(): void {
+  _canvasHiddenTabIds = []
+}
+
 /** Test-only: reset Canvas hidden list. */
 export function __resetCanvasHiddenTabIdsForTest(): void {
-  _canvasHiddenTabIds = []
+  resetCanvasHiddenTabIds()
 }

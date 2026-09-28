@@ -50,6 +50,7 @@ import {
 } from '../../sidebar/styles'
 import { isMainDrawerRestorePending } from '../../sidebar/main-persist'
 import { dlog } from '../../debug/log'
+import { currentLifecycleGeneration, isLifecycleCurrent } from '../../lifecycle/instance'
 
 const DEFAULT_WIDTH = 420
 
@@ -501,6 +502,12 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setHidden(_side: Side, ids: LiveTabId[]): Promise<WriteResult> {
     try {
+      // LUMI-21: the lazy dispatch import below awaits; if the extension is
+      // disabled (or superseded by a newer setup) while it resolves, the
+      // continuation must not write the Canvas hidden copy or re-apply the
+      // strips against the torn-down/restored vanilla UI. Boot shares the
+      // boot generation, so boot-restore merges are unaffected.
+      const armedGeneration = currentLifecycleGeneration()
       // S2: the host drawerSettings.hiddenTabIds patch is GONE (Q2/Q3 —
       // the model owns `hidden`; the Canvas copy is a hydrate bridge and
       // converge target). Converge the Canvas copy to this side's model
@@ -544,6 +551,10 @@ export class LumiverseHost implements HostPort {
         }
       } catch {
         /* dispatch unavailable (stub env) — closed-set merge is best-effort */
+      }
+      if (!isLifecycleCurrent(armedGeneration)) {
+        dlog('[host] setHidden: dropped post-teardown continuation')
+        return 'degraded'
       }
 
       setCanvasHiddenTabIds([

@@ -1274,5 +1274,41 @@ import { applyHiddenTabIdsToHostMain } from '../buttons'
   }
 }
 
+// B35: post-teardown lazy continuation no-ops (LUMI-21). A continuation
+// resolving after the extension is disabled must not re-hide the restored
+// vanilla host strip — the teardown chain (showAllMainTabButtons) already
+// put every button back.
+{
+  const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
+  const gen = beginLifecycle()
+  endLifecycle(gen) // disable: lifecycle inactive
+
+  const btnConnections = { style: { display: '' }, getAttribute: (n: string) => n === 'data-tab-id' ? 'connections' : null }
+  const tabList = {
+    querySelectorAll(sel: string) {
+      if (sel === 'button[data-tab-id]') return [btnConnections]
+      return []
+    },
+  }
+  const sidebarStub = {
+    querySelector(sel: string) {
+      if (sel.includes('tabListWrap') || sel.includes('tabList')) return tabList
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  const prevQS = (globalThis as any).document.querySelector
+  ;(globalThis as any).document.querySelector = (sel: string) =>
+    sel === '[data-spindle-mount="sidebar"]' ? sidebarStub : null
+
+  try {
+    applyHiddenTabIdsToHostMain(new Set(['connections']))
+    await new Promise((r) => setTimeout(r, 0))
+    assertEqual(btnConnections.style.display, '', 'B35: post-teardown continuation does not hide the restored host button')
+  } finally {
+    ;(globalThis as any).document.querySelector = prevQS
+  }
+}
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

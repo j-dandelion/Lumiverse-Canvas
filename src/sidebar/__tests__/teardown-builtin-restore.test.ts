@@ -551,6 +551,101 @@ async function testT10_StoreApiViaFiberDeps() {
 }
 
 // =====================================================================
+// T11: post-teardown hidden-sync cannot re-hide the restored strips
+// (LUMI-21)
+//
+// AC1: toggling Canvas off must leave the vanilla UI intact. The disable
+// chain's restoreHostContent() re-registers host tabs, which re-arms the
+// hidden-sync debounce and fires syncHiddenTabsFromHost — post-teardown
+// continuations must no-op (lifecycle guard) and the debounce must be
+// cancelled, or the vanilla tab strip renders empty of buttons again.
+//
+// T11-local mocks are registered INSIDE the test, after T1–T10 have
+// completed (mock.module is process-global; registering late keeps the
+// earlier tests on the real modules).
+let _t11HostSettings: any = { side: 'right', tabOrder: [], hiddenTabIds: [] as string[] }
+let _t11Secondary: string[] = []
+let _t11Mirror: string[] = []
+let _t11HostMain: string[] = []
+
+async function testT11_PostTeardownHiddenSync() {
+  mock.module('../../dom/host-settings', () => ({
+    getHostDrawerSettings: () => _t11HostSettings,
+  }))
+  mock.module('../../tabs/buttons', () => ({
+    applyHiddenTabIdsToSecondary: (ids: ReadonlySet<string>) => { _t11Secondary = [...ids] },
+    applyHiddenTabIdsToMirror: (ids: ReadonlySet<string>) => { _t11Mirror = [...ids] },
+    applyHiddenTabIdsToHostMain: (ids: ReadonlySet<string>) => { _t11HostMain = [...ids] },
+  }))
+  mock.module('../../recon/dispatch', () => ({
+    getModel: () => null,
+    getHost: () => null,
+  }))
+
+  const {
+    syncHiddenTabsFromHost,
+    scheduleSyncHiddenTabsFromHost,
+    cancelScheduledHiddenTabsSync,
+    resetCanvasHiddenTabIds,
+    setCanvasHiddenTabIds,
+    hydrateCanvasHiddenFromLayout,
+    getCanvasHiddenTabIds,
+  } = await import('../../tabs/hidden-tabs')
+  const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
+  const flush = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+  // T11a (control): with the instance LIVE, the sync applies the stored
+  // hidden set to all three strips.
+  const gen = beginLifecycle()
+  resetCanvasHiddenTabIds()
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['databank'] }
+  _t11Secondary = []; _t11Mirror = []; _t11HostMain = []
+  syncHiddenTabsFromHost()
+  assert(_t11Secondary.includes('databank'), 'T11a: live sync applies to the secondary strip (control)')
+  assert(_t11HostMain.includes('databank'), 'T11a-b: live sync applies to the host main strip (control)')
+
+  // T11b: post-teardown direct sync no-ops — the disable chain's
+  // restoreHostContent()-driven pass must not re-hide the restored buttons.
+  endLifecycle(gen)
+  _t11Secondary = []; _t11Mirror = []; _t11HostMain = []
+  setCanvasHiddenTabIds(['databank'])
+  syncHiddenTabsFromHost()
+  assertEqual(_t11Secondary.length, 0, 'T11b: post-teardown sync does not apply to the secondary strip')
+  assertEqual(_t11Mirror.length, 0, 'T11b-b: post-teardown sync does not apply to the mirror strip')
+  assertEqual(_t11HostMain.length, 0, 'T11b-c: post-teardown sync does not apply to the host main strip (AC1)')
+  await flush(20)
+  assertEqual(_t11HostMain.length, 0, 'T11b-d: lazy closed-set continuation inert post-teardown')
+
+  // T11c: a debounce timer armed post-teardown never fires (fire-time
+  // generation guard — belt to the cancel's suspenders).
+  scheduleSyncHiddenTabsFromHost({ delayMs: 10 })
+  await flush(80)
+  assertEqual(_t11Secondary.length, 0, 'T11c: post-teardown debounce fire no-ops')
+
+  // T11d: re-enable — cancel sweeps a pending timer armed before teardown
+  // completed; the fresh session re-seeds from the hydrated layout.
+  const gen2 = beginLifecycle()
+  scheduleSyncHiddenTabsFromHost({ delayMs: 10 })
+  cancelScheduledHiddenTabsSync()
+  await flush(80)
+  assertEqual(_t11Secondary.length, 0, 'T11d: cancelled debounce never fires')
+
+  // T11e: the re-enabled session re-seeds from the hydrated layout (the
+  // teardown reset cleared the stale set) — an empty layout hide list
+  // applies an empty set, leaving the vanilla/Canvas strips unhidden.
+  // Host settings are cleared too: the hydrate/layout blob is the truth
+  // the fresh session re-seeds from, not the disabled session's memory.
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+  resetCanvasHiddenTabIds() // teardown cleanup registration (setup.ts)
+  hydrateCanvasHiddenFromLayout({ hiddenTabIds: [] })
+  syncHiddenTabsFromHost()
+  assertEqual(_t11Secondary.length, 0, 'T11e: re-seeded empty hide list applies empty (no stale hides)')
+  assertEqual(getCanvasHiddenTabIds().length, 0, 'T11e-b: stale hidden set did not survive the toggle')
+
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 
@@ -564,6 +659,7 @@ async function main() {
   await testT8_HostInactiveDoesNotAbort()
   await testT9_ContainerUnregisterStoreFallback()
   await testT10_StoreApiViaFiberDeps()
+  await testT11_PostTeardownHiddenSync()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

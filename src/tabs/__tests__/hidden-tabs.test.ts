@@ -100,7 +100,10 @@ const {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
   __resetCanvasHiddenTabIdsForTest,
+  resetCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
+  scheduleSyncHiddenTabsFromHost,
+  cancelScheduledHiddenTabsSync,
 } = await import('../hidden-tabs')
 
 function resetCanvas() {
@@ -249,6 +252,60 @@ await flushAsync()
   const r = syncHiddenTabsFromHost()
   assert(r.hiddenIds.includes('weaver'), 'H12: no model → merge no-op, canvas copy unaffected')
   await flushAsync()
+}
+
+// H13–H15: lifecycle guard (LUMI-21). A teardown-armed sync must not
+// re-apply the hidden set to the restored vanilla strips, and the
+// re-enabled session must re-seed from the hydrated layout instead of
+// inheriting the disabled session's in-memory set.
+const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
+
+// H13: sync no-ops once the instance is torn down (disable chain: no
+// applies, Canvas copy untouched, lazy dispatch continuation inert).
+{
+  const gen = beginLifecycle() // simulate the running instance
+  endLifecycle(gen) // ...then disable it (teardown ran)
+  resetCanvasHiddenTabIds() // teardown cleanup registered in setup.ts
+  setCanvasHiddenTabIds(['weaver'])
+  _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['weaver'] }
+  _appliedSecondary = []
+  _appliedMirror = []
+  const r = syncHiddenTabsFromHost()
+  assertEqual(r.hiddenIds.join(','), 'weaver', 'H13: guard returns the untouched Canvas copy')
+  assertEqual(_appliedSecondary.length, 0, 'H13: no strip apply after teardown')
+  assertEqual(_appliedMirror.length, 0, 'H13b: no mirror apply after teardown')
+  assertEqual(getCanvasHiddenTabIds().join(','), 'weaver', 'H13c: Canvas copy not rewritten post-teardown')
+  await flushAsync()
+  assertEqual(_appliedSecondary.length, 0, 'H13d: lazy closed-set continuation inert after teardown')
+}
+
+// H14: cancelScheduledHiddenTabsSync cancels a pending debounce while the
+// instance is live (the teardown cancel registration's guarantee).
+{
+  const gen = beginLifecycle() // re-enabled instance
+  resetCanvasHiddenTabIds()
+  _hostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['weaver'] }
+  _appliedSecondary = []
+  _appliedMirror = []
+  scheduleSyncHiddenTabsFromHost({ delayMs: 20 })
+  cancelScheduledHiddenTabsSync()
+  await new Promise((r) => setTimeout(r, 80))
+  assertEqual(_appliedSecondary.length, 0, 'H14: cancelled debounce never fires')
+
+  // Sanity: without the cancel the same armed timer DOES fire.
+  scheduleSyncHiddenTabsFromHost({ delayMs: 20 })
+  await new Promise((r) => setTimeout(r, 80))
+  assert(_appliedSecondary.includes('weaver'), 'H14b: uncancelled debounce fires (control)')
+
+  // H15: post-teardown fire is guarded even without a cancel (belt and
+  // suspenders for timers armed before the cleanup chain ran).
+  _appliedSecondary = []
+  _appliedMirror = []
+  endLifecycle(gen)
+  scheduleSyncHiddenTabsFromHost({ delayMs: 20 })
+  await new Promise((r) => setTimeout(r, 80))
+  assertEqual(_appliedSecondary.length, 0, 'H15: debounce firing after teardown no-ops')
+  assertEqual(_appliedMirror.length, 0, 'H15b: mirror debounce post-teardown no-ops')
 }
 
 _dispatchModel = null

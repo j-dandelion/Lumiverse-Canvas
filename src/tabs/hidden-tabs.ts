@@ -27,15 +27,22 @@ import {
   hydrateCanvasHiddenFromLayout,
   mergeHiddenTabIdLists,
   normalizeHiddenIds,
+  resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
   __resetCanvasHiddenTabIdsForTest,
 } from './canvas-hidden'
+import {
+  currentLifecycleGeneration,
+  isInstanceActive,
+  isLifecycleCurrent,
+} from '../lifecycle/instance'
 
 export { healHiddenTabIds, isTabIdHidden } from '../persist/tab-id-heal'
 export {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
   mergeHiddenTabIdLists,
+  resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
   __resetCanvasHiddenTabIdsForTest,
 } from './canvas-hidden'
@@ -83,6 +90,23 @@ export type SyncHiddenTabsResult = {
 let _debouncedSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
+ * Cancel a pending debounced sync. Registered as a teardown cleanup
+ * (LUMI-21): the tab-register observer re-arms this timer DURING the
+ * disable chain (restoreHostContent re-registers host tabs), so a timer
+ * armed mid-teardown would otherwise fire post-teardown and re-hide the
+ * vanilla strip (AC1's "no tab buttons"). Registered AFTER the
+ * restoreHostContent cleanup in setup's FIFO chain so it sweeps timers
+ * armed during teardown; the generation guard in the callback is the
+ * belt-and-suspenders backstop for anything armed earlier.
+ */
+export function cancelScheduledHiddenTabsSync(): void {
+  if (_debouncedSyncTimer !== null) {
+    clearTimeout(_debouncedSyncTimer)
+    _debouncedSyncTimer = null
+  }
+}
+
+/**
  * Debounced `syncHiddenTabsFromHost` for high-frequency sites (tab register).
  * Immediate sites (finishRestore) should call `syncHiddenTabsFromHost` directly.
  */
@@ -91,8 +115,12 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
 }): void {
   const delayMs = opts?.delayMs ?? 50
   if (_debouncedSyncTimer !== null) clearTimeout(_debouncedSyncTimer)
+  // LUMI-21: a timer armed pre-teardown (or mid-teardown) must not fire
+  // post-teardown — guard at fire time against the arming generation.
+  const armedGeneration = currentLifecycleGeneration()
   _debouncedSyncTimer = setTimeout(() => {
     _debouncedSyncTimer = null
+    if (!isLifecycleCurrent(armedGeneration)) return
     try {
       syncHiddenTabsFromHost()
     } catch {
@@ -109,6 +137,13 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
  * Safe to call repeatedly (on finishRestore, tab register, setup).
  */
 export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
+  // LUMI-21: no hidden-sync work once the instance is torn down. The
+  // disable chain's restoreHostContent() re-registers host tabs, which
+  // drives this sync against the freshly restored vanilla strip — without
+  // the guard it re-applies the stored hidden set and strips the vanilla
+  // tab buttons (AC1). Boot runs with the instance active, so boot restore
+  // is unaffected.
+  if (!isInstanceActive()) return { hiddenIds: getCanvasHiddenTabIds() }
   const host = getHostDrawerSettings()
   const hostStored = normalizeHiddenIds(host?.hiddenTabIds)
   const canvasStored = getCanvasHiddenTabIds()
@@ -136,8 +171,12 @@ export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
   // edge through this path (the codebase tolerates the existing cycle —
   // active-tab — but a leaf surface like this should not add one).
   const closedOnlyLiveIds = new Set<string>()
+  // LUMI-21: guard the lazy continuation — a dispatch import resolving
+  // after teardown must not re-apply the hidden set to the restored strips.
+  const armedGeneration = currentLifecycleGeneration()
   try {
     void import('../recon/dispatch').then((m) => {
+      if (!isLifecycleCurrent(armedGeneration)) return
       const model = m.getModel()
       if (!model || model.closed.length === 0) return applySets(forDom, stored, liveIds)
       const hiddenKeys = new Set<string>(model.hidden)

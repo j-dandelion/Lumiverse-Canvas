@@ -64,19 +64,30 @@ import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/
 import { clearChatMargins, clearWelcomeReflow } from './chat/reflow'
 import { startWeaverLane } from './modals/weaver-lane'
 import { LumiverseHost } from './host/lumiverse/implementation'
-import { bootstrapFromLayout, bootPlacementDone, shutdown as shutdownCore } from './recon/dispatch'
-
-let _setupGeneration = 0
+import {
+  bootstrapFromLayout,
+  bootPlacementDone,
+  shutdown as shutdownCore,
+} from './recon/dispatch'
+import {
+  beginLifecycle,
+  currentLifecycleGeneration,
+  endLifecycle,
+} from './lifecycle/instance'
+import {
+  cancelScheduledHiddenTabsSync,
+  resetCanvasHiddenTabIds,
+} from './tabs/hidden-tabs'
 
 export function setup(ctx: SpindleFrontendContext) {
-  const generation = ++_setupGeneration
+  const generation = beginLifecycle()
   bootStep(`setup-start gen=${generation}`)
   // Stall watchdog: if the load chain never settles (e.g. backend IPC
   // requests dropped while the transport was not ready), dump the boot
   // timeline loudly so the failure is diagnosable from the console.
   // Cancelled when setup reaches a terminal step.
   const cancelBootWatchdog = armBootWatchdog(() => {
-    if (generation === _setupGeneration) {
+    if (generation === currentLifecycleGeneration()) {
       // only the current generation reports a stall
       bootError(`setup-stall gen=${generation}`, new Error('boot did not finish in time'))
     }
@@ -105,7 +116,7 @@ export function setup(ctx: SpindleFrontendContext) {
   syncPersistDebugToBackend((msg) => ctx.sendToBackend(msg))
   plog(`setup start gen=${generation}`)
   let active = true
-  const isCurrent = () => active && generation === _setupGeneration
+  const isCurrent = () => active && generation === currentLifecycleGeneration()
 
   // Hide host main (and later main-mirror) immediately — do not wait for
   // LOAD_LAYOUT. Host defaults the open drawer to "profile"; without this
@@ -137,6 +148,18 @@ export function setup(ctx: SpindleFrontendContext) {
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
+  // LUMI-21: the Canvas-owned hidden list is module-level and must not
+  // survive an off→on toggle — a re-enabled session re-seeds from the
+  // hydrated layout instead of inheriting the disabled session's set.
+  // Registered here so cleanupAll (teardown AND next-boot's stale-instance
+  // sweep) clears it before hydrate re-seeds.
+  registerCleanup(resetCanvasHiddenTabIds)
+  // LUMI-21: the tab-register observer re-arms the hidden-sync debounce
+  // DURING teardown (restoreHostContent re-registers host tabs); this
+  // cancel runs later in the FIFO chain so the timer cannot fire
+  // post-teardown and re-hide the vanilla strip. Must stay AFTER the
+  // teardownMainMirror + restoreHostContent registrations above.
+  registerCleanup(cancelScheduledHiddenTabsSync)
   // NOTE (2026-09-12 teardown fix): the host-bridge context must stay alive
   // through the WHOLE cleanup chain — feature teardowns (notably
   // tearDownSecondarySidebar) use ctx.ui to move built-in tabs back to the
@@ -227,7 +250,7 @@ export function setup(ctx: SpindleFrontendContext) {
     dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`)
     bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`)
     if (!isCurrent()) {
-      plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`)
+      plog(`setup load ignored stale gen=${generation} current=${currentLifecycleGeneration()}`)
       cancelBootWatchdog()
       return
     }
@@ -561,8 +584,12 @@ export function setup(ctx: SpindleFrontendContext) {
     active = false
     cancelBootWatchdog()
     // A newer setup owns the shared cleanup registry and backend context.
-    if (generation !== _setupGeneration) return
+    if (generation !== currentLifecycleGeneration()) return
     plog(`setup teardown gen=${generation}`)
+    // LUMI-21: mark the lifecycle inactive BEFORE the cleanup chain — every
+    // teardown-armed async continuation (hidden-sync debounce, lazy
+    // import() thens) checks the lifecycle and no-ops once this is false.
+    endLifecycle(generation)
     cleanupAll()
     // Keep the load guard active while cleanup tears down observers. This
     // prevents stopMainDrawerPersistence from saving host defaults during

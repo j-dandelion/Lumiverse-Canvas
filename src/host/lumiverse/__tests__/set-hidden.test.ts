@@ -324,5 +324,33 @@ function host() {
   _resolveMap.clear()
 }
 
+// ── F: post-teardown setHidden degrades instead of writing (LUMI-21) ──
+// The closed-set merge awaits the dispatch import; if the extension is
+// disabled while it resolves, the continuation must not write the Canvas
+// hidden copy or re-apply the strips against the torn-down state.
+{
+  const { beginLifecycle, endLifecycle } = await import('../../../lifecycle/instance')
+  const gen = beginLifecycle()
+  endLifecycle(gen)
+  __resetCanvasHiddenTabIdsForTest()
+  setCanvasHiddenTabIds(['keepme'])
+  state.assignments = new Map([[HONE_KEY, 'secondary']])
+  state.observerTabs = [
+    observerTab(HONE_KEY, HONE_LIVE, 'Hone', 'ec535e94-9ee1-48e3-8f7d-2a7ceccadd4d'),
+  ]
+  state.hostSettings = { tabOrder: [], hiddenTabIds: [] }
+  state.mirrorCalls = []
+  state.secondaryCalls = []
+  state.hostMainCalls = []
+
+  const h = host()
+  const res = await h.setHidden('secondary', [])
+  assertEqual(res, 'degraded', 'F1: post-teardown setHidden reports degraded (no write)')
+  assertEqual(state.mirrorCalls.length, 0, 'F2: no mirror apply post-teardown')
+  assertEqual(state.secondaryCalls.length, 0, 'F3: no secondary apply post-teardown')
+  assertEqual(state.hostMainCalls.length, 0, 'F4: no host-main apply post-teardown')
+  assertEqual(getCanvasHiddenTabIds().join(','), 'keepme', 'F5: Canvas hidden copy untouched post-teardown')
+}
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

@@ -27,6 +27,7 @@ import {
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
+import { currentLifecycleGeneration, isLifecycleCurrent } from '../lifecycle/instance'
 import {
   isHideDrawerOpenCloseButtonsEnabled,
   isHorizontalStrip,
@@ -623,7 +624,11 @@ export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): vo
  */
 export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void {
   // Lazy-import to avoid circular dependency at module level.
+  // LUMI-21: capture the arming generation — a continuation resolving after
+  // teardown (extension disable) must not re-hide the restored strips.
+  const armedGeneration = currentLifecycleGeneration()
   void import('../sidebar/main-mirror-drawer').then((m) => {
+    if (!isLifecycleCurrent(armedGeneration)) return
     const list = m.getMainMirrorTabList()
     if (!list) return
     const buttons = Array.from(
@@ -666,7 +671,11 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
  */
 export function applyHiddenTabIdsToHostMain(hiddenIds: ReadonlySet<string>): void {
   // Lazy-import to avoid circular dependency at module level.
+  // LUMI-21: capture the arming generation — a continuation resolving after
+  // teardown must not re-hide the restored vanilla host strip (AC1).
+  const armedGeneration = currentLifecycleGeneration()
   void import('../sidebar/main-mirror-drawer').then((m) => {
+    if (!isLifecycleCurrent(armedGeneration)) return
     // Taskbar mode: the mirror strip is the visible main surface; the
     // mirror applicator covers it. Only the host drawer (non-taskbar) needs
     // this direct apply.
