@@ -14270,6 +14270,9 @@ function addSecondaryTabButton(tab) {
   btn.setAttribute("title", tab.title);
   if (showLabels)
     btn.classList.add("sidebar-ux-tab-labeled");
+  const facadeKey = tab.facadeKey ?? getHost()?.findKey(tab.id) ?? null;
+  if (facadeKey)
+    btn.setAttribute("data-canvas-facade-key", facadeKey);
   btn.style.cssText = `
     width: 100%;
     height: ${showLabels ? "56px" : "48px"};
@@ -14562,6 +14565,7 @@ var init_buttons = __esm(() => {
   init_secondary();
   init_state();
   init_assignment();
+  init_dispatch();
   init_tab_context_menu();
   init_canvas_hidden();
   _buttonTabIdLogged = new Set;
@@ -24196,6 +24200,87 @@ init_mobile_exclusion();
 init_drawer_sync();
 init_drawer_observer();
 init_secondary_drawer();
+
+// src/tabs/ghost-tabs.ts
+init_dispatch();
+init_secondary();
+init_active_tab();
+init_buttons();
+init_log();
+var _unsub = null;
+var _prevSecondary = [];
+function droppedSecondaryKeys(prevSecondary, model) {
+  const out = [];
+  for (const key of prevSecondary) {
+    if (model.secondary.includes(key))
+      continue;
+    if (model.primary.includes(key))
+      continue;
+    out.push(key);
+  }
+  return out;
+}
+function sweepGhostSecondaryButton(key) {
+  if (typeof document === "undefined")
+    return;
+  let escaped;
+  try {
+    escaped = CSS.escape(key);
+  } catch {
+    return;
+  }
+  const scope = getSecondaryTabList() ?? getSecondaryWrapper();
+  const btn = scope?.querySelector(`button[data-canvas-facade-key="${escaped}"]`);
+  const liveId = btn?.getAttribute("data-tab-id") || "";
+  const wasActive = !!liveId && getActiveSecondaryTabId() === liveId;
+  dlog("[ghost-tabs] sweeping dead secondary tab", { key, liveId, wasActive });
+  if (liveId) {
+    let roots = [];
+    try {
+      roots = Array.from(document.querySelectorAll(`[data-canvas-moved="${CSS.escape(liveId)}"]`));
+    } catch {}
+    for (const root of roots)
+      root.remove();
+    removeSecondaryTabButton(liveId);
+  } else {
+    btn?.remove();
+  }
+  if (!wasActive)
+    return;
+  setActiveSecondaryTabId(null);
+  const list = getSecondaryTabList();
+  const remaining = list ? Array.from(list.querySelectorAll("button[data-tab-id]")).filter((el) => !(el instanceof HTMLElement && el.style.display === "none")).length : 0;
+  if (remaining === 0) {
+    closeSecondarySidebar();
+    updateDrawerTabVisibility();
+  }
+}
+function onModelCommit() {
+  const model = getModel();
+  if (!model)
+    return;
+  const prev = _prevSecondary;
+  _prevSecondary = model.secondary;
+  for (const key of droppedSecondaryKeys(prev, model)) {
+    sweepGhostSecondaryButton(key);
+  }
+}
+function startGhostTabSweeper() {
+  stopGhostTabSweeper();
+  const model = getModel();
+  _prevSecondary = model ? model.secondary : [];
+  _unsub = onModelChanged(onModelCommit);
+  return stopGhostTabSweeper;
+}
+function stopGhostTabSweeper() {
+  if (_unsub) {
+    _unsub();
+    _unsub = null;
+  }
+  _prevSecondary = [];
+}
+
+// src/setup.ts
 init_tab_position();
 init_main_mirror_drawer();
 
@@ -24981,6 +25066,36 @@ init_styles();
 init_main_persist();
 init_log();
 var DEFAULT_WIDTH = 420;
+var GHOST_FACADE_GRACE_MS = 1e4;
+var _facadeMissingSince = new Map;
+var _ghostRetryTimers = new Map;
+function clearGhostRetry(key) {
+  const timer = _ghostRetryTimers.get(key);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    _ghostRetryTimers.delete(key);
+  }
+}
+function armGhostRetry(key) {
+  clearGhostRetry(key);
+  const gen = currentLifecycleGeneration();
+  const timer = setTimeout(() => {
+    _ghostRetryTimers.delete(key);
+    if (!isLifecycleCurrent(gen))
+      return;
+    emitWorldChanged();
+  }, GHOST_FACADE_GRACE_MS + 250);
+  _ghostRetryTimers.set(key, timer);
+}
+function forgetMissingFacadeKey(key) {
+  _facadeMissingSince.delete(key);
+  clearGhostRetry(key);
+}
+var _worldNotifies = new Set;
+function emitWorldChanged() {
+  for (const notify of Array.from(_worldNotifies))
+    notify();
+}
 function readSecondaryWidth2() {
   if (typeof document === "undefined")
     return DEFAULT_WIDTH;
@@ -25079,6 +25194,9 @@ class LumiverseHost {
   shutdown() {
     this._dispose?.();
     this._dispose = null;
+    for (const key of Array.from(_ghostRetryTimers.keys()))
+      clearGhostRetry(key);
+    _facadeMissingSince.clear();
   }
   observe() {
     findStoreData(true);
@@ -25088,6 +25206,8 @@ class LumiverseHost {
     for (const t of liveTabs) {
       const key = t.key;
       seen.add(key);
+      if (_facadeMissingSince.has(key))
+        forgetMissingFacadeKey(key);
       entries.push(buildHostEntry(t));
     }
     const liveByTitle = new Map;
@@ -25102,8 +25222,29 @@ class LumiverseHost {
       const title = parseBuiltinKey(tabKey) ?? parseExtensionKey(tabKey)?.tabName;
       if (title && liveByTitle.has(title))
         continue;
+      if (isExtensionKey(tabKey)) {
+        const nowMs = Date.now();
+        let missingSince = _facadeMissingSince.get(tabKey);
+        if (missingSince === undefined) {
+          missingSince = nowMs;
+          _facadeMissingSince.set(tabKey, missingSince);
+          armGhostRetry(tabKey);
+        }
+        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
+          dlog("[host] observe: extension key absent past ghost grace — dropping from observed world", {
+            key: tabKey,
+            missingForMs: nowMs - missingSince
+          });
+          forgetMissingFacadeKey(tabKey);
+          continue;
+        }
+      }
       entries.push(buildEntryFromAssignment(tabKey));
       seen.add(tabKey);
+    }
+    for (const key of Array.from(_facadeMissingSince.keys())) {
+      if (!assignments.has(key))
+        forgetMissingFacadeKey(key);
     }
     const secondaryIds = readVisibleTabIdsFromList(getSecondaryTabList());
     if (secondaryIds.length > 0) {
@@ -25347,6 +25488,7 @@ class LumiverseHost {
           cb();
       });
     };
+    _worldNotifies.add(notify);
     const unreg1 = drawerObserver.onTabRegistered(notify);
     const unreg2 = drawerObserver.onTabUnregistered(notify);
     let sidebarObserver = null;
@@ -25386,6 +25528,7 @@ class LumiverseHost {
     }
     const dispose = () => {
       disposed = true;
+      _worldNotifies.delete(notify);
       unreg1();
       unreg2();
       sidebarObserver?.disconnect();
@@ -25597,6 +25740,7 @@ function setup(ctx) {
     dlog(`initSecondaryDrawer`);
     initSecondaryDrawer(ctx);
     dlog(`initSecondaryDrawer done`);
+    registerCleanup(startGhostTabSweeper());
     dlog(`startContextMenuListener`);
     startContextMenuListener();
     dlog(`startContextMenuListener done`);
