@@ -80,17 +80,6 @@ mock.module('../../recon/dispatch', () => ({
   },
 }))
 const dispatchedIntents: Array<{ t: string; key?: string; hidden?: boolean }> = []
-// Amendment 4: the unbacked manage row's click runs the restore bridge —
-// record the calls instead of hitting the real settings API.
-const restoreCalls: string[] = []
-let restoreResult: 'restored' | 'not-hidden' | 'failed' = 'restored'
-let reloadCalls = 0
-mock.module('../../dom/host-settings', () => ({
-  restoreVanillaHiddenTab: (id: string) => {
-    restoreCalls.push(id)
-    return Promise.resolve(restoreResult)
-  },
-}))
 mock.module('../start-menu-styles', () => ({
   injectStartMenuStyles: () => {},
   START_MENU_STYLE_ID: 'canvas-os-start-menu-styles',
@@ -634,7 +623,6 @@ const fakeDoc = {
   removeEventListener: winRec.removeEventListener,
   innerWidth: 1024,
   innerHeight: 768,
-  location: { reload: () => { reloadCalls++ } },
   visualViewport: {
     addEventListener: vvRec.addEventListener,
     removeEventListener: vvRec.removeEventListener,
@@ -871,7 +859,7 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
         'MAC1 DOM: unbacked row has no launch verb')
       // The hint lives inside the status span (where the launch verb sits).
       const status = row.children.find((c) => c.className.includes('__status'))
-      assert(!!status && status.children.some((c) => c.className.includes('__unbacked-hint') && /restore/i.test(c.textContent)),
+      assert(!!status && status.children.some((c) => c.className.includes('__unbacked-hint') && /unhide/i.test(c.textContent)),
         'MAC1 DOM: unbacked row carries the waiting-on-vanilla hint')
       const cb = row.children.find((c) => c.tagName === 'INPUT' && c.className.includes('__check')) as FakeEl | undefined
       assert(!!cb, 'MAC1 DOM: unbacked row carries a working eye checkbox')
@@ -893,32 +881,6 @@ function openFreshMenu(): { menu: FakeEl; button: FakeEl } {
     assertEqual(dispatchedIntents.length, 1, 'MAC1 DOM: unbacked row checkbox dispatches the menu intent')
     assertEqual(dispatchedIntents[0]?.t, 'setMenuHidden', 'MAC1 DOM: unbacked checkbox uses setMenuHidden (never the strip axis)')
     assertEqual(dispatchedIntents[0]?.key, 'builtin:ghost', 'MAC1 DOM: intent keyed by the model TabKey')
-
-    // Amendment 4: clicking the unbacked row (not the checkbox) runs the
-    // restore bridge for the row's vanilla id — the remove-only host write
-    // replaces the off/on dance.
-    restoreCalls.length = 0
-    reloadCalls = 0
-    // Failure path first (sync assertions): the API refuses — the menu
-    // stays open with a visible message, no reload.
-    restoreResult = 'failed'
-    ghostRow.click()
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
-    assert(!menu.removed, 'A4: failed restore keeps the menu open')
-    assertEqual(reloadCalls, 0, 'A4: failed restore does not reload')
-    assertEqual(restoreCalls.length, 1, 'A4: failed restore still attempted the bridge')
-    const hintAfterFail = (ghostRow.children.find((c) => c.className.includes('__status')) as FakeEl | undefined)
-      ?.children.find((c) => c.className.includes('__unbacked-hint')) as FakeEl | undefined
-    assert(/failed/i.test(hintAfterFail?.textContent ?? ''), 'A4: failed restore surfaces a visible message')
-
-    // Success path: the menu dismisses and the page reloads so the host
-    // re-renders the restored button and Canvas converges.
-    ;(menu as unknown as { animate?: unknown }).animate = undefined
-    restoreResult = 'restored'
-    ghostRow.click()
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
-    assertEqual(reloadCalls, 1, 'A4: successful restore reloads for convergence')
-    assert(menu.removed, 'A4: successful restore dismisses the menu')
   } finally {
     extraPrimary.length = 0
     hideStartMenu({ immediate: true })

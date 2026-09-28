@@ -10,7 +10,6 @@ import {
   __setHostSetSettingForTest,
   __setSettingsApiFetchForTest,
   writeHostDrawerSettingsViaApi,
-  restoreVanillaHiddenTab,
 } from '../host-settings'
 
 let passed = 0
@@ -261,76 +260,6 @@ function reset() {
   __setSettingsApiFetchForTest(offlineFetch)
   const offline = await writeHostDrawerSettingsViaApi({ side: 'right' })
   assert(!offline, 'API fallback returns false when fetch throws')
-
-  __setSettingsApiFetchForTest(null)
-}
-
-// =====================================================================
-// restoreVanillaHiddenTab — the LUMI-26 Amendment 4 restore bridge.
-// Guardrails: READ-MODIFY-WRITE (fresh GET before the PUT), REMOVE-ONLY
-// (exactly one entry removed, everything else preserved, never adds),
-// graceful no-op when the id is not in the list, 'failed' (no throw) when
-// the API refuses or is unreachable.
-// =====================================================================
-{
-  reset()
-  const HOST_ROW = {
-    side: 'left',
-    showTabLabels: true,
-    tabOrder: ['a', 'cortex', 'b'],
-    hiddenTabIds: ['cortex', 'databank', 'spindle:hone:tab:Main:0'],
-  }
-  const calls: Array<{ method: string; body?: unknown }> = []
-  const fakeFetch = async (url: string, init?: RequestInit): Promise<Response> => {
-    const method = init?.method ?? 'GET'
-    calls.push({ method: method, url, body: init?.body })
-    if (method === 'GET') {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ key: 'drawerSettings', value: JSON.parse(JSON.stringify(HOST_ROW)) }),
-      } as unknown as Response
-    }
-    return { ok: true, status: 200, json: async () => ({}) } as unknown as Response
-  }
-  __setSettingsApiFetchForTest(fakeFetch as typeof fetch)
-
-  const r = await restoreVanillaHiddenTab('cortex')
-  assertEqual(r, 'restored', 'A4: restore succeeds on a vanilla-hidden id')
-  assertEqual(calls.length, 2, 'A4: GET then PUT (read-modify-write)')
-  assertEqual(calls[0].method, 'GET', 'A4: the list is re-read immediately before the write')
-  const putBody = JSON.parse(calls[1]!.body as string) as { value: { hiddenTabIds: string[]; showTabLabels?: boolean } }
-  assertArraysEqual(putBody.value.hiddenTabIds, ['databank', 'spindle:hone:tab:Main:0'], 'A4: PUT carries exactly the list minus the one entry')
-  assertEqual(putBody.value.showTabLabels, true, 'A4: PUT preserves every other drawerSettings field')
-
-  // Remove-only: an id NOT in the list → 'not-hidden', NO write.
-  calls.length = 0
-  const missing = await restoreVanillaHiddenTab('never-hidden')
-  assertEqual(missing, 'not-hidden', 'A4: id not in the list → not-hidden')
-  assertEqual(calls.length, 1, 'A4: not-hidden performs NO write (read-only probe)')
-
-  // Failed read: the bridge refuses without writing.
-  const failingRead = async () => ({ ok: false, status: 401, json: async () => ({}) } as unknown as Response)
-  __setSettingsApiFetchForTest(failingRead)
-  const readFail = await restoreVanillaHiddenTab('cortex')
-  assertEqual(readFail, 'failed', 'A4: unreadable row → failed')
-
-  // Rejected write → failed.
-  const rejectingPut = async (url: string, init?: RequestInit): Promise<Response> => {
-    if ((init?.method ?? 'GET') === 'GET') {
-      return { ok: true, status: 200, json: async () => ({ value: { hiddenTabIds: ['cortex'] } }) } as unknown as Response
-    }
-    return { ok: false, status: 500, json: async () => ({}) } as unknown as Response
-  }
-  __setSettingsApiFetchForTest(rejectingPut)
-  const putFail = await restoreVanillaHiddenTab('cortex')
-  assertEqual(putFail, 'failed', 'A4: rejected PUT → failed')
-
-  // Offline → failed, no throw.
-  const offlineFetch = async () => { throw new Error('offline') }
-  __setSettingsApiFetchForTest(offlineFetch)
-  const offline = await restoreVanillaHiddenTab('cortex')
-  assertEqual(offline, 'failed', 'A4: unreachable API → failed (no throw)')
 
   __setSettingsApiFetchForTest(null)
 }

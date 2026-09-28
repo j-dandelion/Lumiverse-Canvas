@@ -251,15 +251,14 @@ export type RecoveredEntriesModel = {
  * their keys resolve totally (liveIdForKey), so they never need this path.
  */
 /**
- * LUMI-26 Amendment 2, reworded by Amendment 4: a host-unbacked recovered tab
- * (supplemented row, or a row kept only via the model's liveId projection) is
- * a tab the host currently does not back — the row carries this note and, on
- * both Canvas surfaces, a user-gestured Restore action
- * (restoreVanillaHiddenTab) that clears the vanilla hide through Lumiverse's
- * own settings API.
+ * LUMI-26 Amendment 2: a host-unbacked recovered tab (supplemented row, or a
+ * row kept only via the model's liveId projection) is a tab the host
+ * currently does not back — the row must not promise a presence the host
+ * prevents, so it carries a waiting-on-vanilla hint instead of the regular
+ * launch blurb.
  */
 export const RECOVERED_WAITING_DESCRIPTION =
-  'Hidden in Lumiverse\u2019s settings \u2014 restore to bring it back here'
+  'Hidden in Lumiverse — unhide it in Lumiverse\u2019s Configure Tabs to bring it back here'
 
 export function supplementCatalogWithRecoveredEntries(
   catalog: CatalogTab[],
