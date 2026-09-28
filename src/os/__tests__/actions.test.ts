@@ -546,19 +546,27 @@ const baseModel = () => ({
   )
 }
 {
-  // LUMI-16b: a menu-hidden target launches AND re-enters the menu's NORMAL
-  // list (setMenuHidden:false rides the open batch). The strip `hidden` set
-  // is untouched — no setHidden may fire for a menu-only hide.
+  // LUMI-23 (overturns the LUMI-16b launch-unhide): a menu-hidden target
+  // launches with ZERO `setMenuHidden` intents — the launch path never
+  // writes the menu axis, so the panel stays out of the menu's NORMAL list
+  // until the manage checkbox un-hides it. The strip `hidden` set is also
+  // untouched — no setHidden may fire for a menu-only hide.
   fresh({ ...baseModel(), menuHidden: [KEY] })
   fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
   await openWindowInDrawerByLiveId('weaver:2', 'primary')
-  const menuIntent = fake.dispatches.find((d: any) => d.t === 'setMenuHidden')
-  assertEqual(menuIntent?.hidden, false, 'menu-hidden launch → setMenuHidden:false (re-enters the menu list)')
-  assertEqual(menuIntent?.key, KEY, 'menu un-hide targets the resolved key')
+  assertEqual(
+    fake.dispatches.filter((d: any) => d.t === 'setMenuHidden').length,
+    0,
+    'menu-hidden launch dispatches no setMenuHidden (launch never writes the menu axis)',
+  )
   assertEqual(
     fake.dispatches.filter((d: any) => d.t === 'setHidden').length,
     0,
     'menu-hidden launch never touches the strip hidden set',
+  )
+  assert(
+    fake.dispatches.some((d: any) => d.t === 'activate'),
+    'menu-hidden launch still activates the panel',
   )
 }
 {

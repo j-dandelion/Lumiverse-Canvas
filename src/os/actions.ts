@@ -204,11 +204,14 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
 
   const isClosed = model.closed.includes(key)
   const isHidden = model.hidden.includes(key)
-  // START-MENU-only set (LUMI-16b): a launch is a stronger signal than a
-  // manage-mode un-check — the launched window must re-enter the menu's
-  // NORMAL list (the menu toggle itself never touches the strips, and this
-  // intent does not either).
-  const menuHidden = model.menuHidden.includes(key)
+  // LUMI-23 (member decision 2026-09-28): the launch NEVER writes the menu
+  // axis — no `{t:'setMenuHidden'}` intent fires from this path, in any
+  // layout. A menu-hidden panel that is opened stays menu-hidden (dimmed in
+  // manage mode, out of the menu's NORMAL list) until the manage checkbox
+  // un-hides it. This overturns the LUMI-16b launch-unhide rationale ("a
+  // launch is a stronger signal than a manage-mode un-check"). The menu axis
+  // is written only from the manage checkbox (start-menu.ts), the OS-disable
+  // sweep (os-mode.ts), and the reducer/persist plumbing.
   const livesInTarget = side === 'primary' ? model.primary.includes(key) : model.secondary.includes(key)
   // Launch placement: a button already in the TARGET drawer keeps its slot;
   // every other window (other drawer / closed / hidden) lands at the end.
@@ -268,11 +271,8 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   // already reordered in the un-hide batch).
   const open: Promise<void> = dispatchBatch([
     { t: 'setClosed', key, closed: false },
-    // LUMI-16b: launching a menu-hidden panel re-enters it into the menu's
-    // NORMAL listing (the set is menu-projection-only — no strip effect).
-    ...(menuHidden
-      ? [{ t: 'setMenuHidden', key, hidden: false } as const]
-      : []),
+    // LUMI-23: no menu-axis write on launch — a menu-hidden panel opened
+    // here keeps its menuHidden membership (see the comment above).
     ...(isClosed && !isHidden && livesInTarget
       ? [{ t: 'reorder', key, side, index: launchIndex } as const]
       : []),

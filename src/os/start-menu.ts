@@ -362,8 +362,10 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
  * draft; this menu has no draft). The set is consumed ONLY by the Start-menu
  * projections: reconcile has no menuHidden diff, so no host write fires and
  * the strips cannot react; the dispatch's reconcileAndPersist saves the
- * layout automatically. Launching a menu-hidden panel clears the set for
- * that window (the launch path, actions.ts).
+ * layout automatically. The set is menu-projection-only: launching a
+ * menu-hidden panel does NOT change its menuHidden membership (the launch
+ * path never writes the menu axis — LUMI-23, member decision 2026-09-28);
+ * only this checkbox un-hides it.
  *
  * Core hide-locked rows (CORE_HIDE_LOCKED) keep the checkbox disabled
  * unless the `coreTabsHidden` setting is on — the same unlock rule the
