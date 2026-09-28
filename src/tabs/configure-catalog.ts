@@ -118,20 +118,6 @@ export function humanizeTabId(id: string): string {
   return words.join(' ')
 }
 
-/**
- * Human display title for a model TabKey — never a raw `builtin:`/`ext:`
- * key (LUMI-26 rework: a raw key must never render on a Canvas surface).
- * Builtins go through the known-title map; extension keys carry their human
- * tabName in the key itself. Returns null only for unparseable keys.
- */
-export function humanTabTitleForKey(key: string): string | null {
-  const builtin = parseBuiltinKey(key as TabKey)
-  if (builtin) return humanizeTabId(builtin)
-  const ext = parseExtensionKey(key as TabKey)
-  if (ext) return ext.tabName
-  return null
-}
-
 /** All built-in tabs as CatalogTab entries, in BUILTIN_TAB_IDS order. */
 export function getBuiltinCatalog(): CatalogTab[] {
   return BUILTIN_TAB_IDS.map(id => ({

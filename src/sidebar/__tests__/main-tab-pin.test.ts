@@ -156,28 +156,6 @@ class StubElement {
   closest(_sel: string): StubElement | null { return null }
   querySelector(sel: string): StubElement | null {
     // Attribute-key lookup must not fall through to "first matching class"
-    // LUMI-26 rework: host-twin attribute selectors (data-tab-id / title) —
-    // the backing predicate resolves the twin through findMainTabButton.
-    {
-      const attrM = sel.match(/^button\[(data-tab-id|title)="([^"]+)"\]$/)
-      if (attrM) {
-        const attr = attrM[1]
-        const walk = (el: StubElement): StubElement | null => {
-          if (String(el.tagName).toUpperCase() === 'BUTTON' && el.getAttribute(attr) === attrM[2]) return el
-          for (const c of el.children) {
-            const hit = walk(c)
-            if (hit) return hit
-          }
-          return null
-        }
-        for (const c of this.children) {
-          const hit = walk(c)
-          if (hit) return hit
-        }
-        return null
-      }
-    }
-    // Attribute-key lookup must not fall through to "first matching class"
     if (sel.includes('[data-mirror-key=') || sel.includes('data-mirror-key=')) {
       const m = sel.match(/data-mirror-key="([^"]+)"/)
       if (m) {
@@ -730,14 +708,6 @@ async function bootMirror(opts?: {
   active?: TabKey | null
   extraTabs?: LiveTab[]
 }): Promise<FakeHost> {
-  // LUMI-26 rework: the mirror renders only host-BACKED keys now — seed the
-  // standard host buttons when the block didn't append its own (blocks that
-  // do — M17/M18/B1 — keep theirs; a non-empty sidebar is left untouched).
-  if (!mainSidebar.children.some((c) => String(c.tagName).toUpperCase() === 'BUTTON')) {
-    for (const [id, title] of [['profile', 'Profile'], ['memory', 'Memory'], ['notes', 'Notes']] as const) {
-      mainSidebar.appendChild(makeHostBtn(id, title))
-    }
-  }
   const tabs: LiveTab[] = [
     makeLiveTab(PROFILE, 'profile'),
     makeLiveTab(MEMORY, 'memory'),
@@ -910,12 +880,6 @@ function reset(): void {
 // button that is not a model key (moved away) renders nowhere.
 {
   reset()
-  // LUMI-26 rework: mirror renders only host-backed keys — give every model
-  // key its twin; the test's own subjects stay: model-hidden → display:none,
-  // non-model host button ('moved') → nowhere.
-  for (const [id, title] of [['memory', 'Memory'], ['notes', 'Notes']] as const) {
-    mainSidebar.appendChild(makeHostBtn(id, title))
-  }
   const visibleHost = makeHostBtn('profile', 'Profile', false)
   const movedHost = makeHostBtn('moved', 'Moved', false)
   movedHost.style.display = 'none'
@@ -1656,9 +1620,6 @@ function reset(): void {
   // Late extension tab registers in the host world + merges into the model.
   const HONE2 = HONE
   host.addTab(HONE2, 'h:hone-ghost', 'primary')
-  // LUMI-26 rework: registration in the real host mounts the extension's
-  // drawer button; the convergence render materializes the mirror button.
-  mainSidebar.appendChild(makeHostBtn('h:hone-ghost', 'Hone'))
   await flush()
   const { getModel: gm } = await import('../../recon/dispatch')
   // Simulate the membership adopt the enqueueHostSync path performs: append
@@ -1777,70 +1738,6 @@ shutdownModel()
 
   shutdownModel()
   void host
-}
-
-// RAC1 (LUMI-26 rework): strips never render host-unbacked model keys.
-// A key with no host twin (id or title fallback) and no Canvas-closed
-// lifecycle gets NO strip button — fabricated chrome produced inert ghosts
-// (member report 2026-09-28). Convergence materializes the button once the
-// host re-backs the tab; closed keys keep the display:none lifecycle (D6);
-// the never-hide-all guard evaluates renderable (backed) keys only.
-{
-  reset()
-  const GHOST = builtinKey('ghost')
-  const host = await bootMirror({ primary: [PROFILE, MEMORY, GHOST] })
-  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
-  const mirrors = () => collectMirrorButtons(list)
-  assert(!mirrors().some((m) => m.getAttribute('data-mirror-key') === GHOST),
-    'RAC1: unbacked model key renders no strip button')
-  assertEqual(mirrors().length, 2, 'RAC1: backed keys unaffected')
-
-  // The twin appears (vanilla-side unhide) → next render materializes the
-  // button; no state change involved.
-  const twin = makeHostBtn('ghost', 'Ghost')
-  mainSidebar.appendChild(twin)
-  renderMainMirrorTabs()
-  const ghost = mirrors().find((m) => m.getAttribute('data-mirror-key') === GHOST)
-  assert(!!ghost, 'RAC1: button materializes when the host re-backs the key')
-  assertEqual(ghost!.getAttribute('data-tab-id'), null, 'RAC1: unbacked live id never stamped (resolve misses)')
-
-  // Backing lost mid-session → the sweep drops the stale button.
-  twin.remove()
-  renderMainMirrorTabs()
-  assert(!mirrors().some((m) => m.getAttribute('data-mirror-key') === GHOST),
-    'RAC1: key that loses backing mid-session leaves no ghost')
-  shutdownModel()
-}
-{
-  reset()
-  // Closed keys keep today's display:none lifecycle (D6) even unbacked.
-  const GHOST = builtinKey('ghost')
-  await bootMirror({ primary: [PROFILE, GHOST], active: PROFILE })
-  const model = getModel()!
-  bootstrap({ ...model, closed: [GHOST] }, new FakeHost([
-    makeLiveTab(PROFILE, 'profile'),
-  ]))
-  await flush()
-  applyMainTabListPin(true, { force: true })
-  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
-  const ghost = collectMirrorButtons(list).find((m) => m.getAttribute('data-mirror-key') === GHOST)
-  assert(!!ghost, 'RAC1: closed unbacked key keeps its strip button')
-  assertEqual(ghost!.style.display, 'none', 'RAC1: closed unbacked key stays display:none (D6 lifecycle)')
-  shutdownModel()
-}
-{
-  reset()
-  // Never-hide-all guard evaluates renderable (backed) keys only: hiding
-  // every BACKED key force-shows the first backed key; an unbacked hidden
-  // key never becomes the force-visible slot.
-  const GHOST = builtinKey('ghost')
-  await bootMirror({ primary: [PROFILE, GHOST], hidden: [PROFILE, GHOST] })
-  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
-  const mirrors = collectMirrorButtons(list)
-  assertEqual(mirrors.length, 1, 'RAC1: unbacked hidden key renders no button')
-  assertEqual(mirrors[0].getAttribute('data-mirror-key'), PROFILE, 'RAC1: force-visible slot goes to a backed key')
-  assertEqual(mirrors[0].style.display, '', 'RAC1: never-hide-all keeps the backed key visible')
-  shutdownModel()
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

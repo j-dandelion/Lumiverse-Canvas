@@ -52,9 +52,6 @@ const storeTabs = [
   { id: 'c:2', extensionId: 'x/c', title: 'Gamma', root: null },
   { id: 'a:2', extensionId: '', title: 'Alpha', iconSvg: '<svg/>', root: null },
   { id: 'b:2', extensionId: '', title: 'Beta', root: null },
-  // LUMI-26 rework: the core-lock blocks need profile BACKED (a raw-key row
-  // for an unbacked non-closed tab is now skipped — launchable windows only).
-  { id: 'profile:2', extensionId: '', title: 'Profile', root: null },
 ] as unknown as DrawerTab[]
 
 // getDrawerTabs is consumed inside deriveStartMenuEntries — bun:test mock.
@@ -133,41 +130,6 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assertEqual(hiddenEntry?.side, 'secondary', 'menu-hidden tab keeps its drawer')
   assertEqual(hiddenEntry?.key, KEY_HIDDEN, 'menu-hidden entry carries its TabKey (setMenuHidden keying)')
   assert(entries.find((e) => e.liveId === 'a:2')?.menuHidden === false, 'menu-visible tab not flagged')
-}
-
-// ── RAC2 (LUMI-26 rework): launchable windows only — unbacked keys are skipped in BOTH projections ──
-{
-  // A builtin key whose resolved live id has NO drawer-inventory backing:
-  // identity's bare-builtin passthrough fabricates 'ghost' — the host does
-  // not back the tab, so there is no window to launch. Recovered extension
-  // keys resolve to null and were already skipped.
-  const unbackedModel = {
-    ...makeModel(),
-    primary: [KEY_A, 'builtin:ghost'] as string[],
-    closed: [] as string[],
-  }
-  const ghostResolve = (key: string) => (key === 'builtin:ghost' ? 'ghost' : liveIds.get(key) ?? null)
-  const normal = deriveStartMenuEntries(unbackedModel, ghostResolve)
-  assertEqual(normal.length, 2, 'RAC2: unbacked non-closed key absent from the NORMAL projection')
-  assert(!normal.some((e) => e.key === 'builtin:ghost'), 'RAC2: no ghost row (normal)')
-  const manage = deriveStartMenuEntries(unbackedModel, ghostResolve, storeTabs, { manageMode: true })
-  assert(!manage.some((e) => e.key === 'builtin:ghost'), 'RAC2: unbacked key absent from the MANAGE projection too')
-
-  // A CLOSED unbacked key keeps listing (D6 reopen memory) — with a
-  // humanized title, never a raw key.
-  const closedUnbacked = { ...unbackedModel, closed: ['builtin:ghost'] as string[] }
-  const closedNormal = deriveStartMenuEntries(closedUnbacked, ghostResolve)
-  const row = closedNormal.find((e) => e.key === 'builtin:ghost')
-  assert(!!row, 'RAC2: closed unbacked key still listed (D6)')
-  assertEqual(row?.state, 'closed', 'RAC2: closed unbacked row carries the closed mark')
-  assertEqual(row?.title, 'Ghost', 'RAC2: title humanized (never a raw key)')
-
-  // Backed keys are untouched: same model with a backing store tab lists it.
-  const backedModel = { ...unbackedModel, primary: [KEY_A, 'builtin:profile'] as string[] }
-  const backedResolve = (key: string) => (key === 'builtin:profile' ? 'profile:2' : liveIds.get(key) ?? null)
-  const backed = deriveStartMenuEntries(backedModel, backedResolve)
-  assert(backed.some((e) => e.key === 'builtin:profile' && e.title === 'Profile'),
-    'RAC2: backed key keeps its inventory title and row')
 }
 
 // ── menu projection reads ONLY menuHidden (LUMI-16b) — strip `hidden` is not a menu concern ──

@@ -28,9 +28,11 @@
 // click forwards to the host Settings button, never a Canvas tab.
 
 import type { TabKey } from '../core/model'
+import {
+  parseBuiltinKey,
+  parseExtensionKey,
+} from '../core/model'
 import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch } from '../recon/dispatch'
-import { humanTabTitleForKey } from '../tabs/configure-catalog'
-import { getLayoutOwnedTabTitle } from '../persist/layout-model'
 import { getSettings, isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
 import { isStartAtStripTopGate } from '../os/start-strip-top-gate'
 import { toggleWindowByLiveId } from '../os/actions'
@@ -201,11 +203,11 @@ export function ensureMirrorListStructure(list: HTMLElement): {
 
 /** Best-effort display title for a model TabKey (used when no twin exists). */
 function keyTitle(key: TabKey): string | null {
-  // LUMI-26 rework: NEVER a raw `builtin:`/`ext:`-derived bare id — prefer
-  // the layout blob's tabTitle mapping, then the humanized key chain.
-  const stored = getLayoutOwnedTabTitle(key)
-  if (stored) return stored
-  return humanTabTitleForKey(key)
+  const builtin = parseBuiltinKey(key)
+  if (builtin) return builtin
+  const ext = parseExtensionKey(key)
+  if (ext) return ext.tabName
+  return null
 }
 
 /** Twin lookup for a model key, resolving suffix drift per render. */
@@ -426,39 +428,21 @@ export function renderMainMirrorTabs(): void {
   const open = isCanvasMainOpen()
   const activeKey = model.active.primary
 
-  // Never-hide-all guard (WORKFLOW gotcha): if EVERY renderable regular
-  // primary key is hidden, keep the first renderable one so the strip never
-  // renders empty. OS mode suspends the guard: all windows minimized/closed
-  // → an empty strip is the correct collapsed-drawer look (D7), the Start
-  // button remains. LUMI-26 rework: the guard evaluates RENDERABLE (backed)
-  // keys only — unbacked keys contribute neither ghosts nor guard slots.
+  // Never-hide-all guard (WORKFLOW gotcha): if EVERY regular primary key is
+  // hidden, keep the first visible so the strip never renders empty. OS
+  // mode suspends the guard: all windows minimized/closed → an empty strip
+  // is the correct collapsed-drawer look (D7), the Start button remains.
   const regularKeys = model.primary
-
-  // LUMI-26 rework: backing pass. A strip button exists to operate a window;
-  // a model key with no host twin (id or title fallback) and no Canvas-closed
-  // lifecycle is host-unbacked (vanilla-filtered / layout-recovered) and gets
-  // NO button — fabricating chrome produced inert label-only ghosts (member
-  // report 2026-09-28). No state changes in either direction: when the
-  // vanilla side re-backs the tab, the next convergence render materializes
-  // the button; when it filters it out mid-session, the sweep below drops
-  // the stale ghost. Closed keys keep today's display:none lifecycle (D6).
-  const twins = new Map<TabKey, { liveId: string | null; btn: HTMLElement | null }>()
-  for (const key of regularKeys) twins.set(key, twinForKey(key))
-  const renderableKeys = regularKeys.filter(
-    (key) => !!twins.get(key)!.btn || model.closed.includes(key),
-  )
-  console.error('DBG renderable', Array.from(twins.entries()).map(([k,v]) => [k, !!v.btn, v.liveId]))
-
-  const hiddenCount = renderableKeys.filter((k) => isHidden(model, k)).length
+  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length
   const forceVisibleKey: TabKey | null =
-    renderableKeys.length > 0 && hiddenCount >= renderableKeys.length && !isOsModeEnabled()
-      ? renderableKeys[0]!
+    regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled()
+      ? regularKeys[0]!
       : null
 
   // Built-in / extension tabs: scrollable top section in MODEL order.
   let insertBefore: ChildNode | null = mainSection.firstChild
-  for (const key of renderableKeys) {
-    const twin = twins.get(key)!
+  for (const key of regularKeys) {
+    const twin = twinForKey(key)
     const mirror = ensureMirrorButton(mainSection, list, key, insertBefore)
     insertBefore = mirror.nextSibling
 
@@ -500,10 +484,7 @@ export function renderMainMirrorTabs(): void {
   }
 
   // Drop stale mirror buttons anywhere under the list (main + bottom).
-  // LUMI-26 rework: only renderable keys keep a button — a key that lost its
-  // host backing mid-session (vanilla-side hide while Canvas is on) must not
-  // leave an inert ghost behind.
-  const wantedKeys = new Set<string>(renderableKeys)
+  const wantedKeys = new Set<string>(regularKeys)
   for (const btn of Array.from(
     list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`),
   ) as HTMLElement[]) {
