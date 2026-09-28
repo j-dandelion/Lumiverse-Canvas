@@ -8772,10 +8772,35 @@ function mergeHiddenTabIdLists(hostIds, canvasIds) {
   }
   return out;
 }
+function resetCanvasHiddenTabIds() {
+  _canvasHiddenTabIds = [];
+}
 var _canvasHiddenTabIds;
 var init_canvas_hidden = __esm(() => {
   _canvasHiddenTabIds = [];
 });
+
+// src/lifecycle/instance.ts
+function beginLifecycle() {
+  _generation++;
+  _active = true;
+  return _generation;
+}
+function endLifecycle(generation) {
+  if (generation !== _generation)
+    return;
+  _active = false;
+}
+function currentLifecycleGeneration() {
+  return _generation;
+}
+function isInstanceActive() {
+  return _generation === 0 || _active;
+}
+function isLifecycleCurrent(generation) {
+  return generation === _generation && (_generation === 0 || _active);
+}
+var _generation = 0, _active = false;
 
 // src/tabs/hidden-tabs.ts
 function collectLiveTabIdsForHiddenHeal() {
@@ -8805,18 +8830,29 @@ function collectLiveTabIdsForHiddenHeal() {
   }
   return [...ids];
 }
+function cancelScheduledHiddenTabsSync() {
+  if (_debouncedSyncTimer !== null) {
+    clearTimeout(_debouncedSyncTimer);
+    _debouncedSyncTimer = null;
+  }
+}
 function scheduleSyncHiddenTabsFromHost(opts) {
   const delayMs = opts?.delayMs ?? 50;
   if (_debouncedSyncTimer !== null)
     clearTimeout(_debouncedSyncTimer);
+  const armedGeneration = currentLifecycleGeneration();
   _debouncedSyncTimer = setTimeout(() => {
     _debouncedSyncTimer = null;
+    if (!isLifecycleCurrent(armedGeneration))
+      return;
     try {
       syncHiddenTabsFromHost();
     } catch {}
   }, delayMs);
 }
 function syncHiddenTabsFromHost() {
+  if (!isInstanceActive())
+    return { hiddenIds: getCanvasHiddenTabIds() };
   const host = getHostDrawerSettings();
   const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
   const canvasStored = getCanvasHiddenTabIds();
@@ -8826,8 +8862,11 @@ function syncHiddenTabsFromHost() {
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
   setCanvasHiddenTabIds(forCanvas);
   const closedOnlyLiveIds = new Set;
+  const armedGeneration = currentLifecycleGeneration();
   try {
     Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
+      if (!isLifecycleCurrent(armedGeneration))
+        return;
       const model = getModel();
       if (!model || model.closed.length === 0)
         return applySets(forDom, stored, liveIds);
@@ -12907,7 +12946,7 @@ function installDragOnButton(btn) {
     cleanupPendingListeners();
   };
   const onPointerDown = (e) => {
-    if (!_active)
+    if (!_active2)
       return;
     if (!isLiveTabListDndAllowed())
       return;
@@ -12972,9 +13011,9 @@ function installDragOnButton(btn) {
   btn.addEventListener("pointerdown", onPointerDown);
 }
 function installTabListDnd() {
-  if (_active)
+  if (_active2)
     return null;
-  _active = true;
+  _active2 = true;
   dlog("[tab-list-dnd] install: diagnostic build active");
   injectDndStyles();
   const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
@@ -13003,7 +13042,7 @@ function installTabListDnd() {
   };
 }
 function tearDownTabListDnd() {
-  _active = false;
+  _active2 = false;
   if (_observer) {
     _observer.disconnect();
     _observer = null;
@@ -13030,7 +13069,7 @@ function tearDownTabListDnd() {
     document.getElementById(DND_STYLE_ID)?.remove();
   }
 }
-var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active = false, _observer = null;
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
 var init_tab_list_dnd = __esm(() => {
   init_configure_model();
   init_owned_commit();
@@ -14371,7 +14410,10 @@ function applyHiddenTabIdsToSecondary(hiddenIds) {
   }
 }
 function applyHiddenTabIdsToMirror(hiddenIds) {
+  const armedGeneration = currentLifecycleGeneration();
   Promise.resolve().then(() => (init_main_mirror_drawer(), {})).then((m) => {
+    if (!isLifecycleCurrent(armedGeneration))
+      return;
     const list = getMainMirrorTabList();
     if (!list)
       return;
@@ -14390,7 +14432,10 @@ function applyHiddenTabIdsToMirror(hiddenIds) {
   });
 }
 function applyHiddenTabIdsToHostMain(hiddenIds) {
+  const armedGeneration = currentLifecycleGeneration();
   Promise.resolve().then(() => (init_main_mirror_drawer(), {})).then((m) => {
+    if (!isLifecycleCurrent(armedGeneration))
+      return;
     if (getMainMirrorTabList())
       return;
     const sidebar = getMainSidebar();
@@ -14622,14 +14667,14 @@ function sameKeys2(a, b) {
 }
 function bootstrap(model, host, version) {
   _unsubscribeWorldChanged?.();
-  const gen = ++_generation;
+  const gen = ++_generation2;
   commitModel(model);
   _host = host;
   _version = version ?? "unknown";
   _bootstrapping = true;
   _worldSyncPending = false;
   _unsubscribeWorldChanged = host.onWorldChanged(() => {
-    if (gen !== _generation || _host !== host)
+    if (gen !== _generation2 || _host !== host)
       return;
     if (_bootstrapping) {
       _worldSyncPending = true;
@@ -14640,7 +14685,7 @@ function bootstrap(model, host, version) {
   const task = reconcileAndPersist(model, gen);
   _queue = task.catch(() => {}).then(() => {});
   task.then((next) => {
-    if (gen !== _generation || _host !== host)
+    if (gen !== _generation2 || _host !== host)
       return;
     _persistOsBootOverride = null;
     if (next !== model)
@@ -14651,7 +14696,7 @@ function bootstrap(model, host, version) {
       enqueueHostSync(host, gen).catch(() => {});
     }
   }, () => {
-    if (gen === _generation && _host === host) {
+    if (gen === _generation2 && _host === host) {
       _persistOsBootOverride = null;
       _bootstrapping = false;
     }
@@ -14659,7 +14704,7 @@ function bootstrap(model, host, version) {
 }
 function enqueueHostSync(host, generation) {
   const task = _queue.then(async () => {
-    if (generation !== _generation || _host !== host || !_model)
+    if (generation !== _generation2 || _host !== host || !_model)
       return;
     const observed = host.observe();
     if (_pendingLayout !== null && inventoryIsReady(observed) && observed.tabs.length > 0) {
@@ -14684,7 +14729,7 @@ function enqueueHostSync(host, generation) {
       if (merged !== _model) {
         _restoringPending = true;
         try {
-          if (generation === _generation) {
+          if (generation === _generation2) {
             commitModel(await reconcileAndPersist(merged, generation));
           }
         } finally {
@@ -14722,14 +14767,14 @@ function enqueueHostSync(host, generation) {
     if (next === _model)
       return;
     const result = await reconcileAndPersist(next, generation);
-    if (generation === _generation)
+    if (generation === _generation2)
       commitModel(result);
   });
   _queue = task.catch(() => {});
   return task;
 }
 function shutdown() {
-  _generation++;
+  _generation2++;
   _unsubscribeWorldChanged?.();
   _unsubscribeWorldChanged = null;
   _bootstrapping = false;
@@ -14824,9 +14869,9 @@ function persistModel(model) {
     console.warn("[canvas] saveLayoutToDisk rejected:", err);
   });
 }
-async function reconcileAndPersist(model, generation = _generation) {
+async function reconcileAndPersist(model, generation = _generation2) {
   const host = _host;
-  if (!host || generation !== _generation)
+  if (!host || generation !== _generation2)
     return model;
   const report = await reconcile(model, host);
   if (report.modelSideCorrection !== undefined && model.side !== report.modelSideCorrection) {
@@ -14834,20 +14879,20 @@ async function reconcileAndPersist(model, generation = _generation) {
   }
   const hasTabs = model.primary.length > 0 || model.secondary.length > 0;
   const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending;
-  if (generation === _generation && _host === host && persistAllowed && hasTabs) {
+  if (generation === _generation2 && _host === host && persistAllowed && hasTabs) {
     persistModel(model);
   }
   return model;
 }
 function dispatch(intent) {
-  const gen = _generation;
+  const gen = _generation2;
   const host = _host;
   if (host)
     dlog("[dispatch] intent", { t: intent.t, intent });
   if (!host)
     return Promise.resolve();
   const task = _queue.then(async () => {
-    if (gen !== _generation)
+    if (gen !== _generation2)
       return;
     if (!_model || !_host)
       return;
@@ -14864,12 +14909,12 @@ function dispatch(intent) {
   return task;
 }
 function dispatchBatch(intents) {
-  const gen = _generation;
+  const gen = _generation2;
   const host = _host;
   if (!host)
     return Promise.resolve();
   const task = _queue.then(async () => {
-    if (gen !== _generation)
+    if (gen !== _generation2)
       return;
     if (!_model || !_host)
       return;
@@ -15148,7 +15193,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
     });
   }
   bootstrap(model, host, version);
-  const passGen = _generation;
+  const passGen = _generation2;
   const savedLayout = layout ?? {};
   dlog("[dispatch] boot restore", {
     expectedTabs: expected,
@@ -15164,7 +15209,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
   const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
   const restorePending = _pendingLayout !== null;
   _bootPlacementPass = (async () => {
-    if (passGen !== _generation)
+    if (passGen !== _generation2)
       return;
     let gate = null;
     let gateReleased = false;
@@ -15177,7 +15222,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
         gate?.releaseSecondaryPlacementReveal();
       } catch {}
     };
-    if (passGen !== _generation)
+    if (passGen !== _generation2)
       return;
     try {
       gate = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
@@ -15186,7 +15231,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
     } catch {}
     try {
       const m = await Promise.resolve().then(() => (init_secondary(), {}));
-      if (passGen !== _generation)
+      if (passGen !== _generation2)
         return;
       await reassignSecondaryTabsFromModel({
         openOnClosed: false,
@@ -15194,7 +15239,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
         activateKey: model.active.secondary ?? null
       });
       if (!restorePending) {
-        if (passGen !== _generation)
+        if (passGen !== _generation2)
           return;
         try {
           await unassignSecondaryTabsNotInModel();
@@ -15213,7 +15258,7 @@ function bootstrapFromLayout(layout, host, version, opts) {
         try {
           mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
         } catch {}
-        if (passGen !== _generation)
+        if (passGen !== _generation2)
           return;
         try {
           mp?.ensureRestoredPrimaryTab(primaryBootLiveId);
@@ -15222,16 +15267,16 @@ function bootstrapFromLayout(layout, host, version, opts) {
           mm?.ensureHostContentParkedPublic();
         } catch {}
       };
-      if (passGen !== _generation)
+      if (passGen !== _generation2)
         return;
       await reassertPrimary();
-      if (passGen !== _generation)
+      if (passGen !== _generation2)
         return;
       try {
         const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
         if (isMainMirrorActive()) {
           setTimeout(() => {
-            if (passGen !== _generation)
+            if (passGen !== _generation2)
               return;
             reassertPrimary();
           }, 500);
@@ -15258,7 +15303,7 @@ function __getPendingRestoreFlagsForTest() {
     pendingWindowUserState: _pendingWindowUserState
   };
 }
-var _host = null, _model = null, _queue, _generation = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _persistOsOverride = null, _persistOsBootOverride = null, _persistResolvedWhilePending = false, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
+var _host = null, _model = null, _queue, _generation2 = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _persistOsOverride = null, _persistOsBootOverride = null, _persistResolvedWhilePending = false, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
 var init_dispatch = __esm(() => {
   init_reduce();
   init_reconcile();
@@ -15528,7 +15573,7 @@ function getMainMirrorWidthVar() {
   return MAIN_MIRROR_WIDTH_VAR;
 }
 function isMainMirrorActive() {
-  return _active2;
+  return _active3;
 }
 function isCanvasMainOpen() {
   return _open && isMainMirrorActive();
@@ -15557,17 +15602,17 @@ function applyMainMirrorDrawer(enabled, opts) {
     return;
   }
   const side = getMainDrawerSide();
-  if (_active2 && _shell && _mountedSide === side && !opts?.force) {
+  if (_active3 && _shell && _mountedSide === side && !opts?.force) {
     ensureHostContentParked();
     return;
   }
-  if (_active2 && _shell && !opts?.force) {
+  if (_active3 && _shell && !opts?.force) {
     restyleMainShellSide(side);
     ensureHostContentParked();
     syncDrawerTabSettings();
     return;
   }
-  if (_active2 && opts?.force) {
+  if (_active3 && opts?.force) {
     const wasOpen = _open;
     teardownMainMirror({ keepWidthVar: true });
     mountMainMirror({ initialOpen: opts?.initialOpen ?? wasOpen });
@@ -15582,7 +15627,7 @@ function reconcileMainMirrorDrawer(opts) {
     force: false,
     initialOpen: opts?.initialOpen
   });
-  if (opts?.initialOpen !== undefined && _active2 && !_open && opts.initialOpen) {
+  if (opts?.initialOpen !== undefined && _active3 && !_open && opts.initialOpen) {
     openCanvasMainDrawer();
   }
 }
@@ -15613,7 +15658,7 @@ function applyMainMirrorRestoredWidth(widthPx) {
   }
 }
 function restyleMainShellSide(side) {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   const w = readWidthCssVar(MAIN_MIRROR_WIDTH_VAR, 420);
   cancelWrapperAnimation(_shell.wrapper);
@@ -15624,7 +15669,7 @@ function restyleMainShellSide(side) {
   bumpReflow();
 }
 function openCanvasMainDrawer() {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   _shell.wrapper.dataset.drawerOpen = "true";
   ensureHostContentParked();
@@ -15646,7 +15691,7 @@ function openCanvasMainDrawer() {
   mobileExclusionAfterToggle(true);
 }
 function closeCanvasMainDrawer() {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   _shell.wrapper.dataset.drawerOpen = "false";
   if (!_open)
@@ -15697,7 +15742,7 @@ function setCanvasMainNoActive(noActive) {
   }
 }
 function onMainMirrorTabActivated(title, opts) {
-  if (!_active2)
+  if (!_active3)
     return;
   if (title)
     setCanvasMainTitle(title);
@@ -15723,7 +15768,7 @@ function __resetMainMirrorForTest() {
   teardownMainMirror();
 }
 function updateMainMirrorDrawerTabVisibility() {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   const horizontal = isHorizontalStrip();
   _shell.drawerTab.style.display = horizontal || !isMobileViewport() && isHideDrawerOpenCloseButtonsEnabled() ? "none" : "flex";
@@ -15732,7 +15777,7 @@ function injectMainMirrorMobileStyles() {
   injectStyles("sidebar-ux-main-mirror-mobile", MAIN_MIRROR_MOBILE_CSS);
 }
 function syncMainMirrorToViewport() {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   cancelWrapperAnimation(_shell.wrapper);
   try {
@@ -15895,11 +15940,11 @@ function mountMainMirror(opts) {
     injectMainMirrorMobileStyles();
   document.body.appendChild(_shell.wrapper);
   sweepOrphanMainMirrorWrappers();
-  _active2 = true;
+  _active3 = true;
   _open = opts.initialOpen;
   _mountedSide = side;
   setDrawerCommandHandler((commandSide, open) => {
-    if (commandSide !== "primary" || !_active2 || !_shell)
+    if (commandSide !== "primary" || !_active3 || !_shell)
       return false;
     if (open)
       openCanvasMainDrawer();
@@ -15998,7 +16043,7 @@ function resolveHostPanelContent() {
   return document.querySelector(`[${CONTENT_MARK_ATTR}]`);
 }
 function ensureHostContentParked() {
-  if (!_shell || !_active2)
+  if (!_shell || !_active3)
     return;
   const slot = _shell.content;
   const hostContent = resolveHostPanelContent();
@@ -16153,13 +16198,13 @@ function teardownMainMirror(opts) {
   document.documentElement.classList.remove(CANVAS_MAIN_ACTIVE_CLASS);
   document.documentElement.classList.remove(CANVAS_MAIN_OPEN_CLASS);
   setDrawerCommandHandler(null);
-  _active2 = false;
+  _active3 = false;
   _open = false;
   _desktopWidth = null;
   _mountedSide = null;
   bumpReflow();
 }
-var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active2 = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _desktopWidth = null;
+var CONTENT_MARK_ATTR = "data-canvas-main-panel-content", _active3 = false, _open = false, _shell = null, _pinSpacer2 = null, _tabListRestoreParent = null, _tabListRestoreNext = null, _contentEl = null, _contentRestoreParent = null, _contentRestoreNext = null, _mountedSide = null, _desktopWidth = null;
 var init_main_mirror_drawer = __esm(() => {
   init_store();
   init_state();
@@ -18473,7 +18518,7 @@ function whenPanelParkingReady(side, apply) {
     check();
 }
 function applyNoActiveParking(side) {
-  if (!_active3 || !isOsModeEnabled())
+  if (!_active4 || !isOsModeEnabled())
     return;
   if (getDisplayedLiveId(side))
     return;
@@ -18573,14 +18618,14 @@ function ensureChromeBoth() {
     ensureChromeForSide("secondary");
 }
 function applyOsWindowControlsChange() {
-  if (!isOsModeEnabled() || !_active3)
+  if (!isOsModeEnabled() || !_active4)
     return;
   ensureChromeBoth();
 }
 function mountPanelChrome() {
-  if (_active3)
+  if (_active4)
     return;
-  _active3 = true;
+  _active4 = true;
   setPanelHeaderCloseHandler((side) => {
     if (!isOsModeEnabled())
       return false;
@@ -18610,9 +18655,9 @@ function mountPanelChrome() {
   dlog("[os] panel chrome mounted");
 }
 function teardownPanelChrome() {
-  if (!_active3)
+  if (!_active4)
     return;
-  _active3 = false;
+  _active4 = false;
   setPanelHeaderCloseHandler(null);
   if (typeof window !== "undefined") {
     window.removeEventListener(DRAWER_SHELL_CREATED_EVENT, scheduleEnsure);
@@ -18638,7 +18683,7 @@ function teardownPanelChrome() {
   applyHiddenTabIdsToSecondary(new Set(mergeHiddenTabIdLists(getHostDrawerSettings()?.hiddenTabIds, [...getCanvasHiddenTabIds()])));
   dlog("[os] panel chrome unmounted");
 }
-var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active3 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged3 = null;
+var MINIMIZE_ATTR = "data-canvas-os-minimize", HIDDEN_ATTR = "data-canvas-os-hidden", _active4 = false, _headerObserver = null, _observedHeaders, _ensureRaf = 0, closedLiveIdsCache, _unsubModelChanged3 = null;
 var init_panel_chrome = __esm(() => {
   init_drawer_shell();
   init_main_mirror_drawer();
@@ -24523,7 +24568,7 @@ var WEAVER_INSET_R_VAR = "--sidebar-ux-weaver-inset-r";
 var PIN_HOST_SEL3 = ".sidebar-ux-tab-list-pin-host";
 var _observer3 = null;
 var _rafId2 = null;
-var _active4 = false;
+var _active5 = false;
 var _resizeListening = false;
 var _pollTimer = null;
 var _taggedDialog = null;
@@ -24812,7 +24857,7 @@ function setResizeListening(on) {
 function setPoll(on) {
   if (on && _pollTimer === null) {
     _pollTimer = setInterval(() => {
-      if (!_active4) {
+      if (!_active5) {
         setPoll(false);
         return;
       }
@@ -24824,7 +24869,7 @@ function setPoll(on) {
   }
 }
 function applyWeaverLane() {
-  if (!_active4)
+  if (!_active5)
     return;
   const dialog = findWeaverDialog();
   if (dialog) {
@@ -24862,16 +24907,16 @@ function startWeaverLane() {
     return () => {};
   }
   injectWeaverLaneStyles();
-  _active4 = true;
+  _active5 = true;
   scheduleApply();
   _observer3 = new MutationObserver(() => {
-    if (!_active4)
+    if (!_active5)
       return;
     scheduleApply();
   });
   _observer3.observe(document.body, { childList: true, subtree: true });
   return () => {
-    _active4 = false;
+    _active5 = false;
     if (_rafId2 !== null) {
       cancelAnimationFrame(_rafId2);
       _rafId2 = null;
@@ -25130,6 +25175,7 @@ class LumiverseHost {
   }
   async setHidden(_side, ids) {
     try {
+      const armedGeneration = currentLifecycleGeneration();
       const assignments = getTabAssignments();
       const sideIds = new Set;
       for (const tab of liveDrawerTabs()) {
@@ -25158,6 +25204,10 @@ class LumiverseHost {
           }
         }
       } catch {}
+      if (!isLifecycleCurrent(armedGeneration)) {
+        dlog("[host] setHidden: dropped post-teardown continuation");
+        return "degraded";
+      }
       setCanvasHiddenTabIds([
         ...canvasOtherSide,
         ...ids.filter((id) => !closedOnlyLiveIds.has(id))
@@ -25317,12 +25367,12 @@ class LumiverseHost {
 
 // src/setup.ts
 init_dispatch();
-var _setupGeneration = 0;
+init_hidden_tabs();
 function setup(ctx) {
-  const generation = ++_setupGeneration;
+  const generation = beginLifecycle();
   bootStep(`setup-start gen=${generation}`);
   const cancelBootWatchdog = armBootWatchdog(() => {
-    if (generation === _setupGeneration) {
+    if (generation === currentLifecycleGeneration()) {
       bootError(`setup-stall gen=${generation}`, new Error("boot did not finish in time"));
     }
   });
@@ -25342,7 +25392,7 @@ function setup(ctx) {
   syncPersistDebugToBackend((msg) => ctx.sendToBackend(msg));
   plog(`setup start gen=${generation}`);
   let active = true;
-  const isCurrent = () => active && generation === _setupGeneration;
+  const isCurrent = () => active && generation === currentLifecycleGeneration();
   beginMainDrawerRestoreGuard();
   registerCleanup(() => {
     try {
@@ -25359,6 +25409,8 @@ function setup(ctx) {
     }
   });
   registerCleanup(unsuppressMainDrawer);
+  registerCleanup(resetCanvasHiddenTabIds);
+  registerCleanup(cancelScheduledHiddenTabsSync);
   const flushOnUnload = () => {
     try {
       flushPendingSaves();
@@ -25414,7 +25466,7 @@ function setup(ctx) {
     dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`);
     bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`);
     if (!isCurrent()) {
-      plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`);
+      plog(`setup load ignored stale gen=${generation} current=${currentLifecycleGeneration()}`);
       cancelBootWatchdog();
       return;
     }
@@ -25616,9 +25668,10 @@ function setup(ctx) {
     disposed = true;
     active = false;
     cancelBootWatchdog();
-    if (generation !== _setupGeneration)
+    if (generation !== currentLifecycleGeneration())
       return;
     plog(`setup teardown gen=${generation}`);
+    endLifecycle(generation);
     cleanupAll();
     cancelLoadSavedLayout();
     if (getBackendCtx() === ctx)
