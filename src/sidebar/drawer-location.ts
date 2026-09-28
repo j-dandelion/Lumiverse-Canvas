@@ -25,6 +25,7 @@ import {
 import { onModelChanged } from '../recon/dispatch'
 import { hasSecondaryAssignedTabs } from '../tabs/assignment'
 import { getMainDrawerSide } from '../store'
+import { isInstanceActive } from '../lifecycle/instance'
 import { isMobileViewport } from './mobile-exclusion'
 import type { DrawerLocation } from '../types'
 import {
@@ -149,6 +150,16 @@ function computeKey(loc: DrawerLocation): string {
  * set the dirty flag; one follow-up pass runs after the current one.
  */
 export function reconcileDrawerLocation(opts?: { force?: boolean }): void {
+  // LUMI-21 rework (review AC1): the disable chain's own fire-and-forget
+  // `void import('./drawer-location')` continuations (secondary.tsx teardown
+  // + checkSideChanged, drawer-sync, mobile-exclusion) and any rAF armed
+  // pre-teardown resolve AFTER teardown restored the vanilla drawer — the
+  // reconcile fan-out below remounts an empty Canvas shell over it
+  // (applyMainMirrorDrawer(true) → mountMainMirror re-injects the host-hide
+  // style + html classes and recreates the shell). No-op once the instance
+  // is torn down; the mid-session second-drawer toggle-off path runs with
+  // the instance active and is unaffected.
+  if (!isInstanceActive()) return
   if (_pending) {
     _dirty = true
     return

@@ -15,6 +15,7 @@
 
 import { getMainSidebar } from '../dom/lumiverse'
 import { getMainDrawerSide } from '../store'
+import { isInstanceActive } from '../lifecycle/instance'
 import { getSettings, isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { isMobileViewport } from './mobile-exclusion'
 import {
@@ -160,6 +161,12 @@ function unpinMainMirrorForChromeOff(): void {
  * the drawer.
  */
 export function reconcileMainTabListPin(): void {
+  // LUMI-21 rework (review AC2): post-teardown continuations and the stale
+  // instance's observers must not drive the pin/reconcile pass — it mounts
+  // the mirror shell (reconcileMainMirrorDrawer) and creates pin chrome
+  // against a DOM the instance no longer owns. Teardown itself uses
+  // teardownMainPin, never this entry.
+  if (!isInstanceActive()) return
   // S8: Sides-mobile keeps the S6 unpin path; horizontal mobile pins.
   if (isMobileViewport() && !isHorizontalStrip()) {
     applyMainTabListPin(false)
@@ -258,6 +265,10 @@ function scheduleReconcile(): void {
  * host visible, then hand the BUTTONS to the flat renderer.
  */
 function reconcileMainMirror(): void {
+  // LUMI-21 rework (review AC2): reached directly from scheduleReconcile's
+  // rAF and the sidebar observer — a stale instance's timer/observer must
+  // not re-pin or re-render into a torn-down/new-boot DOM.
+  if (!isInstanceActive()) return
   // S1: gated on shell liveness (desktop mirror mounted), not pin state —
   // the unpinned shell still needs pin-chrome reset + a render.
   if (!isMainMirrorActive()) return

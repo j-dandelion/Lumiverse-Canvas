@@ -66,6 +66,7 @@ import { syncDrawerTabSettings } from './drawer-sync'
 import { resetPanelHeaderSyncCache, syncPanelHeaderFromMain } from './panel-header-sync'
 import { handlePanelHeaderClose } from '../os/header-close'
 import { setDrawerCommandHandler } from '../os/drawer-command'
+import { isInstanceActive } from '../lifecycle/instance'
 
 export { MAIN_MIRROR_WIDTH_VAR }
 
@@ -577,6 +578,14 @@ function injectHostHideStyles(): void {
 }
 
 function mountMainMirror(opts: { initialOpen: boolean }): void {
+  // LUMI-21 rework (review AC1/AC2): the single choke point for shell
+  // mounts. A post-teardown continuation (the traced
+  // reconcileDrawerLocation → reconcileMainTabListPin →
+  // applyMainMirrorDrawer(true) fan-out) or a stale-instance call must not
+  // re-inject the host-hide style + html classes or recreate the shell over
+  // the restored vanilla drawer / the next boot's chrome. Teardown goes
+  // through teardownMainMirror (never mounts).
+  if (!isInstanceActive()) return
   injectHostHideStyles()
   document.documentElement.classList.add(CANVAS_MAIN_ACTIVE_CLASS)
 
@@ -711,6 +720,10 @@ function pinShellTabList(side: 'left' | 'right'): void {
  *  host, or null when no shell / no body. Pin callers gate on their own
  *  pin state — this helper never checks settings. */
 export function pinMainMirrorShellTabList(side: 'left' | 'right'): HTMLElement | null {
+  // LUMI-21 rework (review AC2): a stale instance's pin pass must not
+  // reparent tab lists into a (new) pin host or restyle a shell it no
+  // longer owns. Own-instance teardown unpins via unpinShellTabList.
+  if (!isInstanceActive()) return null
   if (!_shell) return null
   const tabList = _shell.tabList
   const host = ensureMainPinHost(side)

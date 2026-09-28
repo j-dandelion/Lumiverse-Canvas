@@ -36,6 +36,7 @@ import {
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { updateDockOffsets } from './dock-offset'
 import { syncSpacerForLocation } from './drawer-shell'
+import { isInstanceActive } from '../lifecycle/instance'
 
 /** Re-export for callers that already import pin helpers from this module. */
 export { TAB_LIST_WIDTH_PX }
@@ -228,6 +229,12 @@ export function getMainPinHost(): HTMLElement | null {
  * Does not reparent host React nodes — callers own the mirror children.
  */
 export function ensureMainPinHost(side: 'left' | 'right'): HTMLElement | null {
+  // LUMI-21 rework (review AC2): a stale instance reaching this entry must
+  // not create a pin host into the next boot's DOM — the traced kill was
+  // old-graph `pinMainMirrorShellTabList → ensureMainPinHost →
+  // sweepStrayPinHosts` removing the NEW instance's populated pin host.
+  // Teardown never ensures (it destroys via destroyMainPinHost).
+  if (!isInstanceActive()) return null
   if (typeof document === 'undefined' || !document.body) return null
   if (!_mainPinHost) {
     _mainPinHost = document.createElement('div')
@@ -707,6 +714,11 @@ export function isTabListPinned(tabList?: Element | null): boolean {
  * On mobile, always force-unpins (clears styles + restores parent).
  */
 export function reconcileTabListPin(): void {
+  // LUMI-21 rework (review AC2): lazy continuations (buttons, mobile-exclusion)
+  // and stale-instance calls must not re-apply pin chrome / reparent tab
+  // lists after teardown or into the next boot. Teardown uses
+  // applyTabListPin(false, { force: true }) directly, never this entry.
+  if (!isInstanceActive()) return
   // S8: mobile keeps the Sides force-unpin (byte-for-byte S6 behavior); a
   // horizontal strip PINS on mobile too (the strip is the tab surface).
   if (isMobileViewport() && !isHorizontalStrip()) {
@@ -800,6 +812,13 @@ function ensurePinHost(side: 'left' | 'right'): HTMLElement | null {
 
 /** Remove document pin hosts that are not the module-owned secondary or main hosts. */
 function sweepStrayPinHosts(): void {
+  // LUMI-21 rework (review AC2): the "stray" predicate is graph-local — a
+  // stale instance's module state no longer tracks the CURRENT instance's
+  // hosts, so a post-teardown sweep would classify them as strays and
+  // remove them (the traced 9-button pin-host kill). Own-instance teardown
+  // removes its tracked hosts explicitly; skipping the defensive sweep
+  // there is safe (any strays were swept by the last active ensure).
+  if (!isInstanceActive()) return
   if (typeof document === 'undefined' || !document.querySelectorAll) return
   const hosts = document.querySelectorAll(`.${TAB_LIST_PIN_HOST_CLASS}`)
   for (const host of Array.from(hosts)) {
