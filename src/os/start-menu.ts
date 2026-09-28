@@ -351,25 +351,6 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
 
 /**
  * Manage (eye) mode row: the same launch button as a NORMAL row, plus a
- * visibility checkbox on the right — checked = VISIBLE (the Configure Tabs
- * semantics, mirrored). Hidden rows render dimmed (`row-hidden` precedent).
- *
- * The checkbox dispatches the model intent `{t:'setHidden', key, hidden}` —
- * NOT the Configure draft mutation (`configure-model.setHidden` mutates the
- * modal's draft; this menu has no draft). The dispatchBatch reconciliation
- * is the whole commit bridge: applySetHidden commits the model, the
- * reconcile diff calls `host.setHidden` which converges the Canvas hidden
- * copy (setCanvasHiddenTabIds) + applies the DOM strips, and
- * reconcileAndPersist saves the layout (persistLayout is a retired no-op —
- * owned-model persistence is automatic after every reconcile).
- *
- * Core hide-locked rows (CORE_HIDE_LOCKED) keep the checkbox disabled
- * unless the `coreTabsHidden` setting is on — the same unlock rule the
- * Configure toggle applies. Hidden-core rows appear only when OS mode is on
- * (which forces the setting), so the lock only shows on visible core rows.
- */
-/**
- * Manage (eye) mode row: the same launch button as a NORMAL row, plus a
  * visibility checkbox on the right — checked = VISIBLE in the START MENU
  * (Configure Tabs semantics, mirrored for the menu's own set).
  * Hidden-in-menu rows render dimmed (`row-hidden` precedent).
