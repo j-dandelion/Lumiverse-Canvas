@@ -447,7 +447,6 @@ export function renderMainMirrorTabs(): void {
   const renderableKeys = regularKeys.filter(
     (key) => !!twins.get(key)!.btn || model.closed.includes(key),
   )
-  console.error('DBG renderable', Array.from(twins.entries()).map(([k,v]) => [k, !!v.btn, v.liveId]))
 
   const hiddenCount = renderableKeys.filter((k) => isHidden(model, k)).length
   const forceVisibleKey: TabKey | null =

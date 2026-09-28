@@ -135,7 +135,7 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   assert(entries.find((e) => e.liveId === 'a:2')?.menuHidden === false, 'menu-visible tab not flagged')
 }
 
-// ── RAC2 (LUMI-26 rework): launchable windows only — unbacked keys are skipped in BOTH projections ──
+// ── RAC2/AAC1 (LUMI-26): launchable windows only — unbacked keys are skipped in BOTH projections ──
 {
   // A builtin key whose resolved live id has NO drawer-inventory backing:
   // identity's bare-builtin passthrough fabricates 'ghost' — the host does
@@ -153,14 +153,28 @@ const resolve = (key: string) => liveIds.get(key) ?? null
   const manage = deriveStartMenuEntries(unbackedModel, ghostResolve, storeTabs, { manageMode: true })
   assert(!manage.some((e) => e.key === 'builtin:ghost'), 'RAC2: unbacked key absent from the MANAGE projection too')
 
-  // A CLOSED unbacked key keeps listing (D6 reopen memory) — with a
-  // humanized title, never a raw key.
+  // Amendment 2 (AAC1): a CLOSED unbacked key is skipped in BOTH projections
+  // too — a listed row whose launch cannot resolve is a dead control; the
+  // D6 reopen memory only applies to backed windows (their host button
+  // survives a close). Configure Tabs is the unbacked tabs' surface.
   const closedUnbacked = { ...unbackedModel, closed: ['builtin:ghost'] as string[] }
-  const closedNormal = deriveStartMenuEntries(closedUnbacked, ghostResolve)
-  const row = closedNormal.find((e) => e.key === 'builtin:ghost')
-  assert(!!row, 'RAC2: closed unbacked key still listed (D6)')
-  assertEqual(row?.state, 'closed', 'RAC2: closed unbacked row carries the closed mark')
-  assertEqual(row?.title, 'Ghost', 'RAC2: title humanized (never a raw key)')
+  assertEqual(
+    deriveStartMenuEntries(closedUnbacked, ghostResolve).some((e) => e.key === 'builtin:ghost'),
+    false,
+    'AAC1: closed unbacked key skipped from the NORMAL projection (dead-row guard)',
+  )
+  assertEqual(
+    deriveStartMenuEntries(closedUnbacked, ghostResolve, storeTabs, { manageMode: true }).some((e) => e.key === 'builtin:ghost'),
+    false,
+    'AAC1: closed unbacked key skipped from the MANAGE projection too',
+  )
+
+  // D6 regression guard: a CLOSED + BACKED key still lists (launch resolves).
+  const closedBacked = { ...makeModel(), closed: [KEY_A] as string[] }
+  const d6Row = deriveStartMenuEntries(closedBacked, resolve).find((e) => e.liveId === 'a:2')
+  assert(!!d6Row, 'AAC1: closed backed key still listed (D6)')
+  assertEqual(d6Row?.state, 'closed', 'AAC1: closed backed row carries the closed mark')
+  assertEqual(d6Row?.liveId, 'a:2', 'AAC1: closed backed row has a resolvable launch live id')
 
   // Backed keys are untouched: same model with a backing store tab lists it.
   const backedModel = { ...unbackedModel, primary: [KEY_A, 'builtin:profile'] as string[] }

@@ -261,6 +261,19 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   // Empty projection → only live-resolvable ids remain.
   const onlyLive = filterCatalogToLive(catalog, host, new Set())
   assertEqual(onlyLive.map(t => t.id).join(','), 'loom,spindle:foo:tab:Bar:0', 'FL3: no model projection → live only')
+
+  // Amendment 2 (AAC3): a row kept ONLY via the model projection is
+  // host-unbacked — its description is swapped for the waiting-on-vanilla
+  // hint ("enabled" must not promise a presence the host prevents). Rows
+  // the host resolves keep their real description.
+  const withDesc: CatalogTab[] = [
+    { id: 'loom', kind: 'builtin', title: 'Loom', description: 'Backed blurb', hideLocked: false },
+    { id: 'create', kind: 'builtin', title: 'Create', description: 'Create and edit Lumia items', hideLocked: false },
+  ]
+  const hinted = filterCatalogToLive(withDesc, host, new Set(['create']))
+  assertEqual(hinted[0]?.description, 'Backed blurb', 'AAC3: host-backed row keeps its real description')
+  assert(/unhide/i.test(hinted[1]?.description ?? ''), 'AAC3: model-only row carries the waiting-on-vanilla hint')
+  assertEqual(hinted[1]?.id, 'create', 'AAC3: hint swap preserves the row id/manageability')
 }
 
 // =====================================================================
@@ -284,6 +297,8 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
   assertEqual(rec.extensionId, 'hone', 'SUP1c: extensionId from the parsed key')
   assertEqual(rec.kind, 'extension', 'SUP1d: kind extension')
   assertEqual(rec.hideLocked, false, 'SUP1e: recovered entries are never hide-locked')
+  assert(/unhide/i.test(rec.description ?? ''), 'AAC3: recovered row carries the waiting-on-vanilla hint')
+  assert(!/Open /.test(rec.description ?? ''), 'AAC3: no launch blurb promising host presence')
   // Present ids are never duplicated.
   assertEqual(out.filter(t => t.id === 'loom').length, 1, 'SUP2: existing catalog ids not duplicated')
   // Ids the model does NOT own are never supplemented (phantom guard intact).
@@ -296,6 +311,8 @@ assertEqual(humanizeTabId('spindle'), 'Extensions', 'humanize spindle')
     primary: ['builtin:Hone'], secondary: [], hidden: [],
   })
   assert(masq.some(t => t.id === 'builtin:Hone'), 'SUP4: legacy masquerade key supplemented')
+  assert(/unhide/i.test(masq.find(t => t.id === 'builtin:Hone')?.description ?? ''),
+    'AAC3: masquerade recovered row carries the hint too')
   // Null model → unchanged.
   assertEqual(supplementCatalogWithRecoveredEntries(catalog, null), catalog, 'SUP5: no model → catalog unchanged')
   // Hidden-only model ownership still recovers the entry.
