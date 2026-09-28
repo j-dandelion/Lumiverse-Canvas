@@ -46,7 +46,7 @@
 
 import type { Side, TabKey } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
-import { humanTabTitleForKey, RECOVERED_WAITING_DESCRIPTION } from '../tabs/configure-catalog'
+import { humanTabTitleForKey } from '../tabs/configure-catalog'
 import { getLayoutOwnedTabTitle } from '../persist/layout-model'
 import { getModel, getHost, dispatchBatch } from '../recon/dispatch'
 import { getDrawerTabs, getMainDrawerSide, type DrawerTab } from '../store'
@@ -129,12 +129,6 @@ export interface StartMenuEntry {
    *  disabled unless the `coreTabsHidden` setting is on — the Configure
    *  Tabs rule, mirrored here. */
   locked: boolean
-  /** LUMI-26 Amendment 3: false when the host does not back this tab (no
-   *  live drawer tab — the key is fabricated or unresolvable). Such rows
-   *  render in MANAGE mode only (dimmed, hinted, no launch action —
-   *  nothing to launch until the vanilla side un-hides the tab); the
-   *  NORMAL projection skips them (launchable windows only, amendment 2). */
-  launchable: boolean
 }
 
 // ── Icon resolution (fixes the empty-icon bug) ───────────────────────────────
@@ -178,15 +172,6 @@ export function entryMonogram(title: string): string {
  * Per-entry icon resolution order (plan §3.5): live button → store fields →
  * built-in map. An empty result means the render-time monogram is used.
  */
-/**
- * LUMI-26 Amendment 3: icon for a host-unbacked manage row — static-builtin
- * SVG when the key is builtin-shaped, else the monogram fallback (renderEntryIcon).
- */
-function staticIconForUnbacked(liveId: string | null): { svg?: string; url?: string } {
-  const builtin = liveId ? BUILTIN_ICON_SVGS[builtinBaseId(liveId)] : undefined
-  return builtin ? { svg: builtin } : {}
-}
-
 export function resolveEntryIcon(
   tab: { iconSvg?: string; iconUrl?: string; root?: HTMLElement | null } | undefined,
   liveId: string,
@@ -251,13 +236,8 @@ export function deriveStartMenuEntries(
     const activeKey = model.active[side]
     for (const key of keys) {
       const liveId = resolve(key)
-      // LUMI-26 Amendment 3: in MANAGE mode an unresolvable key still lists
-      // (the manage projection is the complete model inventory) — it keys
-      // dedup by the key itself since there is no live id.
-      if (!liveId && !manageMode) continue
-      const seenId = liveId ?? `unbacked:${key}`
-      if (seen.has(seenId)) continue
-      seen.add(seenId)
+      if (!liveId || seen.has(liveId)) continue
+      seen.add(liveId)
       // MENU-hidden (LUMI-16b): the Start-menu-only set. The strip `hidden`
       // set is deliberately NOT consulted here — strip visibility is not a
       // menu concern.
@@ -271,25 +251,23 @@ export function deriveStartMenuEntries(
       const state = model.closed.includes(key)
         ? 'closed'
         : key === activeKey ? 'open' : 'minimized'
-      const tab = liveId ? tabsById.get(liveId) : undefined
-      // LUMI-26 Amendment 2 (NORMAL): launchable windows only — a listed
-      // row's launch must resolve. A resolved live id with no
+      const tab = tabsById.get(liveId)
+      // LUMI-26 Amendment 2: launchable windows only, in BOTH projections —
+      // a listed row's launch must resolve. A resolved live id with no
       // drawer-inventory backing is fabricated (builtin identity
       // passthrough) or stale — the host does not back this tab, so there
       // is no window to launch/focus; closed unbacked rows would be dead
       // controls (`openWindowInDrawerByLiveId` no-ops on the findKey miss).
-      // Closed + backed rows keep listing and launching (D6 reopen memory).
-      // LUMI-26 Amendment 3 (MANAGE): manage mode is the menu's
-      // inventory-and-recovery surface — it lists EVERY panel the model
-      // knows, including host-unbacked ones, as non-launchable rows
-      // (`launchable: false`; the checkbox is the actionable element).
-      if (!tab && !manageMode) continue
-      const icon = tab ? resolveEntryIcon(tab, liveId!) : staticIconForUnbacked(liveId)
+      // Closed + backed rows keep listing and launching (D6 reopen memory);
+      // manage mode recovers MENU-hidden tabs, not unbacked ones — Configure
+      // Tabs is the recovered tabs' surface.
+      if (!tab) continue
+      const icon = resolveEntryIcon(tab, liveId)
       // Core hide-lock: resolved from the MODEL key's bare builtin id (the
       // same resolution the OS close path uses — never isHideLocked(liveId)).
       const coreId = parseBuiltinKey(key)
       out.push({
-        liveId: liveId ?? '',
+        liveId,
         side,
         // LUMI-26 rework: never a raw `builtin:`/`ext:` key — layout-blob
         // title first, then the humanized key chain.
@@ -297,7 +275,6 @@ export function deriveStartMenuEntries(
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
-        launchable: !!tab,
         menuHidden: isMenuHidden,
         key,
         locked: coreId !== null && isCoreTabId(coreId),
@@ -344,13 +321,7 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   item.className = 'canvas-os-start-menu__item'
   item.setAttribute('role', 'menuitem')
   item.setAttribute('data-os-state', entry.state)
-  // LUMI-26 Amendment 3: unbacked rows are not launch targets — the
-  // actionable element in manage mode is the checkbox.
-  if (!entry.launchable) item.setAttribute('aria-disabled', 'true')
-  const itemAriaLabel = entry.launchable
-    ? `${entry.title} — ${STATE_LABEL[entry.state]}`
-    : `${entry.title} — ${RECOVERED_WAITING_DESCRIPTION}`
-  item.setAttribute('aria-label', itemAriaLabel)
+  item.setAttribute('aria-label', `${entry.title} — ${STATE_LABEL[entry.state]}`)
 
   const rail = document.createElement('span')
   rail.className = 'canvas-os-start-menu__rail'
@@ -368,39 +339,27 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   const status = document.createElement('span')
   status.className = 'canvas-os-start-menu__status'
   status.setAttribute('aria-hidden', 'true')
-  if (entry.launchable) {
-    const markSvg = STATE_MARK_SVG[entry.state]
-    if (markSvg) {
-      const mark = document.createElement('span')
-      mark.className = 'canvas-os-start-menu__mark'
-      mark.innerHTML = markSvg
-      status.appendChild(mark)
-    }
-    const verb = document.createElement('span')
-    verb.className = 'canvas-os-start-menu__verb'
-    verb.textContent = STATE_VERB[entry.state]
-    status.appendChild(verb)
-  } else {
-    // Unbacked manage row: no window state to mark and nothing to launch —
-    // the row carries the waiting-on-vanilla hint instead (same string as
-    // the Configure rows).
-    const hint = document.createElement('span')
-    hint.className = 'canvas-os-start-menu__unbacked-hint'
-    hint.textContent = RECOVERED_WAITING_DESCRIPTION
-    status.appendChild(hint)
+  const markSvg = STATE_MARK_SVG[entry.state]
+  if (markSvg) {
+    const mark = document.createElement('span')
+    mark.className = 'canvas-os-start-menu__mark'
+    mark.innerHTML = markSvg
+    status.appendChild(mark)
   }
+  const verb = document.createElement('span')
+  verb.className = 'canvas-os-start-menu__verb'
+  verb.textContent = STATE_VERB[entry.state]
+  status.appendChild(verb)
 
   item.append(rail, tile, label, status)
-  if (entry.launchable) {
-    item.addEventListener('click', () => {
-      hideStartMenu()
-      // Launch into the INVOKING menu's drawer (per-drawer launcher): the entry
-      // inventory is global, but the clicked window opens where the user is.
-      // The action places it at that drawer's launch end unless its button is
-      // already there.
-      void openWindowInDrawerByLiveId(entry.liveId, targetSide)
-    })
-  }
+  item.addEventListener('click', () => {
+    hideStartMenu()
+    // Launch into the INVOKING menu's drawer (per-drawer launcher): the entry
+    // inventory is global, but the clicked window opens where the user is.
+    // The action places it at that drawer's launch end unless its button is
+    // already there.
+    void openWindowInDrawerByLiveId(entry.liveId, targetSide)
+  })
   return item
 }
 
@@ -437,15 +396,6 @@ function createManageRow(
   const row = createMenuEntry(entry, targetSide)
   row.classList.add('canvas-os-start-menu__item--manage')
   if (entry.menuHidden) row.classList.add('row-hidden')
-  if (!entry.launchable) {
-    // LUMI-26 Amendment 3: host-unbacked row — dimmed like the menu-hidden
-    // rows (it is waiting on the vanilla Lumiverse side), tooltip carries
-    // the same hint string the Configure rows use. The checkbox below stays
-    // fully functional (menuHidden is Canvas state, independent of host
-    // backing); the row itself has no launch action.
-    row.classList.add('row-unbacked')
-    row.title = RECOVERED_WAITING_DESCRIPTION
-  }
 
   const coreUnlocked = !!getSettings().coreTabsHidden
   const isLocked = entry.locked && !coreUnlocked
