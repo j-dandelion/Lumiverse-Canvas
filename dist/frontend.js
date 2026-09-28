@@ -1603,6 +1603,28 @@ html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio
 `;
 });
 
+// src/lifecycle/instance.ts
+function beginLifecycle() {
+  _generation++;
+  _active = true;
+  return _generation;
+}
+function endLifecycle(generation) {
+  if (generation !== _generation)
+    return;
+  _active = false;
+}
+function currentLifecycleGeneration() {
+  return _generation;
+}
+function isInstanceActive() {
+  return _generation === 0 || _active;
+}
+function isLifecycleCurrent(generation) {
+  return generation === _generation && (_generation === 0 || _active);
+}
+var _generation = 0, _active = false;
+
 // src/sidebar/dock-offset.ts
 function getDockInsets() {
   if (typeof document === "undefined")
@@ -1685,6 +1707,8 @@ function dockEdgeOf(panel, cs) {
   return null;
 }
 function updateDockOffsets() {
+  if (!isInstanceActive())
+    return;
   if (typeof document === "undefined" || typeof window === "undefined")
     return;
   const dock = getDockInsets();
@@ -3642,28 +3666,6 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
-// src/lifecycle/instance.ts
-function beginLifecycle() {
-  _generation++;
-  _active = true;
-  return _generation;
-}
-function endLifecycle(generation) {
-  if (generation !== _generation)
-    return;
-  _active = false;
-}
-function currentLifecycleGeneration() {
-  return _generation;
-}
-function isInstanceActive() {
-  return _generation === 0 || _active;
-}
-function isLifecycleCurrent(generation) {
-  return generation === _generation && (_generation === 0 || _active);
-}
-var _generation = 0, _active = false;
-
 // src/sidebar/strip-gutter.ts
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
@@ -3742,6 +3744,8 @@ function clearStripGutters() {
   stopStripGutterObservers();
 }
 function updateStripGutters() {
+  if (!isInstanceActive())
+    return;
   if (isHorizontalStrip()) {
     clearStripGutterVars();
     return;
@@ -9231,6 +9235,8 @@ function isMobileViewportLocal() {
   }
 }
 function syncOsMobileDrawerMode(opts) {
+  if (!isInstanceActive())
+    return Promise.resolve();
   const nested = !!opts?.nested;
   if (_mobileDrawerSync) {
     if (nested && !_mobileDrawerSyncNested) {
@@ -22984,6 +22990,9 @@ var init_render = __esm(() => {
 });
 
 // src/settings/panel.ts
+function clearSettingsPanelContext() {
+  _settingsPanelCtx = null;
+}
 function _isMobileViewportForPanel() {
   try {
     return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
@@ -25852,6 +25861,10 @@ function setup(ctx) {
     endLifecycle(generation);
     cleanupAll();
     cancelLoadSavedLayout();
+    disarmLayoutRepo();
+    disarmSettingsRepo();
+    setSettingsRepoBackendCtx(null);
+    clearSettingsPanelContext();
     if (getBackendCtx() === ctx)
       setBackendCtx(null);
     setHostBridgeContext(null);
