@@ -103,8 +103,10 @@ function setSidebarButtons(buttons: any[]): void {
   _fakeSidebar.querySelectorAll = (_sel: string) => buttons
 }
 
-import { extensionKey } from '../../core/model'
+import { extensionKey } from '../../../core/model'
 import { setTabAssignment, getTabAssignments } from '../../../tabs/assignment'
+const { setCanvasHiddenTabIds, __resetCanvasHiddenTabIdsForTest } = await import('../../../tabs/canvas-hidden')
+const { setActiveSecondaryTabId } = await import('../../../tabs/active-tab')
 
 const [{ LumiverseHost }] = await Promise.all([import('../implementation')])
 import { drawerObserver } from '../../../sidebar/drawer-observer'
@@ -118,6 +120,7 @@ import { drawerObserver } from '../../../sidebar/drawer-observer'
   drawerObserver.start()
   setTabAssignment(ALIVE_KEY, 'primary')
   setTabAssignment(GHOST_KEY, 'primary')
+  setCanvasHiddenTabIds(['spindle:ghost:tab:main:0'])
 
   const host = new LumiverseHost()
 
@@ -127,6 +130,11 @@ import { drawerObserver } from '../../../sidebar/drawer-observer'
   const keys1 = obs1.tabs.map(t => t.key)
   assert(keys1.includes(GHOST_KEY), 'G1a: missing extension key synthesized within grace')
   assert(keys1.includes(ALIVE_KEY), 'G1b: live extension key present')
+  assertEqual(
+    obs1.tabs.find(t => t.key === GHOST_KEY)?.isHidden,
+    false,
+    'G1d: unresolved extension stays unhidden during ghost grace',
+  )
   assertEqual(obs1.inventory?.status, 'ready', 'G1c: inventory ready (one live tab)')
 
   // G4: the tab comes back (extension re-enabled / re-render re-add) — the
@@ -173,6 +181,7 @@ import { drawerObserver } from '../../../sidebar/drawer-observer'
     'G2e: absence of 11s ≥ grace → dropped',
   )
   _nowOffset = 0
+  __resetCanvasHiddenTabIdsForTest()
 }
 
 // ── G3: built-ins are never ghost-purged ──
@@ -191,6 +200,62 @@ import { drawerObserver } from '../../../sidebar/drawer-observer'
     obs2.tabs.map(t => t.key).includes('builtin:ghostpanel'),
     'G3b: builtin key NEVER expires — DOM-placed built-ins have no live button by design',
   )
+
+  const key = 'builtin:ghostpanel'
+  setTabAssignment(key, 'secondary')
+  setCanvasHiddenTabIds(['ghostpanel'])
+  setActiveSecondaryTabId('ghostpanel', { silent: true })
+  const observed = host.observe()
+  const entry = observed.tabs.find(t => t.key === key)
+  assertEqual(entry?.isHidden, true, 'G3c: synthesized builtin observes its live-ID hidden state')
+  assertEqual(entry?.isActiveInSecondary, true, 'G3d: synthesized builtin observes its secondary active state')
+
+  const { createEmptyModel } = await import('../../../core/model')
+  const { reconcile, resetEpochState } = await import('../../../recon/reconcile')
+  const reconcileSynthetic = async (hidden: boolean, active: boolean) => {
+    setCanvasHiddenTabIds(hidden ? ['ghostpanel'] : [])
+    const world = host.observe()
+    const model = {
+      ...createEmptyModel(world.drawerSide),
+      secondary: [key],
+      hidden: hidden ? [key] : [],
+      active: { primary: null, secondary: active ? key : null },
+      drawers: {
+        primary: { open: world.primaryOpen, width: world.primaryWidth },
+        secondary: { open: world.secondaryOpen, width: world.secondaryWidth },
+      },
+    }
+    const port: any = {
+      observe: () => world,
+      resolve: (candidate: string) => candidate === key ? 'ghostpanel' : null,
+      findKey: (id: string) => id === 'ghostpanel' ? key : null,
+      placeTab: async () => ({ placed: true }),
+      setOrder: async () => 'ok',
+      setHidden: async () => 'ok',
+      activate: async () => 'ok',
+      setDrawer: async () => 'ok',
+      setSide: async () => 'ok',
+      onWorldChanged: () => () => {},
+    }
+    resetEpochState()
+    return reconcile(model, port)
+  }
+
+  const hiddenReport = await reconcileSynthetic(true, false)
+  assertEqual(
+    hiddenReport.steps.find(step => step.step === 'visibility')?.ops,
+    0,
+    'G3e: hidden synthesized builtin has no visibility diff after converge',
+  )
+  const activeReport = await reconcileSynthetic(false, true)
+  assertEqual(
+    activeReport.steps.find(step => step.step === 'activation')?.ops,
+    0,
+    'G3f: active synthesized builtin has no activation diff after converge',
+  )
+
+  __resetCanvasHiddenTabIdsForTest()
+  setActiveSecondaryTabId(null, { silent: true })
   _nowOffset = 0
   setSidebarButtons([])
 }

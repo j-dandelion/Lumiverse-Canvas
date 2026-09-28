@@ -272,8 +272,12 @@ function buildHostEntry(tab: { id: string; extensionId: string; title: string; r
 function buildEntryFromAssignment(tabKey: string): HostTabEntry {
   const assignments = getTabAssignments()
   const location: Side = assignments.get(tabKey) === 'secondary' ? 'secondary' : 'primary'
+  // Assignment keys are TabKeys, while hidden and active state is tracked by
+  // live ID. Builtins resolve even without a drawer button; a missing
+  // extension key resolves to null during its ghost grace window.
+  const liveId = resolveTabKey(tabKey as TabKey)
   const canvasHidden = new Set(getCanvasHiddenTabIds())
-  const isHidden = canvasHidden.has(tabKey)
+  const isHidden = liveId !== null && canvasHidden.has(liveId)
   const primaryActive = resolvePrimaryActiveTabId()
   const secondaryActive = getActiveSecondaryTabId()
 
@@ -283,8 +287,8 @@ function buildEntryFromAssignment(tabKey: string): HostTabEntry {
     isBuiltin: false,
     location,
     isHidden,
-    isActiveInPrimary: primaryActive === tabKey,
-    isActiveInSecondary: secondaryActive === tabKey,
+    isActiveInPrimary: liveId !== null && primaryActive === liveId,
+    isActiveInSecondary: liveId !== null && secondaryActive === liveId,
     hasContentRoot: false,
   }
 }

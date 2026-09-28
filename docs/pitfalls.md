@@ -329,6 +329,8 @@ The full off-world-tab series — the LUMI-25 fix (host hidden-list union remova
 - **A Canvas-owned secondary button needs a key-based removal path.** A dead extension's liveId no longer resolves, so the id-keyed removal paths (unreg → `removeSecondaryTabButton`, `unassignSecondaryTabsNotInModel`'s `findKey` skip) can never find the button. `addSecondaryTabButton` therefore stamps `data-canvas-facade-key` at creation, and `tabs/ghost-tabs.ts` sweeps buttons whose key a model commit dropped entirely (a secondary→primary move keeps the key in `model.primary` — never sweep those).
 - **Known scope boundary:** the OS `closed` set is NOT pruned by the drop (a dead extension's OS-minimized window keeps its Start-menu row) — that surface belongs to the reverted LUMI-25/LUMI-26 series (§28); do not re-land it casually.
 
+**Synthesized-entry key space (LUMI-31):** assignment entries are keyed by TabKey, but Canvas hidden state and active trackers use live IDs. Resolve the TabKey through `liveIdForKey` before comparing those values. A null resolution (an absent extension key within its grace window) stays unhidden and inactive; builtins still resolve without a drawer button, so DOM-placed entries report their hidden and active state correctly.
+
 ## 30. Resize drag cancellation must run the normal finish path
 
 The resize handle's content overlay blocks iframe pointer capture during a
