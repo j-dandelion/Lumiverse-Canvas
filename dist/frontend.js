@@ -238,7 +238,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "";
+var _backendCtx = null, CANVAS_VERSION = "1.9.3";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -2210,6 +2210,14 @@ function applySetHidden(model, key, hide) {
   }
   return next;
 }
+function applySetMenuHidden(model, key, hide) {
+  if (!keyExists(model, key))
+    return model;
+  const nextMenuHidden = toggleMembership(model.menuHidden, key, hide);
+  if (nextMenuHidden === model.menuHidden)
+    return model;
+  return { ...model, menuHidden: nextMenuHidden };
+}
 function applySetClosed(model, key, closed) {
   if (!keyExists(model, key))
     return model;
@@ -2321,7 +2329,8 @@ function applySyncFromHost(model, observed) {
   next = { ...next, primary: newPrimary, secondary: newSecondary };
   next = {
     ...next,
-    hidden: next.hidden.filter((k) => observedKeys.has(k))
+    hidden: next.hidden.filter((k) => observedKeys.has(k)),
+    menuHidden: next.menuHidden.filter((k) => observedKeys.has(k))
   };
   const adoptActive = (side) => {
     for (const tab of observed.tabs) {
@@ -2353,7 +2362,7 @@ function applySyncFromHost(model, observed) {
       secondary: { open: observed.secondaryOpen, width: observed.secondaryWidth }
     }
   };
-  const sameContent = sameKeys(next.primary, model.primary) && sameKeys(next.secondary, model.secondary) && sameKeys(next.hidden, model.hidden) && next.active.primary === model.active.primary && next.active.secondary === model.active.secondary && next.side === model.side && next.drawers.primary.open === model.drawers.primary.open && next.drawers.primary.width === model.drawers.primary.width && next.drawers.secondary.open === model.drawers.secondary.open && next.drawers.secondary.width === model.drawers.secondary.width;
+  const sameContent = sameKeys(next.primary, model.primary) && sameKeys(next.secondary, model.secondary) && sameKeys(next.hidden, model.hidden) && sameKeys(next.menuHidden, model.menuHidden) && next.active.primary === model.active.primary && next.active.secondary === model.active.secondary && next.side === model.side && next.drawers.primary.open === model.drawers.primary.open && next.drawers.primary.width === model.drawers.primary.width && next.drawers.secondary.open === model.drawers.secondary.open && next.drawers.secondary.width === model.drawers.secondary.width;
   if (sameContent)
     return model;
   return next;
@@ -2375,6 +2384,8 @@ function reduce(model, intent) {
       return applyReorder(model, intent.key, intent.side, intent.index);
     case "setHidden":
       return applySetHidden(model, intent.key, intent.hidden);
+    case "setMenuHidden":
+      return applySetMenuHidden(model, intent.key, intent.hidden);
     case "setClosed":
       return applySetClosed(model, intent.key, intent.closed);
     case "activate":
@@ -2789,6 +2800,7 @@ function createEmptyModel(side = "left") {
     primary: [],
     secondary: [],
     hidden: [],
+    menuHidden: [],
     closed: [],
     active: { primary: null, secondary: null },
     drawers: {
@@ -2908,6 +2920,13 @@ function buildModelFromLayout(layout, findKey, side) {
       hidden.push(key);
     }
   }
+  const menuHidden = [];
+  for (const storedId of layout.menuHiddenTabIds ?? []) {
+    const key = resolveStoredId(storedId, findKey);
+    if (key && (primary.includes(key) || secondary.includes(key)) && !menuHidden.includes(key)) {
+      menuHidden.push(key);
+    }
+  }
   const closed = [];
   for (const storedId of layout.closedTabIds ?? []) {
     const key = resolveStoredId(storedId, findKey);
@@ -2928,6 +2947,7 @@ function buildModelFromLayout(layout, findKey, side) {
     primary,
     secondary,
     hidden,
+    menuHidden,
     closed,
     active: {
       primary: activePrimary ?? null,
@@ -2952,6 +2972,7 @@ function serializeModelToSingleLayout(model, resolve, version) {
     detachedTabs: [],
     tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
     hiddenTabIds: model.hidden.map((key) => resolve(key)).filter(Boolean),
+    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
     closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
     drawerSide: model.side
   };
@@ -3037,6 +3058,7 @@ function serializeModelToLayout(model, resolve, version) {
     detachedTabs,
     tabOrder,
     hiddenTabIds,
+    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
     closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
     drawerSide: model.side
   };
@@ -5570,6 +5592,7 @@ function openWindowInDrawerByLiveId(liveId, side) {
   }
   const isClosed = model.closed.includes(key);
   const isHidden = model.hidden.includes(key);
+  const menuHidden = model.menuHidden.includes(key);
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
   const placeAtEnd = !livesInTarget || isClosed || isHidden;
   const launchIndex = placeAtEnd ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
@@ -5586,6 +5609,7 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false, launchIndex);
   const open = dispatchBatch([
     { t: "setClosed", key, closed: false },
+    ...menuHidden ? [{ t: "setMenuHidden", key, hidden: false }] : [],
     ...isClosed && !isHidden && livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : [],
     { t: "activate", key, side }
   ]);
@@ -6378,10 +6402,10 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
       if (!liveId || seen.has(liveId))
         continue;
       seen.add(liveId);
-      const isHidden = model.hidden.includes(key);
-      if (isHidden && !manageMode)
+      const isMenuHidden = model.menuHidden.includes(key);
+      if (isMenuHidden && !manageMode)
         continue;
-      const state = model.closed.includes(key) || isHidden ? "closed" : key === activeKey ? "open" : "minimized";
+      const state = model.closed.includes(key) ? "closed" : key === activeKey ? "open" : "minimized";
       const tab = tabsById.get(liveId);
       const icon = resolveEntryIcon(tab, liveId);
       const coreId = parseBuiltinKey(key);
@@ -6392,7 +6416,7 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
-        hidden: isHidden,
+        menuHidden: isMenuHidden,
         key,
         locked: coreId !== null && isCoreTabId(coreId)
       });
@@ -6442,24 +6466,23 @@ function createMenuEntry(entry, targetSide) {
 function createManageRow(entry, targetSide) {
   const row = createMenuEntry(entry, targetSide);
   row.classList.add("canvas-os-start-menu__item--manage");
-  if (entry.hidden)
+  if (entry.menuHidden)
     row.classList.add("row-hidden");
   const coreUnlocked = !!getSettings().coreTabsHidden;
   const isLocked = entry.locked && !coreUnlocked;
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "canvas-os-start-menu__check";
-  checkbox.checked = !entry.hidden;
+  checkbox.checked = !entry.menuHidden;
   checkbox.disabled = isLocked;
-  checkbox.title = isLocked ? "Cannot hide this panel" : entry.hidden ? "Show panel" : "Hide panel";
+  checkbox.title = isLocked ? "Cannot hide this panel" : entry.menuHidden ? "Show panel" : "Hide panel";
   checkbox.setAttribute("aria-label", `${entry.title} — ${checkbox.title}`);
   checkbox.addEventListener("click", (ev) => ev.stopPropagation());
   checkbox.addEventListener("change", () => {
-    dispatchBatch([{ t: "setHidden", key: entry.key, hidden: !checkbox.checked }]);
-    const nowHidden = !checkbox.checked;
-    entry.hidden = nowHidden;
-    row.classList.toggle("row-hidden", nowHidden);
-    row.setAttribute("data-os-state", "closed");
+    dispatchBatch([{ t: "setMenuHidden", key: entry.key, hidden: !checkbox.checked }]);
+    const nowMenuHidden = !checkbox.checked;
+    entry.menuHidden = nowMenuHidden;
+    row.classList.toggle("row-hidden", nowMenuHidden);
   });
   row.appendChild(checkbox);
   return row;
@@ -6548,7 +6571,7 @@ function buildMenu(targetSide) {
     menu.appendChild(createEmptyState());
     return menu;
   }
-  const header = createHeader(entries.length, entries.filter((e) => e.hidden).length, _manageMode);
+  const header = createHeader(entries.length, entries.filter((e) => e.menuHidden).length, _manageMode);
   const manageBtn = header.querySelector("button.canvas-os-start-menu__manage");
   manageBtn?.addEventListener("click", (ev) => {
     ev.stopPropagation();
@@ -9335,6 +9358,12 @@ async function runOsDisable() {
         dlog("[os] disable: clearing residual closed windows", { closed: after.closed.length });
         const reopen = after.closed.map((key) => ({ t: "setClosed", key, closed: false }));
         await dispatchBatch(reopen);
+      }
+      const afterHidden = getModel();
+      if (afterHidden && afterHidden.menuHidden.length > 0) {
+        dlog("[os] disable: clearing residual menu-hidden panels", { menuHidden: afterHidden.menuHidden.length });
+        const unmenu = afterHidden.menuHidden.map((key) => ({ t: "setMenuHidden", key, hidden: false }));
+        await dispatchBatch(unmenu);
       }
       await syncOsMobileDrawerMode({ nested: true });
       try {
@@ -14554,12 +14583,14 @@ function mergeResolvedInto(current, rebuilt) {
   const primary = mergeSide("primary");
   const secondary = mergeSide("secondary");
   const hidden = rebuilt.hidden.filter((k) => inModel.has(k));
+  const menuHidden = rebuilt.menuHidden.filter((k) => inModel.has(k));
   const keepUser = _pendingWindowUserState;
   const next = {
     ...current,
     primary,
     secondary,
     hidden: keepUser ? current.hidden : hidden,
+    menuHidden: keepUser ? current.menuHidden : menuHidden,
     active: {
       primary: current.active.primary ?? rebuilt.active.primary,
       secondary: current.active.secondary ?? rebuilt.active.secondary
@@ -14567,7 +14598,7 @@ function mergeResolvedInto(current, rebuilt) {
     drawers: keepUser ? current.drawers : rebuilt.drawers,
     side: keepUser ? current.side : rebuilt.side
   };
-  if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
+  if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && sameKeys2(next.menuHidden, current.menuHidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
     return current;
   }
   return next;
@@ -14576,7 +14607,7 @@ function markPendingWindowUserIntent(intent) {
   if (_pendingLayout === null)
     return;
   const t = intent.t;
-  if (t === "setDrawer" || t === "swapSides" || t === "setHidden") {
+  if (t === "setDrawer" || t === "swapSides" || t === "setHidden" || t === "setMenuHidden") {
     _pendingWindowUserState = true;
   }
 }
@@ -14736,7 +14767,7 @@ function buildPersistedBlob(model, resolve) {
   const layout = serializeModelToLayout(model, resolve, _version);
   const isDual = model.secondary.length > 0;
   const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled();
-  const base = os ? layout : { ...layout, closedTabIds: [] };
+  const base = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
   const s = getSettings();
   const lastPrimary = getLastLoadedLayout()?.primary ?? null;
   const basePrimary = base.primary ?? {};
@@ -15088,6 +15119,12 @@ function bootstrapFromLayout(layout, host, version, opts) {
       closed: model.closed.length
     });
     model = { ...model, closed: [] };
+  }
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.menuHidden.length > 0) {
+    dlog("[dispatch] dropped OS menu-hidden set on non-OS boot/restore", {
+      menuHidden: model.menuHidden.length
+    });
+    model = { ...model, menuHidden: [] };
   }
   if (pendingLayoutTabCount(layout) === 0) {
     const observed = host.observe();
