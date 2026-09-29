@@ -601,7 +601,13 @@ import {
   type TabKey,
   type LayoutModel,
 } from '../../core/model'
-import { isCanvasMainOpen, getMainMirrorDrawer, getMainMirrorTitleEl } from '../main-mirror-drawer'
+import {
+  isCanvasMainOpen,
+  getMainMirrorDrawer,
+  getMainMirrorTitleEl,
+  openCanvasMainDrawer,
+  setCanvasMainNoActive,
+} from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 
 /** Collect mirror buttons from the list (nested under main/bottom sections). */
@@ -705,6 +711,7 @@ function mirrorListIn(host: StubElement): StubElement {
 async function bootMirror(opts?: {
   primary?: TabKey[]
   hidden?: TabKey[]
+  closed?: TabKey[]
   active?: TabKey | null
   extraTabs?: LiveTab[]
 }): Promise<FakeHost> {
@@ -720,6 +727,7 @@ async function bootMirror(opts?: {
     primary: opts?.primary ?? [PROFILE, MEMORY, NOTES],
     secondary: [],
     hidden: opts?.hidden ?? [],
+    closed: opts?.closed ?? [],
     active: { primary: opts?.active ?? null, secondary: null },
   }
   bootstrap(model, host)
@@ -915,13 +923,47 @@ function reset(): void {
 // visible (WORKFLOW gotcha; the renderer guards, the model is untouched).
 {
   reset()
-  await bootMirror({ hidden: [PROFILE, MEMORY, NOTES] })
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
+  mainSidebar.appendChild(makeHostBtn('memory', 'Memory', false))
+  mainSidebar.appendChild(makeHostBtn('notes', 'Notes', false))
+  await bootMirror({ hidden: [PROFILE, MEMORY, NOTES], active: MEMORY })
   const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
   const mirrors = collectMirrorButtons(list)
   assertEqual(mirrors.length, 3, 'M7c: all keyed buttons present')
   const shown = mirrors.filter((m) => m.style.display !== 'none')
   assertEqual(shown.length, 1, 'M7c: exactly one visible when all would hide')
   assertEqual(shown[0].getAttribute('data-mirror-key'), PROFILE, 'M7c: first key is the rescue tab')
+
+  openCanvasMainDrawer()
+  renderMainMirrorTabs()
+  assertEqual(
+    (getMainMirrorTitleEl() as any)?.textContent,
+    'Profile',
+    'M7c: header title follows the visible rescue tab when active is hidden',
+  )
+}
+
+// D7: OS mode has no rescue key; an all-closed strip keeps its header clear.
+{
+  reset()
+  hydrateSettings({ osMode: true })
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
+  mainSidebar.appendChild(makeHostBtn('memory', 'Memory', false))
+  mainSidebar.appendChild(makeHostBtn('notes', 'Notes', false))
+  await bootMirror({ active: PROFILE, closed: [PROFILE, MEMORY, NOTES] })
+  openCanvasMainDrawer()
+  setCanvasMainNoActive(true)
+  renderMainMirrorTabs()
+
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const shown = collectMirrorButtons(list).filter((m) => m.style.display !== 'none')
+  assertEqual(shown.length, 0, 'D7: all closed tabs remain absent from the strip')
+  assertEqual(
+    (getMainMirrorTitleEl() as any)?.textContent,
+    '',
+    'D7: renderer leaves the cleared header title empty',
+  )
+  hydrateSettings(null)
 }
 
 // M8: reconcileMainTabListPin with default setting leaves off

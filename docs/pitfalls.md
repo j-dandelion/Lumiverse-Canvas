@@ -339,3 +339,12 @@ idempotent cleanup: remove all drag listeners and the overlay, restore body
 cursor/selection, clear `_resizeDragging`, and commit the last live width once.
 Cancellation keeps the width already applied; if pointercancel or blur skips
 cleanup, the drawer content can remain unclickable.
+
+## 31. Main-mirror header titles must follow rendered tabs (LUMI-37)
+
+The never-hide-all guard renders the first primary key as a rescue tab when
+every regular key is hidden and OS mode is off. Header title selection must use
+the same renderable-key set as the strip: title the active key if it renders,
+otherwise title the rescue key when one is rendered. If OS mode has no
+renderable keys because all windows are closed, leave the header title cleared
+by D7; do not write a title from a hidden or closed active key.

@@ -55,6 +55,10 @@ interface CanvasFeature {
 
 **Note**: The `drawerTabDrag` feature is in the registry but has no settings panel toggle — it is enabled/disabled via the `drawerTabDrag` setting key, which is not exposed in the UI panel. It is unrelated to `dragAndDropDrawerTabs` (tab *list* reorder).
 
+### Main-mirror tab rendering
+
+The main-mirror strip keeps model tabs available for rendering and hides a tab when it is hidden or OS-closed. When every regular tab is hidden, non-OS mode temporarily renders the first tab as a rescue; if the active tab is hidden, the header title follows that visible rescue tab. OS mode suspends the rescue, so an all-closed strip stays empty and D7 can keep the header clear.
+
 ### Removed Features
 
 | Feature | Setting ID | Reason |

@@ -36,7 +36,7 @@ import { getModel, getHost, onModelChanged, dispatchActivateByLiveId, dispatch }
 import { getSettings, isOsModeEnabled, isTaskbarModeEnabled } from '../settings/state'
 import { isStartAtStripTopGate } from '../os/start-strip-top-gate'
 import { toggleWindowByLiveId } from '../os/actions'
-import { isHidden, visibleKeys } from '../core/select'
+import { isHidden } from '../core/select'
 import { getMainSidebar } from '../dom/lumiverse'
 import { isShowTabLabels } from './drawer-sync'
 import {
@@ -438,6 +438,11 @@ export function renderMainMirrorTabs(): void {
     regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled()
       ? regularKeys[0]!
       : null
+  const renderableKeys = new Set(
+    regularKeys.filter((key) =>
+      (!isHidden(model, key) && !model.closed.includes(key)) || key === forceVisibleKey,
+    ),
+  )
 
   // Built-in / extension tabs: scrollable top section in MODEL order.
   let insertBefore: ChildNode | null = mainSection.firstChild
@@ -466,7 +471,7 @@ export function renderMainMirrorTabs(): void {
     // have distinct keys — more precise than the live-id pairing path).
     // OS mode (D3): closed windows hide their strip button the same way —
     // membership in model.closed (the Start menu keeps listing them, D6).
-    const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey
+    const hidden = !renderableKeys.has(key)
     mirror.style.display = hidden ? 'none' : ''
 
     // Active from the MODEL — open-only highlight; never host tabBtnActive.
@@ -538,14 +543,21 @@ export function renderMainMirrorTabs(): void {
     while (bottomSection.firstChild) bottomSection.removeChild(bottomSection.firstChild)
   }
 
-  // Header title (Q4): from the host twin of the resolved live id, read-only.
-  // Non-null activeKey only — mount seeds the shell with 'Drawer'.
-  if (open && activeKey !== null && visibleKeys(model, 'primary').length > 0) {
-    const twin = twinForKey(activeKey)
+  // Header title (Q4): use the active tab when it renders, or the rescue tab
+  // when the active tab has no rendered button. Non-null activeKey only —
+  // mount seeds the shell with 'Drawer'.
+  const titleKey =
+    activeKey !== null && renderableKeys.has(activeKey)
+      ? activeKey
+      : activeKey !== null && forceVisibleKey !== null && renderableKeys.has(forceVisibleKey)
+        ? forceVisibleKey
+        : null
+  if (open && titleKey !== null) {
+    const twin = twinForKey(titleKey)
     const title =
       twin.btn?.getAttribute('title') ||
       twin.btn?.getAttribute('aria-label') ||
-      keyTitle(activeKey) ||
+      keyTitle(titleKey) ||
       ''
     if (title) setCanvasMainTitle(title)
   }
