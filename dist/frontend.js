@@ -7400,6 +7400,7 @@ function renderMainMirrorTabs() {
   const regularKeys = model.primary;
   const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
   const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
+  const renderableKeys = new Set(regularKeys.filter((key) => !isHidden(model, key) && !model.closed.includes(key) || key === forceVisibleKey));
   let insertBefore = mainSection.firstChild;
   for (const key of regularKeys) {
     const twin = twinForKey(key);
@@ -7415,7 +7416,7 @@ function renderMainMirrorTabs() {
       mirror.setAttribute("title", title);
       mirror.setAttribute("aria-label", title);
     }
-    const hidden = (isHidden(model, key) || model.closed.includes(key)) && key !== forceVisibleKey;
+    const hidden = !renderableKeys.has(key);
     mirror.style.display = hidden ? "none" : "";
     const showActive = open && activeKey === key && !hidden;
     mirror.classList.toggle("sidebar-ux-tab-active", showActive);
@@ -7466,9 +7467,10 @@ function renderMainMirrorTabs() {
     while (bottomSection.firstChild)
       bottomSection.removeChild(bottomSection.firstChild);
   }
-  if (open && activeKey !== null && visibleKeys(model, "primary").length > 0) {
-    const twin = twinForKey(activeKey);
-    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || keyTitle(activeKey) || "";
+  const titleKey = activeKey !== null && renderableKeys.has(activeKey) ? activeKey : activeKey !== null && forceVisibleKey !== null && renderableKeys.has(forceVisibleKey) ? forceVisibleKey : null;
+  if (open && titleKey !== null) {
+    const twin = twinForKey(titleKey);
+    const title = twin.btn?.getAttribute("title") || twin.btn?.getAttribute("aria-label") || keyTitle(titleKey) || "";
     if (title)
       setCanvasMainTitle(title);
   }
