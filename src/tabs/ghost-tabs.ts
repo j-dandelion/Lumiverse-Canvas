@@ -26,12 +26,41 @@ import { getSecondaryTabList, getSecondaryWrapper, closeSecondarySidebar } from 
 import { getActiveSecondaryTabId, setActiveSecondaryTabId } from './active-tab'
 import { updateDrawerTabVisibility, removeSecondaryTabButton } from './buttons'
 import { dlog } from '../debug/log'
+import {
+  getGhostPresentationPendingKeys,
+  onGhostPresentationChanged,
+  setGhostPresentationPending,
+} from './ghost-presentation'
 
 /** Unsubscribe handle returned by startGhostTabSweeper. */
 export type GhostTabSweeperStop = () => void
 
 let _unsub: (() => void) | null = null
+let _unsubPresentation: (() => void) | null = null
 let _prevSecondary: readonly string[] = []
+
+/** Hide or restore a Canvas-owned secondary strip button during ghost grace. */
+function setSecondaryGhostVisibility(key: string, pending: boolean): void {
+  if (typeof document === 'undefined') return
+  let escaped: string
+  try {
+    escaped = CSS.escape(key)
+  } catch {
+    return
+  }
+  const scope = getSecondaryTabList() ?? getSecondaryWrapper()
+  const btn = scope?.querySelector(
+    `button[data-canvas-facade-key="${escaped}"]`,
+  ) as HTMLElement | null
+  if (!btn) return
+
+  if (pending) {
+    btn.setAttribute('data-canvas-ghost-pending', 'true')
+    return
+  }
+
+  btn.removeAttribute('data-canvas-ghost-pending')
+}
 
 /**
  * Keys that left model.secondary AND model.primary in this commit — the
@@ -118,6 +147,13 @@ function onModelCommit(): void {
   for (const key of droppedSecondaryKeys(prev, model)) {
     sweepGhostSecondaryButton(key)
   }
+  // The absent key is no longer renderable on either strip, so release its
+  // presentation state after the authoritative model drop has landed.
+  for (const key of getGhostPresentationPendingKeys()) {
+    if (!model.primary.includes(key) && !model.secondary.includes(key)) {
+      setGhostPresentationPending(key, false)
+    }
+  }
 }
 
 /**
@@ -130,6 +166,10 @@ export function startGhostTabSweeper(): GhostTabSweeperStop {
   const model = getModel()
   _prevSecondary = model ? model.secondary : []
   _unsub = onModelChanged(onModelCommit)
+  _unsubPresentation = onGhostPresentationChanged(setSecondaryGhostVisibility)
+  for (const key of getGhostPresentationPendingKeys()) {
+    setSecondaryGhostVisibility(key, true)
+  }
   return stopGhostTabSweeper
 }
 
@@ -137,6 +177,10 @@ export function stopGhostTabSweeper(): void {
   if (_unsub) {
     _unsub()
     _unsub = null
+  }
+  if (_unsubPresentation) {
+    _unsubPresentation()
+    _unsubPresentation = null
   }
   _prevSecondary = []
 }

@@ -53,6 +53,10 @@ import {
 } from '../tabs/buttons'
 import { dlog, dwarn } from '../debug/log'
 import { START_STRIP_TOP_DIVIDER_CLASS } from './styles'
+import {
+  isGhostPresentationPending,
+  onGhostPresentationChanged,
+} from '../tabs/ghost-presentation'
 
 /** Canvas-owned tab list class (also on shell tab list when pinned). */
 export const MAIN_MIRROR_LIST_CLASS = 'sidebar-ux-main-tab-list-mirror'
@@ -78,6 +82,7 @@ export const SETTINGS_MIRROR_KEY = '__canvas-settings__'
 
 /** Renderer subscription handle (null = not subscribed). */
 let _unsubModelChanged: (() => void) | null = null
+let _unsubGhostPresentation: (() => void) | null = null
 
 /** rAF coalesce for observation-driven re-renders (twin chrome deltas). */
 let _renderRaf: number | null = null
@@ -433,13 +438,14 @@ export function renderMainMirrorTabs(): void {
   // mode suspends the guard: all windows minimized/closed → an empty strip
   // is the correct collapsed-drawer look (D7), the Start button remains.
   const regularKeys = model.primary
-  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length
+  const presentationKeys = regularKeys.filter((key) => !isGhostPresentationPending(key))
+  const hiddenCount = presentationKeys.filter((k) => isHidden(model, k)).length
   const forceVisibleKey: TabKey | null =
-    regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled()
-      ? regularKeys[0]!
+    presentationKeys.length > 0 && hiddenCount >= presentationKeys.length && !isOsModeEnabled()
+      ? presentationKeys[0]!
       : null
   const renderableKeys = new Set(
-    regularKeys.filter((key) =>
+    presentationKeys.filter((key) =>
       (!isHidden(model, key) && !model.closed.includes(key)) || key === forceVisibleKey,
     ),
   )
@@ -781,6 +787,9 @@ export function initMainRenderer(): void {
   if (!_unsubModelChanged) {
     _unsubModelChanged = onModelChanged(() => scheduleMainMirrorRender())
   }
+  if (!_unsubGhostPresentation) {
+    _unsubGhostPresentation = onGhostPresentationChanged(() => scheduleMainMirrorRender())
+  }
   renderMainMirrorTabs()
 }
 
@@ -789,6 +798,10 @@ export function teardownMainRenderer(): void {
   if (_unsubModelChanged) {
     _unsubModelChanged()
     _unsubModelChanged = null
+  }
+  if (_unsubGhostPresentation) {
+    _unsubGhostPresentation()
+    _unsubGhostPresentation = null
   }
   if (_renderRaf !== null && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(_renderRaf)

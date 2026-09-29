@@ -51,6 +51,10 @@ import {
 import { isMainDrawerRestorePending } from '../../sidebar/main-persist'
 import { dlog } from '../../debug/log'
 import { currentLifecycleGeneration, isLifecycleCurrent } from '../../lifecycle/instance'
+import {
+  clearGhostPresentationPending,
+  setGhostPresentationPending,
+} from '../../tabs/ghost-presentation'
 
 const DEFAULT_WIDTH = 420
 
@@ -62,16 +66,16 @@ const DEFAULT_WIDTH = 420
 // (label-only mirror twin with no icon; click and right-click are no-ops
 // because both forward to the missing host twin).
 //
-// The tracker gives a missing EXTENSION key a grace window: absence that
-// outlives GHOST_FACADE_GRACE_MS across observe() rounds means the
-// extension was disabled/uninstalled, and observe() stops synthesizing the
-// entry — the authoritative host-sync then drops the key from the model
-// (and prunes hidden/menuHidden with it). Transient host re-renders
-// (button removed and re-added within the window) never expire the clock,
-// and a re-registered tab clears it. The first absence arms a one-shot
-// retry that re-fires the world-change signal after the window — without
-// it the sync that armed the clock would be the LAST round (nothing else
-// changes, so nothing re-observes) and the ghost would persist.
+// The tracker gives a missing EXTENSION key a grace window: its Canvas strip
+// buttons are suppressed immediately, while the model entry remains for
+// GHOST_FACADE_GRACE_MS so a transient host re-render can restore it. Sustained
+// absence stops synthesizing the entry — the authoritative host-sync then
+// drops the key from the model (and prunes hidden/menuHidden with it). A
+// re-registered tab clears both the clock and visual suppression. The first
+// absence arms a one-shot retry that re-fires the world-change signal after
+// the window — without it the sync that armed the clock would be the LAST
+// round (nothing else changes, so nothing re-observes) and the ghost would
+// persist.
 //
 // Extension keys only: DOM-placed built-ins legitimately have no live
 // button while their registry root lives in a Canvas shell, and must keep
@@ -102,9 +106,10 @@ function armGhostRetry(key: TabKey): void {
 }
 
 /** Forget a key's absence state (tab re-registered, left the model, or purged). */
-function forgetMissingFacadeKey(key: TabKey): void {
+function forgetMissingFacadeKey(key: TabKey, restorePresentation = true): void {
   _facadeMissingSince.delete(key)
   clearGhostRetry(key)
+  if (restorePresentation) setGhostPresentationPending(key, false)
 }
 
 /**
@@ -347,6 +352,7 @@ export class LumiverseHost implements HostPort {
     // the disabled session's timers (LUMI-21 continuation class).
     for (const key of Array.from(_ghostRetryTimers.keys())) clearGhostRetry(key)
     _facadeMissingSince.clear()
+    clearGhostPresentationPending()
   }
 
   // -----------------------------------------------------------------------
@@ -374,11 +380,11 @@ export class LumiverseHost implements HostPort {
 
     // Tabs from the live host inventory (frozen keys from the registry —
     // never re-derived from tagging state). A key back in the inventory is
-    // alive — forget any ghost-absence state (LUMI-29).
+    // alive — clear any ghost clock or presentation suppression (LUMI-29).
     for (const t of liveTabs) {
       const key = t.key
       seen.add(key)
-      if (_facadeMissingSince.has(key)) forgetMissingFacadeKey(key)
+      forgetMissingFacadeKey(key)
       entries.push(buildHostEntry(t))
     }
 
@@ -417,13 +423,17 @@ export class LumiverseHost implements HostPort {
           missingSince = nowMs
           _facadeMissingSince.set(tabKey, missingSince)
           armGhostRetry(tabKey)
+          setGhostPresentationPending(tabKey, true)
         }
         if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
           dlog('[host] observe: extension key absent past ghost grace — dropping from observed world', {
             key: tabKey,
             missingForMs: nowMs - missingSince,
           })
-          forgetMissingFacadeKey(tabKey)
+          // Keep the presentation suppressed while the authoritative sync
+          // commits the drop. Restoring it here would briefly flash the dead
+          // row between grace expiry and the model commit.
+          forgetMissingFacadeKey(tabKey, false)
           continue
         }
       }

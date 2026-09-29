@@ -43,6 +43,7 @@ import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
 } from './canvas-hidden'
+import { isGhostPresentationPending } from './ghost-presentation'
 
 // Test seams for hideMainTabButton / showMainTabButton — allows tests to override the real implementations
 let _hideMainTabButtonOverride: ((tabId: string) => void) | null = null
@@ -384,6 +385,9 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     cursor: pointer;
     transition: all 0.2s ease;
   `
+  if (facadeKey && isGhostPresentationPending(facadeKey)) {
+    btn.setAttribute('data-canvas-ghost-pending', 'true')
+  }
 
   // Render icon from store data (matches ViewportDrawer.tsx rendering)
   const iconWrap = document.createElement('span')

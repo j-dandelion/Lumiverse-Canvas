@@ -57,7 +57,7 @@ interface CanvasFeature {
 
 ### Main-mirror tab rendering
 
-The main-mirror strip keeps model tabs available for rendering and hides a tab when it is hidden or OS-closed. When every regular tab is hidden, non-OS mode temporarily renders the first tab as a rescue; if the active tab is hidden, the header title follows that visible rescue tab. OS mode suspends the rescue, so an all-closed strip stays empty and D7 can keep the header clear.
+The main-mirror strip keeps model tabs available for rendering and hides a tab when it is hidden, OS-closed, or an extension key has just disappeared from the live inventory during ghost grace. That last state is presentation-only: a returning extension restores its row with the saved placement, while sustained absence drops the model key after the grace period. When every regular tab is hidden, non-OS mode temporarily renders the first tab as a rescue; pending ghost keys are excluded from that rescue. OS mode suspends the rescue, so an all-closed strip stays empty and D7 can keep the header clear.
 
 ### Removed Features
 

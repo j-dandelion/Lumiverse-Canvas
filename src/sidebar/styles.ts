@@ -853,6 +853,11 @@ export function injectStartStripTopStyles(): void {
 
 export function injectDrawerTabStyles(): void {
   injectStyles('sidebar-ux-drawer-tab-styles', `
+    /* Ghost grace is presentation-only; !important keeps other inline
+       visibility applicators from flashing a missing extension button. */
+    .sidebar-ux-tab-list button[data-canvas-ghost-pending="true"] {
+      display: none !important;
+    }
     .sidebar-ux-drawer-tab {
       flex-shrink: 0;
       align-self: flex-start;

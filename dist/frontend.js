@@ -611,6 +611,11 @@ ${START_STRIP_TOP_DIVIDER_CSS}
 }
 function injectDrawerTabStyles() {
   injectStyles("sidebar-ux-drawer-tab-styles", `
+    /* Ghost grace is presentation-only; !important keeps other inline
+       visibility applicators from flashing a missing extension button. */
+    .sidebar-ux-tab-list button[data-canvas-ghost-pending="true"] {
+      display: none !important;
+    }
     .sidebar-ux-drawer-tab {
       flex-shrink: 0;
       align-self: flex-start;
@@ -5682,6 +5687,42 @@ var init_actions = __esm(() => {
   init_log();
 });
 
+// src/tabs/ghost-presentation.ts
+function isGhostPresentationPending(key) {
+  return _pendingKeys.has(key);
+}
+function getGhostPresentationPendingKeys() {
+  return Array.from(_pendingKeys);
+}
+function onGhostPresentationChanged(listener) {
+  _listeners.add(listener);
+  return () => _listeners.delete(listener);
+}
+function setGhostPresentationPending(key, pending) {
+  const changed = pending ? !_pendingKeys.has(key) : _pendingKeys.has(key);
+  if (!changed)
+    return;
+  if (pending)
+    _pendingKeys.add(key);
+  else
+    _pendingKeys.delete(key);
+  for (const listener of Array.from(_listeners)) {
+    try {
+      listener(key, pending);
+    } catch {}
+  }
+}
+function clearGhostPresentationPending() {
+  for (const key of Array.from(_pendingKeys)) {
+    setGhostPresentationPending(key, false);
+  }
+}
+var _pendingKeys, _listeners;
+var init_ghost_presentation = __esm(() => {
+  _pendingKeys = new Set;
+  _listeners = new Set;
+});
+
 // src/sidebar/chrome-sides.ts
 function resolveChromeSides(value, mainSide, secondEnabled) {
   const secondSide = mainSide === "left" ? "right" : "left";
@@ -7398,9 +7439,10 @@ function renderMainMirrorTabs() {
   const open = isCanvasMainOpen();
   const activeKey = model.active.primary;
   const regularKeys = model.primary;
-  const hiddenCount = regularKeys.filter((k) => isHidden(model, k)).length;
-  const forceVisibleKey = regularKeys.length > 0 && hiddenCount >= regularKeys.length && !isOsModeEnabled() ? regularKeys[0] : null;
-  const renderableKeys = new Set(regularKeys.filter((key) => !isHidden(model, key) && !model.closed.includes(key) || key === forceVisibleKey));
+  const presentationKeys = regularKeys.filter((key) => !isGhostPresentationPending(key));
+  const hiddenCount = presentationKeys.filter((k) => isHidden(model, k)).length;
+  const forceVisibleKey = presentationKeys.length > 0 && hiddenCount >= presentationKeys.length && !isOsModeEnabled() ? presentationKeys[0] : null;
+  const renderableKeys = new Set(presentationKeys.filter((key) => !isHidden(model, key) && !model.closed.includes(key) || key === forceVisibleKey));
   let insertBefore = mainSection.firstChild;
   for (const key of regularKeys) {
     const twin = twinForKey(key);
@@ -7599,6 +7641,9 @@ function initMainRenderer() {
   if (!_unsubModelChanged2) {
     _unsubModelChanged2 = onModelChanged(() => scheduleMainMirrorRender());
   }
+  if (!_unsubGhostPresentation) {
+    _unsubGhostPresentation = onGhostPresentationChanged(() => scheduleMainMirrorRender());
+  }
   renderMainMirrorTabs();
 }
 function teardownMainRenderer() {
@@ -7606,12 +7651,16 @@ function teardownMainRenderer() {
     _unsubModelChanged2();
     _unsubModelChanged2 = null;
   }
+  if (_unsubGhostPresentation) {
+    _unsubGhostPresentation();
+    _unsubGhostPresentation = null;
+  }
   if (_renderRaf !== null && typeof cancelAnimationFrame === "function") {
     cancelAnimationFrame(_renderRaf);
   }
   _renderRaf = null;
 }
-var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged2 = null, _renderRaf = null;
+var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged2 = null, _unsubGhostPresentation = null, _renderRaf = null;
 var init_main_renderer = __esm(() => {
   init_dispatch();
   init_state();
@@ -7622,6 +7671,7 @@ var init_main_renderer = __esm(() => {
   init_buttons();
   init_log();
   init_styles();
+  init_ghost_presentation();
 });
 
 // src/sidebar/main-tab-pin.ts
@@ -14294,6 +14344,9 @@ function addSecondaryTabButton(tab) {
     cursor: pointer;
     transition: all 0.2s ease;
   `;
+  if (facadeKey && isGhostPresentationPending(facadeKey)) {
+    btn.setAttribute("data-canvas-ghost-pending", "true");
+  }
   const iconWrap = document.createElement("span");
   if (tab.iconSvg) {
     iconWrap.innerHTML = tab.iconSvg;
@@ -14576,6 +14629,7 @@ var init_buttons = __esm(() => {
   init_dispatch();
   init_tab_context_menu();
   init_canvas_hidden();
+  init_ghost_presentation();
   _buttonTabIdLogged = new Set;
 });
 
@@ -24226,8 +24280,29 @@ init_secondary();
 init_active_tab();
 init_buttons();
 init_log();
+init_ghost_presentation();
 var _unsub = null;
+var _unsubPresentation = null;
 var _prevSecondary = [];
+function setSecondaryGhostVisibility(key, pending) {
+  if (typeof document === "undefined")
+    return;
+  let escaped;
+  try {
+    escaped = CSS.escape(key);
+  } catch {
+    return;
+  }
+  const scope = getSecondaryTabList() ?? getSecondaryWrapper();
+  const btn = scope?.querySelector(`button[data-canvas-facade-key="${escaped}"]`);
+  if (!btn)
+    return;
+  if (pending) {
+    btn.setAttribute("data-canvas-ghost-pending", "true");
+    return;
+  }
+  btn.removeAttribute("data-canvas-ghost-pending");
+}
 function droppedSecondaryKeys(prevSecondary, model) {
   const out = [];
   for (const key of prevSecondary) {
@@ -24283,18 +24358,31 @@ function onModelCommit() {
   for (const key of droppedSecondaryKeys(prev, model)) {
     sweepGhostSecondaryButton(key);
   }
+  for (const key of getGhostPresentationPendingKeys()) {
+    if (!model.primary.includes(key) && !model.secondary.includes(key)) {
+      setGhostPresentationPending(key, false);
+    }
+  }
 }
 function startGhostTabSweeper() {
   stopGhostTabSweeper();
   const model = getModel();
   _prevSecondary = model ? model.secondary : [];
   _unsub = onModelChanged(onModelCommit);
+  _unsubPresentation = onGhostPresentationChanged(setSecondaryGhostVisibility);
+  for (const key of getGhostPresentationPendingKeys()) {
+    setSecondaryGhostVisibility(key, true);
+  }
   return stopGhostTabSweeper;
 }
 function stopGhostTabSweeper() {
   if (_unsub) {
     _unsub();
     _unsub = null;
+  }
+  if (_unsubPresentation) {
+    _unsubPresentation();
+    _unsubPresentation = null;
   }
   _prevSecondary = [];
 }
@@ -25084,6 +25172,7 @@ init_live_tab_order();
 init_styles();
 init_main_persist();
 init_log();
+init_ghost_presentation();
 var DEFAULT_WIDTH = 420;
 var GHOST_FACADE_GRACE_MS = 1e4;
 var _facadeMissingSince = new Map;
@@ -25106,9 +25195,11 @@ function armGhostRetry(key) {
   }, GHOST_FACADE_GRACE_MS + 250);
   _ghostRetryTimers.set(key, timer);
 }
-function forgetMissingFacadeKey(key) {
+function forgetMissingFacadeKey(key, restorePresentation = true) {
   _facadeMissingSince.delete(key);
   clearGhostRetry(key);
+  if (restorePresentation)
+    setGhostPresentationPending(key, false);
 }
 var _worldNotifies = new Set;
 function emitWorldChanged() {
@@ -25217,6 +25308,7 @@ class LumiverseHost {
     for (const key of Array.from(_ghostRetryTimers.keys()))
       clearGhostRetry(key);
     _facadeMissingSince.clear();
+    clearGhostPresentationPending();
   }
   observe() {
     findStoreData(true);
@@ -25226,8 +25318,7 @@ class LumiverseHost {
     for (const t of liveTabs) {
       const key = t.key;
       seen.add(key);
-      if (_facadeMissingSince.has(key))
-        forgetMissingFacadeKey(key);
+      forgetMissingFacadeKey(key);
       entries.push(buildHostEntry(t));
     }
     const liveByTitle = new Map;
@@ -25249,13 +25340,14 @@ class LumiverseHost {
           missingSince = nowMs;
           _facadeMissingSince.set(tabKey, missingSince);
           armGhostRetry(tabKey);
+          setGhostPresentationPending(tabKey, true);
         }
         if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
           dlog("[host] observe: extension key absent past ghost grace — dropping from observed world", {
             key: tabKey,
             missingForMs: nowMs - missingSince
           });
-          forgetMissingFacadeKey(tabKey);
+          forgetMissingFacadeKey(tabKey, false);
           continue;
         }
       }
