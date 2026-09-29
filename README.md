@@ -27,3 +27,9 @@ Convenient tweaks and shortcuts to enhance your Lumiverse UI! More at your finge
 ## Screenshots
 <img width="1919" height="929" alt="Screenshot From 2026-06-01 03-06-37" src="https://github.com/user-attachments/assets/69822f12-3c55-453e-8538-2bf502477202" />
 <img width="1919" height="929" alt="Screenshot From 2026-06-01 03-07-18" src="https://github.com/user-attachments/assets/78fd76a9-6b8f-4a8e-bff5-dd2886656b5f" />
+
+## License
+
+Canvas-authored code is licensed under the MIT License; see [LICENSE](LICENSE). Preact code included in the frontend bundle retains its separate notice in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+Canvas is an independent, unofficial extension designed to interoperate with Lumiverse. It is not affiliated with, endorsed by, or supported by the Lumiverse project or its licensors.
