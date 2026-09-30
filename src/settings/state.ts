@@ -202,20 +202,18 @@ export function isSettingsHydrated(): boolean { return _hydrated }
 
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
   const merged = mergeCanvasSettings(raw ?? null)
-  if (_mobileViewportActive && merged.drawerLocation === 'sides') {
+  if (_mobileViewportActive && isTaskbarModeEnabled(merged) && merged.drawerLocation === 'sides') {
     merged.drawerLocation = merged.lastHorizontalDrawerLocation
   }
   _settings = normalizeCanvasSettings(merged)
   _hydrated = true
 }
 
-/** Keep the settings invariant synchronized with the strict ≤600px mobile
- * viewport. Entering mobile resolves Sides to the remembered horizontal mode;
- * leaving mobile deliberately keeps that resolved mode until Sides is
- * explicitly selected again on desktop. */
+/** Mobile taskbars use the remembered horizontal edge. Vanilla keeps its
+ * native edge handles and in-drawer tabs, including after a reload. */
 export function setMobileViewportActive(active: boolean): void {
   _mobileViewportActive = active
-  if (!active || !_hydrated || _settings.drawerLocation !== 'sides') return
+  if (!active || !_hydrated || !isTaskbarModeEnabled() || _settings.drawerLocation !== 'sides') return
   setSettings({ drawerLocation: _settings.lastHorizontalDrawerLocation })
 }
 
@@ -227,14 +225,9 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     if (v !== undefined) (next as Record<string, unknown>)[key] = v
   }
 
-  // Keep the last explicit horizontal choice independent of Sides. While
-  // mobile, coerce any requested/restored Sides value before feature apply so
-  // the disallowed geometry can never become the active overall mode.
+  // Keep the last explicit horizontal choice independent of Vanilla/Sides.
   if (patch.drawerLocation === 'top' || patch.drawerLocation === 'bottom') {
     next.lastHorizontalDrawerLocation = patch.drawerLocation
-  }
-  if (_mobileViewportActive && next.drawerLocation === 'sides') {
-    next.drawerLocation = next.lastHorizontalDrawerLocation
   }
 
   // S8 (Drawer location): Top/Bottom force taskbar chrome on via the
@@ -291,13 +284,24 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     const chromePrefs = next.drawerLocation === 'sides'
       ? next.sidesChromePrefs ?? prefs
       : prefs
-    next.taskbarMode = chromePrefs.taskbarMode
-    next.moveControlsToOuterEdge = chromePrefs.moveControlsToOuterEdge
+    // A mode tile supplies its destination chrome explicitly. Restoring the
+    // pre-OS snapshot must not overwrite that selection (especially Vanilla
+    // on mobile, where a horizontal edge would force Taskbar back on).
+    next.taskbarMode = patch.taskbarMode ?? chromePrefs.taskbarMode
+    next.moveControlsToOuterEdge = patch.moveControlsToOuterEdge ?? chromePrefs.moveControlsToOuterEdge
     next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     next.osChromePrefs = { ...prefs }
   }
 
-  const normalized = normalizeCanvasSettings(next)
+  let normalized = normalizeCanvasSettings(next)
+  // Resolve the mobile edge only AFTER the destination mode is known. OS
+  // normalization also enables the taskbar pair. Vanilla is the exception:
+  // its tab row rides inside the drawer and its small edge handle reopens it.
+  if (_mobileViewportActive && isTaskbarModeEnabled(normalized) && normalized.drawerLocation === 'sides') {
+    normalized = normalizeCanvasSettings({
+      ...normalized, drawerLocation: normalized.lastHorizontalDrawerLocation,
+    })
+  }
   // Hide intermediate host activations before synchronous chrome teardown.
   beginModeReveal(prev, normalized)
   _settings = normalized

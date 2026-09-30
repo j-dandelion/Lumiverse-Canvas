@@ -718,8 +718,9 @@ async function runSecondDrawerSwitch(
     // mobile viewport crossing could enable dual mode while OS mode is on.
     // Refuse the enable (no state mutation); the OS-mobile force only ever
     // calls the disable direction, which stays unguarded.
-    if (getSettings().osMode && isMobileViewportLocal()) {
-      dlog('[second-drawer-mode] enable ignored: OS mode forces single drawer on mobile')
+    const settings = getSettings()
+    if ((settings.osMode || (settings.taskbarMode && settings.moveControlsToOuterEdge)) && isMobileViewportLocal()) {
+      dlog('[second-drawer-mode] enable ignored: mobile taskbars force single drawer')
       return
     }
 

@@ -38,6 +38,7 @@ class StubStyle {
   get paddingLeft() { return this._props['paddingLeft'] ?? '8px' }
   get borderTopWidth() { return this._props['borderTopWidth'] ?? '1px' }
   get gap() { return this._props['gap'] ?? '8px' }
+  getPropertyValue(k: string) { return this._props[k] ?? '' }
   setProperty(k: string, v: string) { this._props[k] = v; this._setPropertyCalls++ }
 }
 
@@ -100,6 +101,7 @@ secondaryWrapper.querySelector = (sel: string): StubElement | null => {
 
 // Stub getComputedStyle
 ;(globalThis as any).getComputedStyle = (_el: StubElement) => ({
+  getPropertyValue: (key: string) => _el.style.getPropertyValue(key),
   get marginTop() { return _el.style.marginTop },
   get paddingTop() { return _el.style.paddingTop },
   get paddingRight() { return _el.style.paddingRight },
@@ -467,16 +469,16 @@ import { getSettings } from '../../settings/state'
   assertEqual(_rafQueue.length, 1, 'T7.a: 10 calls in same tick coalesce to exactly 1 rAF')
 
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T7.b: body ran once → 8 setProperty writes (not 80)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T7.b: body ran once → 9 setProperty writes (not 80)')
 
   // A second batch of 10 in a new tick should schedule a second rAF
   for (let i = 0; i < 10; i++) syncDrawerTabSettings()
   assertEqual(_rafQueue.length, 1, 'T7.c: 10 more calls in a new tick schedule exactly 1 rAF')
   _flushRaf()
   // Cache is the same value (7vh, same dimensions), so 0 new writes
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T7.d: second batch cache hit → still 8 setProperty writes (not 16)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T7.d: second batch cache hit → still 9 setProperty writes (not 16)')
 }
 
 // ============================================================
@@ -499,21 +501,21 @@ import { getSettings } from '../../settings/state'
 
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T8.a: first call writes 8 vars (cache miss from T7)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T8.a: first call writes 9 vars (cache miss from T7)')
 
   // Second call with IDENTICAL dimensions — should be a cache hit
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T8.b: second call cache hit → 0 new writes (counter still 8)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T8.b: second call cache hit → 0 new writes (counter still 9)')
 
   // Third call with one CHANGED dimension — should invalidate cache
-  mainDrawerTab.offsetWidth = 51
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '32px')
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 16,
-    'T8.c: dimension change invalidates cache → 8 new writes (counter now 16)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 18,
+    'T8.c: dimension change invalidates cache → 9 new writes (counter now 18)')
 }
 
 // ============================================================
@@ -557,9 +559,9 @@ import { getSettings } from '../../settings/state'
   ;(globalThis as any).document.querySelector = _origQuerySelector
 
   _flushRaf()
-  // The retry found mainDrawerTab, ran the body, and wrote 8 vars
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T9.c: retry ran, found mainDrawerTab, wrote 8 vars')
+  // The retry found mainDrawerTab, ran the body, and wrote 9 vars
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T9.c: retry ran, found mainDrawerTab, wrote 9 vars')
 }
 
 // ============================================================
@@ -685,6 +687,29 @@ function _resetLastKnownVerticalPos() {
   clearHostSettingsCache()
   __resetSideApplyStateForTest()
   setMainDrawerSideOverride(null)
+}
+
+// Mode-switch measurements must not enlarge the Vanilla handles. A hidden
+// host can report a tall box; the logical chrome still specifies 48px width.
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.offsetWidth = 390
+  mainDrawerTab.offsetHeight = 300
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '48px')
+  secondaryWrapper.style = new StubStyle()
+  secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', '300px')
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w'), '48px', 'mode switch: uses host logical width, not transient full viewport')
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-h'), 'auto', 'mode switch: clears oversized frozen height')
+
+  mainDrawerTab.className = '_drawerTab_abc _drawerTabCompact_abc'
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '32px')
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w'), '32px', 'mode switch: compact handle stays compact')
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-icon-size'), '14px', 'mode switch: compact glyph matches host')
+  mainDrawerTab.className = '_drawerTab_abc'
 }
 
 // Cleanup

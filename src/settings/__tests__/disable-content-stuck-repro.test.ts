@@ -513,7 +513,7 @@ const _raf = (fn: FrameRequestCallback) => {
 ;(globalThis as any).requestAnimationFrame = _raf
 ;(globalThis as any).cancelAnimationFrame = () => {}
 ;(globalThis as any).CSS = { escape: (s: string) => s }
-;(globalThis as any).getComputedStyle = () => ({})
+;(globalThis as any).getComputedStyle = () => ({ getPropertyValue: () => '' })
 ;(globalThis as any).MutationObserver = class {
   observe() {}
   disconnect() {}

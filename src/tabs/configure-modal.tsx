@@ -1213,8 +1213,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
   // OS mode on a mobile viewport forces single-drawer mode (see
   // os/os-mode.syncOsMobileDrawerMode): lock the footer toggle so the user
   // cannot flip the invariant off from this surface.
-  const osMobileSingle =
-    !!getSettings().osMode && _isMobileViewportForConfigure()
+  const mobileTaskbarSingle =
+    (getSettings().osMode || (getSettings().taskbarMode && getSettings().moveControlsToOuterEdge)) && _isMobileViewportForConfigure()
 
   // Ref-based latest values for document-level Escape handler
   const committingRef = useRef(committing)
@@ -1531,18 +1531,18 @@ function ConfigureTabsModalInner(props: ModalProps) {
             <div class="canvas-configure-tabs-second-drawer-toggle">
               <span
                 class="canvas-configure-tabs-second-drawer-toggle-label"
-                title={osMobileSingle ? 'OS mode uses single-drawer mode on mobile — disable OS mode first.' : undefined}
-                onClick={() => { if (!osMobileSingle) onToggleSecondDrawer() }}
+                title={mobileTaskbarSingle ? 'OS and Taskbar use single-drawer mode on mobile — choose Vanilla first.' : undefined}
+                onClick={() => { if (!mobileTaskbarSingle) onToggleSecondDrawer() }}
               >
                 Second drawer
               </span>
               <button
                 class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
-                disabled={osMobileSingle}
-                title={osMobileSingle ? 'OS mode uses single-drawer mode on mobile — disable OS mode first.' : undefined}
+                disabled={mobileTaskbarSingle}
+                title={mobileTaskbarSingle ? 'OS and Taskbar use single-drawer mode on mobile — choose Vanilla first.' : undefined}
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (!osMobileSingle) onToggleSecondDrawer()
+                  if (!mobileTaskbarSingle) onToggleSecondDrawer()
                 }}
               />
             </div>

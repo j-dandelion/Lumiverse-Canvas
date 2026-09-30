@@ -116,7 +116,7 @@ let _mobileDrawerSyncDirty = false
 let _mobileDrawerSyncNested = false
 
 /**
- * Reconcile the OS+mobile single-drawer invariant with the current settings
+ * Reconcile the OS/Taskbar mobile single-drawer invariant with current settings
  * and viewport. Safe to call from any entry point (OS enable/disable,
  * viewport crossing, post-boot).
  *
@@ -192,12 +192,12 @@ export function syncOsMobileDrawerMode(opts?: { nested?: boolean }): Promise<voi
 
 async function runSyncOsMobileDrawerMode(nested = false): Promise<void> {
   const s = getSettings()
-  const force = !!s.osMode && isMobileViewportLocal()
+  const force = (!!s.osMode || (!!s.taskbarMode && !!s.moveControlsToOuterEdge)) && isMobileViewportLocal()
   if (force && s.secondSidebarEnabled) {
     // Re-fires while the drawer is still enabled (recovery after an
     // interrupted switch), not only when the flag is unset.
     if (!s.osForcedSingleDrawer) setSettings({ osForcedSingleDrawer: true })
-    dlog('[os] mobile: forcing single-drawer mode')
+    dlog('[os] mobile taskbar: forcing single-drawer mode')
     const { requestSecondDrawerMode } = await import('../settings/second-drawer-mode')
     await requestSecondDrawerMode(false, nested ? { silent: true, nested: true } : { silent: true })
     return

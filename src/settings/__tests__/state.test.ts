@@ -530,13 +530,14 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'toggle records taskbar default off')
 }
 
-// --- LUMI-44: mobile excludes Sides and remembers explicit Top/Bottom ---
+// --- Mobile taskbars exclude Sides and remember explicit Top/Bottom ---
 {
   const original = { ...getSettings() }
   try {
     setMobileViewportActive(false)
     hydrateSettings(null)
     assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'mobile layout: new install defaults remembered choice to top')
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
 
     // AC1: Sides on desktop does not erase either explicit horizontal choice.
     setSettings({ drawerLocation: 'top' })
@@ -581,15 +582,42 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
     // AC3: boot restore while mobile normalizes persisted Sides. Missing
     // memory deterministically falls back to Top; explicit memory is retained.
-    hydrateSettings({ drawerLocation: 'sides' })
+    hydrateSettings({ drawerLocation: 'sides', taskbarMode: true, moveControlsToOuterEdge: true })
     assertEqual(getSettings().drawerLocation, 'top', 'mobile restore with no horizontal choice falls back to Top')
-    hydrateSettings({ drawerLocation: 'sides', lastHorizontalDrawerLocation: 'bottom' })
+    hydrateSettings({ drawerLocation: 'sides', lastHorizontalDrawerLocation: 'bottom', taskbarMode: true, moveControlsToOuterEdge: true })
     assertEqual(getSettings().drawerLocation, 'bottom', 'mobile restore honors persisted Bottom memory')
     assertEqual(
       mergeCanvasSettings({ drawerLocation: 'bottom' }).lastHorizontalDrawerLocation,
       'bottom',
       'legacy Bottom preference seeds remembered mode during migration',
     )
+  } finally {
+    setMobileViewportActive(false)
+    hydrateSettings(original)
+  }
+}
+
+// --- Mobile Vanilla survives mode selection, unrelated changes and reload ---
+{
+  const original = { ...getSettings() }
+  try {
+    setMobileViewportActive(true)
+    hydrateSettings({ drawerLocation: 'bottom', osMode: true })
+    setSettings({ drawerLocation: 'sides', osMode: false, taskbarMode: false, moveControlsToOuterEdge: false })
+    assertEqual(isTaskbarModeEnabled(), false, 'mobile OS→Vanilla: destination chrome wins over OS snapshot')
+    assertEqual(getDrawerLocation(), 'sides', 'mobile Vanilla: native handles and in-drawer tabs')
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'bottom', 'mobile Vanilla: keeps remembered Bottom')
+    setSettings({ debugMode: false })
+    assertEqual(isTaskbarModeEnabled(), false, 'mobile Vanilla: unrelated changes do not re-enable Taskbar')
+    hydrateSettings({ ...getSettings() })
+    assertEqual(getDrawerLocation(), 'sides', 'mobile Vanilla: survives reload')
+    setSettings({ osMode: true })
+    assertEqual(getDrawerLocation(), 'bottom', 'mobile Vanilla→OS: visible taskbar returns to remembered edge')
+    setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(isTaskbarModeEnabled(), true, 'mobile OS→Taskbar: explicit destination wins')
+    setSettings({ drawerLocation: 'sides', taskbarMode: false, moveControlsToOuterEdge: false })
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(getDrawerLocation(), 'bottom', 'mobile Vanilla→Taskbar: remembered horizontal edge')
   } finally {
     setMobileViewportActive(false)
     hydrateSettings(original)

@@ -188,9 +188,9 @@ export interface CanvasSettings {
    *  restores the pre-OS value from `osChromePrefs`. Default off. */
   coreTabsHidden?: boolean
 
-  /** Internal bookkeeping (never a user-facing toggle): OS mode auto-toggles
+  /** Internal bookkeeping (legacy key, never a user-facing toggle): OS and Taskbar auto-toggle
    *  the second drawer off while the viewport is mobile and this flag marks
-   *  that the disable was OS-initiated, so disabling OS mode (or leaving the
+   *  that the disable was automatic, so choosing Vanilla (or leaving the
    *  mobile viewport) re-enables the user's dual-drawer mode. Written by
    *  `syncOsMobileDrawerMode` around the mode-switch call. Default false. */
   osForcedSingleDrawer?: boolean

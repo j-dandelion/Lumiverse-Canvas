@@ -212,27 +212,37 @@ closed-drawer case: re-tapping an OS-closed window's button now runs the full
 D19 action (un-close + activate) instead of the legacy `showSecondaryTab`
 path, which left the window in `model.closed`.
 
-### OS mode forces single-drawer mode on mobile (2026-09-15)
+### OS and Taskbar force single-drawer mode on mobile
 
-OS mode is live on every viewport, but dual-drawer layout is not usable on a
-≤600px viewport (full-bleed drawers + mutual exclusion), so while OS mode is on
-and the viewport is mobile the second drawer is forced off through the real
-mode-switch API (`os/os-mode.syncOsMobileDrawerMode` →
-`requestSecondDrawerMode(false, { silent: true })`): the live dual layout is
-saved into the OS dual slot and the OS single slot is restored. The
-`osForcedSingleDrawer` bookkeeping setting marks that the disable was
-OS-initiated; disabling OS mode — or leaving the mobile viewport — restores the
-user's dual layout (`requestSecondDrawerMode(true)`), routed to the OS or
-non-OS slot by the F6 accessors.
+OS and effective Taskbar mode (`taskbarMode && moveControlsToOuterEdge`) use
+one drawer on a ≤600px viewport. Both resolve Sides to the remembered
+Top/Bottom edge before applying features, so the main tab list stays pinned
+and reachable while the full-bleed drawer is closed. Vanilla is exempt from
+this edge coercion: selecting it restores Sides, normal edge handles and
+in-drawer tabs, and that selection survives settings edits and reloads.
 
-Entry points: the OS toggle (`applyOsModeChange`), the viewport-cross handler
-(`_onMediaChange`), and the end of the `setup()` boot chain (after
-`bootstrapFromLayout` + boot placement + `applyMainDrawer`, so the mode switch
-projects a real model and saves the dual layout before restoring single). The
-sync is single-flight (OS toggle + crossing can race) and re-fires while the
-drawer is still enabled (recovery after an interrupted switch). The settings
-panel's second-drawer master row and the Configure Tabs footer toggle are
-locked while OS mode is on and the viewport is mobile.
+The single-drawer rule runs through the real mode-switch API
+(`os/os-mode.syncOsMobileDrawerMode` → `requestSecondDrawerMode(false,
+{ silent: true })`), saving the dual slot before restoring single. The
+legacy `osForcedSingleDrawer` key now records either automatic fold. Moving
+between OS and Taskbar on mobile keeps single mode; choosing Vanilla or
+leaving mobile restores the saved dual mode. Taskbar does not latch an
+intentional single-drawer layout. OS and ordinary slot ownership remains
+separate through the existing F6 routing accessors.
+
+Entry points are the OS transition, effective Taskbar changes (including an
+outer-edge-only toggle), viewport crossings, and the end of setup's boot
+chain. Taskbar changes register their actual sync promise with the mode
+reveal guard, even when the same settings diff changes the strip edge. The
+OS transition retains its nested sync to avoid deadlocking the drawer
+transition chain. The panel and Configure Tabs lock dual mode in both
+mobile taskbar modes; the request API also refuses stale enable requests.
+
+Before releasing a mode reveal, a forced drawer-location reconcile repairs
+pins and wrapper offsets after any shell replacement, then handle sync runs
+under the guard. Handle dimensions follow the host's logical width and
+compact padding/icon settings. Height stays intrinsic instead of freezing a
+bounding box measured during a transition.
 
 ## Mobile-Specific Behavior in Other Modules
 

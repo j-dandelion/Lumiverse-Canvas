@@ -8,7 +8,10 @@ of the boot restore guard: it does not change model observation or persistence.
 The OS feature registers the actual serialized drain promise, including when a
 new selection joins an existing drain. The reveal waits for that work, the
 bootstrap placement/removal pass, the model flush, content settlement, and the
-scheduled chrome render. Requests arriving during settlement keep the same
+scheduled chrome render. Effective Taskbar changes also register the mobile
+single-drawer fold/restore promise. The final settling pass forces drawer
+location reconciliation (pins, wrapper offsets, handles), syncs handle chrome,
+and reconciles OS chrome before revealing. Requests arriving during settlement keep the same
 guard until the newest destination settles. Intermediate reflow observations
 are coalesced into one final chat/Welcome update.
 

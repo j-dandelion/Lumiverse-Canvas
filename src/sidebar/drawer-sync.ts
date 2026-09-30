@@ -331,7 +331,7 @@ async function recordCanvasSwapAndSyncHost(
 // Coalescing: when syncDrawerTabSettings is called multiple times in the
 // same tick (from ResizeObserver, 2x MutationObserver, 2s setInterval, and
 // external callers), only one body run per frame. The previous code allowed
-// 12+ redundant calls per tick, each logging 'enter' and re-stamping 8 CSS
+// 12+ redundant calls per tick, each logging 'enter' and re-stamping handle CSS
 // vars on the secondary wrapper.
 let _syncPending = false
 /** Bounded retry counter for the missing main-drawer-tab path (2026-08-17). */
@@ -339,8 +339,8 @@ let _drawerTabRetryCount = 0
 const DRAWER_TAB_RETRY_MAX = 30
 // Diagnostic noise guard: log the missing drawer-tab retry once per session.
 let _drawerTabRetryLogged = false
-// Cache the serialized 8-dim value of the secondary wrapper's CSS vars.
-// Skip the 8 setProperty calls when nothing changed (the hot path during
+// Cache the serialized handle chrome of the secondary wrapper's CSS vars.
+// Skip repeated setProperty calls when nothing changed (the hot path during
 // a drag — only the actual drag ticks change the values).
 let _lastWrittenDrawerTabVars: string | null = null
 // Cache show/hide for syncSecondaryTabLabels. When showLabels is constant,
@@ -392,40 +392,19 @@ function _runSyncDrawerTabSettings(): void {
   const mainMirrorWrapperEarly = getMainMirrorWrapper()
   if (!drawerTab && !mainMirrorWrapperEarly) return
 
-  // Bug fix (2026-06-19, follow-up): scope the main-drawer-tab query to
-  // the main WRAPPER rather than the whole document. The previous
-  // `document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)')`
-  // was returning the FIRST element in the document with `_drawerTab_` in
-  // its class. After a drawer-side change, Lumiverse re-renders the main
-  // drawer, and there can be transient elements in the DOM (e.g. during
-  // a multi-step transition, the old main drawer tab may still be in the
-  // tree with a class like `_drawerTabOld_abc`, OR a wrapper element may
-  // briefly have a class containing `_drawerTab_`). The wrong element's
-  // `offsetWidth` can be very large (e.g. 420px for the full drawer width
-  // or the full viewport), and the CSS vars get stamped to that value —
-  // the secondary's open/close drawer tab then renders at 420px wide,
-  // the "open/close tab becomes large" symptom reported on 2026-06-19.
-  //
-  // Scoping to `getMainWrapper()` (the Lumiverse wrapper element) means
-  // we only consider the main drawer's own drawer tab, never a transient
-  // or unrelated element elsewhere in the document. `getMainWrapper()`
-  // reads the DOM class (wrapperLeft / wrapperRight) so it's stable
-  // across re-renders.
-  //
-  // Fallback: if the wrapper isn't mounted yet (very early mount, before
-  // Lumiverse has rendered the wrapper element), fall back to the
-  // document-level query so the sync still works. The validation below
-  // catches the "wrong element" case even at the document level.
+  // Resolve only the host's real handle button, scoped to its wrapper.
+  // A transient node whose class contains drawerTab must never supply chrome
+  // metrics for a Canvas handle. Fall back while the host wrapper mounts.
   let mainDrawerTab: HTMLElement | null = null
   const mainWrapper = getMainWrapper()
   if (mainWrapper) {
     mainDrawerTab = mainWrapper.querySelector(
-      '[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
+      'button[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
     ) as HTMLElement | null
   }
   if (!mainDrawerTab) {
     mainDrawerTab = document.querySelector(
-      '[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
+      'button[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)'
     ) as HTMLElement | null
   }
   if (!mainDrawerTab) {
@@ -450,20 +429,6 @@ function _runSyncDrawerTabSettings(): void {
     return
   }
   _drawerTabRetryCount = 0
-
-  // Bug fix (2026-06-19, follow-up): validate the read dimensions. The
-  // main drawer's `.drawerTab` is 48px wide (or 32px in compact mode).
-  // Anything outside [16, 120]px is almost certainly the wrong element
-  // (e.g. the drawer, the wrapper, or a transient transition node). Fall
-  // back to Lumiverse's documented defaults rather than stamping
-  // garbage values that make the secondary's drawer tab render as a
-  // full-width slab.
-  const w = mainDrawerTab.offsetWidth
-  const h = mainDrawerTab.offsetHeight
-  if (w < 16 || w > 120 || h < 16 || h > 400) {
-    dlog(`[drawer-sync] main drawer tab dimensions look wrong (w=${w} h=${h}), skipping mirror`)
-    return
-  }
 
   // Attach ResizeObserver to the main drawer tab so we re-sync whenever
   // the user resizes it (e.g. drag to resize). Only attach once.
@@ -508,50 +473,38 @@ function _runSyncDrawerTabSettings(): void {
     registerCleanup(stopDrawerTabStyleObserver)
   }
 
-  // Mirror dimensions — GUARDED. Cache the 8 values as a serialized string.
-  // Stamp onto secondary AND main-mirror wrappers so both edge toggles match host.
-  const secondaryWrapper = getSecondaryWrapper()
-  const mainMirrorWrapper = getMainMirrorWrapper()
+  // Mirror host chrome, not a transient bounding box. The headless host
+  // handle can be hidden/replaced during a mode switch; freezing offsetHeight
+  // retained an oversized handle after returning to Vanilla. Height stays
+  // intrinsic, matching Lumiverse's own handle. The host's logical width var
+  // is stable under UI zoom and independent of temporary layout dimensions.
   const mainStyle = getComputedStyle(mainDrawerTab)
-  const newVars = [
-    `${mainDrawerTab.offsetWidth}px`,
-    `${mainDrawerTab.offsetHeight}px`,
-    mainStyle.paddingTop,
-    mainStyle.paddingRight,
-    mainStyle.paddingBottom,
-    mainStyle.paddingLeft,
-    mainStyle.gap,
+  const compact = String(mainDrawerTab.className).includes('drawerTabCompact')
+  const hostWidth = parseFloat(mainStyle.getPropertyValue('--drawer-tab-w'))
+  const width = Number.isFinite(hostWidth) && hostWidth >= 16 && hostWidth <= 64
+    ? hostWidth : compact ? 32 : 48
+  const values = [
+    `${width}px`, 'auto',
+    mainStyle.paddingTop, mainStyle.paddingRight,
+    mainStyle.paddingBottom, mainStyle.paddingLeft, mainStyle.gap,
     `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`,
-  ].join('|')
-  if (newVars !== _lastWrittenDrawerTabVars) {
-    _lastWrittenDrawerTabVars = newVars
-    const parts = newVars.split('|')
-    const stamp = (wrapper: HTMLElement) => {
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
-      wrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
-    }
-    if (secondaryWrapper) stamp(secondaryWrapper)
-    if (mainMirrorWrapper) stamp(mainMirrorWrapper)
-  } else {
-    // First paint of main mirror after vars already cached — still stamp once.
-    if (mainMirrorWrapper && !mainMirrorWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w')) {
-      const parts = newVars.split('|')
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-w', parts[0])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', parts[1])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pt', parts[2])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pr', parts[3])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pb', parts[4])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-pl', parts[5])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-gap', parts[6])
-      mainMirrorWrapper.style.setProperty('--sidebar-ux-drawer-tab-border', parts[7])
-    }
+    compact ? '14px' : '16px',
+  ]
+  const names = ['w', 'h', 'pt', 'pr', 'pb', 'pl', 'gap', 'border', 'icon-size']
+  const newVars = values.join('|')
+  const stamp = (wrapper: HTMLElement | null) => {
+    if (!wrapper) return
+    // A new main OR secondary shell still needs the values when the host
+    // chrome matches the cache from the old shell.
+    if (newVars === _lastWrittenDrawerTabVars
+        && wrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w') === values[0]
+        && wrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-h') === 'auto') return
+    names.forEach((name, i) => wrapper.style.setProperty(`--sidebar-ux-drawer-tab-${name}`, values[i]))
   }
+  const mainMirrorWrapper = getMainMirrorWrapper()
+  stamp(getSecondaryWrapper())
+  stamp(mainMirrorWrapper)
+  _lastWrittenDrawerTabVars = newVars
 
   // Detect vertical position from main drawer tab margin
   const mainParent = mainDrawerTab.parentElement

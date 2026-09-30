@@ -67,14 +67,14 @@ import {
 const MODE_TILES_HINT =
   'Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.'
 const DRAWER_LAYOUT_HINT =
-  'Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically. On narrow (mobile) screens Sides is unavailable and the last Top/Bottom choice is used instead.'
+  'Which screen edge the drawer tab strips sit on. Sides keeps a strip next to each drawer. Top or Bottom moves them into a single full-width strip and turns Taskbar mode on. On mobile, OS and Taskbar use the last Top/Bottom choice. Vanilla keeps its normal drawer handles and in-drawer tabs.'
 const MAIN_SIDE_HINT =
   "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree."
 const MAIN_SIDE_SWAP_HINT = 'Swapping drawer sides…'
 const DRAWER_MODE_HINT =
   'Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.'
-const DRAWER_MODE_OS_MOBILE_HINT =
-  'On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.'
+const DRAWER_MODE_MOBILE_TASKBAR_HINT =
+  'On phone-width screens, OS and Taskbar use only the main drawer. Choose Vanilla or a wider screen to use the second drawer.'
 const MIRROR_COMPACT_HINT =
   "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position."
 const MIRROR_COMPACT_LOCK_HINT =
@@ -1204,10 +1204,10 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     // Drawer mode: single/dual; locked while OS mode runs on a mobile
     // viewport (os/os-mode.syncOsMobileDrawerMode forces single drawer there).
     drawerMode.refresh(s.secondSidebarEnabled ? 'dual' : 'single')
-    const osMobile = !!s.osMode && _isMobileViewportForPanel()
-    drawerMode.setDisabled(osMobile)
-    drawerModeRow.setDisabled(osMobile)
-    drawerModeRow.setHint(osMobile ? DRAWER_MODE_OS_MOBILE_HINT : DRAWER_MODE_HINT)
+    const mobileTaskbar = (!!s.osMode || isTaskbarModeEnabled(s)) && _isMobileViewportForPanel()
+    drawerMode.setDisabled(mobileTaskbar)
+    drawerModeRow.setDisabled(mobileTaskbar)
+    drawerModeRow.setHint(mobileTaskbar ? DRAWER_MODE_MOBILE_TASKBAR_HINT : DRAWER_MODE_HINT)
 
     // Mirror open/close handle: gated by the second-drawer master toggle.
     {

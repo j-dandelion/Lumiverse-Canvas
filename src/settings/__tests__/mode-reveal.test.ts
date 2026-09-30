@@ -10,6 +10,7 @@ let css = ''
 let placement = deferred()
 let entered = deferred()
 let chromeCalls = 0
+let drawerCalls = 0
 let failSettle = false
 let applyWork: Promise<void> | null = null
 let guardedDuringApply = false
@@ -32,6 +33,12 @@ mock.module('../../recon/dispatch', () => ({
 }))
 mock.module('../../sidebar/main-persist', () => ({ waitForMainContentSettled: async () => {} }))
 mock.module('../../os/chrome-locations', () => ({ reconcileChromeLocations: () => { chromeCalls++ } }))
+mock.module('../../sidebar/drawer-location', () => ({ reconcileDrawerLocation: (opts: { force?: boolean }) => {
+  expect(held()).toBe(true)
+  expect(opts.force).toBe(true)
+  drawerCalls++
+} }))
+mock.module('../../sidebar/drawer-sync', () => ({ syncDrawerTabSettings: () => {} }))
 mock.module('../panel', () => ({ applySettings: () => {
   guardedDuringApply = classes.has('sidebar-ux-mode-switch-pending')
   if (applyWork) trackModeRevealWork(applyWork)
@@ -53,6 +60,7 @@ beforeEach(() => {
   placement = deferred()
   entered = deferred()
   chromeCalls = 0
+  drawerCalls = 0
   failSettle = false
   applyWork = null
   guardedDuringApply = false
@@ -76,6 +84,7 @@ describe('mode reveal', () => {
     await done
     expect(held()).toBe(false)
     expect(chromeCalls).toBe(1)
+    expect(drawerCalls).toBe(1)
     expect(classes.has('sidebar-ux-mode-switch-reveal')).toBe(true)
     expect(classes.has('sidebar-ux-mode-switch-strip-change')).toBe(false)
   })

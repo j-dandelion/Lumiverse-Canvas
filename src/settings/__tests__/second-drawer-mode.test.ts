@@ -418,6 +418,15 @@ assertEqual(
   'M6 mobile: no settings save side effect',
 )
 
+// Mobile Taskbar also refuses a stale dual-enable request.
+setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
+await sleep(150)
+sent.length = 0
+await requestSecondDrawerMode(true)
+assertEqual(getSettings().secondSidebarEnabled, false, 'Taskbar mobile: stale enable request is refused')
+assertEqual(calls.bootstrapFromLayout, 0, 'Taskbar mobile: no dual restore ran')
+setSettings({ osMode: true })
+
 // Desktop + OS mode: behavior unchanged — the enable proceeds normally.
 // (No bootstrapFromLayout assertion here: with OS mode on, the active dual
 // slot is the OS variant, which is empty in this scenario.)

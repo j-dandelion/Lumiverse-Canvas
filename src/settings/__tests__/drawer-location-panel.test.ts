@@ -13,6 +13,14 @@ mock.module('../../features/registry', () => ({
   FEATURES: [],
   alwaysCleanups: () => [],
 }))
+// This suite owns only the panel DOM; geometry is verified by drawer tests
+// and the browser fixture. Defining a real mobile viewport also enables the
+// panel refresh's gutter hook, which needs no real shell here.
+mock.module('../../sidebar/strip-gutter', () => ({ updateStripGutters: () => {} }))
+mock.module('../mode-reveal', () => ({
+  beginModeReveal: () => {}, finishModeReveal: async () => {},
+  trackModeRevealWork: () => {}, deferModeRevealReflow: () => false,
+}))
 
 // Mode tiles (plan A7): selectMode dynamic-imports these only for
 // OS-involving transitions. Mock both so the heavy os-mode/second-drawer
@@ -135,7 +143,7 @@ const doc = {
 }
 ;(globalThis as any).document = doc
 
-const { getSettings, hydrateSettings, refreshSettingsPanel } = await import('../state')
+const { getSettings, hydrateSettings, refreshSettingsPanel, setMobileViewportActive } = await import('../state')
 const { mountSettingsPanel } = await import('../panel')
 const { buildSegmentedControl } = await import('../render')
 
@@ -368,8 +376,45 @@ describe('drawer location panel', () => {
   })
 })
 
+let mobileViewport = false
+;(globalThis as any).window = { matchMedia: () => ({ matches: mobileViewport }) }
+
 describe('mode tiles', () => {
   beforeEach(() => { hydrateSettings(null) })
+
+  test('mobile tiles select Vanilla, OS and Taskbar with the correct edge and drawer lock', async () => {
+    mobileViewport = true
+    setMobileViewportActive(true)
+    try {
+      hydrateSettings({ osMode: true, drawerLocation: 'bottom' })
+      const root = mountPanel()
+      const tiles = modeTiles(root)
+      const drawerControls = rowByLabel(root, 'Drawer mode').querySelector('.sidebar-ux-panel-segmented')!
+      expect(drawerControls.children.every((c) => c.disabled)).toBe(true)
+      tiles.children[0].click()
+      await flushSelectMode()
+      expect(getSettings().drawerLocation).toBe('sides')
+      expect(getSettings().taskbarMode).toBe(false)
+      expect(getSettings().moveControlsToOuterEdge).toBe(false)
+      expect(tiles.children[0].getAttribute('aria-checked')).toBe('true')
+      expect(drawerControls.children.every((c) => !c.disabled)).toBe(true)
+      tiles.children[2].click()
+      await flushSelectMode()
+      expect(getSettings().osMode).toBe(true)
+      expect(getSettings().drawerLocation).toBe('bottom')
+      expect(drawerControls.children.every((c) => c.disabled)).toBe(true)
+      tiles.children[1].click()
+      await flushSelectMode()
+      expect(getSettings().osMode).toBe(false)
+      expect(getSettings().taskbarMode).toBe(true)
+      expect(getSettings().moveControlsToOuterEdge).toBe(true)
+      expect(getSettings().drawerLocation).toBe('bottom')
+      expect(drawerControls.children.every((c) => c.disabled)).toBe(true)
+    } finally {
+      mobileViewport = false
+      setMobileViewportActive(false)
+    }
+  })
 
   test('derives the effective tile from settings', () => {
     const root = mountPanel()

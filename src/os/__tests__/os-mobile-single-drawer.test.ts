@@ -27,6 +27,7 @@ let osMode = false
 let mobile = false
 let secondSidebarEnabled = false
 let forcedSingleDrawer = false
+let taskbarMode = false
 const setSettingsCalls: Array<Record<string, unknown>> = []
 const modeCalls: Array<{ next: boolean; opts?: unknown }> = []
 let modeGate: Promise<void> | null = null
@@ -65,6 +66,8 @@ mock.module('../../tabs/configure-modal', () => ({
 mock.module('../../settings/state', () => ({
   getSettings: () => ({
     osMode,
+    taskbarMode,
+    moveControlsToOuterEdge: taskbarMode,
     secondSidebarEnabled,
     osForcedSingleDrawer: forcedSingleDrawer,
   }),
@@ -101,6 +104,7 @@ const { syncOsMobileDrawerMode } = await import('../os-mode')
 
 function reset() {
   osMode = false
+  taskbarMode = false
   mobile = false
   secondSidebarEnabled = false
   forcedSingleDrawer = false
@@ -337,6 +341,48 @@ function reset() {
   await syncOsMobileDrawerMode()
   assertEqual(modeCalls.length, 2, 'L7: slot is clear after settle — a later dispatch runs a fresh force')
   assertEqual(secondSidebarEnabled, false, 'L7: fresh force converges single again')
+}
+
+// Mobile Taskbar uses the same real fold/restore API. Crossing between OS
+// and Taskbar retains single mode; Vanilla or desktop restores the dual slot.
+{
+  reset()
+  mobile = true
+  taskbarMode = true
+  secondSidebarEnabled = true
+  await syncOsMobileDrawerMode()
+  assertEqual(secondSidebarEnabled, false, 'Taskbar mobile: folds dual to single')
+  assertEqual(forcedSingleDrawer, true, 'Taskbar mobile: remembers automatic fold')
+  assertEqual((modeCalls[0].opts as any)?.silent, true, 'Taskbar mobile: automatic fold is silent')
+  osMode = true
+  await syncOsMobileDrawerMode()
+  osMode = false
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 1, 'OS↔Taskbar mobile: never briefly restores dual')
+  taskbarMode = false
+  await syncOsMobileDrawerMode()
+  assertEqual(secondSidebarEnabled, true, 'Vanilla mobile: restores the saved dual mode')
+  assertEqual(forcedSingleDrawer, false, 'Vanilla mobile: clears latch after successful restore')
+}
+{
+  reset()
+  taskbarMode = true
+  mobile = true
+  await syncOsMobileDrawerMode()
+  assertEqual(forcedSingleDrawer, false, 'Taskbar mobile: intentional single mode stays single')
+  mobile = false
+  await syncOsMobileDrawerMode()
+  assertEqual(modeCalls.length, 0, 'Taskbar desktop: intentional single mode is not changed')
+}
+{
+  reset()
+  taskbarMode = true
+  mobile = true
+  secondSidebarEnabled = true
+  await syncOsMobileDrawerMode()
+  mobile = false
+  await syncOsMobileDrawerMode()
+  assertEqual(secondSidebarEnabled, true, 'Taskbar viewport crossing: desktop restores saved dual')
 }
 
 console.log('---')

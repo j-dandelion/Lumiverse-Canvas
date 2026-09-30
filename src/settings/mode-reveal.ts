@@ -148,8 +148,16 @@ export function finishModeReveal(): Promise<void> {
         await Promise.race([main.waitForMainContentSettled(1000), session.ended])
         if (_session !== session) return
         if (revision !== session.revision || session.work.size > 0) continue
-        const chrome = await import('../os/chrome-locations')
+        const [drawer, sync, chrome] = await Promise.all([
+          import('../sidebar/drawer-location'), import('../sidebar/drawer-sync'),
+          import('../os/chrome-locations'),
+        ])
         if (_session !== session) return
+        // A mobile single-drawer fold or host remount can replace the shell
+        // after the settings diff's geometry pass. Re-pin the final live list
+        // and refresh handles before revealing any surfaces.
+        drawer.reconcileDrawerLocation({ force: true })
+        sync.syncDrawerTabSettings()
         chrome.reconcileChromeLocations()
         // Allow scheduled mirror renders and React DOM commits to land under
         // the guard. No fixed delay based on tab count or guessed load time.

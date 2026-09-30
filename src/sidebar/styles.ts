@@ -859,6 +859,7 @@ export function injectDrawerTabStyles(): void {
       display: none !important;
     }
     .sidebar-ux-drawer-tab {
+      box-sizing: border-box;
       flex-shrink: 0;
       align-self: flex-start;
       width: var(--sidebar-ux-drawer-tab-w, 48px);
@@ -899,6 +900,11 @@ export function injectDrawerTabStyles(): void {
       align-items: center;
       justify-content: center;
       color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-drawer-tab-icon svg {
+      width: var(--sidebar-ux-drawer-tab-icon-size, 16px);
+      height: var(--sidebar-ux-drawer-tab-icon-size, 16px);
+      flex-shrink: 0;
     }
     /* Icon container — matches main drawer .extIconSvg
        (ViewportDrawer.module.css:284-290). */

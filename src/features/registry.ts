@@ -32,7 +32,8 @@ import type { FullCanvasSettings } from '../settings/state'
 import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled, isTaskbarModeEnabled, isOsModeEnabled } from '../settings/state'
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
 import { setDebug, dlog, dwarn } from '../debug/log'
-import { applyOsModeChange } from '../os/os-mode'
+import { applyOsModeChange, syncOsMobileDrawerMode } from '../os/os-mode'
+import { trackModeRevealWork } from '../settings/mode-reveal'
 import { mountPanelChrome, teardownPanelChrome, applyOsWindowControlsChange } from '../os/panel-chrome'
 import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
 import { activateChromeLocations, reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'
@@ -540,6 +541,12 @@ const tabPositionFeature: CanvasFeature = {
   },
   apply(prev, next) {
     if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge) return
+    // The taskbar feature handles pair changes when its own field changed;
+    // OS changes use the nested sync inside the serialized OS transition.
+    if (prev.taskbarMode === next.taskbarMode && prev.osMode === next.osMode
+        && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+      trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn('[taskbar] mobile drawer sync failed:', err)))
+    }
     // S8: a location flip auto-enables outer-edge in the same diff — stand
     // down; drawerLocationFeature.reconcileDrawerLocation owns that pass.
     if (prev.drawerLocation !== next.drawerLocation) return
@@ -594,6 +601,12 @@ const taskbarModeFeature: CanvasFeature = {
     }
   },
   apply(prev, next) {
+    // Register before the location-change stand-down: mobile mode switches
+    // often change the edge and chrome together. Wait for the real layout
+    // fold/restore before exposing the new strip. OS changes own this sync.
+    if (prev.osMode === next.osMode && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+      trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn('[taskbar] mobile drawer sync failed:', err)))
+    }
     // S8: a location flip auto-enables taskbar chrome in the same diff —
     // stand down (no force remount); drawerLocationFeature reconciles.
     if (prev.drawerLocation !== next.drawerLocation) return
