@@ -167,10 +167,10 @@ export function launchEndVisibleIndex(
  * chain — each stage reuses the proven dispatch machinery instead of
  * re-deriving placement logic:
  *   1. D19 — auto-open the target drawer when it is closed.
- *   2. D13 — cross-drawer move first via dispatchMoveByLiveId with
- *      `activateDest: false` (no focus during the move — the batch below
- *      decides it). The move's activeAfterRemoval hands the source
- *      drawer's focus to its neighbor (pitfalls §5).
+ *   2. D13 — place the tab in the second drawer before recording a move
+ *      there. Reconcile observes placement through the model-backed
+ *      assignment facade, so a model-only move cannot move its content.
+ *      The move uses `activateDest: false`; the batch below owns focus.
  *   3. Un-close + activate: the window is ALWAYS displayed in the target
  *      drawer, whatever drawer it lived in before (Start-menu launch
  *      semantics — the launching menu's drawer is authoritative).
@@ -259,31 +259,33 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
     : Promise.resolve()
   if (drawerClosed) commandDrawerOpen(side, true)
 
-  // D13: cross-drawer move first (no focus during the move). The move carries
-  // the target drawer's launch-end index — the button was not in this drawer.
-  const move = livesInTarget
-    ? Promise.resolve()
-    : dispatchMoveByLiveId(liveId, false, launchIndex)
-
-  // Un-close + activate in one folded model transition. Identity no-ops
-  // short-circuit inside reduce. A closed-but-visible same-drawer window also
-  // folds its launch-end reorder between un-close and activate (hidden keys
-  // already reordered in the un-hide batch).
-  const open: Promise<void> = dispatchBatch([
-    { t: 'setClosed', key, closed: false },
-    // LUMI-23: no menu-axis write on launch — a menu-hidden panel opened
-    // here keeps its menuHidden membership (see the comment above).
-    ...(isClosed && !isHidden && livesInTarget
-      ? [{ t: 'reorder', key, side, index: launchIndex } as const]
-      : []),
-    { t: 'activate', key, side },
-  ])
-
   return secondaryCapture.then((secondaryChrome) =>
     unhide
       .then(() => openDrawer)
-      .then(() => move)
-      .then(() => open)
+      .then(async () => {
+        if (side === 'secondary') {
+          // The facade reports the model's destination immediately. Without
+          // this explicit placement, reconcile considers the move complete
+          // while the root is still in the main drawer. Also repair an
+          // already-secondary tab whose content has not been placed yet.
+          const drawer = await import('../sidebar/secondary-drawer')
+          await drawer.assignToSecondary(liveId, {
+            openOnClosed: false,
+            setActiveWhenReady: false,
+          })
+        }
+        if (!livesInTarget) {
+          await dispatchMoveByLiveId(liveId, false, launchIndex)
+        }
+      })
+      .then(() => dispatchBatch([
+        { t: 'setClosed', key, closed: false },
+        // LUMI-23: a menu-hidden panel keeps its menuHidden membership.
+        ...(isClosed && !isHidden && livesInTarget
+          ? [{ t: 'reorder', key, side, index: launchIndex } as const]
+          : []),
+        { t: 'activate', key, side },
+      ]))
       .then(() => {
         // SOURCE CLEANUP BEFORE THE CONTENT CLICK (order matters). Moving a
         // window out of the second drawer re-homes its host button/root:
@@ -306,7 +308,7 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
         // (silent: the model activation was dispatched above). Idempotent when
         // the tab is already host-active. Runs AFTER the source re-home so the
         // root is attached on the target side when the click lands.
-        void host.activate(side, liveId)
+        return host.activate(side, liveId).then(() => {})
       }),
   )
 }

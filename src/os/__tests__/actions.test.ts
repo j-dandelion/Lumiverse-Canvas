@@ -29,6 +29,7 @@ const fake: {
   secondaryCaptures: string[]
   secondaryHandoffs: string[]
   unassignCalls: string[]
+  assignCalls: string[]
   /** Ordered log across mocks — pins the source-cleanup-before-content order. */
   events: string[]
   drawerCommands: Array<{ side: string; open: boolean }>
@@ -46,6 +47,7 @@ const fake: {
   secondaryCaptures: [],
   secondaryHandoffs: [],
   unassignCalls: [],
+  assignCalls: [],
   events: [],
   drawerCommands: [],
   activations: [],
@@ -64,6 +66,7 @@ mock.module('../../recon/dispatch', () => ({
   dispatchBatch: (intents: any[]) => { fake.dispatches.push(...intents); return Promise.resolve() },
   dispatchMoveByLiveId: (liveId: string, activateDest: boolean, visibleIndex?: number) => {
     fake.moveCalls.push({ liveId, activateDest, visibleIndex })
+    fake.events.push(`move:${liveId}`)
     return Promise.resolve()
   },
   captureSecondaryNeighborForMove: async (liveId: string) => {
@@ -90,6 +93,10 @@ mock.module('../../recon/dispatch', () => ({
 // The OS launch path dynamically imports the secondary drawer for the
 // source-drawer cleanup (moves out of the second drawer); record it.
 mock.module('../../sidebar/secondary-drawer', () => ({
+  assignToSecondary: async (id: string) => {
+    fake.assignCalls.push(id)
+    fake.events.push(`assign:${id}`)
+  },
   unassignFromSecondary: async (id: string) => {
     fake.unassignCalls.push(id)
     fake.events.push(`unassign:${id}`)
@@ -121,6 +128,7 @@ function fresh(model: any) {
   fake.secondaryCaptures.length = 0
   fake.secondaryHandoffs.length = 0
   fake.unassignCalls.length = 0
+  fake.assignCalls.length = 0
   fake.events.length = 0
   fake.drawerCommands.length = 0
   fake.activations.length = 0
@@ -438,6 +446,15 @@ const baseModel = () => ({
   fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
   await openWindowInDrawerByLiveId('weaver:2', 'secondary')
   assertEqual(fake.moveCalls.length, 1, 'primary→secondary: move dispatched')
+  assertEqual(fake.assignCalls[0], 'weaver:2', 'primary→secondary: content placed in destination')
+  assert(
+    fake.events.indexOf('assign:weaver:2') < fake.events.indexOf('move:weaver:2'),
+    'primary→secondary: content placement precedes model move',
+  )
+  assert(
+    fake.events.indexOf('assign:weaver:2') < fake.events.indexOf('activate:secondary'),
+    'primary→secondary: content placement precedes activation',
+  )
   assertEqual(fake.secondaryCaptures.length, 0, 'primary→secondary: no secondary capture')
   assertEqual(fake.unassignCalls.length, 0, 'primary→secondary: no secondary unassign')
   assertEqual(fake.secondaryHandoffs.length, 0, 'primary→secondary: no secondary handoff')
@@ -450,6 +467,19 @@ const baseModel = () => ({
   assertEqual(fake.secondaryCaptures.length, 0, 'same-drawer: no secondary capture')
   assertEqual(fake.unassignCalls.length, 0, 'same-drawer: no secondary unassign')
   assertEqual(fake.secondaryHandoffs.length, 0, 'same-drawer: no secondary handoff')
+}
+{
+  // A previously modeled secondary tab may still lack its physical root
+  // after restore. Launching it again should repair placement before focus.
+  fresh({ ...baseModel(), primary: [], secondary: [KEY] })
+  fake.findKey = (id: string) => (id === 'weaver:2' ? KEY : null)
+  await openWindowInDrawerByLiveId('weaver:2', 'secondary')
+  assertEqual(fake.moveCalls.length, 0, 'same-side secondary: no model move')
+  assertEqual(fake.assignCalls[0], 'weaver:2', 'same-side secondary: placement repaired')
+  assert(
+    fake.events.indexOf('assign:weaver:2') < fake.events.indexOf('activate:secondary'),
+    'same-side secondary: placement precedes activation',
+  )
 }
 {
   // OS off → nothing.
