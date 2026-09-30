@@ -73,6 +73,7 @@ import {
 import { dlog, dwarn } from '../debug/log'
 import { takeOsConfigureWillRestore } from './os-configure-gate'
 import { isInstanceActive } from '../lifecycle/instance'
+import { trackModeRevealWork } from '../settings/mode-reveal'
 
 // ── OS + mobile single-drawer force ──────────────────────────────────────────
 //
@@ -528,7 +529,10 @@ export function applyOsModeChange(
   next: { osMode?: boolean },
 ): Promise<void> {
   if (prev.osMode === next.osMode) return Promise.resolve()
-  if (_osDrain) return _osDrain
+  if (_osDrain) {
+    trackModeRevealWork(_osDrain)
+    return _osDrain
+  }
   _osDrain = runOsTransition(async () => {
     try {
       let last = prev.osMode === true // known pre-flip state from the apply diff
@@ -546,5 +550,6 @@ export function applyOsModeChange(
       _osDrain = null
     }
   })
+  trackModeRevealWork(_osDrain)
   return _osDrain
 }

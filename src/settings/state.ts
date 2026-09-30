@@ -27,6 +27,7 @@ import { buildPersistedLayout } from '../layout/snapshot'
 import { isLoadInProgress } from '../persist/layout-load'
 import { saveSettingsToDisk, isSettingsRepoArmed } from '../persist/settings-repo'
 import { getBackendCtx } from '../persist/backend-ctx'
+import { beginModeReveal, finishModeReveal } from './mode-reveal'
 
 type FullCanvasSettings = Required<CanvasSettings>
 export type { FullCanvasSettings }
@@ -296,7 +297,10 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
     next.osChromePrefs = { ...prefs }
   }
 
-  _settings = normalizeCanvasSettings(next)
+  const normalized = normalizeCanvasSettings(next)
+  // Hide intermediate host activations before synchronous chrome teardown.
+  beginModeReveal(prev, normalized)
+  _settings = normalized
   setDebug(_settings.debugMode)
   // A throwing feature apply must not strand the panel or the save: refresh
   // and persist still run (N3 2026-09-19). applySettings itself also guards
@@ -304,6 +308,7 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
   try {
     applySettings(prev, _settings)
   } finally {
+    void finishModeReveal()
     refreshSettingsPanel()
     persistSettings()
   }

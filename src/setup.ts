@@ -49,6 +49,7 @@ import {
   setMobileViewportActive,
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
+import { cancelModeReveal } from './settings/mode-reveal'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startMainDrawerPersistence, stopMainDrawerPersistence, beginMainDrawerRestoreGuard, unsuppressMainDrawer } from './sidebar/main-persist'
 import { isMobileViewport, startMobileExclusion } from './sidebar/mobile-exclusion'
@@ -151,6 +152,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
+  registerCleanup(cancelModeReveal)
   // LUMI-21: the Canvas-owned hidden list is module-level and must not
   // survive an off→on toggle — a re-enabled session re-seeds from the
   // hydrated layout instead of inheriting the disabled session's set.

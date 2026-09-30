@@ -39,6 +39,7 @@ import { getMainDrawerSide, isMainDrawerOpen } from '../store'
 import { isSecondarySidebarOpen, SECONDARY_WIDTH_VAR, getSecondaryTabList } from '../sidebar/secondary'
 import { startTagObserver } from './tag-buttons'
 import { injectStyles } from '../debug/styles'
+import { deferModeRevealReflow } from '../settings/mode-reveal'
 import { getDockInsets } from '../sidebar/dock-offset'
 
 // CSS variable names for content lane insets (published on documentElement).
@@ -342,6 +343,7 @@ export function scheduleReflow(): void {
 }
 
 export function updateChatReflow(): void {
+  if (deferModeRevealReflow(updateChatReflow)) return
   // Mobile: reflow is a complete no-op. The host CSS controls the
   // chat column layout at ≤600px (the drawer overlays the chat),
   // and writing margins here would shift the column. clearChatMargins
