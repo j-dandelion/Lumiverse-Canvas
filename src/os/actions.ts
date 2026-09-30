@@ -23,7 +23,15 @@
 
 import type { Side } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
-import { dispatch, dispatchBatch, dispatchMoveByLiveId, getHost, getModel } from '../recon/dispatch'
+import {
+  applyMainMirrorMoveChrome,
+  captureMainMirrorMoveChrome,
+  dispatch,
+  dispatchBatch,
+  dispatchMoveByLiveId,
+  getHost,
+  getModel,
+} from '../recon/dispatch'
 import { getSettings, isHorizontalStrip, isOsModeEnabled } from '../settings/state'
 import { isCoreTabId } from '../tabs/core-tabs'
 import { suppressNextCloseAnchor } from '../sidebar/panel-motion'
@@ -234,6 +242,9 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
     // helper is only reached on a move out of the second drawer).
     ? import('../recon/dispatch').then((m) => m.captureSecondaryNeighborForMove(liveId))
     : Promise.resolve({ neighborBtn: null })
+  const mainChrome = side === 'secondary'
+    ? captureMainMirrorMoveChrome(liveId, side)
+    : Promise.resolve(null)
 
   // Hidden targets (Start-menu recovery path): activation is hidden-gated in
   // the reducer, so un-hide FIRST — otherwise the activate intent is dropped
@@ -259,7 +270,7 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
     : Promise.resolve()
   if (drawerClosed) commandDrawerOpen(side, true)
 
-  return secondaryCapture.then((secondaryChrome) =>
+  return Promise.all([secondaryCapture, mainChrome]).then(([secondaryChrome, mainMoveChrome]) =>
     unhide
       .then(() => openDrawer)
       .then(async () => {
@@ -276,6 +287,13 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
         }
         if (!livesInTarget) {
           await dispatchMoveByLiveId(liveId, false, launchIndex)
+        }
+        // Built-in placement briefly activates the target in the host main
+        // drawer, and the subsequent container move can evict its previous
+        // panel root. Restore the model's current primary content after the
+        // move, as the other move paths do.
+        if (mainMoveChrome) {
+          await applyMainMirrorMoveChrome(mainMoveChrome, liveId)
         }
       })
       .then(() => dispatchBatch([
