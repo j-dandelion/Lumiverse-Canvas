@@ -4592,6 +4592,59 @@ function commandDrawerOpen(side, open) {
 }
 var _handler = null;
 
+// src/tabs/dom-placed-builtin.ts
+function isDomPlacedBuiltIn(tabId) {
+  if (_domPlacedIds.has(tabId))
+    return true;
+  if (typeof document === "undefined")
+    return false;
+  try {
+    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+  } catch {
+    return false;
+  }
+}
+function markDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.add(tabId);
+}
+function clearDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.delete(tabId);
+}
+function restoreDomPlacedBuiltInToMain(tabId, root) {
+  let el = root ?? null;
+  if (!el && typeof document !== "undefined") {
+    try {
+      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+      if (!el) {
+        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
+      }
+    } catch {
+      el = null;
+    }
+  }
+  if (el) {
+    if (el.parentElement) {
+      try {
+        el.parentElement.removeChild(el);
+      } catch {}
+    }
+    el.removeAttribute("data-canvas-moved");
+    el.removeAttribute("data-canvas-active");
+    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+    el.style.removeProperty("position");
+    el.style.removeProperty("inset");
+    el.style.removeProperty("display");
+  }
+  _domPlacedIds.delete(tabId);
+  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
+  return !!el;
+}
+var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
+var init_dom_placed_builtin = __esm(() => {
+  init_log();
+  _domPlacedIds = new Set;
+});
+
 // src/tabs/host-tab-location.ts
 function readActiveTabStoreSnapshot() {
   let snap = getStoreSnapshot();
@@ -4794,59 +4847,6 @@ var init_host_tab_location = __esm(() => {
   init_fiber();
   init_store();
   init_log();
-});
-
-// src/tabs/dom-placed-builtin.ts
-function isDomPlacedBuiltIn(tabId) {
-  if (_domPlacedIds.has(tabId))
-    return true;
-  if (typeof document === "undefined")
-    return false;
-  try {
-    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-  } catch {
-    return false;
-  }
-}
-function markDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.add(tabId);
-}
-function clearDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.delete(tabId);
-}
-function restoreDomPlacedBuiltInToMain(tabId, root) {
-  let el = root ?? null;
-  if (!el && typeof document !== "undefined") {
-    try {
-      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-      if (!el) {
-        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
-      }
-    } catch {
-      el = null;
-    }
-  }
-  if (el) {
-    if (el.parentElement) {
-      try {
-        el.parentElement.removeChild(el);
-      } catch {}
-    }
-    el.removeAttribute("data-canvas-moved");
-    el.removeAttribute("data-canvas-active");
-    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-    el.style.removeProperty("position");
-    el.style.removeProperty("inset");
-    el.style.removeProperty("display");
-  }
-  _domPlacedIds.delete(tabId);
-  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
-  return !!el;
-}
-var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
-var init_dom_placed_builtin = __esm(() => {
-  init_log();
-  _domPlacedIds = new Set;
 });
 
 // src/tabs/builtin-move.ts
@@ -5055,14 +5055,16 @@ async function finalizeAssignToSecondary(opts) {
     wireAssignment = true,
     openOnClosed = true,
     setActiveWhenReady = true,
-    showAndPersist = true
+    showAndPersist = true,
+    facadeKey
   } = opts;
   addSecondaryTabButton({
     id: resolvedId,
     title,
     root,
     iconSvg,
-    shortName
+    shortName,
+    facadeKey
   });
   updateDrawerTabVisibility();
   if (wireAssignment) {
@@ -5111,10 +5113,247 @@ async function finalizeAssignToSecondary(opts) {
     } catch {}
   }
 }
+function readHostMainDrawerState() {
+  const wrapper = getMainWrapper();
+  const sidebar = getMainSidebar();
+  const activeButton = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  return {
+    open: wrapper ? /wrapperOpen/.test(wrapper.className) : isMainDrawerOpen(),
+    tabId: activeButton?.getAttribute("data-tab-id") || activeButton?.getAttribute("title") || null
+  };
+}
+function findMainDrawerToggle2() {
+  const wrapper = getMainWrapper();
+  if (!wrapper)
+    return null;
+  for (const button of Array.from(wrapper.querySelectorAll(":scope > button"))) {
+    if (/drawerTab/i.test(button.className)) {
+      return button;
+    }
+  }
+  return null;
+}
+function findMainExtensionButton(resolvedId, title) {
+  const sidebar = getMainSidebar();
+  return sidebar?.querySelector(`button[data-tab-id="${CSS.escape(resolvedId)}"]`) || sidebar?.querySelector(`button[title="${CSS.escape(title)}"]`);
+}
+function isExtensionButton(button, resolvedId, title) {
+  const id = button.getAttribute("data-tab-id") || "";
+  const buttonTitle = button.getAttribute("title") || "";
+  return id === resolvedId || id === title || buttonTitle === title;
+}
+function usableMainButton(button) {
+  return !!button && button.isConnected && button.style.display !== "none" && !isSettingsButton(button);
+}
+function findPrimaryRestoreButton(preferredId, resolvedId, title) {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return null;
+  if (preferredId) {
+    const preferred = findMainTabButton(preferredId);
+    if (usableMainButton(preferred) && !isExtensionButton(preferred, resolvedId, title))
+      return preferred;
+  }
+  return Array.from(sidebar.querySelectorAll("button[data-tab-id], button[title]")).map((button) => button).find((button) => usableMainButton(button) && !isExtensionButton(button, resolvedId, title)) ?? null;
+}
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+async function mountExtensionRootFromMain(args) {
+  const { resolvedId, title, findRoot } = args;
+  if (isMobileViewport()) {
+    dlog("[SecondaryDrawer] extension mount activation skipped on mobile", { resolvedId });
+    return null;
+  }
+  const sidebar = getMainSidebar();
+  const targetButton = findMainExtensionButton(resolvedId, title);
+  if (!sidebar || !targetButton || !targetButton.isConnected) {
+    dwarn("[SecondaryDrawer] cannot mount extension root: main button unavailable", {
+      resolvedId,
+      title,
+      hasSidebar: !!sidebar,
+      hasButton: !!targetButton
+    });
+    return null;
+  }
+  const before = readHostMainDrawerState();
+  const beforeExtensionRoots = new Set(Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]")));
+  const capturedRoots = new Set;
+  const hostTab = getHostStoreTabs().find((item) => item.id === resolvedId || item.id === title || item.title === title);
+  const expectedTabId = hostTab?.id.startsWith("spindle:") ? hostTab.id : null;
+  const expectedExtensionId = hostTab?.extensionId && hostTab.extensionId !== "unknown" ? hostTab.extensionId : null;
+  const captureAddedRoots = (records) => {
+    for (const record of records) {
+      if (record.type === "attributes" && record.target instanceof HTMLElement && record.target.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") && !beforeExtensionRoots.has(record.target) && !capturedRoots.has(record.target)) {
+        capturedRoots.add(record.target);
+        dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
+          tabId: record.target.getAttribute("data-spindle-drawer-tab"),
+          extensionId: record.target.getAttribute("data-spindle-ext-id"),
+          connected: record.target.isConnected
+        }));
+      }
+      for (const node of Array.from(record.addedNodes)) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        const roots = [
+          ...node.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") ? [node] : [],
+          ...Array.from(node.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))
+        ];
+        for (const root of roots) {
+          if (!beforeExtensionRoots.has(root) && root.tagName !== "BUTTON" && !capturedRoots.has(root)) {
+            capturedRoots.add(root);
+            dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
+              tabId: root.getAttribute("data-spindle-drawer-tab"),
+              extensionId: root.getAttribute("data-spindle-ext-id"),
+              connected: root.isConnected
+            }));
+          }
+        }
+      }
+    }
+  };
+  const rootObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(captureAddedRoots);
+  rootObserver?.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-spindle-drawer-tab", "data-spindle-ext-id"]
+  });
+  const findNewlyMountedRoot = () => {
+    const candidates = new Set(capturedRoots);
+    for (const element of Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))) {
+      if (!beforeExtensionRoots.has(element))
+        candidates.add(element);
+    }
+    const all = Array.from(candidates);
+    const matchingTab = expectedTabId ? all.filter((element) => element.getAttribute("data-spindle-drawer-tab") === expectedTabId) : [];
+    if (matchingTab.length === 1)
+      return matchingTab[0];
+    const matchingExtension = expectedExtensionId ? all.filter((element) => element.getAttribute("data-spindle-ext-id") === expectedExtensionId) : [];
+    if (matchingExtension.length === 1)
+      return matchingExtension[0];
+    return all.length === 1 ? all[0] : null;
+  };
+  let capturedRoot = null;
+  const findMountedRoot = () => {
+    capturedRoot = capturedRoot || findRoot() || findNewlyMountedRoot();
+    return capturedRoot;
+  };
+  const wasTargetHidden = targetButton.style.display === "none";
+  if (wasTargetHidden)
+    targetButton.style.display = "";
+  const targetWasSelected = before.tabId === resolvedId || before.tabId === title;
+  dlog("[SecondaryDrawer] mounting extension root via main activation", JSON.stringify({
+    resolvedId,
+    title,
+    before,
+    targetWasSelected,
+    wasTargetHidden,
+    expectedTabId,
+    expectedExtensionId,
+    storeEntry: hostTab ? { id: hostTab.id, extensionId: hostTab.extensionId, hasRoot: !!hostTab.root } : null
+  }));
+  let root = null;
+  try {
+    if (!before.open) {
+      const toggle = findMainDrawerToggle2();
+      if (toggle)
+        toggle.click();
+      else
+        targetButton.click();
+      await nextFrame();
+    }
+    const afterOpen = readHostMainDrawerState();
+    dlog("[SecondaryDrawer] host state after opening for extension activation", JSON.stringify(afterOpen));
+    if (afterOpen.tabId !== resolvedId && afterOpen.tabId !== title) {
+      targetButton.click();
+    }
+    dlog("[SecondaryDrawer] host state after selecting extension", JSON.stringify(readHostMainDrawerState()));
+    const deadline = Date.now() + 2500;
+    let delayMs = 16;
+    while (Date.now() < deadline) {
+      root = findMountedRoot();
+      if (root && root.tagName !== "BUTTON")
+        break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(125, delayMs * 2);
+    }
+    root = root && root.tagName !== "BUTTON" ? root : null;
+    if (root)
+      await nextFrame();
+  } finally {
+    if (rootObserver) {
+      captureAddedRoots(rootObserver.takeRecords());
+      rootObserver.disconnect();
+    }
+    root = root || findRoot() || findNewlyMountedRoot();
+    if (before.tabId) {
+      const desiredId = before.tabId === resolvedId || before.tabId === title ? resolvePrimaryActiveTabId() : before.tabId;
+      const restoreButton = findPrimaryRestoreButton(desiredId, resolvedId, title);
+      if (restoreButton) {
+        const afterActivation = readHostMainDrawerState();
+        const restoreId = restoreButton.getAttribute("data-tab-id") || restoreButton.getAttribute("title") || "";
+        if (afterActivation.tabId !== restoreId)
+          restoreButton.click();
+      }
+    }
+    if (!before.open && isMainDrawerOpen()) {
+      findMainDrawerToggle2()?.click();
+    }
+    await nextFrame();
+    if (wasTargetHidden && !root)
+      targetButton.style.display = "none";
+  }
+  if (root && root.tagName !== "BUTTON") {
+    const currentRoot = findMountedRoot();
+    return currentRoot && currentRoot.tagName !== "BUTTON" ? currentRoot : root;
+  }
+  dlog("[SecondaryDrawer] extension root did not mount after main activation", JSON.stringify({
+    resolvedId,
+    title,
+    after: readHostMainDrawerState(),
+    expectedTabId,
+    expectedExtensionId,
+    candidates: Array.from(capturedRoots).map((element) => ({
+      tabId: element.getAttribute("data-spindle-drawer-tab"),
+      extensionId: element.getAttribute("data-spindle-ext-id"),
+      connected: element.isConnected
+    }))
+  }));
+  return null;
+}
+function scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey) {
+  showMainTabButton(resolvedId);
+  if (_restoringFromLayout) {
+    dlog("[SecondaryDrawer] retaining rootless extension assignment during layout restore", {
+      resolvedId
+    });
+    return;
+  }
+  setTimeout(() => {
+    Promise.resolve().then(() => (init_dispatch(), {})).then(({}) => {
+      if (!getModel()) {
+        deleteTabAssignment(resolvedId);
+        return;
+      }
+      if (getTabSidebar(facadeKey) !== "secondary")
+        return;
+      return dispatch({
+        t: "move",
+        key: facadeKey,
+        to: "primary",
+        index: -1,
+        activateDest: false
+      });
+    }).catch((err) => {
+      dwarn("[SecondaryDrawer] failed extension placement rollback threw:", err);
+    });
+  }, 0);
+}
 async function assignExtensionTabToSecondary(ctx) {
-  const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx;
+  const { tabId, tab, resolvedId, facadeKey, iconSvg, shortName, deferActivation } = ctx;
+  const assignmentSideAtStart = getTabSidebar(facadeKey);
   setTabAssignment(resolvedId, "secondary");
-  hideMainTabButton(resolvedId);
   if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
     await openSecondarySidebar();
     _state = "open";
@@ -5124,6 +5363,7 @@ async function assignExtensionTabToSecondary(ctx) {
   const existingRoot = secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(bareId)}"]`);
   if (existingRoot) {
     const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+    hideMainTabButton(resolvedId);
     await finalizeAssignToSecondary({
       resolvedId,
       title: tab.title || storeTabForButton?.title || resolvedId,
@@ -5133,6 +5373,7 @@ async function assignExtensionTabToSecondary(ctx) {
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
+      facadeKey,
       setActiveWhenReady: ctx.setActiveWhenReady ?? true
     });
     return;
@@ -5140,70 +5381,122 @@ async function assignExtensionTabToSecondary(ctx) {
   const secondaryWrapper = getSecondaryWrapper();
   const secondaryContentMain = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-  await Promise.resolve().then(() => init_store());
-  const hostStoreTabs = getHostStoreTabs();
-  const fiberTab = hostStoreTabs.find((t) => t.id === resolvedId) || hostStoreTabs.find((t) => t.title === tab.title);
-  const realRoot = fiberTab?.root && fiberTab.root !== tab.button ? fiberTab.root : null;
-  if (realRoot && secondaryContentMain) {
-    const root = realRoot;
-    root.setAttribute("data-canvas-moved", resolvedId);
-    let placedViaHost = false;
+  if (!secondaryContentMain) {
+    dwarn("[SecondaryDrawer] cannot place extension root: secondary content missing", {
+      resolvedId,
+      title: tab.title
+    });
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  const findHostStoreTab = () => {
+    const hostStoreTabs = getHostStoreTabs();
+    return hostStoreTabs.find((item) => item.id === resolvedId) || hostStoreTabs.find((item) => item.id === tabId) || hostStoreTabs.find((item) => item.title === tab.title) || null;
+  };
+  const findRealRoot = () => {
+    const fiberTab = findHostStoreTab();
+    const storeRoot = fiberTab?.root && fiberTab.root !== tab.button ? fiberTab.root : null;
+    if (storeRoot?.isConnected && storeRoot.tagName !== "BUTTON")
+      return storeRoot;
+    const stampedIds = [fiberTab?.id, resolvedId, tabId].filter((id) => !!id);
+    for (const id of stampedIds) {
+      const stampedRoot = document.querySelector(`[data-spindle-drawer-tab="${CSS.escape(id)}"]`);
+      if (stampedRoot?.isConnected && stampedRoot.tagName !== "BUTTON")
+        return stampedRoot;
+    }
+    return null;
+  };
+  let realRoot = findRealRoot();
+  if (!realRoot) {
     try {
-      await Promise.resolve().then(() => init_host_tab_location());
-      const placed = requestHostTabToSecondary(resolvedId);
-      dlog("[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary", {
-        tabId: resolvedId,
-        ok: placed.ok,
-        via: placed.via
+      realRoot = await mountExtensionRootFromMain({
+        resolvedId,
+        title: tab.title || storeTab?.title || resolvedId,
+        findRoot: findRealRoot
       });
-      placedViaHost = placed.ok;
     } catch (err) {
-      dwarn("[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary threw:", err);
+      dwarn("[SecondaryDrawer] extension main activation failed:", err);
+      scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+      return;
     }
-    if (!placedViaHost) {
-      if (root.parentElement !== secondaryContentMain) {
-        secondaryContentMain.appendChild(root);
-      }
-    }
-    if (!deferActivation) {
-      for (const child of Array.from(secondaryContentMain.children)) {
-        if (child instanceof HTMLElement) {
-          if (child === root) {
-            child.setAttribute("data-canvas-active", "");
-          } else {
-            child.removeAttribute("data-canvas-active");
-          }
+  }
+  const currentMainButton = findMainExtensionButton(resolvedId, tab.title || storeTab?.title || resolvedId);
+  const currentSide = getTabSidebar(facadeKey);
+  const movedBackDuringMount = assignmentSideAtStart === "secondary" && currentSide !== "secondary";
+  if (movedBackDuringMount || !currentMainButton?.isConnected) {
+    showMainTabButton(resolvedId);
+    dlog("[SecondaryDrawer] extension mount placement cancelled after host activation", JSON.stringify({
+      resolvedId,
+      initialSide: assignmentSideAtStart,
+      currentSide,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab()
+    }));
+    return;
+  }
+  if (!realRoot || realRoot.tagName === "BUTTON") {
+    dwarn("[SecondaryDrawer] extension root unavailable after main activation; placement did not complete", JSON.stringify({
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab()
+    }));
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  const root = realRoot;
+  root.setAttribute("data-canvas-moved", resolvedId);
+  if (root.parentElement !== secondaryContentMain) {
+    secondaryContentMain.appendChild(root);
+  }
+  await nextFrame();
+  if (!secondaryContentMain.contains(root)) {
+    dlog("[SecondaryDrawer] host reclaimed extension root during activation restore; retrying DOM placement", {
+      resolvedId,
+      parentTag: root.parentElement?.tagName || null
+    });
+    secondaryContentMain.appendChild(root);
+    await nextFrame();
+  }
+  if (!secondaryContentMain.contains(root)) {
+    root.removeAttribute("data-canvas-moved");
+    root.removeAttribute("data-canvas-active");
+    dwarn("[SecondaryDrawer] host reclaimed extension root after DOM placement; placement did not complete", {
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId
+    });
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContentMain.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root) {
+          child.setAttribute("data-canvas-active", "");
+        } else {
+          child.removeAttribute("data-canvas-active");
         }
       }
     }
-    await finalizeAssignToSecondary({
-      resolvedId,
-      title: tab.title || storeTab?.title || resolvedId,
-      root,
-      iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
-      shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
-      deferActivation,
-      wireAssignment: false,
-      openOnClosed: false,
-      setActiveWhenReady: ctx.setActiveWhenReady ?? true
-    });
-    return;
   }
+  setTabAssignment(resolvedId, "secondary");
+  hideMainTabButton(resolvedId);
   await finalizeAssignToSecondary({
     resolvedId,
     title: tab.title || storeTab?.title || resolvedId,
-    root: tab.button,
+    root,
     iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
     shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
     deferActivation,
     wireAssignment: false,
     openOnClosed: false,
+    facadeKey,
     setActiveWhenReady: ctx.setActiveWhenReady ?? true
   });
   return;
 }
 async function assignBuiltInTabToSecondary(ctx) {
-  const { tabId, tab, resolvedId, deferActivation } = ctx;
+  const { tabId, tab, resolvedId, facadeKey, deferActivation } = ctx;
   const secondaryWrapper = getSecondaryWrapper();
   const secondaryContent = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
@@ -5231,6 +5524,7 @@ async function assignBuiltInTabToSecondary(ctx) {
       deferActivation,
       wireAssignment: true,
       openOnClosed: ctx.openOnClosed ?? true,
+      facadeKey,
       setActiveWhenReady: ctx.setActiveWhenReady ?? false
     });
     return;
@@ -5294,6 +5588,7 @@ async function assignBuiltInTabToSecondary(ctx) {
     deferActivation,
     wireAssignment: true,
     openOnClosed: ctx.openOnClosed ?? true,
+    facadeKey,
     setActiveWhenReady: ctx.setActiveWhenReady ?? false
   });
 }
@@ -5332,12 +5627,12 @@ async function assignToSecondary(tabId, opts) {
   }
   const resolvedId = tab.tabId;
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
-  let isExtensionTab = !!tab.extensionId && tab.extensionId !== "unknown";
-  if (!isExtensionTab) {
+  const facadeKey = opts?.facadeKey ?? tab.key;
+  let isExtensionTab = isExtensionKey(facadeKey) || !!tab.extensionId && tab.extensionId !== "unknown";
+  if (!isExtensionTab || !tab.extensionId || tab.extensionId === "unknown" || tab.tabId === tab.title) {
     if (!tab)
       return;
     const t = tab;
-    await Promise.resolve().then(() => init_store());
     const hostStoreTabs = getHostStoreTabs();
     const storeTab = hostStoreTabs.find((x) => x.id === tabId) || hostStoreTabs.find((x) => x.id === t.tabId) || hostStoreTabs.find((x) => x.title === t.title);
     if (storeTab?.extensionId && storeTab.extensionId !== "unknown") {
@@ -5363,6 +5658,7 @@ async function assignToSecondary(tabId, opts) {
     tabId,
     tab,
     resolvedId: tab.tabId,
+    facadeKey,
     iconSvg,
     shortName,
     deferActivation,
@@ -8377,7 +8673,7 @@ var init_configure_model = __esm(() => {
   init_drawer_observer();
 });
 
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
+// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
 function m(n, l) {
   for (var u in l)
     n[u] = l[u];
@@ -8679,7 +8975,7 @@ var init_preact_module = __esm(() => {
   }, H.__r = 0, f = Math.random().toString(8), c = "__d" + f, a = "__a" + f, s = /(PointerCapture)$|Capture$/i, h = 0, p = V(false), v = V(true), y = 0;
 });
 
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
+// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
 function p2(n, t) {
   c2.__h && c2.__h(r2, n, o2 || t), o2 = 0;
   var u = r2.__H || (r2.__H = { __: [], __h: [] });
@@ -9036,7 +9332,7 @@ var init_live_tab_order = __esm(() => {
   _titleResolvedLogged = new Set;
 });
 
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
+// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e, t, n, o, i, u) {
   t || (t = {});
   var a, c, p = t;
@@ -11799,6 +12095,7 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
             try {
               if (move.to === "secondary") {
                 await assignToSecondary(liveId, {
+                  facadeKey: move.key,
                   openOnClosed: false,
                   setActiveWhenReady: false
                 });
@@ -15180,7 +15477,8 @@ async function placementFirstMoveByLiveId(liveId, target) {
   try {
     const sidebar = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
     if (target === "secondary") {
-      await assignToSecondary(liveId);
+      const facadeKey = host.findKey(liveId);
+      await assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined);
     } else {
       await unassignFromSecondary(liveId);
     }
@@ -18945,7 +19243,8 @@ function runReassign(opts) {
         dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`);
         continue;
       }
-      const ok = await assignToSecondary(liveId, opts).then(() => true).catch(() => false);
+      const placementOpts = { ...opts, facadeKey: tabKey };
+      const ok = await assignToSecondary(liveId, placementOpts).then(() => true).catch(() => false);
       if (ok)
         placed.push(liveId);
     }

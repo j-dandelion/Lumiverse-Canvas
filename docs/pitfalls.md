@@ -332,6 +332,17 @@ The full off-world-tab series — the LUMI-25 fix (host hidden-list union remova
 
 **Synthesized-entry key space (LUMI-31):** assignment entries are keyed by TabKey, but Canvas hidden state and active trackers use live IDs. Resolve the TabKey through `liveIdForKey` before comparing those values. A null resolution (an absent extension key within its grace window) stays unhidden and inactive; builtins still resolve without a drawer button, so DOM-placed entries report their hidden and active state correctly.
 
+## 32. Lazy extension roots must mount through the host button (LUMI-50)
+
+The host store can omit an extension entry while its button is present, and
+the host's location API is owner-scoped. On desktop, select the real host tab
+in an open main drawer while observing for its stamped content root, restore
+the prior main selection/open state, then reparent the retained root. Carry the
+frozen `TabKey` through every placement caller because extension metadata may
+still be `unknown`. Placement-first user moves have not updated the model yet;
+the post-mount race check must allow that original primary side and cancel only
+when an already-secondary tab moved back out during activation.
+
 ## 30. Resize drag cancellation must run the normal finish path
 
 The resize handle's content overlay blocks iframe pointer capture during a

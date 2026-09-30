@@ -487,7 +487,8 @@ function runReassign(opts?: ReassignSecondaryOpts): Promise<void> {
           dlog(`[secondary] open loop: no live tab for facade key "${tabKey}"`)
           continue
         }
-        const ok = await assignToSecondary(liveId, opts)
+        const placementOpts = { ...opts, facadeKey: tabKey }
+        const ok = await assignToSecondary(liveId, placementOpts)
           .then(() => true)
           .catch(() => false)
         if (ok) placed.push(liveId)

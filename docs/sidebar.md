@@ -175,17 +175,14 @@ Signature: `assignToSecondary(tabId, opts?)` — `tabId` is a **liveId**, never 
 
 Two paths depending on tab type:
 
-**Extension tabs (has UUID extensionId):**
-1. Resolve tab in Zustand store or DrawerObserver
-2. Set assignment: `setTabAssignment(id, 'secondary')`
-3. Hide main sidebar button: `hideMainTabButton(id)`
-4. Open secondary sidebar if closed (not on mobile)
-5. **DOM reparent**: Move the extension's root element into `.sidebar-ux-panel-content` via `appendChild` (preserves React state)
-6. Mark with `data-canvas-moved` and `data-canvas-active` attributes
-7. Create secondary tab button via `addSecondaryTabButton`
-8. Persist layout
+**Extension tabs:**
+1. Resolve the stable model key and live tab entry
+2. Open the secondary sidebar if needed (desktop only)
+3. Resolve the real content root through the host store or host-stamped DOM; the DrawerObserver root is only the tab button
+4. If the extension is lazy, briefly open the host main drawer and select its real button while observing newly stamped roots; restore the prior main selection and open state
+5. Reparent the retained content root into the secondary drawer, confirm it stays there, then hide the host button and create the secondary button
 
-> **Root-sourcing trap (2026-08-17):** the root for step 5 must come from the **fiber store** (`getHostStoreTabs()` in `store/index.ts`), NOT from the DrawerObserver facade. `getDrawerTabs()`'s observer-derived entries return `root: tab.button` — the HOST BUTTON, not the content root — because the observer only ever sees buttons. Reparenting that button rips it out of the sidebar: the mirror loses the tab, `findMainTabButton` misses ("no button for id=… found among N buttons"), and moving the tab back to primary cannot restore it. `assignExtensionTabToSecondary` rejects button-as-root (`fiberTab.root !== tab.button`) and, for lazily-mounted extensions whose fiber root is `null`, wires the assignment + secondary button **without reparenting anything** — the content root attaches when the host mounts the tab.
+> **Root-sourcing and lazy-mount trap (2026-09-29):** `getHostStoreTabs()` can be partial even while the extension button is present. The host mobility API is owner-scoped and cannot place another extension's tab into Canvas's container. A lazy extension panel may mount only after its real host button is selected in an open main drawer. Capture the newly stamped `[data-spindle-drawer-tab][data-spindle-ext-id]` root during that activation, restore main state, then reparent the retained root. Keep the frozen `TabKey` with the placement request because observer metadata may still say `extensionId: unknown`. Log activation/capture and failed-placement details when diagnosing a blank second drawer.
 
 **Built-in tabs (Characters, History, Lorebook, Profile):**
 1. Prefer shared helper `moveBuiltInTabToSecondaryContainer` (`tabs/builtin-move.ts`) — also used by `assignTab`

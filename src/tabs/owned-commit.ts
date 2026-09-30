@@ -356,6 +356,7 @@ export async function commitDraftToOwnedModel(
             try {
               if (move.to === 'secondary') {
                 await drawer.assignToSecondary(liveId, {
+                  facadeKey: move.key,
                   openOnClosed: false,
                   setActiveWhenReady: false,
                 })

@@ -2,9 +2,9 @@
 //
 // Manages tab assignment to the secondary, coordinates with DrawerObserver
 // for DOM-based tab discovery, and owns the showSecondaryTab display-toggle
-// path. Extension tabs are moved via DOM reparenting (appendChild) to
-// preserve state; built-in tabs (Characters, History) use the display-toggle
-// path directly.
+// path. Extension tabs use the host's registered container location and
+// preserve their persistent root; built-in tabs (Characters, History) use
+// the display-toggle path directly.
 
 import { drawerObserver, keyForTabShape, type ObservedTab } from './drawer-observer'
 import {
@@ -17,11 +17,16 @@ import {
   clearSecondaryTabButtonActive,
   updateDrawerTabVisibility,
   readMainButtonShortName,
+  isSettingsButton,
 } from '../tabs/buttons'
 import {
-  getTabAssignments, setTabAssignment, deleteTabAssignment,
+  getTabAssignments, getTabSidebar, setTabAssignment, deleteTabAssignment,
 } from '../tabs/assignment'
-import { getActiveSecondaryTabId, setActiveSecondaryTabId } from '../tabs/active-tab'
+import {
+  getActiveSecondaryTabId,
+  resolvePrimaryActiveTabId,
+  setActiveSecondaryTabId,
+} from '../tabs/active-tab'
 import {
   ensureSecondaryShellMounted,
   getSecondaryWrapper,
@@ -29,10 +34,18 @@ import {
   isSecondarySidebarOpen,
   closeSecondarySidebar,
 } from './secondary'
-import { findStoreData, getDrawerTabs, type DrawerTab } from '../store'
+import {
+  findStoreData,
+  getDrawerTabs,
+  getHostStoreTabs,
+  isMainDrawerOpen,
+  type DrawerTab,
+} from '../store'
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
+import { isExtensionKey, type TabKey } from '../core/model'
 import { dlog, dwarn } from '../debug/log'
 import { getHostBridge } from '../dom/host-bridge'
+import { getMainSidebar, getMainWrapper } from '../dom/lumiverse'
 import { isMobileViewport } from './mobile-exclusion'
 
 export type SecondaryDrawerState = 'closed' | 'open' | 'tab_active'
@@ -167,6 +180,8 @@ async function finalizeAssignToSecondary(opts: {
    * Built-in early-return uses true; leave true for all current callers.
    */
   showAndPersist?: boolean
+  /** Frozen owned-model identity; never re-derive it from a transient live ID. */
+  facadeKey?: TabKey
 }): Promise<void> {
   const {
     resolvedId,
@@ -179,6 +194,7 @@ async function finalizeAssignToSecondary(opts: {
     openOnClosed = true,
     setActiveWhenReady = true,
     showAndPersist = true,
+    facadeKey,
   } = opts
 
   addSecondaryTabButton({
@@ -187,6 +203,7 @@ async function finalizeAssignToSecondary(opts: {
     root,
     iconSvg,
     shortName,
+    facadeKey,
   })
   updateDrawerTabVisibility()
 
@@ -266,6 +283,7 @@ type AssignCtx = {
   tabId: string
   tab: ObservedTab
   resolvedId: string
+  facadeKey: TabKey
   iconSvg?: string
   shortName?: string
   deferActivation: boolean
@@ -275,14 +293,341 @@ type AssignCtx = {
   setActiveWhenReady?: boolean
 }
 
+type HostMainDrawerState = { open: boolean; tabId: string | null }
+
+function readHostMainDrawerState(): HostMainDrawerState {
+  const wrapper = getMainWrapper()
+  const sidebar = getMainSidebar()
+  const activeButton = sidebar?.querySelector(
+    'button.tabBtnActive, button[class*="tabBtnActive"]',
+  ) as HTMLElement | null
+  return {
+    open: wrapper ? /wrapperOpen/.test(wrapper.className) : isMainDrawerOpen(),
+    tabId: activeButton?.getAttribute('data-tab-id')
+      || activeButton?.getAttribute('title')
+      || null,
+  }
+}
+
+function findMainDrawerToggle(): HTMLButtonElement | null {
+  const wrapper = getMainWrapper()
+  if (!wrapper) return null
+  for (const button of Array.from(wrapper.querySelectorAll(':scope > button'))) {
+    if (/drawerTab/i.test((button as HTMLElement).className)) {
+      return button as HTMLButtonElement
+    }
+  }
+  return null
+}
+
+function findMainExtensionButton(resolvedId: string, title: string): HTMLElement | null {
+  const sidebar = getMainSidebar()
+  return (
+    sidebar?.querySelector(`button[data-tab-id="${CSS.escape(resolvedId)}"]`)
+    || sidebar?.querySelector(`button[title="${CSS.escape(title)}"]`)
+  ) as HTMLElement | null
+}
+
+function isExtensionButton(
+  button: HTMLElement,
+  resolvedId: string,
+  title: string,
+): boolean {
+  const id = button.getAttribute('data-tab-id') || ''
+  const buttonTitle = button.getAttribute('title') || ''
+  return id === resolvedId || id === title || buttonTitle === title
+}
+
+function usableMainButton(button: HTMLElement | null): button is HTMLElement {
+  return !!button
+    && button.isConnected
+    && button.style.display !== 'none'
+    && !isSettingsButton(button)
+}
+
+function findPrimaryRestoreButton(
+  preferredId: string | null,
+  resolvedId: string,
+  title: string,
+): HTMLElement | null {
+  const sidebar = getMainSidebar()
+  if (!sidebar) return null
+
+  if (preferredId) {
+    const preferred = findMainTabButton(preferredId) as HTMLElement | null
+    if (
+      usableMainButton(preferred)
+      && !isExtensionButton(preferred, resolvedId, title)
+    ) return preferred
+  }
+
+  return Array.from(sidebar.querySelectorAll('button[data-tab-id], button[title]'))
+    .map((button) => button as HTMLElement)
+    .find((button) =>
+      usableMainButton(button)
+      && !isExtensionButton(button, resolvedId, title),
+    ) ?? null
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
 /**
- * Extension tabs: reparent store root via appendChild (preserves instance state).
- * Assignment is wired before open so a failed reparent still records secondary.
+ * Activate an extension's real host button to trigger lazy panel mounting.
+ * The host mobility API cannot move tabs owned by another extension, so this
+ * path waits for the persistent root and then uses Canvas's established DOM
+ * reparenting path.
+ */
+async function mountExtensionRootFromMain(
+  args: {
+    resolvedId: string
+    title: string
+    findRoot: () => HTMLElement | null
+  },
+): Promise<HTMLElement | null> {
+  const { resolvedId, title, findRoot } = args
+  if (isMobileViewport()) {
+    dlog('[SecondaryDrawer] extension mount activation skipped on mobile', { resolvedId })
+    return null
+  }
+
+  const sidebar = getMainSidebar()
+  const targetButton = findMainExtensionButton(resolvedId, title)
+  if (!sidebar || !targetButton || !targetButton.isConnected) {
+    dwarn('[SecondaryDrawer] cannot mount extension root: main button unavailable', {
+      resolvedId,
+      title,
+      hasSidebar: !!sidebar,
+      hasButton: !!targetButton,
+    })
+    return null
+  }
+
+  const before = readHostMainDrawerState()
+  const beforeExtensionRoots = new Set(
+    Array.from(document.querySelectorAll<HTMLElement>(
+      '[data-spindle-drawer-tab][data-spindle-ext-id]',
+    )),
+  )
+  const capturedRoots = new Set<HTMLElement>()
+  const hostTab = getHostStoreTabs().find((item) =>
+    item.id === resolvedId || item.id === title || item.title === title,
+  )
+  const expectedTabId = hostTab?.id.startsWith('spindle:') ? hostTab.id : null
+  const expectedExtensionId = hostTab?.extensionId && hostTab.extensionId !== 'unknown'
+    ? hostTab.extensionId
+    : null
+  const captureAddedRoots = (records: MutationRecord[]): void => {
+    for (const record of records) {
+      if (
+        record.type === 'attributes'
+        && record.target instanceof HTMLElement
+        && record.target.matches('[data-spindle-drawer-tab][data-spindle-ext-id]')
+        && !beforeExtensionRoots.has(record.target)
+        && !capturedRoots.has(record.target)
+      ) {
+        capturedRoots.add(record.target)
+        dlog('[SecondaryDrawer] captured extension root during main activation', JSON.stringify({
+          tabId: record.target.getAttribute('data-spindle-drawer-tab'),
+          extensionId: record.target.getAttribute('data-spindle-ext-id'),
+          connected: record.target.isConnected,
+        }))
+      }
+      for (const node of Array.from(record.addedNodes)) {
+        if (!(node instanceof HTMLElement)) continue
+        const roots = [
+          ...(node.matches('[data-spindle-drawer-tab][data-spindle-ext-id]') ? [node] : []),
+          ...Array.from(node.querySelectorAll<HTMLElement>(
+            '[data-spindle-drawer-tab][data-spindle-ext-id]',
+          )),
+        ]
+        for (const root of roots) {
+          if (!beforeExtensionRoots.has(root) && root.tagName !== 'BUTTON' && !capturedRoots.has(root)) {
+            capturedRoots.add(root)
+            dlog('[SecondaryDrawer] captured extension root during main activation', JSON.stringify({
+              tabId: root.getAttribute('data-spindle-drawer-tab'),
+              extensionId: root.getAttribute('data-spindle-ext-id'),
+              connected: root.isConnected,
+            }))
+          }
+        }
+      }
+    }
+  }
+  const rootObserver = typeof MutationObserver === 'undefined'
+    ? null
+    : new MutationObserver(captureAddedRoots)
+  rootObserver?.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-spindle-drawer-tab', 'data-spindle-ext-id'],
+  })
+  const findNewlyMountedRoot = (): HTMLElement | null => {
+    const candidates = new Set<HTMLElement>(capturedRoots)
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>(
+      '[data-spindle-drawer-tab][data-spindle-ext-id]',
+    ))) {
+      if (!beforeExtensionRoots.has(element)) candidates.add(element)
+    }
+    const all = Array.from(candidates)
+    const matchingTab = expectedTabId
+      ? all.filter((element) => element.getAttribute('data-spindle-drawer-tab') === expectedTabId)
+      : []
+    if (matchingTab.length === 1) return matchingTab[0]
+    const matchingExtension = expectedExtensionId
+      ? all.filter((element) => element.getAttribute('data-spindle-ext-id') === expectedExtensionId)
+      : []
+    if (matchingExtension.length === 1) return matchingExtension[0]
+    return all.length === 1 ? all[0] : null
+  }
+  let capturedRoot: HTMLElement | null = null
+  const findMountedRoot = (): HTMLElement | null => {
+    capturedRoot = capturedRoot || findRoot() || findNewlyMountedRoot()
+    return capturedRoot
+  }
+  const wasTargetHidden = targetButton.style.display === 'none'
+  if (wasTargetHidden) targetButton.style.display = ''
+
+  const targetWasSelected = before.tabId === resolvedId || before.tabId === title
+  dlog('[SecondaryDrawer] mounting extension root via main activation', JSON.stringify({
+    resolvedId,
+    title,
+    before,
+    targetWasSelected,
+    wasTargetHidden,
+    expectedTabId,
+    expectedExtensionId,
+    storeEntry: hostTab ? { id: hostTab.id, extensionId: hostTab.extensionId, hasRoot: !!hostTab.root } : null,
+  }))
+
+  let root: HTMLElement | null = null
+  try {
+    // Open the host drawer explicitly before relying on tab selection to
+    // mount visibility-gated extension panels. In Canvas mirror mode, clicking
+    // a host tab can select it while the host wrapper itself stays closed.
+    if (!before.open) {
+      const toggle = findMainDrawerToggle()
+      if (toggle) toggle.click()
+      else targetButton.click()
+      await nextFrame()
+    }
+    const afterOpen = readHostMainDrawerState()
+    dlog('[SecondaryDrawer] host state after opening for extension activation', JSON.stringify(afterOpen))
+    if (afterOpen.tabId !== resolvedId && afterOpen.tabId !== title) {
+      targetButton.click()
+    }
+    dlog('[SecondaryDrawer] host state after selecting extension', JSON.stringify(readHostMainDrawerState()))
+
+    const deadline = Date.now() + 2500
+    let delayMs = 16
+    while (Date.now() < deadline) {
+      root = findMountedRoot()
+      if (root && root.tagName !== 'BUTTON') break
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+      delayMs = Math.min(125, delayMs * 2)
+    }
+    root = root && root.tagName !== 'BUTTON' ? root : null
+    if (root) await nextFrame()
+  } finally {
+    if (rootObserver) {
+      captureAddedRoots(rootObserver.takeRecords())
+      rootObserver.disconnect()
+    }
+    root = root || findRoot() || findNewlyMountedRoot()
+    // Restore the prior main selection, or select a remaining main tab if the
+    // extension being moved was itself active. Never click a Canvas-hidden
+    // tab or Lumiverse's Settings tab as a fallback.
+    if (before.tabId) {
+      const desiredId = before.tabId === resolvedId || before.tabId === title
+        ? resolvePrimaryActiveTabId()
+        : before.tabId
+      const restoreButton = findPrimaryRestoreButton(desiredId, resolvedId, title)
+      if (restoreButton) {
+        const afterActivation = readHostMainDrawerState()
+        const restoreId = restoreButton.getAttribute('data-tab-id')
+          || restoreButton.getAttribute('title')
+          || ''
+        if (afterActivation.tabId !== restoreId) restoreButton.click()
+      }
+    }
+    if (!before.open && isMainDrawerOpen()) {
+      findMainDrawerToggle()?.click()
+    }
+
+    // Let the host finish its selection/render pass before Canvas reparents
+    // the now-mounted persistent extension root.
+    await nextFrame()
+    if (wasTargetHidden && !root) targetButton.style.display = 'none'
+  }
+
+  if (root && root.tagName !== 'BUTTON') {
+    // The activation restore can replace a root in hosts that remount panels.
+    // Prefer the current store/DOM root, falling back to the captured node.
+    const currentRoot = findMountedRoot()
+    return currentRoot && currentRoot.tagName !== 'BUTTON' ? currentRoot : root
+  }
+
+  dlog('[SecondaryDrawer] extension root did not mount after main activation', JSON.stringify({
+    resolvedId,
+    title,
+    after: readHostMainDrawerState(),
+    expectedTabId,
+    expectedExtensionId,
+    candidates: Array.from(capturedRoots).map((element) => ({
+      tabId: element.getAttribute('data-spindle-drawer-tab'),
+      extensionId: element.getAttribute('data-spindle-ext-id'),
+      connected: element.isConnected,
+    })),
+  }))
+  return null
+}
+
+function scheduleFailedExtensionPlacementRollback(resolvedId: string, facadeKey: TabKey): void {
+  showMainTabButton(resolvedId)
+  if (_restoringFromLayout) {
+    // Keep the persisted placement intent; restore can run before an
+    // extension finishes loading. The visible host button preserves access,
+    // and a later restore/reassignment pass can retry the mount.
+    dlog('[SecondaryDrawer] retaining rootless extension assignment during layout restore', {
+      resolvedId,
+    })
+    return
+  }
+  // Placement runs inside the owned-model dispatch queue. Queue the rollback
+  // after that placement settles instead of awaiting a nested dispatch here.
+  setTimeout(() => {
+    void import('../recon/dispatch').then(({ dispatch, getModel }) => {
+      if (!getModel()) {
+        deleteTabAssignment(resolvedId)
+        return
+      }
+      if (getTabSidebar(facadeKey) !== 'secondary') return
+      return dispatch({
+        t: 'move',
+        key: facadeKey,
+        to: 'primary',
+        index: -1,
+        activateDest: false,
+      })
+    }).catch((err) => {
+      dwarn('[SecondaryDrawer] failed extension placement rollback threw:', err)
+    })
+  }, 0)
+}
+
+/**
+ * Extension tabs: activate the host button when needed to mount the persistent
+ * root, then reparent that root into the secondary drawer.
  */
 async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
-  const { tabId, tab, resolvedId, iconSvg, shortName, deferActivation } = ctx
+  const { tabId, tab, resolvedId, facadeKey, iconSvg, shortName, deferActivation } = ctx
+  // A direct user move places the DOM before dispatching the owned-model move.
+  // Remember the initial side so the post-mount race check can distinguish
+  // that expected primary state from a tab moved back out of secondary.
+  const assignmentSideAtStart = getTabSidebar(facadeKey)
   setTabAssignment(resolvedId, 'secondary')
-  hideMainTabButton(resolvedId)
   // On mobile, do not auto-open during assign (would enforceExclusionOnOpen).
   // During layout restore, skip auto-open so finishRestore decides open state.
   if (_state === 'closed' && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
@@ -304,6 +649,7 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
 
   if (existingRoot) {
     const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
+    hideMainTabButton(resolvedId)
     await finalizeAssignToSecondary({
       resolvedId,
       title: tab.title || storeTabForButton?.title || resolvedId,
@@ -315,6 +661,7 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
       deferActivation,
       wireAssignment: false,
       openOnClosed: false,
+      facadeKey,
       // DnD cross-drawer placement passes setActiveWhenReady:false so the
       // dropped tab is NOT activated in the destination (quiet DnD contract).
       setActiveWhenReady: ctx.setActiveWhenReady ?? true,
@@ -322,112 +669,158 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
     return
   }
 
-  // PRIMARY PATH: ask the host to move the extension tab into the Canvas
-  // secondary container. This updates `tabLocations[tabId]` so the host's
-  // own `ContainerTabContent` effect places the root in the registered
-  // container — and the host's `TabPanelContent` for the MAIN drawer sees
-  // `isMatch = false` and does NOT move the root back. Without this, the
-  // DOM-only reparent leaves `tabLocations` at `main-drawer`, and any
-  // subsequent `TabPanelContent` effect re-run (active tab switch, store
-  // re-render) moves the root back to the main container — the "Configure
-  // drag doesn't actually move the extension tab in the main UI" bug.
-  //
-  // If the host can't move it (allowlist deny + store.moveTabTo missing),
-  // fall back to the DOM reparent that worked before.
+  // Extension mobility is owner-scoped in Lumiverse; Canvas cannot set the
+  // location of a tab owned by another extension. Resolve the live root from
+  // the host inventory and mount it through the real main tab button when it
+  // is lazy, then use the same persistent-root DOM placement as main.
   const secondaryWrapper = getSecondaryWrapper()
   const secondaryContentMain = secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
 
-  // Root sourcing (2026-08-17): the observer-derived facade
-  // (findStoreTab → getDrawerTabs) returns `root: tab.button` — the HOST
-  // BUTTON, NOT the content root. Reparenting it rips the button out of
-  // the sidebar (the mirror loses the tab, findMainTabButton misses, and
-  // moving the tab back to primary cannot restore it). Only a REAL content
-  // root from the fiber store may be reparented; a lazily-mounted
-  // extension (root null) falls through to the no-root wiring below.
-  const { getHostStoreTabs } = await import('../store')
-  const hostStoreTabs = getHostStoreTabs()
-  const fiberTab = hostStoreTabs.find((t) => t.id === resolvedId)
-    || hostStoreTabs.find((t) => t.title === tab.title)
-  const realRoot = fiberTab?.root && fiberTab.root !== tab.button
-    ? (fiberTab.root as HTMLElement)
-    : null
-
-  if (realRoot && secondaryContentMain) {
-    const root = realRoot
-
-    // Tag before host move so `data-canvas-moved` travels with the root
-    // (ContainerTabContent appends the same node; showSecondaryTab looks
-    // for [data-canvas-moved] to toggle `data-canvas-active`).
-    root.setAttribute('data-canvas-moved', resolvedId)
-
-    // Try host-managed placement first (updates tabLocations → host's
-    // ContainerTabContent moves the root into the canvas-secondary-drawer
-    // container). Dynamic import to avoid the secondary-drawer →
-    // host-tab-location → ... circular dep.
-    let placedViaHost = false
-    try {
-      const { requestHostTabToSecondary } = await import('../tabs/host-tab-location')
-      const placed = requestHostTabToSecondary(resolvedId)
-      dlog('[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary', {
-        tabId: resolvedId, ok: placed.ok, via: placed.via,
-      })
-      placedViaHost = placed.ok
-    } catch (err) {
-      dwarn('[SecondaryDrawer] assignExtensionTab: requestHostTabToSecondary threw:', err)
-    }
-
-    if (!placedViaHost) {
-      // Fallback: DOM reparent (the previous behavior). The host's
-      // tabLocations still says main-drawer, so this is race-prone if the
-      // host's TabPanelContent effect re-runs, but it's the best we can do
-      // when the host can't manage the placement.
-      if (root.parentElement !== secondaryContentMain) {
-        secondaryContentMain.appendChild(root)
-      }
-    }
-
-    // During restore / suppress, leave data-canvas-active alone so
-    // finishRestore → showSecondaryTab is the sole content switcher.
-    if (!deferActivation) {
-      for (const child of Array.from(secondaryContentMain.children)) {
-        if (child instanceof HTMLElement) {
-          if (child === root) {
-            child.setAttribute('data-canvas-active', '')
-          } else {
-            child.removeAttribute('data-canvas-active')
-          }
-        }
-      }
-    }
-    await finalizeAssignToSecondary({
+  if (!secondaryContentMain) {
+    dwarn('[SecondaryDrawer] cannot place extension root: secondary content missing', {
       resolvedId,
-      title: tab.title || storeTab?.title || resolvedId,
-      root,
-      iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab?.iconSvg,
-      shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
-      deferActivation,
-      wireAssignment: false,
-      openOnClosed: false,
-      // Quiet DnD: see existingRoot branch above.
-      setActiveWhenReady: ctx.setActiveWhenReady ?? true,
+      title: tab.title,
     })
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey)
     return
   }
 
-  // No real content root (lazily-mounted extension) — wire the assignment
-  // and the secondary button anyway; the content root attaches when the
-  // host mounts the tab. The `root` passed to finalize is only used for the
-  // button descriptor (never reparented), so the host button is safe.
+  const findHostStoreTab = (): DrawerTab | null => {
+    const hostStoreTabs = getHostStoreTabs()
+    return hostStoreTabs.find((item) => item.id === resolvedId)
+      || hostStoreTabs.find((item) => item.id === tabId)
+      || hostStoreTabs.find((item) => item.title === tab.title)
+      || null
+  }
+
+  const findRealRoot = (): HTMLElement | null => {
+    const fiberTab = findHostStoreTab()
+    const storeRoot = fiberTab?.root && fiberTab.root !== tab.button
+      ? fiberTab.root as HTMLElement
+      : null
+    if (storeRoot?.isConnected && storeRoot.tagName !== 'BUTTON') return storeRoot
+
+    // Some host snapshots expose the canonical tab ID before their root
+    // pointer updates. The host stamps that ID on the rendered extension root.
+    const stampedIds = [fiberTab?.id, resolvedId, tabId]
+      .filter((id): id is string => !!id)
+    for (const id of stampedIds) {
+      const stampedRoot = document.querySelector(
+        `[data-spindle-drawer-tab="${CSS.escape(id)}"]`,
+      ) as HTMLElement | null
+      if (stampedRoot?.isConnected && stampedRoot.tagName !== 'BUTTON') return stampedRoot
+    }
+    return null
+  }
+  let realRoot = findRealRoot()
+
+  if (!realRoot) {
+    try {
+      realRoot = await mountExtensionRootFromMain({
+        resolvedId,
+        title: tab.title || storeTab?.title || resolvedId,
+        findRoot: findRealRoot,
+      })
+    } catch (err) {
+      dwarn('[SecondaryDrawer] extension main activation failed:', err)
+      scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey)
+      return
+    }
+  }
+
+  // A user move-back or extension removal can race the mount wait. Respect
+  // the latest placement decision before moving the host root.
+  const currentMainButton = findMainExtensionButton(
+    resolvedId,
+    tab.title || storeTab?.title || resolvedId,
+  )
+  const currentSide = getTabSidebar(facadeKey)
+  const movedBackDuringMount = assignmentSideAtStart === 'secondary'
+    && currentSide !== 'secondary'
+  if (movedBackDuringMount || !currentMainButton?.isConnected) {
+    showMainTabButton(resolvedId)
+    dlog('[SecondaryDrawer] extension mount placement cancelled after host activation', JSON.stringify({
+      resolvedId,
+      initialSide: assignmentSideAtStart,
+      currentSide,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab(),
+    }))
+    return
+  }
+
+  if (!realRoot || realRoot.tagName === 'BUTTON') {
+    dwarn('[SecondaryDrawer] extension root unavailable after main activation; placement did not complete', JSON.stringify({
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab(),
+    }))
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey)
+    return
+  }
+
+  const root = realRoot
+
+  // Reparent only after the activation and host selection restoration have
+  // settled. The host root is persistent; this preserves its live React state.
+  // It may already be detached because the host restored its previous active
+  // tab immediately after the activation render; retaining the node reference
+  // still lets Canvas mount that same root here.
+  root.setAttribute('data-canvas-moved', resolvedId)
+
+  if (root.parentElement !== secondaryContentMain) {
+    secondaryContentMain.appendChild(root)
+  }
+
+  await nextFrame()
+  if (!secondaryContentMain.contains(root)) {
+    dlog('[SecondaryDrawer] host reclaimed extension root during activation restore; retrying DOM placement', {
+      resolvedId,
+      parentTag: root.parentElement?.tagName || null,
+    })
+    secondaryContentMain.appendChild(root)
+    await nextFrame()
+  }
+  if (!secondaryContentMain.contains(root)) {
+    root.removeAttribute('data-canvas-moved')
+    root.removeAttribute('data-canvas-active')
+    dwarn('[SecondaryDrawer] host reclaimed extension root after DOM placement; placement did not complete', {
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
+    })
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey)
+    return
+  }
+
+  // During restore / suppress, leave data-canvas-active alone so
+  // finishRestore → showSecondaryTab is the sole content switcher.
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContentMain.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root) {
+          child.setAttribute('data-canvas-active', '')
+        } else {
+          child.removeAttribute('data-canvas-active')
+        }
+      }
+    }
+  }
+
+  // Wire the secondary chrome only after the actual content root is present.
+  setTabAssignment(resolvedId, 'secondary')
+  hideMainTabButton(resolvedId)
   await finalizeAssignToSecondary({
     resolvedId,
     title: tab.title || storeTab?.title || resolvedId,
-    root: tab.button,
+    root,
     iconSvg: (tab.button as HTMLElement | undefined)?.querySelector('svg')?.outerHTML || storeTab?.iconSvg,
     shortName: readMainButtonShortName(tab.button as Element) || storeTab?.shortName,
     deferActivation,
     wireAssignment: false,
     openOnClosed: false,
+    facadeKey,
     // Quiet DnD: see existingRoot branch above.
     setActiveWhenReady: ctx.setActiveWhenReady ?? true,
   })
@@ -440,7 +833,7 @@ async function assignExtensionTabToSecondary(ctx: AssignCtx): Promise<void> {
  * panelContent (main-mirror parks that node).
  */
 async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
-  const { tabId, tab, resolvedId, deferActivation } = ctx
+  const { tabId, tab, resolvedId, facadeKey, deferActivation } = ctx
   const secondaryWrapper = getSecondaryWrapper()
   const secondaryContent = secondaryWrapper?.querySelector('.sidebar-ux-panel-content')
   const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title)
@@ -474,6 +867,7 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
       deferActivation,
       wireAssignment: true,
       openOnClosed: ctx.openOnClosed ?? true,
+      facadeKey,
       // Built-in: only set tab_active when we open; otherwise show path only.
       setActiveWhenReady: ctx.setActiveWhenReady ?? false,
     })
@@ -566,6 +960,7 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
     deferActivation,
     wireAssignment: true,
     openOnClosed: ctx.openOnClosed ?? true,
+    facadeKey,
     setActiveWhenReady: ctx.setActiveWhenReady ?? false,
   })
 }
@@ -586,7 +981,7 @@ async function assignBuiltInTabToSecondary(ctx: AssignCtx): Promise<void> {
  */
 export async function assignToSecondary(
   tabId: string,
-  opts?: { openOnClosed?: boolean; setActiveWhenReady?: boolean },
+  opts?: { openOnClosed?: boolean; setActiveWhenReady?: boolean; facadeKey?: TabKey },
 ): Promise<void> {
   // Snapshot at entry so fire-and-forget async tails still defer activation
   // after finishRestore / openSecondarySidebar clear the live flags.
@@ -636,24 +1031,24 @@ export async function assignToSecondary(
   const resolvedId = tab.tabId
   dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`)
 
-  let isExtensionTab = !!tab.extensionId && tab.extensionId !== 'unknown'
-  if (!isExtensionTab) {
-    // Stale-entry upgrade (2026-08-17): the observer entry may still be
-    // title-keyed with extensionId 'unknown' — the tagger's data-tab-id
-    // write happened during the observer's initial scan, before it was
-    // observing, so the entry never upgraded to the composite spindle id.
-    // The REAL host store (fiber walk) has the composite id + extensionId;
-    // re-classify from it so the extension placement path runs. (NOT
-    // findStoreTab/getDrawerTabs — that facade prefers the observer
-    // inventory and would serve the same stale entry.) Otherwise the boot
-    // restore treats the extension tab as a built-in, its placement fails,
-    // and the model ends up ahead of the DOM ("drag an extension tab to
-    // another drawer → it doesn't move in the main UI / activation lands on
-    // the old drawer").
+  // The observer/store metadata can lag behind the frozen model identity.
+  // In particular, live DnD may hand us `ext:unknown/Title` while the
+  // observer still reports `extensionId: unknown`; routing that entry to the
+  // built-in path can fail to find a registry root and leave the parked main
+  // mirror as the only clickable control. The owned TabKey namespace is the
+  // authoritative kind signal when the caller supplies it.
+  const facadeKey = opts?.facadeKey ?? tab.key
+  let isExtensionTab = isExtensionKey(facadeKey)
+    || (!!tab.extensionId && tab.extensionId !== 'unknown')
+  if (!isExtensionTab || !tab.extensionId || tab.extensionId === 'unknown' || tab.tabId === tab.title) {
+    // Resolve stale addresses independently of the frozen model kind. A key
+    // like ext:unknown/Title correctly says "extension", but it does not
+    // supply the host's current live ID. The host store (fiber walk) is the
+    // source for that address; findStoreTab/getDrawerTabs can return this same
+    // stale observer entry and therefore cannot perform the upgrade.
     // unreachable (resolved above) — TS cannot narrow `tab` past the await
     if (!tab) return
     const t = tab
-    const { getHostStoreTabs } = await import('../store')
     const hostStoreTabs = getHostStoreTabs()
     const storeTab = hostStoreTabs.find((x) => x.id === tabId)
       || hostStoreTabs.find((x) => x.id === t.tabId)
@@ -682,6 +1077,10 @@ export async function assignToSecondary(
     tabId,
     tab,
     resolvedId: tab.tabId,
+    // Prefer the move intent's model key; otherwise carry the observer's
+    // frozen identity through button creation instead of re-resolving a
+    // session-specific live ID after the placement awaits.
+    facadeKey,
     iconSvg,
     shortName,
     deferActivation,

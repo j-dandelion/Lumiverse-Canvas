@@ -1065,7 +1065,8 @@ export async function placementFirstMoveByLiveId(
   try {
     const sidebar = await import('../sidebar/secondary-drawer')
     if (target === 'secondary') {
-      await sidebar.assignToSecondary(liveId)
+      const facadeKey = host.findKey(liveId)
+      await sidebar.assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined)
     } else {
       await sidebar.unassignFromSecondary(liveId)
     }
