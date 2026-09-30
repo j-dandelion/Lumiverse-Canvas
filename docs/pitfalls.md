@@ -343,6 +343,20 @@ still be `unknown`. Placement-first user moves have not updated the model yet;
 the post-mount race check must allow that original primary side and cancel only
 when an already-secondary tab moved back out during activation.
 
+**Move-back then move-again in OS mode:** a host button can remain selected
+after its panel root has left the main drawer. If `findRoot()` is empty and the
+host still reports that button as selected, selecting it again is a no-op.
+Select another visible main tab first, wait for that host selection to settle,
+then select the extension to mount its root. More fundamentally, the fiber
+hook-array scan can miss the host's `drawerTabs` entry while its button remains
+visible. `getHostStoreTabs()` must read the live Zustand API first; otherwise
+the observer keeps the title (`LumiBooks`) as its live ID instead of the
+canonical `spindle:…:tab:…` ID. The wrong ID loses the root on move-back, the
+next placement times out and rolls the model back to main, and a later click
+appears to open the tab in the opposite drawer. Both the owned-commit and
+placement-first paths check for the extension root after `assignToSecondary`;
+a resolved Promise alone does not mean DOM placement succeeded.
+
 ## 30. Resize drag cancellation must run the normal finish path
 
 The resize handle's content overlay blocks iframe pointer capture during a

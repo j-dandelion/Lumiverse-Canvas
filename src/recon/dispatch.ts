@@ -1,4 +1,4 @@
-import type { LayoutModel, TabKey, Side } from '../core/model'
+import { isExtensionKey, type LayoutModel, type TabKey, type Side } from '../core/model'
 import type { Intent } from '../core/intents'
 import { reduce, foldIntents } from '../core/reduce'
 import { sideOfKey, visibleKeys } from '../core/select'
@@ -1067,6 +1067,21 @@ export async function placementFirstMoveByLiveId(
     if (target === 'secondary') {
       const facadeKey = host.findKey(liveId)
       await sidebar.assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined)
+      if (facadeKey && isExtensionKey(facadeKey)) {
+        const { getSecondaryWrapper } = await import('../sidebar/secondary')
+        const content = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+        const rootPresent = !!content?.querySelector(
+          `[data-canvas-moved="${CSS.escape(liveId)}"]`,
+        )
+        if (!rootPresent) {
+          dwarn('[tabmove] extension placement returned without secondary root', {
+            liveId,
+            facadeKey,
+            secondaryContentFound: !!content,
+          })
+          return
+        }
+      }
     } else {
       await sidebar.unassignFromSecondary(liveId)
     }

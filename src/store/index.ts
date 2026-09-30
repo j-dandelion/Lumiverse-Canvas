@@ -201,6 +201,14 @@ export function getDrawerTabs(): DrawerTab[] {
  * authoritative pre-start (it resolved the composite id + extension kind).
  */
 export function getHostStoreTabs(): DrawerTab[] {
+  // The fiber hook-array scan can miss drawerTabs when the host subscribes
+  // through a selector. The actual Zustand API (also used for host actions)
+  // retains extension roots even while they are detached between drawers.
+  // Read it first so a second move can reuse that persistent root directly.
+  try {
+    const liveTabs = findHostStoreApi()?.getState?.()?.drawerTabs
+    if (Array.isArray(liveTabs)) return liveTabs as DrawerTab[]
+  } catch { /* fall back to the older fiber snapshot path */ }
   findStoreData(true)
   return _drawerTabsCache ? [..._drawerTabsCache] : []
 }

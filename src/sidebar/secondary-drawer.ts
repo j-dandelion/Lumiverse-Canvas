@@ -515,8 +515,46 @@ async function mountExtensionRootFromMain(
     }
     const afterOpen = readHostMainDrawerState()
     dlog('[SecondaryDrawer] host state after opening for extension activation', JSON.stringify(afterOpen))
-    if (afterOpen.tabId !== resolvedId && afterOpen.tabId !== title) {
-      targetButton.click()
+    // A tab moved back from secondary can leave the host button selected even
+    // though its panel root was removed. Selecting that same button again is
+    // a host no-op, so first select another real main tab to force the host
+    // through its normal deselect -> mount transition.
+    if (afterOpen.tabId === resolvedId || afterOpen.tabId === title) {
+      const handoffButton = findPrimaryRestoreButton(
+        resolvePrimaryActiveTabId(), resolvedId, title,
+      )
+      if (handoffButton) {
+        const handoffId = handoffButton.getAttribute('data-tab-id')
+          || handoffButton.getAttribute('title')
+          || ''
+        dlog('[SecondaryDrawer] deselecting rootless host extension before mount', JSON.stringify({
+          resolvedId,
+          handoffId,
+          wasTargetHidden,
+        }))
+        handoffButton.click()
+        await nextFrame()
+      } else {
+        dwarn('[SecondaryDrawer] rootless selected extension has no main-tab handoff', {
+          resolvedId,
+        })
+      }
+    }
+    const beforeSelect = readHostMainDrawerState()
+    if (beforeSelect.tabId !== resolvedId && beforeSelect.tabId !== title) {
+      const liveTargetButton = findMainExtensionButton(resolvedId, title)
+      dlog('[SecondaryDrawer] selecting host extension for mount', JSON.stringify({
+        resolvedId,
+        beforeSelect,
+        originalButtonConnected: targetButton.isConnected,
+        liveButtonFound: !!liveTargetButton,
+        sameButton: liveTargetButton === targetButton,
+        liveButtonDisplay: liveTargetButton?.style.display ?? null,
+      }))
+      if (liveTargetButton) {
+        if (liveTargetButton.style.display === 'none') liveTargetButton.style.display = ''
+        liveTargetButton.click()
+      }
     }
     dlog('[SecondaryDrawer] host state after selecting extension', JSON.stringify(readHostMainDrawerState()))
 

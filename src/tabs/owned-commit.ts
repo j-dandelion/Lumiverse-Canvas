@@ -12,7 +12,7 @@ import {
   type SecondaryMoveChrome,
 } from '../recon/dispatch'
 import { activeAfterRemoval, sideOfKey, visibleKeys } from '../core/select'
-import type { TabKey, Side, ObservedWorld, LayoutModel } from '../core/model'
+import { isExtensionKey, type TabKey, type Side, type ObservedWorld, type LayoutModel } from '../core/model'
 import type { LiveTabId } from '../host/port'
 import { dlog, dwarn } from '../debug/log'
 import { isModeSwitchBarrierActive } from '../settings/mode-transition'
@@ -360,6 +360,23 @@ export async function commitDraftToOwnedModel(
                   openOnClosed: false,
                   setActiveWhenReady: false,
                 })
+                if (isExtensionKey(move.key)) {
+                  const { getSecondaryWrapper } = await import('../sidebar/secondary')
+                  const { cssEscape } = await import('../tabs/buttons')
+                  const content = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+                  const rootPresent = !!content?.querySelector(
+                    `[data-canvas-moved="${cssEscape(liveId)}"]`,
+                  )
+                  if (!rootPresent) {
+                    failed.push(move.key)
+                    dwarn('[owned-commit] placement returned without secondary root', {
+                      key: move.key,
+                      liveId,
+                      secondaryContentFound: !!content,
+                    })
+                    continue
+                  }
+                }
               } else {
                 await drawer.unassignFromSecondary(liveId)
               }

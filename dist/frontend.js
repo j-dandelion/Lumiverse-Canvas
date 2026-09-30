@@ -2080,6 +2080,51 @@ var init_animation = __esm(() => {
   _livePanelWrappers = new Set;
 });
 
+// src/core/model.ts
+function builtinKey(id) {
+  return `${BUILTIN_PREFIX}${id}`;
+}
+function extensionKey(extensionId, tabName) {
+  return `${EXT_PREFIX}${extensionId}/${tabName}`;
+}
+function isBuiltinKey(key) {
+  return key.startsWith(BUILTIN_PREFIX);
+}
+function isExtensionKey(key) {
+  return key.startsWith(EXT_PREFIX);
+}
+function parseBuiltinKey(key) {
+  if (!isBuiltinKey(key))
+    return null;
+  return key.slice(BUILTIN_PREFIX.length);
+}
+function parseExtensionKey(key) {
+  if (!isExtensionKey(key))
+    return null;
+  const rest = key.slice(EXT_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash === -1)
+    return null;
+  return { extensionId: rest.slice(0, slash), tabName: rest.slice(slash + 1) };
+}
+function createEmptyModel(side = "left") {
+  return {
+    version: 2,
+    primary: [],
+    secondary: [],
+    hidden: [],
+    menuHidden: [],
+    closed: [],
+    active: { primary: null, secondary: null },
+    drawers: {
+      primary: { open: false, width: 420 },
+      secondary: { open: false, width: 420 }
+    },
+    side
+  };
+}
+var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
+
 // src/core/select.ts
 function listForSide(model, side) {
   return side === "primary" ? model.primary : model.secondary;
@@ -2795,51 +2840,6 @@ var init_reconcile = __esm(() => {
   init_log();
   init_active_tab();
 });
-
-// src/core/model.ts
-function builtinKey(id) {
-  return `${BUILTIN_PREFIX}${id}`;
-}
-function extensionKey(extensionId, tabName) {
-  return `${EXT_PREFIX}${extensionId}/${tabName}`;
-}
-function isBuiltinKey(key) {
-  return key.startsWith(BUILTIN_PREFIX);
-}
-function isExtensionKey(key) {
-  return key.startsWith(EXT_PREFIX);
-}
-function parseBuiltinKey(key) {
-  if (!isBuiltinKey(key))
-    return null;
-  return key.slice(BUILTIN_PREFIX.length);
-}
-function parseExtensionKey(key) {
-  if (!isExtensionKey(key))
-    return null;
-  const rest = key.slice(EXT_PREFIX.length);
-  const slash = rest.indexOf("/");
-  if (slash === -1)
-    return null;
-  return { extensionId: rest.slice(0, slash), tabName: rest.slice(slash + 1) };
-}
-function createEmptyModel(side = "left") {
-  return {
-    version: 2,
-    primary: [],
-    secondary: [],
-    hidden: [],
-    menuHidden: [],
-    closed: [],
-    active: { primary: null, secondary: null },
-    drawers: {
-      primary: { open: false, width: 420 },
-      secondary: { open: false, width: 420 }
-    },
-    side
-  };
-}
-var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
 
 // src/persist/tab-id-heal.ts
 function stripTabIdSuffix(id) {
@@ -5265,8 +5265,39 @@ async function mountExtensionRootFromMain(args) {
     }
     const afterOpen = readHostMainDrawerState();
     dlog("[SecondaryDrawer] host state after opening for extension activation", JSON.stringify(afterOpen));
-    if (afterOpen.tabId !== resolvedId && afterOpen.tabId !== title) {
-      targetButton.click();
+    if (afterOpen.tabId === resolvedId || afterOpen.tabId === title) {
+      const handoffButton = findPrimaryRestoreButton(resolvePrimaryActiveTabId(), resolvedId, title);
+      if (handoffButton) {
+        const handoffId = handoffButton.getAttribute("data-tab-id") || handoffButton.getAttribute("title") || "";
+        dlog("[SecondaryDrawer] deselecting rootless host extension before mount", JSON.stringify({
+          resolvedId,
+          handoffId,
+          wasTargetHidden
+        }));
+        handoffButton.click();
+        await nextFrame();
+      } else {
+        dwarn("[SecondaryDrawer] rootless selected extension has no main-tab handoff", {
+          resolvedId
+        });
+      }
+    }
+    const beforeSelect = readHostMainDrawerState();
+    if (beforeSelect.tabId !== resolvedId && beforeSelect.tabId !== title) {
+      const liveTargetButton = findMainExtensionButton(resolvedId, title);
+      dlog("[SecondaryDrawer] selecting host extension for mount", JSON.stringify({
+        resolvedId,
+        beforeSelect,
+        originalButtonConnected: targetButton.isConnected,
+        liveButtonFound: !!liveTargetButton,
+        sameButton: liveTargetButton === targetButton,
+        liveButtonDisplay: liveTargetButton?.style.display ?? null
+      }));
+      if (liveTargetButton) {
+        if (liveTargetButton.style.display === "none")
+          liveTargetButton.style.display = "";
+        liveTargetButton.click();
+      }
     }
     dlog("[SecondaryDrawer] host state after selecting extension", JSON.stringify(readHostMainDrawerState()));
     const deadline = Date.now() + 2500;
@@ -12099,6 +12130,21 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
                   openOnClosed: false,
                   setActiveWhenReady: false
                 });
+                if (isExtensionKey(move.key)) {
+                  await Promise.resolve().then(() => init_secondary());
+                  await Promise.resolve().then(() => init_buttons());
+                  const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+                  const rootPresent = !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
+                  if (!rootPresent) {
+                    failed.push(move.key);
+                    dwarn("[owned-commit] placement returned without secondary root", {
+                      key: move.key,
+                      liveId,
+                      secondaryContentFound: !!content
+                    });
+                    continue;
+                  }
+                }
               } else {
                 await unassignFromSecondary(liveId);
               }
@@ -15479,6 +15525,19 @@ async function placementFirstMoveByLiveId(liveId, target) {
     if (target === "secondary") {
       const facadeKey = host.findKey(liveId);
       await assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined);
+      if (facadeKey && isExtensionKey(facadeKey)) {
+        await Promise.resolve().then(() => init_secondary());
+        const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+        const rootPresent = !!content?.querySelector(`[data-canvas-moved="${CSS.escape(liveId)}"]`);
+        if (!rootPresent) {
+          dwarn("[tabmove] extension placement returned without secondary root", {
+            liveId,
+            facadeKey,
+            secondaryContentFound: !!content
+          });
+          return;
+        }
+      }
     } else {
       await unassignFromSecondary(liveId);
     }
@@ -18722,6 +18781,11 @@ function getDrawerTabs() {
   return [];
 }
 function getHostStoreTabs() {
+  try {
+    const liveTabs = findHostStoreApi()?.getState?.()?.drawerTabs;
+    if (Array.isArray(liveTabs))
+      return liveTabs;
+  } catch {}
   findStoreData(true);
   return _drawerTabsCache ? [..._drawerTabsCache] : [];
 }
