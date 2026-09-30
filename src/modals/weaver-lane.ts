@@ -26,7 +26,7 @@ import { publishContentLaneInsets } from '../chat/reflow'
 import { injectStyles } from '../debug/styles'
 import { dwarn } from '../debug/log'
 import { TAB_LIST_WIDTH_PX } from '../sidebar/styles'
-import { isTaskbarModeEnabled } from '../settings/state'
+import { isHorizontalStrip, isTaskbarModeEnabled } from '../settings/state'
 import { computeStripGutters } from '../sidebar/strip-gutter'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
 
@@ -209,16 +209,28 @@ function clearWeaverInsetVars(): void {
   root.style.removeProperty(WEAVER_INSET_R_VAR)
 }
 
+export interface WeaverStripInsets {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
 /**
- * Live pin-host widths only (static taskbar strips). Ignores open drawers.
+ * Live pin-host insets only (static taskbar strips). Ignores open drawers.
  * Cap each side at a reasonable strip width so a mis-measured host cannot
  * collapse the studio.
+ *
+ * S8: horizontal hosts are measured as TOP/BOTTOM insets (skipped for L/R);
+ * vertical hosts keep the classic left/right measurement.
  */
-function measurePinStripInsets(): { left: number; right: number } {
+function measurePinStripInsets(): WeaverStripInsets {
   let left = 0
   let right = 0
+  let top = 0
+  let bottom = 0
   if (typeof document === 'undefined' || typeof window === 'undefined') {
-    return { left, right }
+    return { left, right, top, bottom }
   }
 
   const vw = document.documentElement.clientWidth || window.innerWidth || 0
@@ -228,38 +240,55 @@ function measurePinStripInsets(): { left: number; right: number } {
   for (const el of document.querySelectorAll<HTMLElement>(PIN_HOST_SEL)) {
     const style = window.getComputedStyle?.(el)
     if (style && (style.display === 'none' || style.visibility === 'hidden')) continue
-    const w = el.offsetWidth
-    if (w < 8) continue
     const rect = el.getBoundingClientRect()
     if (rect.width < 1 || rect.height < 1) continue
+
+    if (el.getAttribute?.('data-strip-axis') === 'horizontal') {
+      const edge = el.getAttribute?.('data-strip-edge')
+      const h = Math.min(el.offsetHeight || rect.height, cap)
+      if (edge === 'top') top = Math.max(top, h)
+      else if (edge === 'bottom') bottom = Math.max(bottom, h)
+      continue
+    }
+
+    const w = el.offsetWidth
+    if (w < 8) continue
     const mid = rect.left + rect.width / 2
     const strip = Math.min(w, cap)
     if (mid < vw / 2) left = Math.max(left, strip)
     else right = Math.max(right, strip)
   }
 
-  return { left, right }
+  return { left, right, top, bottom }
 }
 
 /**
  * Strip-only insets for Weaver. Open-drawer widths are intentionally excluded.
- * Taskbar off or mobile → {0,0}.
+ * Sides-mobile / taskbar-off → all zero. S8: horizontal strips measure on
+ * mobile too (they are pinned there), and produce top/bottom insets.
  */
-export function computeWeaverStripInsets(): { left: number; right: number } {
-  if (typeof document === 'undefined') return { left: 0, right: 0 }
-  if (isMobileViewport()) return { left: 0, right: 0 }
-  if (!isTaskbarModeEnabled()) return { left: 0, right: 0 }
+export function computeWeaverStripInsets(): WeaverStripInsets {
+  const zero = { left: 0, right: 0, top: 0, bottom: 0 }
+  if (typeof document === 'undefined') return zero
+  // Sides-mobile keeps the S6 no-op; horizontal mobile measures.
+  if (isMobileViewport() && !isHorizontalStrip()) return zero
+  if (!isTaskbarModeEnabled()) return zero
 
+  const horizontal = isHorizontalStrip()
   let gutters = { left: 0, right: 0 }
-  try {
-    gutters = computeStripGutters()
-  } catch (err) {
-    dwarn('[weaver-lane] computeStripGutters failed:', err)
+  if (!horizontal) {
+    try {
+      gutters = computeStripGutters()
+    } catch (err) {
+      dwarn('[weaver-lane] computeStripGutters failed:', err)
+    }
   }
   const live = measurePinStripInsets()
   return {
     left: Math.max(gutters.left, live.left),
     right: Math.max(gutters.right, live.right),
+    top: live.top,
+    bottom: live.bottom,
   }
 }
 
@@ -275,8 +304,9 @@ function applyLaneGeometry(dialog: HTMLElement): void {
 
   setImportant(dialog, 'position', 'fixed')
   setImportant(dialog, 'inset', 'unset')
-  setImportant(dialog, 'top', '0px')
-  setImportant(dialog, 'bottom', '0px')
+  // S8: horizontal strips reserve the top/bottom edge for the lane.
+  setImportant(dialog, 'top', `${insets.top}px`)
+  setImportant(dialog, 'bottom', `${insets.bottom}px`)
   setImportant(dialog, 'left', `${insets.left}px`)
   setImportant(dialog, 'right', `${insets.right}px`)
   setImportant(dialog, 'width', 'auto')

@@ -248,6 +248,37 @@ assert(blob?.singleLayout != null, 'persisted blob embeds the singleLayout slot 
 assert(Array.isArray(blob?.dualLayout?.detachedTabs) && blob.dualLayout.detachedTabs.length === 1, 'persisted dualLayout carries the detached tabs')
 assertEqual(blob?.dualLayout?.detachedTabs[0]?.tabId, 'h:loom', 'persisted dualLayout detached tabs are live ids')
 
+// ══ Phase 4: intentional-empty dual live (user moved every secondary tab
+// out) — the stored slot must be preserved ══
+//
+// The live model is dual-shaped but has zero secondary tabs, so the disable
+// snapshot is zero-tab. The H4 guard keeps the non-empty stored dual slot
+// instead of overwriting it with an empty one — the same branch that
+// protects the boot anomaly. Intentional-empty losing the "all moved out"
+// state on disable is the accepted trade-off (commit body notes it).
+shutdown()
+const host3 = makeHost()
+bootstrap({
+  ...createEmptyModel(),
+  primary: [PROFILE, REGEX, LOOM],
+  secondary: [],
+  active: { primary: PROFILE, secondary: null },
+}, host3, 'test-version')
+await flush()
+await sleep(10)
+
+const storedBefore = getDualLayoutSlot()
+assert(storedBefore != null, 'intentional-empty setup: stored dual slot present')
+assertEqual(storedBefore.detachedTabs.length, 1, 'intentional-empty setup: stored slot non-empty')
+
+writes.length = 0
+await requestSecondDrawerMode(false)
+await flush()
+await sleep(10)
+
+assert(getDualLayoutSlot() === storedBefore, 'intentional-empty dual live preserves the stored dual slot (same object)')
+assertEqual(getDualLayoutSlot().detachedTabs.length, 1, 'preserved slot still has its 1 detached tab')
+
 // ── Summary ──
 console.log(`PASS: ${passed}`)
 console.log(`FAILED: ${failed}`)

@@ -2,13 +2,11 @@
 //
 // This drives the REAL backend module in a worker-like environment: the
 // `spindle` global is stubbed with an in-memory storage that mirrors the
-// host contract EXACTLY — `storage.read` REJECTS with `Error: File not
-// found` when the key is missing (worker-host-storage-api.ts
-// handleStorageRead → fail). The regression: the 08-16 persistence rewrite
-// dropped the try/catch around `spindle.storage.read` in `readJsonFile`, so a
-// missing file surfaced as `{status:'error'}` instead of `{status:'empty'}`
-// → the frontend never armed the persistence repos → settings/layout were
-// never saved on a fresh install → every refresh reset Canvas settings.
+// host contract — `storage.read` REJECTS with `Error: File not found` when
+// the key is missing (worker-host-storage-api.ts handleStorageRead → fail)
+// and can return either a string or `{ data: string }`. Missing files must
+// stay distinct from other read failures so the frontend write fence protects
+// existing files after a transient storage or IPC error.
 
 let passed = 0
 let failed = 0
@@ -81,6 +79,51 @@ async function main(): Promise<void> {
   await dispatch({ type: 'LOAD_LAYOUT' })
   assertEqual(lastSent('LAYOUT_DATA')?.result?.status, 'empty', 'B1b missing layout.json → status empty')
 
+  // B1c — a non-missing read rejection must surface as an error, preserving
+  // the existing bytes instead of treating the file as absent.
+  {
+    const storage = (globalThis as any).spindle.storage
+    const originalRead = storage.read
+    const original = JSON.stringify({ version: 2, marker: 'keep-existing-layout' })
+    mem.clear(); written.length = 0; sent.length = 0
+    mem.set('layout.json', original)
+    storage.read = async (key: string) => {
+      if (key === 'layout.json') throw new Error('temporary storage failure')
+      return originalRead(key)
+    }
+    try {
+      await dispatch({ type: 'LOAD_LAYOUT' })
+      const result = lastSent('LAYOUT_DATA')?.result
+      assertEqual(result?.status, 'error', 'B1c read failure → status error')
+      assertEqual(result?.reason, 'read failed: temporary storage failure', 'B1c read failure is reported')
+      assertEqual(mem.get('layout.json'), original, 'B1c existing layout bytes remain unchanged')
+      assertEqual(written.length, 0, 'B1c read failure writes nothing')
+    } finally {
+      storage.read = originalRead
+    }
+  }
+
+  // B1d — accept the wrapper-shaped storage payload as readable JSON.
+  {
+    const storage = (globalThis as any).spindle.storage
+    const originalRead = storage.read
+    const wrappedLayout = JSON.stringify({ version: 2, marker: 'wrapped-read' })
+    mem.clear(); written.length = 0; sent.length = 0
+    mem.set('layout.json', wrappedLayout)
+    storage.read = async (key: string) => {
+      const value = await originalRead(key)
+      return { data: value }
+    }
+    try {
+      await dispatch({ type: 'LOAD_LAYOUT' })
+      const result = lastSent('LAYOUT_DATA')?.result
+      assertEqual(result?.status, 'ok', 'B1d wrapper-shaped read → status ok')
+      assertEqual(result?.data?.marker, 'wrapped-read', 'B1d wrapper payload is parsed')
+    } finally {
+      storage.read = originalRead
+    }
+  }
+
   // B2 — fresh-install regression: save → reload round-trips through disk.
   mem.clear(); written.length = 0; sent.length = 0
   await dispatch({ type: 'SAVE_SETTINGS', settings: { version: 2, settings: { debugMode: true } }, saveId: 7 })
@@ -123,6 +166,32 @@ async function main(): Promise<void> {
   await dispatch({ type: 'LOAD_LAYOUT' })
   assertEqual(lastSent('LAYOUT_DATA')?.result?.status, 'error', 'B4d corrupt layout.json → status error')
   assert([...mem.keys()].some((k) => k.startsWith('layout.corrupt-')), 'B4e corrupt layout preserved under .corrupt- key')
+
+  // B5 — a storage failure must ack {status:'error'}, not ok. The old
+  // saveLayout/saveSettings caught and logged, so the chained `.then` always
+  // acked ok and the frontend's reliability layer never retried (review B2).
+  mem.clear(); written.length = 0; sent.length = 0
+  const storage = (globalThis as any).spindle.storage
+  const origWrite = storage.write
+  storage.write = async () => { throw new Error('disk full') }
+  try {
+    await dispatch({ type: 'SAVE_LAYOUT', layout: { version: 2, drawerSide: 'left' }, saveId: 11 })
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.saveId, 11, 'B5a failed layout save result carries saveId')
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'error', 'B5b failed layout write → status error')
+
+    await dispatch({ type: 'SAVE_SETTINGS', settings: { version: 2, settings: {} }, saveId: 12 })
+    assertEqual(lastSent('SAVE_SETTINGS_RESULT')?.result?.status, 'error', 'B5c failed settings write → status error')
+
+    // Invalid payloads are programmer errors, not silent successes.
+    await dispatch({ type: 'SAVE_LAYOUT', saveId: 13 })
+    assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'error', 'B5d invalid layout payload → status error')
+  } finally {
+    storage.write = origWrite
+  }
+  // The queue must stay usable after a failure.
+  await dispatch({ type: 'SAVE_LAYOUT', layout: { version: 2, drawerSide: 'right' }, saveId: 14 })
+  assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.result?.status, 'ok', 'B5e queue recovers after a failed save')
+  assertEqual(lastSent('SAVE_LAYOUT_RESULT')?.saveId, 14, 'B5f recovery ack correlates saveId')
 
   console.log(`persist/backend-ipc: ${passed} passed, ${failed} failed`)
   if (failed > 0) {

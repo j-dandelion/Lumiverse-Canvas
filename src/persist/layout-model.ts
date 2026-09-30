@@ -21,6 +21,16 @@ export interface LegacyLayout {
   detachedTabs?: StoredTab[]
   tabOrder?: string[]
   hiddenTabIds?: string[]
+  /** START-MENU-only hidden set (LUMI-16b) — live tab ids resolved from the
+   *  model's `menuHidden` TabKeys. Meaningful only while OS mode is on (the
+   *  Start menu is OS chrome); non-OS serializations drop it like
+   *  `closedTabIds`, and older layouts without the field hydrate an empty
+   *  set. Consumed ONLY by the Start-menu projections — never by strips. */
+  menuHiddenTabIds?: string[]
+  /** OS-mode closed-set — live tab ids (resolved from the model's closed
+   *  TabKeys). Present in the active serialization and the OS slots; the
+   *  non-OS slots carry it only as an empty array while OS is off. */
+  closedTabIds?: string[]
   drawerSide?: 'left' | 'right'
 }
 
@@ -95,6 +105,28 @@ export function buildModelFromLayout(
     }
   }
 
+  // START-MENU-only hidden set (LUMI-16b) → menuHidden TabKeys. Same healing
+  // rules as the hidden set (unresolvable ids are dropped). Strip surfaces
+  // never read this set.
+  const menuHidden: TabKey[] = []
+  for (const storedId of (layout.menuHiddenTabIds ?? [])) {
+    const key = resolveStoredId(storedId, findKey)
+    if (key && (primary.includes(key) || secondary.includes(key)) && !menuHidden.includes(key)) {
+      menuHidden.push(key)
+    }
+  }
+
+  // OS-mode closed-set (spec §3.3) → closed TabKeys. Unresolvable ids are
+  // dropped (GC at boot — spec §3.4: ghosts of deleted/renamed tabs never
+  // survive a restore pass). Same healing rules as the hidden set.
+  const closed: TabKey[] = []
+  for (const storedId of (layout.closedTabIds ?? [])) {
+    const key = resolveStoredId(storedId, findKey)
+    if (key && (primary.includes(key) || secondary.includes(key)) && !closed.includes(key)) {
+      closed.push(key)
+    }
+  }
+
   // Active tabs
   const activePrimaryCandidate = layout.primary?.tabId
     ? resolveStoredId(layout.primary.tabId, findKey)
@@ -102,10 +134,10 @@ export function buildModelFromLayout(
   const activeSecondaryCandidate = layout.secondary?.activeTabId
     ? resolveStoredId(layout.secondary.activeTabId, findKey)
     : null
-  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate)
+  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate) && !closed.includes(activePrimaryCandidate)
     ? activePrimaryCandidate
     : null
-  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate)
+  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate) && !closed.includes(activeSecondaryCandidate)
     ? activeSecondaryCandidate
     : null
 
@@ -120,6 +152,8 @@ export function buildModelFromLayout(
     primary,
     secondary,
     hidden,
+    menuHidden,
+    closed,
     active: {
       primary: activePrimary ?? null,
       secondary: activeSecondary ?? null,
@@ -130,6 +164,123 @@ export function buildModelFromLayout(
     },
     side: layout.drawerSide ?? side ?? 'left',
   }
+}
+
+/**
+ * Serialize the model as a SINGLE-drawer layout regardless of the model's
+ * shape. When the model still holds secondary tabs (the documented
+ * disable-fallback state: the drawer is off but a dual-shaped model was
+ * booted from a dual top-level blob), every secondary key is folded into
+ * the primary order (primary-then-secondary), detachedTabs is emptied, and
+ * the secondary drawer state is neutral. Hidden set, primary geometry and
+ * side are preserved — a single-mode "what the user would see if the
+ * second drawer were off" projection.
+ */
+export function serializeModelToSingleLayout(
+  model: LayoutModel,
+  resolve: (key: TabKey) => string | null,
+  version: string,
+): LegacyLayout {
+  return {
+    version,
+    primary: {
+      open: model.drawers.primary.open,
+      width: model.drawers.primary.width,
+      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined,
+    },
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    // Fold: secondary keys appended after the primary keys, serialized as
+    // live ids exactly like a dual serialization's tabOrder.
+    tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
+    hiddenTabIds: model.hidden.map(key => resolve(key)).filter(Boolean) as string[],
+    menuHiddenTabIds: model.menuHidden.map(key => resolve(key)).filter(Boolean) as string[],
+    closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
+    drawerSide: model.side,
+  }
+}
+
+/**
+ * Fold a raw serialization into SINGLE shape (deep-review M1): a slot named
+ * "single" must never carry `detachedTabs` — restoring a dual-shaped blob
+ * from `osSingleLayout` rebuilds a dual model under
+ * `secondSidebarEnabled: false`, stranding tabs in `model.secondary` with no
+ * shell and contaminating later persist routing. Secondary entries fold into
+ * `tabOrder` (appended after the existing ids when a stale/old bundle left
+ * them out — `buildModelFromLayout` tolerates that asymmetry, a single
+ * restore cannot), `detachedTabs` empties, and the secondary drawer state
+ * neutralizes — the same projection `serializeModelToSingleLayout` performs
+ * from the model. Hidden set, closed set, primary geometry and side are
+ * preserved.
+ */
+export function foldLayoutToSingleShape(layout: LegacyLayout): LegacyLayout {
+  const detached = layout.detachedTabs ?? []
+  const order = Array.isArray(layout.tabOrder) ? [...layout.tabOrder] : []
+  for (const d of detached) {
+    const id = d?.tabId
+    if (id && !order.includes(id)) order.push(id)
+  }
+  return {
+    ...layout,
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: order,
+  }
+}
+
+/**
+ * True when a layout blob/profile carries at least one tab — either shape:
+ * a single layout lists ids in `tabOrder` (detachedTabs: []), a dual layout
+ * lists entries in `detachedTabs`. Used by the mode-switch and boot-recovery
+ * restore gates ("restore only a slot that has content; an absent/empty slot
+ * means seed from live" — os-mode D11, mode-profiles fallbacks).
+ *
+ * Lives here (a leaf module) rather than layout/snapshot: three test files
+ * mock `layout/snapshot` with under-populated shapes, and Bun throws
+ * `SyntaxError: Export named 'X' not found` when a mocked module lacks a
+ * named export the real module statically imports.
+ */
+export function layoutHasTabs(
+  layout: { tabOrder?: unknown; detachedTabs?: unknown } | null | undefined,
+): boolean {
+  if (!layout) return false
+  return (
+    (Array.isArray(layout.tabOrder) && layout.tabOrder.length > 0) ||
+    (Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0)
+  )
+}
+
+/**
+ * True when at least one id stored in the slot resolves against the host.
+ * Guards the mode-switch restores: a slot whose ids were all renamed/deleted
+ * (or never tagged) must NOT replace a live model with an empty one —
+ * bootstrapFromLayout would then arm a pending restore that suppresses host
+ * adoption for the 30s retry window. Callers fall back to seeding from live
+ * instead. `resolveTitle` (optional) lets dual slots test the authoritative
+ * `tabTitle` key alongside the live-id `tabId`.
+ */
+export function slotResolves(
+  slot: { tabOrder?: unknown; detachedTabs?: unknown } | null | undefined,
+  findKey: (id: string) => string | null,
+): boolean {
+  if (!slot) return false
+  const ids: string[] = []
+  if (Array.isArray(slot.tabOrder)) {
+    for (const id of slot.tabOrder) if (typeof id === 'string') ids.push(id)
+  }
+  if (Array.isArray(slot.detachedTabs)) {
+    for (const tab of slot.detachedTabs) {
+      if (tab && typeof tab === 'object') {
+        const t = tab as { tabId?: unknown; tabTitle?: unknown }
+        if (typeof t.tabId === 'string') ids.push(t.tabId)
+        if (typeof t.tabTitle === 'string') ids.push(t.tabTitle)
+      }
+    }
+  }
+  for (const id of ids) {
+    if (findKey(id)) return true
+  }
+  return false
 }
 
 /**
@@ -188,6 +339,8 @@ export function serializeModelToLayout(
     detachedTabs,
     tabOrder,
     hiddenTabIds,
+    menuHiddenTabIds: model.menuHidden.map(key => resolve(key)).filter(Boolean) as string[],
+    closedTabIds: model.closed.map(key => resolve(key)).filter(Boolean) as string[],
     drawerSide: model.side,
   }
 }

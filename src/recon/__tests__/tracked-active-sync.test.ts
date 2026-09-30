@@ -146,51 +146,13 @@ async function testSecondarySetterSync() {
 }
 
 // ============================================================================
-// T2 — the main-mirror activeKey write (taskbar) converges the primary side
+// T2 — REMOVED (S2): the old "main-mirror activeKey write (taskbar) converges
+// the primary side" scenario relied on the deleted parity layer
+// (`__setMainTabPinEnabledForTest` / `adoptMainMirrorHostActivation`). In the
+// model era, mirror clicks dispatch `dispatchActivateByLiveId`
+// (main-renderer) and the renderer renders model.active directly; trailing
+// coalescing is covered by tracked-sync-trailing.test.ts.
 // ============================================================================
-async function testMirrorKeySync() {
-  const host = dualHost()
-  shutdown()
-  bootstrap(dualModel(), host)
-  await flush()
-
-  const {
-    __setMainTabPinEnabledForTest,
-    __resetMainTabPinForTest,
-    adoptMainMirrorHostActivation,
-  } = await import('../../sidebar/main-tab-pin')
-  __setMainTabPinEnabledForTest(true)
-
-  // User clicks the PRESETS mirror button (host twin carries data-tab-id).
-  // The commitState activeKey write fires the unified sync.
-  const hostBtn = {
-    isConnected: true,
-    getAttribute: (k: string) => (k === 'data-tab-id' ? 'presets' : 'Presets'),
-  } as unknown as HTMLElement
-  adoptMainMirrorHostActivation(hostBtn, 'Presets')
-  await settle()
-
-  const after = getModel()
-  assert(after != null, 'T2a: model present')
-  if (after) {
-    assertEqual(after.active.primary, PRESETS, 'T2b: mirror tracked active adopted into primary')
-    assertEqual(after.active.secondary, A, 'T2c: secondary tracked active kept')
-
-    // The persisted layout must carry the CLICKED mirror tab.
-    const blob = serializeModelToLayout(after, (k) => host.resolve(k), 'test-v1.0')
-    assertEqual(blob.primary!.tabId, 'presets', 'T2d: persisted primary active follows the mirror click')
-    assertEqual(blob.secondary!.activeTabId, 'h:a', 'T2e: persisted secondary active unchanged')
-  }
-
-  // Same-key write (restore echo): no redundant round.
-  const ref = getModel()
-  adoptMainMirrorHostActivation(hostBtn, 'Presets')
-  await settle()
-  assert(getModel() === ref, 'T2f: same-key mirror write keeps the model reference')
-
-  __resetMainTabPinForTest()
-  shutdown()
-}
 
 // ============================================================================
 // T3 — Configure Tabs composes with the unified sync (no revert fight)
@@ -297,7 +259,6 @@ async function testSideFlipComposesWithSync() {
 }
 
 await testSecondarySetterSync()
-await testMirrorKeySync()
 await testConfigureBatchComposesWithSync()
 await testSideFlipComposesWithSync()
 

@@ -23,8 +23,9 @@
 // every pointermove (cheap compositor work). Hit-test, DOM reorder, and
 // FLIP animation are coalesced via requestAnimationFrame.
 //
-// Requires taskbar mode (settings-gated): primary mid-drag surface is
-// main-mirror only. Reorderable lists get mid-drag FLIP: secondary
+// Taskbar-agnostic (S7: toggle-only gate — the Canvas main shell is always
+// mounted, so main-mirror is always the primary mid-drag surface).
+// Reorderable lists get mid-drag FLIP: secondary
 // .sidebar-ux-tab-list and main-mirror .sidebar-ux-tab-list-main. Commit
 // uses visible-index helpers so hidden tabs do not make primary reorder a
 // no-op; hit-test + mid-drag also skip display:none so settle DOM matches
@@ -74,7 +75,9 @@ import {
   showMainTabButton,
   buttonTabId,
 } from './buttons'
+import { appendSecondaryTabNode, getSecondaryStartDock } from './secondary-start-dock'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { isPointerResizeActive } from '../resize/handles'
 import { dlog, dwarn } from '../debug/log'
 import {
   readLivePrimaryTabIds,
@@ -82,11 +85,15 @@ import {
 } from './live-tab-order'
 
 /**
- * Live drawer tab-list DnD is desktop-only.
+ * Live drawer tab-list DnD is fine-pointer desktop only.
  * Configure Tabs modal drag is separate and remains available on mobile.
+ *
+ * S8: ≤600px AND coarse-pointer devices (tablets/touch) are no-ops — the
+ * same policy as resize handles (isPointerResizeActive), and consistent
+ * with the "mobile DnD off" decision. Fine-pointer desktop is supported.
  */
 export function isLiveTabListDndAllowed(): boolean {
-  return !isMobileViewport()
+  return !isMobileViewport() && !isPointerResizeActive()
 }
 
 /**
@@ -167,6 +174,20 @@ let _clickSuppressorEl: HTMLElement | null = null
 let _docClickSuppressor: ((e: Event) => void) | null = null
 let _clickSuppressorTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * Capture-phase contextmenu suppressor installed for the drag's lifetime.
+ * It is otherwise removed only in onUp, so a teardown mid-drag (extension
+ * disable / DnD toggle-off) left the whole page's right-click suppressed
+ * (review batch 3). Stored module-level so teardown can always remove it.
+ */
+let _dragContextMenuSuppressor: ((e: Event) => void) | null = null
+
+function removeDragContextMenuSuppressor(): void {
+  if (!_dragContextMenuSuppressor) return
+  document.removeEventListener('contextmenu', _dragContextMenuSuppressor, true)
+  _dragContextMenuSuppressor = null
+}
+
 // ── rAF-coalesced drag-frame state ──
 
 let _rafId: number | null = null
@@ -183,12 +204,111 @@ const SETTLE_MIN_DISTANCE_PX = 2
 
 // ── Geometry cache (rebuilt each rAF, invalidated on DOM reorder) ──
 
+/** S8: drag axis of a container. 'x' = horizontal strip, 'y' = vertical. */
+export type DndAxis = 'x' | 'y'
+
 interface ContainerCache {
-  containers: { el: HTMLElement; secondary: boolean }[]
+  containers: { el: HTMLElement; secondary: boolean; axis: DndAxis }[]
 }
 let _geometryCache: ContainerCache | null = null
 /** True after a DOM reorder — next rAF must rebuild cache. */
 let _geomDirty = false
+
+/**
+ * S8 axis resolution — TOKEN FIRST (data-strip-axis on the element or the
+ * nearest ancestor, written by the single geometry writer). The horizontal
+ * list class token is a secondary hint; computed style is only a guarded
+ * fallback (hand-rolled test harnesses / detached elements have no layout).
+ */
+export function containerAxis(el: HTMLElement | null | undefined): DndAxis {
+  if (!el) return 'y'
+
+  // 1. Token on the element or nearest ancestor (main section → list → host).
+  let cur: HTMLElement | null = el
+  while (cur) {
+    const axis = cur.getAttribute?.('data-strip-axis')
+    if (axis === 'horizontal') return 'x'
+    if (axis === 'vertical') return 'y'
+    cur = cur.parentElement
+  }
+
+  // 2. Horizontal list class token (legacy/partially-chromed nodes).
+  if (
+    el.classList?.contains?.('sidebar-ux-tab-list--pinned') ||
+    el.classList?.contains?.(MIRROR_MAIN_CLASS) ||
+    el.classList?.contains?.(MIRROR_BOTTOM_CLASS)
+  ) {
+    // Only trust the class when an ancestor actually declares a horizontal
+    // axis — otherwise a vertical pinned list would be misread as a row.
+    let p: HTMLElement | null = el.parentElement
+    while (p) {
+      if (p.getAttribute?.('data-strip-axis') === 'horizontal') return 'x'
+      p = p.parentElement
+    }
+  }
+
+  // 3. Guarded computed-style fallback (never the primary signal).
+  try {
+    if (typeof getComputedStyle === 'function') {
+      const fd = getComputedStyle(el).flexDirection
+      if (typeof fd === 'string' && fd.includes('row')) return 'x'
+    }
+  } catch {
+    /* detached / stub environment — fall through */
+  }
+
+  return 'y'
+}
+
+/** Axis coordinate of a midpoint (pure, unit-tested). */
+export function axisMidpoint(
+  rect: { left: number; top: number; width: number; height: number },
+  axis: DndAxis,
+): number {
+  return axis === 'x' ? rect.left + rect.width / 2 : rect.top + rect.height / 2
+}
+
+/** Axis coordinate of the floating-tab hit geometry (pure, unit-tested). */
+export function axisCoordinate(
+  geom: { centerX: number; centerY: number },
+  axis: DndAxis,
+): number {
+  return axis === 'x' ? geom.centerX : geom.centerY
+}
+
+/**
+ * S8 seam comparator for adjacent horizontal zones (pure, unit-tested).
+ * The Settings dock makes the main section narrower than its zone, so
+ * nearest-center is not the seam: use the zone-edge boundary. Exact tie →
+ * the right-hand (secondary) zone, deterministic.
+ */
+export function seamChoice(
+  centerX: number,
+  leftRect: { right: number },
+  rightRect: { left: number },
+): 'left' | 'right' {
+  const boundary = (leftRect.right + rightRect.left) / 2
+  return centerX < boundary ? 'left' : 'right'
+}
+
+/** FLIP invert delta (pure, unit-tested). */
+export function flipDelta(
+  prev: { left: number; top: number },
+  curr: { left: number; top: number },
+): { dx: number; dy: number } {
+  return { dx: prev.left - curr.left, dy: prev.top - curr.top }
+}
+
+/** S8: invalidate cached container geometry (reconcile / viewport cross). */
+export function invalidateDndGeometry(): void {
+  _geometryCache = null
+  _geomDirty = true
+}
+
+/** True while a live drag is in progress (invalidation call sites). */
+export function isDndDragActive(): boolean {
+  return _drag.phase === 'dragging'
+}
 
 /** Insert indicator element (insert-before-highlight). */
 let _insertIndicatorEl: HTMLElement | null = null
@@ -385,7 +505,7 @@ function getButtonTabId(btn: HTMLElement): string | null {
 
 /**
  * True when the container is eligible for mid-drag FLIP reorder.
- * Secondary list + mirror main/bottom sections only (taskbar mode required).
+ * Secondary list + mirror main/bottom sections only.
  */
 function isReorderableContainer(el: HTMLElement): boolean {
   if (el.classList.contains(MIRROR_MAIN_CLASS)) return true
@@ -421,19 +541,21 @@ function getReorderParent(btn: HTMLElement): HTMLElement | null {
  * Collect all potential drop containers and their side.
  * Mirror uses main/bottom *sections* (where buttons actually live) so
  * hit-test and insertBefore stay within the correct flex column.
- * Host React `.tabList` is not a mid-drag surface (taskbar mode required;
- * commit still reorders host buttons through the owned model).
+ * Host React `.tabList` is not a mid-drag surface (commit reorders host
+ * buttons through the owned model).
  */
-function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
-  const containers: { el: HTMLElement; secondary: boolean }[] = []
+function getDropContainers(): { el: HTMLElement; secondary: boolean; axis: DndAxis }[] {
+  const containers: { el: HTMLElement; secondary: boolean; axis: DndAxis }[] = []
 
-  // 1. Secondary tab list (only when second drawer is mounted)
+  // 1. Secondary tab list (only when second drawer is mounted). In horizontal
+  //    the list is reparented to its pin host — getSecondaryTabList resolves
+  //    it; a collapsed zone has no list at all.
   if (getSecondaryWrapper()) {
     const secList = getSecondaryTabList()
-    if (secList) containers.push({ el: secList, secondary: true })
+    if (secList) containers.push({ el: secList, secondary: true, axis: containerAxis(secList) })
   }
 
-  // 2. Main-mirror primary strip (Canvas-owned under taskbar mode).
+  // 2. Main-mirror primary strip (Canvas-owned, always mounted on desktop).
   //    Settings bottom dock is not a drop target — host chrome stays pinned.
   const mirrorList = document.querySelector(
     `.${MIRROR_LIST_CLASS}`,
@@ -443,10 +565,10 @@ function getDropContainers(): { el: HTMLElement; secondary: boolean }[] {
       `:scope > .${MIRROR_MAIN_CLASS}`,
     ) as HTMLElement | null
     if (main) {
-      containers.push({ el: main, secondary: false })
+      containers.push({ el: main, secondary: false, axis: containerAxis(main) })
     } else {
       // Fallback if structure not yet built (legacy flat list)
-      containers.push({ el: mirrorList, secondary: false })
+      containers.push({ el: mirrorList, secondary: false, axis: containerAxis(mirrorList) })
     }
   }
 
@@ -703,19 +825,23 @@ function hitTestDropTarget(
     ? _geometryCache.containers
     : getDropContainers()
 
-  // Prefer the container whose horizontal center is closest to the tab
-  // center when both overlap (unlikely for opposite-side drawers, but
-  // stable if they briefly both match).
-  let best: {
+  const candidates: Array<{
     container: HTMLElement
     index: number
     secondary: boolean
+    axis: DndAxis
+    rect: DOMRect
     distX: number
-  } | null = null
+  }> = []
 
-  for (const { el: container, secondary } of containers) {
+  for (const { el: container, secondary, axis } of containers) {
     const rect = container.getBoundingClientRect()
-    if (!overlayOverlapsContainer(geom, rect)) continue
+    // S8: swap the hit pads by axis — a horizontal strip needs generous
+    // vertical leeway (the float drifts below the 56px row) and little
+    // horizontal leeway (the zones are adjacent).
+    const padY = axis === 'x' ? 80 : 8
+    const padX = axis === 'x' ? 8 : 80
+    if (!overlayOverlapsContainer(geom, rect, padY, padX)) continue
 
     const buttons = getButtonsInContainer(
       container,
@@ -725,33 +851,57 @@ function hitTestDropTarget(
 
     let index = 0
     if (buttons.length > 0) {
-      const midpoints = buttons.map((btn) => {
-        const btnRect = btn.getBoundingClientRect()
-        return btnRect.top + btnRect.height / 2
-      })
-      // Insert index from floating *tab center* Y (not pointer Y).
-      index = insertIndexFromMidpoints(geom.centerY, midpoints)
+      const midpoints = buttons.map((btn) =>
+        axisMidpoint(btn.getBoundingClientRect(), axis),
+      )
+      // Insert index from the floating *tab center* on the container's axis
+      // (not the raw pointer).
+      index = insertIndexFromMidpoints(axisCoordinate(geom, axis), midpoints)
       dlog('[tab-list-dnd] hit-test', {
         containerCls: String(container.className || ''),
         secondary,
+        axis,
         dragTabId,
         buttons: buttons.length,
         midpoints: midpoints.length,
         centerY: Math.round(geom.centerY),
+        centerX: Math.round(geom.centerX),
         index,
       })
     }
 
     const containerMidX = rect.left + rect.width / 2
     const distX = Math.abs(geom.centerX - containerMidX)
-    if (!best || distX < best.distX) {
-      best = { container, index, secondary, distX }
+    candidates.push({ container, index, secondary, axis, rect, distX })
+  }
+
+  if (candidates.length === 0) return null
+
+  // S8: adjacent horizontal zones select by the zone-edge seam (the Settings
+  // dock makes the main section narrower than its zone, so nearest-center is
+  // wrong). Solo / mixed-axis keeps the nearest-center behavior.
+  const horizontal = candidates.filter((c) => c.axis === 'x')
+  if (horizontal.length >= 2) {
+    const sorted = [...horizontal].sort((a, b) => a.rect.left - b.rect.left)
+    const left = sorted[0]
+    const right = sorted[sorted.length - 1]
+    const chosen =
+      seamChoice(geom.centerX, left.rect, right.rect) === 'left' ? left : right
+    return {
+      container: chosen.container,
+      index: chosen.index,
+      secondary: chosen.secondary,
     }
   }
 
-  return best
-    ? { container: best.container, index: best.index, secondary: best.secondary }
-    : null
+  // Prefer the container whose horizontal center is closest to the tab
+  // center when both overlap (unlikely for opposite-side drawers, but
+  // stable if they briefly both match).
+  let best = candidates[0]
+  for (const c of candidates) {
+    if (c.distX < best.distX) best = c
+  }
+  return { container: best.container, index: best.index, secondary: best.secondary }
 }
 
 /**
@@ -766,11 +916,15 @@ export function settleDestFromButtonRects(
   index: number,
   rects: { left: number; top: number; width: number; height: number }[],
   emptyFallback: { left: number; top: number },
+  axis: DndAxis = 'y',
 ): { left: number; top: number } {
   if (rects.length === 0) return emptyFallback
   if (index >= rects.length) {
     const last = rects[rects.length - 1]
-    return { left: last.left, top: last.top + last.height }
+    // S8: after-last on X advances past the button width, not the height.
+    return axis === 'x'
+      ? { left: last.left + last.width, top: last.top }
+      : { left: last.left, top: last.top + last.height }
   }
   const ref = rects[index]
   return { left: ref.left, top: ref.top }
@@ -817,7 +971,12 @@ function resolveSettleDestination(
       left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
       top: cr.top,
     }
-    return settleDestFromButtonRects(target.index, rects, emptyFallback)
+    return settleDestFromButtonRects(
+      target.index,
+      rects,
+      emptyFallback,
+      containerAxis(target.container),
+    )
   }
 
   // Cancel / no target after restore
@@ -898,13 +1057,17 @@ function installDropSlotSpacer(placeholder: HTMLElement | null): HTMLElement | n
   if (!placeholder?.parentElement) return null
   const parent = placeholder.parentElement
   const rect = placeholder.getBoundingClientRect()
-  const height = Math.max(Math.round(rect.height), 1)
+  const axis = containerAxis(parent)
+  // S8: in a row, width:100% is the whole scroller — hold the slot with the
+  // placeholder's width and full height instead.
+  const sizeProps = axis === 'x'
+    ? [`width:${Math.max(Math.round(rect.width), 1)}px`, 'height:100%']
+    : [`height:${Math.max(Math.round(rect.height), 1)}px`, 'width:100%']
   const spacer = document.createElement('div')
   spacer.className = 'canvas-tab-list-dnd-slot-spacer'
   spacer.setAttribute('aria-hidden', 'true')
   spacer.style.cssText = [
-    `height:${height}px`,
-    'width:100%',
+    ...sizeProps,
     'flex-shrink:0',
     'pointer-events:none',
     'visibility:hidden',
@@ -1001,10 +1164,10 @@ function applyFLIP(
       if (!id || id === excludeTabId || !prevRects.has(id)) continue
       const prev = prevRects.get(id)!
       const curr = btn.getBoundingClientRect()
-      const deltaY = prev.top - curr.top
-      if (Math.abs(deltaY) <= 0.5) continue
+      const { dx, dy } = flipDelta(prev, curr)
+      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) continue
       btn.style.setProperty('transition', 'none', 'important')
-      btn.style.setProperty('transform', `translateY(${deltaY}px)`, 'important')
+      btn.style.setProperty('transform', `translate(${dx}px, ${dy}px)`, 'important')
       animated.push(btn)
     }
   }
@@ -1097,13 +1260,18 @@ function reorderCanvasListDOM(
 
   if (insertIdx >= buttonsWithoutSource.length) {
     // After last sibling (no trailing hidden after last visible, or empty).
+    // The secondary list's OS Start dock sits after the tab order, so a
+    // source already immediately before it is also "already last".
+    const endDock = getSecondaryStartDock(container)
     if (
       sourceBtn.parentElement === container &&
-      sourceBtn.nextElementSibling === null
+      (sourceBtn.nextElementSibling === null || sourceBtn.nextElementSibling === endDock)
     ) {
       return false
     }
-    container.appendChild(sourceBtn)
+    // Secondary list: never append past the OS Start dock (the divider must
+    // stay below the tab order). Mirror sections have no dock child.
+    appendSecondaryTabNode(container, sourceBtn)
     return true
   }
 
@@ -1235,6 +1403,42 @@ function removeClickSuppressorNow(): void {
 }
 
 /** Schedule rAF-coalesced hit-test + reorder + FLIP work. */
+/**
+ * S8: horizontal edge auto-scroll. Reads the hovered scroller's live rect
+ * and advances `scrollLeft` when the floating tab is in the edge band.
+ * Returns true while scrolling — the caller reschedules the frame, because a
+ * stationary pointer produces no pointermove events (the loop must
+ * self-sustain). Stops naturally on drop/cancel (the frame's phase guard).
+ */
+function autoScrollHorizontal(geom: { centerX: number; centerY: number }): boolean {
+  const containers = _geometryCache?.containers ?? []
+  const EDGE_PX = 24
+  const STEP_PX = 14
+  let scrolling = false
+  for (const { el, axis } of containers) {
+    if (axis !== 'x') continue
+    const rect = el.getBoundingClientRect()
+    if (geom.centerY < rect.top || geom.centerY > rect.bottom) continue
+    if (geom.centerX < rect.left || geom.centerX > rect.right) continue
+    const maxScroll = el.scrollWidth - el.clientWidth
+    if (maxScroll <= 0) continue
+    if (geom.centerX < rect.left + EDGE_PX) {
+      const next = Math.max(0, el.scrollLeft - STEP_PX)
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next
+        scrolling = true
+      }
+    } else if (geom.centerX > rect.right - EDGE_PX) {
+      const next = Math.min(maxScroll, el.scrollLeft + STEP_PX)
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next
+        scrolling = true
+      }
+    }
+  }
+  return scrolling
+}
+
 function scheduleDragFrame(): void {
   if (_rafId !== null) return
   _rafId = requestAnimationFrame(() => {
@@ -1257,6 +1461,14 @@ function scheduleDragFrame(): void {
       _drag.overlayWidth || 48,
       _drag.overlayHeight || 48,
     )
+
+    // S8: horizontal edge auto-scroll BEFORE the hit-test (button rects are
+    // read live, so a scrollLeft change is reflected in this same frame).
+    // Self-schedules while the float stays in the band.
+    if (autoScrollHorizontal(geom)) {
+      scheduleDragFrame()
+    }
+
     const target = hitTestDropTarget(geom, _drag.tabId)
 
     const prev = _drag.lastDropTarget
@@ -1393,11 +1605,14 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
   document.body.classList.add('canvas-tab-list-dnd-dragging')
 
   // Suppress context menu during drag (capture-phase preventDefault)
-  // so host long-press contextmenu does not fire while dragging.
+  // so host long-press contextmenu does not fire while dragging. Stored
+  // module-level so teardown can always remove it (review batch 3).
+  removeDragContextMenuSuppressor()
   const suppressCtx = (e: Event) => {
     e.preventDefault()
     e.stopPropagation()
   }
+  _dragContextMenuSuppressor = suppressCtx
   document.addEventListener('contextmenu', suppressCtx, true)
 
   // Suppress post-drag synthetic click (source + document capture).
@@ -1452,7 +1667,7 @@ function startDrag(btn: HTMLElement, pointerEvent: PointerEvent): void {
         : null,
     })
 
-    document.removeEventListener('contextmenu', suppressCtx, true)
+    removeDragContextMenuSuppressor()
 
     // Keep click suppressors through this task so the browser's
     // compatibility click (after pointerup returns / at await yield)
@@ -1692,7 +1907,6 @@ function cleanupDragVisuals(): void {
     el.classList.remove('canvas-tab-list-dnd-placeholder')
     // Commit the un-hidden, non-transitioning style before overlay removal.
     void el.offsetWidth
-    // Restore normal transitions on the next frame (hover color, labels, …).
     requestAnimationFrame(() => {
       el.style.removeProperty('transition')
     })
@@ -2074,6 +2288,14 @@ export function tearDownTabListDnd(): void {
   }
   if (_drag.phase !== 'idle') {
     removeClickSuppressorNow()
+    // The contextmenu suppressor is otherwise removed only in onUp; leaving
+    // it installed kept the whole page's right-click suppressed after
+    // teardown (review batch 3). Then detach the pointer listeners while the
+    // phase is still `dragging` — cleanupDragVisuals() zeroes it, after which
+    // detachDragPointerListeners() is a no-op (the old cleanup→clear order
+    // leaked onMove/onUp onto document).
+    removeDragContextMenuSuppressor()
+    detachDragPointerListeners()
     // Cancel any pending rAF / settle
     if (_rafId !== null) {
       cancelAnimationFrame(_rafId)

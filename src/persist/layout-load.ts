@@ -32,6 +32,8 @@ export function loadSavedLayout(): null {
 
 // Guard: true while a load is awaiting the backend response.
 let _loadInProgress = false
+// Permanent false in the owned-model world — no writer arms `_loadInProgress`;
+// callers keep it as a compat seam.
 export function isLoadInProgress(): boolean { return _loadInProgress }
 
 let _loadCancel: (() => void) | null = null
@@ -56,6 +58,11 @@ export function cancelLoadSavedLayout(options?: { preserveGuard?: boolean }): vo
 // find a defined symbol.
 let _saveLayoutTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * Permanent no-op in the owned-model world: the local `_saveLayoutTimer`
+ * is never set (layout writes are immediate in `dispatch.persistModel`);
+ * callers keep it as a compat seam.
+ */
 export function cancelLayoutSave(): void {
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
@@ -64,22 +71,23 @@ export function cancelLayoutSave(): void {
 }
 
 export function flushPendingSaves(): void {
+  // Settings and layout are independent repositories: a layout load failure
+  // (layout repo unarmed) must not drop a pending settings save made <100ms
+  // before unload (review batch 2). Flush settings FIRST, before every layout
+  // gate. No-op when nothing is pending.
+  flushSettingsSave()
   if (!isLayoutRepoArmed()) {
     logPersistSave('flush', null, { skipped: 'not-armed', loadInProgress: _loadInProgress })
     return
   }
   if (_loadInProgress) {
-    logPersistSave('flush', null, { skipped: 'load-in-progress', loadInProgress: true })
+    logPersistSave('flush', null, { skipped: 'load-in-progress', loadInProgress: _loadInProgress })
     return
   }
   if (_saveLayoutTimer !== null) {
     clearTimeout(_saveLayoutTimer)
     _saveLayoutTimer = null
   }
-  // Flush a pending settings save instead of cancelling it: a toggle made
-  // <100ms before unload would otherwise be silently dropped. No-op when
-  // nothing is pending.
-  flushSettingsSave()
   syncPersistDebugToBackend((msg) => getBackendCtx()?.sendToBackend(msg))
   logPersistSave('flush', null, { loadInProgress: _loadInProgress })
   // No actual write — the owned model handles all persistence.

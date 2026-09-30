@@ -185,18 +185,29 @@ export function setMobileOpenClass(which: 'primary' | 'secondary', open: boolean
 
 /** Close the main drawer (host-owned) by clicking its toggle button.
  *  Scoped to the host's main wrapper via getMainWrapper() — never a
- *  global query that could accidentally match the secondary wrapper. */
+ *  global query that could accidentally match the secondary wrapper.
+ *  S6: when the Canvas main shell is the surface (active on mobile),
+ *  close the SHELL directly instead — no host-toggle indirection, and
+ *  the shell's own open state (not wrapperOpen) is the truth. Falls
+ *  back to the host toggle when the shell is not active. */
 function _closeMainDrawer(): void {
-  const wrapper = getMainWrapper()
-  if (!wrapper) return
-  // Don't toggle the main drawer if it's already closed — on hard-refresh
-  // at mobile the main may have been initialized closed, and clicking the
-  // toggle would reopen it instead of closing it.
-  if (!wrapper.classList.toString().includes('wrapperOpen')) return
-  const btn = findDrawerToggleButton(wrapper)
-  if (btn) {
-    try { btn.click() } catch { /* swallow */ }
-  }
+  void import('./main-mirror-drawer').then((m) => {
+    if (m.isMainMirrorActive()) {
+      m.closeCanvasMainDrawer()
+      return
+    }
+    // Fallback: host toggle click (shell inactive / teardown window).
+    const wrapper = getMainWrapper()
+    if (!wrapper) return
+    // Don't toggle the main drawer if it's already closed — on hard-refresh
+    // at mobile the main may have been initialized closed, and clicking the
+    // toggle would reopen it instead of closing it.
+    if (!wrapper.classList.toString().includes('wrapperOpen')) return
+    const btn = findDrawerToggleButton(wrapper)
+    if (btn) {
+      try { btn.click() } catch { /* swallow */ }
+    }
+  }).catch(() => { /* module unavailable mid-teardown */ })
 }
 
 /** When a sidebar opens on mobile, close the other one. If the other
@@ -226,8 +237,12 @@ let _onMediaChange: ((e: MediaQueryListEvent) => void) | null = null
 /** Register the matchMedia listener for viewport-cross detection.
  *  Returns a cleanup function that removes listeners and the
  *  injected <style> element. */
-export function startMobileExclusion(): () => void {
+export function startMobileExclusion(
+  onViewportChange?: (isMobile: boolean) => void,
+): () => void {
   _mediaQuery = window.matchMedia('(max-width: 600px)')
+  // Seed the consumer on startup as well as on later viewport crossings.
+  onViewportChange?.(_mediaQuery.matches)
 
   /** Update the secondary drawer's inline width based on viewport.
    *  On mobile, force the host-aligned scaled viewport width via CSS var
@@ -239,9 +254,11 @@ export function startMobileExclusion(): () => void {
    *  to match the new CSS var so the closed transform stays in sync with
    *  the drawer's actual width. */
   function _updateDrawerWidth(): void {
-   // Stop any in-flight rAF so it can't overwrite the transform we're about to set
-   cancelWrapperAnimation()
    const wrapper = getSecondaryWrapper()
+   // Stop any in-flight motion (translate or rail bloom) so it can't overwrite
+   // the transform/width we're about to set — and so a settling close cannot
+   // write a stale closed transform after the width changed.
+   if (wrapper) cancelWrapperAnimation(wrapper)
    const drawer = wrapper?.querySelector('.sidebar-ux-drawer') as HTMLElement | null
    if (!drawer) return
    if (isMobileViewport()) {
@@ -273,6 +290,14 @@ export function startMobileExclusion(): () => void {
   }
 
   _onMediaChange = (e: MediaQueryListEvent) => {
+    // Settings state uses this strict viewport transition to prevent Sides
+    // from becoming active on mobile and to preserve the resolved mode on the
+    // return to desktop.
+    onViewportChange?.(e.matches)
+    // S6: restyle the main shell in place on EVERY crossing (mobile →
+    // full-bleed + horizontal list via @media CSS; desktop → restored
+    // width + pins). No remount — content stays parked.
+    void import('./main-mirror-drawer').then((m) => m.syncMainMirrorToViewport()).catch(() => {})
     if (e.matches) {
       // Cross-down into mobile: if both sidebars are open, close secondary silently
        _updateDrawerWidth()
@@ -280,12 +305,19 @@ export function startMobileExclusion(): () => void {
         closeSecondarySidebar({ silent: true })
         setMobileOpenClass('secondary', false)
       }
-      // Update primary class from DOM state
-      const wrapper = getMainWrapper()
-      if (wrapper) {
-        const isOpen = wrapper.classList.toString().includes('wrapperOpen')
-        setMobileOpenClass('primary', isOpen)
-      }
+      // Update the primary body class from the actual surface state.
+      // S6: when the Canvas main shell is active, its open state is the
+      // truth; otherwise the host wrapper's wrapperOpen class.
+      void import('./main-mirror-drawer').then((m) => {
+        if (m.isMainMirrorActive()) {
+          setMobileOpenClass('primary', m.isCanvasMainOpen())
+          return
+        }
+        const wrapper = getMainWrapper()
+        if (wrapper) {
+          setMobileOpenClass('primary', wrapper.classList.toString().includes('wrapperOpen'))
+        }
+      }).catch(() => {})
       // Clear desktop tab-list pins so mobile horizontal layout is not fought.
       // Dynamic import avoids a static cycle (tab-position imports isMobileViewport).
       void import('./tab-position').then((m) => m.reconcileTabListPin())
@@ -298,10 +330,23 @@ export function startMobileExclusion(): () => void {
       void import('./tab-position').then((m) => m.reconcileTabListPin())
       void import('./main-tab-pin').then((m) => m.reconcileMainTabListPin())
     }
+    // S8: re-run the location presentation after a crossing (horizontal
+    // pins on mobile too; Sides-mobile restores the S6 no-pin layout).
+    void import('./drawer-location').then((m) => m.reconcileDrawerLocation()).catch(() => {})
+    // S8: a crossing mid-drag invalidates the cached DnD geometry.
+    void import('../tabs/tab-list-dnd').then((m) => m.invalidateDndGeometry()).catch(() => {})
     // Re-evaluate drawer-tab visibility on viewport cross so desktop↔mobile
     // transitions clear any stale inline display:none from the hide setting.
     void import('../tabs/buttons').then((m) => m.updateDrawerTabVisibility())
     void import('./main-mirror-drawer').then((m) => m.updateMainMirrorDrawerTabVisibility())
+    // OS mode: the mobile viewport forces single-drawer mode; leaving it
+    // restores the user's dual mode (idempotent, no-op when OS mode is off).
+    // Dynamic import: os-mode pulls dispatch/settings and must not join this
+    // module's load cycle.
+    void import('../os/os-mode').then((m) => m.syncOsMobileDrawerMode()).catch(() => {})
+    // The locked second-drawer row reflects `osMode && isMobileViewport()`;
+    // refresh it so the settings panel tracks the crossing.
+    void import('../settings/state').then((m) => m.refreshSettingsPanel()).catch(() => {})
   }
   _mediaQuery.addEventListener('change', _onMediaChange)
 
@@ -314,6 +359,9 @@ export function startMobileExclusion(): () => void {
   // resize (covers ≤600px + larger touch mobile).
   const _onResize = () => {
     syncHostMainDrawerToMobileWidth()           // host main full-bleed sync
+    // S6: keep the main shell's full-bleed width + transform tracking the
+    // viewport while mobile (same cadence as the secondary's sync).
+    void import('./main-mirror-drawer').then((m) => m.syncMainMirrorToViewport()).catch(() => {})
     if (!isMobileViewport()) return             // desktop / larger mobile: no secondary work
     if (_resizeRafId !== null) return            // already coalesced for this frame
     _resizeRafId = requestAnimationFrame(() => {
@@ -335,18 +383,26 @@ export function startMobileExclusion(): () => void {
   if (isMobileViewport()) {
     _updateDrawerWidth()
   }
+  // S6: one-shot main-shell viewport sync (boot ordering — the shell may
+  // have mounted desktop-styled before this module started).
+  void import('./main-mirror-drawer').then((m) => m.syncMainMirrorToViewport()).catch(() => {})
   // One-shot reconciliation on mount: if both are open at init time,
   // close secondary silently.
   if (isMobileViewport() && isSecondarySidebarOpen()) {
     closeSecondarySidebar({ silent: true })
     setMobileOpenClass('secondary', false)
   }
-  // Seed primary body class if main is open
-  const wrapper = getMainWrapper()
-  if (wrapper) {
-    const isOpen = wrapper.classList.toString().includes('wrapperOpen')
-    setMobileOpenClass('primary', isOpen)
-  }
+  // Seed primary body class from the actual surface state (S6: shell first).
+  void import('./main-mirror-drawer').then((m) => {
+    if (m.isMainMirrorActive()) {
+      setMobileOpenClass('primary', m.isCanvasMainOpen())
+      return
+    }
+    const wrapper = getMainWrapper()
+    if (wrapper) {
+      setMobileOpenClass('primary', wrapper.classList.toString().includes('wrapperOpen'))
+    }
+  }).catch(() => {})
 
   return () => {
     // Cancel any pending resize rAF

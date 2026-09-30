@@ -629,6 +629,7 @@ import {
   applyHiddenTabIdsToSecondary,
   addSecondaryTabButton,
   findMainTabButton,
+  removeSecondaryTabButton,
 } from '../buttons'
 
 // Factory for tab list stubs used by reorder/hide tests.
@@ -664,6 +665,7 @@ function makeListStub(initialButtons: Array<{
       classList: {
         contains(c: string) { return classes.has(c) },
         add(c: string) { classes.add(c) },
+        remove(c: string) { classes.delete(c) },
       },
       getAttribute(name: string) { return name === 'data-tab-id' ? b.id : null },
       closest(_sel: string) { return null },
@@ -1070,194 +1072,12 @@ import { __setDrawerTabsForTest } from '../../store'
 })()
 
 // ============================================================
-// T31: reorderMainMirrorTabButtons moves UNTAGGED extension buttons
+// T31 — REMOVED (S2): `reorderMainMirrorTabButtons` was part of the deleted
+// parity layer. The mirror order is now rendered wholesale from the model by
+// main-renderer.ts on every model commit, so the "untagged extension button
+// missing from the DOM reorder → perpetual setOrder" class cannot occur here.
+// Renderer coverage lives in sidebar/__tests__/main-tab-pin.test.ts.
 // ============================================================
-// setOrder's DOM reorder must move untagged extension mirror buttons to
-// their model slot (matched via buttonTabId). Without this, the observed
-// order can never equal the model order → reconcile fires setOrder forever
-// → infinite SAVE_LAYOUT cascade.
-;(() => {
-  const { reorderMainMirrorTabButtons } = require('../buttons') as typeof import('../buttons')
-
-  // Mirror main-section stub with appendChild-moves-to-end semantics.
-  const items: any[] = []
-  const mkBtn = (opts: { id?: string; title?: string; ext?: boolean }) => {
-    const el: any = {
-      getAttribute(name: string) {
-        if (name === 'data-tab-id') return opts.id ?? null
-        if (name === 'title') return opts.title ?? null
-        return null
-      },
-      get className() {
-        return opts.ext
-          ? 'sidebar-ux-main-tab-mirror-btn'
-          : 'sidebar-ux-main-tab-mirror-btn'
-      },
-      parentElement: null as any,
-    }
-    el.parentElement = section
-    items.push(el)
-    return el
-  }
-  const section: any = {
-    querySelectorAll(_sel: string) { return [...items] },
-    appendChild(child: any) {
-      const idx = items.indexOf(child)
-      if (idx >= 0) items.splice(idx, 1)
-      items.push(child)
-    },
-  }
-  // A, B tagged; EXT untagged (title only, mirror class).
-  mkBtn({ id: 'a' })
-  mkBtn({ id: 'b' })
-  const extBtn = mkBtn({ title: 'Ext Tab' })
-
-  const prevQS = (globalThis as any).document.querySelector
-  ;(globalThis as any).document.querySelector = (sel: string) =>
-    sel === '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main' ? section : null
-
-  // Model order: [a, EXT, b] — EXT must slot between a and b.
-  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,Ext Tab,b',
-    'T31: untagged extension button moved to its model slot (no setOrder cascade)',
-  )
-
-  // Idempotent — a second call leaves the order unchanged (converges).
-  reorderMainMirrorTabButtons(['a', 'Ext Tab', 'b'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,Ext Tab,b',
-    'T31.b: reorder idempotent once converged',
-  )
-
-  // EXT last: appends to the end (past the tagged b).
-  reorderMainMirrorTabButtons(['a', 'b', 'Ext Tab'])
-  assertEqual(
-    items.map((i: any) => i.getAttribute('data-tab-id') || i.getAttribute('title')).join(','),
-    'a,b,Ext Tab',
-    'T31.c: untagged extension append works',
-  )
-
-  ;(globalThis as any).document.querySelector = prevQS
-})()
-
-// ============================================================
-// B32: restoreSecondaryTabButtons resolves the TabKey facade → live ids
-//
-// Regression (2026-08-16): after a Configure "Swap drawer locations"
-// remount, the secondary shell came back EMPTY and the moved tabs showed
-// back up in the main drawer/mirror. The assignment facade is TabKey-keyed
-// ('builtin:regex', 'ext:foo/Bar') but the restore looked tabs up by live
-// id ('regex', 'spindle:ext:foo:tab:Bar:0') — every lookup missed. The
-// TabKey → liveId conversion must restore both kinds, re-hide the host
-// buttons, and capture the real icon (not the puzzle fallback).
-// ============================================================
-;(async () => {
-  const { restoreSecondaryTabButtons } = require('../../sidebar/drawer-sync') as typeof import('../../sidebar/drawer-sync')
-  const { setTabAssignment, deleteTabAssignment, clearTabAssignments } = require('../../tabs/assignment') as typeof import('../../tabs/assignment')
-
-  const { __resetPinStateForTest } = require('../../sidebar/tab-position') as typeof import('../../sidebar/tab-position')
-  __resetPinStateForTest()
-  clearTabAssignments()
-
-  const listStub = makeListStub([])
-  const wrapper = {
-    querySelector(sel: string) {
-      if (sel === '.sidebar-ux-tab-list') return listStub as unknown as HTMLElement
-      return null
-    },
-    querySelectorAll() { return [] },
-  }
-  __setSecondaryWrapperForTest(wrapper as unknown as HTMLElement)
-
-  // Live-id store inventory (what getDrawerTabs returns once the observer
-  // is running).
-  __setDrawerTabsForTest([
-    { id: 'regex', extensionId: '', title: 'Regex Scripts', root: {} as HTMLElement },
-    { id: 'spindle:ext:foo:tab:Bar:0', extensionId: 'ext:foo', title: 'Bar', root: {} as HTMLElement },
-  ])
-
-  // Assignment facade in TabKey namespace — what the owned model emits
-  // after the swap intent.
-  setTabAssignment('builtin:regex', 'secondary')
-  setTabAssignment('ext:ext:foo/Bar', 'secondary')
-
-  // Main sidebar stub so findMainTabButton / hideMainTabButton resolve.
-  const hostButtons: Record<string, any> = {
-    regex: {
-      style: { display: '' },
-      attrs: { 'data-tab-id': 'regex', title: 'Regex Scripts' },
-      getAttribute(name: string) { return this.attrs[name] ?? null },
-      querySelector(sel: string) {
-        if (sel === 'svg') return { outerHTML: '<svg id="regex-icon"/>' }
-        // Host-rendered label span — the "shorthand" shown in the main drawer.
-        if (sel === 'span[class*="tabLabel"]') return { textContent: 'Regex Scr…' }
-        return null
-      },
-    },
-    'spindle:ext:foo:tab:Bar:0': {
-      style: { display: '' },
-      attrs: { 'data-tab-id': 'spindle:ext:foo:tab:Bar:0', title: 'Bar' },
-      getAttribute(name: string) { return this.attrs[name] ?? null },
-      querySelector(sel: string) {
-        if (sel === 'svg') return { outerHTML: '<svg id="ext-icon"/>' }
-        // Host label span is absent when showTabLabels is off — short name
-        // falls back to deriveShortName(title) inside addSecondaryTabButton.
-        return null
-      },
-    },
-  }
-  const sidebarStub = {
-    querySelector(sel: string): unknown {
-      const m = sel.match(/\[data-tab-id="([^"]+)"\]/)
-      if (m) return hostButtons[m[1]] ?? null
-      return null
-    },
-    querySelectorAll(_sel: string): unknown[] { return [] },
-    closest(): unknown { return null },
-  }
-  const prevQS = (globalThis as any).document.querySelector
-  ;(globalThis as any).document.querySelector = (sel: string) =>
-    sel === '[data-spindle-mount="sidebar"]' ? sidebarStub : null
-
-  try {
-    restoreSecondaryTabButtons()
-
-    const items = listStub.children as any[]
-    assertEqual(items.length, 2, 'B32.a: both secondary tabs restored as buttons')
-    const ids = items.map((i: any) => i.getAttribute?.('data-tab-id') ?? i._id)
-    assertEqual(ids[0], 'regex', 'B32.b: builtin TabKey resolved to live-id button')
-    assertEqual(ids[1], 'spindle:ext:foo:tab:Bar:0', 'B32.c: extension TabKey resolved to live-id button')
-    // Icon captured from the main sidebar button (not the puzzle fallback).
-    assertEqual(items[0].children[0].innerHTML, '<svg id="regex-icon"/>', 'B32.d: builtin icon captured from main button')
-    assertEqual(items[1].children[0].innerHTML, '<svg id="ext-icon"/>', 'B32.e: extension icon captured from main button')
-    // Label parity: the restored button uses the HOST's rendered short name
-    // (the main drawer's "shorthand"), not a different Canvas truncation.
-    assertEqual(items[0].children[1].textContent, 'Regex Scr…', 'B32.f: builtin label = host short name')
-    // No host label span (labels off) → deriveShortName(title) fallback
-    // ('Bar' is ≤ 8 chars so the title itself is the shorthand).
-    assertEqual(items[1].children[1].textContent, 'Bar', 'B32.g: extension label falls back to short title')
-    // Host buttons re-hidden so the tabs do not reappear in main drawer/mirror.
-    assertEqual(hostButtons['regex'].style.display, 'none', 'B32.h: builtin host button re-hidden')
-    assertEqual(hostButtons['spindle:ext:foo:tab:Bar:0'].style.display, 'none', 'B32.i: extension host button re-hidden')
-
-    // A second restore is idempotent (buttons already present → no dupes).
-    restoreSecondaryTabButtons()
-    assertEqual((listStub.children as any[]).length, 2, 'B32.j: second restore idempotent')
-  } finally {
-    ;(globalThis as any).document.querySelector = prevQS
-    __setSecondaryWrapperForTest(null)
-    __setDrawerTabsForTest(null)
-    deleteTabAssignment('builtin:regex')
-    deleteTabAssignment('ext:ext:foo/Bar')
-    clearTabAssignments()
-  }
-  // Settle the async tab-position tail (reconcileTabListPin) from
-  // addSecondaryTabButton before the runner exits.
-  await new Promise((r) => setTimeout(r, 0))
-})()
 
 // =====================================================================
 // B33: findMainTabButton title-fallback must NOT clobber an existing
@@ -1451,6 +1271,42 @@ import { applyHiddenTabIdsToHostMain } from '../buttons'
     ;(globalThis as any).document.querySelector = prevQS
     assignmentMod.deleteTabAssignment('moved-tab')
     assignmentMod.clearTabAssignments()
+  }
+}
+
+// B35: post-teardown lazy continuation no-ops (LUMI-21). A continuation
+// resolving after the extension is disabled must not re-hide the restored
+// vanilla host strip — the teardown chain (showAllMainTabButtons) already
+// put every button back.
+{
+  const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
+  const gen = beginLifecycle()
+  endLifecycle(gen) // disable: lifecycle inactive
+
+  const btnConnections = { style: { display: '' }, getAttribute: (n: string) => n === 'data-tab-id' ? 'connections' : null }
+  const tabList = {
+    querySelectorAll(sel: string) {
+      if (sel === 'button[data-tab-id]') return [btnConnections]
+      return []
+    },
+  }
+  const sidebarStub = {
+    querySelector(sel: string) {
+      if (sel.includes('tabListWrap') || sel.includes('tabList')) return tabList
+      return null
+    },
+    querySelectorAll() { return [] },
+  }
+  const prevQS = (globalThis as any).document.querySelector
+  ;(globalThis as any).document.querySelector = (sel: string) =>
+    sel === '[data-spindle-mount="sidebar"]' ? sidebarStub : null
+
+  try {
+    applyHiddenTabIdsToHostMain(new Set(['connections']))
+    await new Promise((r) => setTimeout(r, 0))
+    assertEqual(btnConnections.style.display, '', 'B35: post-teardown continuation does not hide the restored host button')
+  } finally {
+    ;(globalThis as any).document.querySelector = prevQS
   }
 }
 

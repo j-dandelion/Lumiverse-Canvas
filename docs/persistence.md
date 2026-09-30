@@ -28,9 +28,11 @@ Canvas persists the full UI state (drawer open/close, widths, tab assignments, s
     "secondSidebarEnabled": true,
     "resizeSidebars": true,
     "chatReflow": true,
+    "welcomeReflow": true,
     "persistDrawerOpenState": true,
     "persistDrawerWidth": true,
     "slashCommandsEnabled": true,
+    "drawerLocation": "sides",
     "debugMode": false,
     ...
   }
@@ -51,11 +53,12 @@ Communication uses `spindle.sendToBackend()` / `spindle.onFrontendMessage()`:
 ## Backend (`backend.ts`)
 
 - `loadLayout()` — reads `layout.json` via `spindle.storage.read()`
+- `readJsonFile()` normalizes either a string or `{ data: string }` storage payload. Only the host's `File not found` rejection means the file is absent; other read failures return `{status: 'error'}` so the frontend leaves that repo unarmed and cannot overwrite the existing file on a later save.
 - `saveLayout(state)` — atomic write: writes to `layout.json.tmp`, then `storage.move()` to `layout.json`. Falls back to direct write on cross-device/Windows errors.
 - Uses `spindle.storage.*` (not raw `fs`) because the host resolves paths against a per-extension, per-user storage root.
 - Serializes `SAVE_LAYOUT` requests and makes `LOAD_LAYOUT` wait for queued saves. Extension updates can overlap IPC handlers; without this ordering, an older slower write can overwrite a newer layout or a reload can read stale settings.
 
-## Frontend Persistence (`layout/persist.ts`)
+## Frontend Persistence (`persist/layout-load.ts` + `persist/layout-repo.ts`)
 
 ### Two Write Paths
 
@@ -84,7 +87,7 @@ Tab-assignment persistence (`detachedTabs`, `secondary.activeTabId`) is **always
 
 **Write path:** every SAVE_LAYOUT uses `buildPersistedLayout()` — live values for enabled facets, last-loaded (or defaults) for disabled facets. Turning a facet off freezes its disk value rather than scrubbing it. Tab assignments are always written from the live state (or frozen from last-loaded when the second drawer is off).
 
-**Restore path:** `applyLayout` / `applyMainDrawer` apply only the enabled facets, but tabs are always restored. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → open + width on; false → open + width off). Secondary open restore also requires at least one live secondary tab assignment (tabs are always restored, so the check is just whether the restored map has any tabs assigned); open facet alone does not show an empty second drawer.
+**Restore path:** `bootstrapFromLayout` (owned model; `recon/dispatch.ts`) and `applyMainDrawer` (`layout/main-restore.ts`) apply only the enabled facets, but tabs are always restored. Old disks with only `layoutPersistence` migrate in `mergeCanvasSettings` (true → open + width on; false → open + width off). Secondary open restore also requires at least one live secondary tab assignment (tabs are always restored, so the check is just whether the restored map has any tabs assigned); open facet alone does not show an empty second drawer.
 
 ### `loadSavedLayout()`
 
@@ -120,11 +123,21 @@ The main drawer is host-owned — Canvas can't call its API directly. Instead:
 2. **Active tab**: `MutationObserver` on the sidebar for `tabBtnActive` class movement
 3. **Width**: `ResizeObserver` with 300ms debounce
 
-**Suppress/unsuppress pattern**: At the start of `setup()`, `beginMainDrawerRestoreGuard()` adds `html.sidebar-ux-main-restore-pending`. Styles + inline stamps hide host main, main-mirror shell, and every main panel body (**opacity:0** — `visibility:hidden` alone is not enough when content forces `visibility:visible`).
+**Suppress/unsuppress pattern**: At the start of `setup()`, `beginMainDrawerRestoreGuard()` adds `html.sidebar-ux-main-restore-pending`. Styles + inline stamps hide host main, the main-mirror shell, the **secondary shell** (features mount during the guard window — without this the second drawer's strip is visible/populates mid-restore; live-verify #5), both pin hosts, and every panel body (**opacity:0** — `visibility:hidden` alone is not enough when content forces `visibility:visible`).
+
+**Mid-session mode-switch reveal hold (2026-09, live-verify #4)**: the runtime second-drawer enable (`requestSecondDrawerMode(true)`) queues the same placement pass *while the main mirror is already visible* — each builtin pre-activation painted that panel into the parked node for a frame or two (panels flashed one by one). `main-persist.holdMainDrawerReveal()` / `releaseMainDrawerReveal()` (refcounted) wrap the mount + model restore + `bootPlacementDone()` + `waitForMainContentSettled()` window with a **visual-only** class (`html.sidebar-ux-main-reveal-hold`): it hides both Canvas shells + every panel body and defers `unsuppressMainDrawer()` until release, but deliberately does NOT set `sidebar-ux-main-restore-pending` — `isMainDrawerRestorePending()` gates `observe()` shell truth and `setDrawer('primary')` echo suppression (S1/S5), so flipping it mid-session would resume stale host reads (the #1 ping-pong class). `main-mirror-drawer`'s parked-content force-visible rule excludes the hold class, and teardown (`stopMainDrawerPersistence`) clears any stranded hold. **Live-verify #5 (2026-09-10):** the hold also hides the body-level pinned secondary strip (`[data-pin-owner="secondary"]`, same rule for the boot restore guard) — it lives outside `.sidebar-ux-secondary-wrapper`; and `bootPlacementDone()` now genuinely waits for the placement pass: a coalesced `reassignSecondaryTabsFromModel` call returns a waiter that resolves only after the whole drain (run + trailing rerun) settles, instead of `Promise.resolve()` — the old early resolve released the hold mid-loop and the secondary tabs popped in one by one. On release the settled shells + pinned secondary strip also play a **180ms fade-in** (`sidebar-ux-main-reveal-in` + `@keyframes sidebar-ux-reveal-fade-in`, class auto-removed after the window; cleared on teardown) so the reveal is smooth instead of a snap. The same fade fires on the **boot reveal**: `unsuppressMainDrawer()` calls `playRevealIn()` when it actually lifts an active restore guard (not on idempotent/no-op calls, and never while `_stopped`, so the teardown-chain unsuppress cannot resurrect the class). A **secondary placement gate** (`sidebar-ux-secondary-placement-hold`, refcounted `holdSecondaryPlacementReveal` / `releaseSecondaryPlacementReveal`) additionally keeps the second drawer shell + pinned strip hidden for the lifetime of the boot placement pass (`bootstrapFromLayout`'s pass holds it, releases in `finally`, 5s safety cap): the pass can outlive the capped (1.5s) main reveal, and without the gate the active panel root painted while the serial strip placement was still running ("content before tab buttons", taskbar mode). A late release (main already visible) plays a secondary-only fade (`sidebar-ux-secondary-reveal-in`). The gate is visual-only and never hides the main surface, so a slow pass cannot stall the main reveal.
 
 **Unsuppress readiness** (main-mirror and host): lift the guard only when (1) the **host** sidebar has `tabBtnActive` for the saved `primary.tabId` for **≥ N consecutive polls** (`RESTORE_HOST_STABLE_POLLS`, poll every `RESTORE_TAB_POLL_MS` ≈16ms; re-click when `polls % 3 === 0` while host not yet active), **and** (2) the parked panel body has settled (childList mutation quiescence, or a short fallback if the tab was already correct / empty). Final panel-body stamp + repark run while still pending, then two rAF unsuppress. Canvas mirror chrome (`_activeMainMirrorKey` / `sidebar-ux-tab-active` on mirror buttons) is **not** a restore-ready signal — `activateMainMirrorFromRestore` paints header + highlight before React commits panel children. Secondary `finishRestore` re-asserts primary via `ensureRestoredPrimaryTab` (also host-only). ~1s poll budget + fail-forward unsuppress if restore never completes.
 
 **Restore**: `restoreMainDrawerFromDom()` simulates clicks on the host tab (with Canvas active-key update under taskbar mode) since `spindle.ui.openDrawerTab` is not available to extensions at runtime. Open/width are applied while still suppressed; visibility lifts only once host active + content settle.
+
+**Warm-restore persistence (`persistWhilePending`, 2026-09-15)**: `bootstrapFromLayout` arms `_pendingLayout` when a saved tab cannot resolve on the first identity walk (late extension registration); `reconcileAndPersist` refuses to write while it is armed so a partial model never replaces the stored layout. That gate is correct for **boot** (the top-level blob already holds the unresolved keys; the +30s retry window owns the write) but wrong for a **warm mode-switch restore**: enabling the second drawer in OS mode with an unresolvable key in `osDualLayout` blocked every write, and a reload restored the stale top-level single layout — the second drawer came back empty (live bug 2026-09-15). `restoreSingleModeLayout` (second-drawer enable/disable, OS disable) now calls `bootstrapFromLayout(slot, host, version, { persistWhilePending: true })`: the resolved live model is written immediately (still `hasTabs`-guarded against empty writes, byte-deduped) while `_pendingLayout` stays armed, so a merely-late key still merges into the model and re-persists; only keys that never resolve within the retry window are pruned. **Boot recovery** (`layout/mode-recovery.ts` → `restoreSingleModeLayout(..., { persistWhilePending: false })`, L3 2026-09-23) keeps the plain retry window — it must never durably persist a resolved-only dual blob during the 30s pending window (early-reload placement loss). Warm callers omit the option and get the default `true`.
+
+**S5 — persistence rewiring (2026-09-09)**: the owned-model serialization is the single `layout.json` writer, and `drawers.primary.{open,width}` are fed by **shell truth**, not the host wrapper. `LumiverseHost.observe()` reads `CANVAS_MAIN_OPEN_CLASS` + `MAIN_MIRROR_WIDTH_VAR` while canvas-main mode is active AND the boot restore guard has lifted (`isMainDrawerRestorePending()`); during the restore window (and mirror-inactive/mobile) the host reads remain, so boot persists are byte-identical to pre-S5 behavior. Shell open/close dispatch `setDrawer(primary, {open, width})` directly (`main-mirror-drawer.ts` `persistCanvasMainOpenState` — mirrors `persistSecondaryDrawerOpen`), so closing the Canvas shell persists immediately; with observe() reading shell truth, reconcile sees world==model → no drift writes → no loop. `snapshotLayout().tabOrder` sources the model serialization (`snapshotOwnedModelLayout()`, combined primary+secondary live-id order) with the host-settings copy as pre-bootstrap fallback. On disable, `showAllMainTabButtons()` (setup cleanup chain, between `teardownMainMirror` and `unsuppressMainDrawer`) clears every Canvas-owned inline `display:none` from host main tab buttons — the vanilla seam reappears complete.
+
+**Boot closed-state (2026-09-10, live-verify #6)**: a persisted-closed main drawer previously reopened on every refresh. Two fixes: (1) the boot placement pass's primary CONTENT re-assert (`ensureRestoredPrimaryTab` → `activateMainMirrorFromRestore(hostBtn, title, {open:false})` → `onMainMirrorTabActivated(title, {open:false})`) parks content/title but never touches open state — previously it (and dispatch's +500ms retry) reopened the shell after `restoreMainDrawerFromDom` had honored `primary.open:false`; (2) `restoreMainDrawerFromDom`'s persisted-closed mirror branch re-asserts the closed state via the exported `persistCanvasMainOpenState()` **after** `unsuppressMainDrawer()` — during the restore window `observe()` reads host truth (default-open), so a boot host-sync could adopt `open:true` into the model/disk and a never-transitioned shell had no close-persist to correct it. Post-guard `observe()` reads shell truth, making the re-assert drift-free.
+
+**S7 — teardown leaves the host drawer open (documented)**: `teardownMainMirror` restores parked content, unpins, removes the shell + injected styles, and clears the Canvas classes — it never writes host open state. The host drawer stays open at whatever state it held; `unsuppressMainDrawer` (registered after in the FIFO cleanup) just restores chrome visibility while `observe()` falls back to host reads (mirror-inactive). Disable preserves the user's open drawer — no close-then-reopen churn.
 
 ## Mode Layout Profiles (persisted slots — `layout/mode-profiles.ts`, `settings/state.ts`)
 
@@ -132,6 +145,48 @@ Each mode (single-drawer / dual-drawer) keeps its **own persisted layout**, so s
 
 - `singleLayout` slot — the layout shown when the second drawer is off (all tabs in the main drawer, single order/hidden set, main open/active).
 - `dualLayout` slot — the layout shown when the second drawer is on (tabs split across main + secondary).
+
+### Four-slot layout (2026-09-23)
+
+While OS mode is on, mode switches save/restore the **OS variants** of the same two modes — the non-OS slots are frozen for the duration of the OS session (`dispatch.buildPersistedBlob` routes OS-mode writes):
+
+| Slot | When written / restored |
+|------|-------------------------|
+| `singleLayout` | Second drawer off, OS **off** |
+| `dualLayout` | Second drawer on, OS **off** |
+| `osSingleLayout` | Second drawer off (or forced single on mobile), OS **on** |
+| `osDualLayout` | Second drawer on, OS **on** (desktop) |
+
+Routing accessors (`os/os-mode.ts`): `getActiveSingleSlot` / `getActiveDualSlot` / `setActiveSingleSlot` / `setActiveDualSlot` read/write the OS or non-OS variant based on `isOsModeEnabled()`. Entry slot for OS enable (`entryOsSlot`): **always `osSingle` on mobile** (R1-7 — the live dual layout is what the force saves into `osDual`); otherwise the OS slot of the active mode (model shape authoritative).
+
+**Single-shape fold (`persist/layout-model.ts: foldLayoutToSingleShape`)**: a slot named "single" (`singleLayout` / `osSingleLayout`) must never carry `detachedTabs`. Restoring a dual-shaped blob from a single slot rebuilds a dual model under `secondSidebarEnabled: false`, stranding tabs in `model.secondary` with no shell. `seedOsSlotFromLive('single')` folds the raw serialization (deep-review M1); `serializeModelToSingleLayout` performs the same projection from the model. Secondary entries fold into `tabOrder`, `detachedTabs` empties, secondary drawer state neutralizes; hidden/closed sets, primary geometry and side are preserved.
+
+### Mode recovery at boot (`layout/mode-recovery.ts`)
+
+When settings say `secondSidebarEnabled: true` but the loaded top-level blob is single-shaped (mid-switch reload), `planModeRecovery` decides **synchronously** whether to restore the dual slot; `recoverModeLayoutAtBoot` applies it. Exactly **one** main-drawer restore runs on this path (setup does not also call `applyMainDrawer`).
+
+**Five preconditions — ALL must hold** (plan C; facet-gated apply):
+
+1. `secondSidebarEnabled === true` (settings).
+2. Boot model is single-shaped: `model.secondary.length === 0`.
+3. Top-level blob has no `detachedTabs` (or empty) — a late-resolving dual boot never recovers (R2-2).
+4. Host is present; the dual (or OS dual on OS+desktop) slot has tabs **and** at least one id resolves (`layoutHasTabs` + `slotResolves`).
+5. **Not** OS+mobile (`osMode && matchMedia('(max-width: 600px)')` — R2-11; the mobile force owns that path).
+
+Apply passes `restoreOpen`/`restoreWidth` from the persisted facets and **`persistWhilePending: false`** (plain retry window). Failure paths best-effort `unsuppressMainDrawer` so a broken recovery cannot leave the drawer suppressed until the 3s watchdog.
+
+**Accepted trade-off (R2-1, locked by test C-3):** an intentionally-emptied dual layout is indistinguishable from a mid-switch reload — recovery resurrects the saved dual layout in both cases. Do not cite H4 as its rationale.
+
+### Mode-switch arbiter (`settings/mode-transition.ts`)
+
+Hierarchical **two-chain** serializer — no deadlocks, rejections swallowed so chains never wedge:
+
+- `runOsTransition(fn)` — OS enable/disable; runs after prior OS transitions, then enters the drawer chain.
+- `runDrawerTransition(fn)` — second-drawer enable/disable; runs after prior drawer transitions.
+- `runNestedDrawerTransition` — re-entrant drawer entry when already inside `runOsTransition`'s fn (inline, no second chain hop).
+- `withModeSwitchBarrier(fn)` — **commit barrier** (H1): outermost switch drains Configure commits, freezes `commitDraftToOwnedModel` across snapshot/restore until terminal `refreshConfigureDraftFromLive`, nested switches stack a depth counter. All four switch paths restructure to `flush → barrier → snapshot/restore → refresh-ONLY`.
+
+`owned-commit.ts` refuses with `superseded` at entry AND after the rebase await; Configure autoCommit/Done drop that result silently (never an error banner).
 
 **Storage:** both slots live at the top level of the layout blob (`dispatch.ts:buildPersistedBlob` embeds them; `hydrateModeLayoutSlots` restores them at boot). The active model serialization fills the slot of the mode it matches (`model.secondary.length > 0` ⟺ dual), so a stale dual model can never clobber the stored single slot.
 
@@ -143,7 +198,7 @@ Each mode (single-drawer / dual-drawer) keeps its **own persisted layout**, so s
 
 **DetachedTabs semantics** (unified across all writers): `tabId` = current live id (placement), `tabTitle` = the model TabKey (authoritative for restore — tagging-state-independent). Writers use `getLiveIdAssignmentEntries()` (`tabs/assignment.ts`).
 
-## First-Enable Seed (`layout/persist.ts` — `seedDualLayoutFromLive`)
+## First-Enable Seed (`layout/snapshot.ts` — `seedDualLayoutFromLive`)
 
 When the user enables the second drawer for the **first time** (no prior dual tabs exist on disk or in the session profile), Canvas seeds the dual layout from the current live single-drawer state rather than restoring stale or empty defaults.
 
@@ -156,7 +211,7 @@ When the user enables the second drawer for the **first time** (no prior dual ta
 
 **Why before setSettings:** the seed is written to `_lastLoadedLayout` so `secondSidebarFeature.apply` reads it during its mount callback. Without the seed, the feature would see a stale lastLoaded (possibly with ghost secondary state from a prior session) and attempt to restore tabs that don't exist.
 
-**Re-enable (has dual tabs):** skipped entirely — `hasDetachedTabs` returns true for lastLoaded or the session profile, so the restore path (`applyLayout` or `restoreSessionDualProfile`) runs unchanged. The seed does not overwrite real dual tabs.
+**Re-enable (has dual tabs):** skipped entirely — `hasDetachedTabs` returns true for lastLoaded or the session profile, so the restore path (`bootstrapFromLayout` or `restoreSessionDualProfile`) runs unchanged. The seed does not overwrite real dual tabs.
 
 **Helper functions:**
 - `hasDetachedTabs(layoutOrProfile)` — null-safe check for at least one entry in `detachedTabs`.
@@ -198,7 +253,7 @@ restore because `host.findKey` turns a TabKey into a garbage `ext:…` key (see
 [pitfalls.md](pitfalls.md) §1). The owned-model serialize path
 (`serializeModelToLayout` → `host.resolve`) was always live-id correct.
 
-## Layout Restore (`layout/apply.ts`)
+## Layout Restore (`recon/dispatch.bootstrapFromLayout` + `layout/`)
 
 Restores the secondary sidebar state:
 
@@ -236,3 +291,5 @@ See [pitfalls.md](pitfalls.md) §1, §7, §8.
 Settings are merged into the layout blob as the `settings` field. `persistSettings()` debounces at 100ms and posts `SAVE_LAYOUT` with `buildPersistedLayout()` geometry plus `getSettings()`.
 
 Tab assignment is always written (built-in). When the remaining two user-facing layout facets (open + width) are both OFF, their geometry fields come from the last-loaded layout (or closed defaults), so re-enabling a facet later does not lose the previous disk state.
+
+**Preference bookkeeping (never user-facing):** `sidesChromePrefs` (taskbar + outer-edge before a Top/Bottom excursion), `osChromePrefs` (the same pair plus `coreTabsHidden` before OS mode was enabled; the `coreTabsHidden` member is optional for blobs written before it existed — restore defaults to false), and `osForcedSingleDrawer` (OS mode auto-disabled the second drawer because the viewport is mobile; disabling OS mode or leaving mobile restores dual). Corrupt shapes/values are normalized: `osChromePrefs` with a non-boolean member drops to null, a non-boolean `osForcedSingleDrawer` coerces to false.

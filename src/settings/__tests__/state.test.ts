@@ -7,10 +7,24 @@ function assert(cond: unknown, msg: string) {
 
 import {
   getSettings,
+  hydrateSettings,
+  setSettings,
   normalizeCanvasSettings,
   isTaskbarModeEnabled,
   isHideDrawerOpenCloseButtonsEnabled,
   isDragAndDropDrawerTabsEnabled,
+  getDrawerLocation,
+  isHorizontalStrip,
+  setMobileViewportActive,
+  hydrateModeLayoutSlots,
+  getSingleLayoutSlot,
+  setSingleLayoutSlot,
+  getDualLayoutSlot,
+  setDualLayoutSlot,
+  getOsSingleLayoutSlot,
+  setOsSingleLayoutSlot,
+  getOsDualLayoutSlot,
+  setOsDualLayoutSlot,
 } from '../state'
 import { mergeCanvasSettings } from '../../types'
 
@@ -40,9 +54,9 @@ assertEqual(settings.drawerShadowsDesktop, true, 'drawerShadowsDesktop defaults 
 assertEqual(settings.drawerShadowsMobile, false, 'drawerShadowsMobile defaults to false')
 assertEqual(settings.slashCommandsEnabled, true, 'slashCommandsEnabled defaults to true')
 assertEqual(settings.hideDrawerOpenCloseButtons, false, 'hideDrawerOpenCloseButtons defaults to false')
-// Default true in DEFAULT_CANVAS_SETTINGS, but normalize clears it when taskbar is off
-// (getSettings() after hydrate is normalized — taskbar default false → drag forced off).
-assertEqual(settings.dragAndDropDrawerTabs, false, 'dragAndDropDrawerTabs defaults to false after normalize (taskbar off)')
+// Default true in DEFAULT_CANVAS_SETTINGS and stays on after normalize
+// (S7 removed the taskbar cascade — the toggle is the only gate).
+assertEqual(settings.dragAndDropDrawerTabs, true, 'dragAndDropDrawerTabs defaults to true (S7 toggle-only gate)')
 
 // --- mergeCanvasSettings merges correctly ---
 // null input → all defaults
@@ -73,6 +87,19 @@ assert(slashDefault.slashCommandsEnabled === true, 'mergeCanvasSettings default 
 const slashOff = mergeCanvasSettings({ slashCommandsEnabled: false })
 assertEqual(slashOff.slashCommandsEnabled, false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false')
 assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects explicit slashCommandsEnabled=false (assert)')
+
+// horizontalSplit (2026-09-16) — default 0.5, passthrough, numeric clamp.
+assertEqual(fromNull.horizontalSplit, 0.5, 'mergeCanvasSettings(null) defaults horizontalSplit=0.5')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 0.3 }).horizontalSplit, 0.3, 'merge keeps explicit horizontalSplit')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 0.05 }).horizontalSplit, 0.1, 'merge clamps low horizontalSplit to 0.1')
+assertEqual(mergeCanvasSettings({ horizontalSplit: 5 }).horizontalSplit, 0.9, 'merge clamps high horizontalSplit to 0.9')
+assertEqual(mergeCanvasSettings({ horizontalSplit: -1 }).horizontalSplit, 0.1, 'merge clamps negative horizontalSplit')
+assertEqual(mergeCanvasSettings({ horizontalSplit: Number.NaN }).horizontalSplit, 0.5, 'merge coerces NaN horizontalSplit to 0.5')
+assertEqual(
+  mergeCanvasSettings({ horizontalSplit: 'nope' as unknown as number }).horizontalSplit,
+  0.5,
+  'merge coerces non-number horizontalSplit to 0.5',
+)
 
 // Legacy sidebarShadows* → drawerShadows* migration
 {
@@ -126,23 +153,27 @@ assert(slashOff.slashCommandsEnabled === false, 'mergeCanvasSettings respects ex
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
-  if (actual !== expected) {
+  if (actual === expected) {
+    passed++
+  } else {
     console.error(`FAIL: ${message} — expected ${expected}, got ${actual}`)
     failed++
   }
 }
 
-// --- taskbarMode requires moveControlsToOuterEdge ---
+// --- S1: taskbarMode no longer requires moveControlsToOuterEdge (cascade
+// dropped — ownership is unconditional; the effective pin gate
+// isTaskbarModeEnabled still requires both). ---
 {
-  const cleared = normalizeCanvasSettings(
+  const kept = normalizeCanvasSettings(
     mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: false }),
   )
-  assertEqual(cleared.taskbarMode, false, 'normalize: taskbar off when outer edge off')
-  assertEqual(cleared.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
+  assertEqual(kept.taskbarMode, true, 'normalize: taskbar stays on when outer edge off (S1)')
+  assertEqual(kept.moveControlsToOuterEdge, false, 'normalize: outer edge stays off')
   assertEqual(
-    isTaskbarModeEnabled(cleared),
+    isTaskbarModeEnabled(kept),
     false,
-    'isTaskbarModeEnabled false when outer off',
+    'isTaskbarModeEnabled false when outer off (effective gate)',
   )
 
   const both = normalizeCanvasSettings(
@@ -205,7 +236,9 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   )
 }
 
-// Outer-edge off cascades: taskbar cleared → hide cleared
+// S1: outer-edge off no longer cascades taskbar off — taskbar + hide keep
+// their settings (inert while the effective pin gate is off); hide stays
+// cleared only when taskbarMode itself is off.
 {
   const cascade = normalizeCanvasSettings(
     mergeCanvasSettings({
@@ -215,12 +248,12 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     }),
   )
   assertEqual(cascade.moveControlsToOuterEdge, false, 'cascade: outer-edge off')
-  assertEqual(cascade.taskbarMode, false, 'cascade: taskbar cleared')
-  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'cascade: hide cleared')
+  assertEqual(cascade.taskbarMode, true, 'cascade: taskbar kept (S1 — no clearing)')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'cascade: hide kept (taskbar still on)')
   assertEqual(
     isTaskbarModeEnabled(cascade),
     false,
-    'cascade: isTaskbarModeEnabled false',
+    'cascade: isTaskbarModeEnabled false (effective gate)',
   )
   assertEqual(
     isHideDrawerOpenCloseButtonsEnabled(cascade),
@@ -243,9 +276,10 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(direct.hideDrawerOpenCloseButtons, false, 'direct: hide cleared when taskbar off')
 }
 
-// --- dragAndDropDrawerTabs requires taskbarMode ---
+// --- dragAndDropDrawerTabs: toggle-only gate (S7 — taskbar cascade removed) ---
 {
-  const cleared = normalizeCanvasSettings(
+  // Toggle on + taskbar OFF → kept by normalize AND effectively enabled.
+  const onTaskbarOff = normalizeCanvasSettings(
     mergeCanvasSettings({
       dragAndDropDrawerTabs: true,
       taskbarMode: false,
@@ -253,14 +287,14 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     }),
   )
   assertEqual(
-    cleared.dragAndDropDrawerTabs,
-    false,
-    'dragAndDrop cleared when taskbar mode is off',
+    onTaskbarOff.dragAndDropDrawerTabs,
+    true,
+    'dnd S7: drag kept when taskbar mode is off (cascade removed)',
   )
   assertEqual(
-    isDragAndDropDrawerTabsEnabled(cleared),
-    false,
-    'isDragAndDropDrawerTabsEnabled false when drag cleared',
+    isDragAndDropDrawerTabsEnabled(onTaskbarOff),
+    true,
+    'dnd S7: isDragAndDropDrawerTabsEnabled true with taskbar off (toggle-only gate)',
   )
 
   const both = normalizeCanvasSettings(
@@ -274,9 +308,24 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   assertEqual(
     isDragAndDropDrawerTabsEnabled(both),
     true,
-    'isDragAndDropDrawerTabsEnabled true when all three on',
+    'isDragAndDropDrawerTabsEnabled true when taskbar + outer-edge on',
   )
 
+  // Toggle off → disabled regardless of taskbar mode.
+  const offTaskbarOn = normalizeCanvasSettings(
+    mergeCanvasSettings({
+      dragAndDropDrawerTabs: false,
+      taskbarMode: true,
+      moveControlsToOuterEdge: true,
+    }),
+  )
+  assertEqual(
+    isDragAndDropDrawerTabsEnabled(offTaskbarOn),
+    false,
+    'dnd S7: toggle off → disabled even with taskbar on',
+  )
+
+  // hide still cascades (unchanged) while drag no longer does.
   const cascade = normalizeCanvasSettings(
     mergeCanvasSettings({
       dragAndDropDrawerTabs: true,
@@ -285,24 +334,24 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
       moveControlsToOuterEdge: false,
     }),
   )
-  assertEqual(cascade.taskbarMode, false, 'dnd cascade: taskbar cleared')
-  assertEqual(cascade.dragAndDropDrawerTabs, false, 'dnd cascade: drag cleared')
-  assertEqual(cascade.hideDrawerOpenCloseButtons, false, 'dnd cascade: hide cleared')
+  assertEqual(cascade.taskbarMode, true, 'dnd cascade: taskbar kept (S1 — outer-edge off does not clear)')
+  assertEqual(cascade.dragAndDropDrawerTabs, true, 'dnd cascade: drag kept (S7 — no clearing)')
+  assertEqual(cascade.hideDrawerOpenCloseButtons, true, 'dnd cascade: hide kept (taskbar on)')
   assertEqual(
     isDragAndDropDrawerTabsEnabled(cascade),
-    false,
-    'dnd cascade: isDragAndDropDrawerTabsEnabled false',
+    true,
+    'dnd cascade: isDragAndDropDrawerTabsEnabled true (S7 — outer-edge off no longer disables)',
   )
 
-  // Raw default true survives merge before normalize when taskbar on
+  // Raw default true survives merge before normalize with taskbar off too.
   const rawDefault = mergeCanvasSettings({
-    taskbarMode: true,
+    taskbarMode: false,
     moveControlsToOuterEdge: true,
   })
   assertEqual(
     rawDefault.dragAndDropDrawerTabs,
     true,
-    'merge default dragAndDropDrawerTabs true when taskbar on',
+    'merge default dragAndDropDrawerTabs true with taskbar off (S7)',
   )
 }
 
@@ -317,6 +366,417 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
   const noLegacy = mergeCanvasSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
   assertEqual(noLegacy.taskbarMode, true, 'migration: new key alone works')
+}
+
+// --- S8: Drawer location — coercion, invariant, ordering ---
+{
+  const defaults = mergeCanvasSettings({})
+  assertEqual(defaults.drawerLocation, 'sides', 'drawerLocation defaults to sides')
+  assertEqual(getDrawerLocation(defaults), 'sides', 'getDrawerLocation returns sides by default')
+  assertEqual(isHorizontalStrip(defaults), false, 'isHorizontalStrip false by default')
+
+  // Corrupt values coerce to sides (enum coercion is the first cascade).
+  for (const bad of ['TOp', 'TOP', 'left', 'right', '', 42, null, true, {}]) {
+    const coerced = normalizeCanvasSettings(
+      mergeCanvasSettings({ drawerLocation: bad } as any),
+    )
+    assertEqual(
+      coerced.drawerLocation,
+      'sides',
+      `corrupt drawerLocation ${JSON.stringify(bad)} coerces to sides`,
+    )
+  }
+
+  // Cascade 2h: startButtonAtStripTop boolean coercion (corrupt disk value →
+  // false, the shipped default — bottom dock placement).
+  {
+    const def = mergeCanvasSettings({})
+    assertEqual(def.startButtonAtStripTop, false, 'startButtonAtStripTop defaults to false')
+    for (const bad of [1, 0, null, undefined, 'true', '', {}]) {
+      const coerced = normalizeCanvasSettings(
+        mergeCanvasSettings({ startButtonAtStripTop: bad } as any),
+      )
+      assertEqual(
+        coerced.startButtonAtStripTop,
+        false,
+        `corrupt startButtonAtStripTop ${JSON.stringify(bad)} coerces to false`,
+      )
+    }
+    assertEqual(
+      normalizeCanvasSettings(mergeCanvasSettings({ startButtonAtStripTop: true })).startButtonAtStripTop,
+      true,
+      'startButtonAtStripTop true is kept',
+    )
+    assertEqual(
+      normalizeCanvasSettings(mergeCanvasSettings({ startButtonAtStripTop: false })).startButtonAtStripTop,
+      false,
+      'startButtonAtStripTop false is kept',
+    )
+  }
+
+  // Ordering: the location invariant runs BEFORE the hide cascade, so a
+  // hide:true + taskbar:false + location:top blob keeps hide (the invariant
+  // turns taskbar on first).
+  const ordering = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    hideDrawerOpenCloseButtons: true,
+    taskbarMode: false,
+    moveControlsToOuterEdge: false,
+  }))
+  assertEqual(ordering.hideDrawerOpenCloseButtons, true, 'hide survives the location invariant (ordering)')
+  assertEqual(ordering.taskbarMode, true, 'ordering: taskbar forced on')
+  assertEqual(isHideDrawerOpenCloseButtonsEnabled(ordering), true, 'ordering: effective hide gate on')
+
+  // top/bottom force taskbar chrome on.
+  const top = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'top' }))
+  assertEqual(top.drawerLocation, 'top', 'top is kept')
+  assertEqual(top.taskbarMode, true, 'top forces taskbarMode on')
+  assertEqual(top.moveControlsToOuterEdge, true, 'top forces moveControlsToOuterEdge on')
+  assertEqual(isTaskbarModeEnabled(top), true, 'top → effective taskbar gate on')
+  assertEqual(isHorizontalStrip(top), true, 'isHorizontalStrip true for top')
+
+  const bottom = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'bottom' }))
+  assertEqual(bottom.drawerLocation, 'bottom', 'bottom is kept')
+  assertEqual(bottom.taskbarMode, true, 'bottom forces taskbarMode on')
+  assertEqual(bottom.moveControlsToOuterEdge, true, 'bottom forces outer-edge on')
+  assertEqual(isHorizontalStrip(bottom), true, 'isHorizontalStrip true for bottom')
+
+  // Normalize alone never forces the flags off on Sides (setSettings owns the
+  // restore — see the S8 excursion block below).
+  const back = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'sides',
+    taskbarMode: true,
+    moveControlsToOuterEdge: true,
+  }))
+  assertEqual(back.drawerLocation, 'sides', 'sides kept')
+  assertEqual(back.taskbarMode, true, 'sides leaves taskbarMode on')
+  assertEqual(back.moveControlsToOuterEdge, true, 'sides leaves moveControlsToOuterEdge on')
+  assertEqual(isHorizontalStrip(back), false, 'isHorizontalStrip false after returning to sides')
+
+  // Explicit sides never turns an existing taskbar choice off.
+  const sidesOnly = normalizeCanvasSettings(mergeCanvasSettings({ drawerLocation: 'sides' }))
+  assertEqual(sidesOnly.taskbarMode, false, 'sides alone does not force taskbarMode')
+  assertEqual(sidesOnly.moveControlsToOuterEdge, false, 'sides alone does not force outer-edge')
+}
+
+// --- S8: Sides taskbar/outer-edge prefs survive a Top/Bottom excursion ---
+// Top/Bottom force both flags on (normalize invariant). setSettings records
+// the user's Sides values in `sidesChromePrefs` on an explicit toggle and
+// restores them when the location returns to sides.
+{
+  // Explicit on/on while on Sides, round-tripped through Top.
+  hydrateSettings(null)
+  assertEqual(getSettings().drawerLocation, 'sides', 'excursion: starts on sides')
+  assertEqual(getSettings().sidesChromePrefs, null, 'excursion: no snapshot until an explicit toggle')
+  setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  const snap = getSettings().sidesChromePrefs
+  assertEqual(snap?.taskbarMode, true, 'excursion: on/on toggle recorded')
+  assertEqual(snap?.moveControlsToOuterEdge, true, 'excursion: on/on toggle recorded (outer)')
+  setSettings({ drawerLocation: 'top' })
+  assertEqual(getSettings().taskbarMode, true, 'excursion: top forces taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'excursion: top forces outer on')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().drawerLocation, 'sides', 'excursion: back on sides')
+  assertEqual(getSettings().taskbarMode, true, 'excursion: restores taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'excursion: restores outer on')
+
+  // Explicit off/off while on Sides, round-tripped through Bottom.
+  hydrateSettings(null)
+  setSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  setSettings({ drawerLocation: 'bottom' })
+  assertEqual(getSettings().taskbarMode, true, 'excursion: bottom forces taskbar on')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'excursion: restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'excursion: restores outer off')
+
+  // Legacy blob (no snapshot) last saved while horizontal: the forced values
+  // are not trustworthy, so the return to Sides falls back to the defaults
+  // instead of leaving them on (the reported bug).
+  hydrateSettings({ drawerLocation: 'top', taskbarMode: true, moveControlsToOuterEdge: true })
+  assertEqual(getSettings().sidesChromePrefs, null, 'legacy: no snapshot')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'legacy: falls back to default taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'legacy: falls back to default outer off')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'legacy: fallback recorded')
+
+  // Persisted snapshot (reload while horizontal) is honored over defaults.
+  hydrateSettings({
+    drawerLocation: 'bottom',
+    taskbarMode: true,
+    moveControlsToOuterEdge: true,
+    sidesChromePrefs: { taskbarMode: false, moveControlsToOuterEdge: true },
+  })
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, false, 'persisted snapshot: restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'persisted snapshot: restores outer on')
+
+  // Corrupt snapshot shape is dropped by normalize → defaults fallback.
+  const corrupt = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: { taskbarMode: 'yes', moveControlsToOuterEdge: 1 } as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(corrupt.sidesChromePrefs, null, 'corrupt snapshot dropped to null')
+  const corrupt2 = normalizeCanvasSettings(mergeCanvasSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: 'nope' as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(corrupt2.sidesChromePrefs, null, 'non-object snapshot dropped to null')
+
+  // A plain explicit toggle on Sides alone (without a location change)
+  // keeps the record current for the next excursion.
+  hydrateSettings(null)
+  setSettings({ moveControlsToOuterEdge: true })
+  assertEqual(getSettings().sidesChromePrefs?.moveControlsToOuterEdge, true, 'toggle records outer on')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'toggle records taskbar default off')
+}
+
+// --- Mobile taskbars exclude Sides and remember explicit Top/Bottom ---
+{
+  const original = { ...getSettings() }
+  try {
+    setMobileViewportActive(false)
+    hydrateSettings(null)
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'mobile layout: new install defaults remembered choice to top')
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+
+    // AC1: Sides on desktop does not erase either explicit horizontal choice.
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'sides' })
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile entry: Sides resolves to remembered Top')
+    setMobileViewportActive(false)
+    assertEqual(getSettings().drawerLocation, 'top', 'desktop return keeps normalized Top active')
+
+    setSettings({ drawerLocation: 'sides' })
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'sides' })
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile entry: Sides resolves to remembered Bottom')
+
+    // AC2: most-recent explicit horizontal choice wins; Sides is not a choice.
+    setMobileViewportActive(false)
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'Sides leaves the latest explicit horizontal choice intact')
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile entry uses the latest alternating selection')
+
+    // AC3: selecting/restoring Sides on mobile cannot activate it or alter memory.
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile Sides selection stays on remembered Top')
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'mobile Sides selection does not overwrite memory')
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile Sides selection after Bottom stays on Bottom')
+
+    // AC4: desktop Sides remains selectable, and entering mobile resolves it
+    // again without affecting the independent remembered mode.
+    setMobileViewportActive(false)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'desktop return preserves Bottom until another choice')
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'sides', 'Sides remains selectable on desktop')
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile entry after desktop Sides restores Bottom')
+
+    // AC3: boot restore while mobile normalizes persisted Sides. Missing
+    // memory deterministically falls back to Top; explicit memory is retained.
+    hydrateSettings({ drawerLocation: 'sides', taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile restore with no horizontal choice falls back to Top')
+    hydrateSettings({ drawerLocation: 'sides', lastHorizontalDrawerLocation: 'bottom', taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile restore honors persisted Bottom memory')
+    assertEqual(
+      mergeCanvasSettings({ drawerLocation: 'bottom' }).lastHorizontalDrawerLocation,
+      'bottom',
+      'legacy Bottom preference seeds remembered mode during migration',
+    )
+  } finally {
+    setMobileViewportActive(false)
+    hydrateSettings(original)
+  }
+}
+
+// --- Mobile Vanilla survives mode selection, unrelated changes and reload ---
+{
+  const original = { ...getSettings() }
+  try {
+    setMobileViewportActive(true)
+    hydrateSettings({ drawerLocation: 'bottom', osMode: true })
+    setSettings({ drawerLocation: 'sides', osMode: false, taskbarMode: false, moveControlsToOuterEdge: false })
+    assertEqual(isTaskbarModeEnabled(), false, 'mobile OS→Vanilla: destination chrome wins over OS snapshot')
+    assertEqual(getDrawerLocation(), 'sides', 'mobile Vanilla: native handles and in-drawer tabs')
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'bottom', 'mobile Vanilla: keeps remembered Bottom')
+    setSettings({ debugMode: false })
+    assertEqual(isTaskbarModeEnabled(), false, 'mobile Vanilla: unrelated changes do not re-enable Taskbar')
+    hydrateSettings({ ...getSettings() })
+    assertEqual(getDrawerLocation(), 'sides', 'mobile Vanilla: survives reload')
+    setSettings({ osMode: true })
+    assertEqual(getDrawerLocation(), 'bottom', 'mobile Vanilla→OS: visible taskbar returns to remembered edge')
+    setSettings({ osMode: false, taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(isTaskbarModeEnabled(), true, 'mobile OS→Taskbar: explicit destination wins')
+    setSettings({ drawerLocation: 'sides', taskbarMode: false, moveControlsToOuterEdge: false })
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+    assertEqual(getDrawerLocation(), 'bottom', 'mobile Vanilla→Taskbar: remembered horizontal edge')
+  } finally {
+    setMobileViewportActive(false)
+    hydrateSettings(original)
+  }
+}
+
+// --- OS mode (cascade 2c/2d + osChromePrefs bookkeeping) ---
+{
+  // Defaults.
+  assertEqual(settings.osMode, false, 'osMode defaults to false')
+  assertEqual(settings.osChromePrefs, null, 'osChromePrefs defaults to null')
+
+  // Cascade 2c: osMode forces the full taskbar chrome pair on (same pattern
+  // as top/bottom drawerLocation).
+  const osForced = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    taskbarMode: false,
+    moveControlsToOuterEdge: false,
+  }))
+  assertEqual(osForced.taskbarMode, true, 'osMode forces taskbarMode on')
+  assertEqual(osForced.moveControlsToOuterEdge, true, 'osMode forces outer-edge on')
+
+  // Cascade 3 order: hide stays valid when OS mode forced taskbar on.
+  const osHide = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    hideDrawerOpenCloseButtons: true,
+    taskbarMode: false,
+  }))
+  assertEqual(osHide.hideDrawerOpenCloseButtons, true, 'hide survives OS-forced taskbar')
+
+  // Cascade 2d: corrupt osChromePrefs shapes drop to null.
+  const osCorrupt = normalizeCanvasSettings(mergeCanvasSettings({
+    osMode: true,
+    osChromePrefs: { taskbarMode: 'yes' } as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(osCorrupt.osChromePrefs, null, 'corrupt osChromePrefs dropped to null')
+  const osCorrupt2 = normalizeCanvasSettings(mergeCanvasSettings({
+    osChromePrefs: 'nope' as unknown as { taskbarMode: boolean; moveControlsToOuterEdge: boolean },
+  }))
+  assertEqual(osCorrupt2.osChromePrefs, null, 'non-object osChromePrefs dropped to null')
+
+  // setSettings: enable snapshots the pre-OS chrome values, then the
+  // normalize invariant forces them on.
+  hydrateSettings(null)
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osMode, true, 'osMode enabled')
+  assertEqual(getSettings().taskbarMode, true, 'enable forces taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'enable forces outer on')
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, false, 'enable snapshots pre-OS taskbar (false)')
+  assertEqual(getSettings().osChromePrefs?.moveControlsToOuterEdge, false, 'enable snapshots pre-OS outer (false)')
+
+  // Disable restores the pre-OS values (recorded, like sidesChromePrefs).
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'disable restores pre-OS taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'disable restores pre-OS outer off')
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, false, 'disable keeps the snapshot recorded')
+
+  // Disable while horizontal re-forces taskbar on (location invariant wins).
+  hydrateSettings({ drawerLocation: 'top', taskbarMode: true, moveControlsToOuterEdge: true })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, true, 'enable on top/bottom snapshots forced-true')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'disable while horizontal: location keeps taskbar on')
+
+  // Enable with a real user choice to restore: taskbar on, outer off (valid
+  // S1 state) is preserved through the OS excursion.
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'enable forces outer on from S1 state')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'S1 restore: taskbar back on')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'S1 state: outer back off')
+
+  // M7: after an OS excursion started from Top, the location-forced pair must
+  // not stick when the user is back on Sides — the Sides snapshot wins.
+  hydrateSettings(null)
+  setSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7: sides chrome-off recorded')
+  setSettings({ drawerLocation: 'top' })
+  setSettings({ osMode: true })
+  assertEqual(getSettings().osChromePrefs?.taskbarMode, true, 'M7: OS enable from top snapshots forced-true')
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().taskbarMode, true, 'M7: OS still forces chrome on while on sides')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'M7: sides snapshot restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7: sides snapshot restores outer off')
+
+  // M7 legacy: no Sides snapshot yet — returning to Sides materializes one
+  // from the defaults, and that snapshot is what the OS disable restores.
+  hydrateSettings({ taskbarMode: false, moveControlsToOuterEdge: false })
+  assertEqual(getSettings().sidesChromePrefs, null, 'M7 legacy: no snapshot yet')
+  setSettings({ drawerLocation: 'top' })
+  setSettings({ osMode: true })
+  setSettings({ drawerLocation: 'sides' })
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7 legacy: return to sides materializes snapshot')
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, false, 'M7 legacy: materialized snapshot restores taskbar off')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7 legacy: materialized snapshot restores outer off')
+
+  // M7 fallback chain: sidesChromePrefs null on a legacy Sides blob → the
+  // osChromePrefs pair is used, not the defaults.
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  setSettings({ osMode: true })
+  setSettings({ osMode: false })
+  assertEqual(getSettings().sidesChromePrefs, null, 'M7 fallback: still no sides snapshot')
+  assertEqual(getSettings().taskbarMode, true, 'M7 fallback: osChromePrefs pair supplies taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, false, 'M7 fallback: osChromePrefs pair supplies outer off')
+
+  // M7: an OS disable while still on Top keeps the forced pair (the location
+  // invariant owns it) even with a false Sides snapshot on record.
+  hydrateSettings({
+    drawerLocation: 'top',
+    sidesChromePrefs: { taskbarMode: false, moveControlsToOuterEdge: false },
+  })
+  setSettings({ osMode: true })
+  setSettings({ osMode: false })
+  assertEqual(getSettings().taskbarMode, true, 'M7 top: disable keeps forced taskbar on')
+  assertEqual(getSettings().moveControlsToOuterEdge, true, 'M7 top: disable keeps forced outer on')
+  assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'M7 top: sides snapshot untouched')
+}
+
+// --- B2-1: hydrateModeLayoutSlots resets ALL FOUR slots unconditionally
+// (disk is authoritative; absent/null clears) ---
+{
+  const single = { version: 'v', tabOrder: ['a'], detachedTabs: [] }
+  const dual = { version: 'v', tabOrder: [], detachedTabs: [{ tabId: 's' }] }
+  const osSingle = { version: 'v', tabOrder: ['os-a'], detachedTabs: [] }
+  const osDual = { version: 'v', tabOrder: [], detachedTabs: [{ tabId: 'os-s' }] }
+
+  // Object blob with all four keys → all four apply.
+  hydrateModeLayoutSlots({ singleLayout: single, dualLayout: dual, osSingleLayout: osSingle, osDualLayout: osDual })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: present singleLayout applies')
+  assertEqual(getDualLayoutSlot(), dual, 'B2: present dualLayout applies')
+  assertEqual(getOsSingleLayoutSlot(), osSingle, 'B2: present osSingleLayout applies')
+  assertEqual(getOsDualLayoutSlot(), osDual, 'B2: present osDualLayout applies')
+
+  // Missing keys clear the previous values (hot-reload stale-slot
+  // preservation is intentionally dropped).
+  hydrateModeLayoutSlots({ singleLayout: single })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: present key re-applies')
+  assert(getDualLayoutSlot() == null, 'B2: absent dualLayout key clears')
+  assert(getOsSingleLayoutSlot() == null, 'B2: absent osSingleLayout key clears')
+  assert(getOsDualLayoutSlot() == null, 'B2: absent osDualLayout key clears')
+
+  // hydrate(null) clears everything too — the reset runs BEFORE the object
+  // guard.
+  setDualLayoutSlot(dual)
+  setOsSingleLayoutSlot(osSingle)
+  setOsDualLayoutSlot(osDual)
+  hydrateModeLayoutSlots(null)
+  assert(getSingleLayoutSlot() == null, 'B2: hydrate(null) clears singleLayout')
+  assert(getDualLayoutSlot() == null, 'B2: hydrate(null) clears dualLayout')
+  assert(getOsSingleLayoutSlot() == null, 'B2: hydrate(null) clears osSingleLayout')
+  assert(getOsDualLayoutSlot() == null, 'B2: hydrate(null) clears osDualLayout')
+
+  // Explicit null values on an object blob clear those slots as well.
+  hydrateModeLayoutSlots({ singleLayout: single, dualLayout: null, osSingleLayout: null, osDualLayout: null })
+  assertEqual(getSingleLayoutSlot(), single, 'B2: explicit present key applies')
+  assert(getDualLayoutSlot() == null, 'B2: explicit null dualLayout clears')
 }
 
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

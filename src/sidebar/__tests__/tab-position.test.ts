@@ -108,7 +108,7 @@ Object.defineProperty(stubSidebar, 'parentElement', {
 }
 
 // --- Import after stubs are in place ---
-import { applyTabListPosition, getTabListPosition } from '../tab-position'
+import { applyTabListPosition, clearTabListPosition, getTabListPosition } from '../tab-position'
 import { __setSecondaryWrapperForTest } from '../secondary'
 
 // Stub elements expose a StubStyle, not a real CSSStyleDeclaration. The
@@ -515,6 +515,35 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
 }
 
 // ============================================================
+// C14: clearTabListPosition removes Canvas's inline writes (disable seam)
+// ============================================================
+{
+  stubWrapper.className = 'wrapperRight'
+  stubWrapper.closest = () => stubWrapper
+  stubDrawerParent.style = new StubStyle()
+  stubSidebar.style = new StubStyle()
+  stubMainPanel.style = new StubStyle()
+
+  // Simulate outer-edge ON applied to the HOST main elements.
+  applyTabListPosition(true, fullOpts(stubDrawer, stubTabList, stubHandle, stubDrawerParent, stubSidebar))
+  assert(stubDrawerParent.style.flexDirection !== '', 'C14 precondition: host main drawer flipped')
+  assert(
+    stubSidebar.style.borderLeft !== '' || stubSidebar.style.borderRight !== '',
+    'C14 precondition: host main tab list border written',
+  )
+
+  clearTabListPosition()
+
+  assertEqual(stubDrawerParent.style.flexDirection, '', 'C14: main drawer flex cleared')
+  assertEqual(stubSidebar.style.borderLeft, '', 'C14: main tab list borderLeft cleared')
+  assertEqual(stubSidebar.style.borderRight, '', 'C14: main tab list borderRight cleared')
+  assertEqual(stubSidebar.style.borderTop, '', 'C14: main tab list borderTop cleared')
+  assertEqual(stubSidebar.style.borderBottom, '', 'C14: main tab list borderBottom cleared')
+  assertEqual(stubMainPanel.style.borderLeft, '', 'C14: main panel borderLeft cleared')
+  assertEqual(stubMainPanel.style.borderRight, '', 'C14: main panel borderRight cleared')
+}
+
+// ============================================================
 // getTabListPosition returns empty strings when elements are null
 // ============================================================
 {
@@ -526,6 +555,55 @@ const fullOpts = (drawer: StubElement, tabList: StubElement, handle: StubElement
   assertEqual(pos.tabListBorderLeft, '', 'getTabListPosition returns empty when tabList is null')
   assertEqual(pos.mainDrawerDir, '', 'getTabListPosition returns empty when mainDrawer is null')
   assertEqual(pos.mainTabListBorderLeft, '', 'getTabListPosition returns empty when mainTabList is null')
+}
+
+// ============================================================
+// LUMI-21 residual (2026-09-28 member report): the disable chain's LAST
+// positional clear must win. teardownSecondarySidebar → applyTabListPin(false)
+// → unpinTabList → applyTabListPosition (no opts → resolves the HOST main
+// drawer) re-writes the inline flex-direction AFTER alwaysCleanups' early
+// clearTabListPosition ran (feature teardowns register later in the FIFO).
+// setup.ts therefore registers a chain-final clearTabListPosition after all
+// writers; this pins the hazard + the final-clear contract.
+// ============================================================
+{
+  ;(globalThis as any).document = {
+    querySelector(sel: string): StubElement | null {
+      if (sel.includes('[data-spindle-mount="sidebar"]')) return stubSidebar
+      if (sel === '.sidebar-ux-drawer') return stubDrawer
+      if (sel === '.sidebar-ux-tab-list') return stubTabList
+      if (sel.includes('.sidebar-ux-resize-handle')) return stubHandle
+      return null
+    },
+  }
+  stubDrawerParent.style = new StubStyle()
+  stubSidebar.style = new StubStyle()
+  stubMainPanel.style = new StubStyle()
+  stubDrawer.style = new StubStyle()
+  stubTabList.style = new StubStyle()
+  stubHandle.style = new StubStyle()
+
+  // (1) live state: outer-edge ON wrote inline positional styles on the HOST
+  // main drawer + tab list.
+  applyTabListPosition(true, fullOpts(stubDrawer, stubTabList, stubHandle, stubDrawerParent, stubSidebar))
+  assert(stubDrawerParent.style.flexDirection !== '', 'residual precondition: host drawer flex written')
+
+  // (2) alwaysCleanups' clearTabListPosition — EARLY in the FIFO chain.
+  clearTabListPosition()
+  assertEqual(stubDrawerParent.style.flexDirection, '', 'residual: the early clear empties the host flex')
+
+  // (3) the traced re-writer: the unpin path re-applies the position inline
+  // (no opts → HOST elements) AFTER the early clear — the residual fingerprint
+  // ('flex-direction: row-reverse;' left on the vanilla drawer).
+  applyTabListPosition(false)
+  assert(stubDrawerParent.style.flexDirection !== '', 'residual: the unpin re-writes the host flex after the early clear (the traced writer)')
+
+  // (4) the chain-final clearTabListPosition (setup.ts, registered after all
+  // writers) must restore the vanilla baseline: empty inline positional style.
+  clearTabListPosition()
+  assertEqual(stubDrawerParent.style.flexDirection, '', 'residual: the final clear restores the vanilla drawer (empty inline)')
+  assertEqual(stubSidebar.style.borderLeft, '', 'residual: final clear empties host tab-list borderLeft')
+  assertEqual(stubSidebar.style.borderRight, '', 'residual: final clear empties host tab-list borderRight')
 }
 
 console.log(`PASS: ${passed}`)

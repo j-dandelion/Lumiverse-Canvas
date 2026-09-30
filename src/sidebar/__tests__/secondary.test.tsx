@@ -73,5 +73,71 @@ assert(
   'S6: unresolvable EXTENSION key (no matching tab) counts as placed (cannot be placed either)',
 )
 
+// ── secondaryTabsToUnassign (2026-09-15, OS-off duplicate fix) ───────────
+// Removal half of a layout restore: live secondary buttons the model no
+// longer places in the secondary drawer. A null findKey is left alone.
+import { secondaryTabsToUnassign } from '../secondary'
+
+const keyLookup = (map: Record<string, string>) => (id: string) => map[id] ?? null
+
+assertEqual(
+  secondaryTabsToUnassign(
+    ['builtin:weaver'],
+    ['weaver'],
+    keyLookup({ weaver: 'builtin:weaver' }),
+  ).join(','),
+  '',
+  'S7: model still places the button secondary → kept',
+)
+assertEqual(
+  secondaryTabsToUnassign(
+    ['builtin:weaver'],
+    ['history'],
+    keyLookup({ history: 'builtin:history' }),
+  ).join(','),
+  'history',
+  'S8: model moved the button to primary → unassigned',
+)
+assertEqual(
+  secondaryTabsToUnassign(
+    ['ext:ext:foo/Bar'],
+    ['spindle:ext:foo:tab:Bar:0'],
+    keyLookup({ 'spindle:ext:foo:tab:Bar:0': 'ext:ext:foo/Bar' }),
+  ).join(','),
+  '',
+  'S9: suffix-drift live id resolving to the model key is kept',
+)
+assertEqual(
+  secondaryTabsToUnassign(
+    [],
+    ['weaver'],
+    keyLookup({ weaver: 'builtin:weaver' }),
+  ).join(','),
+  'weaver',
+  'S10: empty model.secondary → every resolvable button is stale',
+)
+assertEqual(
+  secondaryTabsToUnassign(
+    ['builtin:weaver'],
+    ['ghost'],
+    keyLookup({}),
+  ).join(','),
+  '',
+  'S11: unresolvable live id is left alone (never unassign the unknown)',
+)
+assertEqual(
+  secondaryTabsToUnassign(
+    ['builtin:weaver', 'ext:ext:foo/Bar'],
+    ['weaver', 'spindle:ext:foo:tab:Bar:0', 'history'],
+    keyLookup({
+      weaver: 'builtin:weaver',
+      'spindle:ext:foo:tab:Bar:0': 'ext:ext:foo/Bar',
+      history: 'builtin:history',
+    }),
+  ).join(','),
+  'history',
+  'S12: mixed list → only the model-primary button is unassigned',
+)
+
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
 console.log(`PASS: ${passed}`)

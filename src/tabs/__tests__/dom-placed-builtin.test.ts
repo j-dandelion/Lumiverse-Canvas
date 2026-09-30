@@ -17,12 +17,13 @@ type StubEl = {
   children: StubEl[]
   parentElement: StubEl | null
   className: string
-  style: Record<string, unknown>
+  style: { removeProperty(k: string): void; setProperty(k: string, v: string): void }
   setAttribute(name: string, value: string): void
   getAttribute(name: string): string | null
   removeAttribute(name: string): void
   hasAttribute(name: string): boolean
   appendChild(c: StubEl): StubEl
+  removeChild(c: StubEl): StubEl
   remove(): void
   contains(other: StubEl): boolean
   querySelector(sel: string): StubEl | null
@@ -37,7 +38,7 @@ function makeEl(tag: string): StubEl {
     children,
     parentElement: null,
     className: '',
-    style: {},
+    style: { removeProperty(_k: string) {}, setProperty(_k: string, _v: string) {} },
     setAttribute(name, value) { attrs[name] = value },
     getAttribute(name) { return name in attrs ? attrs[name] : null },
     removeAttribute(name) { delete attrs[name] },
@@ -50,6 +51,12 @@ function makeEl(tag: string): StubEl {
       }
       c.parentElement = el
       children.push(c)
+      return c
+    },
+    removeChild(c) {
+      const i = children.indexOf(c)
+      if (i >= 0) children.splice(i, 1)
+      if (c.parentElement === el) c.parentElement = null
       return c
     },
     remove() {

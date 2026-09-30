@@ -20,7 +20,7 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
 import type { CanvasFeature } from './registry'
-import { getSettings, setSettings } from '../settings/state'
+import { getSettings, isHorizontalStrip, setSettings } from '../settings/state'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getSecondaryWrapper } from '../sidebar/secondary'
 import { applyDrawerTabPosition } from '../drawerTabPosition'
@@ -131,7 +131,10 @@ export const drawerTabDragFeature: CanvasFeature = {
     // Apply the override to the DOM now that both tabs (possibly) exist.
     // Without this, the saved override is in settings but not on the DOM
     // until the user drags or until a settings change fires apply().
-    applyDrawerTabPosition(getSettings(), getMainDrawerTab(), getSecondaryDrawerTab())
+    // S8: while Top/Bottom there is no panel row to position — skip.
+    if (!isHorizontalStrip()) {
+      applyDrawerTabPosition(getSettings(), getMainDrawerTab(), getSecondaryDrawerTab())
+    }
   },
 
   apply(prev: FullCanvasSettings, next: FullCanvasSettings): void {
@@ -142,6 +145,8 @@ export const drawerTabDragFeature: CanvasFeature = {
     if (prev.drawerTabDrag === next.drawerTabDrag &&
         prev.mainDrawerTabOverrideVh === next.mainDrawerTabOverrideVh &&
         prev.secondaryDrawerTabOverrideVh === next.secondaryDrawerTabOverrideVh) return
+    // S8: Top/Bottom hides both edge handles (no panel row to position).
+    if (isHorizontalStrip(next)) return
     applyDrawerTabPosition(next, getMainDrawerTab(), getSecondaryDrawerTab())
   },
 }

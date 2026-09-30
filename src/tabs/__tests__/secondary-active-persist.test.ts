@@ -77,6 +77,8 @@ function makeEl(tag: string) {
 }
 
 import { mock } from 'bun:test'
+// Spread the real module so newly-imported exports keep linking.
+import * as actualDispatch from '../../recon/dispatch'
 
 // Mock recon/dispatch with a recording dispatchTrackedActiveSync. Must include
 // the exports the STATIC import chain needs (tabs/assignment imports
@@ -84,12 +86,15 @@ import { mock } from 'bun:test'
 // placementFirstMoveByLiveId) or the module load fails.
 let syncCount = 0
 mock.module('../../recon/dispatch', () => ({
+  ...actualDispatch,
   dispatchTrackedActiveSync: async () => { syncCount++ },
   dispatch: async () => {},
   dispatchBatch: async () => {},
   getModel: () => null,
   getHost: () => null,
   flush: async () => {},
+  snapshotOwnedModelLayout: () => null,
+  onModelChanged: () => () => {},
   bootstrap: () => {},
   bootstrapFromLayout: () => {},
   shutdown: () => {},

@@ -16,7 +16,7 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 10. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
 11. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
 
-**[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, host NO-GOs. **Read this before touching tab moves, the main-mirror, or restore.**
+**[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, drawer-location/motion traps, host NO-GOs. **Read this before touching tab moves, the main-mirror, restore, or drawer motion.**
 
 ## Quick Reference
 
@@ -27,6 +27,9 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 ### Key Types
 - `LayoutState` — persisted drawer state (`types.ts`)
 - `CanvasSettings` — all user-togglable settings (`types.ts`)
+- `DrawerLocation` — `'sides' | 'top' | 'bottom'`; Top/Bottom pins one horizontal tab strip per zone to the viewport edge (`types.ts`)
+- `ChromeSideValue` — `'left' | 'right' | 'both' | null` for `optionsButtonLocation` / `startButtonLocation`; `null` = main drawer only, resolved live by `resolveChromeSides` (`types.ts` → `sidebar/chrome-sides.ts`)
+- `horizontalSplit` — Top/Bottom dual-drawer boundary fraction (0.5 default, normalized 0.1–0.9); dragged via the strip handle, drives `--sidebar-ux-hsplit` (`types.ts` → `sidebar/tab-position.ts`)
 - `FullCanvasSettings` — `Required<CanvasSettings>` with all fields non-optional (`settings/state.ts`)
 - `CanvasFeature` — feature lifecycle hooks (`features/registry.ts`)
 - `DrawerTab` — store's tab entry with `id`, `title`, `root`, `iconSvg` (`store/index.ts`)
@@ -39,12 +42,24 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 - `src/recon/dispatch.ts` — dispatch queue, `placementFirstMoveByLiveId` (the move path), `bootstrapFromLayout` (restore + boot placement)
 - `src/host/lumiverse/implementation.ts` — `LumiverseHost` (HostPort): observe/place/setOrder/activate against live Lumiverse
 - `src/features/registry.ts` — feature registry (add new features here)
+- `src/os/` — OS mode: `actions.ts` (window-state actions), `os-mode.ts` (enable/disable + four-slot routing + mobile force), `os-configure-gate.ts` (panel willRestore latch for Configure refresh), `drawer-command.ts` (shell-command seam), `panel-chrome.ts` (header minimize/X + D17 parking), `start-menu.ts` + `start-menu-motion.ts` (Start button/menu), spec `~/Documents/plans/os-mode-spec.md`
+- `src/settings/mode-transition.ts` — hierarchical two-chain arbiter (`runOsTransition` ⊃ `runDrawerTransition`) + `withModeSwitchBarrier` commit barrier
+- `src/layout/mode-recovery.ts` — boot-time mode/slot mismatch recovery (5 preconditions, decision/apply split)
+- `src/layout/mode-profiles.ts` — single/dual restore primitive (`restoreSingleModeLayout`)
 - `src/sidebar/secondary.tsx` — secondary sidebar DOM construction + `reassignSecondaryTabsFromModel`
 - `src/sidebar/secondary-drawer.ts` — secondary drawer state machine
+- `src/sidebar/drawer-shell.ts` — shared shell builder for both drawers (wrapper / drawer / panel / header / tab list)
+- `src/sidebar/animation.ts` + `src/sidebar/panel-motion.ts` — mode-routed open/close motion: Sides `translateX` slide (350 ms) vs Top/Bottom rail bloom (`animatePanelToggle`, anchored to the displayed window's strip button)
+- `src/sidebar/drawer-location.ts` — Drawer location presentation/orchestration: html classes + `--sidebar-ux-strip-h`, shell edge offsets, handle visibility, consumer knobs, presence subscription, `reconcileDrawerLocation()` fan-out, `clearDrawerLocation()` (never writes strip geometry)
+- `src/sidebar/tab-position.ts` — the single strip-geometry writer: pin host chrome (`data-strip-axis`/`data-strip-edge`, zone split), list chrome + clear, spacer sync
 - `src/sidebar/main-tab-pin.ts` — main-mirror pin: exclusive active key, `userPicked` guard, neighbor handoff
 - `src/tabs/assignment.ts` — owned-model facade (TabKey-keyed)
+- `src/sidebar/chrome-sides.ts` — pure resolution of the chrome-location settings against the live main side + dual state
+- `src/sidebar/settings-dock.ts` — Options (Settings gear) location: hides the main mirror gear, clones it into the shared secondary dock, collapses empty docks
+- `src/os/chrome-locations.ts` — unified `reconcileChromeLocations()` fan-out (Options gear + Start sides + the `sidebar-ux-start-edge-inner` root class)
 - `src/slash/runtime.ts` — slash command runtime wiring
-- `src/layout/persist.ts` — layout persistence + IPC
+- `src/persist/layout-repo.ts` + `src/persist/layout-load.ts` — layout persistence + IPC
+- `src/persist/settings-repo.ts` — settings persistence + IPC
 
 ### State Flow
 ```
@@ -54,7 +69,7 @@ User toggles setting in panel
       → feature.apply(prev, next, ctx)    [features/registry.ts]
     → refreshSettingsPanel()              [settings/state.ts]
     → persistSettings()                   [settings/state.ts] (100ms debounce)
-      → sendToBackend({ type: 'SAVE_LAYOUT', layout })  [layout/persist.ts]
+      → sendToBackend({ type: 'SAVE_LAYOUT', layout })  [persist/layout-repo.ts]
 ```
 
 ### Extension Points

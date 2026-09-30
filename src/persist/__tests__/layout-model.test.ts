@@ -157,12 +157,128 @@ function testNullLayoutBuildsEmptyModel(): void {
   assertArray(fromUndefined.primary, [], '13an: undefined layout has empty primary')
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// OS closed-set round-trip (2026-09-14, spec §3.3): closedTabIds serialize
+// to live ids, re-key on build, and GC unresolvable ghosts. A closed
+// active candidate must NOT restore as active (no displayed window).
+// ═══════════════════════════════════════════════════════════════════
+
+function testClosedSetRoundTrip(): void {
+  const original = model()
+  const withClosed = { ...original, closed: [PRESETS, WEAVER] }
+  const layout = serializeModelToLayout(withClosed, key => liveIds.get(key) ?? null, '2.0.0')
+
+  assertArray(layout.closedTabIds ?? [], ['presets:2', 'weaver:2'], '13ao: closed set serializes to live ids')
+  assertEqual(layout.primary?.tabId, 'profile:2', '13ap: closed-set does not disturb the active fields')
+
+  const rebuilt = buildModelFromLayout(layout, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.closed, [PRESETS, WEAVER], '13aq: closed set re-keys on round-trip')
+}
+
+function testClosedSetRejectsClosedActiveCandidates(): void {
+  // Boot with the saved active tab inside the closed-set → no displayed
+  // window (the drawer restores collapsed, spec §3.1 no-active sentinel).
+  const layout = serializeModelToLayout(model(), key => liveIds.get(key) ?? null, '2.0.0')
+  const closedActiveBlob = { ...layout, closedTabIds: ['profile:2'] }
+  const rebuilt = buildModelFromLayout(closedActiveBlob, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.closed, [PROFILE], '13ar: closed set re-keys')
+  assertEqual(rebuilt.active.primary, null, '13as: closed active candidate is rejected → no displayed window')
+  assertEqual(rebuilt.active.secondary, WEAVER, '13at: unaffected side keeps its active')
+}
+
+function testClosedSetGcDropsUnresolvableIds(): void {
+  const layout = serializeModelToLayout(model(), key => liveIds.get(key) ?? null, '2.0.0')
+  const ghostBlob = { ...layout, closedTabIds: ['ghost:1', 'presets:2'] }
+  const rebuilt = buildModelFromLayout(ghostBlob, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.closed, [PRESETS], '13au: unresolvable closed ids are GC-dropped at build (spec §3.4)')
+}
+
+function testClosedSetAbsentBuildsEmpty(): void {
+  const rebuilt = buildModelFromLayout({
+    version: '2.0.0',
+    tabOrder: ['profile:2'],
+  }, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.closed, [], '13av: blob without closedTabIds builds an empty closed set (legacy compat)')
+}
+
 testSerializeAndBuildRoundTrip()
 testSuffixDriftRoundTrip()
 testMalformedLayoutPreservesModelInvariants()
 testPartialResolutionDropsOnlyUnavailableTabs()
 testPartialResolutionSerializerOmitsUnresolvedIds()
 testNullLayoutBuildsEmptyModel()
+testClosedSetRoundTrip()
+testClosedSetRejectsClosedActiveCandidates()
+testClosedSetGcDropsUnresolvableIds()
+testClosedSetAbsentBuildsEmpty()
+
+// ═══════════════════════════════════════════════════════════════════
+// START-MENU-only hidden set round-trip (LUMI-16b): menuHiddenTabIds
+// serialize to live ids and re-key on build, same healing rules as the
+// hidden/closed sets. Consumed ONLY by the Start-menu projections.
+// ═══════════════════════════════════════════════════════════════════
+
+function testMenuHiddenRoundTrip(): void {
+  const original = model()
+  const withMenu = { ...original, menuHidden: [LOOM, WEAVER] }
+  const layout = serializeModelToLayout(withMenu, key => liveIds.get(key) ?? null, '2.0.0')
+  assertArray(layout.menuHiddenTabIds ?? [], ['loom:2', 'weaver:2'], '13ba: menu-hidden set serializes to live ids')
+  assertArray(layout.hiddenTabIds ?? [], ['presets:2'], '13bb: menu-hidden set does not disturb the strip hidden set')
+
+  const rebuilt = buildModelFromLayout(layout, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.menuHidden, [LOOM, WEAVER], '13bc: menu-hidden set re-keys on round-trip')
+  assertArray(rebuilt.hidden, original.hidden, '13bd: strip hidden set untouched by the menu-hidden round-trip')
+}
+
+function testMenuHiddenGcDropsUnresolvableIds(): void {
+  const layout = serializeModelToLayout(model(), key => liveIds.get(key) ?? null, '2.0.0')
+  const ghostBlob = { ...layout, menuHiddenTabIds: ['ghost:1', 'loom:2'] }
+  const rebuilt = buildModelFromLayout(ghostBlob, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.menuHidden, [LOOM], '13be: unresolvable menu-hidden ids are GC-dropped at build')
+}
+
+function testMenuHiddenAbsentBuildsEmpty(): void {
+  const rebuilt = buildModelFromLayout({
+    version: '2.0.0',
+    tabOrder: ['profile:2'],
+  }, id => {
+    for (const [key, liveId] of liveIds) if (liveId === id) return key
+    return null
+  })
+  assertArray(rebuilt.menuHidden, [], '13bf: blob without menuHiddenTabIds builds an empty menu-hidden set (legacy compat)')
+}
+
+function testMenuHiddenSerializerOmitsUnresolvedIds(): void {
+  const withMenu = { ...model(), menuHidden: [LOOM, PRESETS] }
+  const layout = serializeModelToLayout(withMenu, key => {
+    if (key === LOOM) return null
+    return liveIds.get(key) ?? null
+  }, '2.0.0')
+  assertArray(layout.menuHiddenTabIds ?? [], ['presets:2'], '13bg: unresolved menu-hidden ids are omitted from the serialization')
+}
+
+testMenuHiddenRoundTrip()
+testMenuHiddenGcDropsUnresolvableIds()
+testMenuHiddenAbsentBuildsEmpty()
+testMenuHiddenSerializerOmitsUnresolvedIds()
 
 console.log(`persist/layout-model: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

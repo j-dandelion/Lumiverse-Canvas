@@ -6,7 +6,7 @@ Drag-to-resize handles on both the main and secondary drawers.
 
 ### Handle Structure
 
-Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing the content area). The settings panel UI says "4px grab handle" but the actual rendered width is 8px:
+Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing the content area):
 - `position: absolute` within the drawer
 - `cursor: col-resize`
 - `z-index: 99999`
@@ -16,7 +16,10 @@ Each handle is an 8px-wide `div` positioned at the drawer's inner edge (facing t
 
 1. `pointerdown`: record start position and drawer width
 2. `pointermove`: compute delta based on direction, apply `clampSidebarWidth(startWidth + delta)`
-3. `pointerup`: persist layout
+3. `pointerup`, `pointercancel`, or window blur: remove drag listeners and
+   the iframe-blocking overlay, restore body cursor/selection, and persist the
+   last live width exactly once. A cancelled drag keeps the width already
+   applied during the drag.
 
 **Direction encoding**:
 - `'right'` = expand on rightward drag (drawer is on left)
@@ -33,6 +36,45 @@ Resize handles are suppressed on mobile (`isPointerResizeActive()` checks `match
 ### `refreshResizeHandles()`
 
 Idempotent — mount handles if setting is on and handles are missing; remove if setting is off.
+
+## Horizontal Split Handle (`sidebar/tab-position.ts`)
+
+The Top/Bottom dual-drawer boundary handle. Full architecture in
+[sidebar.md](sidebar.md) §Drawer location; drag specifics:
+
+- 12px transparent hit zone, a child of the **secondary pin host** (never the
+  tab list — the Settings/Start dock must stay the list's last child),
+  physically anchored to the host's inner edge (`left:-6px` on a side-right
+  host, `right:-6px` on side-left), `cursor: col-resize`.
+- Visual line: zero-width `::after` with `border-left: 1px solid` — the
+  border paint path, deliberately **not** a 1px background (fractional-zoom
+  visibility; `pitfalls.md` §11).
+- Reveal (2026-09-17): the line is `opacity: 0` at rest and fades in/out
+  (150ms transition). A document-level JS pointer tracker (`--near` class)
+  reveals it only while the pointer is inside the strip band and within
+  `SPLIT_REVEAL_RADIUS_PX` (100px) of the boundary — measured in JS because a
+  CSS `:hover` zone wide enough for the radius would swallow tab clicks.
+  `:hover` / `:focus-visible` / `--active` (drag) reveal unconditionally.
+  The tracker is rAF-coalesced, bound to the handle (torn down with it), and
+  a capture-phase `pointerout` hides the line when the pointer leaves the
+  strip straight into a drawer iframe (after which no document pointermove
+  fires). Pure predicate `shouldRevealSplitHandle()` is unit-tested.
+- Drag (fine pointer only, same gate as DnD/resize handles): pointermove
+  converts `clientX` to a fraction (a side-right secondary measures from the
+  viewport's right edge), clamps via `computeSplitPct` (64px-per-side floor),
+  and live-writes `--sidebar-ux-hsplit` through `setHorizontalSplitPct` (the
+  drag-ownership flag stops reconciles from clobbering the live value).
+  `pointerup` persists `CanvasSettings.horizontalSplit`; double-click resets
+  to 0.5.
+- Cancel paths (`pointercancel`, window blur, host teardown, release outside
+  the window) restore the pre-drag value; a full-viewport transparent overlay
+  (`z-index:13000`, the DnD pattern) keeps drawer iframes from swallowing
+  pointermove. Hidden in Sides (`display: none` on vertical hosts) and under
+  `@media (max-width:600px), (pointer:coarse)`.
+- Geometry ownership: the secondary host width and the main list lane padding
+  both consume the var; the host width is written inline with `!important`
+  (`setImportant`) so stale theme CSS cannot freeze the split — live bug
+  2026-09-16, `pitfalls.md` §11.
 
 ## Drawer Tab Drag (`drawerTabPosition/`)
 
@@ -59,6 +101,8 @@ Vertical drag repositioning for drawer tabs (main + secondary).
 - `apply()`: re-applies overrides from settings on diff
 
 **Bidirectional mirror**: When `mirrorCompactPosition` is on, dragging the secondary also moves the main via `onLiveUpdate`. The style observer on the main fires and writes back to the secondary (idempotent).
+
+**S8 Drawer location:** while Top/Bottom is active the edge handles are hidden and there is no panel row to position — `drawerTabDragFeature.apply` / `mount` skip the override writes, and `drawer-sync` skips the vertical-position mirror and clears any stale `marginTop` on both edge handles (cache reset so returning to Sides re-applies). Resize handles are unaffected (panels keep their side and width in every mode).
 
 ### Utility Functions
 

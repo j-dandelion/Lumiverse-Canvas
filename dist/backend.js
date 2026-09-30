@@ -52,14 +52,26 @@ function pblog(...args) {
   } catch {}
 }
 var saveQueue = Promise.resolve();
+async function readStorageText(key) {
+  const value = await spindle.storage.read(key);
+  if (typeof value === "string")
+    return value;
+  if (value && typeof value === "object" && typeof value.data === "string") {
+    return value.data;
+  }
+  return null;
+}
 async function readJsonFile(key) {
   let data;
   try {
-    data = await spindle.storage.read(key);
-  } catch {
-    return null;
+    data = await readStorageText(key);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "File not found")
+      return null;
+    throw err;
   }
-  if (data && typeof data === "string")
+  if (data !== null)
     return { data, bytes: data.length };
   return null;
 }
@@ -151,11 +163,11 @@ async function loadSettings() {
     if (!raw) {
       const layoutRaw = await readJsonFile(LAYOUT_KEY);
       if (layoutRaw) {
-        let parsed2;
+        let parsed;
         try {
-          parsed2 = JSON.parse(layoutRaw.data);
+          parsed = JSON.parse(layoutRaw.data);
         } catch {}
-        if (parsed2 && typeof parsed2 === "object" && parsed2.settings !== undefined) {
+        if (parsed && typeof parsed === "object" && parsed.settings !== undefined) {
           const migrated = await tryMigrateV1ToV2(layoutRaw.data);
           if (migrated) {
             const fresh = await readJsonFile(SETTINGS_KEY);
@@ -197,7 +209,7 @@ async function loadSettings() {
 }
 async function moveCorruptFile2(key, reason) {
   const newKey = await moveCorruptFile({
-    read: (k) => spindle.storage.read(k).then((v) => typeof v === "string" ? v : v?.data ?? null),
+    read: readStorageText,
     write: (k, contents) => spindle.storage.write(k, contents),
     move: (from, to) => spindle.storage.move(from, to),
     delete: (k) => spindle.storage.delete(k)
@@ -212,8 +224,9 @@ async function moveCorruptFile2(key, reason) {
   }
 }
 async function saveLayout(state) {
-  if (!state || typeof state !== "object")
-    return;
+  if (!state || typeof state !== "object") {
+    throw new Error("invalid layout payload (not an object)");
+  }
   const json = JSON.stringify(state, null, 2);
   pblog("disk-write layout start", `bytes=${json.length}`);
   try {
@@ -224,11 +237,13 @@ async function saveLayout(state) {
     pblog("disk-write layout fail", msg);
     if (DEBUG)
       spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`);
+    throw err instanceof Error ? err : new Error(msg);
   }
 }
 async function saveSettings(state) {
-  if (!state || typeof state !== "object")
-    return;
+  if (!state || typeof state !== "object") {
+    throw new Error("invalid settings payload (not an object)");
+  }
   const json = JSON.stringify(state, null, 2);
   pblog("disk-write settings start", `bytes=${json.length}`);
   try {
@@ -239,6 +254,7 @@ async function saveSettings(state) {
     pblog("disk-write settings fail", msg);
     if (DEBUG)
       spindle.log.error(`[SidebarUX] Failed to save settings: ${msg}`);
+    throw err instanceof Error ? err : new Error(msg);
   }
 }
 spindle.onFrontendMessage(async (payload) => {

@@ -135,6 +135,10 @@ const secondaryState = {
 mock.module('../../sidebar/secondary', () => ({
   SECONDARY_WIDTH_VAR: '--sidebar-ux-secondary-width',
   PUZZLE_ICON_SVG: '',
+  restyleSecondaryShellSide: (side: 'left' | 'right') => {
+    // S4 restyle-in-place: the mounted shell moves to the requested side.
+    if (secondaryState.wrapper) secondaryState.mountedSide = side
+  },
   isSecondarySidebarOpen: () => secondaryState.open,
   getSecondaryWrapper: () => secondaryState.wrapper,
   getSecondaryDrawer: () => secondaryState.wrapper,
@@ -199,6 +203,7 @@ mock.module('../../sidebar/main-mirror-drawer', () => ({
   getMainMirrorDrawer: () => null,
   getMainMirrorTitleEl: () => null,
   getMainMirrorTabList: () => null,
+  getMainMirrorPanel: () => null,
   getMainMirrorPanelContent: () => null,
   getMainMirrorWidthVar: () => '',
   isCanvasMainOpen: () => false,
@@ -212,8 +217,12 @@ mock.module('../../sidebar/main-mirror-drawer', () => ({
   openCanvasMainDrawer: () => {},
   closeCanvasMainDrawer: () => {},
   ensureHostContentParkedPublic: () => {},
-  restartReparkWatch: () => {},
-  __getReparkIdleCountForTest: () => 0,
+  persistCanvasMainOpenState: () => {},
+  pinMainMirrorShellTabList: () => null,
+  unpinMainMirrorShellTabList: () => {},
+  restyleMainShellSide: () => {},
+  syncMainMirrorToViewport: () => {},
+  teardownMainMirror: () => {},
   __resetMainMirrorForTest: () => {},
   MAIN_MIRROR_WIDTH_VAR: '--sidebar-ux-main-mirror-w',
 }))
@@ -304,7 +313,9 @@ const [{ setSettingsRepoBackendCtx, armSettingsRepo, __resetSettingsRepoForTest 
 const [{ serializeModelToLayout }] = await Promise.all([import('../../persist/layout-model')])
 const [
   {
-    applyMainDrawerSideChange,
+    // S4: applyMainDrawerSideChange was deleted — a host side write is a
+    // pure host-settings write; the geometry flow follows via
+    // checkSideChanged/syncFromHost (the test fires the wrapper MO itself).
     resetSideRemountStateAfterDisable,
     __setSideSettleHardMsForTest,
     __resetSideApplyStateForTest,
@@ -324,8 +335,10 @@ const {
   extensionKey,
 } = await import('../../core/model')
 import type { TabKey, Side, DrawerSide, ObservedWorld } from '../../core/model'
-const { __setMainTabPinEnabledForTest, __resetMainTabPinForTest } =
-  await import('../../sidebar/main-tab-pin')
+// S2: the old `__setMainTabPinEnabledForTest` seam died with the parity layer
+// — the tracked-active sync is no longer gated on pin chrome, and the storm
+// below drives it through the real `setActiveSecondaryTabId`.
+const { __resetMainTabPinForTest } = await import('../../sidebar/main-tab-pin')
 
 const PROFILE = builtinKey('profile')
 const LOOM = builtinKey('loom')
@@ -380,19 +393,12 @@ class SideAwareHost extends FakeHost {
     }
   }
   async setSide(side: DrawerSide): Promise<'ok' | 'degraded' | 'failed'> {
-    const ok = patchHostDrawerSettings({ side })
-    // Mirrors the FIXED LumiverseHost.setSide: only drive the Canvas-side
-    // flip (override + remount + settle) when the host accepted the write.
-    // On NO-GO the DOM never flips — installing the override would stick.
-    if (ok) {
-      try {
-        await applyMainDrawerSideChange(side)
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[SideAwareHost] applyMainDrawerSideChange threw:', err)
-      }
-    }
-    return ok ? 'ok' : 'degraded'
+    // Mirrors implementation.setSide (S4): the ONE host side write lives in
+    // drawer-sync's applyCanvasSideChange, which also restyles both shells in
+    // place and stamps the override while the write is in flight.
+    const ds = await import('../../sidebar/drawer-sync')
+    const res = await ds.applyCanvasSideChange(side)
+    return res.writeOk ? 'ok' : 'degraded'
   }
   async setDrawer(side: Side, s: { open: boolean; width: number }): Promise<'ok' | 'degraded' | 'failed'> {
     if (side === 'secondary') {
@@ -419,7 +425,6 @@ function resetGlobal(): void {
   clearHostSettingsCache()
   __setHostSetSettingForTest(null)
   __resetMainTabPinForTest()
-  __setMainTabPinEnabledForTest(false)
   ;(globalThis as any).__setMainWrapperSideForTest?.('left')
   secondaryState.open = false
   secondaryState.wrapper = null
@@ -562,6 +567,11 @@ async function testEnableSideMismatchGo() {
   ;(globalThis as any).__setMainWrapperSideForTest('right')
   ;(globalThis as any).MutationObserver?.__fireAll?.()
   await settle()
+  // The host world reports the flipped side (the wrapper MO → onWorldChanged
+  // → enqueueHostSync wire is exercised by drawer-sync/host tests); converge
+  // the owned model explicitly, as the real host notification would.
+  await dispatch({ t: 'syncFromHost', observed: { ...host.observe(), drawerSide: 'right' } })
+  await settle()
   await sleep(120)
   ;(globalThis as any).MutationObserver?.__fireAll?.()
   await settle()
@@ -602,9 +612,6 @@ async function testPostEnableStormNoGo() {
 
   await requestSecondDrawerMode(true)
   await settle()
-
-  // Real tracked-active hooks on (mirror key + secondary setter).
-  __setMainTabPinEnabledForTest(true)
 
   // The storm: 12 rounds alternating the observed world between two states
   // (secondary active bounces between loom/cortex) while the tracked writers

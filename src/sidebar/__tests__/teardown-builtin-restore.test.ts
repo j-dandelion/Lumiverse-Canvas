@@ -33,6 +33,11 @@ let _fakeMainSidebar: any = null
   documentElement: {
     style: { setProperty: () => {}, getPropertyValue: () => '', removeProperty: () => {} },
     classList: { add() {}, remove() {}, contains() { return false }, toggle() {} },
+    // Reflow shadow ownership writes/removes data-canvas-chat-shadow here.
+    _attrs: {} as Record<string, string>,
+    setAttribute(name: string, value: string) { this._attrs[name] = value },
+    removeAttribute(name: string) { delete this._attrs[name] },
+    getAttribute(name: string) { return this._attrs[name] ?? null },
   },
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeMainSidebar
@@ -362,25 +367,30 @@ async function testT5_NoAssignments() {
 }
 
 // =====================================================================
-// T6: tearDownSecondarySidebar reconciles main-mirror pin strip
-// (reconcileMainTabListPin called via dynamic import)
+// T6: tearDownSecondarySidebar's mirror-strip reconcile is liveness-gated
+// (2026-09-12 teardown fix)
 // =====================================================================
 //
 // Main-mirror filters display:none host buttons; its observer does NOT
-// watch style. teardown unhides secondary tabs via showMainTabButton,
-// so reconcileMainTabListPin must be called to pick them up.
+// watch style, so a mid-session teardown (second-drawer toggle off) must
+// reconcile the pin strip to pick the unhidden buttons up. On extension
+// disable the mirror is already gone and reconcileMainTabListPin →
+// reconcileMainMirrorDrawer would REMOUNT the shell (ownership is
+// unconditional) — a post-disable Canvas shell with an empty tab list at
+// the outer edge. The call is therefore gated on isMainMirrorActive().
 import { mock } from 'bun:test'
 
 let _reconcilePinCallCount = 0
 
-async function testT6_ReconcilePinOnTeardown() {
+async function runTeardownWithMirrorActive(active: boolean): Promise<number> {
   setupEnv({ builtInTabIds: ['databank'] })
   _reconcilePinCallCount = 0
 
-  // Mock main-tab-pin so the dynamic import('./main-tab-pin') inside
-  // tearDownSecondarySidebar resolves to a spy.
   mock.module('../main-tab-pin', () => ({
     reconcileMainTabListPin: () => { _reconcilePinCallCount++ },
+  }))
+  mock.module('../main-mirror-drawer', () => ({
+    isMainMirrorActive: () => active,
   }))
 
   try {
@@ -389,22 +399,31 @@ async function testT6_ReconcilePinOnTeardown() {
     const { tearDownSecondarySidebar } = await import('../secondary')
     tearDownSecondarySidebar()
 
-    // Yield microtasks so the dynamic import promise resolves and the
-    // reconcile call fires.
+    // Yield microtasks so the dynamic import promises resolve and the
+    // guarded reconcile path runs (or not).
     await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
-
-    assert(_reconcilePinCallCount >= 1,
-      'T6: reconcileMainTabListPin called at least once during teardown')
+    await Promise.resolve()
   } finally {
-    // Un-register the mock by returning the original module. Since mock.module
-    // is process-global, replace with a pass-through that re-exports the real
-    // module for any subsequent tests in this process.
-    mock.module('../main-tab-pin', () => ({}))
     restoreEnv()
   }
+  return _reconcilePinCallCount
 }
+
+// T6a: mirror INACTIVE (extension disable) → no reconcile, no remount.
+const _pinCallsInactive = await runTeardownWithMirrorActive(false)
+assert(_pinCallsInactive === 0,
+  'T6a: mirror inactive → reconcileMainTabListPin NOT called (no post-disable remount)')
+
+// T6b: mirror ACTIVE (mid-session second-drawer toggle off) → reconcile fires.
+const _pinCallsActive = await runTeardownWithMirrorActive(true)
+assert(_pinCallsActive >= 1,
+  'T6b: mirror active → reconcileMainTabListPin called (strip refresh)')
+
+// Leave the process-global module mocks in a benign state for later tests.
+mock.module('../main-tab-pin', () => ({}))
+mock.module('../main-mirror-drawer', () => ({ isMainMirrorActive: () => false }))
 
 // =====================================================================
 // T7: null wrapper still clears tab assignments
@@ -427,6 +446,206 @@ async function testT7_NullWrapperClearsAssignments() {
 }
 
 // =====================================================================
+// T8: a dead host bridge (SPINDLE_FRONTEND_INACTIVE at disable) must not
+// abort the teardown
+// =====================================================================
+//
+// The host invalidates the extension frontend generation BEFORE running the
+// cleanup chain, so every ctx.ui call throws. getBuiltInTabRoot used to be
+// called unguarded at the top of the per-tab loop: the throw aborted the
+// whole function — wrapper left in the DOM, every root still parked, and the
+// vanilla drawer rendered empty panels (2026-09-12 live report — lorebook).
+async function testT8_HostInactiveDoesNotAbort() {
+  setupEnv({ builtInTabIds: ['databank', 'lorebook'] })
+  try {
+    // Simulate the host's placeholder error during disable.
+    ;((globalThis.window as any).spindle.ui as any).getBuiltInTabRoot = () => {
+      throw new Error('SPINDLE_FRONTEND_INACTIVE: extension frontend generation is no longer active')
+    }
+    setTabAssignment('databank', 'secondary')
+    setTabAssignment('lorebook', 'secondary')
+
+    const { tearDownSecondarySidebar } = await import('../secondary')
+    tearDownSecondarySidebar()
+
+    assert((_fakeSecondaryWrapper as any)?._removed === true,
+      'T8: wrapper removed despite the host throwing')
+    assertEqual(getTabAssignments().size, 0, 'T8: assignments cleared despite the host throwing')
+    assertEqual(_requestTabLocationCalls.length, 0,
+      'T8: no host location calls attempted against the dead ctx')
+  } finally { restoreEnv() }
+}
+
+// =====================================================================
+// T9: dead-ctx unregisterContainer falls back to the raw store action
+// =====================================================================
+//
+// During extension disable the host generation-gates ctx.containers, so the
+// bridge call throws. The raw Zustand action is still callable and MUST run:
+// while the container entry stays registered, the host keeps routing the
+// affected tabs into the detached Canvas element and ContainerTabContent
+// Pass 3 never resets them to main-drawer (2026-09-12 live report:
+// Theme/Lore/Profile panels stayed empty after disable).
+async function testT9_ContainerUnregisterStoreFallback() {
+  setupEnv({ builtInTabIds: ['lorebook'] })
+  try {
+    const unregistered: string[] = []
+    ;((globalThis.window as any).spindle as any).containers = {
+      unregisterContainer: () => {
+        throw new Error('SPINDLE_FRONTEND_INACTIVE: extension frontend generation is no longer active')
+      },
+    }
+    __setStoreSnapshotForTest({
+      drawerOpen: true,
+      unregisterContainer: (id: string) => { unregistered.push(id) },
+    })
+    setTabAssignment('lorebook', 'secondary')
+
+    const { tearDownSecondarySidebar } = await import('../secondary')
+    tearDownSecondarySidebar()
+
+    assertEqual(unregistered.join(','), 'canvas-secondary-drawer',
+      'T9: raw store unregisterContainer ran after the ctx call threw')
+  } finally { restoreEnv() }
+}
+
+// =====================================================================
+// T10: store API reached through React fiber hook deps (zustand v5 path)
+// =====================================================================
+//
+// zustand v5's useStore calls
+//   React.useCallback(() => selector(api.getState()), [api, selector])
+// so the useCallback hook's memoizedState is [callback, [api, selector]] —
+// the store API object sits in the deps array. The coarse snapshot cache does
+// NOT carry actions (live console: "unregisterContainer unavailable"), so
+// callHostStoreAction must find the API through the fiber hook chain.
+async function testT10_StoreApiViaFiberDeps() {
+  setupEnv({ builtInTabIds: ['lorebook'] })
+  try {
+    const unregistered: string[] = []
+    const api = {
+      getState: () => ({
+        drawerTabs: [],
+        unregisterContainer: (id: string) => { unregistered.push(id) },
+      }),
+      setState: () => {},
+      subscribe: () => () => {},
+    }
+    const depsHook = { memoizedState: [() => {}, [api, () => {}]], next: null }
+    const rootFiber: any = { memoizedState: depsHook, child: null, sibling: null, return: null }
+    ;(_fakeMainSidebar as any).__reactFiber$test = rootFiber
+
+    ;((globalThis.window as any).spindle as any).containers = {
+      unregisterContainer: () => {
+        throw new Error('SPINDLE_FRONTEND_INACTIVE: extension frontend generation is no longer active')
+      },
+    }
+
+    setTabAssignment('lorebook', 'secondary')
+    const { tearDownSecondarySidebar } = await import('../secondary')
+    tearDownSecondarySidebar()
+
+    assertEqual(unregistered.join(','), 'canvas-secondary-drawer',
+      'T10: raw action called via the fiber-dep store API')
+  } finally { restoreEnv() }
+}
+
+// =====================================================================
+// T11: post-teardown hidden-sync cannot re-hide the restored strips
+// (LUMI-21)
+//
+// AC1: toggling Canvas off must leave the vanilla UI intact. The disable
+// chain's restoreHostContent() re-registers host tabs, which re-arms the
+// hidden-sync debounce and fires syncHiddenTabsFromHost — post-teardown
+// continuations must no-op (lifecycle guard) and the debounce must be
+// cancelled, or the vanilla tab strip renders empty of buttons again.
+//
+// T11-local mocks are registered INSIDE the test, after T1–T10 have
+// completed (mock.module is process-global; registering late keeps the
+// earlier tests on the real modules).
+let _t11HostSettings: any = { side: 'right', tabOrder: [], hiddenTabIds: [] as string[] }
+let _t11Secondary: string[] = []
+let _t11Mirror: string[] = []
+let _t11HostMain: string[] = []
+
+async function testT11_PostTeardownHiddenSync() {
+  mock.module('../../dom/host-settings', () => ({
+    getHostDrawerSettings: () => _t11HostSettings,
+  }))
+  mock.module('../../tabs/buttons', () => ({
+    applyHiddenTabIdsToSecondary: (ids: ReadonlySet<string>) => { _t11Secondary = [...ids] },
+    applyHiddenTabIdsToMirror: (ids: ReadonlySet<string>) => { _t11Mirror = [...ids] },
+    applyHiddenTabIdsToHostMain: (ids: ReadonlySet<string>) => { _t11HostMain = [...ids] },
+  }))
+  mock.module('../../recon/dispatch', () => ({
+    getModel: () => null,
+    getHost: () => null,
+  }))
+
+  const {
+    syncHiddenTabsFromHost,
+    scheduleSyncHiddenTabsFromHost,
+    cancelScheduledHiddenTabsSync,
+    resetCanvasHiddenTabIds,
+    setCanvasHiddenTabIds,
+    hydrateCanvasHiddenFromLayout,
+    getCanvasHiddenTabIds,
+  } = await import('../../tabs/hidden-tabs')
+  const { beginLifecycle, endLifecycle } = await import('../../lifecycle/instance')
+  const flush = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+  // T11a (control): with the instance LIVE, the sync applies the stored
+  // hidden set to all three strips.
+  const gen = beginLifecycle()
+  resetCanvasHiddenTabIds()
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: ['databank'] }
+  _t11Secondary = []; _t11Mirror = []; _t11HostMain = []
+  syncHiddenTabsFromHost()
+  assert(_t11Secondary.includes('databank'), 'T11a: live sync applies to the secondary strip (control)')
+  assert(_t11HostMain.includes('databank'), 'T11a-b: live sync applies to the host main strip (control)')
+
+  // T11b: post-teardown direct sync no-ops — the disable chain's
+  // restoreHostContent()-driven pass must not re-hide the restored buttons.
+  endLifecycle(gen)
+  _t11Secondary = []; _t11Mirror = []; _t11HostMain = []
+  setCanvasHiddenTabIds(['databank'])
+  syncHiddenTabsFromHost()
+  assertEqual(_t11Secondary.length, 0, 'T11b: post-teardown sync does not apply to the secondary strip')
+  assertEqual(_t11Mirror.length, 0, 'T11b-b: post-teardown sync does not apply to the mirror strip')
+  assertEqual(_t11HostMain.length, 0, 'T11b-c: post-teardown sync does not apply to the host main strip (AC1)')
+  await flush(20)
+  assertEqual(_t11HostMain.length, 0, 'T11b-d: lazy closed-set continuation inert post-teardown')
+
+  // T11c: a debounce timer armed post-teardown never fires (fire-time
+  // generation guard — belt to the cancel's suspenders).
+  scheduleSyncHiddenTabsFromHost({ delayMs: 10 })
+  await flush(80)
+  assertEqual(_t11Secondary.length, 0, 'T11c: post-teardown debounce fire no-ops')
+
+  // T11d: re-enable — cancel sweeps a pending timer armed before teardown
+  // completed; the fresh session re-seeds from the hydrated layout.
+  const gen2 = beginLifecycle()
+  scheduleSyncHiddenTabsFromHost({ delayMs: 10 })
+  cancelScheduledHiddenTabsSync()
+  await flush(80)
+  assertEqual(_t11Secondary.length, 0, 'T11d: cancelled debounce never fires')
+
+  // T11e: the re-enabled session re-seeds from the hydrated layout (the
+  // teardown reset cleared the stale set) — an empty layout hide list
+  // applies an empty set, leaving the vanilla/Canvas strips unhidden.
+  // Host settings are cleared too: the hydrate/layout blob is the truth
+  // the fresh session re-seeds from, not the disabled session's memory.
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+  resetCanvasHiddenTabIds() // teardown cleanup registration (setup.ts)
+  hydrateCanvasHiddenFromLayout({ hiddenTabIds: [] })
+  syncHiddenTabsFromHost()
+  assertEqual(_t11Secondary.length, 0, 'T11e: re-seeded empty hide list applies empty (no stale hides)')
+  assertEqual(getCanvasHiddenTabIds().length, 0, 'T11e-b: stale hidden set did not survive the toggle')
+
+  _t11HostSettings = { side: 'right', tabOrder: [], hiddenTabIds: [] }
+}
+
+// =====================================================================
 // Run all tests
 // =====================================================================
 
@@ -436,8 +655,11 @@ async function main() {
   await testT3_MultipleBuiltins()
   await testT4_OrderBeforeRemoval()
   await testT5_NoAssignments()
-  await testT6_ReconcilePinOnTeardown()
   await testT7_NullWrapperClearsAssignments()
+  await testT8_HostInactiveDoesNotAbort()
+  await testT9_ContainerUnregisterStoreFallback()
+  await testT10_StoreApiViaFiberDeps()
+  await testT11_PostTeardownHiddenSync()
 
   if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }
   console.log(`PASS: ${passed}`)

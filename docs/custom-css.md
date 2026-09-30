@@ -132,8 +132,12 @@ You only need these if variables are not enough.
 | `.sidebar-ux-tab-active` | The currently selected tab button |
 | `.sidebar-ux-tab-label` | Short name under a tab icon |
 | `.sidebar-ux-tab-list-pin-host` | Pin strip when the drawer is closed |
+| `html.sidebar-ux-location-sides/top/bottom` | Current Drawer location (exactly one) |
+| `[data-strip-axis="horizontal"\|"vertical"]` | Pin host / strip orientation (S8) |
+| `[data-strip-edge="top"\|"bottom"\|"left"\|"right"]` | Edge the strip is anchored to |
 
-Left vs right edge: `.sidebar-ux-side-left` / `.sidebar-ux-side-right`.
+Left vs right edge: `.sidebar-ux-side-left` / `.sidebar-ux-side-right` (still
+meaningful in Top/Bottom: it denotes the drawer's own side).
 
 ---
 
@@ -185,6 +189,15 @@ These change sizes/margins more than theme. Only touch them if you know you need
 | `--sidebar-ux-secondary-w` | Second drawer width |
 | `--sidebar-ux-main-mirror-w` | Main Canvas drawer width |
 | `--sidebar-ux-chat-ml` / `--sidebar-ux-chat-mr` | Chat side margins (reflow) |
+| `--sidebar-ux-strip-h` | Horizontal strip height (56px; S8 Top/Bottom) |
+
+**S8 Top/Bottom chrome:** the strip host is `[data-strip-axis="horizontal"]` and
+the list inside it carries `.sidebar-ux-tab-list--pinned`; orientation, button
+size (48×48), padding, borders and overflow are owned by the injected
+`sidebar-ux-location-horizontal` stylesheet with `!important`. The chat column
+and `[data-component="LandingPage"]` reserve the strip via `margin-top`
+(top-edge) / `margin-bottom` (bottom-edge) — override those selectors if you
+need different spacing.
 
 For how drawers are built, see [sidebar.md](sidebar.md). For chat margins, see [chat-reflow.md](chat-reflow.md).
 

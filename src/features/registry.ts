@@ -29,11 +29,17 @@
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { FullCanvasSettings } from '../settings/state'
-import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled } from '../settings/state'
+import { getSettings, getLastLoadedLayout, getDualLayoutSlot, isDragAndDropDrawerTabsEnabled, isTaskbarModeEnabled, isOsModeEnabled } from '../settings/state'
 import { installTabListDnd, tearDownTabListDnd } from '../tabs/tab-list-dnd'
-import { setDebug } from '../debug/log'
+import { setDebug, dlog, dwarn } from '../debug/log'
+import { applyOsModeChange, syncOsMobileDrawerMode } from '../os/os-mode'
+import { trackModeRevealWork } from '../settings/mode-reveal'
+import { mountPanelChrome, teardownPanelChrome, applyOsWindowControlsChange } from '../os/panel-chrome'
+import { applyStartButtonLocationChange, hideStartMenu, mountStartMenu, teardownStartMenu } from '../os/start-menu'
+import { activateChromeLocations, reconcileChromeLocations, teardownChromeLocations } from '../os/chrome-locations'
+import { cancelAllWrapperAnimations } from '../sidebar/animation'
 import { installDebugEscapeHatch } from '../debug/fiber-scan'
-import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins } from '../chat/reflow'
+import { injectReflowStyles, startReflowObserver, updateChatReflow, clearChatMargins, clearWelcomeReflow } from '../chat/reflow'
 import { registerCleanup } from '../sidebar/cleanup'
 import { getMainDrawer } from '../dom/lumiverse'
 import { injectStyles } from '../debug/styles'
@@ -43,11 +49,21 @@ import { syncDrawerTabSettings } from '../sidebar/drawer-sync'
 import { cancelLayoutSave } from '../persist/layout-load'
 import { attachSlashRuntime } from '../slash/runtime'
 import { unmountToastSurface } from '../slash/toast'
-import { applyTabListPosition, applyTabListPin, reconcileTabListPin } from '../sidebar/tab-position'
-import { applyMainTabListPin, reconcileMainTabListPin } from '../sidebar/main-tab-pin'
+import { applyTabListPosition, applyTabListPin, clearTabListPosition, reconcileTabListPin, syncHorizontalSplit } from '../sidebar/tab-position'
+import { applyMainTabListPin, reconcileMainTabListPin, teardownMainPin } from '../sidebar/main-tab-pin'
+import {
+  clearDrawerLocation,
+  initDrawerLocation,
+  mountDrawerLocation,
+  reconcileDrawerLocation,
+} from '../sidebar/drawer-location'
 import { updateStripGutters, clearStripGutters } from '../sidebar/strip-gutter'
 import { updateDrawerTabVisibility } from '../tabs/buttons'
 import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-drawer'
+import { getModel, dispatchBatch } from '../recon/dispatch'
+import { parseBuiltinKey } from '../core/model'
+import { isCoreTabId } from '../tabs/core-tabs'
+import { startUnhideVanillaTabs } from '../tabs/unhide-vanilla'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -65,6 +81,9 @@ export interface CanvasFeature {
   /** Apply a settings diff. Optional. The orchestrator only calls this
    *  when prev[id] !== next[id]. */
   apply?(prev: FullCanvasSettings, next: FullCanvasSettings, ctx: SpindleFrontendContext): void
+  /** Mount even when the feature's setting is falsy (S1: main-drawer
+   *  ownership is unconditional — the feature self-gates its chrome). */
+  unconditional?: boolean
 }
 
 // --- Shadow CSS constants (shared by desktop + mobile features) ---
@@ -79,6 +98,38 @@ const shadowDisableCss = (media: 'min' | 'max', width: number): string => `
 `
 
 // --- Features ---
+
+let _unhideVanillaTabsTeardown: Teardown | null = null
+
+function mountUnhideVanillaTabs(): Teardown {
+  if (_unhideVanillaTabsTeardown) return _unhideVanillaTabsTeardown
+  const stop = startUnhideVanillaTabs()
+  const teardown = () => {
+    stop()
+    if (_unhideVanillaTabsTeardown === teardown) {
+      _unhideVanillaTabsTeardown = null
+    }
+  }
+  _unhideVanillaTabsTeardown = teardown
+  return teardown
+}
+
+/** Keep Lumiverse's own hidden-tab list clear while Canvas owns the opt-in. */
+const unhideVanillaTabsFeature: CanvasFeature = {
+  id: 'unhideVanillaTabs',
+  mount() {
+    return mountUnhideVanillaTabs()
+  },
+  apply(_prev, next) {
+    if (next.unhideVanillaTabs) {
+      if (!_unhideVanillaTabsTeardown) {
+        registerCleanup(mountUnhideVanillaTabs())
+      }
+      return
+    }
+    _unhideVanillaTabsTeardown?.()
+  },
+}
 
 /** Debug mode: enables [Canvas] console output + installs the escape hatch. */
 const debugFeature: CanvasFeature = {
@@ -135,13 +186,56 @@ const chatReflowFeature: CanvasFeature = {
         registerCleanup(_chatReflowTeardown)
       }
     } else {
-      // On → off: remove the injected CSS and reset chat margins.
-      // The observer stays attached but its CSS rule is gone, so
-      // subsequent scheduleReflow calls have no visual effect.
-      // We don't disconnect the observer — the cleanup chain handles
-      // that on extension disable.
-      document.getElementById('sidebar-ux-reflow')?.remove()
+      // On → off: reset chat margins. The observer stays attached but the
+      // chat write is gated inside updateChatReflow, so subsequent
+      // scheduleReflow calls leave the chat alone. We don't disconnect the
+      // observer — the cleanup chain handles that on extension disable (and
+      // welcomeReflow may still need the shared observer + sheet).
       clearChatMargins()
+      if (!getSettings().welcomeReflow) {
+        document.getElementById('sidebar-ux-reflow')?.remove()
+      }
+    }
+  },
+}
+
+/** Welcome/Landing reflow (default on): the Landing route gets the same
+ *  open-drawer margins as the chat. Independent of chatReflow but shares its
+ *  observer + injected sheet (one MutationObserver watches the main wrapper
+ *  for both consumers). mount()/apply() therefore only start the shared
+ *  observer when it is not already running, and never remove the sheet while
+ *  chat still needs it. */
+const welcomeReflowFeature: CanvasFeature = {
+  id: 'welcomeReflow',
+  mount() {
+    if (!getSettings().welcomeReflow) return
+    if (_chatReflowTeardown) {
+      // The shared observer is already running (chatReflow on, or a runtime
+      // enable): reuse it and just make the sheet + current geometry apply.
+      injectReflowStyles()
+      updateChatReflow()
+      return
+    }
+    _chatReflowTeardown = startReflowObserver()
+    return _chatReflowTeardown
+  },
+  apply(prev, next) {
+    if (prev.welcomeReflow === next.welcomeReflow) return
+    if (next.welcomeReflow) {
+      // Off → on at runtime: same lazy-mount contract as chatReflowFeature.
+      injectReflowStyles()
+      updateChatReflow()
+      if (!_chatReflowTeardown) {
+        _chatReflowTeardown = startReflowObserver()
+        registerCleanup(_chatReflowTeardown)
+      }
+    } else {
+      // On → off: drop the Landing margins/class + snap gate. The shared
+      // sheet must survive while chat still needs it.
+      clearWelcomeReflow()
+      if (!getSettings().chatReflow) {
+        document.getElementById('sidebar-ux-reflow')?.remove()
+      }
     }
   },
 }
@@ -378,6 +472,61 @@ const slashFeature: CanvasFeature = _slashImpl.feature
  *  cleanup chain via alwaysCleanups(). */
 export function slashAlwaysCleanup(): void { _slashImpl.alwaysCleanup() }
 
+/**
+ * S8 Drawer location (Sides | Top | Bottom).
+ *
+ * Registered immediately BEFORE tabPositionFeature so the html location
+ * classes + --sidebar-ux-strip-h exist before any pin chrome in the same
+ * settings diff. `unconditional`: the classes/var must be right before any
+ * mount, even at the default 'sides'.
+ *
+ * On a location-changed diff the legacy geometry features STAND DOWN (they
+ * compare prev/next.drawerLocation) so reconcileDrawerLocation is the only
+ * geometry pass — this is what keeps the taskbar auto-enable from
+ * force-remounting the shells.
+ */
+const drawerLocationFeature: CanvasFeature = {
+  id: 'drawerLocation',
+  unconditional: true,
+  init() {
+    // Classes + strip-height var + HORIZONTAL_STRIP_CSS before any mount.
+    initDrawerLocation()
+  },
+  mount() {
+    // Presentation + presence subscription; the returned teardown
+    // unsubscribes (clearDrawerLocation also handles it idempotently).
+    return mountDrawerLocation()
+  },
+  apply(prev, next) {
+    if (prev.drawerLocation === next.drawerLocation) return
+    // A live drawer animation targets the old rail/geometry — settle it before
+    // the new layout lands (mixed-axis motion otherwise).
+    cancelAllWrapperAnimations()
+    // Authoritative pass for the diff (sync + coalesced).
+    reconcileDrawerLocation({ force: true })
+    // Spec §4.5: a floating Start menu cannot survive the strip moving
+    // underneath it — dismiss before the geometry settles.
+    hideStartMenu({ immediate: true })
+    // Location changes recreate the pin hosts (which carry the Start-edge
+    // attr) — re-resolve all location-dependent chrome.
+    reconcileChromeLocations()
+  },
+}
+
+/**
+ * Top/Bottom dual-drawer split (`CanvasSettings.horizontalSplit`). The
+ * boundary drag persists on release; this apply keeps external setting
+ * changes (settings.json edits, future UI controls) in sync with the
+ * `--sidebar-ux-hsplit` CSS var. Geometry/presence passes stay in
+ * `drawerLocationFeature` + `drawer-location.reconcileDrawerLocation`.
+ */
+const horizontalSplitFeature: CanvasFeature = {
+  id: 'horizontalSplit',
+  apply() {
+    syncHorizontalSplit()
+  },
+}
+
 /** Tab list position: moves the column of tab buttons to the screen-edge
  *  side of the secondary sidebar when enabled. No mount needed — the
  *  effect is applied by createSecondarySidebar / mountSecondarySidebar /
@@ -392,50 +541,86 @@ const tabPositionFeature: CanvasFeature = {
   },
   apply(prev, next) {
     if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge) return
+    // The taskbar feature handles pair changes when its own field changed;
+    // OS changes use the nested sync inside the serialized OS transition.
+    if (prev.taskbarMode === next.taskbarMode && prev.osMode === next.osMode
+        && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+      trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn('[taskbar] mobile drawer sync failed:', err)))
+    }
+    // S8: a location flip auto-enables outer-edge in the same diff — stand
+    // down; drawerLocationFeature.reconcileDrawerLocation owns that pass.
+    if (prev.drawerLocation !== next.drawerLocation) return
     applyTabListPosition(next.moveControlsToOuterEdge)
+    // S1 gate inversion: outer-edge is an input to the taskbar-chrome gate
+    // (isTaskbarModeEnabled = taskbarMode && outer-edge). The taskbarMode
+    // setting itself did not change, so the taskbar feature's apply() won't
+    // fire — re-apply pin state + reflow here.
+    reconcileTabListPin()
+    reconcileMainTabListPin()
+    updateChatReflow()
   },
 }
 
-/** Taskbar mode (requires moveControlsToOuterEdge):
- *  - Secondary: reparents Canvas-owned tab list onto a body-level pin host.
- *  - Main: Canvas-owned *mirror* strip (host React nodes stay put); clicks
- *    forward to host tab buttons. Hidden while main drawer is open.
- *  - Strip gutters: permanent Welcome/Landing bounds (strip width only);
- *    open drawers overlay Welcome. Chat margins stay with chat reflow.
- *  Secondary remount also calls reconcileTabListPin(); side-change calls
- *  reconcileMainTabListPin() (Canvas main shell + host hide + portal).
- *  No-op on mobile (force-unpins / tears down main mirror). */
+/** Main-drawer ownership + taskbar chrome.
+ *
+ * S1 ("Canvas owns the drawers"): the main mirror IS the main drawer and is
+ * ALWAYS mounted on desktop when Canvas is enabled — `taskbarMode` no longer
+ * gates ownership (the host main drawer is hidden and never used on desktop).
+ * `taskbarMode` (+ moveControlsToOuterEdge) now only controls the extra
+ * taskbar CHROME: pinning the main/secondary tab strips to the screen edge,
+ * strip gutters, hidden open/close buttons, and DnD. No-op on mobile (mirror
+ * force-tears-down; host drawer remains the mobile surface until the mobile
+ * task lands).
+ *
+ * User contract (2026-08-25):
+ *   taskbarMode ON  → tabs pinned to screen edge, only panel slides.
+ *   taskbarMode OFF → tabs ride with panel; the shell still owns the drawer.
+ */
 const taskbarModeFeature: CanvasFeature = {
   id: 'taskbarMode',
+  // S1: mount unconditionally — the feature is the mount point for main
+  // drawer ownership; the pin chrome is self-gated inside.
+  unconditional: true,
   mount(_ctx, _layout) {
-    // mount() only runs when taskbarMode is truthy at setup, but still
-    // require outer-edge (settings normalize + apply also enforce this).
-    const on = !!getSettings().taskbarMode && !!getSettings().moveControlsToOuterEdge
-    if (on) {
-      reconcileTabListPin()
-      reconcileMainTabListPin()
-    } else {
-      applyTabListPin(false, { force: true })
-      applyMainTabListPin(false, { force: true })
-    }
+    // Secondary pin is chrome-gated; main mirror ownership is unconditional
+    // but its PIN is chrome-gated.
+    reconcileTabListPin()
+    reconcileMainTabListPin()
     updateDrawerTabVisibility()
     updateStripGutters()
     // Recompute chat reflow (mirror open width / closed strip reserve).
     updateChatReflow()
     return () => {
       applyTabListPin(false, { force: true })
-      applyMainTabListPin(false, { force: true })
+      // Full main teardown on disable (applyMainTabListPin(false) only
+      // unpins — the unconditional shell teardown in setup.ts also runs).
+      teardownMainPin()
       updateDrawerTabVisibility()
       clearStripGutters()
       updateChatReflow()
     }
   },
-  apply(_prev, next) {
-    const on = !!next.taskbarMode && !!next.moveControlsToOuterEdge
-    applyTabListPin(on, { force: true })
-    applyMainTabListPin(on, { force: true })
+  apply(prev, next) {
+    // Register before the location-change stand-down: mobile mode switches
+    // often change the edge and chrome together. Wait for the real layout
+    // fold/restore before exposing the new strip. OS changes own this sync.
+    if (prev.osMode === next.osMode && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+      trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn('[taskbar] mobile drawer sync failed:', err)))
+    }
+    // S8: a location flip auto-enables taskbar chrome in the same diff —
+    // stand down (no force remount); drawerLocationFeature reconciles.
+    if (prev.drawerLocation !== next.drawerLocation) return
+    const chrome = isTaskbarModeEnabled(next)
+    // Main mirror PIN is taskbar chrome (tabs pinned vs riding with panel).
+    // Ownership (drawer shell + host hide) is unconditional — applyMainTabListPin
+    // keeps the shell when chrome is off and only tears down the pin.
+    // S8: no {force:true} on the apply path — a chrome toggle must not
+    // remount the shell (auto-enable already avoids it via stand-down).
+    applyMainTabListPin(chrome)
+    // Secondary edge-strip pin + gutters are also taskbar chrome.
+    applyTabListPin(chrome)
     updateDrawerTabVisibility()
-    if (on) {
+    if (chrome) {
       updateStripGutters()
     } else {
       clearStripGutters()
@@ -464,8 +649,9 @@ const hideDrawerOpenCloseButtonsFeature: CanvasFeature = {
 }
 
 /** Long-press drag-and-drop reorder/move on drawer tab buttons.
- *  Requires taskbar mode (normalize cascade + isDragAndDropDrawerTabsEnabled).
- *  Primary surface is main-mirror; commit still reorders host React buttons. */
+ *  Taskbar-agnostic (S7: toggle-only gate — the main shell is always mounted,
+ *  so main-mirror is always the primary surface; ≤600px is a no-op).
+ *  Commit still reorders host React buttons. */
 const dragAndDropDrawerTabsFeature: CanvasFeature = {
   id: 'dragAndDropDrawerTabs',
   mount() {
@@ -484,11 +670,174 @@ const dragAndDropDrawerTabsFeature: CanvasFeature = {
   },
 }
 
+/** OS mode (2026-09-14, spec §4.8): registered AFTER the taskbar chrome
+ *  features so its apply() runs downstream of the chrome it builds on.
+ *  Layer scope so far: the enable/disable slot orchestration (seed on
+ *  first enable, slot-wins non-OS restore on disable) + the panel-header
+ *  chrome (minimize button injection + X→close-window interception).
+ *  The Start menu mounts in a later step — this feature's hooks extend
+ *  in place. */
+const osModeFeature: CanvasFeature = {
+  id: 'osMode',
+  mount() {
+    // Boot with osMode on: hydrate ran in setup; mount the chrome.
+    if (!isOsModeEnabled()) return
+    mountPanelChrome()
+    mountStartMenu()
+    return () => {
+      teardownPanelChrome()
+      teardownStartMenu()
+    }
+  },
+  apply(prev, next) {
+    if (prev.osMode !== next.osMode) {
+      void applyOsModeChange(prev, next).catch((err) => {
+        dwarn('[os] apply change failed:', err instanceof Error ? err.message : err)
+      })
+    }
+    // Chrome follows the OS gate (both directions; idempotent).
+    if (isOsModeEnabled(next)) {
+      if (!isOsModeEnabled(prev)) {
+        mountPanelChrome()
+        mountStartMenu()
+      }
+    } else {
+      teardownPanelChrome()
+      teardownStartMenu()
+    }
+  },
+}
+
+/** CoreTabsHidden (M8): when the user turns `coreTabsHidden` off, any core
+ *  built-in tab still in the model's hidden set would be stranded — with OS
+ *  off the Configure eye re-locks (`hideLocked && !coreUnlocked`), so no UI
+ *  path can un-hide it even though the copy claims core tabs stay visible.
+ *  Sweep those keys back to visible as model intents.
+ *
+ *  Registered AFTER osModeFeature: the OS-off diff flips `osMode` and
+ *  `coreTabsHidden` in one setSettings, and feature apply order is FEATURES
+ *  order. `applyOsModeChange` is fire-and-forget async, but the frozen
+ *  non-OS slots cannot contain core-hidden ids, so the sweep is safe
+ *  regardless of which half lands first. */
+const coreTabsHiddenFeature: CanvasFeature = {
+  id: 'coreTabsHidden',
+  apply(prev, next) {
+    if (!prev.coreTabsHidden || next.coreTabsHidden) return
+    const model = getModel()
+    if (!model || model.hidden.length === 0) return
+    // Same resolution as os/actions.ts shouldHideOnClose: model keys may
+    // carry live-id suffix drift, so map through parseBuiltinKey before the
+    // core-set check — never string-match raw model keys.
+    const stranded = model.hidden.filter((key) => {
+      const coreId = parseBuiltinKey(key)
+      return !!coreId && isCoreTabId(coreId)
+    })
+    if (stranded.length === 0) return
+    void dispatchBatch(
+      stranded.map((key) => ({ t: 'setHidden' as const, key, hidden: false })),
+    )
+      .then(() => {
+        // Keep an open Configure modal consistent with the sweep — the eye
+        // renders from live state. Dynamic import avoids the state cycle
+        // (configure-modal -> settings/state -> panel -> registry).
+        void import('../tabs/configure-modal')
+          .then((m) => {
+            if (m.isConfigureTabsModalOpen()) m.refreshConfigureDraftFromLive()
+          })
+          .catch(() => { /* modal module may not be loaded */ })
+      })
+      .catch(() => { /* dispatch reports its own failures */ })
+  },
+}
+
+/** Chrome locations (settings overhaul 2026-09-19): options/Start gear
+ *  placement + the Top/Bottom Start-edge anchor.
+ *
+ *  All three features are `unconditional`: their defaults include falsy values
+ *  (`null`, and the `startButtonAlwaysOnScreenEdge:false` case), so the
+ *  orchestrator's truthiness gate would skip the boot reconcile exactly when
+ *  chrome must be shown/hidden/stamped. Each mount/apply funnels into the one
+ *  idempotent `reconcileChromeLocations` (os/chrome-locations.ts), which is
+ *  also called from every shell/side lifecycle event.
+ *
+ *  `applySettings` keys on `feature.id`, so each new setting needs its own
+ *  feature entry even though the work is shared. */
+const optionsButtonLocationFeature: CanvasFeature = {
+  id: 'optionsButtonLocation',
+  unconditional: true,
+  mount() {
+    // activate (not reconcile): clears the teardown tombstone on a
+    // disable → enable cycle (L7 2026-09-19).
+    activateChromeLocations()
+    return () => teardownChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
+  },
+}
+
+/** OS Start button location (literal sides; defaults to main-drawer only).
+ *  Registered after osModeFeature (chrome exists only while OS mode is on). */
+const startButtonLocationFeature: CanvasFeature = {
+  id: 'startButtonLocation',
+  unconditional: true,
+  mount() {
+    activateChromeLocations()
+  },
+  apply() {
+    applyStartButtonLocationChange()
+  },
+}
+
+/** Top/Bottom only: anchor Start at the outer strip end (default) vs the
+ *  tab-facing side. The pin hosts carry the attr; CSS owns the order. */
+const startButtonAlwaysOnScreenEdgeFeature: CanvasFeature = {
+  id: 'startButtonAlwaysOnScreenEdge',
+  unconditional: true,
+  mount() {
+    activateChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
+  },
+}
+
+/** Sides only: lift the Start button to the top of the vertical tab strip
+ *  (default off = the shared bottom dock). The root class carries the CSS
+ *  variant; ensureStartButtonForSide owns the DOM move. Unconditional like
+ *  the other chrome-location features (default false would be skipped by
+ *  setup's truthiness gate). */
+const startButtonAtStripTopFeature: CanvasFeature = {
+  id: 'startButtonAtStripTop',
+  unconditional: true,
+  mount() {
+    activateChromeLocations()
+  },
+  apply() {
+    reconcileChromeLocations()
+  },
+}
+
+/** OS panel-header controls (default on): "- minimizes, X closes" vs the
+ *  vanilla single X that minimizes. OS chrome only — the feature id must stay
+ *  distinct (`applySettings` keys on `feature.id`, so `osModeFeature` never
+ *  sees this diff). Live-apply just re-runs the chrome pass; the X branch
+ *  reads the setting at click time. */
+const osWindowControlsFeature: CanvasFeature = {
+  id: 'osWindowControls',
+  apply(prev, next) {
+    if (prev.osWindowControls === next.osWindowControls) return
+    applyOsWindowControlsChange()
+  },
+}
+
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
+  unhideVanillaTabsFeature,
   debugFeature,
   chatReflowFeature,
+  welcomeReflowFeature,
   secondSidebarFeature,
   resizeSidebarsFeature,
   drawerSyncFeature,
@@ -497,9 +846,27 @@ export const FEATURES: readonly CanvasFeature[] = [
   persistDrawerOpenStateFeature,
   persistDrawerWidthFeature,
   slashFeature,
+  // S8: location presentation must run before any pin chrome in the same diff
+  // (html classes + strip var + HORIZONTAL_STRIP_CSS), and it reconciles the
+  // whole strip geometry on a location change.
+  drawerLocationFeature,
+  horizontalSplitFeature,
   tabPositionFeature,
   taskbarModeFeature,
   hideDrawerOpenCloseButtonsFeature,
+  // OS mode depends on the taskbar chrome being applied first (§4.8).
+  osModeFeature,
+  // M8: coreTabsHidden must apply AFTER osModeFeature (OS-off flips both
+  // settings in one diff; feature apply order is FEATURES order).
+  coreTabsHiddenFeature,
+  // Chrome locations: downstream of the OS mount pipeline (Start chrome) and
+  // the drawer-location geometry pass. Unconditional — see feature docs.
+  startButtonLocationFeature,
+  optionsButtonLocationFeature,
+  startButtonAlwaysOnScreenEdgeFeature,
+  startButtonAtStripTopFeature,
+  // OS header controls: same downstream placement (chrome pass only).
+  osWindowControlsFeature,
   dragAndDropDrawerTabsFeature,
   drawerTabDragFeature,
 ]
@@ -511,5 +878,13 @@ export function alwaysCleanups(): Teardown[] {
   return [
     unmountToastSurface,
     slashAlwaysCleanup,
+    // Outer-edge writes inline flex/borders on the HOST drawer elements;
+    // without this reset a disable while outer-edge was on left the vanilla
+    // tab strip flipped to the outer edge (2026-09-12 teardown report).
+    clearTabListPosition,
+    // S8: location classes/var + shell edge offsets must reset even when the
+    // drawer-location feature never mounted. Idempotent (also in the feature
+    // teardown) — runs before feature teardowns in the FIFO chain.
+    clearDrawerLocation,
   ]
 }

@@ -68,6 +68,11 @@ import {
   DRAG_ACTIVATE_DISTANCE_PX,
   domInsertIndexFromVisibleIndex,
   isDisplayedTabButton,
+  containerAxis,
+  axisMidpoint,
+  axisCoordinate,
+  seamChoice,
+  flipDelta,
 } from '../tab-list-dnd'
 import { readVisibleTabIdsFromList } from '../live-tab-order'
 
@@ -588,6 +593,158 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
     'readVisibleTabIdsFromList: extension mirror buttons resolve via title (store match + fallback)',
   )
   __setDrawerTabsForTest(null)
+})()
+
+// Teardown-mid-drag lifecycle (review batch 3): the capture-phase contextmenu
+// suppressor is otherwise removed only in onUp, so disabling DnD mid-drag used
+// to leave the whole page's right-click suppressed; and cleanupDragVisuals()
+// zeroes `_drag.phase` before clearDragState()'s detach, so the old
+// cleanup→clear order leaked the document onMove/onUp listeners.
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/tabs/tab-list-dnd.ts'), 'utf8')
+  const teardownIdx = src.indexOf('export function tearDownTabListDnd')
+  const block = teardownIdx === -1 ? '' : src.slice(teardownIdx, teardownIdx + 1400)
+  if (!block) {
+    failed++
+    console.error('FAIL: tearDownTabListDnd not found')
+  } else {
+    if (block.includes('removeDragContextMenuSuppressor()')) passed++
+    else {
+      failed++
+      console.error('FAIL: teardown removes the drag contextmenu suppressor')
+    }
+    // Match CALL LINES (4-space indent), not the explanatory comment text.
+    const detachIdx = block.search(/(^|\n)\s{4}detachDragPointerListeners\(\)/)
+    const cleanupIdx = block.search(/(^|\n)\s{4}cleanupDragVisuals\(\)/)
+    if (detachIdx !== -1 && cleanupIdx !== -1 && detachIdx < cleanupIdx) passed++
+    else {
+      failed++
+      console.error('FAIL: teardown detaches pointer listeners before cleanupDragVisuals() zeroes the phase')
+    }
+  }
+}
+
+// ── S8: axis resolution (token first), axis math, seam, FLIP deltas ──
+
+function fakeAxisEl(
+  attrs: Record<string, string> = {},
+  parent: any = null,
+  classes: string[] = [],
+): any {
+  return {
+    parentElement: parent,
+    getAttribute: (k: string) => attrs[k] ?? null,
+    classList: { contains: (c: string) => classes.includes(c) },
+  }
+}
+
+;(() => {
+  // 1. Token on the element.
+  assertEqual(
+    containerAxis(fakeAxisEl({ 'data-strip-axis': 'horizontal' })),
+    'x',
+    'containerAxis: horizontal token on element → x',
+  )
+  assertEqual(
+    containerAxis(fakeAxisEl({ 'data-strip-axis': 'vertical' })),
+    'y',
+    'containerAxis: vertical token on element → y',
+  )
+  // 2. Token on an ancestor (main section → list → host).
+  const host = fakeAxisEl({ 'data-strip-axis': 'horizontal' })
+  const list = fakeAxisEl({}, host)
+  const section = fakeAxisEl({}, list)
+  assertEqual(containerAxis(section), 'x', 'containerAxis: horizontal token on ancestor → x')
+  // 3. Horizontal list class token only trusted with a horizontal ancestor.
+  assertEqual(
+    containerAxis(fakeAxisEl({}, host, ['sidebar-ux-tab-list-main'])),
+    'x',
+    'containerAxis: main-section class + horizontal ancestor → x',
+  )
+  assertEqual(
+    containerAxis(fakeAxisEl({}, null, ['sidebar-ux-tab-list-main'])),
+    'y',
+    'containerAxis: main-section class without horizontal ancestor → y',
+  )
+  // 4. Guarded computed-style fallback.
+  const g = globalThis as any
+  const prevComputed = g.getComputedStyle
+  try {
+    g.getComputedStyle = () => ({ flexDirection: 'row' })
+    assertEqual(containerAxis(fakeAxisEl()), 'x', 'containerAxis: computed row fallback → x')
+    g.getComputedStyle = () => ({ flexDirection: 'column' })
+    assertEqual(containerAxis(fakeAxisEl()), 'y', 'containerAxis: computed column fallback → y')
+  } finally {
+    if (prevComputed === undefined) delete g.getComputedStyle
+    else g.getComputedStyle = prevComputed
+  }
+  assertEqual(containerAxis(null), 'y', 'containerAxis: null → y')
+  assertEqual(containerAxis(undefined), 'y', 'containerAxis: undefined → y')
+
+  // Axis midpoint / coordinate.
+  assertEqual(
+    axisMidpoint({ left: 100, top: 10, width: 48, height: 48 }, 'x'),
+    124,
+    'axisMidpoint: x = left + width/2',
+  )
+  assertEqual(
+    axisMidpoint({ left: 100, top: 10, width: 48, height: 48 }, 'y'),
+    34,
+    'axisMidpoint: y = top + height/2',
+  )
+  assertEqual(axisCoordinate({ centerX: 700, centerY: 30 }, 'x'), 700, 'axisCoordinate: x → centerX')
+  assertEqual(axisCoordinate({ centerX: 700, centerY: 30 }, 'y'), 30, 'axisCoordinate: y → centerY')
+
+  // Seam comparator — dock-shifted zone edges, exact tie → right/secondary.
+  const leftZone = { right: 640 }
+  const rightZone = { left: 640 }
+  assertEqual(seamChoice(300, leftZone, rightZone), 'left', 'seamChoice: well inside left → left')
+  assertEqual(seamChoice(900, leftZone, rightZone), 'right', 'seamChoice: well inside right → right')
+  assertEqual(seamChoice(640, leftZone, rightZone), 'right', 'seamChoice: exact tie → right (secondary)')
+  // Boundary is the midpoint of the gap, not either edge alone.
+  assertEqual(
+    seamChoice(640, { right: 620 }, { left: 680 }),
+    'left',
+    'seamChoice: boundary = (left.right + right.left)/2',
+  )
+  assertEqual(
+    seamChoice(650, { right: 620 }, { left: 680 }),
+    'right',
+    'seamChoice: exact midpoint → right (deterministic tie)',
+  )
+
+  // Axis-aware settle: append past last on X advances by width.
+  const hRects = [
+    { left: 0, top: 0, width: 48, height: 48 },
+    { left: 48, top: 0, width: 48, height: 48 },
+  ]
+  assertEqual(
+    settleDestFromButtonRects(2, hRects, { left: 0, top: 0 }, 'x').left,
+    96,
+    'settleDest x: append past last → last.left + width',
+  )
+  assertEqual(
+    settleDestFromButtonRects(2, hRects, { left: 0, top: 0 }, 'x').top,
+    0,
+    'settleDest x: append keeps the row top',
+  )
+  assertEqual(
+    settleDestFromButtonRects(2, hRects, { left: 0, top: 0 }).left,
+    48,
+    'settleDest y default: append past last → last.left (unchanged)',
+  )
+  assertEqual(
+    settleDestFromButtonRects(2, hRects, { left: 0, top: 0 }).top,
+    48,
+    'settleDest y default: append past last → last.top + height',
+  )
+
+  // FLIP deltas.
+  assertEqual(flipDelta({ left: 100, top: 50 }, { left: 90, top: 50 }).dx, 10, 'flipDelta: dx')
+  assertEqual(flipDelta({ left: 100, top: 50 }, { left: 90, top: 70 }).dy, -20, 'flipDelta: dy')
+  assertEqual(flipDelta({ left: 100, top: 50 }, { left: 100, top: 50 }).dx, 0, 'flipDelta: no move → 0')
 })()
 
 // Report

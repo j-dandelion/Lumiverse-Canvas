@@ -27,6 +27,19 @@ function assertEqual<T>(actual: T, expected: T, msg: string) {
 import { builtinKey, createEmptyModel } from '../../core/model'
 import { buildModelFromLayout } from '../../persist/layout-model'
 import { FakeHost } from '../../host/fake/implementation'
+import { mock } from 'bun:test'
+
+// Spread-real + record-only restoreMainDrawerFromDom (do NOT call through):
+// the real restore can re-enter this mock via the module namespace when
+// open:true + tabId:null, which infinite-loops. L8 only needs the tabId.
+const realMainPersist = await import('../../sidebar/main-persist')
+const restoreDrawerCalls: Array<{ open: boolean; tabId: string | null }> = []
+mock.module('../../sidebar/main-persist', () => ({
+  ...realMainPersist,
+  restoreMainDrawerFromDom: (open: boolean, tabId: string | null) => {
+    restoreDrawerCalls.push({ open, tabId })
+  },
+}))
 
 const PROFILE = builtinKey('profile')
 const REGEX = builtinKey('regex')
@@ -106,6 +119,73 @@ const host = new FakeHost([
   assert(model!.primary.includes(LOOM), 'single slot includes the formerly-secondary tab in primary')
   const world = host.observe()
   assert(world.tabs.every((t) => t.location === 'primary'), 'host converges to all-primary after single restore')
+}
+
+// ── Mode width restore (review batch 2) ──
+// restoreSingleModeLayout must thread the slot's saved main width into
+// restoreMainDrawerFromDom. It used to pass undefined, so a mode switch kept
+// the live width and the next shell-truth host sync adopted that over the
+// slot's saved width (each mode's width silently degraded to the other's).
+{
+  const { readFileSync } = await import('fs')
+  const { join } = await import('path')
+  const src = readFileSync(join(process.cwd(), 'src/layout/mode-profiles.ts'), 'utf8')
+  assert(
+    /typeof slot\.primary\?\.width === 'number'/.test(src),
+    'mode restore reads the slot width',
+  )
+  // Facet-gated form (boot recovery passes restoreWidth:false): the slot
+  // width still flows into restoreMainDrawerFromDom whenever the facet is on
+  // (the default) — `restoreWidth ? width : undefined`.
+  assert(
+    /restoreMainDrawerFromDom\(open, tabId, restoreWidth \? width : undefined,/.test(src),
+    'mode restore threads the width into restoreMainDrawerFromDom',
+  )
+}
+
+// ── L8: suffix-heal closed-active includes (mode-profiles) ──
+// `primary.tabId: 'loom:2'` + `closedTabIds: ['loom']` — raw includes misses
+// the `:N` drift that resolveStoredId heals, so the DOM restore would click
+// a window the model calls closed (D17 split).
+{
+  restoreDrawerCalls.length = 0
+  const osClosedSlot: any = {
+    version: 't',
+    primary: { open: true, width: 420, tabId: 'loom:2' },
+    secondary: { open: false, width: 420, activeTabId: null },
+    detachedTabs: [],
+    tabOrder: ['profile', 'regex', 'loom'],
+    closedTabIds: ['loom'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+  // Model half: buildModelFromLayout already suffix-heals — closed-active
+  // must reject the active and keep the healed key in model.closed.
+  const built = buildModelFromLayout(osClosedSlot, (id) => host.findKey(id))
+  assertEqual(
+    built.active.primary,
+    null,
+    'L8: model.active.primary is null for the closed active',
+  )
+  assert(
+    built.closed.includes(LOOM),
+    'L8: model.closed has the healed key',
+  )
+  // DOM half: restoreSingleModeLayout must pass null to restoreMainDrawerFromDom
+  // (not click the suffix-drifted closed window open).
+  const { restoreSingleModeLayout } = await import('../mode-profiles')
+  const { bootstrap, shutdown, flush } = await import('../../recon/dispatch')
+  shutdown()
+  bootstrap(createEmptyModel(), host, 't')
+  const result = await restoreSingleModeLayout(osClosedSlot, host, { osActive: true })
+  await flush()
+  assert(result.ok === true, 'L8: OS closed-slot restore completes ok')
+  assert(restoreDrawerCalls.length >= 1, 'L8: DOM restore ran')
+  assertEqual(
+    restoreDrawerCalls[restoreDrawerCalls.length - 1]?.tabId,
+    null,
+    'L8: suffix-drifted closed active heals to null (DOM restore does not click it open)',
+  )
 }
 
 console.log(`PASS: ${passed}`)

@@ -42,6 +42,7 @@ class StubElement {
   remove() {}
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
+  removeAttribute(n: string) { delete this._attrs[n] }
   get style(): any {
     const s = this._style
     return {
@@ -146,6 +147,8 @@ const stubWindow: any = {
 
 ;(globalThis as any).document = stubDocument
 ;(globalThis as any).window = stubWindow
+;(globalThis as any).requestAnimationFrame = stubWindow.requestAnimationFrame
+;(globalThis as any).cancelAnimationFrame = stubWindow.cancelAnimationFrame
 ;(globalThis as any).MutationObserver = class {
   constructor(_cb: any) {}
   observe(_target: any, _options: any) {}
@@ -224,7 +227,7 @@ function _resetAll() {
 
 // --- Imports under test ---
 
-import { updateChatReflow } from '../reflow'
+import { updateChatReflow, REFLOW_INSTANT_ATTR } from '../reflow'
 import { hydrateSettings } from '../../settings/state'
 import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
 
@@ -476,26 +479,29 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   )
 }
 
-// --- Test 10b: closed taskbar strip + dock on same edge → full strip margin
-// (the dock is offset to sit just inside the strip by dock-offset.ts; the App
-// padding reserves the dock inset, the strip adds its own 56px on top)
+// --- Test 10b: closed drawer + taskbar SETTING + dock on same edge.
+// S1 gate inversion: the strip reserve keys on the PIN being ACTIVE
+// (isMainTabListPinActive = shell mounted + taskbar chrome), not on the
+// taskbarMode setting alone. This env never mounts the mirror shell, so a
+// closed drawer reserves nothing — the dock clamp leaves 0. The pinned-strip
+// reserve case is covered in reflow-content-insets.test.ts (tests 7/8).
 
 {
   _resetAll()
   const { chat } = _installDom({
-    open: false,        // drawer closed → taskbar strip reserved
-    leftSide: false,    // main drawer on right (strip on right edge)
+    open: false,        // drawer closed
+    leftSide: false,    // main drawer on right
     appRoot: true,
-    dockRight: 300,     // dock on the same edge as the (right) strip
+    dockRight: 300,     // dock on the same edge as the (right) drawer
   })
   hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
   updateChatReflow()
-  // mainOpen=false, taskbar strip → mainStrip = 56
-  // rightMargin = max(56, 0) = 56 (dock is offset, not subtracted)
+  // mainOpen=false, no pin active → mainStrip = 0
+  // rightMargin = max(0, 0) = 0 (no strip, no open drawer overhang)
   assertEqual(
     _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-mr'),
-    `${TAB_LIST_WIDTH_PX}px`,
-    `test 10b: closed strip + dock right=300 — --sidebar-ux-chat-mr = ${TAB_LIST_WIDTH_PX}px (strip reserved)`
+    '0px',
+    'test 10b: closed unpinned drawer + dock right=300 — --sidebar-ux-chat-mr = 0px (no strip reserve without pin)'
   )
   assertEqual(
     _chatStyle(chat).getPropertyValue('--sidebar-ux-chat-ml'),
@@ -537,6 +543,29 @@ import { TAB_LIST_WIDTH_PX } from '../../sidebar/styles'
   teardown()
   ;(globalThis as any).MutationObserver = origMO
 })()
+
+// --- Test 15: a fresh chat element's first reflow snaps (no load slide) ---
+// The chat can mount after the drawer is already open (boot restore / SPA
+// navigation); an animated first margin application reads as a load-time
+// layout slide, so a freshly-seen chat element snaps its margins once.
+
+{
+  _resetAll()
+  const { chat } = _installDom({ open: true, appRoot: false })
+  updateChatReflow()
+  assertEqual(
+    chat.getAttribute(REFLOW_INSTANT_ATTR),
+    '1',
+    'test 15a: first reflow for a fresh chat element marks it instant',
+  )
+  chat.removeAttribute(REFLOW_INSTANT_ATTR)
+  updateChatReflow()
+  assertEqual(
+    chat.getAttribute(REFLOW_INSTANT_ATTR),
+    null,
+    'test 15b: later reflows on the same element let margins animate',
+  )
+}
 
 // --- Summary ---
 

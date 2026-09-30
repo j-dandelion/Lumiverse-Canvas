@@ -4,6 +4,24 @@
 //   15. Settings survive a layout load failure, and layout survives a settings load failure.
 //   16. (Migration tested in backend — frontend repos test the fence.)
 
+// Minimal DOM stub: persistSettings → buildPersistedLayout reads the host
+// drawer via document queries even here (review batch 2 added the first
+// settings-flush path that builds a snapshot without a mounted DOM).
+;(globalThis as any).document = {
+  documentElement: {
+    classList: {
+      _c: new Set<string>(),
+      contains(c: string) { return this._c.has(c) },
+      add(c: string) { this._c.add(c) },
+      remove(c: string) { this._c.delete(c) },
+    },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+  },
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  body: { querySelector: () => null, appendChild() {}, removeChild() {} },
+}
+
 let passed = 0
 let failed = 0
 function assert(cond: unknown, msg: string) {
@@ -67,7 +85,15 @@ import {
   saveSettingsToDisk,
   isSettingsRepoArmed,
   __resetSettingsRepoForTest,
+  __resolveSettingsSave,
 } from '../settings-repo'
+import { flushPendingSaves } from '../layout-load'
+import { persistSettings, __setSettingsSaveRetriesForTest } from '../../settings/state'
+
+// This suite intentionally leaves saves unanswered (the fence is what is under
+// test); disable the N2 auto-retry so the failed saves don't keep the event
+// loop alive across retry chains.
+__setSettingsSaveRetriesForTest(0)
 
 function reset() {
   __resetLayoutRepoForTest()
@@ -81,21 +107,51 @@ function sleep(ms: number): Promise<void> {
 // --- 14a: error load → repo NOT armed → saves are dropped ---
 {
   reset()
-  const ctx = makeBackendCtx()
+  const ctx = makeRespondingCtx('SETTINGS_DATA', {
+    status: 'error',
+    reason: 'read failed: temporary storage failure',
+  })
   setLayoutRepoBackendCtx(ctx)
   setSettingsRepoBackendCtx(ctx)
 
-  // Simulate error load for settings
   const settingsResult = await loadSettingsFromDisk()
-  // Our fake doesn't auto-respond; the first attempt times out after retries
-  // That returns { status: 'error' }
+  assertEqual(settingsResult.status, 'error', '14a: read error returns error')
+  assert(!isSettingsRepoArmed(), '14a: read error leaves settings repo unarmed')
 
-  const isNotArmed = (result: any) => result.status === 'error'
-  if (isNotArmed(settingsResult)) {
-    // Error → arm NOT called → save should do nothing
-    saveSettingsToDisk({ debugMode: true })
-    assertEqual(ctx._saves().length, 0, '14a: error load → no SAVE_SETTINGS sent')
+  saveSettingsToDisk({ debugMode: true })
+  assertEqual(ctx._saves().length, 0, '14a: error load → no SAVE_SETTINGS sent')
+}
+
+// --- 14e: layout read error → repo NOT armed → existing file stays intact ---
+{
+  reset()
+  const originalLayout = '{"version":2,"primary":{"open":true}}'
+  let storedLayout = originalLayout
+  const ctx = makeBackendCtx()
+  const sendToBackend = ctx.sendToBackend
+  ctx.sendToBackend = (msg: BackendMsg) => {
+    sendToBackend(msg)
+    if (msg.type === 'SAVE_LAYOUT') storedLayout = JSON.stringify(msg.layout)
   }
+  setLayoutRepoBackendCtx(ctx)
+
+  const loadPromise = loadLayoutFromDisk()
+  await sleep(100)
+  ctx._respond('LAYOUT_DATA', {
+    status: 'error',
+    reason: 'read failed: temporary storage failure',
+  })
+  const result = await loadPromise
+  assertEqual(result.status, 'error', '14e: read error returns error')
+  assert(!isLayoutRepoArmed(), '14e: read error leaves layout repo unarmed')
+
+  saveLayoutToDisk({ version: 2, primary: { open: false } })
+  assertEqual(
+    ctx._saves().filter((msg) => msg.type === 'SAVE_LAYOUT').length,
+    0,
+    '14e: error load → no SAVE_LAYOUT sent',
+  )
+  assertEqual(storedLayout, originalLayout, '14e: later save leaves existing layout bytes intact')
 }
 
 // --- 14b: empty load → repo ARMED → saves go through ---
@@ -252,6 +308,79 @@ function sleep(ms: number): Promise<void> {
   assert(elapsed >= 200, `18b: waits out the window (took ${elapsed}ms)`)
   assert(String(result.reason).includes('timed out'), '18b: reason mentions timeout')
   __resetBootLoadParamsForTest()
+}
+
+// --- 19a: pending settings save flushes even when the layout repo is unarmed ---
+// layout.json and settings.json are independent. `flushPendingSaves` used to
+// return at the unarmed-layout guard BEFORE flushing settings, so a toggle
+// made <100ms before unload was lost when the layout load had failed
+// (review batch 2).
+{
+  reset()
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  setLayoutRepoBackendCtx(ctx)
+  armSettingsRepo()
+  // Layout repo deliberately left unarmed (simulates a failed/error load).
+  assert(!isLayoutRepoArmed(), '19a: layout repo unarmed')
+
+  persistSettings()
+  flushPendingSaves()
+  assert(
+    ctx._saves().some((m: BackendMsg) => m.type === 'SAVE_SETTINGS'),
+    '19a: pending settings save flushed despite unarmed layout repo',
+  )
+}
+
+// --- 20a: a failed save is retried once the retry window elapses (N2) ---
+{
+  reset()
+  // Let the previous section's reset-resolved save failure settle while
+  // retries are still disabled, so it cannot consume this section's budget.
+  await sleep(10)
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  armSettingsRepo()
+  __setSettingsSaveRetriesForTest(1)
+
+  persistSettings()
+  const firstDeadline = Date.now() + 3000
+  while (ctx._saves().length < 1 && Date.now() < firstDeadline) await sleep(20)
+  assert(ctx._saves().length >= 1, '20a: initial save sent')
+  const first = ctx._saves().find((m: BackendMsg) => m.type === 'SAVE_SETTINGS')!
+  __resolveSettingsSave(first.saveId as number, { status: 'error', reason: 'transient' })
+
+  const retryDeadline = Date.now() + 4000
+  while (ctx._saves().length < 2 && Date.now() < retryDeadline) await sleep(25)
+  assert(ctx._saves().length === 2, '20a: failed save retried once')
+  const second = ctx._saves()[1]
+  assert(second !== undefined, '20a: retry message present')
+  if (second) __resolveSettingsSave(second.saveId as number, { status: 'ok' })
+  // Cleanup for the remaining sections.
+  __setSettingsSaveRetriesForTest(0)
+}
+
+// --- 20b: a retries-exhausted failed write still flushes while owed (N2) ---
+{
+  reset()
+  await sleep(10)
+  const ctx = makeBackendCtx()
+  setSettingsRepoBackendCtx(ctx)
+  armSettingsRepo()
+  __setSettingsSaveRetriesForTest(0)
+
+  persistSettings()
+  const firstDeadline = Date.now() + 3000
+  while (ctx._saves().length < 1 && Date.now() < firstDeadline) await sleep(20)
+  const first = ctx._saves().find((m: BackendMsg) => m.type === 'SAVE_SETTINGS')!
+  __resolveSettingsSave(first.saveId as number, { status: 'error', reason: 'transient' })
+
+  flushPendingSaves()
+  const flushDeadline = Date.now() + 1500
+  while (ctx._saves().length < 2 && Date.now() < flushDeadline) await sleep(20)
+  assert(ctx._saves().length >= 2, '20b: flush fires while a failed write is owed')
+  const second = ctx._saves()[1]
+  if (second) __resolveSettingsSave(second.saveId as number, { status: 'ok' })
 }
 
 console.log(`persist/write-fence: ${passed} passed, ${failed} failed`)

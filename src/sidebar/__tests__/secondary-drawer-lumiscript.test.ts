@@ -30,6 +30,15 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 
 let _fakeSidebar: any = null
 ;(globalThis as any).document = {
+  documentElement: {
+    classList: {
+      _c: new Set<string>(),
+      add(c: string) { this._c.add(c) },
+      remove(c: string) { this._c.delete(c) },
+      contains(c: string) { return this._c.has(c) },
+    },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue() { return '' } },
+  },
   querySelector(sel: string) {
     if (sel === '[data-spindle-mount="sidebar"]') return _fakeSidebar
     return null
@@ -128,6 +137,7 @@ function setupLumiScriptTest(opts: {
   // --- Fake root (the extension's primary DOM root that gets reparented) ---
   const fakeRoot: any = {
     tagName: 'DIV',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     setAttribute(name: string, value: string) { fakeRoot._attrs[name] = value },
     getAttribute(name: string) { return fakeRoot._attrs[name] ?? null },
@@ -227,6 +237,7 @@ function setupLumiScriptTest(opts: {
     getAttribute(name: string) { return fakePanelContent._attrs[name] ?? null },
     setAttribute(name: string, value: string) { fakePanelContent._attrs[name] = value },
     removeAttribute(name: string) { delete fakePanelContent._attrs[name] },
+    contains(node: any) { return fakePanelContent.children.includes(node) },
   }
   const fakeHeaderTitle = {
     tagName: 'SPAN',
@@ -328,6 +339,7 @@ function setupLumiScriptTest(opts: {
       button: fakeButton,
       extensionId,
       title: tabTitle,
+      key: `ext:${extensionId}/${tabTitle}`,
     })
   }
 
@@ -335,6 +347,7 @@ function setupLumiScriptTest(opts: {
   const buttonTitle = opts.sidebarButtonTitle ?? tabTitle
   const fakeMainButton: any = {
     tagName: 'BUTTON',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     style: { display: '' },
     getAttribute(name: string) { return fakeMainButton._attrs[name] ?? null },

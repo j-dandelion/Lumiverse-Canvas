@@ -5,16 +5,11 @@
 // Canvas-owned secondary / main-mirror buttons only got display:none at
 // Configure commit — finishRestore and late assigns never re-read host.
 //
-// Additionally: host setSetting is often unreachable from the fiber walk
-// (NO-GO or silent no-persist), so live hide worked via Canvas DOM apply
-// while DB drawerSettings never received council/cortex/create. Canvas now
-// owns a copy of hiddenTabIds in layout.json and merges it with host on
-// every sync.
+// S2 (2026-09): the host write-back is GONE (model owns `hidden`; the
+// Canvas copy is the hydrate/converge bridge). This sync now reads host +
+// Canvas, heals, keeps the Canvas copy aligned, and DOM-applies the strips.
 
-import {
-  getHostDrawerSettings,
-  patchHostDrawerSettings,
-} from '../dom/host-settings'
+import { getHostDrawerSettings } from '../dom/host-settings'
 import { getDrawerTabs } from '../store'
 import {
   healHiddenTabIds,
@@ -27,21 +22,27 @@ import {
   applyHiddenTabIdsToHostMain,
 } from './buttons'
 import { getSecondaryTabList } from '../sidebar/secondary'
-import { dlog } from '../debug/log'
 import {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
   mergeHiddenTabIdLists,
   normalizeHiddenIds,
+  resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
   __resetCanvasHiddenTabIdsForTest,
 } from './canvas-hidden'
+import {
+  currentLifecycleGeneration,
+  isInstanceActive,
+  isLifecycleCurrent,
+} from '../lifecycle/instance'
 
 export { healHiddenTabIds, isTabIdHidden } from '../persist/tab-id-heal'
 export {
   getCanvasHiddenTabIds,
   hydrateCanvasHiddenFromLayout,
   mergeHiddenTabIdLists,
+  resetCanvasHiddenTabIds,
   setCanvasHiddenTabIds,
   __resetCanvasHiddenTabIdsForTest,
 } from './canvas-hidden'
@@ -83,27 +84,46 @@ export function collectLiveTabIdsForHiddenHeal(): string[] {
 export type SyncHiddenTabsResult = {
   /** Effective hidden ids after heal (what we applied / stored on Canvas). */
   hiddenIds: string[]
-  /** True when host store was patched with healed ids. */
-  wroteBack: boolean
 }
 
 /** Coalesce bursty tab-register syncs (many extensions at once). */
 let _debouncedSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
+ * Cancel a pending debounced sync. Registered as a teardown cleanup
+ * (LUMI-21): the tab-register observer re-arms this timer DURING the
+ * disable chain (restoreHostContent re-registers host tabs), so a timer
+ * armed mid-teardown would otherwise fire post-teardown and re-hide the
+ * vanilla strip (AC1's "no tab buttons"). Registered AFTER the
+ * restoreHostContent cleanup in setup's FIFO chain so it sweeps timers
+ * armed during teardown; the generation guard in the callback is the
+ * belt-and-suspenders backstop for anything armed earlier.
+ */
+export function cancelScheduledHiddenTabsSync(): void {
+  if (_debouncedSyncTimer !== null) {
+    clearTimeout(_debouncedSyncTimer)
+    _debouncedSyncTimer = null
+  }
+}
+
+/**
  * Debounced `syncHiddenTabsFromHost` for high-frequency sites (tab register).
  * Immediate sites (finishRestore) should call `syncHiddenTabsFromHost` directly.
  */
 export function scheduleSyncHiddenTabsFromHost(opts?: {
-  writeBack?: boolean
   delayMs?: number
+  unhideHostTabs?: boolean
 }): void {
   const delayMs = opts?.delayMs ?? 50
   if (_debouncedSyncTimer !== null) clearTimeout(_debouncedSyncTimer)
+  // LUMI-21: a timer armed pre-teardown (or mid-teardown) must not fire
+  // post-teardown — guard at fire time against the arming generation.
+  const armedGeneration = currentLifecycleGeneration()
   _debouncedSyncTimer = setTimeout(() => {
     _debouncedSyncTimer = null
+    if (!isLifecycleCurrent(armedGeneration)) return
     try {
-      syncHiddenTabsFromHost({ writeBack: opts?.writeBack !== false })
+      syncHiddenTabsFromHost({ unhideHostTabs: opts?.unhideHostTabs })
     } catch {
       // best-effort
     }
@@ -111,60 +131,100 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
 }
 
 /**
- * Re-read host + Canvas hiddenTabIds, heal against live tabs, keep Canvas
- * copy, optionally write healed ids back to host (so React primary filter
- * matches), and apply to Canvas secondary + main-mirror strips.
+ * Re-read host + Canvas hiddenTabIds, heal against live tabs, keep the
+ * Canvas copy (hydrate/converge bridge — the model owns `hidden`), and
+ * apply to Canvas secondary + main strips.
  *
  * Safe to call repeatedly (on finishRestore, tab register, setup).
  */
 export function syncHiddenTabsFromHost(opts?: {
-  /** Patch host when heal rewrites ids or Canvas has ids host lacks (default true). */
-  writeBack?: boolean
+  /** Ignore vanilla hidden ids and remove those ids from Canvas's copy too. */
+  unhideHostTabs?: boolean
 }): SyncHiddenTabsResult {
-  const writeBack = opts?.writeBack !== false
+  // LUMI-21: no hidden-sync work once the instance is torn down. The
+  // disable chain's restoreHostContent() re-registers host tabs, which
+  // drives this sync against the freshly restored vanilla strip — without
+  // the guard it re-applies the stored hidden set and strips the vanilla
+  // tab buttons (AC1). Boot runs with the instance active, so boot restore
+  // is unaffected.
+  if (!isInstanceActive()) return { hiddenIds: getCanvasHiddenTabIds() }
   const host = getHostDrawerSettings()
-  const hostStored = normalizeHiddenIds(host?.hiddenTabIds)
-  const canvasStored = getCanvasHiddenTabIds()
+  const rawHostStored = normalizeHiddenIds(host?.hiddenTabIds)
+  const unhideHostIds = opts?.unhideHostTabs ? new Set(rawHostStored) : null
+  const hostStored = unhideHostIds ? [] : rawHostStored
+  const canvasStored = unhideHostIds
+    ? getCanvasHiddenTabIds().filter((id) => !unhideHostIds.has(id))
+    : getCanvasHiddenTabIds()
   const stored = mergeHiddenTabIdLists(hostStored, canvasStored)
 
   const liveIds = collectLiveTabIdsForHiddenHeal()
-  // Write-back path: never drop unmatched (late extension register).
-  const forHost = healHiddenTabIds(stored, liveIds, { keepUnmatched: true })
+  // Canvas-copy path: never drop unmatched (late extension register).
+  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true })
   // DOM path: only ids that map onto something currently live on strips.
   const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false })
 
-  // Always keep Canvas layout copy aligned with effective hide (healed).
-  // This is what survives hard refresh even when host setSetting is NO-GO.
-  setCanvasHiddenTabIds(forHost)
+  // Always keep the Canvas layout copy aligned with effective hide (healed).
+  // This is what survives hard refresh (hydrate bridge at boot).
+  setCanvasHiddenTabIds(forCanvas)
 
-  let wroteBack = false
-  if (writeBack && forHost.length > 0) {
-    const hostSame =
-      forHost.length === hostStored.length
-      && forHost.every((id, i) => id === hostStored[i])
-    if (!hostSame) {
-      wroteBack = patchHostDrawerSettings({ hiddenTabIds: forHost })
-      if (wroteBack) {
-        dlog('[hidden-tabs] healed hiddenTabIds write-back', {
-          from: hostStored,
-          to: forHost,
-        })
-      } else {
-        dlog('[hidden-tabs] host write-back NO-GO; Canvas layout copy retained', {
-          hidden: forHost,
-        })
+  // OS mode (D3): closed∧unhidden tabs must stay OFF the strips even though
+  // the hidden set alone no longer names them. Resolve the model's closed
+  // set through the dispatch host (the same key→liveId seam the OS close
+  // path uses) and merge those live ids into the DOM applies ONLY — the
+  // Canvas copy stays pure hidden-list truth so a later un-hide (Configure
+  // draft, menu manage) converges it without closed residue, and closed ids
+  // never leak into hiddenTabIds persist. LAZY import: hidden-tabs sits
+  // inside the registry load chain (registry → tab-list-dnd → hidden-tabs);
+  // a static dispatch import would add a dispatch → reconcile → … cycle
+  // edge through this path (the codebase tolerates the existing cycle —
+  // active-tab — but a leaf surface like this should not add one).
+  const closedOnlyLiveIds = new Set<string>()
+  // LUMI-21: guard the lazy continuation — a dispatch import resolving
+  // after teardown must not re-apply the hidden set to the restored strips.
+  const armedGeneration = currentLifecycleGeneration()
+  try {
+    void import('../recon/dispatch').then((m) => {
+      if (!isLifecycleCurrent(armedGeneration)) return
+      const model = m.getModel()
+      if (!model || model.closed.length === 0) return applySets(forDom, stored, liveIds)
+      const hiddenKeys = new Set<string>(model.hidden)
+      const resolved = new Set<string>()
+      const hostMod = m.getHost()
+      for (const key of model.closed) {
+        if (hiddenKeys.has(key)) continue // hidden-set apply covers it
+        const liveId = hostMod?.resolve(key)
+        if (liveId) resolved.add(liveId)
       }
-    }
+      applySets(forDom, stored, liveIds, resolved)
+    }).catch(() => { /* dispatch unavailable — plain apply already ran */ })
+  } catch {
+    /* dispatch import threw synchronously — plain apply already ran */
   }
 
-  // Apply union: healed live targets + keep stored exact ids still on strip
-  // (forDom already covers paired live; re-apply stored for exact mid-heal).
-  const applySet = new Set<string>([...forDom, ...stored.filter((id) => liveIds.includes(id))])
-  applyHiddenTabIdsToSecondary(applySet)
-  applyHiddenTabIdsToMirror(applySet)
-  applyHiddenTabIdsToHostMain(applySet)
+  function applySets(
+    dom: readonly string[],
+    all: readonly string[],
+    live: readonly string[],
+    extra?: ReadonlySet<string>,
+  ): void {
+    // Apply union: healed live targets + keep stored exact ids still on
+    // strip (dom already covers paired live; re-apply stored for exact
+    // mid-heal) + the OS closed∧unhidden live ids (suppression pass).
+    const applySet = new Set<string>([
+      ...dom,
+      ...all.filter((id) => live.includes(id)),
+      ...(extra ?? []),
+    ])
+    applyHiddenTabIdsToSecondary(applySet)
+    applyHiddenTabIdsToMirror(applySet)
+    applyHiddenTabIdsToHostMain(applySet)
+  }
 
-  return { hiddenIds: forHost, wroteBack }
+  // Fire the immediate pass (dispatch may not be ready yet; the async
+  // continuation above re-applies with the closed set once it resolves).
+  applySets(forDom, stored, liveIds)
+
+  return { hiddenIds: forCanvas }
 }
 
 /**

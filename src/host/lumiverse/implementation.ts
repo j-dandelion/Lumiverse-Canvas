@@ -10,7 +10,6 @@ import { getHostBridge } from '../../dom/host-bridge'
 import { resolvePrimaryActiveTabId, getActiveSecondaryTabId } from '../../tabs/active-tab'
 import {
   getCanvasHiddenTabIds,
-  mergeHiddenTabIdLists,
   setCanvasHiddenTabIds,
 } from '../../tabs/canvas-hidden'
 import {
@@ -29,7 +28,6 @@ import {
   removeSecondaryTabButton,
   reorderSecondaryTabButtons,
   secondaryTabButtonsReady,
-  reorderMainMirrorTabButtons,
   reorderHostMainTabButtons,
   hideMainTabButton,
   showMainTabButton,
@@ -41,13 +39,88 @@ import {
 } from '../../tabs/buttons'
 import { drawerObserver } from '../../sidebar/drawer-observer'
 import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
-import { getMainMirrorDrawer } from '../../sidebar/main-mirror-drawer'
+import { getMainMirrorDrawer, isMainMirrorActive } from '../../sidebar/main-mirror-drawer'
 import { getSecondaryTabList } from '../../sidebar/secondary'
 import { readVisibleTabIdsFromList } from '../../tabs/live-tab-order'
+import {
+  CANVAS_MAIN_ACTIVE_CLASS,
+  CANVAS_MAIN_OPEN_CLASS,
+  MAIN_MIRROR_WIDTH_VAR,
+  SECONDARY_WIDTH_VAR,
+} from '../../sidebar/styles'
+import { isMainDrawerRestorePending } from '../../sidebar/main-persist'
 import { dlog } from '../../debug/log'
+import { currentLifecycleGeneration, isLifecycleCurrent } from '../../lifecycle/instance'
+import {
+  clearGhostPresentationPending,
+  setGhostPresentationPending,
+} from '../../tabs/ghost-presentation'
 
-const SECONDARY_WIDTH_VAR = '--canvas-secondary-width'
 const DEFAULT_WIDTH = 420
+
+// -----------------------------------------------------------------------
+// Ghost facade keys (LUMI-29): a model TabKey absent from the live
+// inventory re-feeds itself into applySyncFromHost forever through the
+// synthesis loop in observe() — the model keeps a tab whose extension was
+// turned off, and every Canvas surface renders a dead strip button
+// (label-only mirror twin with no icon; click and right-click are no-ops
+// because both forward to the missing host twin).
+//
+// The tracker gives a missing EXTENSION key a grace window: its Canvas strip
+// buttons are suppressed immediately, while the model entry remains for
+// GHOST_FACADE_GRACE_MS so a transient host re-render can restore it. Sustained
+// absence stops synthesizing the entry — the authoritative host-sync then
+// drops the key from the model (and prunes hidden/menuHidden with it). A
+// re-registered tab clears both the clock and visual suppression. The first
+// absence arms a one-shot retry that re-fires the world-change signal after
+// the window — without it the sync that armed the clock would be the LAST
+// round (nothing else changes, so nothing re-observes) and the ghost would
+// persist.
+//
+// Extension keys only: DOM-placed built-ins legitimately have no live
+// button while their registry root lives in a Canvas shell, and must keep
+// the synthesis lifeline (observe() contract comment above).
+// -----------------------------------------------------------------------
+const GHOST_FACADE_GRACE_MS = 10_000
+const _facadeMissingSince = new Map<TabKey, number>()
+const _ghostRetryTimers = new Map<TabKey, ReturnType<typeof setTimeout>>()
+
+function clearGhostRetry(key: TabKey): void {
+  const timer = _ghostRetryTimers.get(key)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    _ghostRetryTimers.delete(key)
+  }
+}
+
+/** One-shot re-sync after the grace window (see tracker comment above). */
+function armGhostRetry(key: TabKey): void {
+  clearGhostRetry(key)
+  const gen = currentLifecycleGeneration()
+  const timer = setTimeout(() => {
+    _ghostRetryTimers.delete(key)
+    if (!isLifecycleCurrent(gen)) return
+    emitWorldChanged()
+  }, GHOST_FACADE_GRACE_MS + 250)
+  _ghostRetryTimers.set(key, timer)
+}
+
+/** Forget a key's absence state (tab re-registered, left the model, or purged). */
+function forgetMissingFacadeKey(key: TabKey, restorePresentation = true): void {
+  _facadeMissingSince.delete(key)
+  clearGhostRetry(key)
+  if (restorePresentation) setGhostPresentationPending(key, false)
+}
+
+/**
+ * World-change signal fan-out. `onWorldChanged` registers its notify
+ * closure here so module-internal paths (the ghost-retry timer) can ask
+ * the dispatcher for a fresh host-sync without a static dispatch import.
+ */
+const _worldNotifies = new Set<() => void>()
+function emitWorldChanged(): void {
+  for (const notify of Array.from(_worldNotifies)) notify()
+}
 
 // ---------------------------------------------------------------------------
 // Helper: read secondary width from CSS custom property
@@ -168,8 +241,16 @@ function buildHostEntry(tab: { id: string; extensionId: string; title: string; r
   const location: Side = entryLocationFor(tab, assignments)
   const key = tab.key
   const canvasHidden = new Set(getCanvasHiddenTabIds())
-  const hostSettings = getHostDrawerSettings()
-  const hostHidden = hostSettings?.hiddenTabIds ? new Set(hostSettings.hiddenTabIds as string[]) : new Set<string>()
+  // S2: the host's hiddenTabIds filter only describes a REAL surface when
+  // the host drawer itself is visible — i.e. when the Canvas main shell is
+  // NOT active (mobile until S6). On desktop the shell is the surface,
+  // hidden is model/canvas-copy truth, and a STALE host settings list must
+  // not keep the reconcile's diffHidden fighting (write is gone).
+  const hostHidden = !isMainMirrorActive()
+    ? getHostDrawerSettings()?.hiddenTabIds
+      ? new Set(getHostDrawerSettings()!.hiddenTabIds as string[])
+      : new Set<string>()
+    : new Set<string>()
   const isHidden = canvasHidden.has(tab.id) || hostHidden.has(tab.id)
   const primaryActive = resolvePrimaryActiveTabId()
   const secondaryActive = getActiveSecondaryTabId()
@@ -196,8 +277,12 @@ function buildHostEntry(tab: { id: string; extensionId: string; title: string; r
 function buildEntryFromAssignment(tabKey: string): HostTabEntry {
   const assignments = getTabAssignments()
   const location: Side = assignments.get(tabKey) === 'secondary' ? 'secondary' : 'primary'
+  // Assignment keys are TabKeys, while hidden and active state is tracked by
+  // live ID. Builtins resolve even without a drawer button; a missing
+  // extension key resolves to null during its ghost grace window.
+  const liveId = resolveTabKey(tabKey as TabKey)
   const canvasHidden = new Set(getCanvasHiddenTabIds())
-  const isHidden = canvasHidden.has(tabKey)
+  const isHidden = liveId !== null && canvasHidden.has(liveId)
   const primaryActive = resolvePrimaryActiveTabId()
   const secondaryActive = getActiveSecondaryTabId()
 
@@ -207,9 +292,36 @@ function buildEntryFromAssignment(tabKey: string): HostTabEntry {
     isBuiltin: false,
     location,
     isHidden,
-    isActiveInPrimary: primaryActive === tabKey,
-    isActiveInSecondary: secondaryActive === tabKey,
+    isActiveInPrimary: liveId !== null && primaryActive === liveId,
+    isActiveInSecondary: liveId !== null && secondaryActive === liveId,
     hasContentRoot: false,
+  }
+}
+
+/**
+ * Does the Canvas main shell OWN the primary drawer surface right now?
+ *
+ * Same condition observe() uses to read SHELL truth for primary open/width:
+ * canvas-main mode active (CANVAS_MAIN_ACTIVE_CLASS on <html>) AND the boot
+ * restore guard has lifted (isMainDrawerRestorePending() == false).
+ *
+ * While TRUE, the shell is the ONLY writer of primary open — every shell
+ * transition (open/close) persists itself via the setDrawer intent, and
+ * observe() feeds shell truth back into the model. A model→chrome drawer
+ * write landing in this window is definitionally a STALE echo of an
+ * in-flight shell transition (the intent queue is async; the shell has
+ * already moved on), and forcing it re-triggers the shell's own persist —
+ * the open/close ping-pong → SAVE_LAYOUT freeze (2026-09 live-verify #1).
+ */
+export function mainShellOwnsPrimarySurface(): boolean {
+  try {
+    return (
+      typeof document !== 'undefined'
+      && document.documentElement.classList.contains(CANVAS_MAIN_ACTIVE_CLASS)
+      && !isMainDrawerRestorePending()
+    )
+  } catch {
+    return false
   }
 }
 
@@ -235,6 +347,12 @@ export class LumiverseHost implements HostPort {
   shutdown(): void {
     this._dispose?.()
     this._dispose = null
+    // Ghost tracker (LUMI-29): cancel pending grace retries and forget
+    // absence state — a re-enabled session must re-derive it, never inherit
+    // the disabled session's timers (LUMI-21 continuation class).
+    for (const key of Array.from(_ghostRetryTimers.keys())) clearGhostRetry(key)
+    _facadeMissingSince.clear()
+    clearGhostPresentationPending()
   }
 
   // -----------------------------------------------------------------------
@@ -261,10 +379,12 @@ export class LumiverseHost implements HostPort {
     const entries: HostTabEntry[] = []
 
     // Tabs from the live host inventory (frozen keys from the registry —
-    // never re-derived from tagging state).
+    // never re-derived from tagging state). A key back in the inventory is
+    // alive — clear any ghost clock or presentation suppression (LUMI-29).
     for (const t of liveTabs) {
       const key = t.key
       seen.add(key)
+      forgetMissingFacadeKey(key)
       entries.push(buildHostEntry(t))
     }
 
@@ -292,8 +412,38 @@ export class LumiverseHost implements HostPort {
       if (seen.has(tabKey)) continue
       const title = parseBuiltinKey(tabKey) ?? parseExtensionKey(tabKey)?.tabName
       if (title && liveByTitle.has(title)) continue
+      // Ghost grace (LUMI-29): an extension key the live inventory has been
+      // missing past the grace window is dead — its extension was turned
+      // off. Skip the synthesis so the authoritative sync drops the key
+      // from the model instead of sustaining it forever.
+      if (isExtensionKey(tabKey)) {
+        const nowMs = Date.now()
+        let missingSince = _facadeMissingSince.get(tabKey)
+        if (missingSince === undefined) {
+          missingSince = nowMs
+          _facadeMissingSince.set(tabKey, missingSince)
+          armGhostRetry(tabKey)
+          setGhostPresentationPending(tabKey, true)
+        }
+        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
+          dlog('[host] observe: extension key absent past ghost grace — dropping from observed world', {
+            key: tabKey,
+            missingForMs: nowMs - missingSince,
+          })
+          // Keep the presentation suppressed while the authoritative sync
+          // commits the drop. Restoring it here would briefly flash the dead
+          // row between grace expiry and the model commit.
+          forgetMissingFacadeKey(tabKey, false)
+          continue
+        }
+      }
       entries.push(buildEntryFromAssignment(tabKey))
       seen.add(tabKey)
+    }
+
+    // Keys that left the facade (model) no longer need absence state.
+    for (const key of Array.from(_facadeMissingSince.keys())) {
+      if (!assignments.has(key)) forgetMissingFacadeKey(key)
     }
 
     // Secondary order is Canvas-owned: derive it from the actual secondary
@@ -326,8 +476,35 @@ export class LumiverseHost implements HostPort {
     }
 
     const drawerSide: DrawerSide = getMainDrawerSide() === 'left' ? 'left' : 'right'
-    const primaryOpen = isMainDrawerOpen()
-    const primaryWidth = getMainDrawerWidth() || DEFAULT_WIDTH
+    // S5 rewire: while the Canvas main shell owns the primary surface
+    // (canvas-main mode active AND the boot restore guard has lifted),
+    // primary open/width are SHELL truth — CANVAS_MAIN_OPEN_CLASS +
+    // MAIN_MIRROR_WIDTH_VAR — not the host wrapper. The host is store-open
+    // forever and headless in this mode, so reading it forced
+    // model.primary.open=true forever (closing the shell never persisted).
+    // During the restore window the shell still shows its pre-restore
+    // (closed) state: keep host reads there so boot persists stay
+    // byte-identical to pre-S5 behavior (no transient open:false clobber of
+    // the stored open:true). Mirrors snapshot.ts's readPrimaryOpen/Width.
+    let shellOwnsPrimary = false
+    let shellPrimaryOpen = false
+    let shellPrimaryWidth = 0
+    if (mainShellOwnsPrimarySurface()) {
+      shellOwnsPrimary = true
+      try {
+        shellPrimaryOpen = document.documentElement.classList.contains(CANVAS_MAIN_OPEN_CLASS)
+        const w = parseFloat(
+          document.documentElement.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR),
+        )
+        shellPrimaryWidth = isFinite(w) && w > 0 ? w : 0
+      } catch {
+        /* non-DOM test environment */
+      }
+    }
+    const primaryOpen = shellOwnsPrimary ? shellPrimaryOpen : isMainDrawerOpen()
+    const primaryWidth = shellOwnsPrimary
+      ? (shellPrimaryWidth || getMainDrawerWidth() || DEFAULT_WIDTH)
+      : (getMainDrawerWidth() || DEFAULT_WIDTH)
     const secondaryOpen = isSecondarySidebarOpen()
     const secondaryWidth = readSecondaryWidth()
 
@@ -413,23 +590,18 @@ export class LumiverseHost implements HostPort {
         return 'ok'
       }
 
-      const current = getHostDrawerSettings()
-      const merged = {
-        ...(current ?? {}),
-        tabOrder: ids,
-      }
-
-      // Apply the order to both live primary surfaces before the host's React
-      // settings update settles. DnD removes its overlay immediately after
-      // reconcile; without this handoff the old DOM order becomes visible and
-      // the dropped tab appears to teleport back to its source slot.
+      // S2: the drawerSettings.tabOrder patch is GONE (Q2 — no host
+      // settings writes for order/hidden). What converges the OBSERVED
+      // world instead is the live host DOM: applySyncFromHost rebuilds
+      // primary order wholesale from the host button sequence
+      // (drawer-observer sorts by compareDocumentPosition), so keep ONLY
+      // the invisible DOM reorder of the (CSS-hidden) host buttons. The
+      // mirror strip needs no reorder — the flat renderer renders model
+      // order on each commit (reorderMainMirrorTabButtons died with the
+      // parity layer).
       reorderHostMainTabButtons(ids)
-      reorderMainMirrorTabButtons(ids)
       dlog('[host] setOrder:dom-reordered', { side, ids })
-
-      const ok = patchHostDrawerSettings(merged)
-      dlog('[host] setOrder:settings-written', { side, ids, ok })
-      return ok ? 'ok' : 'degraded'
+      return 'ok'
     } catch {
       return 'failed'
     }
@@ -440,64 +612,79 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setHidden(_side: Side, ids: LiveTabId[]): Promise<WriteResult> {
     try {
-      const current = getHostDrawerSettings()
-      const side = _side
-      // Which live tabs belong to THIS side. The assignment facade
-      // (getTabAssignments) is keyed by TabKey — looking it up by live id
-      // always misses, which made the old per-side filter add EVERY live tab
-      // for the primary side and NONE for the secondary side. Consequences
-      // (2026-08-17 Configure hide no-op report): a primary hide wiped the
-      // other side's hidden ids from the persisted lists, and an unhidden
-      // secondary id was never removed — so it stayed in host/canvas
-      // hiddenTabIds and re-hid on the next host-sync. Resolve the facade by
-      // the frozen key (tab.key) so the filter matches the real side.
+      // LUMI-21: the lazy dispatch import below awaits; if the extension is
+      // disabled (or superseded by a newer setup) while it resolves, the
+      // continuation must not write the Canvas hidden copy or re-apply the
+      // strips against the torn-down/restored vanilla UI. Boot shares the
+      // boot generation, so boot-restore merges are unaffected.
+      const armedGeneration = currentLifecycleGeneration()
+      // S2: the host drawerSettings.hiddenTabIds patch is GONE (Q2/Q3 —
+      // the model owns `hidden`; the Canvas copy is a hydrate bridge and
+      // converge target). Converge the Canvas copy to this side's model
+      // projection (keep the OTHER side's stored hides), then DOM-apply
+      // directly — idempotent on every reconcile-driven hide change (boot
+      // restore, DnD, Configure).
       const assignments = getTabAssignments()
       const sideIds = new Set<string>()
       for (const tab of liveDrawerTabs()) {
         const assignedSide = assignments.get(tab.key)
-        if ((assignedSide === 'secondary') === (side === 'secondary')) {
+        if ((assignedSide === 'secondary') === (_side === 'secondary')) {
           sideIds.add(tab.id)
         }
       }
       // Facade keys (TabKey) for tabs with no live inventory entry (e.g.
-      // DOM-placed secondary tabs whose host button was removed). The hidden
-      // lists are live-id-keyed so these rarely match, but keep them so the
-      // merge never drops a tab that is only known by key.
+      // DOM-placed secondary tabs whose host button was removed).
       for (const [key, assignedSide] of assignments) {
-        if ((assignedSide === 'secondary') === (side === 'secondary')) sideIds.add(key)
+        if ((assignedSide === 'secondary') === (_side === 'secondary')) sideIds.add(key)
       }
-      const currentHidden = Array.isArray(current?.hiddenTabIds)
-        ? current.hiddenTabIds as string[]
-        : []
-      const nextHidden = currentHidden.filter(id => !sideIds.has(id))
-      for (const id of ids) {
-        if (!nextHidden.includes(id)) nextHidden.push(id)
+      const canvasOtherSide = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
+
+      // OS mode (D3): a CLOSED window keeps its strip button suppressed even
+      // after a Start-menu manage un-hide — menu-hidden (model.hidden) and
+      // strip-presence are independent; reopening is the launch path's job
+      // (openWindowInDrawerByLiveId clears closed + hidden together). Merge
+      // the closed set — resolved to live ids — into the STRIP applies only:
+      // the Canvas copy stays pure model.hidden (closed∧unhidden ids must
+      // never leak into hiddenTabIds persist / Configure draft state), and
+      // closed∧hidden ids stay in the copy via `ids` as before.
+      const closedOnlyLiveIds = new Set<string>()
+      try {
+        const { getModel } = await import('../../recon/dispatch')
+        const model = getModel()
+        if (model && model.closed.length > 0) {
+          const hiddenKeys = new Set<string>(model.hidden)
+          for (const key of model.closed) {
+            if (hiddenKeys.has(key)) continue // carried by `ids` already
+            const liveId = resolveTabKey(key)
+            if (liveId) closedOnlyLiveIds.add(liveId)
+          }
+        }
+      } catch {
+        /* dispatch unavailable (stub env) — closed-set merge is best-effort */
       }
-      const canvasHidden = getCanvasHiddenTabIds().filter(id => !sideIds.has(id))
-      setCanvasHiddenTabIds([...canvasHidden, ...ids])
-      const effective = mergeHiddenTabIdLists(nextHidden, getCanvasHiddenTabIds())
-      const merged = {
-        ...(current ?? {}),
-        hiddenTabIds: effective,
+      if (!isLifecycleCurrent(armedGeneration)) {
+        dlog('[host] setHidden: dropped post-teardown continuation')
+        return 'degraded'
       }
 
-      // Apply to the Canvas-owned strips DIRECTLY, regardless of the host
-      // write result. The host React filter only reacts when setSetting is
-      // reachable (GO); under NO-GO the main-mirror buttons never get
-      // display:none and the Configure hide toggle is a no-op (2026-08-17).
-      // The pre-owned-model Configure commit did exactly this
-      // (applyHiddenTabIdsToMirror + applyHiddenTabIdsToSecondary at commit
-      // time) — it was lost in the owned-commit refactor. Idempotent, safe on
-      // every reconcile-driven hide change (boot restore, DnD, Configure).
-      // applyHiddenTabIdsToHostMain covers the NON-taskbar MAIN drawer (the
-      // host React drawer — the visible surface when the mirror is absent);
-      // it is a no-op in taskbar mode (mirror handles it).
-      applyHiddenTabIdsToMirror(new Set(effective))
-      applyHiddenTabIdsToSecondary(new Set(effective))
-      applyHiddenTabIdsToHostMain(new Set(effective))
+      setCanvasHiddenTabIds([
+        ...canvasOtherSide,
+        ...ids.filter(id => !closedOnlyLiveIds.has(id)),
+      ])
+      const effective = new Set<string>([
+        ...canvasOtherSide,
+        ...ids,
+        ...closedOnlyLiveIds,
+      ])
 
-      const ok = patchHostDrawerSettings(merged)
-      return ok ? 'ok' : 'degraded'
+      // Canvas-owned strip applies. The mirror strip's hidden state is
+      // renderer-owned (model.hidden) — applyHiddenTabIdsToMirror skips
+      // renderer-owned buttons; keep it for chrome-only parity during
+      // boot windows before the first render.
+      applyHiddenTabIdsToMirror(effective)
+      applyHiddenTabIdsToSecondary(effective)
+      applyHiddenTabIdsToHostMain(effective)
+      return 'ok'
     } catch {
       return 'failed'
     }
@@ -509,7 +696,11 @@ export class LumiverseHost implements HostPort {
   async activate(side: Side, id: LiveTabId): Promise<WriteResult> {
     try {
       if (side === 'secondary') {
-        showSecondaryTab(id)
+        // silent: this is a model→chrome echo (diffActive returns the model's
+        // own active). Without silence, the tracked-active write re-dispatches
+        // syncActive into the queue that just drove this reconcile — the
+        // tracked-active ↔ reconcile feedback loop (swap-freeze, 2026-08-27).
+        showSecondaryTab(id, { silent: true })
         return 'ok'
       }
 
@@ -532,10 +723,15 @@ export class LumiverseHost implements HostPort {
         return 'degraded'
       }
 
-      const { activateMainMirrorFromRestore } = await import(
-        '../../sidebar/main-tab-pin'
-      )
-      activateMainMirrorFromRestore(hostBtn, tab.title)
+      // S2: the mirror key/activateMainMirrorFromRestore machinery is
+      // gone — a primary activation echo is just the host content click.
+      // "Already active" is an idempotent no-op re-render. The mirror's
+      // highlight/title follow the model (flat renderer).
+      try {
+        hostBtn.click()
+      } catch {
+        /* host may throw during teardown */
+      }
       return 'ok'
     } catch {
       return 'failed'
@@ -556,6 +752,29 @@ export class LumiverseHost implements HostPort {
         if (s.width > 0 && typeof document !== 'undefined') {
           document.documentElement.style.setProperty(SECONDARY_WIDTH_VAR, `${s.width}px`)
         }
+        return 'ok'
+      }
+
+      // Shell-owned echo suppression (2026-09, live-verify #1): while the
+      // Canvas shell owns the primary surface it is the ONLY writer of
+      // primary open — every shell transition already persists itself via
+      // its own setDrawer intent. A model→chrome write arriving here is a
+      // STALE echo of an in-flight transition (async intent queue): forcing
+      // it toggles the shell back, the toggle re-persists the opposite
+      // state, and the two writers ping-pong SAVE_LAYOUT forever (freeze).
+      // Suppress: shell truth converges into the model via observe() on the
+      // next host-sync instead. Width: the model's width is itself a read
+      // of MAIN_MIRROR_WIDTH_VAR — re-stamping the var from it is idempotent
+      // at best, stale-fighting at worst; skip it too.
+      //
+      // Un-gated paths keep the toggle: mirror inactive (toggle is a no-op
+      // without a shell) and the restore window (boot seeding owns the
+      // pre-guard shell state — byte-identical to pre-fix behavior).
+      if (mainShellOwnsPrimarySurface()) {
+        dlog('[host] setDrawer: shell owns primary — stale echo suppressed', {
+          open: s.open,
+          width: s.width,
+        })
         return 'ok'
       }
 
@@ -580,7 +799,9 @@ export class LumiverseHost implements HostPort {
       }
       if (s.width > 0) {
         if (typeof document !== 'undefined') {
-          document.documentElement.style.setProperty('--canvas-main-mirror-width', `${s.width}px`)
+          // Use the var the main shell actually reads (styles.ts). The old
+          // '--canvas-main-mirror-width' literal matched no reader.
+          document.documentElement.style.setProperty(MAIN_MIRROR_WIDTH_VAR, `${s.width}px`)
         }
       }
 
@@ -595,51 +816,20 @@ export class LumiverseHost implements HostPort {
   // -----------------------------------------------------------------------
   async setSide(side: DrawerSide): Promise<WriteResult> {
     try {
-      const current = getHostDrawerSettings()
-      const merged = { ...(current ?? {}), side }
-
-      // The host settings write is NO-GO in this runtime (setSetting bridge
-      // unavailable — the full store only lands in fiber while a bare
-      // useStore() component is mounted), so the swap must ALSO go through
-      // the Canvas-side flip (drawer-sync's applyMainDrawerSideChange): it
-      // sets the side override (which getMainDrawerSide prefers, so the
-      // observed world converges and diffSide settles), remounts the
-      // secondary shell on the new edge, and repositions the main mirror.
-      // Without it, "Swap drawer locations" in Configure only changed the
-      // model — nothing moved on screen (2026-07-31).
-      //
-      // The Canvas-side flip is only driven when the host write actually
-      // landed — otherwise the override can never settle and sticks
-      // forever (same-side drawers + SAVE_LAYOUT cascade, 2026-08-17). On
-      // NO-GO, fall back to Lumiverse's OWN settings API (the same PUT the
-      // Settings modal's setSetting flush performs): the server broadcasts
-      // SETTINGS_UPDATED, the client's ws handler reloads settings into the
-      // store, and React re-renders the drawer wrapper — the REAL move.
-      let ok = patchHostDrawerSettings(merged)
-      let bridge: 'fiber' | 'api' | 'none' = 'fiber'
-      if (!ok) {
-        ok = await writeHostDrawerSettingsViaApi({ side })
-        bridge = 'api'
-      }
-      if (ok) {
-        try {
-          const ds = await import('../../sidebar/drawer-sync')
-          await ds.applyMainDrawerSideChange(side)
-        } catch (err) {
-          dlog('[host] setSide: drawer-sync flip failed', String(err))
-        }
-      } else {
-        bridge = 'none'
-        dlog(`[host] setSide: NO-GO — host cannot flip the drawer to "${side}"; model will converge on the real side`)
-      }
-
-      // Diagnostic: the swap outcome + which write path moved the drawer.
-      // 'fiber' = direct setSetting (GO), 'api' = Lumiverse settings API
-      // (the same PUT the Settings modal's "Drawer side" toggle performs),
-      // 'none' = no host write — the model converges on the real DOM side.
-      dlog('[host] setSide', { side, bridge, result: ok ? 'ok' : 'degraded' })
-
-      return ok ? 'ok' : 'degraded'
+      // S4: the flip is pure geometry on the Canvas shells (drawer-sync's
+      // applyCanvasSideChange restyles both shells in place). The ONE host
+      // side write per swap (patchHostDrawerSettings → hosted-API fallback,
+      // 800ms echo guard) lives inside it — no local write here, so the
+      // 500ms host watcher and the 800ms guard cannot fight a double write
+      // (design doc §4 item 5).
+      const ds = await import('../../sidebar/drawer-sync')
+      const res = await ds.applyCanvasSideChange(side)
+      // 'ok' = the host write landed (patch or API); 'degraded' = it did
+      // not — reconcile's modelSideCorrection then converges the model on
+      // the real side (2026-08-17 enable-toggle poison fix preserved). The
+      // shells themselves never depend on the write (Canvas-owned geometry).
+      dlog('[host] setSide', { side, result: res.writeOk ? 'ok' : 'degraded' })
+      return res.writeOk ? 'ok' : 'degraded'
     } catch {
       return 'failed'
     }
@@ -659,6 +849,9 @@ export class LumiverseHost implements HostPort {
         if (!disposed) cb()
       })
     }
+    // Ghost-retry fan-out (LUMI-29): the grace timer re-fires the world
+    // change through this set so the dispatcher re-syncs after the window.
+    _worldNotifies.add(notify)
 
     // DrawerObserver can report several registrations during one React commit.
     // Route those events through the same microtask gate as DOM readiness
@@ -712,6 +905,7 @@ export class LumiverseHost implements HostPort {
 
     const dispose = () => {
       disposed = true
+      _worldNotifies.delete(notify)
       unreg1()
       unreg2()
       sidebarObserver?.disconnect()

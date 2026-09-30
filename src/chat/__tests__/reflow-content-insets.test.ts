@@ -35,6 +35,7 @@ class StubElement {
   }
   setAttribute(n: string, v: string) { this._attrs[n] = v }
   getAttribute(n: string) { return this._attrs[n] ?? null }
+  removeAttribute(n: string) { delete this._attrs[n] }
   get classList() {
     const self = this
     return { contains: (c: string) => self.className.split(/\s+/).includes(c), toString: () => self.className }
@@ -60,7 +61,7 @@ class StubElement {
 // ── Mock all reflow module dependencies ──
 
 // State shared between mocks
-const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0 }
+const state = { mainOpen: false, mainSide: 'right' as 'left' | 'right', secondaryOpen: false, secondaryTabList: false, taskbarMode: false, mobile: false, dockLeft: 0, dockRight: 0, mirrorActive: false, canvasMainOpen: false, mainPinActive: false, horizontal: false }
 
 mock.module('../../sidebar/mobile-exclusion', () => ({
   isMobileViewport: () => state.mobile,
@@ -73,16 +74,22 @@ mock.module('../../store', () => ({
   findStoreData: () => {},
   getStoreSnapshot: () => null,
   getDrawerTabs: () => [],
+  getHostStoreTabs: () => [],
 }))
 
 mock.module('../../sidebar/main-mirror-drawer', () => ({
-  isMainMirrorActive: () => false,
-  isCanvasMainOpen: () => false,
+  isMainMirrorActive: () => state.mirrorActive,
+  isCanvasMainOpen: () => state.canvasMainOpen,
+}))
+
+mock.module('../../sidebar/main-tab-pin', () => ({
+  isMainTabListPinActive: () => state.mainPinActive,
 }))
 
 mock.module('../../settings/state', () => ({
   isTaskbarModeEnabled: () => state.taskbarMode,
-  getSettings: () => ({ taskbarMode: state.taskbarMode }),
+  isHorizontalStrip: () => state.horizontal,
+  getSettings: () => ({ taskbarMode: state.taskbarMode, chatReflow: true, welcomeReflow: true }),
 }))
 
 mock.module('../../sidebar/secondary', () => ({
@@ -97,6 +104,7 @@ mock.module('../../dom/lumiverse', () => ({
   getMainWrapper: () => null,
   getMainDrawerWidth: () => 420,
   getChatColumn: () => null,
+  getLandingPage: () => null,
   getMainPanelContent: () => null,
 }))
 
@@ -137,6 +145,10 @@ function reset() {
   state.mobile = false
   state.dockLeft = 0
   state.dockRight = 0
+  state.mirrorActive = false
+  state.canvasMainOpen = false
+  state.mainPinActive = false
+  state.horizontal = false
   _appElStyle = {}
 }
 
@@ -146,6 +158,76 @@ state.mainOpen = true
 state.mainSide = 'right'
 assertEqual(computeContentLaneInsets().left, 0, 'main right open: left = 0')
 assertEqual(computeContentLaneInsets().right, 420, 'main right open: right = 420 (main width)')
+
+// ── Test 1b: open-side reporting (chat-owned shadow ownership) ──
+reset()
+state.mainOpen = true
+state.mainSide = 'right'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, true, 'main right open: openRight = true')
+  assertEqual(i.openLeft, false, 'main right open: openLeft = false')
+}
+reset()
+state.mainOpen = true
+state.mainSide = 'left'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'main left open: openLeft = true')
+  assertEqual(i.openRight, false, 'main left open: openRight = false')
+}
+reset()
+state.secondaryOpen = true
+state.mainSide = 'right'
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'secondary open (opposite right main): openLeft = true')
+  assertEqual(i.openRight, false, 'secondary open: openRight = false')
+}
+reset()
+state.mainOpen = true
+state.mirrorActive = true
+state.canvasMainOpen = true
+state.mainSide = 'right'
+state.secondaryOpen = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, true, 'both open: openLeft = true (secondary)')
+  assertEqual(i.openRight, true, 'both open: openRight = true (main)')
+}
+// Top/Bottom only moves the strip — the panel stays a side column, so the
+// open side still reports (the 2026-09-15 "#2 didn't work" live report).
+reset()
+state.mainOpen = true
+state.mirrorActive = true
+state.canvasMainOpen = true
+state.mainSide = 'right'
+state.horizontal = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, true, 'horizontal + main right open: openRight = true (panel is still a side column)')
+  assertEqual(i.openLeft, false, 'horizontal + main right open: openLeft = false')
+}
+// Strip reserves must still not count as "open" in horizontal mode.
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = true
+state.mirrorActive = true
+state.mainPinActive = true
+state.horizontal = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openRight, false, 'horizontal closed + pin strip: openRight = false (strip reserve is not an open drawer)')
+}
+reset()
+state.mobile = true
+state.mainOpen = true
+{
+  const i = computeContentLaneInsets()
+  assertEqual(i.openLeft, false, 'mobile: openLeft = false')
+  assertEqual(i.openRight, false, 'mobile: openRight = false')
+}
 
 // ── Test 2: publishContentLaneInsets sets vars ──
 reset()
@@ -199,11 +281,28 @@ state.mainSide = 'right'
 state.taskbarMode = true
 state.secondaryTabList = true
 state.secondaryOpen = false
-// main closed but taskbarMode → mainWidth = 56 (TAB_LIST_WIDTH_PX) from legacy pin path
+// S1: the main strip reserve keys on the PIN being active (mirror shell
+// mounted + taskbar chrome on) — mainPinActive models the pinned main strip.
+state.mirrorActive = true
+state.mainPinActive = true
+// main closed + main pin active → mainWidth = 56 (TAB_LIST_WIDTH_PX)
 // secondary closed with strip → secondaryWidth = 56
 // mainSide='right', so left=secondary=56, right=main=56
 assertEqual(computeContentLaneInsets().left, 56, 'taskbar mode: left = 56 (secondary strip)')
-assertEqual(computeContentLaneInsets().right, 56, 'taskbar mode: right = 56 (main strip via legacy pin path)')
+assertEqual(computeContentLaneInsets().right, 56, 'taskbar mode: right = 56 (main pinned strip)')
+
+// ── Test 7b: S1 — mirror shell active but NOT pinned (taskbar off):
+// closed drawer leaves no strip reserve (edge tab button overlays, no 56px). ──
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = false
+state.secondaryTabList = false
+state.secondaryOpen = false
+state.mirrorActive = true
+state.mainPinActive = false
+assertEqual(computeContentLaneInsets().left, 0, 'unpinned closed mirror: left = 0')
+assertEqual(computeContentLaneInsets().right, 0, 'unpinned closed mirror: right = 0 (no phantom 56px)')
 
 // ── Test 8: Zero secondary tabs (no strip) ──
 reset()
@@ -211,11 +310,13 @@ state.mainOpen = false
 state.mainSide = 'right'
 state.taskbarMode = true
 state.secondaryTabList = false
-// main closed but taskbarMode → mainWidth = 56
+state.mirrorActive = true
+state.mainPinActive = true
+// main closed + main pin active → mainWidth = 56
 // secondary has no tab list → secondaryWidth = 0
 // mainSide='right', so left=secondary=0, right=main=56
 assertEqual(computeContentLaneInsets().left, 0, 'zero secondary tabs: left = 0')
-assertEqual(computeContentLaneInsets().right, 56, 'zero secondary tabs: right = 56 (main strip via legacy pin path)')
+assertEqual(computeContentLaneInsets().right, 56, 'zero secondary tabs: right = 56 (main pinned strip)')
 
 // ── Test 9: Dock clamp (main right, dock right = 100) ──
 reset()
@@ -247,6 +348,19 @@ _publishedR = ''
 publishContentLaneInsets()
 assertEqual(_publishedL, '0px', 'mobile publish: left var = 0px')
 assertEqual(_publishedR, '0px', 'mobile publish: right var = 0px')
+
+// ── Test 13: S8 horizontal strip → no left/right reserve ──
+// Top/Bottom reserves the strip on the top/bottom edge via CSS; the L/R
+// lane contract must not add a phantom 56px column.
+reset()
+state.mainOpen = false
+state.mainSide = 'right'
+state.taskbarMode = true
+state.mirrorActive = true
+state.mainPinActive = true
+state.horizontal = true
+assertEqual(computeContentLaneInsets().left, 0, 'horizontal: left = 0 (no L/R strip reserve)')
+assertEqual(computeContentLaneInsets().right, 0, 'horizontal: right = 0 (no L/R strip reserve)')
 
 // ── Summary ──
 if (failed > 0) { console.error(`FAILED: ${failed}`); process.exitCode = 1 }

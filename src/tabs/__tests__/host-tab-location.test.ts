@@ -14,7 +14,10 @@ import {
   locationMatches,
   requestHostTabLocation,
   requestHostTabToSecondary,
+  clearSpuriousActiveTabReset,
   __setHostMoveTabToForTest,
+  __setHostActiveTabIdForTest,
+  __setClearPendingActiveTabResetForTest,
   CANVAS_SECONDARY_CONTAINER_ID,
 } from '../host-tab-location'
 import { setHostBridgeContext } from '../../dom/host-bridge'
@@ -24,6 +27,8 @@ const _origWindow = (globalThis as any).window
 function restore() {
   setHostBridgeContext(null)
   __setHostMoveTabToForTest(null)
+  __setHostActiveTabIdForTest(undefined)
+  __setClearPendingActiveTabResetForTest(null)
   ;(globalThis as any).window = _origWindow
 }
 
@@ -148,6 +153,82 @@ function restore() {
   assertEqual(r.ok, true, 'T5: main restore ok')
   assertEqual(r.via, 'store', 'T5: via store')
   assertEqual(locations.connections.kind, 'main-drawer', 'T5: location main-drawer')
+  restore()
+}
+
+// =====================================================================
+// T6 (live-verify #13): a NON-active move-out clears the host's spurious
+// pendingActiveTabReset — the flag ViewportDrawer's effect turns into
+// "switch active to the first remaining tab", which repainted the active
+// tab's content on every main→second drag.
+// =====================================================================
+{
+  let cleared = 0
+  __setHostActiveTabIdForTest('profile')
+  __setClearPendingActiveTabResetForTest(() => { cleared++ })
+
+  assertEqual(clearSpuriousActiveTabReset('personas'), true, 'T6a: cleared for a non-active move')
+  assertEqual(cleared, 1, 'T6b: clear action called exactly once')
+  restore()
+}
+
+// =====================================================================
+// T7: an ACTIVE move keeps the reset — the host must pick a replacement and
+// Canvas's neighbor handoff owns the convergence.
+// =====================================================================
+{
+  let cleared = 0
+  __setHostActiveTabIdForTest('profile')
+  __setClearPendingActiveTabResetForTest(() => { cleared++ })
+
+  assertEqual(clearSpuriousActiveTabReset('profile'), false, 'T7a: not cleared for an active move')
+  assertEqual(
+    clearSpuriousActiveTabReset('spindle:profile:tab:profile:1'),
+    false,
+    'T7b: composite id still matches the host active (tolerant match)',
+  )
+  assertEqual(cleared, 0, 'T7c: clear action never called')
+  restore()
+}
+
+// =====================================================================
+// T8: the guard rides the real move-out path (requestHostTabToSecondary),
+// so extension + built-in placement both get it.
+// =====================================================================
+{
+  let cleared = 0
+  __setHostActiveTabIdForTest('profile')
+  __setClearPendingActiveTabResetForTest(() => { cleared++ })
+  const locations: Record<string, { kind: string; containerId?: string }> = {
+    personas: { kind: 'main-drawer' },
+  }
+  setHostBridgeContext({
+    ui: {
+      requestTabLocation: (id: string, loc: any) => { locations[id] = loc },
+      getTabLocation: (id: string) => locations[id] ?? { kind: 'main-drawer' },
+    },
+    containers: {},
+  } as any)
+
+  const r = requestHostTabToSecondary('personas')
+  assertEqual(r.ok, true, 'T8a: move-out still reports ok')
+  assertEqual(cleared, 1, 'T8b: move-out ran the spurious-reset guard')
+  restore()
+}
+
+// =====================================================================
+// T9 (review batch 1): an UNKNOWN host active must keep the reset. We cannot
+// distinguish an active-tab move (which the host's reset must drive) from a
+// non-active one when neither the DOM nor the store exposes the active, so
+// clearing here would suppress a legitimate replacement.
+// =====================================================================
+{
+  let cleared = 0
+  __setHostActiveTabIdForTest(null)
+  __setClearPendingActiveTabResetForTest(() => { cleared++ })
+
+  assertEqual(clearSpuriousActiveTabReset('personas'), false, 'T9a: unknown active → not cleared')
+  assertEqual(cleared, 0, 'T9b: clear action never called')
   restore()
 }
 

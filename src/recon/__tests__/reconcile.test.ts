@@ -586,14 +586,18 @@ async function testHostActivationTheft() {
     assert(r1.echo.postEpochScheduled === true, 'T1d: post-epoch scheduled')
   }
 
-  // Flush the post-epoch reconcile — it re-asserts A
+  // Flush the post-epoch reconcile. The steal is a NEWER world change than
+  // the model's activation — echo suppression must not fight it (the same
+  // principle as the S0b loop fix and the #13 host-reset handling). The
+  // owned model adopts the host's active on the next syncFromHost.
   await flushMicrotasks()
   assertEqual(epochState().active, false, 'T1e: epoch closed')
 
-  // After post-epoch converge, A should be active again
   const w = host.observe()
   const aEntry = w.tabs.find(t => t.key === A)
-  assert(aEntry!.isActiveInPrimary, 'T1f: A is active after post-epoch re-assert')
+  const profileEntry = w.tabs.find(t => t.key === PROFILE)
+  assert(profileEntry!.isActiveInPrimary, 'T1f: the host steal (PROFILE) survives — no re-assert fight')
+  assert(!aEntry!.isActiveInPrimary, 'T1f: the pre-steal model active is not force re-activated')
 
   unsub()
 }
@@ -987,6 +991,28 @@ await testPlacementCrossSide()
 await testIdempotenceAfterFullConvergence()
 await testSequentialModelConvergence()
 await testDrawerStateReconciliation()
+// ============================================================================
+// A16 — hidden tabs: the order diff must exclude unobservable hidden entries
+// ============================================================================
+async function testHiddenOrderConvergence() {
+  const HID = extensionKey('ext', 'hid')
+  const host = new FakeHost([
+    makeLiveTab(A, 'h:a', 'secondary', { activeInSecondary: true }),
+    makeLiveTab(B, 'h:b', 'secondary'),
+    makeLiveTab(HID, 'h:hid', 'secondary', { hidden: true }),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    secondary: [A, HID, B],
+    hidden: [HID],
+    active: { primary: null, secondary: A },
+  }
+  const r1 = await reconcile(model, host)
+  assertEqual(r1.ops, 0, 'A16a: hidden secondary tab produces no phantom setOrder')
+  const r2 = await reconcile(model, host)
+  assertEqual(r2.ops, 0, 'A16b: idempotent with a non-terminal hidden secondary tab')
+}
+
 await testSideSwap()
 await testActiveNull()
 await testLateRegistrationCrossSide()
@@ -1007,6 +1033,9 @@ await testSuffixDrift()
 await testHostActivationTheft()
 // Adversarial — commit lag (microtask delay)
 await testCommitLag()
+// Adversarial — hidden tabs must not produce phantom setOrder rounds
+await testHiddenOrderConvergence()
+
 // Adversarial — bridge→store→DOM retry
 await testPlaceRetryAfterFailed()
 await testNonReadyInventoryDefersWrites()

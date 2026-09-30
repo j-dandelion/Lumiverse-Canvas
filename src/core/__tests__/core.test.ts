@@ -292,6 +292,56 @@ function test_invariant5_activeAfterRemoval() {
 
 test_invariant5_activeAfterRemoval()
 
+// ── OS mode (2026-09-16 H1): the closed set is an additional selectability
+//    gate for activeAfterRemoval — a closed window must never be elected as
+//    the replacement active (move-out, setHidden, etc.). Note `closed` is
+//    deliberately NOT consulted by visibleKeys / visibleToAbsoluteIndex
+//    (strip + visible-index semantics), only by active selection.
+function test_invariant5_activeAfterRemovalSkipsClosed() {
+  // Nearest neighbour above is closed → fall through to the next selectable
+  // key above (hidden CORTEX is skipped too).
+  const aboveClosed = { ...modelWith({
+    primary: [PROFILE, PRESETS, CORTEX, LOOM],
+    hidden: [CORTEX],
+  }), closed: [PRESETS] }
+  assertEqual(activeAfterRemoval(aboveClosed, 'primary', LOOM), PROFILE, 'closed above: skip closed + hidden, pick next selectable above')
+
+  // Nothing selectable above → fall BELOW rather than elect the closed key.
+  const belowAfterClosed = { ...modelWith({ primary: [PROFILE, PRESETS, LOOM] }), closed: [PROFILE] }
+  assertEqual(activeAfterRemoval(belowAfterClosed, 'primary', PRESETS), LOOM, 'only closed above: prefer below over closed')
+
+  // Move the active out of the side: the source replacement must not be the
+  // closed neighbour above.
+  const m = { ...modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PRESETS] }
+  const moved = reduce(m, { t: 'move', key: LOOM, to: 'secondary', index: 0, activateDest: false })
+  assertArraysEqual(moved.primary, [PROFILE, PRESETS], 'move active out: source loses only the moved key')
+  assertEqual(moved.active.primary, PROFILE, 'move active out: closed neighbour is not elected as replacement')
+
+  // Only closed keys remain → no replacement at all.
+  const onlyClosed = { ...modelWith({ primary: [PROFILE, PRESETS, LOOM] }), closed: [PROFILE, PRESETS] }
+  assertEqual(activeAfterRemoval(onlyClosed, 'primary', LOOM), null, 'only closed keys remain: replacement is null')
+
+  // setHidden(active) replaces through activeAfterRemoval too.
+  const hiddenActive = { ...modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PRESETS] }
+  const hid = reduce(hiddenActive, { t: 'setHidden', key: LOOM, hidden: true })
+  assertEqual(hid.active.primary, PROFILE, 'setHidden(active): closed neighbour is not elected')
+
+  const hidOnlyClosed = { ...modelWith({
+    primary: [PROFILE, LOOM],
+    activePrimary: LOOM,
+  }), closed: [PROFILE] }
+  const hidNull = reduce(hidOnlyClosed, { t: 'setHidden', key: LOOM, hidden: true })
+  assertEqual(hidNull.active.primary, null, 'setHidden(active) with only closed left: replacement is null')
+}
+
+test_invariant5_activeAfterRemovalSkipsClosed()
+
 // ═══════════════════════════════════════════════════════════════════
 // Move intent
 // ═══════════════════════════════════════════════════════════════════
@@ -402,6 +452,101 @@ function test_setHidden() {
 test_setHidden()
 
 // ═══════════════════════════════════════════════════════════════════
+// setClosed intent (2026-09-14, OS mode): membership in the model's
+// closed set. Unlike setHidden, closing the ACTIVE window leaves its
+// drawer with NO active (D17 — a closed window is not auto-succeeded).
+// ═══════════════════════════════════════════════════════════════════
+
+function test_setClosed() {
+  const m = modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: PRESETS,
+  })
+
+  // Closing a non-active window: membership only.
+  const c = reduce(m, { t: 'setClosed', key: PROFILE, closed: true })
+  assert(c.closed.includes(PROFILE), 'setClosed adds to closed')
+  assert(c.primary.includes(PROFILE), 'closed tab stays in list')
+  assertEqual(c.active.primary, PRESETS, 'closing a non-active window keeps the active')
+
+  // Closing the ACTIVE window: D17 — no neighbor replacement, nothing focused.
+  const closedActive = reduce(m, { t: 'setClosed', key: PRESETS, closed: true })
+  assert(closedActive.closed.includes(PRESETS), 'setClosed(active) adds to closed')
+  assertEqual(closedActive.active.primary, null, 'closing the active window clears active (D17 — NOT neighbor replacement)')
+
+  // Un-close restores nothing by itself (opening is an explicit activate).
+  const unclosed = reduce(closedActive, { t: 'setClosed', key: PRESETS, closed: false })
+  assert(!unclosed.closed.includes(PRESETS), 'setClosed false removes from closed')
+  assertEqual(unclosed.active.primary, null, 'un-close does not re-activate')
+
+  // Identity no-ops: redundant close/un-close and unknown keys.
+  const closedOnce = reduce(m, { t: 'setClosed', key: PROFILE, closed: true })
+  const closedTwice = reduce(closedOnce, { t: 'setClosed', key: PROFILE, closed: true })
+  assert(closedTwice === closedOnce, 'redundant close is identity (dispatch no-op gate)')
+  assert(reduce(m, { t: 'setClosed', key: builtinKey('nonexistent'), closed: true }) === m, 'setClosed unknown key identity no-op')
+  const deact = reduce(m, { t: 'deactivate', side: 'primary' })
+  assert(reduce(deact, { t: 'deactivate', side: 'primary' }) === deact, 'redundant deactivate is identity')
+
+  // Deactivate intent: clears active, keeps membership everywhere.
+  const deactivated = reduce(m, { t: 'deactivate', side: 'primary' })
+  assertEqual(deactivated.active.primary, null, 'deactivate clears the active window (minimize)')
+  assertEqual(deactivated.closed.length, m.closed.length, 'deactivate does not touch the closed set')
+  assertEqual(deactivated.primary.length, m.primary.length, 'deactivate keeps placement')
+}
+
+test_setClosed()
+
+// ═══════════════════════════════════════════════════════════════════
+// setMenuHidden intent (LUMI-16b): membership in the START-MENU-only
+// menuHidden set. STRIP-INDEPENDENT: unlike setHidden there is NO active
+// replacement and the `hidden`/`closed` sets are never touched — the menu
+// toggle must change only the Start-menu listing (member requirement
+// 2026-09-28). Strips stay owned by `hidden` (Configure Tabs) + the window
+// lifecycle.
+// ═══════════════════════════════════════════════════════════════════
+
+function test_setMenuHidden() {
+  const m = modelWith({
+    primary: [PROFILE, PRESETS, LOOM],
+    activePrimary: PRESETS,
+  })
+
+  // Menu-hide a window: membership in menuHidden ONLY.
+  const hidden = reduce(m, { t: 'setMenuHidden', key: PROFILE, hidden: true })
+  assert(hidden.menuHidden.includes(PROFILE), 'setMenuHidden adds to menuHidden')
+  assertArraysEqual(hidden.hidden, m.hidden, 'setMenuHidden NEVER touches the strip hidden set')
+  assertArraysEqual(hidden.closed, m.closed, 'setMenuHidden never touches the closed set')
+  assertEqual(hidden.active.primary, PRESETS, 'menu-hiding the ACTIVE window keeps it active (no strip semantics)')
+  assert(hidden.primary.includes(PROFILE), 'menu-hidden tab stays in its list')
+
+  // Menu-hide an inactive window: no lifecycle change either.
+  const minHidden = reduce(m, { t: 'setMenuHidden', key: LOOM, hidden: true })
+  assertEqual(minHidden.active.primary, PRESETS, 'menu-hiding an inactive window keeps the active')
+
+  // Menu-unhide: membership removal only, still strip-neutral.
+  const unhidden = reduce(hidden, { t: 'setMenuHidden', key: PROFILE, hidden: false })
+  assert(!unhidden.menuHidden.includes(PROFILE), 'setMenuHidden false removes from menuHidden')
+  assertArraysEqual(unhidden.hidden, m.hidden, 'menu un-hide never touches the strip hidden set')
+
+  // Coexistence: the two sets are independent — a strip-hidden tab can be
+  // menu-visible and vice versa.
+  const both = reduce(
+    modelWith({ primary: [PROFILE, PRESETS], activePrimary: PRESETS }),
+    { t: 'setHidden', key: PROFILE, hidden: true },
+  )
+  const menuHiddenOnly = reduce(both, { t: 'setMenuHidden', key: PRESETS, hidden: true })
+  assert(menuHiddenOnly.hidden.includes(PROFILE) && !menuHiddenOnly.menuHidden.includes(PROFILE), 'strip-hidden tab stays menu-visible')
+  assert(menuHiddenOnly.menuHidden.includes(PRESETS) && !menuHiddenOnly.hidden.includes(PRESETS), 'menu-hidden tab stays strip-visible')
+
+  // Identity no-ops: redundant toggle and unknown keys.
+  const once = reduce(m, { t: 'setMenuHidden', key: PROFILE, hidden: true })
+  assert(reduce(once, { t: 'setMenuHidden', key: PROFILE, hidden: true }) === once, 'redundant menu-hide is identity (dispatch no-op gate)')
+  assert(reduce(m, { t: 'setMenuHidden', key: builtinKey('nonexistent'), hidden: true }) === m, 'setMenuHidden unknown key identity no-op')
+}
+
+test_setMenuHidden()
+
+// ═══════════════════════════════════════════════════════════════════
 // activate intent
 // ═══════════════════════════════════════════════════════════════════
 
@@ -417,6 +562,34 @@ function test_activate() {
   const mh = modelWith({ primary: [PROFILE, PRESETS], hidden: [PROFILE] })
   const ah = reduce(mh, { t: 'activate', key: PROFILE, side: 'primary' })
   assertEqual(ah.active.primary, null, 'activate hidden tab no-ops')
+
+  // H2: a closed key (OS close keeps reopen memory) is never activated.
+  const closed = reduce(
+    modelWith({ primary: [PROFILE, PRESETS], secondary: [LOOM] }),
+    { t: 'setClosed', key: PROFILE, closed: true },
+  )
+  const closedAct = reduce(closed, { t: 'activate', key: PROFILE, side: 'primary' })
+  assert(closedAct === closed, 'activate closed key is identity no-op')
+  assertEqual(closedAct.active.primary, null, 'activate closed key does not set active')
+
+  // Fold order preserved: un-close then activate in one batch still activates.
+  const reopened = foldIntents(closed, [
+    { t: 'setClosed', key: PROFILE, closed: false },
+    { t: 'activate', key: PROFILE, side: 'primary' },
+  ])
+  assertEqual(reopened.active.primary, PROFILE, 'fold [setClosed(false), activate] activates the key')
+
+  // No over-blocking: other keys (same or other side) still activate normally.
+  assertEqual(
+    reduce(closed, { t: 'activate', key: PRESETS, side: 'primary' }).active.primary,
+    PRESETS,
+    'activate non-closed sibling on the same side still works',
+  )
+  assertEqual(
+    reduce(closed, { t: 'activate', key: LOOM, side: 'secondary' }).active.secondary,
+    LOOM,
+    'activate non-closed key on the other side still works',
+  )
 }
 
 test_activate()
@@ -643,6 +816,40 @@ function test_syncFromHost() {
   })
   assertEqual(movedActiveCleared.active.primary, null, 'syncFromHost clears primary active when the flagged tab moved to the other side')
 
+  // OS mode closed-guard: a CLOSED window must never be re-adopted as active
+  // by a host sync. The secondary tracked active deliberately survives close
+  // (reopen memory), so the observed world keeps flagging the closed key
+  // active — without the guard, the next host-sync resurrects it into
+  // model.active and undoes the X/minimize (strip button stays hidden).
+  const CLOSED_WINDOW = builtinKey('closed-window')
+  const closedActiveRejected = reduce({
+    ...modelWith({
+      primary: [PROFILE],
+      secondary: [CLOSED_WINDOW],
+      activePrimary: PROFILE,
+      activeSecondary: null,
+    }),
+    closed: [CLOSED_WINDOW],
+  }, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PROFILE, liveId: 'profile', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+        { key: CLOSED_WINDOW, liveId: 'closed-window', isBuiltin: true, location: 'secondary', isHidden: false, isActiveInPrimary: false, isActiveInSecondary: true, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: true,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    },
+  })
+  assertEqual(
+    closedActiveRejected.active.secondary,
+    null,
+    'syncFromHost does not re-adopt a closed window as active (OS closed-guard)',
+  )
+
   // Remove gone tabs
   const gone = reduce(m, {
     t: 'syncFromHost',
@@ -657,6 +864,41 @@ function test_syncFromHost() {
   })
   assertArraysEqual(gone.primary, [], 'syncFromHost removes gone tabs')
   assertEqual(gone.active.primary, null, 'syncFromHost clears active when tab gone')
+
+  // menuHidden (LUMI-16b) survives a host sync untouched when the tab is
+  // still present — and is NEVER derived from the host (no host write
+  // consumes it; the strips must not react to it).
+  const menuM = { ...modelWith({ primary: [PROFILE, PRESETS] }), menuHidden: [PROFILE] }
+  const menuSynced = reduce(menuM, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PROFILE, liveId: 'profile', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+        { key: PRESETS, liveId: 'presets', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: false, isActiveInSecondary: false, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: false,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    } as any,
+  })
+  assertArraysEqual(menuSynced.menuHidden, [PROFILE], 'syncFromHost keeps menuHidden membership for present tabs')
+  // A tab that left the observed inventory cannot leave a menu-hidden ghost.
+  const goneMenu = reduce(menuM, {
+    t: 'syncFromHost',
+    observed: {
+      tabs: [
+        { key: PRESETS, liveId: 'presets', isBuiltin: true, location: 'primary', isHidden: false, isActiveInPrimary: true, isActiveInSecondary: false, hasContentRoot: true },
+      ],
+      drawerSide: 'left',
+      primaryOpen: false,
+      primaryWidth: 420,
+      secondaryOpen: false,
+      secondaryWidth: 420,
+    } as any,
+  })
+  assertArraysEqual(goneMenu.menuHidden, [], 'syncFromHost prunes menuHidden entries whose tab is gone')
 }
 
 test_syncFromHost()
@@ -962,7 +1204,45 @@ function test_edge_cases() {
   assert(!keyExists(m4, PROFILE), 'keyExists false')
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Identity preservation for no-op intents (review batch 4)
+// ═══════════════════════════════════════════════════════════════════
+function testNoOpIdentity() {
+  const base: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, EXT_A],
+    secondary: [EXT_B],
+    hidden: [],
+    active: { primary: PROFILE, secondary: EXT_B },
+  }
+
+  assert(
+    reduce(base, { t: 'reorder', key: EXT_A, side: 'primary', index: 1 }) === base,
+    'identity: reorder to the same slot returns the same model',
+  )
+  const moved = reduce(base, { t: 'reorder', key: EXT_A, side: 'primary', index: 0 })
+  assert(moved !== base, 'identity: real reorder returns a new model')
+  assertArraysEqual(listForSide(moved, 'primary'), [EXT_A, PROFILE], 'identity: real reorder applied')
+
+  assert(
+    reduce(base, { t: 'setHidden', key: EXT_A, hidden: false }) === base,
+    'identity: setHidden(already visible) returns the same model',
+  )
+  const hidden = reduce(base, { t: 'setHidden', key: EXT_A, hidden: true })
+  assert(hidden !== base, 'identity: real setHidden returns a new model')
+  assert(
+    reduce(hidden, { t: 'setHidden', key: EXT_A, hidden: true }) === hidden,
+    'identity: repeating a hide returns the same model',
+  )
+
+  assert(
+    reduce(base, { t: 'move', key: EXT_A, to: 'primary', index: 1, activateDest: false }) === base,
+    'identity: same-side move to the same slot returns the same model',
+  )
+}
+
 test_edge_cases()
+testNoOpIdentity()
 
 // ═══════════════════════════════════════════════════════════════════
 // Report

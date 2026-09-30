@@ -1,4 +1,4 @@
-import type { LayoutModel, TabKey, Side } from '../core/model'
+import { isExtensionKey, type LayoutModel, type TabKey, type Side } from '../core/model'
 import type { Intent } from '../core/intents'
 import { reduce, foldIntents } from '../core/reduce'
 import { sideOfKey, visibleKeys } from '../core/select'
@@ -7,7 +7,7 @@ import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
 import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
 import { saveLayoutToDisk } from '../persist/layout-repo'
-import { getSingleLayoutSlot, getDualLayoutSlot } from '../settings/state'
+import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled, getSettings, getLastLoadedLayout } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 let _host: HostPort | null = null
@@ -19,10 +19,114 @@ let _unsubscribeWorldChanged: (() => void) | null = null
 let _bootstrapping = false
 let _worldSyncPending = false
 let _pendingLayout: unknown = null
+/**
+ * Restore-time OS routing override (2026-09-19, layout-mode fixes F3;
+ * re-scoped 2026-09-19 adversarial F2). `setSettings` flips `osMode`
+ * synchronously BEFORE `applyOsModeChange` runs, so a queued/superseded OS
+ * transition can be restoring while the live setting already reads the NEXT
+ * mode — `buildPersistedBlob` would then route the restore's persist into the
+ * wrong pair of slots (a disable restore writing the non-OS model into
+ * `osSingleLayout` because `osMode` flipped back on mid-run).
+ *
+ * TWO independent slots, run wins (F2 — the old single slot was
+ * bootstrap-scoped and settled-NULL while the OS run was still going, so a
+ * mid-run settings flip routed later persists with the LIVE setting):
+ *
+ *   `_persistOsOverride`     — RUN-scoped. Written ONLY via
+ *                              `setPersistOsOverride`: `runOsEnable` sets
+ *                              true at entry, `runOsDisable` false, each
+ *                              clears to null in its finally at run end.
+ *                              Survives bootstrap settle; shutdown/abort
+ *                              clear it as a backstop.
+ *   `_persistOsBootOverride` — BOOTSTRAP-scoped (the original lifecycle):
+ *                              set at `bootstrapFromLayout` entry from
+ *                              `opts.osActive` (absent → null → live
+ *                              setting), cleared when that bootstrap's task
+ *                              settles (only while its generation is still
+ *                              current — a superseding bootstrap owns the
+ *                              value), on the pending-abort path, and on
+ *                              shutdown. Boot passes no value (null → live
+ *                              setting, unchanged behavior).
+ *
+ * Effective routing: `_persistOsOverride ?? _persistOsBootOverride ??
+ * isOsModeEnabled()` — a run's intent is authoritative whenever a run is
+ * active; outside runs the bootstrap slot behaves exactly as before
+ * (settle → null-ish backstop).
+ *
+ * Scheme note: a one-deep push/restore-prev on a single variable was
+ * considered and rejected — a settle arriving between a run's
+ * `setPersistOsOverride` and its own bootstrap's push (e.g. a prior boot
+ * bootstrap settling while a run is in its pre-restore window, or an enable
+ * run on the seed path that never bootstraps) would restore a pre-run value
+ * and clobber the run's override. Two slots have no such interleaving.
+ */
+let _persistOsOverride: boolean | null = null
+let _persistOsBootOverride: boolean | null = null
+
+/**
+ * Set (or clear, with null) the RUN-scoped OS routing override for the
+ * caller's OS-mode run. See the `_persistOsOverride` doc for the two-slot
+ * lifecycle: OS runs bracket their whole body with this (entry value →
+ * finally null); `bootstrapFromLayout`'s settle never touches it.
+ */
+export function setPersistOsOverride(osActive: boolean | null): void {
+  _persistOsOverride = osActive
+}
+/**
+ * Warm-restore persistence gate override (2026-09-15). `reconcileAndPersist`
+ * refuses to write while `_pendingLayout` is armed so a partial boot model is
+ * never persisted over the stored layout. A warm MODE-SWITCH restore (second
+ * drawer enable/disable, OS disable) has the opposite failure mode: if the
+ * entering slot carries an unresolvable key, `_pendingLayout` blocks the write
+ * indefinitely and a reload restores the stale top-level layout — the restored
+ * second-drawer tabs vanish (live bug 2026-09-15). Those restores set this flag
+ * (via `bootstrapFromLayout(..., { persistWhilePending: true })`), so the
+ * resolved live model IS written immediately while the retry window keeps
+ * merging late-resolving keys. Boot never sets it.
+ */
+let _persistResolvedWhilePending = false
+/**
+ * True once the user changed drawer geometry / hidden state / side inside the
+ * pending-restore window. `mergeResolvedInto` then keeps the USER's copies
+ * instead of re-adopting the rebuilt (layout) ones — a late-resolving tab
+ * must not undo a resize/open-close/hide made while it registered
+ * (review batch 4).
+ */
+let _pendingWindowUserState = false
 let _restoringPending = false
+/** Coalescing flags for dispatchTrackedActiveSync (see its doc comment). */
+let _trackedSyncScheduled = false
+let _trackedSyncQueued = false
 /** Boot-only retry window for partial restores (late-registering tabs). */
 let _restoreDeadline = 0
 const RESTORE_RETRY_WINDOW_MS = 30_000
+/** Current boot placement pass (see bootPlacementDone). Null post-shutdown. */
+let _bootPlacementPass: Promise<void> | null = null
+
+// --- Model-commit subscribers (S2 flat renderer) ---
+type ModelSubscriber = () => void
+const _modelSubscribers = new Set<ModelSubscriber>()
+
+/**
+ * Subscribe to model commits (bootstrap, dispatch, host-sync merges). Called
+ * after every `_model` assignment so chrome driven by the model (the S2 main
+ * renderer) can re-render without polling. Returns an unsubscribe function.
+ */
+export function onModelChanged(cb: ModelSubscriber): () => void {
+  _modelSubscribers.add(cb)
+  return () => { _modelSubscribers.delete(cb) }
+}
+
+/** Assign _model; notify subscribers on reference change. Null never notifies
+ *  (teardown — subscribers are torn down with their DOM). */
+function commitModel(next: LayoutModel | null): void {
+  if (_model === next) return
+  _model = next
+  if (next === null) return
+  for (const cb of Array.from(_modelSubscribers)) {
+    try { cb() } catch { /* subscriber errors must not break the queue */ }
+  }
+}
 
 function pendingLayoutTabCount(layout: any): number {
   if (!layout || typeof layout !== 'object') return 0
@@ -82,23 +186,32 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
   const primary = mergeSide('primary')
   const secondary = mergeSide('secondary')
   const hidden = rebuilt.hidden.filter((k) => inModel.has(k))
+  // START-MENU-only set (LUMI-16b): adopts the rebuild exactly like `hidden`
+  // (the rebuild was built from the same layout blob).
+  const menuHidden = rebuilt.menuHidden.filter((k) => inModel.has(k))
+  // User actions inside the pending window win over the layout for the
+  // fields the rebuild would otherwise overwrite wholesale (drawer geometry,
+  // hidden set, side). Only active had this guard before.
+  const keepUser = _pendingWindowUserState
   const next: LayoutModel = {
     ...current,
     primary,
     secondary,
-    hidden,
+    hidden: keepUser ? current.hidden : hidden,
+    menuHidden: keepUser ? current.menuHidden : menuHidden,
     active: {
       primary: current.active.primary ?? rebuilt.active.primary,
       secondary: current.active.secondary ?? rebuilt.active.secondary,
     },
-    drawers: rebuilt.drawers,
-    side: rebuilt.side,
+    drawers: keepUser ? current.drawers : rebuilt.drawers,
+    side: keepUser ? current.side : rebuilt.side,
   }
   // Identity-preserving when nothing changed.
   if (
     sameKeys(next.primary, current.primary) &&
     sameKeys(next.secondary, current.secondary) &&
     sameKeys(next.hidden, current.hidden) &&
+    sameKeys(next.menuHidden, current.menuHidden) &&
     next.active.primary === current.active.primary &&
     next.active.secondary === current.active.secondary &&
     next.drawers.primary.open === current.drawers.primary.open &&
@@ -113,6 +226,21 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
 }
 
 /** Order-sensitive array equality for TabKey lists. */
+/**
+ * Record user changes to state that `mergeResolvedInto` otherwise re-adopts
+ * from the rebuilt layout while a restore is pending. Only geometry / hidden
+ * / side are marked; tab placement is already add-only in the merge and the
+ * active key has its own `current ?? rebuilt` guard.
+ */
+function markPendingWindowUserIntent(intent: Intent): void {
+  if (_pendingLayout === null) return
+  const t = intent.t
+  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden' || t === 'setMenuHidden') {
+    _pendingWindowUserState = true
+  }
+}
+
+/** Order-sensitive array equality for TabKey lists. */
 function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
@@ -124,7 +252,7 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
 export function bootstrap(model: LayoutModel, host: HostPort, version?: string): void {
   _unsubscribeWorldChanged?.()
   const gen = ++_generation
-  _model = model
+  commitModel(model)
   _host = host
   _version = version ?? 'unknown'
   _bootstrapping = true
@@ -141,17 +269,26 @@ export function bootstrap(model: LayoutModel, host: HostPort, version?: string):
   _queue = task.catch(() => {}).then(() => {})
   void task.then((next) => {
     if (gen !== _generation || _host !== host) return
+    // This bootstrap's restore window is over: the BOOTSTRAP-scoped OS
+    // override is scoped to it (the RUN-scoped `setPersistOsOverride` value
+    // is untouched here and survives until its OS run's finally — F2). A
+    // SUPERSEDED bootstrap (gen mismatch → returned above) never clears it —
+    // the newer bootstrap owns the value.
+    _persistOsBootOverride = null
     // reconcileAndPersist may have corrected the model (e.g. adopted the
     // observed drawer side when the host could not apply the model's side —
     // NO-GO bridge). Keep that correction.
-    if (next !== model) _model = next
+    if (next !== model) commitModel(next)
     _bootstrapping = false
     if (_worldSyncPending) {
       _worldSyncPending = false
       void enqueueHostSync(host, gen).catch(() => {})
     }
   }, () => {
-    if (gen === _generation && _host === host) _bootstrapping = false
+    if (gen === _generation && _host === host) {
+      _persistOsBootOverride = null
+      _bootstrapping = false
+    }
   })
 }
 
@@ -179,6 +316,17 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       if (Date.now() > _restoreDeadline) {
         dlog('[dispatch] pending-layout restore aborted (retry window expired)')
         _pendingLayout = null
+        // Persist is NOT forced here: the abort can run while `_model` is
+        // still partial (or empty), and only the hasTabs-guarded commit path
+        // may write. Clear the warm-restore override too — it exists only
+        // while the retry window is open. Clear the BOOTSTRAP-scoped OS
+        // override (F2): it is scoped to this bootstrap's window. NEVER touch
+        // the RUN-scoped `_persistOsOverride` here (L4, 2026-09-23): a normal
+        // OS run clears its own run slot in its finally — the 30s deadline is
+        // not a reliable run-end signal, and nulling the run slot mid-run
+        // would re-route persists with the live setting.
+        _persistResolvedWhilePending = false
+        _persistOsBootOverride = null
         return
       }
       const rebuilt = buildModelFromLayout(
@@ -194,6 +342,13 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
       // clear it first or the final blob never lands on disk.
       if (resolvedAll) {
         _pendingLayout = null
+        // Lifecycle hygiene (R2-7): both flags only exist while a pending
+        // restore is armed. Placed AFTER mergeResolvedInto (above) on
+        // purpose: the merge reads _pendingWindowUserState for THIS call —
+        // clearing first would drop the user's geometry/hidden on the final
+        // merge.
+        _persistResolvedWhilePending = false
+        _pendingWindowUserState = false
       }
       if (merged !== _model) {
         _restoringPending = true
@@ -202,7 +357,7 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
           // shutdown or re-bootstrap that happened while the restore was
           // awaiting must not overwrite the new generation's model.
           if (generation === _generation) {
-            _model = await reconcileAndPersist(merged, generation)
+            commitModel(await reconcileAndPersist(merged, generation))
           }
         } finally {
           _restoringPending = false
@@ -252,7 +407,7 @@ function enqueueHostSync(host: HostPort, generation: number): Promise<void> {
     // syncFromHost would mutate _model AFTER the next test's bootstrap had
     // set it, leaking the old host's state into the new test.
     const result = await reconcileAndPersist(next, generation)
-    if (generation === _generation) _model = result
+    if (generation === _generation) commitModel(result)
   })
   _queue = task.catch(() => {})
   return task
@@ -264,12 +419,22 @@ export function shutdown(): void {
   _unsubscribeWorldChanged = null
   _bootstrapping = false
   _worldSyncPending = false
+  _trackedSyncScheduled = false
+  _trackedSyncQueued = false
   _host = null
   _model = null
   _version = 'unknown'
   _pendingLayout = null
+  _persistResolvedWhilePending = false
+  _persistOsOverride = null
+  _persistOsBootOverride = null
   _restoringPending = false
   _restoreDeadline = 0
+  _pendingWindowUserState = false
+  _bootPlacementPass = null
+  // Never inherit the previous session's dedup key: a fresh setup must be
+  // able to write the same content again (review B3).
+  _lastPersistedLayout = null
   _queue = Promise.resolve()
 }
 
@@ -286,11 +451,14 @@ let _lastPersistedLayout: string | null = null
 /**
  * The layout blob written to disk: the active model serialization plus the
  * durable single/dual mode profiles (top-level `singleLayout` / `dualLayout`
- * fields, hydrated back at boot by hydrateModeLayoutSlots).
+ * fields, hydrated back at boot by hydrateModeLayoutSlots) and the OS-mode
+ * variants (`osSingleLayout` / `osDualLayout`).
  */
 export type PersistedLayout = LegacyLayout & {
   dualLayout?: LegacyLayout | null
   singleLayout?: LegacyLayout | null
+  osDualLayout?: LegacyLayout | null
+  osSingleLayout?: LegacyLayout | null
 }
 
 /**
@@ -312,14 +480,63 @@ export function snapshotOwnedModelLayout(): LegacyLayout | null {
  * when the model still holds secondary tabs (the disable fallback where no
  * single layout existed to restore), we must NOT clobber the stored single
  * profile with a dual serialization. `model.secondary.length > 0` ⟺ dual.
+ *
+ * OS mode (spec §3.2): while OS mode is on, the non-OS slots are FROZEN at
+ * their stored values — OS edits (closed windows, nullable active) must
+ * never leak into them (D12: disable restores the saved non-OS slot,
+ * slot-wins). The active mode's OS slot receives the live serialization
+ * (which carries `closedTabIds` from the model — serializeModelToLayout
+ * stamps it unconditionally; the OS closed-set lives in the model). While
+ * OS is off, the OS slots pass through their stored values — symmetric
+ * freezing from the last OS session.
+ *
+ * Invariant (2026-09-15): OS mode off ⇒ the closed-set is NOT durable state.
+ * `model.closed` should already be empty (os/os-mode.ts clears residual
+ * membership on disable), but this is the persistence backstop: a leftover
+ * membership must never be written into the top-level blob or a non-OS mode
+ * slot, where a reload would hydrate hidden windows with no Start menu to
+ * reopen them. The OS slots keep their stored `closedTabIds` untouched.
  */
 function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string | null): PersistedLayout {
   const layout = serializeModelToLayout(model, resolve, _version)
   const isDual = model.secondary.length > 0
+  // Restore-time override wins (see `_persistOsOverride`): a queued OS
+  // transition restores under the mode IT belongs to even when the live
+  // setting has already been superseded by a later toggle. Run-scoped slot
+  // first (F2 — survives bootstrap settle until the run ends), then the
+  // bootstrap-scoped slot, then the live setting.
+  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled()
+  // Non-OS serialization: closedTabIds only survive while OS mode is on.
+  // menuHiddenTabIds follows the same rule (LUMI-16b): the Start menu is OS
+  // chrome, so the menu-hidden set is not durable state outside an OS
+  // session — the OS slots keep their stored copies, symmetric with closed.
+  const base: LegacyLayout = os
+    ? layout
+    : { ...layout, closedTabIds: [], menuHiddenTabIds: [] }
+  // Facet freeze — mirrors `layout/snapshot.ts` buildPersistedLayout: a
+  // disabled persistDrawerOpenState / persistDrawerWidth facet keeps the
+  // LAST-LOADED main-drawer open/width on disk instead of the latest live
+  // geometry ("turning a facet off freezes its disk value", docs/persistence.md).
+  // No last-loaded layout (or a missing field) → live value, no undefined leak.
+  // Mode slots below stay live (`base`) so each profile round-trips whole.
+  const s = getSettings()
+  const lastPrimary = (getLastLoadedLayout()?.primary ?? null) as { open?: unknown; width?: unknown } | null
+  const basePrimary = base.primary ?? {}
+  const lastOpen = lastPrimary?.open
+  const lastWidth = lastPrimary?.width
+  const frozenOpen = typeof lastOpen === 'boolean' ? lastOpen : basePrimary.open
+  const frozenWidth = typeof lastWidth === 'number' ? lastWidth : basePrimary.width
   return {
-    ...layout,
-    dualLayout: isDual ? layout : getDualLayoutSlot(),
-    singleLayout: isDual ? getSingleLayoutSlot() : layout,
+    ...base,
+    primary: {
+      ...basePrimary,
+      open: s.persistDrawerOpenState ? basePrimary.open : frozenOpen,
+      width: s.persistDrawerWidth ? basePrimary.width : frozenWidth,
+    },
+    dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
+    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
+    osDualLayout: isDual ? (os ? base : getOsDualLayoutSlot()) : getOsDualLayoutSlot(),
+    osSingleLayout: isDual ? getOsSingleLayoutSlot() : (os ? base : getOsSingleLayoutSlot()),
   }
 }
 
@@ -361,10 +578,16 @@ function persistModel(model: LayoutModel): void {
   // surfaced via the debug log and will be retried on the next dispatch.
   saveLayoutToDisk(layout).then((r) => {
     if (r.status === 'error') {
+      // A failed write must not stay dedup-cached: the next dispatch with the
+      // same content has to retry, otherwise the change only lives in memory
+      // (review B3). Only clear OUR entry — a newer persist may already have
+      // succeeded and re-armed the cache.
+      if (_lastPersistedLayout === json) _lastPersistedLayout = null
       // eslint-disable-next-line no-console
       console.warn('[canvas] saveLayoutToDisk failed:', r.reason)
     }
   }).catch((err: unknown) => {
+    if (_lastPersistedLayout === json) _lastPersistedLayout = null
     // eslint-disable-next-line no-console
     console.warn('[canvas] saveLayoutToDisk rejected:', err)
   })
@@ -388,7 +611,11 @@ async function reconcileAndPersist(model: LayoutModel, generation = _generation)
   // its pre-React empty bootstrap boundary. The readiness callback will retry
   // the restore once live tab identities exist.
   const hasTabs = model.primary.length > 0 || model.secondary.length > 0
-  if (generation === _generation && _host === host && _pendingLayout === null && hasTabs) {
+  // `hasTabs` still guards empty writes on every path. The pending gate opens
+  // only for warm restores that opted in (`_persistResolvedWhilePending`) —
+  // see the flag's doc comment.
+  const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending
+  if (generation === _generation && _host === host && persistAllowed && hasTabs) {
     persistModel(model)
   }
   return model
@@ -404,14 +631,15 @@ export function dispatch(intent: Intent): Promise<void> {
     if (gen !== _generation) return
     if (!_model || !_host) return
 
+    markPendingWindowUserIntent(intent)
     const next = reduce(_model, intent)
     if (next === _model) {
       dlog('[dispatch] no-op (reduce returned same model)', { t: intent.t })
       return
     }
 
-    _model = next
-    _model = await reconcileAndPersist(next, gen)
+    commitModel(next)
+    commitModel(await reconcileAndPersist(next, gen))
   })
   // Keep the shared queue usable after a failed host operation while preserving
   // the rejection for the caller that initiated this dispatch.
@@ -429,6 +657,7 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
     if (gen !== _generation) return
     if (!_model || !_host) return
 
+    for (const intent of intents) markPendingWindowUserIntent(intent)
     const next = foldIntents(_model, intents)
     dlog('[dispatch] batch', {
       intents,
@@ -437,17 +666,26 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
     })
     if (next === _model) return
 
-    _model = next
-    _model = await reconcileAndPersist(next, gen)
+    commitModel(next)
+    commitModel(await reconcileAndPersist(next, gen))
   })
   _queue = task.catch(() => {})
 
   return task
 }
 
+/**
+ * Move a tab (resolved from a live id) to the other drawer.
+ *
+ * `visibleIndex` overrides the destination insertion point (visible-index
+ * semantics, `-1` = append — see `visibleToAbsoluteIndex`). Callers that just
+ * move (context menu, DnD fallback) omit it and keep the append default; the
+ * OS launch path passes an explicit end index for absent windows.
+ */
 export function dispatchMoveByLiveId(
   liveId: LiveTabId,
   activateDest = true,
+  visibleIndex?: number,
 ): Promise<void> {
   const host = _host
   const model = _model
@@ -469,7 +707,7 @@ export function dispatchMoveByLiveId(
         t: 'move',
         key,
         to: nextTo,
-        index: destVisible,
+        index: visibleIndex ?? destVisible,
         activateDest,
       })
     })
@@ -482,7 +720,7 @@ export function dispatchMoveByLiveId(
     t: 'move',
     key,
     to,
-    index: destVisible,
+    index: visibleIndex ?? destVisible,
     activateDest,
   })
 }
@@ -553,6 +791,31 @@ export function dispatchActivateByLiveId(liveId: LiveTabId, side: Side): Promise
  * activations after readiness are unaffected.
  */
 export async function dispatchTrackedActiveSync(): Promise<void> {
+  // Coalesce: writers fire this per CHANGE (remount placement loops set the
+  // tracked id several times in one tick). The body re-reads the tracked
+  // values at run time, so collapsing concurrent triggers into one dispatch
+  // is correct and prevents queue saturation during remount storms.
+  //
+  // A trigger arriving DURING the await (after the body already read the
+  // tracked values) must not be dropped: queue one trailing rerun that
+  // re-reads at run time (review batch 3). Without it, rapid secondary clicks
+  // could leave model.active.secondary on the earlier tab and persist it.
+  if (_trackedSyncScheduled) {
+    _trackedSyncQueued = true
+    return
+  }
+  _trackedSyncScheduled = true
+  try {
+    do {
+      _trackedSyncQueued = false
+      await dispatchTrackedActiveSyncInner()
+    } while (_trackedSyncQueued)
+  } finally {
+    _trackedSyncScheduled = false
+  }
+}
+
+async function dispatchTrackedActiveSyncInner(): Promise<void> {
   const host = _host
   if (!host) return
   if (_bootstrapping || _restoringPending) {
@@ -617,117 +880,71 @@ export async function dispatchTrackedActiveSync(): Promise<void> {
  */
 export interface MainMirrorMoveChrome {
   /**
-   * Nearest visible host button for the moved tab's replacement. Non-null
-   * only when the moved tab IS the mirror's active (user moved their
-   * ACTIVE tab) and a neighbor exists. Captured BEFORE placement — the
-   * moved tab's host button is hidden afterward and
-   * findNeighborHostButtonFor skips hidden buttons.
+   * S2: the mirror parity keys are gone — nothing to capture anymore.
+   * The owned model's applyMove adopts the replacement into
+   * active.primary (activeAfterRemoval) and the flat renderer renders
+   * it; applyMainMirrorMoveChrome re-asserts the content from the model.
+   * The shape stays so live DnD / owned-commit call sites compile.
    */
-  neighborBtn: HTMLElement | null
-  /**
-   * Mirror active id when the moved tab is NOT the mirror's active. Used to
-   * re-assert that tab's content after the move (host panel drift — the
-   * "content changed to Loom" regression).
-   */
-  reassertId: string | null
+  neighborBtn: null
+  reassertId: null
 }
 
 /**
- * Capture the taskbar chrome decision for a user-initiated move to the
- * secondary drawer, BEFORE any placement (see MainMirrorMoveChrome). Two
- * cases:
- *   - The moved tab IS the mirror's active: capture the nearest visible
- *     neighbor for the 07-19 handoff.
- *   - Otherwise: remember the mirror's active id for content re-assert.
- * No-op (both fields null) outside taskbar mode or for non-secondary
- * targets.
+ * S2 capture: no-op. The old pre-placement capture (mirror neighbor from
+ * hidden host buttons, exclusive mirror key) died with the parity layer —
+ * the model already owns the neighbor decision (applyMove adoption) and
+ * the renderer renders it once the move intent commits.
  */
 export async function captureMainMirrorMoveChrome(
   liveId: LiveTabId,
   target: Side,
 ): Promise<MainMirrorMoveChrome> {
-  if (target !== 'secondary') return { neighborBtn: null, reassertId: null }
-  const pin = await import('../sidebar/main-tab-pin')
-  if (!pin.isMainTabPinEnabled()) return { neighborBtn: null, reassertId: null }
-  const mirrorKey = pin.getActiveMainMirrorKey()
-  const mirrorId = mirrorKey?.startsWith('id__') ? mirrorKey.slice('id__'.length) : null
-  if (!mirrorId) return { neighborBtn: null, reassertId: null }
-  if (mirrorId === liveId) {
-    const neighborBtn = pin.findNeighborHostButtonFor(liveId)
-    if (neighborBtn) {
-      dlog('[tabmove] capture chrome: active tab moved — neighbor handoff target', {
-        liveId,
-        neighbor: neighborBtn.getAttribute('title') || neighborBtn.getAttribute('data-tab-id'),
-      })
-    }
-    return { neighborBtn, reassertId: null }
-  }
-  return { neighborBtn: null, reassertId: mirrorId }
+  void liveId
+  void target
+  return { neighborBtn: null, reassertId: null }
 }
 
 /**
- * Apply the captured taskbar chrome after a move to the secondary drawer:
- * neighbor handoff (mirror key → neighbor + host button click for content
- * settle) or active-content re-assert, then converge the owned model's
- * primary active to the neighbor (mirror clicks don't always produce
- * host-syncs, so the model's active can lag the mirror key). No-op when
- * taskbar mode turned off between capture and apply. Callers gate on
+ * S2 content re-assert after a move to the secondary drawer: the host
+ * drifts its panel content to the first remaining tab after a container
+ * remount, and reconcile can no longer detect that drift through
+ * diffActive (the world's isActiveInPrimary is model-derived). Re-click
+ * the CURRENT model primary active's host button — after the move intent
+ * commits, applyMove has already adopted the replacement for active-tab
+ * moves; for non-active moves this re-clicks the unchanged active (the
+ * old reassertId behavior). No-op without a model primary active or when
+ * it still points at the tab that just moved. Callers gate on
  * target === 'secondary'.
  */
 export async function applyMainMirrorMoveChrome(
   chrome: MainMirrorMoveChrome,
   liveId: LiveTabId,
 ): Promise<void> {
-  const { neighborBtn, reassertId } = chrome
-  const pin = await import('../sidebar/main-tab-pin')
-  if (!pin.isMainTabPinEnabled()) return
+  void chrome
+  const model = _model
+  const host = _host
+  if (!model || !host) return
+  const key = model.active.primary
+  if (!key) return
+  const id = host.resolve(key)
+  if (!id || id === liveId) return
 
-  if (neighborBtn && neighborBtn.isConnected) {
-    // User moved their ACTIVE tab: hand the mirror key/header/content to
-    // the nearest visible neighbor (07-19 design). The host button click
-    // forces content settle (the host drifts its panel to the first
-    // remaining tab after a container remount).
-    const title = neighborBtn.getAttribute('title') || neighborBtn.getAttribute('aria-label') || undefined
-    dlog(`[tabmove] apply chrome: handing main-mirror to neighbor (${title ?? neighborBtn.getAttribute('data-tab-id')})`)
-    pin.adoptMainMirrorNeighbor(neighborBtn, title)
-  } else if (reassertId) {
-    // Re-assert the user's active tab content (host panel drift — the
-    // "content changed to Loom" regression).
-    //
-    // Scope the lookup to the MAIN sidebar via findMainTabButton. A global
-    // document.querySelector('button[data-tab-id]') can match a Canvas
-    // secondary button (which also carries data-tab-id) when the host's
-    // main button is hidden or untagged — for extension tabs the host button
-    // has no data-tab-id until the tagger runs, so the global query would
-    // find the secondary button and activate the tab in the WRONG drawer
-    // ("activates on the drawer it was moved from"). Dynamic import to
-    // avoid the dispatch → buttons → secondary → dispatch circular dep.
-    const { findMainTabButton } = await import('../tabs/buttons')
-    const btn = findMainTabButton(reassertId) as HTMLElement | null
-    if (btn && btn.isConnected) {
-      dlog(`[tabmove] apply chrome: re-asserting active tab content (${reassertId})`)
-      try { btn.click() } catch { /* host may throw during teardown */ }
-    } else {
-      dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { reassertId })
-    }
-  }
-
-  // Neighbor convergence: keep the owned model aligned with the chrome
-  // handoff. applyMove adopts the replacement for fresh moves when the
-  // model's active matched the moved tab; this covers the stale-active and
-  // already-in-target cases (mirror clicks don't always produce host-syncs,
-  // so the model's primary active can lag the mirror key).
-  if (neighborBtn) {
-    const neighborLiveId = neighborBtn.getAttribute('data-tab-id')
-    if (neighborLiveId) {
-      const neighborKey = _host?.findKey(neighborLiveId)
-      if (neighborKey && _model?.active.primary !== neighborKey) {
-        dlog(`[tabmove] apply chrome: converging model active to neighbor (${neighborKey})`)
-        void dispatch({ t: 'activate', key: neighborKey, side: 'primary' }).catch((err) => {
-          dwarn('[tabmove] apply chrome: neighbor activate dispatch failed:', err)
-        })
-      }
-    }
+  // Scope the lookup to the MAIN sidebar via findMainTabButton. A global
+  // document.querySelector('button[data-tab-id]') can match a Canvas
+  // secondary button (which also carries data-tab-id) when the host's
+  // main button is hidden or untagged — for extension tabs the host button
+  // has no data-tab-id until the tagger runs, so the global query would
+  // find the secondary button and activate the tab in the WRONG drawer.
+  // Dynamic import avoids the dispatch → buttons → secondary → dispatch
+  // circular dep.
+  const { findMainTabButton } = await import('../tabs/buttons')
+  const btn = findMainTabButton(id) as HTMLElement | null
+  if (btn && btn.isConnected) {
+    dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`)
+    try { btn.click() } catch { /* host may throw during teardown */ }
+  } else {
+    dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { id })
   }
 }
 
@@ -767,6 +984,9 @@ export interface SecondaryMoveChrome {
 export async function captureSecondaryNeighborForMove(
   liveId: LiveTabId,
 ): Promise<SecondaryMoveChrome> {
+  // A collapsed drawer has no displayed window to hand off from: the tracked
+  // cell is reopen memory (OS minimize/close keeps it), not display truth.
+  if (getModel()?.drawers.secondary.open !== true) return { neighborBtn: null }
   const { getActiveSecondaryTabId } = await import('../tabs/active-tab')
   if (getActiveSecondaryTabId() !== liveId) return { neighborBtn: null }
   const { findNeighborSecondaryButtonFor } = await import('../tabs/buttons')
@@ -845,7 +1065,23 @@ export async function placementFirstMoveByLiveId(
   try {
     const sidebar = await import('../sidebar/secondary-drawer')
     if (target === 'secondary') {
-      await sidebar.assignToSecondary(liveId)
+      const facadeKey = host.findKey(liveId)
+      await sidebar.assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined)
+      if (facadeKey && isExtensionKey(facadeKey)) {
+        const { getSecondaryWrapper } = await import('../sidebar/secondary')
+        const content = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content')
+        const rootPresent = !!content?.querySelector(
+          `[data-canvas-moved="${CSS.escape(liveId)}"]`,
+        )
+        if (!rootPresent) {
+          dwarn('[tabmove] extension placement returned without secondary root', {
+            liveId,
+            facadeKey,
+            secondaryContentFound: !!content,
+          })
+          return
+        }
+      }
     } else {
       await sidebar.unassignFromSecondary(liveId)
     }
@@ -876,8 +1112,6 @@ export async function placementFirstMoveByLiveId(
         dlog('[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)')
       }
     }
-
-    await applyMainMirrorMoveChrome(chrome, liveId)
   }
 
   // 2. Model update — catch the owned model up to the DOM. Skip if the
@@ -926,9 +1160,16 @@ export async function placementFirstMoveByLiveId(
   }
 
   // Secondary drawer neighbor handoff (moves OUT of the second drawer).
-  // The mirror handoff ran at step 1.5 for moves INTO the secondary drawer.
+  // The main-mirror content re-assert ran at step 2.5 for moves INTO the
+  // secondary drawer.
   if (target === 'primary') {
     await applySecondaryNeighborHandoff(secondaryChrome, liveId)
+  }
+
+  // S2 (step 2.5): main-mirror content re-assert AFTER the move intent —
+  // the model's active (applyMove adopt) is only current post-dispatch.
+  if (target === 'secondary') {
+    await applyMainMirrorMoveChrome(chrome, liveId)
   }
 
   // Neighbor convergence lives inside the chrome helpers (shared with the
@@ -941,8 +1182,33 @@ export function bootstrapFromLayout(
   layout: unknown,
   host: HostPort,
   version?: string,
+  opts?: { persistWhilePending?: boolean; osActive?: boolean },
 ): void {
   let model = buildModelFromLayout(layout as any, (id) => host.findKey(id))
+  // F2 read backstop (mirrors buildPersistedBlob's write backstop): a stale
+  // OS-shaped top-level blob + settings with osMode off (interrupted OS
+  // disable reload, failed layout write, corrupt/missing settings.json)
+  // hydrates model.closed with no Start menu to reopen those windows — the
+  // renderer hides closed membership unconditionally. Clear on restores that
+  // belong to a non-OS session. Gate follows `opts.osActive` when supplied
+  // (a superseded OS-enable run must keep the closed-set of the OS slot it
+  // is restoring; a disable run clears it) and the live setting otherwise
+  // (boot). OS slots keep their stored closed sets in the blob either way.
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.closed.length > 0) {
+    dlog('[dispatch] dropped OS closed-set on non-OS boot/restore', {
+      closed: model.closed.length,
+    })
+    model = { ...model, closed: [] }
+  }
+  // Same backstop for the START-MENU-only set (LUMI-16b): with OS mode off
+  // the Start menu does not exist, so a stale menu-hidden set must never
+  // survive into a non-OS session (the OS slots keep their stored copies).
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.menuHidden.length > 0) {
+    dlog('[dispatch] dropped OS menu-hidden set on non-OS boot/restore', {
+      menuHidden: model.menuHidden.length,
+    })
+    model = { ...model, menuHidden: [] }
+  }
   if (pendingLayoutTabCount(layout) === 0) {
     const observed = host.observe()
     if (inventoryIsReady(observed) && observed.tabs.length > 0) {
@@ -958,13 +1224,36 @@ export function bootstrapFromLayout(
   // later world changes — merging at saved indices — until everything
   // resolves or the boot deadline expires.
   _restoringPending = false
+  _pendingWindowUserState = false
   const expected = pendingLayoutTabCount(layout)
   const resolved = model.primary.length + model.secondary.length
   _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS
+  // Warm restores (mode switch / OS disable) opt into persisting the resolved
+  // model while the retry window is open — the entering slot must not strand
+  // the live layout on disk (see _persistResolvedWhilePending). Boot calls
+  // without the option: the retry window owns persistence.
+  _persistResolvedWhilePending = opts?.persistWhilePending === true
+  // Restore-time OS routing (see `_persistOsOverride`). Explicit `false` must
+  // override; only an ABSENT option leaves the live setting in charge. This
+  // writes the BOOTSTRAP-scoped slot only — a run-scoped value set by
+  // `setPersistOsOverride` sits independently and is never clobbered here
+  // (F2).
+  _persistOsBootOverride = opts?.osActive === undefined ? null : opts.osActive
   _pendingLayout = layout != null && resolved < expected
     ? layout
     : null
+  if (_pendingLayout !== null) {
+    dlog('[dispatch] pending-layout armed', {
+      expected,
+      resolved,
+      persistWhilePending: _persistResolvedWhilePending,
+    })
+  }
   bootstrap(model, host, version)
+  // Placement-pass generation guard: bootstrap() just incremented
+  // _generation — capture it so the async pass below can detect that a
+  // NEWER bootstrap (mode switch) has superseded this one.
+  const passGen = _generation
 
   // Diagnostic: boot restore summary — what the saved layout asked for vs
   // what resolved. Verifies the persisted layout (drawer side, split, order)
@@ -988,17 +1277,164 @@ export function bootstrapFromLayout(
   // move (2026-07-31). openOnClosed:false — a closed drawer must not be
   // force-opened; setActiveWhenReady:false — no activation while closed;
   // the persisted active.secondary is shown when the drawer is open.
-  void import('../sidebar/secondary').then((m) => {
-    m.reassignSecondaryTabsFromModel({
-      openOnClosed: false,
-      setActiveWhenReady: false,
-      activateKey: model.active.secondary ?? null,
-    })
-  }).catch((err) => {
-    dwarn('[bootstrap] reassignSecondaryTabsFromModel failed:', err)
-  })
+  const primaryBootKey = model.active.primary
+  // Only meaningful when secondary tabs exist: placements (and their host
+  // force-activation churn) only run then. Single-drawer boots skip.
+  const primaryBootLiveId =
+    primaryBootKey !== null
+    && model.secondary.length > 0
+    && !model.secondary.includes(primaryBootKey)
+      ? host.resolve(primaryBootKey)
+      : null
+  // Captured before the async pass: a partial restore's pending merge may
+  // still ADD secondary keys, so the removal sweep below must be skipped
+  // until the model is complete (see the sweep call).
+  const restorePending = _pendingLayout !== null
+  _bootPlacementPass = (async () => {
+    // A newer bootstrap (mode switch) supersedes an older placement pass —
+    // bail before any work (gate, placement, re-assert).
+    if (passGen !== _generation) return
+    // Secondary placement visual gate (2026-09, live-verify #5 final): this
+    // pass serializes secondary placements and can outlive the main restore
+    // reveal (setup caps its wait at 1.5s). Hold the second drawer + pinned
+    // strip hidden until placements settle so its active panel can never
+    // paint before the tab buttons. Released in the finally; the 5s safety
+    // cap guarantees the drawer can never stay hidden after a wedged pass.
+    let gate: typeof import('../sidebar/main-persist') | null = null
+    let gateReleased = false
+    let gateSafety: ReturnType<typeof setTimeout> | null = null
+    const releaseGate = () => {
+      if (gateReleased) return
+      gateReleased = true
+      try { gate?.releaseSecondaryPlacementReveal() } catch { /* non-fatal */ }
+    }
+    // A newer bootstrap (mode switch) supersedes an older placement pass —
+    // bail BEFORE the reveal-gate import + hold: this return would skip the
+    // pass's finally (the hold's only release path), so a hold here leaks.
+    if (passGen !== _generation) return
+    try {
+      gate = await import('../sidebar/main-persist')
+      gate.holdSecondaryPlacementReveal()
+      gateSafety = setTimeout(releaseGate, 5000)
+    } catch { /* non-fatal */ }
+    try {
+      const m = await import('../sidebar/secondary')
+      // A newer bootstrap (mode switch) supersedes an older placement pass —
+      // the stale pass must not place (or sweep/re-assert) below.
+      if (passGen !== _generation) return
+      await m.reassignSecondaryTabsFromModel({
+        openOnClosed: false,
+        setActiveWhenReady: false,
+        activateKey: model.active.secondary ?? null,
+      })
+      // Removal half (2026-09-15): a slot restore that moves a tab
+      // secondary→primary — OS-mode disable, any layout restore — leaves the
+      // host button in the secondary shell. Reconcile cannot see the
+      // divergence (observe() derives location from the model-derived
+      // assignment facade), so without this sweep the tab renders in both the
+      // main mirror strip and the secondary strip and neither duplicate can
+      // load content. Placement is model-driven; removal is this sweep.
+      // Skipped on a partial restore: the pending merge may still add
+      // secondary keys, which the sweep would wrongly unassign.
+      if (!restorePending) {
+        // A newer bootstrap (mode switch) supersedes an older placement pass —
+        // the stale pass must not run the removal sweep.
+        if (passGen !== _generation) return
+        try {
+          await m.unassignSecondaryTabsNotInModel()
+        } catch (err) {
+          dwarn('[bootstrap] unassignSecondaryTabsNotInModel failed:', err)
+        }
+      }
+      if (primaryBootLiveId === null) return
+      // Boot-placement primary re-assert (2026-09): each builtin assign
+      // force-activates the tab in the HOST main drawer (lazy panel-data
+      // load) before moving it to secondary, so when the pass settles the
+      // host's active tab is the LAST MOVED tab — a container tab has no
+      // main panelContent, so the mirror's parked node is empty and the main
+      // drawer goes black (content flashes until the churn finishes). User
+      // moves re-assert via their handoff (preserve/neighbor); boot restore
+      // had no such tail. Re-click the persisted primary — mirror-mode
+      // activateMainMirrorFromRestore no-ops mid-session when a user key
+      // exists, so this is boot-only in effect — then let the repark watch
+      // (or the second attempt) park the content React renders.
+      const reassertPrimary = async (): Promise<void> => {
+        // Load BOTH modules first, then gate once (L10, 2026-09-23): a
+        // supersede landing inside either dynamic import must drop the
+        // re-assert — the old shape clicked before the second import's await
+        // could observe a mid-flight generation bump.
+        let mp: { ensureRestoredPrimaryTab(id: string): void } | null = null
+        let mm: { ensureHostContentParkedPublic(): void } | null = null
+        try {
+          mp = await import('../sidebar/main-persist')
+        } catch { /* non-fatal */ }
+        try {
+          mm = await import('../sidebar/main-mirror-drawer')
+        } catch { /* non-fatal */ }
+        // A newer bootstrap (mode switch) supersedes an older placement pass —
+        // the stale pass must not re-click the pre-switch primary or park.
+        if (passGen !== _generation) return
+        try {
+          mp?.ensureRestoredPrimaryTab(primaryBootLiveId)
+        } catch { /* non-fatal */ }
+        try {
+          mm?.ensureHostContentParkedPublic()
+        } catch { /* non-fatal */ }
+      }
+      // A newer bootstrap (mode switch) supersedes an older placement pass —
+      // the stale pass must not re-assert the primary.
+      if (passGen !== _generation) return
+      await reassertPrimary()
+      // L10: re-check after the awaited re-assert — a supersede that landed
+      // inside reassertPrimary's dynamic imports must not schedule the retry.
+      if (passGen !== _generation) return
+      try {
+        const mm = await import('../sidebar/main-mirror-drawer')
+        if (mm.isMainMirrorActive()) {
+          // Second attempt: covers a coalesced trailing placement run that
+          // finishes after this pass (its tail is click-free, but be safe).
+          setTimeout(() => {
+            // A newer bootstrap (mode switch) supersedes an older placement
+            // pass — drop the stale 500ms retry.
+            if (passGen !== _generation) return
+            void reassertPrimary()
+          }, 500)
+        }
+      } catch { /* non-fatal */ }
+    } catch (err) {
+      dwarn('[bootstrap] reassignSecondaryTabsFromModel failed:', err)
+    } finally {
+      if (gateSafety) clearTimeout(gateSafety)
+      releaseGate()
+    }
+  })()
+}
+
+/**
+ * Resolves when the boot placement pass (secondary tab placement + primary
+ * content re-assert) has settled. setup.ts awaits this (capped) before
+ * revealing the main drawer so the pass's host force-activations never flash
+ * other panels in the open mirror.
+ */
+export function bootPlacementDone(): Promise<void> {
+  return _bootPlacementPass ?? Promise.resolve()
 }
 
 export function flush(): Promise<void> {
   return _queue
+}
+
+/**
+ * Test-only snapshot of the pending-restore lifecycle flags (B3 hygiene).
+ * Both flags are private to this module; the B3-1 test asserts they reset
+ * only AFTER the final merge of a completing pending restore.
+ */
+export function __getPendingRestoreFlagsForTest(): {
+  persistResolvedWhilePending: boolean
+  pendingWindowUserState: boolean
+} {
+  return {
+    persistResolvedWhilePending: _persistResolvedWhilePending,
+    pendingWindowUserState: _pendingWindowUserState,
+  }
 }

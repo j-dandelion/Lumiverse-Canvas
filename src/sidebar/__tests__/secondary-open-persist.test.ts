@@ -22,17 +22,22 @@
 ;(globalThis as any).getComputedStyle = () => ({})
 
 import { mock } from 'bun:test'
+// Spread the real module so newly-imported exports keep linking.
+import * as actualDispatch from '../../recon/dispatch'
 
 // Mock recon/dispatch with a recording dispatch. Must include the exports
 // that secondary.tsx's STATIC import chain needs (tabs/assignment imports
 // getModel/getHost) or the import fails.
 const dispatched: Array<{ t: string; [key: string]: unknown }> = []
 mock.module('../../recon/dispatch', () => ({
+  ...actualDispatch,
   dispatch: async (intent: any) => { dispatched.push(intent) },
   dispatchBatch: async () => {},
   getModel: () => null,
   getHost: () => null,
   flush: async () => {},
+  snapshotOwnedModelLayout: () => null,
+  onModelChanged: () => () => {},
   bootstrap: () => {},
   bootstrapFromLayout: () => {},
   shutdown: () => {},

@@ -62,6 +62,7 @@ class StubElement {
   appendChild(c: any) { this._children.push(c) }
   remove() {}
   setAttribute(_n: string, _v: string) {}
+  removeAttribute(_n: string) {}
   get style(): any {
     const s = this._style
     return {

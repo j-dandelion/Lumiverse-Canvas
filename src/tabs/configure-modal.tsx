@@ -29,6 +29,7 @@ import {
   type DrawerSide,
 } from './configure-model'
 import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
+import { BUILTIN_ICON_SVGS } from './builtin-icons'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
@@ -40,6 +41,7 @@ import { getLiveIdAssignments } from './assignment'
 import type { OwnedCommitResult as CommitResult } from './owned-commit'
 import { commitDraftToOwnedModel } from './owned-commit'
 import { getHost, getModel } from '../recon/dispatch'
+import type { TabKey } from '../core/model'
 import {
   readLivePrimaryTabIds,
   readLiveSecondaryTabIds,
@@ -51,6 +53,7 @@ import { dlog, dwarn } from '../debug/log'
 // (A machine-based configure-modal draft was explored and retired — see git history.)
 
 let _modalContainer: HTMLElement | null = null
+let _openInProgress = false
 let _draftRef: ConfigureDraft | null = null
 let _baseSnapshotRef: BaseSnapshot | null = null
 /**
@@ -96,36 +99,6 @@ const SETTLE_MIN_DISTANCE_PX = 2
 const AUTOSCROLL_EDGE_PX = 56
 /** Auto-scroll: max px scrolled per rAF frame (scales with edge depth). */
 const AUTOSCROLL_SPEED_PX = 14
-
-// ── Built-in tab icon SVGs (lucide paths, 18×18, strokeWidth 1.75) ──
-
-const BUILTIN_ICON_SVGS: Record<string, string> = {
-  profile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
-  presets: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2.5a.5.5 0 0 0-.8-.4L15 7l2 2 4.9-5.7a.5.5 0 0 0 .1-.5Z"/><path d="m3 15 3 3"/><path d="M6 12v3h3"/><path d="m15 6-3-3"/><path d="m12 3 3 3-4 4"/><path d="M5 18l-2 2"/></svg>`,
-  loom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="4"/><circle cx="12" cy="6" r="4"/><path d="M12 2v4"/><path d="m15 9 3-3"/><path d="m9 9-3-3"/><path d="M12 14v4"/><path d="m15 15 3 3"/><path d="m9 15-3 3"/></svg>`,
-  weaver: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>`,
-  connections: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`,
-  browser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5.08 8.7-5"/><path d="M12 22V12"/></svg>`,
-  characters: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-  personas: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h.01M12 12h.01M18 12h.01"/><path d="M20 6H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6l2 4 2-4h6a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1Z"/></svg>`,
-  multiplayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>`,
-  lorebook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2"/><path d="M9 9h6M9 13h6"/></svg>`,
-  cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M11.5 10.5h1"/></svg>`,
-  databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>`,
-  create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 2H12l-2.5 5.5L7 11h5l-3 11 7-9h-4l3.5-5.5z"/></svg>`,
-  ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
-  prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
-  council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-  summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h-5l-5 5v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><path d="M9 2v4h6"/><line x1="9" x2="15" y1="11" y2="11"/><line x1="9" x2="15" y1="15" y2="15"/><line x1="9" x2="11" y1="19" y2="19"/></svg>`,
-  feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/><path d="M10.5 13.5a3.5 3.5 0 0 0 3 0"/></svg>`,
-  worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`,
-  imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
-  wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10"/></svg>`,
-  regex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4c0-1.1.9-2 2-2s2 .9 2 2-.9 2-2 2-2-.9-2-2z"/><path d="M16 10V6"/><path d="M18 12c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2z"/><path d="M10 12H6"/><path d="M12 14l-2 3"/><path d="M12 10l-2-3"/><path d="M4 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>`,
-  branches: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
-  theme: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.5-.6 1.5-1.5 0-.4-.15-.7-.4-1-.25-.3-.6-.5-1-.5-1.2 0-2.1-.9-2.1-2s.9-2 2-2h1.5c1.9 0 3.5-1.6 3.5-3.5 0-1.2-.6-2.3-1.5-3 .4-.3.7-.7.9-1.1.4-.8 1-1.4 1.9-1.4z"/></svg>`,
-  spindle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.98.98 0 0 1-.276.837l-1.61 1.611a2.404 2.404 0 0 1-1.705.706 2.404 2.404 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.404 2.404 0 0 1 1.998 12c0-.617.236-1.233.706-1.704L4.315 8.685a.98.98 0 0 1 .837-.276c.47.07.802.48.968.925a2.501 2.501 0 1 0 3.214-3.214c-.446-.166-.855-.497-.925-.968a.98.98 0 0 1 .276-.837l1.61-1.611a2.404 2.404 0 0 1 1.705-.706 2.404 2.404 0 0 1 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.969a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.968 1.02Z"/></svg>`,
-}
 
 // ── Style injection (force-refresh on each modal open) ──
 
@@ -505,18 +478,22 @@ function injectModalStyles(): void {
       color: var(--lumiverse-text-dim, #888);
     }
 
-    /* ── Toggle switch ── */
+    /* ── Toggle switch (unified Canvas switch spec — shared with the
+       settings panel: 36×20 border-box track, 14px knob inset 2px, 16px
+       travel; knob colors off = text, on = primary-contrast) ── */
     .canvas-configure-tabs-toggle {
       position: relative;
       flex-shrink: 0;
+      box-sizing: border-box;
       width: 36px;
       height: 20px;
       padding: 0;
-      border: none;
-      border-radius: 10px;
-      background: var(--lumiverse-border, #555);
+      border: 1px solid var(--lumiverse-border, #555);
+      border-radius: 999px;
+      background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.3));
       cursor: pointer;
-      transition: background var(--lumiverse-transition-fast, 120ms ease);
+      transition: background var(--lumiverse-transition-fast, 150ms ease),
+        border-color var(--lumiverse-transition-fast, 150ms ease);
       touch-action: manipulation;
     }
     .canvas-configure-tabs-toggle::after {
@@ -524,21 +501,29 @@ function injectModalStyles(): void {
       position: absolute;
       top: 2px;
       left: 2px;
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
-      background: #fff;
-      transition: transform var(--lumiverse-transition-fast, 120ms ease);
+      background: var(--lumiverse-text);
+      transition: transform var(--lumiverse-transition-fast, 150ms ease),
+        background var(--lumiverse-transition-fast, 150ms ease);
+      transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .canvas-configure-tabs-toggle.toggle-on {
       background: var(--lumiverse-primary, #4a9eff);
+      border-color: var(--lumiverse-primary, #4a9eff);
     }
     .canvas-configure-tabs-toggle.toggle-on::after {
       transform: translateX(16px);
+      background: var(--lumiverse-primary-contrast, #fff);
     }
     .canvas-configure-tabs-toggle:disabled {
-      opacity: 0.4;
+      opacity: 0.55;
       cursor: not-allowed;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .canvas-configure-tabs-toggle,
+      .canvas-configure-tabs-toggle::after { transition: none; }
     }
 
     /* ── Empty column hint ── */
@@ -1097,7 +1082,7 @@ function cancelDrag(opts?: { revertDraft?: boolean }): void {
  * dirty (e.g. user made another edit during the previous commit).
  * The owned dispatcher serializes with live DnD.
  */
-async function autoCommit(): Promise<void> {
+async function autoCommit(): Promise<CommitResult> {
   // Chain behind any in-flight auto-commit.
   const prev = _commitPromise
 
@@ -1137,7 +1122,9 @@ async function autoCommit(): Promise<void> {
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, null, false)
       }
-    } else {
+    } else if (!result.superseded) {
+      // `superseded` (H1 mode-switch barrier): dropped on purpose — no error
+      // banner; the switch's terminal refresh rebuilds draft+base from live.
       if (_draftRef === draftToCommit) {
         renderModal(draftToCommit, _catalogRef, result.error, false)
       }
@@ -1150,7 +1137,17 @@ async function autoCommit(): Promise<void> {
     () => ({ ok: false as const, error: 'auto-commit failed' }),
   )
 
-  await myWork
+  return await myWork
+}
+
+/**
+ * Mode-switch Apply (deep-review H1): commit the current draft through the
+ * SAME serial chain as autoCommit so it cannot race a concurrent edit commit
+ * (a direct commitDraftToOwnedModel call here used to bypass `_commitPromise`).
+ * Returns the commit result so the mode-switch guard can cancel on failure.
+ */
+export async function commitConfigureDraftSerial(): Promise<CommitResult> {
+  return autoCommit()
 }
 
 /**
@@ -1166,6 +1163,20 @@ export async function flushConfigureCommits(): Promise<void> {
 }
 
 
+
+// Mobile viewport check local to this module (no sidebar/mobile-exclusion
+// import — that module pulls the whole shell graph).
+function _isMobileViewportForConfigure(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 600px)').matches
+    )
+  } catch {
+    return false
+  }
+}
 
 // ── Catalog ref for module-level re-renders ──
 
@@ -1198,6 +1209,12 @@ function ConfigureTabsModalInner(props: ModalProps) {
   } = props
 
   const leftIsSecondaryVal = leftColumnIsSecondary(draft.drawerSide)
+
+  // OS mode on a mobile viewport forces single-drawer mode (see
+  // os/os-mode.syncOsMobileDrawerMode): lock the footer toggle so the user
+  // cannot flip the invariant off from this surface.
+  const mobileTaskbarSingle =
+    (getSettings().osMode || (getSettings().taskbarMode && getSettings().moveControlsToOuterEdge)) && _isMobileViewportForConfigure()
 
   // Ref-based latest values for document-level Escape handler
   const committingRef = useRef(committing)
@@ -1339,7 +1356,10 @@ function ConfigureTabsModalInner(props: ModalProps) {
   /** Render a single tab row. */
   const renderTabRow = (tab: CatalogTab, index: number, side: ColumnSide) => {
     const isHidden = draft.hiddenIds.has(tab.id)
-    const isLocked = tab.hideLocked
+    // Core tabs unlock for hiding while `coreTabsHidden` is on (OS mode forces
+    // it on): closing a window marks it hidden, so the eye must be usable.
+    const coreUnlocked = !!getSettings().coreTabsHidden
+    const isLocked = tab.hideLocked && !coreUnlocked
     const isCore = tab.kind === 'builtin' && tab.hideLocked
     // Core tabs show their real descriptions too; the locked state is
     // conveyed by the Core badge, the disabled toggle, and its tooltip.
@@ -1479,7 +1499,9 @@ function ConfigureTabsModalInner(props: ModalProps) {
               </button>
             </div>
           </div>
-          <p class="canvas-configure-tabs-subtitle">Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.</p>
+          <p class="canvas-configure-tabs-subtitle">{getSettings().coreTabsHidden
+            ? 'Drag to reorder sidebar tabs. Toggle to hide tabs; closing a core tab in OS mode hides it here too.'
+            : 'Drag to reorder sidebar tabs. Toggle to hide optional tabs; core tabs always remain visible.'}</p>
         </div>
 
         {/* Body: two columns when second drawer is enabled, one column otherwise */}
@@ -1509,15 +1531,18 @@ function ConfigureTabsModalInner(props: ModalProps) {
             <div class="canvas-configure-tabs-second-drawer-toggle">
               <span
                 class="canvas-configure-tabs-second-drawer-toggle-label"
-                onClick={() => onToggleSecondDrawer()}
+                title={mobileTaskbarSingle ? 'OS and Taskbar use single-drawer mode on mobile — choose Vanilla first.' : undefined}
+                onClick={() => { if (!mobileTaskbarSingle) onToggleSecondDrawer() }}
               >
                 Second drawer
               </span>
               <button
                 class={`canvas-configure-tabs-toggle${secondDrawerEnabled ? ' toggle-on' : ''}`}
+                disabled={mobileTaskbarSingle}
+                title={mobileTaskbarSingle ? 'OS and Taskbar use single-drawer mode on mobile — choose Vanilla first.' : undefined}
                 onClick={(e) => {
                   e.stopPropagation()
-                  onToggleSecondDrawer()
+                  if (!mobileTaskbarSingle) onToggleSecondDrawer()
                 }}
               />
             </div>
@@ -1580,6 +1605,56 @@ function buildLiveDraftAndBase(): {
   const drawerSide = hostSide || getMainDrawerSide()
   const sideSource = hostSide ? 'host-settings' : 'dom'
 
+  // ── S2 model source ─────────────────────────────────────────────────
+  // Order + hidden come from the OWNED MODEL, not host tabOrder (the host
+  // settings patch is gone — model is the single source). Draft ids stay
+  // liveIds: resolve each model TabKey via host.resolve (suffix-drift
+  // fallback is inside the resolver). Keys that cannot resolve are
+  // dropped, matching the commit path's resolution semantics.
+  const model = getModel()
+  const host = getHost()
+  if (model && host) {
+    const resolveId = (key: TabKey): string | null => host.resolve(key)
+    const toIds = (keys: readonly TabKey[]): string[] => {
+      const out: string[] = []
+      for (const key of keys) {
+        const id = resolveId(key)
+        if (id) out.push(id)
+      }
+      return out
+    }
+    const modelPrimaryIds = toIds(model.primary)
+    const modelSecondaryIds = toIds(model.secondary)
+    const modelHiddenIds = toIds(model.hidden)
+
+    const draftFromModel = createDraft({
+      catalog,
+      tabOrder: [...modelPrimaryIds, ...modelSecondaryIds],
+      hiddenTabIds: modelHiddenIds,
+      drawerSide,
+      assignments: currentAssignments,
+    })
+    // Align both sides to the live strips — post-S2 the strips are model
+    // renderings (mirror strip + secondary strip), so this is a no-op in
+    // steady state and only protects mid-transition DOM.
+    const draft = alignDraftToLiveVisibleOrder(
+      draftFromModel,
+      readLivePrimaryTabIds(),
+      readLiveSecondaryTabIds(),
+    )
+    const base = baseSnapshotFromDraft(draft)
+    dlog('[configure-modal] draft from model', {
+      side: draft.drawerSide,
+      sideSource,
+      primary: draft.primaryIds.length,
+      secondary: draft.secondaryIds.length,
+      hidden: draft.hiddenIds.size,
+      unresolved: model.primary.length + model.secondary.length - modelPrimaryIds.length - modelSecondaryIds.length,
+    })
+    return { draft, base, catalog }
+  }
+
+  // ── Legacy fallback (no owned model yet — pre-bootstrap float) ──────
   // Host tabOrder can lag behind live strips (e.g. mid-drag commits, first
   // open after strip-only reorders). Align both sides so the modal matches
   // what the user sees in the drawers.
@@ -1627,30 +1702,45 @@ function buildLiveDraftAndBase(): {
  * Open the Configure Tabs modal.
  * Builds the initial draft from current host state and renders the Preact component.
  */
-export function openConfigureTabsModal(): void {
+export async function openConfigureTabsModal(): Promise<void> {
   if (typeof document === 'undefined') return
-  if (_modalContainer) {
-    _modalContainer.style.display = 'flex'
-    return
+  if (_openInProgress) return
+  _openInProgress = true
+  try {
+    if (getSettings().unhideVanillaTabs) {
+      try {
+        const { ensureVanillaTabsUnhiddenBeforeConfigure } = await import('./unhide-vanilla')
+        await ensureVanillaTabsUnhiddenBeforeConfigure()
+      } catch (err) {
+        dlog('[configure-modal] waiting for Lumiverse tabs before open failed', String(err))
+      }
+    }
+
+    if (_modalContainer) {
+      _modalContainer.style.display = 'flex'
+      return
+    }
+
+    injectModalStyles()
+
+    // Lock body scroll like host ModalShell
+    document.body.style.overflow = 'hidden'
+
+    const { draft, base, catalog } = buildLiveDraftAndBase()
+    _draftRef = draft
+    _baseSnapshotRef = base
+    _baseEpoch++
+    dlog('[configure-modal] open (draft built from live)')
+
+    // Create container and render.
+    _modalContainer = document.createElement('div')
+    _modalContainer.id = 'canvas-configure-tabs-modal'
+    document.body.appendChild(_modalContainer)
+
+    renderModal(draft, catalog, null, false)
+  } finally {
+    _openInProgress = false
   }
-
-  injectModalStyles()
-
-  // Lock body scroll like host ModalShell
-  document.body.style.overflow = 'hidden'
-
-  const { draft, base, catalog } = buildLiveDraftAndBase()
-  _draftRef = draft
-  _baseSnapshotRef = base
-  _baseEpoch++
-  dlog('[configure-modal] open (draft built from live)')
-
-  // Create container and render.
-  _modalContainer = document.createElement('div')
-  _modalContainer.id = 'canvas-configure-tabs-modal'
-  document.body.appendChild(_modalContainer)
-
-  renderModal(draft, catalog, null, false)
 }
 
 /**
@@ -1753,7 +1843,7 @@ function renderModal(
       }}
       onToggleHide={(tabId, hidden) => {
         if (!_draftRef) return
-        const next = setHidden(_draftRef, tabId, hidden)
+        const next = setHidden(_draftRef, tabId, hidden, !!getSettings().coreTabsHidden)
         _draftRef = next
         renderModal(next, catalog, null, false)
         autoCommit()
@@ -1794,7 +1884,11 @@ function renderModal(
         if (isDraftDirty(_draftRef, _baseSnapshotRef)) {
           const result: CommitResult = await commitDraftToOwnedModel(_draftRef)
           if (!result.ok) {
-            renderModal(_draftRef, catalog, result.error, false)
+            // `superseded` (H1 barrier): a mode switch owns the model and
+            // will refresh the draft from live — stay open, show no error.
+            if (!result.superseded) {
+              renderModal(_draftRef, catalog, result.error, false)
+            }
             return
           }
           _baseSnapshotRef = baseSnapshotFromDraft(_draftRef)

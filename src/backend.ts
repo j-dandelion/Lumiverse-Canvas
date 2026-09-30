@@ -42,20 +42,31 @@ function pblog(...args: unknown[]): void {
 
 let saveQueue: Promise<void> = Promise.resolve()
 
-async function readJsonFile(key: string): Promise<{ data: unknown; bytes: number } | null> {
-  let data: unknown
-  try {
-    data = await spindle.storage.read(key)
-  } catch {
-    // The host REJECTS with `Error: File not found` when the file does not
-    // exist (worker-host-storage-api handleStorageRead → fail) — it does not
-    // return null. A missing file is NOT corruption: callers must fall through
-    // to `emptyResult()` so the frontend still arms the persistence repos and
-    // can write the first save. (Regression from the 08-16 persistence rewrite,
-    // which dropped the pre-rewrite try/catch that mapped missing → null.)
-    return null
+// The host currently returns a string, but some storage adapters wrap it as
+// { data: string }. Keep that contract normalization in one place so normal
+// loads and corrupt-file handling consume the same payload shape.
+async function readStorageText(key: string): Promise<string | null> {
+  const value: unknown = await spindle.storage.read(key)
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && typeof (value as { data?: unknown }).data === 'string') {
+    return (value as { data: string }).data
   }
-  if (data && typeof data === 'string') return { data, bytes: data.length }
+  return null
+}
+
+async function readJsonFile(key: string): Promise<{ data: unknown; bytes: number } | null> {
+  let data: string | null
+  try {
+    data = await readStorageText(key)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // The host rejects with exactly `File not found` for an absent key. Keep
+    // that distinct from transient IPC/storage failures so callers return an
+    // error and leave the existing file protected by the unarmed write fence.
+    if (msg === 'File not found') return null
+    throw err
+  }
+  if (data !== null) return { data, bytes: data.length }
   return null
 }
 
@@ -202,7 +213,7 @@ async function loadSettings(): Promise<LoadResult> {
 async function moveCorruptFile(key: string, reason: string): Promise<void> {
   const newKey = await moveCorruptFileImpl(
     {
-      read: (k) => spindle.storage.read(k).then((v: any) => (typeof v === 'string' ? v : (v?.data ?? null))),
+      read: readStorageText,
       write: (k, contents) => spindle.storage.write(k, contents),
       move: (from, to) => spindle.storage.move(from, to),
       delete: (k) => spindle.storage.delete(k),
@@ -220,7 +231,9 @@ async function moveCorruptFile(key: string, reason: string): Promise<void> {
 }
 
 async function saveLayout(state: any): Promise<void> {
-  if (!state || typeof state !== 'object') return
+  if (!state || typeof state !== 'object') {
+    throw new Error('invalid layout payload (not an object)')
+  }
   const json = JSON.stringify(state, null, 2)
   pblog('disk-write layout start', `bytes=${json.length}`)
   try {
@@ -230,11 +243,17 @@ async function saveLayout(state: any): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err)
     pblog('disk-write layout fail', msg)
     if (DEBUG) spindle.log.error(`[SidebarUX] Failed to save layout: ${msg}`)
+    // Rethrow so the SAVE_LAYOUT queue ack reports {status:'error'}: a
+    // swallowed failure made every write look successful to the frontend's
+    // reliability layer, even though nothing reached disk (review B2).
+    throw err instanceof Error ? err : new Error(msg)
   }
 }
 
 async function saveSettings(state: { version?: number; settings?: unknown }): Promise<void> {
-  if (!state || typeof state !== 'object') return
+  if (!state || typeof state !== 'object') {
+    throw new Error('invalid settings payload (not an object)')
+  }
   const json = JSON.stringify(state, null, 2)
   pblog('disk-write settings start', `bytes=${json.length}`)
   try {
@@ -244,6 +263,8 @@ async function saveSettings(state: { version?: number; settings?: unknown }): Pr
     const msg = err instanceof Error ? err.message : String(err)
     pblog('disk-write settings fail', msg)
     if (DEBUG) spindle.log.error(`[SidebarUX] Failed to save settings: ${msg}`)
+    // Rethrow so the SAVE_SETTINGS queue ack reports {status:'error'} (review B2).
+    throw err instanceof Error ? err : new Error(msg)
   }
 }
 

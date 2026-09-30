@@ -494,6 +494,24 @@ function makeTestCatalog(): CatalogTab[] {
 }
 
 // =====================================================================
+// setHidden — allowCore unlocks the core-hide lock (coreTabsHidden)
+// =====================================================================
+{
+  const draft: ConfigureDraft = {
+    drawerSide: 'right',
+    primaryIds: [],
+    secondaryIds: [],
+    builtinOrder: ['profile'],
+    extensionOrder: [],
+    hiddenIds: new Set(),
+  }
+  const hidden = setHidden(draft, 'profile', true, true)
+  assert(hidden.hiddenIds.has('profile'), 'profile IS hidden when allowCore is on')
+  const stuck = setHidden(draft, 'profile', true, false)
+  assert(!stuck.hiddenIds.has('profile'), 'profile stays locked when allowCore is off')
+}
+
+// =====================================================================
 // setHidden — unhide
 // =====================================================================
 {

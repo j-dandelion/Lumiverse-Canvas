@@ -123,6 +123,14 @@ await flush()
 model = getModel()
 assert(model!.secondary.includes(WEAVER), 'user move inside the window is applied to the model')
 
+// User geometry + hidden changes inside the window must ALSO survive the
+// convergence merge (review batch 4: mergeResolvedInto re-adopted
+// rebuilt.drawers / rebuilt.hidden wholesale, reverting the user).
+await dispatch({ t: 'setDrawer', side: 'primary', open: false, width: 333 })
+await flush()
+await dispatch({ t: 'setHidden', key: LOOM, hidden: true })
+await flush()
+
 // Hone registers late (extension button appears) → world change → converge.
 host.addTab(HONE, 'Hone', 'secondary')
 await flush()
@@ -132,6 +140,9 @@ assert(model != null, 'model present after retry')
 assert(model!.secondary.includes(HONE), 'Hone back in secondary after the retry')
 assert(model!.secondary.includes(WEAVER), 'user move survives the convergence merge (add-only)')
 assert(!model!.primary.includes(HONE), 'Hone not in primary after the retry')
+assertEqual(model!.drawers.primary.width, 333, 'user width survives the convergence merge')
+assertEqual(model!.drawers.primary.open, false, 'user open state survives the convergence merge')
+assert(model!.hidden.includes(LOOM), 'user hide survives the convergence merge')
 
 // The completed restore persists the full layout (with Hone detached).
 const blob = writes[writes.length - 1]

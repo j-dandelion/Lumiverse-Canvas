@@ -15,8 +15,8 @@
 // management logic.
 
 import { getTabSidebar } from '../tabs/assignment'
-import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
-import { getSettings } from '../settings/state'
+import { getHost, getModel, dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 import { injectStyles } from '../debug/styles'
 import { dlog } from '../debug/log'
 import { isShowTabLabels, syncSecondaryTabLabels } from '../sidebar/drawer-sync'
@@ -128,6 +128,39 @@ export function showAssignmentMenu(
       })
     })
     _contextMenu.appendChild(moveItem)
+  }
+
+  // 5. OS-mode window operations (D14, spec §4.3): Minimize + Close. Minimize
+  // is meaningful only for the drawer's OPEN/active window (minimizing an
+  // already-minimized window is a no-op), so it is omitted unless the model's
+  // active for this side resolves to this tab; Close stays for every visible
+  // strip button (close-of-minimized = membership only; closing the displayed
+  // window collapses the drawer per D7). Lazy-import avoids the load-order
+  // cycle (this module ← os/panel-chrome ← os/actions → dispatch); the model
+  // read is sync from the already-imported dispatch facade.
+  if (isOsModeEnabled()) {
+    const side: 'primary' | 'secondary' = currentSidebar === 'secondary' ? 'secondary' : 'primary'
+    let windowOpen = false
+    try {
+      const host = getHost()
+      const model = getModel()
+      const key = host?.findKey?.(tabId) ?? null
+      windowOpen = !!(key && model && model.active[side] === key)
+    } catch {
+      windowOpen = false
+    }
+    const divider = createDivider()
+    _contextMenu.appendChild(divider)
+    if (windowOpen) {
+      const minimizeItem = createAssignmentContextMenuItem('Minimize', () => {
+        void import('../os/actions').then((m) => m.minimizeWindowByLiveId(tabId, side))
+      })
+      _contextMenu.appendChild(minimizeItem)
+    }
+    const closeItem = createAssignmentContextMenuItem('Close', () => {
+      void import('../os/actions').then((m) => m.closeWindowByLiveId(tabId))
+    })
+    _contextMenu.appendChild(closeItem)
   }
 
   _contextMenu.style.left = `${x}px`

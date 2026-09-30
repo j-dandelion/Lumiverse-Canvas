@@ -3,13 +3,14 @@ import { createEmptyModel, builtinKey, extensionKey } from '../../core/model'
 import { type Intent } from '../../core/intents'
 import { visibleKeys } from '../../core/select'
 import { FakeHost, type LiveTab } from '../../host/fake/implementation'
-import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId, dispatchActivateByLiveId } from '../../recon/dispatch'
+import { bootstrap, bootstrapFromLayout, shutdown, dispatch, dispatchBatch, flush, getModel, getHost, dispatchMoveByLiveId, dispatchActivateByLiveId, captureSecondaryNeighborForMove } from '../../recon/dispatch'
 import { serializeModelToLayout, buildModelFromLayout } from '../../persist/layout-model'
 import {
   armLayoutRepo,
   __resetLayoutRepoForTest,
   setLayoutRepoBackendCtx,
 } from '../../persist/layout-repo'
+import { hydrateSettings, setLastLoadedLayout } from '../../settings/state'
 
 let passed = 0
 let failed = 0
@@ -573,6 +574,43 @@ async function testMoveWhenTabIsInModel() {
   shutdown()
 }
 
+// ============================================================================
+// D13-launch — explicit visible index (OS launch-end placement)
+// ============================================================================
+async function testMoveWithExplicitVisibleIndex() {
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'secondary', { activeInSecondary: true }),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, B],
+    secondary: [A],
+    hidden: [],
+    active: { primary: PROFILE, secondary: A },
+  }
+
+  shutdown()
+  bootstrap(model, host)
+
+  // The OS launch path passes an explicit end index for absent windows:
+  // index 0 = PREPEND (the middle-facing end of a right-side horizontal
+  // drawer); the default callers keep the append.
+  await dispatchMoveByLiveId('h:b', false, 0)
+  await flush()
+
+  const newModel = getModel()
+  assert(newModel != null, 'D13x-a: model present')
+  if (newModel) {
+    assertEqual(newModel.secondary[0], B, 'D13x-b: B inserted at explicit visible index 0')
+    assertEqual(newModel.secondary.length, 2, 'D13x-c: no key lost by the explicit index')
+    assertEqual(newModel.active.secondary, A,
+      'D13x-d: activateDest false → destination focus unchanged')
+  }
+  shutdown()
+}
+
 // ==========================================================================
 // D14 — owned dispatch persists the resulting model
 // ==========================================================================
@@ -871,6 +909,187 @@ async function testDispatchActivateByLiveId() {
 }
 
 // ============================================================================
+// D19 — captureSecondaryNeighborForMove: collapsed drawer = no display truth
+// ============================================================================
+async function testSecondaryNeighborCaptureGate() {
+  const { __setSecondaryWrapperForTest } = await import('../../sidebar/secondary')
+  const { setActiveSecondaryTabId } = await import('../../tabs/active-tab')
+
+  // Minimal secondary tab-list stubs for the real neighbor finder.
+  const mkBtn = (id: string, title: string) => ({
+    className: '',
+    style: { display: '' },
+    getAttribute: (name: string) =>
+      name === 'data-tab-id' ? id : name === 'title' ? title : null,
+  })
+  const secButtons = [mkBtn('h:a', 'Tab A'), mkBtn('h:b', 'Tab B'), mkBtn('h:c', 'Tab C')]
+  const secList = {
+    querySelectorAll: (sel: string) => (sel === 'button[data-tab-id]' ? secButtons : []),
+  }
+  __setSecondaryWrapperForTest({
+    querySelector: (sel: string) => (sel === '.sidebar-ux-tab-list' ? secList : null),
+  } as any)
+
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+
+  // No model → nothing displayed → capture bails even though h:b is tracked.
+  shutdown()
+  setActiveSecondaryTabId('h:b', { silent: true })
+  let chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19a: no model → no secondary neighbor capture')
+
+  // Model present but the secondary drawer is collapsed (OS minimize/close
+  // keeps the tracked active as reopen memory) → still no capture.
+  const closedModel: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A, B],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(closedModel, host)
+  await flush()
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19b: collapsed drawer → no secondary neighbor capture')
+
+  // Open drawer + moved tab is the tracked active → neighbor captured above.
+  const openModel: LayoutModel = {
+    ...closedModel,
+    drawers: {
+      ...closedModel.drawers,
+      secondary: { ...closedModel.drawers.secondary, open: true },
+    },
+  }
+  bootstrap(openModel, host)
+  await flush()
+  setActiveSecondaryTabId('h:b', { silent: true })
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assertEqual(
+    (chrome.neighborBtn as any)?.getAttribute('data-tab-id') ?? null,
+    'h:a',
+    'D19c: open drawer + active-tab move captures the neighbor above',
+  )
+
+  // Open drawer but a NON-active tab is moved → quiet move, no capture.
+  setActiveSecondaryTabId('h:c', { silent: true })
+  chrome = await captureSecondaryNeighborForMove('h:b')
+  assert(chrome.neighborBtn === null, 'D19d: non-active move stays quiet with the drawer open')
+
+  __setSecondaryWrapperForTest(null)
+  setActiveSecondaryTabId(null, { silent: true })
+  shutdown()
+}
+
+// ==========================================================================
+// D20 — persistence facets freeze main-drawer geometry on the owned-model path
+//
+// Contract (docs/persistence.md:87): a SAVE_LAYOUT with a disabled
+// persistDrawerOpenState / persistDrawerWidth facet writes the LAST-LOADED
+// main-drawer value, not the latest live geometry. layout/snapshot.ts
+// buildPersistedLayout implements this for the settings-save path; the owned
+// model writer (persistModel → buildPersistedBlob) must match. Mode slots and
+// every other field stay live; both facets true = the default live path.
+// ==========================================================================
+async function testPersistFacetFreeze() {
+  async function bootAndSave(opts: {
+    settings: { persistDrawerOpenState?: boolean; persistDrawerWidth?: boolean }
+    lastLoaded: any
+    bootOpen: boolean
+    bootWidth: number
+    liveOpen: boolean
+    liveWidth: number
+  }): Promise<any> {
+    const host = new FakeHost([
+      makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    ])
+    const writes: any[] = []
+    const backend = {
+      sendToBackend(message: { type: string; [key: string]: unknown }) {
+        if (message.type === 'SAVE_LAYOUT') writes.push(message.layout)
+      },
+      onBackendMessage() { return () => {} },
+    }
+    __resetLayoutRepoForTest()
+    setLayoutRepoBackendCtx(backend)
+    armLayoutRepo()
+    shutdown()
+    hydrateSettings(opts.settings)
+    setLastLoadedLayout(opts.lastLoaded)
+    bootstrap({
+      ...createEmptyModel(),
+      primary: [PROFILE],
+      active: { primary: PROFILE, secondary: null },
+      drawers: {
+        primary: { open: opts.bootOpen, width: opts.bootWidth },
+        secondary: { open: false, width: 420 },
+      },
+    }, host, 'test-v1.0')
+    await flush()
+    writes.length = 0
+    await dispatch({ t: 'setDrawer', side: 'primary', open: opts.liveOpen, width: opts.liveWidth })
+    await flush()
+    const saved = writes[writes.length - 1]
+    shutdown()
+    hydrateSettings(null)
+    setLastLoadedLayout(null)
+    __resetLayoutRepoForTest()
+    return saved
+  }
+
+  // Case 1: both facets true (default) — live open/width persist.
+  const live = await bootAndSave({
+    settings: {},
+    lastLoaded: { primary: { open: false, width: 300 }, secondary: { open: false, width: 300 } },
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(live?.primary?.open, true, 'D20a: both facets true → live open persists')
+  assertEqual(live?.primary?.width, 555, 'D20b: both facets true → live width persists')
+
+  // Case 2: persistDrawerOpenState false — frozen last-loaded open wins.
+  const frozenOpen = await bootAndSave({
+    settings: { persistDrawerOpenState: false },
+    lastLoaded: { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 } },
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(frozenOpen?.primary?.open, false, 'D20c: open facet off → last-loaded open=false kept')
+  assertEqual(frozenOpen?.primary?.width, 555, 'D20d: open facet off → width still live')
+
+  // Case 3: persistDrawerWidth false — frozen last-loaded width wins.
+  const frozenWidth = await bootAndSave({
+    settings: { persistDrawerWidth: false },
+    lastLoaded: { primary: { open: false, width: 411 }, secondary: { open: false, width: 420 } },
+    bootOpen: false,
+    bootWidth: 411,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(frozenWidth?.primary?.width, 411, 'D20e: width facet off → last-loaded width=411 kept')
+  assertEqual(frozenWidth?.primary?.open, true, 'D20f: width facet off → open still live')
+
+  // Case 4: facet off but no last-loaded layout — live value, no undefined leak.
+  const noLast = await bootAndSave({
+    settings: { persistDrawerOpenState: false, persistDrawerWidth: false },
+    lastLoaded: null,
+    bootOpen: false,
+    bootWidth: 420,
+    liveOpen: true,
+    liveWidth: 555,
+  })
+  assertEqual(noLast?.primary?.open, true, 'D20g: no last-loaded → live open kept')
+  assertEqual(noLast?.primary?.width, 555, 'D20h: no last-loaded → live width kept')
+}
+
+// ============================================================================
 // Run all tests
 // ============================================================================
 await testRightClickMovePrimaryToSecondary()
@@ -890,9 +1109,12 @@ await testBootstrapShutdownRace()
 // Move when tab not yet in model
 await testMoveWhenTabNotInModel()
 await testMoveWhenTabIsInModel()
+await testMoveWithExplicitVisibleIndex()
 await testDispatchPersistsModel()
+await testPersistFacetFreeze()
 await testUnknownLiveIdIsNoOp()
 await testDispatchActivateByLiveId()
+await testSecondaryNeighborCaptureGate()
 
 // Round-trip serialization
 await testRoundTripSerialization()

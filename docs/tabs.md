@@ -39,6 +39,22 @@ Right-click "Move to second drawer" no longer dispatches a model intent first. T
 
 Built-in placement: `requestTabLocation` to the container is an allowlist silent no-op for most built-ins in this runtime, and `store.moveTabTo` is missing — the `via=dom` fallback (registry root reparent) is the real path; `via=bridge` works for allowlisted tabs.
 
+### Context menus (two surfaces)
+
+- **Main drawer** — Lumiverse's own ContextMenu (a direct host-tab right-click, or
+  the mirror button's forwarded synthetic event, `main-renderer.onMirrorContextMenu`).
+  Canvas injects into it (`context-menu/index.ts`): "Move to second drawer"/"Move to
+  main drawer" (the move item is gated on the second drawer being enabled) plus
+  **Minimize + Close** while OS mode is on (spec D14). Minimize is injected only when
+  the tab is that drawer's open/active window (the model active is the predicate — a
+  minimized window's item would be a no-op); Close is always injected. The OS pair is
+  injected only when the menu carries tab-menu wording (labels toggle / "Configure
+  tabs") so a foreign body portal never gets a destructive Close; each injected click
+  dismisses the host menu with an `Escape` keydown.
+- **Second drawer** — Canvas-owned `.canvas-tab-context-menu`
+  (`tabs/tab-context-menu.ts`): labels toggle, Configure tabs, Move to …, and the
+  same OS Minimize (open/active windows only) / Close pair.
+
 ## Button Management (`tabs/buttons.ts`)
 
 ### Main Sidebar
@@ -52,10 +68,21 @@ Built-in placement: `requestTabLocation` to the container is an allowlist silent
 
 ### Secondary Sidebar
 
-- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu)
+- `addSecondaryTabButton(tab)` — creates a button in `.sidebar-ux-tab-list` with icon, label, click handler (opens drawer + shows tab), and right-click handler (shows context menu). While OS mode is on the click handler is the D4 window-state toggle (`os/actions.toggleWindowByLiveId`) on every viewport — displayed window → minimize, minimized/closed → open/restore. Non-OS, tapping the active tab toggle-closes the drawer; on mobile that path requires effective taskbar mode (plain mobile is a no-op — see `docs/mobile.md`). The button is stamped with `data-canvas-facade-key` (the model TabKey it was created for) so the ghost sweeper can find it after its liveId stops resolving
 - `removeSecondaryTabButton(tabId)` — removes the button
 - `showSecondaryTab(tabId)` — activates a tab by setting `data-canvas-active` on the matching root, updating header title, toggling `sidebar-ux-tab-active` class on buttons
 - `updateDrawerTabVisibility()` — shows/hides the drawer tab button based on whether any tabs are assigned
+
+### Tab removal: extension teardown & ghost tabs (LUMI-29)
+
+When an extension that owns a tab is turned off, the host removes its button and content root, but the OWNED MODEL would keep the key forever: `observe()`'s synthesis loop re-derives an entry from the assignment facade (which derives from the model), so the dead key re-feeds `applySyncFromHost` and every surface keeps rendering it — a ghost strip button (label-only mirror twin, no icon; click/contextmenu forward to the missing host twin and do nothing).
+
+Two mechanisms clean this up:
+
+1. **Ghost grace in `LumiverseHost.observe()`** — a missing EXTENSION key gets a 10 s grace window (`_facadeMissingSince`); absence that outlives it stops being synthesized, so the next authoritative host-sync drops the key from the model (and prunes `hidden`/`menuHidden` with it). The first absence arms a one-shot retry (`emitWorldChanged` fan-out in `onWorldChanged`) that re-syncs after the window — without it the arming sync would be the last round and the ghost would persist. Built-ins are never purged (DOM-placed built-ins legitimately have no live button). `shutdown()` clears the timers/tracker (LUMI-21 continuation class).
+2. **Ghost-tab sweeper (`tabs/ghost-tabs.ts`)** — subscribes to model commits and removes the Canvas-OWNED secondary strip button when its facade key (`data-canvas-facade-key`) leaves the model entirely (a secondary→primary move keeps the key in `model.primary` and is not swept). Also removes orphaned `[data-canvas-moved]` roots, clears the tracked active when it pointed at the dead tab, and auto-closes the drawer when no secondary tabs remain. Wired in `setup.ts` via `registerCleanup`.
+
+The grace is for model recovery, not a visible delay. On the first observed absence, Canvas immediately hides the key from its main-mirror strip and hides any Canvas-owned secondary strip button. If the extension re-registers during the 10 s window, the presentation returns with the existing model placement; sustained absence follows the normal authoritative drop and persistence path. This suppression does not mark the tab hidden in user settings.
 
 ### Settings Button Detection
 
@@ -131,7 +158,7 @@ only mode state. `detachedTabs` writers (`getLiveIdAssignmentEntries`) emit
 `tabId` = current live id and `tabTitle` = the model TabKey (authoritative
 for restore).
 
-The first-enable seed is implemented in `layout/persist.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks `lastLoaded` and the dual slot. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
+The first-enable seed is implemented in `layout/snapshot.ts` (`seedDualLayoutFromLive`). It is guarded by `hasDetachedTabs()` which checks `lastLoaded` and the dual slot. If either has detached tabs, the seed is skipped — this prevents overwriting real dual tabs on re-enable.
 
 ### Conflict rule: slot wins on disable
 
@@ -168,9 +195,48 @@ automatically on toggle hide, swap side, and drag-end (not mid-drag).
 
 | Action | Behavior |
 |--------|----------|
-| Toggle tab hidden (eye icon) | Draft commits immediately (no Done needed). |
+| Toggle tab hidden (eye icon) | Draft commits immediately (no Done needed). Core built-in rows (`CORE_HIDE_LOCKED`: profile, presets, loom, characters, personas, branches, spindle, theme, lorebook) are locked unless `coreTabsHidden` is on; the set lives in the `tabs/core-tabs.ts` leaf (OS-mode consumers must not import the store graph). |
 | Swap drawer side radio | Draft commits immediately (no Done needed). |
 | Drag-end within or between columns | Draft commits immediately (no Done needed). |
 | Mid-drag | No draft commit; the previous committed state is unchanged. If drag-tab and drop-tab change order, only the final drop commits. |
 | Close modal (X / Escape) | No special behavior — regular draft-based close dialog applies. |
 | Enable/disable second drawer | No special behavior — full mode-switch dialog. |
+
+**OS closed-window reflection (2026-09-15):** while `coreTabsHidden` is on (OS mode
+forces it), closing a core window dispatches `setClosed` + `setHidden` (hidden last,
+so D17's "nothing displayed" survives) and the Configure row shows as hidden. A
+genuine hidden→visible transition in a commit emits `setClosed(false)`
+(`owned-commit.ts`) so un-hiding brings the window back instead of leaving a
+permanently hidden strip button. The sweep guard matters: the commit emits a
+`setHidden` intent for every model key on every Apply, so the closed-drop is keyed
+on the membership transition, never on "key is in the closed set".
+
+## Live tab-list DnD (`tabs/tab-list-dnd.ts`)
+
+Live strip DnD reorders within a list and moves tabs across drawers; the commit
+path (`performDrop` → owned model) is axis-agnostic — all work is geometry.
+
+- **Supported surface:** fine-pointer desktop only. `isLiveTabListDndAllowed()` =
+  `!isMobileViewport() && !isPointerResizeActive()` — ≤600px **and** coarse-pointer
+  (touch/pen) devices are no-ops, matching the resize-handle policy. Configure
+  Tabs modal DnD remains available on those devices.
+- **Axis resolution (S8):** `containerAxis(el)` is token-first — `data-strip-axis`
+  on the element or nearest ancestor (written by the strip geometry writer) — then
+  a horizontal class token, then a guarded `getComputedStyle` row check, default
+  `'y'`. Resolved once when the drag geometry cache is built.
+- **Horizontal (Top/Bottom):** insertion uses X midpoints/center; overlay hit pads
+  swap by axis; adjacent zones select by the split boundary (`seamChoice` — the
+  Settings dock makes nearest-center wrong; exact tie → secondary). Since
+  2026-09-16 the boundary is the user-draggable drawer split
+  (`CanvasSettings.horizontalSplit`): the secondary overlay list spans
+  `[edge, split]` and the main section lane starts at the split (list padding,
+  same percentage basis as the fixed host width), so the two container rects
+  tile exactly and `seamChoice` stays correct at every split value. FLIP
+  inverts with `translate(dx, dy)`; the drop-slot spacer holds width + full
+  height; edge auto-scroll self-schedules from the drag rAF (a stationary pointer keeps
+  scrolling) and stops via the phase guard on drop/cancel.
+- **Invalidation:** `invalidateDndGeometry()` (cache = null) is called from
+  `reconcileDrawerLocation()` mid-drag and from viewport-cross handlers.
+- **Exports kept for tests:** `containerAxis`, `axisMidpoint`, `axisCoordinate`,
+  `seamChoice`, `flipDelta`, `settleDestFromButtonRects(..., axis?)` — the
+  existing 3-arg call sites and signatures stay byte-identical.

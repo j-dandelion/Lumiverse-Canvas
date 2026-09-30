@@ -120,20 +120,62 @@ const secTsxSrc = readFileSync(join(process.cwd(), 'src/sidebar/secondary.tsx'),
 const loopStart = secTsxSrc.indexOf('for (const [tabKey] of Array.from(getTabAssignments())')
 ok(
   loopStart !== -1 &&
-    /await assignToSecondary\(liveId, opts\)/.test(secTsxSrc.slice(loopStart, loopStart + 1200)),
+    /await assignToSecondary\(liveId, placementOpts\)/.test(secTsxSrc.slice(loopStart, loopStart + 1200)),
   'T-PRE-6: reassignSecondaryTabsFromModel places tabs serially (no Promise.all click stomp)',
 )
 ok(
   !/await Promise\.all\(promises\)/.test(secTsxSrc.slice(loopStart - 200, loopStart + 2000)),
   'T-PRE-6: the serial loop does not fall back to Promise.all',
 )
-// drawer-sync's side-remount re-attach loop was serialized with the same
-// rationale; pin it so a future refactor does not reintroduce the stomp.
+// The drawer-sync side-change handler was reduced to geometry in S4 (CSS-only
+// side swap: no unmount/remount, no placement re-run), so the serialized loop
+// that survives lives only in secondary.tsx above. Pin the retirement so a
+// future refactor does not reintroduce the Promise.all click stomp through a
+// remount path.
 const syncSrc = readFileSync(join(process.cwd(), 'src/sidebar/drawer-sync.ts'), 'utf8')
 ok(
-  /for \(const \[key\] of Array\.from\(getTabAssignments\(\)\)[\s\S]{0,300}await assignToSecondary\(liveId/.test(syncSrc),
-  'T-PRE-6: drawer-sync remount loop places serially',
+  !/assignToSecondary\s*\(/.test(syncSrc),
+  'T-PRE-6: drawer-sync has no placement loop (S4 retired the side-remount path)',
 )
+
+// 7. live-verify #13: the pre-activation is a MOUNT mechanism — after the
+//    root exists, the helper must restore the host's previous active tab so
+//    the moved tab's content never paints in the main drawer, and so the
+//    later move-out is a non-active move for the pendingActiveTabReset guard
+//    (clearSpuriousActiveTabReset in host-tab-location).
+{
+  const prevCaptureIdx = helperSrc.indexOf('const prevActiveTabId')
+  const ensureCallIdx = helperSrc.indexOf('await ensureBuiltInTabActiveInMain(tabId')
+  const restoreIdx = helperSrc.indexOf('findMainTabButton(prevActiveTabId)')
+  ok(
+    prevCaptureIdx !== -1 && /hostMainDrawerDomState\(\)\?\.tab/.test(helperSrc),
+    'T-PRE-7: helper captures the host active tab before the pre-activation click',
+  )
+  ok(
+    restoreIdx !== -1 && helperSrc.includes('prevActiveTabId !== tabId'),
+    'T-PRE-7: helper restores the previous active when a different tab was moved',
+  )
+  ok(
+    prevCaptureIdx !== -1 && ensureCallIdx !== -1 && restoreIdx !== -1 &&
+      prevCaptureIdx < ensureCallIdx && ensureCallIdx < restoreIdx,
+    'T-PRE-7: capture → pre-activate → restore ordering',
+  )
+}
+
+// 8. live-verify #13 hardening (review batch 1): the restore must never click
+//    a hidden (moved-out) main button — Canvas hides those inline and the
+//    host's tabBtnActive can be stale, so the click would activate a tab that
+//    belongs to the secondary drawer.
+{
+  ok(
+    /prevBtn\.isConnected && prevBtn\.style\.display !== 'none'/.test(helperSrc),
+    'T-PRE-8: restore skips hidden/disconnected previous-active buttons',
+  )
+  ok(
+    helperSrc.includes('pre-activation restore skipped for'),
+    'T-PRE-8: skipped restore is logged (debug-gated)',
+  )
+}
 
 console.log(`builtin-move-preactivate: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

@@ -120,8 +120,15 @@ globalThis.window = {
 
 // Stub heavy deps used by secondary mount path.
 import { mock } from 'bun:test'
+// Spread the real modules so newly-imported exports keep linking; the stubs
+// below only neutralize what this test isolates.
+import * as actualSettingsState from '../../settings/state'
+import * as actualStore from '../../store'
+import * as actualLumiverse from '../../dom/lumiverse'
+import * as actualStyles from '../styles'
 
 mock.module('../../settings/state', () => ({
+  ...actualSettingsState,
   getSettings: () => ({
     secondSidebarEnabled: true,
     taskbarMode: true,
@@ -141,6 +148,7 @@ mock.module('../../dom/host-bridge', () => ({
 }))
 
 mock.module('../../store', () => ({
+  ...actualStore,
   getDrawerTabs: () => [],
   getStoreSnapshot: () => null,
   getMainDrawerSide: () => 'left',
@@ -149,13 +157,11 @@ mock.module('../../store', () => ({
 }))
 
 mock.module('../../dom/lumiverse', () => ({
+  ...actualLumiverse,
   getMainSidebar: () => null,
   getMainPanelContent: () => null,
-  getMainPanel: () => null,
   getMainWrapper: () => null,
   getMainDrawer: () => null,
-  getMainPanelHeader: () => null,
-  getChatColumn: () => null,
   getMainDrawerWidth: () => 300,
 }))
 
@@ -186,10 +192,18 @@ mock.module('../panel-header-sync', () => ({
 
 mock.module('../animation', () => ({
   animateWrapper: () => {},
+  cancelWrapperAnimation: () => {},
+  cancelAllWrapperAnimations: () => {},
+  animatePanelToggle: () => {},
+  computePanelAnchor: () => null,
+  __getPanelAnimState: () => ({ panelRaf: null, panelStart: null }),
+  // OS chrome's parking gate (module graph links panel-chrome dynamically).
+  isPanelAnimating: () => false,
+  whenPanelMotionSettles: (_w: unknown, cb: () => void) => cb(),
 }))
 
 mock.module('../styles', () => ({
-  SECONDARY_WIDTH_VAR: '--sidebar-ux-secondary-w',
+  ...actualStyles,
   injectDrawerTabStyles: () => {},
 }))
 

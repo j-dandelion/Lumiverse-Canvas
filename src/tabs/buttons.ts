@@ -27,14 +27,23 @@ import {
   PUZZLE_ICON_SVG,
 } from '../sidebar/secondary'
 import { getSettings } from '../settings/state'
-import { isHideDrawerOpenCloseButtonsEnabled } from '../settings/state'
+import { currentLifecycleGeneration, isLifecycleCurrent } from '../lifecycle/instance'
+import {
+  isHideDrawerOpenCloseButtonsEnabled,
+  isHorizontalStrip,
+  isOsModeEnabled,
+  isTaskbarModeEnabled,
+} from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
+import { getHost } from '../recon/dispatch'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
+import { appendSecondaryTabNode } from './secondary-start-dock'
 import {
   getCanvasHiddenTabIds,
   mergeHiddenTabIdLists,
 } from './canvas-hidden'
+import { isGhostPresentationPending } from './ghost-presentation'
 
 // Test seams for hideMainTabButton / showMainTabButton — allows tests to override the real implementations
 let _hideMainTabButtonOverride: ((tabId: string) => void) | null = null
@@ -61,6 +70,25 @@ export function showMainTabButton(tabId: string): void {
   if (_showMainTabButtonOverride) { _showMainTabButtonOverride(tabId); return }
   const btn = findMainTabButton(tabId)
   if (btn) (btn as HTMLElement).style.display = ''
+}
+
+/**
+ * S5 vanilla seam: clear Canvas's inline `display:none` from EVERY host main
+ * tab button. Both inline-hide writers are Canvas-owned — secondary-assignment
+ * hides (hideMainTabButton from assign/unassign flows) and canvas-hidden
+ * hides (applyHiddenTabIdsToHostMain) — so on extension disable the vanilla
+ * host drawer must show all of them again. No other production path inline-
+ * hides host main tab buttons (§6 teardown checklist "showMainTabButton all").
+ */
+export function showAllMainTabButtons(): void {
+  const sidebar = getMainSidebar()
+  if (!sidebar) return
+  const buttons = Array.from(
+    sidebar.querySelectorAll('button[data-tab-id]'),
+  ) as HTMLElement[]
+  for (const btn of buttons) {
+    if (btn.style.display === 'none') btn.style.display = ''
+  }
 }
 
 export function findMainTabButton(tabId: string): Element | null {
@@ -276,6 +304,13 @@ interface SecondaryTabDescriptor {
   iconSvg?: string
   iconUrl?: string
   root: HTMLElement
+  /**
+   * Model TabKey the button was created for ('ext:foo/Bar', 'builtin:x').
+   * Stamped as `data-canvas-facade-key` so the ghost-tab sweeper (LUMI-29)
+   * can find a Canvas-owned button after its key left the model — a dead
+   * extension's liveId no longer resolves, so id-based lookup cannot find it.
+   */
+  facadeKey?: string
 }
 
 /**
@@ -332,6 +367,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.setAttribute('data-tab-id', tab.id)
   btn.setAttribute('title', tab.title)
   if (showLabels) btn.classList.add('sidebar-ux-tab-labeled')
+  // LUMI-29: freeze the model TabKey on the button. Explicit overrides win;
+  // otherwise resolve once from the live inventory (buttons are created while
+  // the tab is alive, so the frozen key resolves here).
+  const facadeKey = tab.facadeKey ?? getHost()?.findKey(tab.id) ?? null
+  if (facadeKey) btn.setAttribute('data-canvas-facade-key', facadeKey)
   btn.style.cssText = `
     width: 100%;
     height: ${showLabels ? '56px' : '48px'};
@@ -345,6 +385,9 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     cursor: pointer;
     transition: all 0.2s ease;
   `
+  if (facadeKey && isGhostPresentationPending(facadeKey)) {
+    btn.setAttribute('data-canvas-ghost-pending', 'true')
+  }
 
   // Render icon from store data (matches ViewportDrawer.tsx rendering)
   const iconWrap = document.createElement('span')
@@ -360,6 +403,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
     iconWrap.appendChild(img)
   } else {
     iconWrap.innerHTML = PUZZLE_ICON_SVG
+    iconWrap.querySelector('svg')?.classList.add('canvas-puzzle')
   }
   btn.appendChild(iconWrap)
 
@@ -375,9 +419,27 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.appendChild(labelSpan)
 
   btn.addEventListener('click', () => {
+    // OS mode (D4/D19, spec §4.3): every strip click is a window-state
+    // toggle — model-derived displayed predicate (minimize) or open/restore
+    // (auto-opens a closed drawer, converges tracked + model active, clicks
+    // the content active). Runs on mobile too: tab-tap minimize parity with
+    // the header "–" and desktop (the non-OS mobile no-toggle-close guard
+    // below is a separate rule). The tracked active deliberately survives an
+    // OS minimize as reopen memory, so it must NOT be the predicate here.
+    // Lazy-import avoids the load-order cycle (this module ← os/panel-chrome
+    // ← os/actions ← dispatch).
+    if (isOsModeEnabled()) {
+      void import('../os/actions').then((m) => m.toggleWindowByLiveId(tab.id, 'secondary'))
+      return
+    }
     if (isSecondarySidebarOpen()) {
       if (getActiveSecondaryTabId() === tab.id) {
-        closeSecondarySidebar()
+        // Non-OS toggle-close parity: desktop always closes. Mobile keeps the
+        // S6 no-op (full-bleed drawer; the rightmost tab overlaps the opposite
+        // handle — live report 2026-09-12) EXCEPT in effective taskbar mode:
+        // the pinned strip keeps the drawer reopenable, and the user asked for
+        // tap-close parity there (2026-09-15, both strips).
+        if (!_isMobileViewport() || isTaskbarModeEnabled()) closeSecondarySidebar()
       } else {
         // Persistence of the activation is handled inside showSecondaryTab →
         // setActiveSecondaryTabId (the unified tracked-active choke point).
@@ -418,7 +480,7 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   if (insertBefore && insertBefore.parentNode === tabList) {
     tabList.insertBefore(btn, insertBefore)
   } else {
-    tabList.appendChild(btn)
+    appendSecondaryTabNode(tabList, btn)
   }
   // Taskbar pin tracks secondary assignment count — re-evaluate after first tab.
   void import('../sidebar/tab-position').then((m) => m.reconcileTabListPin())
@@ -445,8 +507,7 @@ export function removeSecondaryTabButton(tabId: string): void {
 
 /**
  * Nearest VISIBLE secondary tab button to the moved tab (above, else
- * below) — the drawer-side analog of main-tab-pin's
- * findNeighborHostButtonFor. Used for the secondary neighbor handoff when
+ * below). Used for the secondary neighbor handoff when
  * the second drawer's ACTIVE tab is moved out (right-click / DnD /
  * Configure): the replacement must be activated in the drawer, not the
  * stale model active. Skips display:none buttons and Settings chrome.
@@ -500,10 +561,10 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
   for (const id of desired) {
     const btn = tabList.querySelector(`[data-tab-id="${CSS.escape(id)}"]`) as HTMLElement | null
     if (btn) {
-      // appendChild moves an existing node to the end of the parent's
-      // children list. Iterating ids in order and appending each yields
-      // the desired sequence.
-      tabList.appendChild(btn)
+      // appendSecondaryTabNode moves an existing node to the end of the tab
+      // order (before the Start dock). Iterating ids in order yields the
+      // desired sequence.
+      appendSecondaryTabNode(tabList, btn)
     }
   }
 }
@@ -517,29 +578,14 @@ export function reorderSecondaryTabButtons(ids: string[]): void {
  * (no data-tab-id) also move to their model slot — otherwise setOrder can
  * never converge and the reconcile fires it forever (SAVE_LAYOUT cascade).
  */
-export function reorderMainMirrorTabButtons(ids: string[]): void {
-  const main = document.querySelector(
-    '.sidebar-ux-main-tab-list-mirror .sidebar-ux-tab-list-main',
-  ) as HTMLElement | null
-  if (!main) return
-  for (const id of ids) {
-    const btn = Array.from(
-      main.querySelectorAll(
-        ':scope > button.sidebar-ux-main-tab-mirror-btn, :scope > button[data-tab-id]',
-      ),
-    ).find((b) => buttonTabId(b as HTMLElement) === id) as HTMLElement | null
-    if (btn && btn.parentElement === main) {
-      main.appendChild(btn)
-    }
-  }
-}
-
 /**
  * Reorder host React main tab-list buttons to match the given id order.
  * Targets the host `.tabList` under `.tabListWrap` (not Settings bottom).
- * React may re-render later from tabOrder; when tabOrder matches this
- * order the visual is stable. Used so primary DnD sticks immediately.
- * Buttons are matched via buttonTabId (see reorderMainMirrorTabButtons).
+ * S2: this is the ONLY order convergence write left — it reorders the
+ * CSS-hidden host buttons so the observed world (drawer-observer reads
+ * host DOM order) follows the model without a drawerSettings.tabOrder
+ * patch. The mirror strip is rendered from the model (flat renderer).
+ * Buttons are matched via buttonTabId.
  */
 export function reorderHostMainTabButtons(ids: string[]): void {
   const sidebar = getMainSidebar()
@@ -578,6 +624,9 @@ export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): vo
   for (const btn of buttons) {
     const tid = btn.getAttribute('data-tab-id') || ''
     // Pair against the full strip so multi-instance siblings are not all hidden.
+    // OS mode (D3): the CALLER merges the model's closed set (resolved to
+    // live ids) into `hiddenIds` — see os/panel-chrome.refreshOsVisibility —
+    // so closed strip buttons hide through the same path.
     if (isTabIdHidden(tid, hiddenIds, liveIds)) {
       btn.style.display = 'none'
     } else {
@@ -592,7 +641,11 @@ export function applyHiddenTabIdsToSecondary(hiddenIds: ReadonlySet<string>): vo
  */
 export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void {
   // Lazy-import to avoid circular dependency at module level.
+  // LUMI-21: capture the arming generation — a continuation resolving after
+  // teardown (extension disable) must not re-hide the restored strips.
+  const armedGeneration = currentLifecycleGeneration()
   void import('../sidebar/main-mirror-drawer').then((m) => {
+    if (!isLifecycleCurrent(armedGeneration)) return
     const list = m.getMainMirrorTabList()
     if (!list) return
     const buttons = Array.from(
@@ -603,6 +656,10 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
       .filter(Boolean)
     for (const btn of buttons) {
       const tid = btn.getAttribute('data-tab-id') || ''
+      // S2: buttons carrying data-mirror-key belong to the flat renderer —
+      // its hidden state is model-owned; a canvas-heal apply must not
+      // clobber it.
+      if (btn.hasAttribute('data-mirror-key')) continue
       if (isTabIdHidden(tid, hiddenIds, liveIds)) {
         btn.style.display = 'none'
       } else {
@@ -631,7 +688,11 @@ export function applyHiddenTabIdsToMirror(hiddenIds: ReadonlySet<string>): void 
  */
 export function applyHiddenTabIdsToHostMain(hiddenIds: ReadonlySet<string>): void {
   // Lazy-import to avoid circular dependency at module level.
+  // LUMI-21: capture the arming generation — a continuation resolving after
+  // teardown must not re-hide the restored vanilla host strip (AC1).
+  const armedGeneration = currentLifecycleGeneration()
   void import('../sidebar/main-mirror-drawer').then((m) => {
+    if (!isLifecycleCurrent(armedGeneration)) return
     // Taskbar mode: the mirror strip is the visible main surface; the
     // mirror applicator covers it. Only the host drawer (non-taskbar) needs
     // this direct apply.
@@ -701,6 +762,13 @@ export function updateDrawerTabVisibility(): void {
 
   const hasSecondaryTabs = [...getTabAssignments()].some(([, s]) => s === 'secondary')
 
+  // S8: Top/Bottom hides the edge handle on both platforms — the strip is
+  // the reopen affordance (and the handle would overlap it).
+  if (isHorizontalStrip()) {
+    drawerTab.style.display = 'none'
+    return
+  }
+
   // Mobile: never apply hide setting; clear any stale desktop inline hide.
   if (_isMobileViewport()) {
     drawerTab.style.display = hasSecondaryTabs ? 'flex' : 'none'
@@ -731,13 +799,19 @@ export function clearSecondaryTabButtonActive(): void {
   }
 }
 
-export function showSecondaryTab(tabId: string): void {
+export function showSecondaryTab(tabId: string, opts?: { silent?: boolean }): void {
   // Record which tab is now active. Persistence is unified at the
   // setActiveSecondaryTabId choke point (dispatchTrackedActiveSync), so every
   // activation surface — clicks, reopen, placement-with-activation, handoff,
   // restore — converges the owned model (and layout.json) without per-surface
   // wiring. Restore/placement echoes are no-ops (applySyncActive guards).
-  setActiveSecondaryTabId(tabId)
+  // `silent` is for RECONCILE-ISSUED activations (host.activate echoes the
+  // model's own active into the chrome): the model is already the source, so
+  // re-dispatching syncActive feeds the tracked-active ↔ reconcile loop
+  // (each reconcile's activate flipped the tracked value, which dispatched
+  // syncActive, which changed the model, which made the next reconcile
+  // activate the other key — the 2026-08-27 swap-freeze SAVE_LAYOUT cascade).
+  setActiveSecondaryTabId(tabId, opts)
 
   const secondaryContent = getSecondaryWrapper()?.querySelector('.sidebar-ux-panel-content') as HTMLElement | null
 

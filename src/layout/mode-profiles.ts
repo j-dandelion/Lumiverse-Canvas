@@ -16,6 +16,7 @@
 // so one artifact serves both mode restore and host restore.
 
 import type { LegacyLayout } from '../persist/layout-model'
+import { stripTabIdSuffix } from '../persist/tab-id-heal'
 import { CANVAS_VERSION } from '../persist/backend-ctx'
 import { getHostDrawerSettings } from '../dom/host-settings'
 import { isMainDrawerOpen, getMainDrawerSide, getDrawerTabs } from '../store'
@@ -24,6 +25,7 @@ import { getMainDrawerWidth } from '../dom/lumiverse'
 import type { HostPort } from '../host/port'
 import { bootstrapFromLayout, flush as flushOwnedModel } from '../recon/dispatch'
 import { restoreMainDrawerFromDom } from '../sidebar/main-persist'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 
 /**
  * Build a durable single-drawer layout from the CURRENT live host state.
@@ -80,27 +82,106 @@ export function buildSingleLayoutFromLiveHost(): LegacyLayout {
  *      main-persist path (restore guard, content settle, tab handoff).
  * Never throws — returns the outcome for logging.
  */
+export interface RestoreSingleModeOpts {
+  /**
+   * Which side of an OS toggle this restore belongs to. Authoritative for
+   * (a) persist routing during the restore (`bootstrapFromLayout`'s
+   * `osActive` override — the live setting may already read the NEXT mode
+   * when a queued transition executes) and (b) the OS active/fallback gates
+   * below. Defaults to the live setting (all mode-switch callers inside a
+   * stable session pass nothing or pass the captured intent).
+   */
+  osActive?: boolean
+  /** Facet gates (boot recovery): default true = current behavior. */
+  restoreOpen?: boolean
+  restoreWidth?: boolean
+  /**
+   * Boot recovery (L3, 2026-09-23): pass false so the restore uses the
+   * plain retry window (`persistWhilePending: false`). Warm mid-session
+   * restores keep the default true — boot recovery must never durably
+   * persist a resolved-only dual blob during the 30s pending window
+   * (early-reload placement loss).
+   */
+  persistWhilePending?: boolean
+}
+
 export async function restoreSingleModeLayout(
   slot: LegacyLayout,
   host: HostPort,
+  opts?: RestoreSingleModeOpts,
 ): Promise<{ ok: boolean; reason?: string }> {
   try {
-    bootstrapFromLayout(slot, host, CANVAS_VERSION)
+    // Warm mid-session restore (second-drawer mode switch, OS disable):
+    // persist the resolved model even when the slot carries an unresolvable
+    // key. Without this the pending-restore gate blocks the write and a
+    // reload restores the stale top-level layout — the restored second-drawer
+    // tabs vanish (live bug 2026-09-15). Boot recovery passes
+    // `persistWhilePending: false` so it inherits the plain retry window
+    // (L3, 2026-09-23) — no durable write of a resolved-only blob while the
+    // 30s pending window is still converging.
+    bootstrapFromLayout(slot, host, CANVAS_VERSION, {
+      persistWhilePending: opts?.persistWhilePending !== false,
+      osActive: opts?.osActive,
+    })
     await flushOwnedModel()
   } catch (err) {
     return { ok: false, reason: `bootstrap: ${err instanceof Error ? err.message : String(err)}` }
   }
   try {
+    // Which side of an OS toggle this restore belongs to (see
+    // RestoreSingleModeOpts.osActive): read once so the three gates below
+    // cannot disagree if the live setting is superseded mid-restore.
+    const osActive = opts?.osActive ?? isOsModeEnabled()
+    // Facet gates: boot recovery honors the persisted facets the same way
+    // setup's applyMainDrawer does; mode-switch callers keep restoreOpen/
+    // restoreWidth true (that mode's own open state IS the layout).
+    const restoreOpen = opts?.restoreOpen !== false
+    const restoreWidth = opts?.restoreWidth !== false
     // Main drawer open/active from the slot's primary state. The saved
     // active tab id may be stale (hidden/unknown) — fall back to the first
     // visible host tab rather than crashing.
+    //
+    // F2 gate (spec AR): while OS mode is on, a slot with NO saved active
+    // tab is INTENTIONAL (all windows minimized/closed — no displayed
+    // window) — do not pick a fallback tab. The drawer restores open with
+    // an empty content area (the user reopens windows from the strip /
+    // Start menu). Non-OS keeps the fallback (vanilla always has an active).
     const open = !!slot.primary?.open
     let tabId: string | null = slot.primary?.tabId ?? null
-    if (tabId && !isTabKnownAndVisible(tabId)) tabId = pickSafeFallbackTabId()
-    if (open && !tabId) tabId = pickSafeFallbackTabId()
-    restoreMainDrawerFromDom(open, tabId, undefined, {
-      restoreOpen: true,
-      restoreWidth: true,
+    // Closed-active staleness (2026-09-19): a crashy/older OS slot can carry
+    // `primary.tabId` inside `closedTabIds`. buildModelFromLayout rejects
+    // that active (model.active → null) but the DOM restore below would
+    // still click it open — a D17 split (UI shows a window the model calls
+    // closed). Treat it like any stale saved tab: no active, OS fallback
+    // rules apply after. Suffix-heal (L8, 2026-09-23): compare stripped
+    // forms — `resolveStoredId` heals `h:loom:2` ↔ `h:loom`, but a raw
+    // `includes` misses the drift and lets the closed window be clicked open.
+    if (tabId && osActive && Array.isArray(slot.closedTabIds)) {
+      const activeId = tabId
+      const closedActive = slot.closedTabIds.some((c) =>
+        typeof c === 'string' && stripTabIdSuffix(c) === stripTabIdSuffix(activeId),
+      )
+      if (closedActive) tabId = null
+    }
+    if (tabId && !isTabKnownAndVisible(tabId)) {
+      // OS mode: a stale saved tab (gone/hidden) restores NO active — never
+      // a fallback pick (F2: active:null is intentional in OS mode).
+      tabId = osActive ? null : pickSafeFallbackTabId()
+    }
+    if (open && !tabId && !osActive) tabId = pickSafeFallbackTabId()
+    // Restore the slot's saved main width when width persistence is on
+    // (review batch 2). Passing undefined made the mode switch keep the live
+    // width, and the next shell-truth host sync then overwrote the slot.
+    // Mirrors snapshot.isWidthPersistenceEnabled() without importing
+    // layout/snapshot (partial test mocks of it omit new exports).
+    const width = getSettings().persistDrawerWidth && typeof slot.primary?.width === 'number'
+      ? slot.primary.width
+      : undefined
+    // targetOpen is ignored by restoreMainDrawerFromDom when restoreOpen is
+    // false (width-only / unsuppress path), so it is always safe to pass.
+    restoreMainDrawerFromDom(open, tabId, restoreWidth ? width : undefined, {
+      restoreOpen,
+      restoreWidth,
     })
   } catch (err) {
     return { ok: false, reason: `main drawer: ${err instanceof Error ? err.message : String(err)}` }

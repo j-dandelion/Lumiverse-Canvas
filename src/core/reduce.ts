@@ -13,10 +13,16 @@ function insertAt(list: readonly TabKey[], key: TabKey, index: number): TabKey[]
 }
 
 function toggleHidden(hidden: readonly TabKey[], key: TabKey, hide: boolean): readonly TabKey[] {
-  const has = hidden.includes(key)
-  if (hide && !has) return [...hidden, key]
-  if (!hide && has) return hidden.filter(k => k !== key)
-  return hidden
+  return toggleMembership(hidden, key, hide)
+}
+
+/** Generic membership toggle — the shared list mutation behind the
+ *  `hidden` and OS `closed` sets. */
+function toggleMembership(list: readonly TabKey[], key: TabKey, add: boolean): readonly TabKey[] {
+  const has = list.includes(key)
+  if (add && !has) return [...list, key]
+  if (!add && has) return list.filter(k => k !== key)
+  return list
 }
 
 function applyMove(model: LayoutModel, key: TabKey, to: Side, index: number, activateDest: boolean): LayoutModel {
@@ -43,6 +49,9 @@ function applyMove(model: LayoutModel, key: TabKey, to: Side, index: number, act
     const without = removeFrom(srcList, key)
     const absIdx = visibleToAbsoluteIndex({ ...model, [from]: without }, from, index)
     const newList = insertAt(without, key, absIdx)
+    // No-op moves (same visible slot) keep the model identity so dispatch's
+    // `next === _model` gate short-circuits (review batch 4).
+    if (sameOrder(newList, srcList)) return model
     next = { ...model, [from]: newList }
   } else {
     const newSrc = removeFrom(srcList, key)
@@ -82,13 +91,33 @@ function applyReorder(model: LayoutModel, key: TabKey, side: Side, index: number
   const without = removeFrom(list, key)
   const absIdx = visibleToAbsoluteIndex({ ...model, [side]: without }, side, index)
   const newList = insertAt(without, key, absIdx)
+  // A reorder that lands the key back in its current slot is a no-op; keep
+  // the reference (Configure emits one reorder per key on every save).
+  if (sameOrder(newList, list)) return model
   return { ...model, [side]: newList }
+}
+
+/** Element-wise equality for TabKey lists (order-sensitive). */
+function sameOrder(a: readonly TabKey[], b: readonly TabKey[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 function applySetHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutModel {
   if (!keyExists(model, key)) return model
 
-  let next: LayoutModel = { ...model, hidden: toggleHidden(model.hidden, key, hide) }
+  const nextHidden = toggleHidden(model.hidden, key, hide)
+  const membershipChanged = nextHidden !== model.hidden
+  const activeAffected = hide
+    && (model.active.primary === key || model.active.secondary === key)
+  // No membership change and no active replacement → identity (a Configure
+  // save emits one setHidden per key even when nothing changed).
+  if (!membershipChanged && !activeAffected) return model
+
+  let next: LayoutModel = membershipChanged ? { ...model, hidden: nextHidden } : model
 
   if (hide) {
     if (model.active.primary === key) {
@@ -104,10 +133,64 @@ function applySetHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutM
   return next
 }
 
+/**
+ * START-MENU visibility toggle (LUMI-16b): membership in the model's
+ * menuHidden set. STRIP-INDEPENDENT by design — unlike applySetHidden there
+ * is NO active replacement and NO other surface reads this bit: the manage
+ * checkbox's hide/unhide changes ONLY the Start-menu listing (the member's
+ * explicit requirement, 2026-09-28). Strips stay owned by `hidden` (Configure
+ * Tabs) + the OS window lifecycle. Identity-preserving for no-op rounds.
+ */
+function applySetMenuHidden(model: LayoutModel, key: TabKey, hide: boolean): LayoutModel {
+  if (!keyExists(model, key)) return model
+  const nextMenuHidden = toggleMembership(model.menuHidden, key, hide)
+  if (nextMenuHidden === model.menuHidden) return model
+  return { ...model, menuHidden: nextMenuHidden }
+}
+
+/**
+ * OS-mode window close (spec D3/D9/D17): membership in the model's closed
+ * set. Unlike hide, closing the ACTIVE window leaves its drawer with NO
+ * active window (D17 — a closed window is not auto-succeeded; nothing is
+ * focused until the user opens one). Identity-preserving for no-op rounds.
+ */
+function applySetClosed(model: LayoutModel, key: TabKey, closed: boolean): LayoutModel {
+  if (!keyExists(model, key)) return model
+
+  const nextClosed = toggleMembership(model.closed, key, closed)
+  const membershipChanged = nextClosed !== model.closed
+  const activeAffected = closed
+    && (model.active.primary === key || model.active.secondary === key)
+  if (!membershipChanged && !activeAffected) return model
+
+  let next: LayoutModel = membershipChanged ? { ...model, closed: nextClosed } : model
+  // D17: no neighbor replacement — a closed active window leaves nothing
+  // focused (the drawer collapses to the strip via the collapse predicate).
+  if (closed && model.active.primary === key) {
+    next = { ...next, active: { ...next.active, primary: null } }
+  }
+  if (closed && model.active.secondary === key) {
+    next = { ...next, active: { ...next.active, secondary: null } }
+  }
+  return next
+}
+
+/** OS-mode minimize (D4/D17): clear the drawer's active window — the panel
+ *  parks, the strip button stays, nothing is focused. Identity-preserving. */
+function applyDeactivate(model: LayoutModel, side: Side): LayoutModel {
+  if (model.active[side] == null) return model
+  return { ...model, active: { ...model.active, [side]: null } }
+}
+
 function applyActivate(model: LayoutModel, key: TabKey, side: Side): LayoutModel {
   const list = listForSide(model, side)
   if (!list.includes(key)) return model
   if (isHidden(model, key)) return model
+  // Fold-time guard: producers may observe an OS-closed key as active (the
+  // tracked cell survives close as reopen memory), but a closed window must
+  // never be activated. The legitimate un-hide/un-close→activate flow emits
+  // setClosed(false) earlier in the same intent batch, so it still passes.
+  if (model.closed.includes(key)) return model
   // Identity-preserving for no-op rounds (same convention as applySetDrawer):
   // a redundant activate for the already-active key returns the ORIGINAL
   // reference so dispatch's `next === _model` gate short-circuits — no
@@ -139,15 +222,19 @@ function applySyncActive(
   secondary: TabKey | null,
 ): LayoutModel {
   let next = model
+  // OS mode (F2-adjacent): a CLOSED window must never be adopted as active —
+  // host-driven activation (extension/keyboard paths) of a closed tab would
+  // desync the derivation (active implies open). Same guard as hidden.
+  const closed = (m: LayoutModel, k: TabKey): boolean => m.closed.includes(k)
   if (primary !== null && next.active.primary !== primary) {
     const list = listForSide(next, 'primary')
-    if (list.includes(primary) && !isHidden(next, primary)) {
+    if (list.includes(primary) && !isHidden(next, primary) && !closed(next, primary)) {
       next = { ...next, active: { ...next.active, primary } }
     }
   }
   if (secondary !== null && next.active.secondary !== secondary) {
     const list = listForSide(next, 'secondary')
-    if (list.includes(secondary) && !isHidden(next, secondary)) {
+    if (list.includes(secondary) && !isHidden(next, secondary) && !closed(next, secondary)) {
       next = { ...next, active: { ...next.active, secondary } }
     }
   }
@@ -245,6 +332,11 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
   next = {
     ...next,
     hidden: next.hidden.filter(k => observedKeys.has(k)),
+    // START-MENU-only set (LUMI-16b): pruned against the same observed
+    // inventory so removed tabs cannot leave ghosts behind — but NEVER
+    // derived from the host: no host write consumes menuHidden (the strips
+    // must not react to it), and the host has no voice in the menu listing.
+    menuHidden: next.menuHidden.filter(k => observedKeys.has(k)),
   }
 
   // Host is the source of truth for the currently-active tab on each side.
@@ -268,7 +360,18 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
       // where the mirror drives clicks) must not be adopted as this side's
       // active — otherwise the moved tab becomes the primary active key and
       // the main mirror loses its highlight entirely (activeKeys: []).
-      if (isActive && tab.location === side && !isHidden(next, tab.key)) {
+      //
+      // OS mode (same guard as applySyncActive): a CLOSED window must never
+      // be re-adopted as active by a host sync. The secondary tracked active
+      // deliberately survives close (reopen memory), so without this guard
+      // the next host-sync resurrects the closed key into model.active —
+      // undoing the X/minimize while the strip button stays hidden.
+      if (
+        isActive &&
+        tab.location === side &&
+        !isHidden(next, tab.key) &&
+        !next.closed.includes(tab.key)
+      ) {
         return tab.key
       }
     }
@@ -313,6 +416,7 @@ function applySyncFromHost(model: LayoutModel, observed: ObservedWorld): LayoutM
     sameKeys(next.primary, model.primary) &&
     sameKeys(next.secondary, model.secondary) &&
     sameKeys(next.hidden, model.hidden) &&
+    sameKeys(next.menuHidden, model.menuHidden) &&
     next.active.primary === model.active.primary &&
     next.active.secondary === model.active.secondary &&
     next.side === model.side &&
@@ -342,8 +446,14 @@ export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
       return applyReorder(model, intent.key, intent.side, intent.index)
     case 'setHidden':
       return applySetHidden(model, intent.key, intent.hidden)
+    case 'setMenuHidden':
+      return applySetMenuHidden(model, intent.key, intent.hidden)
+    case 'setClosed':
+      return applySetClosed(model, intent.key, intent.closed)
     case 'activate':
       return applyActivate(model, intent.key, intent.side)
+    case 'deactivate':
+      return applyDeactivate(model, intent.side)
     case 'syncActive':
       return applySyncActive(model, intent.primary, intent.secondary)
     case 'setDrawer':

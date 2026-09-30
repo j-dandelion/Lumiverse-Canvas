@@ -440,6 +440,164 @@ function test_missingSecondaryButtonKeys(): void {
   assertEqual(missing3.length, 0, 'OC9f: unresolvable key skipped')
 }
 
+// ── OC10: OS closed-window coherence — Configure unhide drops `closed` ──
+// The setHidden sweep emits one intent per model key, so the drop must key on
+// the hidden→visible TRANSITION, never on "key is closed" alone (that would
+// un-close every OS window on any Apply).
+async function test_OC10_unhideDropsClosed() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { hidden: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [PROFILE],
+    closed: [PROFILE],
+    active: { primary: A, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  // The Configure eye turned back on for the hidden+closed core tab.
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, true, 'OC10a: unhide commit ok')
+  const after = getModel()
+  if (after) {
+    assert(!after.hidden.includes(PROFILE), 'OC10b: profile unhidden')
+    assert(!after.closed.includes(PROFILE), 'OC10c: hidden→visible drops the closed membership')
+  }
+
+  // Sweep guard: a key that is already visible in the draft keeps its closed
+  // membership (the sweep emits setHidden(false) for it too — the drop must
+  // not fire).
+  shutdown()
+  const host2 = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary'),
+    makeLiveTab(A, 'h:a', 'primary'),
+  ])
+  const model2: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [],
+    closed: [A],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model2, host2)
+  await flush()
+  const draft2 = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  await commitDraftToOwnedModel(draft2)
+  const after2 = getModel()
+  if (after2) {
+    assert(after2.closed.includes(A), 'OC10d: already-visible closed key keeps its membership')
+  }
+  shutdown()
+}
+
+// ── OC11 (H2): a commit that observes the OS-closed key as active must not
+// write it into the model's active — the raw observed active is reopen
+// memory, not a live selection. ──
+// ── OC12 (H1): mode-switch barrier — commits are dropped as `superseded`
+// while a drawer/OS switch owns the model (a stale pre-switch draft must not
+// land on the just-restored model) and work again after the barrier lifts. ──
+async function test_OC12_modeSwitchBarrier() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(A, 'h:a', 'primary'),
+    makeLiveTab(B, 'h:b', 'primary'),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A, B],
+    secondary: [],
+    hidden: [],
+    closed: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a', 'h:b'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a', 'h:b'],
+    hiddenIds: new Set(),
+  })
+
+  const { beginModeSwitchBarrier, endModeSwitchBarrier } = await import('../../settings/mode-transition')
+  beginModeSwitchBarrier()
+  const dropped = await commitDraftToOwnedModel(draft)
+  assertEqual(dropped.ok, false, 'OC12a: commit under the barrier is refused')
+  if (!dropped.ok) {
+    assertEqual(dropped.superseded, true, 'OC12b: refusal is marked superseded (silent drop)')
+  }
+  const during = getModel()
+  if (during) {
+    assertEqual(during.secondary.length, 0, 'OC12c: model untouched while the barrier is up')
+  }
+
+  endModeSwitchBarrier()
+  const landed = await commitDraftToOwnedModel(draft)
+  assertEqual(landed.ok, true, 'OC12d: commit works again after the barrier lifts')
+  shutdown()
+}
+
+async function test_OC11_closedObservedActiveIgnored() {
+  shutdown()
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary'),
+    makeLiveTab(A, 'h:a', 'primary', { activeInPrimary: true }),
+  ])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, A],
+    secondary: [],
+    hidden: [],
+    closed: [A],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+
+  const draft = makeDraft({
+    drawerSide: 'left',
+    primaryIds: ['h:profile', 'h:a'],
+    secondaryIds: [],
+    builtinOrder: ['h:profile'],
+    extensionOrder: ['h:a'],
+    hiddenIds: new Set(),
+  })
+  const result = await commitDraftToOwnedModel(draft)
+  assertEqual(result.ok, true, 'OC11a: commit ok')
+  const after = getModel()
+  if (after) {
+    assert(after.active.primary !== A, 'OC11b: closed observed-active key is not written into model.active')
+    assertEqual(after.active.primary, PROFILE, 'OC11c: prior active preserved')
+  }
+  shutdown()
+}
+
 test_plannedMoves()
 test_missingSecondaryButtonKeys()
 
@@ -450,6 +608,9 @@ await test_OC4_rebaseHandlesLateRegistration()
 await test_OC5_drawerSideSwap()
 await test_OC6_hideIntent()
 await test_OC8_skipChrome()
+await test_OC10_unhideDropsClosed()
+await test_OC11_closedObservedActiveIgnored()
+await test_OC12_modeSwitchBarrier()
 
 console.log(`tabs/owned-commit: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

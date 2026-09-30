@@ -24,8 +24,8 @@
 import { getMainSidebar } from '../dom/lumiverse'
 import { findStoreData, getDrawerTabs } from '../store'
 import { getTabSidebar } from '../tabs/assignment'
-import { dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
-import { getSettings } from '../settings/state'
+import { dispatchMoveByLiveId, getHost, getModel, placementFirstMoveByLiveId } from '../recon/dispatch'
+import { getSettings, isOsModeEnabled } from '../settings/state'
 import { hideAssignmentMenu } from '../tabs/tab-context-menu'
 import { isSettingsButton } from '../tabs/buttons'
 import { isShowTabLabels } from '../sidebar/drawer-sync'
@@ -166,49 +166,49 @@ function stopObserver(): void {
   }
 }
 
-// --- Injection: append Canvas item into Lumiverse's rendered menu ---
+// --- Injection: append Canvas items into Lumiverse's rendered menu ---
 
-function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
-  // Host menu button[0] wording — always (even when Move inject aborts).
-  if (menu.dataset.canvasLabelsSynced !== '1') {
-    stampHostTabLabelsMenuItem(menu)
-    menu.dataset.canvasLabelsSynced = '1'
-  }
-
-  // Derive the move label from the tab's current sidebar assignment only
-  // (open/closed state does not change the move action).
-  let label: string
-  let targetSidebar: 'primary' | 'secondary'
-  if (info.currentSidebar === 'secondary') {
-    label = 'Move to main drawer'
-    targetSidebar = 'primary'
-  } else {
-    label = 'Move to second drawer'
-    targetSidebar = 'secondary'
-  }
-
-  // [Canvas:tabmove] Injection decision — surface the label/target so we
-  // can confirm the right-click flow reached this point and made the
-  // correct branch decision. If the user reports "the right-click option
-  // does nothing", we need to know whether (a) the option was injected
-  // with the right label, (b) the click handler fired, and (c) assignTab
-  // took the right branch. The probe below covers (a).
-  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`)
-
-  // Don't show the move option when the second sidebar is disabled —
-  // there's nothing to move to. Labels stamp above still ran.
-  if (targetSidebar === 'secondary' && !getSettings().secondSidebarEnabled) {
-    dwarn(`[tabmove] injectCanvasItem: ABORTED — secondSidebarEnabled=false, item not injected for tabId="${info.tabId}"`)
-    return
-  }
-
-  // Divider — matches Lumiverse's ContextMenu.module.css .divider
+/** Divider — matches Lumiverse's ContextMenu.module.css .divider. */
+function appendMenuDivider(menu: HTMLElement): void {
   const divider = document.createElement('div')
   divider.style.cssText = 'height:1px;margin:4px 8px;background:var(--lumiverse-border)'
   menu.appendChild(divider)
+}
 
-  // Button — copy styles from Lumiverse's first existing menu button
-  // to ensure visual consistency across themes and UI scales.
+/** Dismiss the host menu the way the move item always has: Escape keydown
+ *  (Lumiverse's ContextMenu binds document keydown; it also closes on
+ *  outside click). */
+function dismissHostMenu(): void {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+}
+
+/**
+ * Wording heuristic shared with stampHostTabLabelsMenuItem: a genuine host tab
+ * menu carries the labels toggle and/or Canvas's "Configure tabs" item. The OS
+ * Minimize/Close pair is destructive — never inject it into a foreign body
+ * portal (message long-press, extension install, …) that happens to match
+ * findLumiverseContextMenu.
+ */
+function menuLooksLikeTabMenu(menu: HTMLElement): boolean {
+  const norm = (t: string | null | undefined) =>
+    (t ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
+  const buttons = Array.from(menu.querySelectorAll('button')) as HTMLElement[]
+  return buttons.some((b) => {
+    const t = norm(b.textContent)
+    return t === 'hide tab labels' || t === 'show tab labels' || t === 'configure tabs'
+  })
+}
+
+/**
+ * Append a Canvas menu item, copying styles from Lumiverse's first existing
+ * menu button so visual consistency holds across themes and UI scales.
+ * Clicking stops propagation, runs `onClick`, then dismisses the host menu.
+ */
+function appendCanvasMenuItem(
+  menu: HTMLElement,
+  label: string,
+  onClick: () => void,
+): HTMLButtonElement {
   const refBtn = menu.querySelector('button') as HTMLElement | null
   const btn = document.createElement('button')
   btn.type = 'button'
@@ -245,29 +245,116 @@ function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
   })
   btn.addEventListener('click', (e) => {
     e.stopPropagation()
-    // [Canvas:tabmove] Click handler — confirms the user actually clicked.
-    // Placement-first: the DOM work happens immediately (the user sees the
-    // move), then the owned model catches up via a `move` intent. See
-    // recon/dispatch.ts:placementFirstMoveByLiveId for the full rationale.
-    dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`)
-    void placementFirstMoveByLiveId(info.tabId, targetSidebar).catch((err) => {
-      dwarn('[tabmove] context-menu placement-first move failed:', err)
-      // Fallback: try the model-first path so the user can still see the move
-      // even if the direct placement failed (e.g. host bridge not yet ready).
-      void dispatchMoveByLiveId(info.tabId, false).catch((err2) => {
-        dwarn('[tabmove] context-menu dispatchMoveByLiveId fallback also failed:', err2)
-      })
-    })
-    // Close Lumiverse's context menu — click its backdrop or trigger Escape.
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    onClick()
+    dismissHostMenu()
   })
 
   menu.appendChild(btn)
+  return btn
+}
+
+function injectCanvasItem(menu: HTMLElement, info: PendingTabInfo): void {
+  // Host menu button[0] wording — always (even when Move inject aborts).
+  if (menu.dataset.canvasLabelsSynced !== '1') {
+    stampHostTabLabelsMenuItem(menu)
+    menu.dataset.canvasLabelsSynced = '1'
+  }
+
+  // Derive the move label from the tab's current sidebar assignment only
+  // (open/closed state does not change the move action). `currentSidebar` is
+  // the capture-time source (docCtxCapture → getTabSidebar) and is also the
+  // OS Minimize side — keep one source so the label and the action agree.
+  let label: string
+  let targetSidebar: 'primary' | 'secondary'
+  if (info.currentSidebar === 'secondary') {
+    label = 'Move to main drawer'
+    targetSidebar = 'primary'
+  } else {
+    label = 'Move to second drawer'
+    targetSidebar = 'secondary'
+  }
+
+  // [Canvas:tabmove] Injection decision — surface the label/target so we
+  // can confirm the right-click flow reached this point and made the
+  // correct branch decision. If the user reports "the right-click option
+  // does nothing", we need to know whether (a) the option was injected
+  // with the right label, (b) the click handler fired, and (c) assignTab
+  // took the right branch. The probe below covers (a).
+  dlog(`[tabmove] injectCanvasItem: tabId="${info.tabId}" currentSidebar=${info.currentSidebar} -> target=${targetSidebar} label="${label}"`)
+
+  // Don't show the move option when the second sidebar is disabled —
+  // there's nothing to move to. Labels stamp above still ran; the OS block
+  // below is independent of the move gate.
+  const canShowMove =
+    targetSidebar === 'primary' || getSettings().secondSidebarEnabled
+  if (canShowMove) {
+    appendMenuDivider(menu)
+    appendCanvasMenuItem(menu, label, () => {
+      // [Canvas:tabmove] Click handler — confirms the user actually clicked.
+      // Placement-first: the DOM work happens immediately (the user sees the
+      // move), then the owned model catches up via a `move` intent. See
+      // recon/dispatch.ts:placementFirstMoveByLiveId for the full rationale.
+      dlog(`[tabmove] context-menu CLICK: tabId="${info.tabId}" target=${targetSidebar} label="${label}"`)
+      void placementFirstMoveByLiveId(info.tabId, targetSidebar).catch((err) => {
+        dwarn('[tabmove] context-menu placement-first move failed:', err)
+        // Fallback: try the model-first path so the user can still see the move
+        // even if the direct placement failed (e.g. host bridge not yet ready).
+        void dispatchMoveByLiveId(info.tabId, false).catch((err2) => {
+          dwarn('[tabmove] context-menu dispatchMoveByLiveId fallback also failed:', err2)
+        })
+      })
+    })
+  } else {
+    dwarn(`[tabmove] injectCanvasItem: move ABORTED — secondSidebarEnabled=false, move not injected for tabId="${info.tabId}"`)
+  }
+
+  // OS mode (spec D14, §4.3): Minimize + Close for the main drawer's tab
+  // menu. Minimize only applies to the drawer's OPEN/active window (the model
+  // active is the predicate; a minimized window's item would be a no-op), so
+  // it is omitted unless this tab is that window. Close stays for any visible
+  // strip button. The secondary drawer keeps its Canvas-owned menu
+  // (tabs/tab-context-menu.ts). Lazy-import avoids the load-order cycle
+  // (this module ← os/panel-chrome ← os/actions → dispatch). The identity
+  // guard keeps the destructive pair off foreign body portals.
+  if (isOsModeEnabled() && menuLooksLikeTabMenu(menu)) {
+    const side = info.currentSidebar
+    let windowOpen = false
+    try {
+      const host = getHost()
+      const model = getModel()
+      const key = host?.findKey?.(info.tabId) ?? null
+      windowOpen = !!(key && model && model.active[side] === key)
+    } catch {
+      windowOpen = false
+    }
+    appendMenuDivider(menu)
+    if (windowOpen) {
+      appendCanvasMenuItem(menu, 'Minimize', () => {
+        void import('../os/actions')
+          .then((m) => m.minimizeWindowByLiveId(info.tabId, side))
+          .catch((err) => dwarn('[os] context-menu minimize failed:', err))
+      })
+    }
+    appendCanvasMenuItem(menu, 'Close', () => {
+      void import('../os/actions')
+        .then((m) => m.closeWindowByLiveId(info.tabId))
+        .catch((err) => dwarn('[os] context-menu close failed:', err))
+    })
+  }
 
   // Re-clamp after injection: the added items may have pushed the menu
   // below the viewport. Lumiverse's initial clamp ran before we injected.
   // No rAF needed — getBoundingClientRect() forces synchronous layout.
   clampMenuToViewport(menu)
+}
+
+/** Test-only: drive the host-menu injection without the DOM observer. */
+export function __injectCanvasItemForTest(
+  menu: HTMLElement,
+  tabId: string,
+  currentSidebar: 'primary' | 'secondary',
+): void {
+  injectCanvasItem(menu, { tabId, currentSidebar, btn: menu })
 }
 
 // --- Document-level listeners ---

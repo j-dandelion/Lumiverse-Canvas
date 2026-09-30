@@ -32,7 +32,7 @@
 // (+ activeTabId) are always saved and restored.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
-import { mountSettingsPanel } from './settings/panel'
+import { clearSettingsPanelContext, mountSettingsPanel } from './settings/panel'
 import { getBackendCtx, setBackendCtx, CANVAS_VERSION } from './persist/backend-ctx'
 import { applyMainDrawer } from './layout/main-restore'
 import { flushPendingSaves, cancelLayoutSave, cancelLoadSavedLayout } from './persist/layout-load'
@@ -43,37 +43,55 @@ import {
   ensureUiPanelsPermission,
 } from './dom/host-bridge'
 import { tagMainSidebarButtons } from './chat/tag-buttons'
+import { showAllMainTabButtons } from './tabs/buttons'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
+  setMobileViewportActive,
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
+import { cancelModeReveal } from './settings/mode-reveal'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startMainDrawerPersistence, stopMainDrawerPersistence, beginMainDrawerRestoreGuard, unsuppressMainDrawer } from './sidebar/main-persist'
-import { startMobileExclusion } from './sidebar/mobile-exclusion'
+import { isMobileViewport, startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
+import { startGhostTabSweeper } from './tabs/ghost-tabs'
+import { clearTabListPosition } from './sidebar/tab-position'
+import { teardownMainMirror } from './sidebar/main-mirror-drawer'
 import { startContextMenuListener, stopContextMenuListener } from './context-menu'
 import { setDebug, dlog, dwarn } from './debug/log'
 import { bootStep, bootError, bootWarn, armBootWatchdog } from './debug/boot-diag'
 import { logPersistLoad, plog, syncPersistDebugToBackend } from './debug/persist-debug'
 import { installDebugEscapeHatch } from './debug/fiber-scan'
 import { startConfigureTabsIntercept, stopConfigureTabsIntercept } from './tabs/configure-intercept'
+import { clearChatMargins, clearWelcomeReflow } from './chat/reflow'
 import { startWeaverLane } from './modals/weaver-lane'
 import { LumiverseHost } from './host/lumiverse/implementation'
-import { bootstrapFromLayout, shutdown as shutdownCore } from './recon/dispatch'
-
-let _setupGeneration = 0
+import {
+  bootstrapFromLayout,
+  bootPlacementDone,
+  shutdown as shutdownCore,
+} from './recon/dispatch'
+import {
+  beginLifecycle,
+  currentLifecycleGeneration,
+  endLifecycle,
+} from './lifecycle/instance'
+import {
+  cancelScheduledHiddenTabsSync,
+  resetCanvasHiddenTabIds,
+} from './tabs/hidden-tabs'
 
 export function setup(ctx: SpindleFrontendContext) {
-  const generation = ++_setupGeneration
+  const generation = beginLifecycle()
   bootStep(`setup-start gen=${generation}`)
   // Stall watchdog: if the load chain never settles (e.g. backend IPC
   // requests dropped while the transport was not ready), dump the boot
   // timeline loudly so the failure is diagnosable from the console.
   // Cancelled when setup reaches a terminal step.
   const cancelBootWatchdog = armBootWatchdog(() => {
-    if (generation === _setupGeneration) {
+    if (generation === currentLifecycleGeneration()) {
       // only the current generation reports a stall
       bootError(`setup-stall gen=${generation}`, new Error('boot did not finish in time'))
     }
@@ -102,20 +120,59 @@ export function setup(ctx: SpindleFrontendContext) {
   syncPersistDebugToBackend((msg) => ctx.sendToBackend(msg))
   plog(`setup start gen=${generation}`)
   let active = true
-  const isCurrent = () => active && generation === _setupGeneration
+  const isCurrent = () => active && generation === currentLifecycleGeneration()
 
   // Hide host main (and later main-mirror) immediately — do not wait for
   // LOAD_LAYOUT. Host defaults the open drawer to "profile"; without this
   // the default paints for the whole IPC round-trip.
   beginMainDrawerRestoreGuard()
+  // S1 FIFO fix: the main mirror shell is Canvas-owned unconditionally on
+  // desktop, so its teardown must run BEFORE unsuppressMainDrawer in the
+  // FIFO chain — otherwise disable lifts the restore guard while
+  // panelContent is still parked in the shell (one frame of blank host
+  // drawer). cleanupAll runs in registration order.
+  registerCleanup(() => {
+    try {
+      teardownMainMirror()
+    } catch (err) {
+      dwarn('teardownMainMirror on disable failed:', err)
+    }
+  })
+  // S5 vanilla seam: restore every Canvas-hidden host main tab button
+  // (secondary-assignment hides + canvas-hidden hides — both Canvas-owned
+  // inline writers) BEFORE the restore guard lifts, so the vanilla drawer
+  // reappears complete. §6 teardown checklist "showMainTabButton all".
+  registerCleanup(() => {
+    try {
+      showAllMainTabButtons()
+    } catch (err) {
+      dwarn('showAllMainTabButtons on disable failed:', err)
+    }
+  })
   // A hot extension replacement can happen before the async layout load
   // finishes. Always lift the guard when the old bundle is torn down.
   registerCleanup(unsuppressMainDrawer)
-  registerCleanup(() => {
-    // Only clear if we still own this generation's ctx (replacement setup
-    // already installed a newer context).
-    if (generation === _setupGeneration) setHostBridgeContext(null)
-  })
+  registerCleanup(cancelModeReveal)
+  // LUMI-21: the Canvas-owned hidden list is module-level and must not
+  // survive an off→on toggle — a re-enabled session re-seeds from the
+  // hydrated layout instead of inheriting the disabled session's set.
+  // Registered here so cleanupAll (teardown AND next-boot's stale-instance
+  // sweep) clears it before hydrate re-seeds.
+  registerCleanup(resetCanvasHiddenTabIds)
+  // LUMI-21: the tab-register observer re-arms the hidden-sync debounce
+  // DURING teardown (restoreHostContent re-registers host tabs); this
+  // cancel runs later in the FIFO chain so the timer cannot fire
+  // post-teardown and re-hide the vanilla strip. Must stay AFTER the
+  // teardownMainMirror + restoreHostContent registrations above.
+  registerCleanup(cancelScheduledHiddenTabsSync)
+  // NOTE (2026-09-12 teardown fix): the host-bridge context must stay alive
+  // through the WHOLE cleanup chain — feature teardowns (notably
+  // tearDownSecondarySidebar) use ctx.ui to move built-in tabs back to the
+  // host drawer and classify built-in vs extension roots. It is cleared at
+  // the END of the returned teardown, after cleanupAll(). An early clear here
+  // ran before those teardowns and left built-in tabLocations pointing at the
+  // removed secondary container → the vanilla drawer returned with an empty
+  // tab strip.
 
   // Force-flush any pending debounced save before the page unloads.
   // Without these, a settings change made <100ms before close is lost.
@@ -151,10 +208,17 @@ export function setup(ctx: SpindleFrontendContext) {
   // the styles persist in <head> after disable — orphaned but inert.
   registerCleanup(() => {
     document.getElementById('canvas-ux-context-menu-styles')?.remove()
+    document.getElementById('canvas-os-start-menu-styles')?.remove()
     document.getElementById('sidebar-ux-reflow')?.remove()
+    // The reflow sheet owns margins + the chat-shadow attr on the host chat
+    // element; removing the sheet alone would leave both stranded.
+    clearChatMargins()
+    clearWelcomeReflow()
     document.getElementById('canvas-ux-secondary-mobile')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-desktop')?.remove()
     document.getElementById('sidebar-ux-shadow-disable-mobile')?.remove()
+    // S8: horizontal strip chrome (injected by drawer-location init).
+    document.getElementById('sidebar-ux-location-horizontal')?.remove()
   })
 
   // Cancel any pending debounced layout save on teardown so the timer
@@ -191,7 +255,7 @@ export function setup(ctx: SpindleFrontendContext) {
     dlog(`load resolved gen=${generation} layoutStatus=${layoutResult.status} settingsStatus=${settingsResult.status}`)
     bootStep(`loads-resolved gen=${generation}`, `layout=${layoutResult.status} settings=${settingsResult.status}`)
     if (!isCurrent()) {
-      plog(`setup load ignored stale gen=${generation} current=${_setupGeneration}`)
+      plog(`setup load ignored stale gen=${generation} current=${currentLifecycleGeneration()}`)
       cancelBootWatchdog()
       return
     }
@@ -222,6 +286,9 @@ export function setup(ctx: SpindleFrontendContext) {
     // Hydrate settings from the settings payload. Defaults filled by
     // mergeCanvasSettings.
     const settingsPayload = settingsResult.status === 'ok' ? settingsResult.data : null
+    // Seed settings-state's viewport constraint before hydration so restored
+    // Sides can resolve to the remembered horizontal mode before drawer init.
+    setMobileViewportActive(isMobileViewport())
     hydrateSettings(settingsPayload?.settings ?? null)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
@@ -300,7 +367,9 @@ export function setup(ctx: SpindleFrontendContext) {
     for (const feature of FEATURES) {
       if (!isCurrent()) return
       if (!feature.mount) continue
-      if (!getSettings()[feature.id]) continue
+      // S1: unconditional features (main-drawer ownership) mount even when
+      // their setting is falsy — they self-gate their chrome internally.
+      if (!feature.unconditional && !getSettings()[feature.id]) continue
       dlog(`mounting feature ${String(feature.id)}`)
       const teardown = feature.mount(ctx, layout)
       if (typeof teardown === 'function') registerCleanup(teardown)
@@ -326,18 +395,21 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(stopMainDrawerPersistence)
     // Mobile exclusion: mutual exclusion + viewport-cross detection
     dlog(`startMobileExclusion`)
-    registerCleanup(startMobileExclusion())
+    registerCleanup(startMobileExclusion(setMobileViewportActive))
     dlog(`startMobileExclusion done`)
     // Wire DrawerObserver to handle tab registration/unregistration
     dlog(`drawerObserver.onTabRegistered`)
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons()
-      // Late extension tabs re-register with a new :N suffix. Heal host
-      // hiddenTabIds and re-apply to secondary/mirror so Configure hide
-      // still sticks after hard refresh. Debounced: many tabs register
+      // Late extension tabs re-register with a new :N suffix. Heal hidden
+      // ids (Canvas bridge copy) and re-apply to secondary/mirror so
+      // Configure hide still sticks after hard refresh. S2: no host
+      // write-back — the model owns hidden. Debounced: many tabs register
       // in a burst at boot.
       void import('./tabs/hidden-tabs').then((m) => {
-        m.scheduleSyncHiddenTabsFromHost({ writeBack: true })
+        m.scheduleSyncHiddenTabsFromHost({
+          unhideHostTabs: getSettings().unhideVanillaTabs,
+        })
       }).catch(() => { /* ignore */ })
       // When a new tab button appears (late extension registration), refresh
       // the open Configure Tabs modal so the user sees the new tab immediately
@@ -355,6 +427,11 @@ export function setup(ctx: SpindleFrontendContext) {
     dlog(`initSecondaryDrawer`)
     initSecondaryDrawer(ctx)
     dlog(`initSecondaryDrawer done`)
+    // Ghost-tab sweeper (LUMI-29): an extension turned off drops its tab
+    // from the owned model (observe()'s ghost grace); this removes the dead
+    // Canvas-owned secondary strip button the model-driven surfaces cannot
+    // reach. Runs on model commits; stopped with the lifecycle.
+    registerCleanup(startGhostTabSweeper())
     // Context menu is always on for now (no panel toggle). Could become a
     // setting later if requested.
     dlog(`startContextMenuListener`)
@@ -372,7 +449,7 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(stopConfigureTabsIntercept)
 
     // Tab-list drag-and-drop is settings-gated (dragAndDropDrawerTabs feature;
-    // requires taskbar mode). Mounted via FEATURES when enabled.
+    // toggle-only since S7). Mounted via FEATURES when enabled.
 
     // Weaver Studio content-lane containment is always on while Canvas is
     // loaded, independent of chatReflow setting. It constrains the weaver
@@ -383,8 +460,17 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Drawer overhaul cleanup: tear down the SecondaryDrawer state machine
     // on extension disable.
+    // LUMI-21 residual (2026-09-28 member report): teardownSecondarySidebar
+    // (via applyTabListPin(false) → unpinTabList → applyTabListPosition)
+    // re-writes `flex-direction: row-reverse` INLINE on the HOST main drawer
+    // — AFTER alwaysCleanups' clearTabListPosition ran earlier in the FIFO
+    // (this registration is later, so its teardown runs later). The vanilla
+    // drawer came back with the strip displaced to the outer edge
+    // (drawerInline 'flex-direction: row-reverse;', sidebarRect.x 1020→1384).
+    // Strip the positional writes immediately after the last writer.
     registerCleanup(() => {
       teardownSecondaryDrawer()
+      clearTabListPosition()
     })
 
     // The owned model is the sole tab placement/ordering state owner.
@@ -405,6 +491,16 @@ export function setup(ctx: SpindleFrontendContext) {
       dwarn('Canvas: bootstrapFromLayout threw synchronously:', bootstrapErr)
       throw bootstrapErr
     }
+
+    // Model now exists: unlock model-gated panel controls (Main drawer side)
+    // and re-apply location chrome — the boot feature-mount pass ran before
+    // the mirror gear was rendered (H3/M1 2026-09-19).
+    try {
+      const { reconcileChromeLocations } = await import('./os/chrome-locations')
+      reconcileChromeLocations()
+    } catch { /* chrome module unavailable in some harnesses */ }
+    refreshSettingsPanel()
+
     // dispatch.shutdown() must run first so _unsubscribeWorldChanged fires
     // before the host's observers are torn down — otherwise a late
     // onWorldChanged callback could enqueue a syncFromHost against a
@@ -414,14 +510,62 @@ export function setup(ctx: SpindleFrontendContext) {
       coreHost.shutdown()
     })
 
+    // LUMI-21 residual: the FIFO chain's LAST positional word. Registered
+    // after every teardown that can write inline positional styles on the
+    // HOST drawer elements (teardownMainMirror's unpin, teardownSecondary
+    // Sidebar → applyTabListPin(false) → unpinTabList → applyTabListPosition
+    // — the traced re-writer). alwaysCleanups' clearTabListPosition runs
+    // EARLY (registered before the feature teardowns) and loses to any of
+    // those writers; this one runs after all of them so the off-state DOM
+    // byte-matches the vanilla baseline (empty drawerInline, strip at the
+    // vanilla edge). Pure DOM + idempotent — safe to run while the
+    // lifecycle is inactive and alongside the adjacent-writer clear in the
+    // teardownSecondaryDrawer registration above.
+    registerCleanup(clearTabListPosition)
+
     // Restore drawer geometry separately. Tab placement, order, hidden state,
     // active tabs, and drawer metadata are restored by the owned model above.
+    // Reveal serialization (2026-09): the boot placement pass force-activates
+    // each secondary builtin in the host main drawer (lazy panel-data load)
+    // while placing it — if the main drawer is revealed mid-pass, every
+    // activation flashes that panel in the open mirror. Let the pass + the
+    // primary re-assert settle first (capped — a pathological pass must not
+    // stall the restore guard's 3s fail-forward) so the drawer appears once
+    // with its final content.
+    try {
+      await Promise.race([
+        bootPlacementDone(),
+        new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+      ])
+    } catch { /* non-fatal */ }
+    // L1 (2026-09-23): a newer setup() may have superseded this generation
+    // while placement ran (or during the dynamic import below). Without
+    // this gate a stale generation can still plan/apply mode recovery on
+    // the old layout.
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded before mode-recovery gen=${generation}`)
+      return
+    }
     dlog(`applyMainDrawer:pre`)
     const s = getSettings()
-    const restoreOpen = !!s.persistDrawerOpenState
-    const restoreWidth = !!s.persistDrawerWidth
-
-    if (restoreOpen || restoreWidth) {
+    const facetOpen = !!s.persistDrawerOpenState
+    const facetWidth = !!s.persistDrawerWidth
+    // Boot recovery (plan C / R2-4): decide FIRST, then apply — exactly ONE
+    // main-drawer restore on this path. Dynamic import keeps setup's static
+    // graph unchanged (mode-recovery joins settings/dispatch/mode-profiles,
+    // which setup already loads, but only after the decision point runs).
+    const { planModeRecovery, recoverModeLayoutAtBoot } = await import('./layout/mode-recovery')
+    if (!isCurrent()) {
+      dlog(`setup():.then superseded after mode-recovery import gen=${generation}`)
+      return
+    }
+    const entering = planModeRecovery(layout)
+    if (entering) {
+      dlog(`modeRecovery:enter`)
+      await recoverModeLayoutAtBoot(entering)
+      bootStep(`mode-recovery gen=${generation}`)
+      dlog(`modeRecovery:done`)
+    } else if (facetOpen || facetWidth) {
       dlog(`applyMainDrawer:call`)
       applyMainDrawer(layout)
       dlog(`applyMainDrawer:returned (async restore in flight)`)
@@ -429,6 +573,17 @@ export function setup(ctx: SpindleFrontendContext) {
       dlog(`applyMainDrawer:skipped (no restore flags)`)
       // beginMainDrawerRestoreGuard already ran; do not leave drawer suppressed.
       unsuppressMainDrawer()
+    }
+    // OS mode on a mobile viewport forces single-drawer mode. Runs AFTER the
+    // owned-model bootstrap + boot placement + drawer restore so the mode
+    // switch projects a real model (the OS slots are written and the entering
+    // single slot is restored). Idempotent; no-op when OS mode is off or the
+    // viewport is desktop.
+    try {
+      const { syncOsMobileDrawerMode } = await import('./os/os-mode')
+      await syncOsMobileDrawerMode()
+    } catch (err) {
+      dlog('syncOsMobileDrawerMode failed (non-fatal)', err)
     }
     dlog(`setup():.then end gen=${generation}`)
     cancelBootWatchdog()
@@ -466,13 +621,28 @@ export function setup(ctx: SpindleFrontendContext) {
     active = false
     cancelBootWatchdog()
     // A newer setup owns the shared cleanup registry and backend context.
-    if (generation !== _setupGeneration) return
+    if (generation !== currentLifecycleGeneration()) return
     plog(`setup teardown gen=${generation}`)
+    // LUMI-21: mark the lifecycle inactive BEFORE the cleanup chain — every
+    // teardown-armed async continuation (hidden-sync debounce, lazy
+    // import() thens) checks the lifecycle and no-ops once this is false.
+    endLifecycle(generation)
     cleanupAll()
     // Keep the load guard active while cleanup tears down observers. This
     // prevents stopMainDrawerPersistence from saving host defaults during
-    // hydration; cancellation is the final teardown step.
+    // hydration; cancel the load before disarming persistence below.
     cancelLoadSavedLayout()
+    // The cleanup chain above owns the intended final persistence flush.
+    // Disarm only after it has run so later continuations cannot write through
+    // either repo or the settings panel's retained backend context.
+    disarmLayoutRepo()
+    disarmSettingsRepo()
+    setSettingsRepoBackendCtx(null)
+    clearSettingsPanelContext()
     if (getBackendCtx() === ctx) setBackendCtx(null)
+    // Clear the host-bridge context only AFTER the cleanup chain has fully
+    // run (2026-09-12): feature teardowns use ctx.ui for built-in tab restore.
+    // The generation check above guarantees we never clear a newer ctx.
+    setHostBridgeContext(null)
   }
 }

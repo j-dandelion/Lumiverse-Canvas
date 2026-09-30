@@ -207,6 +207,8 @@ import {
   setTabAssignment,
   deleteTabAssignment,
 } from '../../tabs/assignment'
+import { setMainDrawerSideOverride } from '../../store'
+import { hydrateSettings } from '../../settings/state'
 
 const SAFE_TOP = 'env(safe-area-inset-top, 0px)'
 const SAFE_BOTTOM = 'env(safe-area-inset-bottom, 0px)'
@@ -433,14 +435,17 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   // Put orphan first: insertBefore live list
   host!.insertBefore(orphan, stubTabList)
 
-  assertEqual(host!.children.length, 2, 'C12: pre — dual lists under host')
-  assertEqual(host!.children[0], orphan, 'C12: pre — orphan is first (document-first-match trap)')
+  // Host also carries the split handle (2026-09-16) — count tab lists only.
+  const tabListKids = (): StubElement[] =>
+    host!.children.filter((c) => c.className.includes('sidebar-ux-tab-list'))
+  assertEqual(tabListKids().length, 2, 'C12: pre — dual lists under host')
+  assertEqual(tabListKids()[0], orphan, 'C12: pre — orphan is first (document-first-match trap)')
 
   // Force re-pin the live list — should drop the orphan.
   applyTabListPin(true, { force: true })
 
-  assertEqual(host!.children.length, 1, 'C12: only one tab list under host after force pin')
-  assertEqual(host!.children[0], stubTabList, 'C12: live list remains')
+  assertEqual(tabListKids().length, 1, 'C12: only one tab list under host after force pin')
+  assertEqual(tabListKids()[0], stubTabList, 'C12: live list remains')
   assertEqual(getPinnedTabList(), stubTabList as any, 'C12: getPinnedTabList returns live list')
   assertEqual(getSecondaryTabList(), stubTabList as any, 'C12: getSecondaryTabList returns live list')
 }
@@ -525,6 +530,69 @@ function resetStubs(secondarySide: 'left' | 'right' = 'right') {
   deleteTabAssignment(STUB_SECONDARY_TAB)
   reconcileTabListPin()
   assert(!stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C18: unpinned after last delete')
+}
+
+// C19: side swap re-anchors the pinned secondary strip + re-orients the
+// drawer flex (S4 live-verify issue #7). Before the fix, a CSS-only swap
+// moved the wrapper but left the body-level pin host/list on the old edge —
+// which is the NEW main edge — so the secondary strip covered the main one.
+{
+  resetStubs('right') // main left → secondary right
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  applyTabListPin(true)
+  assertEqual(stubTabList.style.right, '0', 'C19: pre — list pinned right')
+  assertEqual(stubDrawer.style.flexDirection, 'row-reverse', 'C19: pre — row-reverse for right pin')
+
+  // Swap: main → right, secondary → left (override outruns host DOM).
+  setMainDrawerSideOverride('right')
+  reconcileTabListPin()
+
+  assertEqual(stubTabList.style.left, '0', 'C19: list re-anchored to left')
+  assertEqual(stubTabList.style.right, '', 'C19: old right anchor cleared')
+  assertEqual(
+    stubDrawer.style.flexDirection,
+    'row',
+    'C19: drawer flex re-oriented to left pin (spacer outer)',
+  )
+  assertEqual(
+    stubTabList.style.borderRight,
+    '1px solid var(--lumiverse-primary-020)',
+    'C19: tab-list border flipped to panel-facing right',
+  )
+  const host = __getPinHostForTest()
+  assert(!!host, 'C19: pin host still live after re-anchor')
+  assertEqual(
+    (host as unknown as StubElement).style.left,
+    '0',
+    'C19: pin host moved to left edge',
+  )
+  setMainDrawerSideOverride(null)
+}
+
+// C20 (live-verify #8): reconcileTabListPin uses the EFFECTIVE taskbar gate
+// (taskbarMode && moveControlsToOuterEdge). With S1's dropped cascade,
+// taskbarMode stays true when outer-edge is switched off — the secondary
+// strip must unpin with it (previously the raw taskbarMode gate kept it
+// pinned while the main drawer unpinned).
+{
+  resetStubs('right')
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: false })
+  applyTabListPin(true, { force: true })
+  assert(stubTabList.classList.contains(TAB_LIST_PINNED_CLASS), 'C20: pre — pinned while forced on')
+
+  reconcileTabListPin()
+  assert(
+    !stubTabList.classList.contains(TAB_LIST_PINNED_CLASS),
+    'C20: outer-edge OFF unpins despite raw taskbarMode true',
+  )
+  assertEqual(__getPinHostForTest(), null, 'C20: pin host destroyed on effective-off')
+
+  hydrateSettings({ taskbarMode: true, moveControlsToOuterEdge: true })
+  reconcileTabListPin()
+  assert(
+    stubTabList.classList.contains(TAB_LIST_PINNED_CLASS),
+    'C20: outer-edge back ON re-pins',
+  )
 }
 
 console.log(`PASS: ${passed}`)

@@ -6,7 +6,10 @@
 // full hash, so this code is stable across Lumiverse rebuilds.
 
 export function getMainSidebar(): HTMLElement | null {
-  return document.querySelector('[data-spindle-mount="sidebar"]')
+  // document.querySelector is absent in some test fakes — treat as "no host
+  // sidebar mounted" rather than crashing the caller.
+  const d = document as Document & { querySelector?: (sel: string) => HTMLElement | null }
+  return d.querySelector?.('[data-spindle-mount="sidebar"]') ?? null
 }
 
 export function getMainDrawer(): HTMLElement | null {
@@ -58,7 +61,8 @@ export function getMainPanelHeader(): HTMLElement | null {
 
 export function getMainWrapper(): HTMLElement | null {
   const sidebar = getMainSidebar()
-  return sidebar?.closest('[class*="_wrapper_"]') as HTMLElement | null
+  const host = sidebar as (HTMLElement & { closest?: (sel: string) => HTMLElement | null }) | null
+  return host?.closest?.('[class*="_wrapper_"]') as HTMLElement | null
 }
 
 export function getChatColumn(): HTMLElement | null {
@@ -78,6 +82,17 @@ export function getChatColumn(): HTMLElement | null {
     }
   }
   return null
+}
+
+/**
+ * Find the Welcome/Landing screen container. It renders only on the `/` route
+ * (unmounted while a chat is open) and carries a stable `data-component`
+ * attribute — never match its CSS-module class (`_container_<hash>`).
+ * It is a column-flex scroll container (`flex:1 1 auto; overflow-y:auto`), so
+ * left/right margins shrink it without the host `.body` cross-axis flex trap.
+ */
+export function getLandingPage(): HTMLElement | null {
+  return document.querySelector('[data-component="LandingPage"]')
 }
 
 export function getMainDrawerWidth(): number {

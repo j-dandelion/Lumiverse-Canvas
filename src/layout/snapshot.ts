@@ -22,6 +22,7 @@ import { getLiveIdAssignmentEntries } from '../tabs/assignment'
 import { getActiveSecondaryTabId } from '../tabs/active-tab'
 import { getCanvasHiddenTabIds } from '../tabs/canvas-hidden'
 import { getHostDrawerSettings } from '../dom/host-settings'
+import { snapshotOwnedModelLayout } from '../recon/dispatch'
 import { getSettings, getLastLoadedLayout, setLastLoadedLayout } from '../settings/state'
 import { getDrawerTabs } from '../store'
 import { CANVAS_VERSION } from '../persist/backend-ctx'
@@ -101,7 +102,12 @@ export function snapshotLayout(): any {
         const tab = drawerTabs.find(t => t.id === liveId)
         return { tabId: liveId, tabTitle: key, sidebar: 'secondary' }
       }),
-    tabOrder: getHostDrawerSettings()?.tabOrder ?? [],
+    // S5: tabOrder is MODEL serialization (serializeModelToLayout's combined
+    // primary+secondary resolved list) — S2 stopped all Canvas host tabOrder
+    // writes, so the host settings copy is a stale mirror of the model at
+    // best. Fallback to the host copy pre-bootstrap (mode seeds may run
+    // before the model/host exist).
+    tabOrder: snapshotOwnedModelLayout()?.tabOrder ?? getHostDrawerSettings()?.tabOrder ?? [],
     hiddenTabIds: getCanvasHiddenTabIds(),
   }
 }

@@ -187,6 +187,13 @@ class StubElement {
         if (nested) return nested
       }
     }
+    if (sel.includes('tabBadge')) {
+      for (const c of this.children) {
+        if (c.className.includes('tabBadge')) return c
+        const nested = c.querySelector(sel)
+        if (nested) return nested
+      }
+    }
     if (sel === 'svg') {
       for (const c of this.children) {
         if (c.tagName === 'SVG' || c.tagName === 'svg') return c
@@ -301,6 +308,10 @@ class StubElement {
       this.children[i].nextSibling = this.children[i + 1] ?? null
     }
   }
+  get nextElementSibling(): StubElement | null { return this.nextSibling }
+  // Element-only children make firstElementChild coincide with firstChild
+  // (matches the renderer's fallback assumption; some stubs only track firstChild).
+  get firstElementChild(): StubElement | null { return this.firstChild }
 }
 
 const bodyStub = new StubElement()
@@ -345,7 +356,11 @@ Object.defineProperty(StubElement.prototype, 'outerHTML', {
     if (this.tagName === 'svg' || this.tagName === 'SVG') {
       return `<svg data-stub="${this.getAttribute('data-icon') || ''}"></svg>`
     }
-    return `<${this.tagName}></${this.tagName}>`
+    // B1 (S7): serialize class + textContent so badge clones are
+    // distinguishable in mirror innerHTML assertions.
+    const cls = this.className ? ` class="${this.className}"` : ''
+    const text = (this as any)._text ?? ''
+    return `<${this.tagName}${cls}>${text}</${this.tagName}>`
   },
   configurable: true,
 })
@@ -475,7 +490,7 @@ import {
   __setMainTabPinEnabledForTest,
 } from '../main-tab-pin'
 import { captureMainMirrorMoveChrome, captureSecondaryNeighborForMove } from '../../recon/dispatch'
-import { isCanvasMainOpen, getMainMirrorTitleEl } from '../main-mirror-drawer'
+import { isCanvasMainOpen, getMainMirrorTitleEl, applyMainMirrorDrawer, isMainMirrorActive } from '../main-mirror-drawer'
 import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
 import {
   __setHostSetSettingForTest,
@@ -553,55 +568,212 @@ function resetAll() {
   secDrawer.appendChild(secPanel)
 }
 
-// M1: enable main pin creates host with data-pin-owner=main and mirror buttons
-{
-  resetAll()
-  const b1 = makeHostBtn('profile', 'Profile', true)
-  const b2 = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(b1)
-  mainSidebar.appendChild(b2)
 
-  // Fix querySelectorAll on mainSidebar to return buttons
+// ── S2 renderer-era imports + helpers (old clone-era import block and the
+// key/heal/neighbor assertions died with the parity layer) ──
+
+import {
+  applyMainTabListPin,
+  reconcileMainTabListPin,
+  isMainTabListPinActive,
+  activateMainMirrorFromRestore,
+  __resetMainTabPinForTest,
+} from '../main-tab-pin'
+import {
+  MAIN_MIRROR_LIST_CLASS,
+  MAIN_MIRROR_BTN_CLASS,
+  MAIN_MIRROR_LIST_MAIN_CLASS,
+  MAIN_MIRROR_LIST_BOTTOM_CLASS,
+  renderMainMirrorTabs,
+} from '../main-renderer'
+import {
+  bootstrap,
+  shutdown as shutdownModel,
+  flush,
+  getModel,
+  captureSecondaryNeighborForMove,
+} from '../../recon/dispatch'
+import { FakeHost, type LiveTab } from '../../host/fake/implementation'
+import {
+  createEmptyModel,
+  builtinKey,
+  extensionKey,
+  type TabKey,
+  type LayoutModel,
+} from '../../core/model'
+import {
+  isCanvasMainOpen,
+  getMainMirrorDrawer,
+  getMainMirrorTitleEl,
+  openCanvasMainDrawer,
+  setCanvasMainNoActive,
+} from '../main-mirror-drawer'
+import { __setShowAssignmentMenuForTest } from '../../tabs/tab-context-menu'
+
+/** Collect mirror buttons from the list (nested under main/bottom sections). */
+function collectMirrorButtons(list: StubElement): StubElement[] {
+  const out: StubElement[] = []
+  const walk = (el: StubElement) => {
+    if (el.className.includes(MAIN_MIRROR_BTN_CLASS)) out.push(el)
+    for (const c of el.children) walk(c)
+  }
+  for (const c of list.children) walk(c)
+  return out
+}
+import {
+  applyTabListPin,
+  ensureMainPinHost,
+  getMainPinHost,
+  TAB_LIST_PIN_HOST_CLASS,
+  PIN_OWNER_MAIN,
+  PIN_OWNER_SECONDARY,
+  __resetPinStateForTest,
+  __getPinHostForTest,
+  __getMainPinHostForTest,
+} from '../tab-position'
+import { __setSecondaryWrapperForTest } from '../secondary'
+import { setTabAssignment, deleteTabAssignment, setActiveSecondaryTabId } from '../../tabs/assignment'
+import {
+  __setHostSetSettingForTest,
+  clearHostSettingsCache,
+} from '../../dom/host-settings'
+import { hydrateSettings } from '../../settings/state'
+
+function makeLiveTab(key: TabKey, liveId: string, overrides?: Partial<LiveTab>): LiveTab {
+  return {
+    key, liveId, location: 'primary',
+    hidden: false,
+    activeInPrimary: false,
+    activeInSecondary: false,
+    hasContentRoot: true,
+    isBuiltin: key.startsWith('builtin:'),
+    ...overrides,
+  }
+}
+
+const PROFILE = builtinKey('profile')
+const MEMORY = builtinKey('memory')
+const NOTES = builtinKey('notes')
+const HONE = extensionKey('ext', 'Hone')
+
+/**
+ * Wire mainSidebar lookups for the flat-renderer era: findMainTabButton
+ * queries by attribute selector, the Settings twin scan uses tabBtn buttons.
+ * Also keeps the data-mirror-key walk used by the mirror lookup.
+ */
+function wireMainSidebarButtons(): void {
   mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) {
-      return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
+    if (sel.includes('tabBtn') || sel === 'button[title]') {
+      return mainSidebar.children.filter(
+        (c) => c.className.includes('tabBtn') || String(c.tagName) === 'BUTTON',
+      )
     }
     return []
   }
+  mainSidebar.querySelector = (sel: string): StubElement | null => {
+    // data-mirror-key walk (renderer mirror lookup).
+    if (sel.includes('data-mirror-key=')) {
+      const m = sel.match(/data-mirror-key="([^"]+)"/)
+      if (m) {
+        const walk = (el: StubElement): StubElement | null => {
+          if (el.getAttribute('data-mirror-key') === m[1]) return el
+          for (const c of el.children) {
+            const hit = walk(c)
+            if (hit) return hit
+          }
+          return null
+        }
+        for (const c of mainSidebar.children) {
+          const hit = walk(c)
+          if (hit) return hit
+        }
+      }
+      return null
+    }
+    // findMainTabButton attribute paths.
+    for (const attr of ['data-tab-id', 'title'] as const) {
+      if (sel.includes(`[${attr}=`)) {
+        const m = sel.match(new RegExp(`${attr}="([^"]+)"`))
+        if (m) {
+          return mainSidebar.children.find((c) => c.getAttribute(attr) === m[1]) ?? null
+        }
+      }
+    }
+    return null
+  }
+}
 
+function mirrorListIn(host: StubElement): StubElement {
+  return host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+}
+
+/** Reset + boot the model with the standard 3 builtin tabs, then mount. */
+async function bootMirror(opts?: {
+  primary?: TabKey[]
+  hidden?: TabKey[]
+  closed?: TabKey[]
+  active?: TabKey | null
+  extraTabs?: LiveTab[]
+}): Promise<FakeHost> {
+  const tabs: LiveTab[] = [
+    makeLiveTab(PROFILE, 'profile'),
+    makeLiveTab(MEMORY, 'memory'),
+    makeLiveTab(NOTES, 'notes'),
+    ...(opts?.extraTabs ?? []),
+  ]
+  const host = new FakeHost(tabs)
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: opts?.primary ?? [PROFILE, MEMORY, NOTES],
+    secondary: [],
+    hidden: opts?.hidden ?? [],
+    closed: opts?.closed ?? [],
+    active: { primary: opts?.active ?? null, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
   applyMainTabListPin(true, { force: true })
+  return host
+}
 
+function reset(): void {
+  resetAll()
+  shutdownModel()
+  wireMainSidebarButtons()
+}
+
+// M1: model-keyed render — order/ids from the model, no active while closed
+{
+  reset()
+  await bootMirror()
   assert(isMainTabListPinActive(), 'M1: pin active')
-  const host = getMainPinHost() as unknown as StubElement | null
-  assert(!!host, 'M1: main pin host exists')
-  assertEqual(host!.getAttribute('data-pin-owner'), PIN_OWNER_MAIN, 'M1: owner=main')
-  assert(host!.className.includes(TAB_LIST_PIN_HOST_CLASS), 'M1: pin host class')
-  assertEqual(host!.style.display, '', 'M1: host visible when drawer closed')
-
-  const list = host!.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))
+  const pinHost = getMainPinHost() as unknown as StubElement | null
+  assert(!!pinHost, 'M1: main pin host exists')
+  assertEqual(pinHost!.getAttribute('data-pin-owner'), PIN_OWNER_MAIN, 'M1: owner=main')
+  assert(pinHost!.className.includes(TAB_LIST_PIN_HOST_CLASS), 'M1: pin host class')
+  assertEqual(pinHost!.style.display, '', 'M1: host visible when drawer closed')
+  const list = mirrorListIn(pinHost!)
   assert(!!list, 'M1: mirror list present')
-  const mirrors = collectMirrorButtons(list!)
-  assertEqual(mirrors.length, 2, 'M1: two mirror buttons')
-  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M1: first mirror id')
+  const mirrors = collectMirrorButtons(list)
+  assertEqual(mirrors.length, 3, 'M1: three mirror buttons (model keys)')
+  assertEqual(mirrors[0].getAttribute('data-mirror-key'), PROFILE, 'M1: first mirror keyed by model key')
+  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M1: data-tab-id stamped from host.resolve')
   // Secondary parity: no tab looks selected while the drawer is closed.
-  assert(!mirrors[0].classList.contains('sidebar-ux-tab-active'), 'M1: no active highlight while closed')
-  // Open via mirror click → host active should show on open.
+  assert(mirrors.every((m) => !m.classList.contains('sidebar-ux-tab-active')), 'M1: no active highlight while closed')
+  // Open via mirror click → model active + highlight only on open.
   mirrors[0].click()
-  // Reconcile after open restores host active class.
+  await flush()
+  assert(isCanvasMainOpen(), 'M1: drawer open after click')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M1: model active follows the click')
   applyMainTabListPin(true, { force: true })
-  const listAfter = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const m0 = collectMirrorButtons(listAfter).find((c) => c.getAttribute('data-tab-id') === 'profile')!
-  assert(m0.classList.contains('sidebar-ux-tab-active'), 'M1: active class mirrored when open')
+  const listAfter = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const m0 = collectMirrorButtons(listAfter).find((c) => c.getAttribute('data-mirror-key') === PROFILE)!
+  assert(m0.classList.contains('sidebar-ux-tab-active'), 'M1: active class from model when open')
 }
 
 // M2: host wrapperOpen does NOT hide pin host (Canvas owns open/close)
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', true))
   applyMainTabListPin(true, { force: true })
   assertEqual((getMainPinHost() as unknown as StubElement)!.style.display, '', 'M2: pre visible')
@@ -621,32 +793,26 @@ function resetAll() {
   )
 }
 
-// M3: click forwards to host button
+// M3: click forwards to host button + activation dispatch
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   const hostBtn = makeHostBtn('profile', 'Profile', false)
   mainSidebar.appendChild(hostBtn)
-  applyMainTabListPin(true, { force: true })
+  await bootMirror({ primary: [PROFILE] })
 
   const host = getMainPinHost() as unknown as StubElement
-  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const list = mirrorListIn(host)
   const mirror = collectMirrorButtons(list)[0]
   assert(!!mirror, 'M3: mirror exists')
   mirror.click()
+  await flush()
   assertEqual(hostBtn.clickCount, 1, 'M3: host button clicked')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M3: activation dispatch recorded on the model')
 }
 
 // M4: dual hosts — secondary + main coexist; sweep does not kill either
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
 
   // Secondary pin is gated on hasSecondaryAssignedTabs() (taskbar empty strip).
@@ -673,11 +839,7 @@ function resetAll() {
 
 // M5: disable clears main host only
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
   setTabAssignment('m5-sec-tab', 'secondary')
   applyTabListPin(true, { force: true })
@@ -692,11 +854,7 @@ function resetAll() {
 
 // M6: mobile no-op
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
   ;(globalThis as any).window.matchMedia = () => ({
     matches: true,
@@ -708,24 +866,104 @@ function resetAll() {
   assert(!isMainTabListPinActive(), 'M6: inactive on mobile')
 }
 
-// M7: hidden host buttons (display:none) are not mirrored
+// M6b (review batch 2): a mobile reconcile must KEEP the shell (S6). The old
+// mobile branch force-tore the whole mirror down, so narrowing the window
+// with the main drawer open destroyed it; the shell must survive.
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const visible = makeHostBtn('profile', 'Profile', false)
-  const hidden = makeHostBtn('moved', 'Moved', false)
-  hidden.style.display = 'none'
-  mainSidebar.appendChild(visible)
-  mainSidebar.appendChild(hidden)
-  applyMainTabListPin(true, { force: true })
-  const host = getMainPinHost() as unknown as StubElement
-  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  reset()
+  ;(globalThis as any).window.matchMedia = (query: string) => ({
+    matches: /max-width:\s*600px/.test(query),
+    addEventListener() {},
+    removeEventListener() {},
+  })
+  applyMainMirrorDrawer(true, { force: true })
+  assert(isMainMirrorActive(), 'M6b: shell active on mobile after mount')
+  reconcileMainTabListPin()
+  assert(isMainMirrorActive(), 'M6b: mobile reconcile keeps the shell (no teardown)')
+  assertEqual(getMainPinHost(), null, 'M6b: no pin host on mobile')
+  applyMainMirrorDrawer(false, { force: true })
+}
+
+// M7: hidden is MODEL-owned — a hidden key renders display:none; a host
+// button that is not a model key (moved away) renders nowhere.
+{
+  reset()
+  const visibleHost = makeHostBtn('profile', 'Profile', false)
+  const movedHost = makeHostBtn('moved', 'Moved', false)
+  movedHost.style.display = 'none'
+  mainSidebar.appendChild(visibleHost)
+  mainSidebar.appendChild(movedHost)
+  await bootMirror({ hidden: [PROFILE] })
+
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
   const mirrors = collectMirrorButtons(list)
-  assertEqual(mirrors.length, 1, 'M7: only visible button mirrored')
-  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M7: profile only')
+  assertEqual(mirrors.length, 3, 'M7: all model-keyed buttons rendered')
+  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M7: first key stays first')
+  assertEqual(mirrors[0].style.display, 'none', 'M7: model-hidden button is display:none')
+}
+
+// M7b: hidden survives a force remount (side-change / re-apply parity)
+{
+  reset()
+  await bootMirror({ hidden: [MEMORY] })
+  applyMainTabListPin(true, { force: true })
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrors = collectMirrorButtons(list)
+  assertEqual(mirrors.length, 3, 'M7b: all model keys still rendered after remount')
+  const memory = mirrors.find((m) => m.getAttribute('data-mirror-key') === MEMORY)!
+  assert(!!memory, 'M7b: memory mirror survives the remount')
+  assertEqual(memory.style.display, 'none', 'M7b: hidden key stays hidden after remount')
+  assert(
+    mirrors.find((m) => m.getAttribute('data-mirror-key') === PROFILE)!.style.display !== 'none',
+    'M7b: visible sibling stays shown',
+  )
+}
+
+// M7c: never-hide-all — when EVERY model key is hidden, the first stays
+// visible (WORKFLOW gotcha; the renderer guards, the model is untouched).
+{
+  reset()
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
+  mainSidebar.appendChild(makeHostBtn('memory', 'Memory', false))
+  mainSidebar.appendChild(makeHostBtn('notes', 'Notes', false))
+  await bootMirror({ hidden: [PROFILE, MEMORY, NOTES], active: MEMORY })
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrors = collectMirrorButtons(list)
+  assertEqual(mirrors.length, 3, 'M7c: all keyed buttons present')
+  const shown = mirrors.filter((m) => m.style.display !== 'none')
+  assertEqual(shown.length, 1, 'M7c: exactly one visible when all would hide')
+  assertEqual(shown[0].getAttribute('data-mirror-key'), PROFILE, 'M7c: first key is the rescue tab')
+
+  openCanvasMainDrawer()
+  renderMainMirrorTabs()
+  assertEqual(
+    (getMainMirrorTitleEl() as any)?.textContent,
+    'Profile',
+    'M7c: header title follows the visible rescue tab when active is hidden',
+  )
+}
+
+// D7: OS mode has no rescue key; an all-closed strip keeps its header clear.
+{
+  reset()
+  hydrateSettings({ osMode: true })
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', false))
+  mainSidebar.appendChild(makeHostBtn('memory', 'Memory', false))
+  mainSidebar.appendChild(makeHostBtn('notes', 'Notes', false))
+  await bootMirror({ active: PROFILE, closed: [PROFILE, MEMORY, NOTES] })
+  openCanvasMainDrawer()
+  setCanvasMainNoActive(true)
+  renderMainMirrorTabs()
+
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const shown = collectMirrorButtons(list).filter((m) => m.style.display !== 'none')
+  assertEqual(shown.length, 0, 'D7: all closed tabs remain absent from the strip')
+  assertEqual(
+    (getMainMirrorTitleEl() as any)?.textContent,
+    '',
+    'D7: renderer leaves the cleared header title empty',
+  )
+  hydrateSettings(null)
 }
 
 // M8: reconcileMainTabListPin with default setting leaves off
@@ -736,13 +974,163 @@ function resetAll() {
   assertEqual(getMainPinHost(), null, 'M8: no host')
 }
 
+// M8b: S1 gate inversion — reconcileMainTabListPin with taskbar OFF still
+// mounts the Canvas main shell (ownership unconditional) and renders the
+// model into the shell's own tab list, with NO pin host created.
+{
+  reset()
+  const b1 = makeHostBtn('profile', 'Profile', true)
+  const b2 = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(b1)
+  mainSidebar.appendChild(b2)
+  wireMainSidebarButtons()
+  const host = new FakeHost([makeLiveTab(PROFILE, 'profile'), makeLiveTab(MEMORY, 'memory')])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE, MEMORY],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  bootstrap(model, host)
+  await flush()
+  reconcileMainTabListPin()
+  assertEqual(getMainPinHost(), null, 'M8b: no pin host (taskbar chrome off)')
+  assert(!isMainTabListPinActive(), 'M8b: not pin-active')
+  // The shell wrapper is present (body-level) with the mirror list inside.
+  const wrapper = bodyStub.children.find((c) =>
+    String(c.className || '').includes('sidebar-ux-main-mirror-wrapper'),
+  )
+  assert(!!wrapper, 'M8b: main shell mounted without taskbar mode')
+  // Buttons rendered into the shell's tab list (rides with the panel).
+  const findList = (el: StubElement): StubElement | null => {
+    if (String(el.className || '').includes('sidebar-ux-tab-list')) return el
+    for (const c of el.children) {
+      const hit = findList(c)
+      if (hit) return hit
+    }
+    return null
+  }
+  const shellList = wrapper ? findList(wrapper) : null
+  assert(!!shellList, 'M8b: shell tab list present')
+  const mirrors = collectMirrorButtons(shellList!)
+  assertEqual(mirrors.length, 2, 'M8b: two mirror buttons rendered into shell list')
+  assertEqual(mirrors[0].getAttribute('data-mirror-key'), PROFILE, 'M8b: first mirror keyed by model key')
+  shutdownModel()
+}
+
+// M8c (live-verify #8): a runtime "Move tab controls to outer edge" toggle
+// must refresh the VISIBLE main shell's orientation. Before the fix,
+// reconcileMainTabListPin only handled pin chrome; the other position pass
+// (`applyTabListPosition(enabled)` with no opts) targets the HIDDEN host main
+// drawer, so the shell kept its mount-time flex until a hard refresh.
+{
+  reset()
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', true))
+  wireMainSidebarButtons()
+  const host = new FakeHost([makeLiveTab(PROFILE, 'profile')])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  hydrateSettings({ moveControlsToOuterEdge: false, taskbarMode: false })
+  bootstrap(model, host)
+  await flush()
+  reconcileMainTabListPin()
+
+  const shellDrawer = getMainMirrorDrawer() as unknown as StubElement | null
+  assert(!!shellDrawer, 'M8c: main shell drawer mounted')
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row',
+    'M8c: default flex (side right, controls sit in the drawer)',
+  )
+
+  hydrateSettings({ moveControlsToOuterEdge: true })
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8c: outer-edge ON flips the visible shell flex',
+  )
+
+  hydrateSettings({ moveControlsToOuterEdge: false })
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row',
+    'M8c: outer-edge OFF restores the visible shell flex',
+  )
+
+  // Leave global settings at defaults for the cases that follow.
+  hydrateSettings(null)
+  shutdownModel()
+}
+
+// M8d (live report 2026-09-14): Sides mode + taskbar chrome (pinned strip).
+// The pin must orient the drawer so the 56px spacer sits on the OUTER
+// (screen-edge) side: side-right → row-reverse, side-left → row. Before the
+// fix, pinMainMirrorShellTabList only touched the list; while pinned,
+// applyTabListPosition deliberately skips the drawer flex and restyleShellSide
+// is not reached on a location flip, so the previous (unpinned) flex survived
+// ('row' for the default right side): the spacer sat on the inner side and the
+// panel rode 56px under the pin strip with a gap. Toggling outer-edge off/on
+// masked it by running applyTabListPosition while temporarily unpinned.
+// Horizontal skips the write (spacer neutralized to 0×0) — the Sides pin must
+// re-assert it.
+{
+  reset()
+  mainSidebar.appendChild(makeHostBtn('profile', 'Profile', true))
+  const host = new FakeHost([makeLiveTab(PROFILE, 'profile')])
+  const model: LayoutModel = {
+    ...createEmptyModel(),
+    primary: [PROFILE],
+    secondary: [],
+    hidden: [],
+    active: { primary: PROFILE, secondary: null },
+  }
+  // Boot in Sides with taskbar chrome on (pinned strip).
+  hydrateSettings({ drawerLocation: 'sides', taskbarMode: true, moveControlsToOuterEdge: true })
+  bootstrap(model, host)
+  await flush()
+  reconcileMainTabListPin()
+
+  const shellDrawer = getMainMirrorDrawer() as unknown as StubElement | null
+  assert(!!shellDrawer, 'M8d: main shell drawer mounted')
+
+  // The stale state the real app carries into a Top→Sides flip: while pinned,
+  // applyTabListPosition deliberately skips the drawer flex and restyleShellSide
+  // is not called on a location flip (same side) — so the mount/horizontal
+  // value survives. Side-right default (controls in the inner drawer) is 'row';
+  // the pinned orientation must be 'row-reverse' (spacer on the outer edge).
+  shellDrawer!.style.flexDirection = 'row'
+
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8d: Sides pin writes the outer-edge drawer flex (side-right)',
+  )
+
+  // Re-pinning (already pinned) re-asserts it too — idempotent.
+  shellDrawer!.style.flexDirection = 'row'
+  reconcileMainTabListPin()
+  assertEqual(
+    shellDrawer!.style.flexDirection,
+    'row-reverse',
+    'M8d: re-pin re-asserts the pinned flex',
+  )
+
+  hydrateSettings(null)
+  shutdownModel()
+}
+
 // M9: Settings mirrors into bottom dock with separator chrome (host .sidebarBottom)
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   const profile = makeHostBtn('profile', 'Profile', false)
   const settings = makeHostBtn('settings', 'Settings', false)
   // Host settings often has no data-tab-id — isSettingsButton uses title.
@@ -751,11 +1139,10 @@ function resetAll() {
   settings.setAttribute('aria-label', 'Settings')
   mainSidebar.appendChild(profile)
   mainSidebar.appendChild(settings)
-
-  applyMainTabListPin(true, { force: true })
+  await bootMirror({ primary: [PROFILE] })
 
   const host = getMainPinHost() as unknown as StubElement
-  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const list = mirrorListIn(host)
   const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))
   const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))
   assert(!!mainSec, 'M9: main section present')
@@ -774,72 +1161,36 @@ function resetAll() {
   assertEqual(mainMirrors[0].getAttribute('data-tab-id'), 'profile', 'M9: profile id')
   assertEqual(bottomMirrors.length, 1, 'M9: settings in bottom section')
   assertEqual(bottomMirrors[0].getAttribute('title'), 'Settings', 'M9: settings title')
-  // Click forwards to host but does not activate Canvas chrome (no key/open).
-  assertEqual(getActiveMainMirrorKey(), null, 'M9: no active key before settings click')
+  // Click forwards to host but never touches the model selection.
+  assertEqual(getModel()!.active.primary, null, 'M9: no active before settings click')
   assert(!isCanvasMainOpen(), 'M9: drawer closed before settings click')
   bottomMirrors[0].click()
+  await flush()
   assertEqual(settings.clickCount, 1, 'M9: settings click forwards to host')
-  assertEqual(getActiveMainMirrorKey(), null, 'M9: settings does not set active key')
+  assertEqual(getModel()!.active.primary, null, 'M9: settings does not set model active')
   assert(!isCanvasMainOpen(), 'M9: settings does not open drawer')
 
-  // With a real tab open, Settings still only forwards — keeps key + open.
+  // With a real tab open, Settings still only forwards — keeps active + open.
   mainMirrors[0].click()
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M9: profile activates')
+  await flush()
+  assertEqual(getModel()!.active.primary, PROFILE, 'M9: profile activates')
   assert(isCanvasMainOpen(), 'M9: profile opens drawer')
   bottomMirrors[0].click()
   assertEqual(settings.clickCount, 2, 'M9: second settings click still forwards')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M9: settings leaves profile key')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M9: settings leaves profile active')
   assert(isCanvasMainOpen(), 'M9: settings leaves drawer open')
-}
-
-// M9b: stale-key heal must not adopt Settings as Canvas active tab / title.
-{
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const memory = makeHostBtn('memory', 'Memory', false)
-  const settings = makeHostBtn('settings', 'Settings', false)
-  settings.removeAttribute('data-tab-id')
-  settings.setAttribute('title', 'Settings')
-  settings.setAttribute('aria-label', 'Settings')
-  mainSidebar.appendChild(memory)
-  mainSidebar.appendChild(settings)
-  applyMainTabListPin(true, { force: true })
-
-  const list0 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const memoryMirror = collectMirrorButtons(list0).find(
-    (m) => m.getAttribute('data-tab-id') === 'memory',
-  )!
-  memoryMirror.click()
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M9b: key = memory after click')
-
-  // Memory leaves primary; only Settings remains and is host-active.
-  mainSidebar.removeChild(memory)
-  memory.isConnected = false
-  settings.classList.add('tabBtnActive')
-  settings.className = 'tabBtn tabBtnActive'
-  applyMainTabListPin(true, { force: true })
-
-  assertEqual(getActiveMainMirrorKey(), null, 'M9b: heal does not adopt Settings key')
 }
 
 // M9c: Settings right-click must not host-forward or open assignment menu.
 // Profile right-click forwards synthetic contextmenu to the host twin (host
 // ContextMenu + inject path) — never showAssignmentMenu.
 {
-  resetAll()
+  reset()
   const menuCalls: Array<{ tabId: string; title: string }> = []
   __setShowAssignmentMenuForTest((_x, _y, tabId, tabTitle) => {
     menuCalls.push({ tabId, title: tabTitle })
   })
   try {
-    mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-      if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-      return []
-    }
     const profile = makeHostBtn('profile', 'Profile', false)
     const settings = makeHostBtn('settings', 'Settings', false)
     settings.removeAttribute('data-tab-id')
@@ -847,10 +1198,10 @@ function resetAll() {
     settings.setAttribute('aria-label', 'Settings')
     mainSidebar.appendChild(profile)
     mainSidebar.appendChild(settings)
-    applyMainTabListPin(true, { force: true })
+    await bootMirror({ primary: [PROFILE] })
 
     const host = getMainPinHost() as unknown as StubElement
-    const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+    const list = mirrorListIn(host)
     const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))!
     const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))!
     const profileMirror = mainSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
@@ -860,11 +1211,13 @@ function resetAll() {
     settings.contextmenuDispatches = []
 
     settingsMirror.contextmenu(12, 34)
+    await flush()
     assertEqual(menuCalls.length, 0, 'M9c: Settings contextmenu does not open assignment menu')
     assertEqual(settings.contextmenuDispatches.length, 0, 'M9c: Settings does not host-forward')
     assertEqual(profile.contextmenuDispatches.length, 0, 'M9c: Settings path does not dispatch on Profile')
 
     profileMirror.contextmenu(56, 78)
+    await flush()
     assertEqual(menuCalls.length, 0, 'M9c: Profile does not open Canvas assignment menu')
     assertEqual(profile.contextmenuDispatches.length, 1, 'M9c: Profile host-forwards contextmenu')
     assertEqual(profile.contextmenuDispatches[0]?.clientX, 56, 'M9c: Profile forward clientX')
@@ -875,382 +1228,181 @@ function resetAll() {
   }
 }
 
-// M10: toggle-close — click already-active tab while open closes drawer
-// Regression: host can lose tabBtnActive while Canvas still owns open state;
-// Canvas-owned active key must still close.
+// M10: toggle-close — click the model-active tab while open closes the drawer
+// (no host click on the close path); a different tab switches without closing.
+// The renderer never consults host tabBtnActive for the close decision.
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   const b1 = makeHostBtn('profile', 'Profile', false)
   const b2 = makeHostBtn('memory', 'Memory', false)
   mainSidebar.appendChild(b1)
   mainSidebar.appendChild(b2)
-  applyMainTabListPin(true, { force: true })
-
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  await bootMirror()
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
   const mirrors = collectMirrorButtons(list)
-  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
-  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
+  const profileMirror = mirrors.find((m) => m.getAttribute('data-mirror-key') === PROFILE)!
+  const memoryMirror = mirrors.find((m) => m.getAttribute('data-mirror-key') === MEMORY)!
 
   // Open profile
   profileMirror.click()
+  await flush()
   assert(isCanvasMainOpen(), 'M10: drawer open after first click')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: active key = profile')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M10: model active = profile')
   assertEqual(b1.clickCount, 1, 'M10: host profile clicked once')
 
-  // Simulate host losing tabBtnActive while Canvas stays open (repark / headless).
+  // Host can lose tabBtnActive (repark / headless) — model active survives.
   b1.classList.remove('tabBtnActive')
   b1.className = 'tabBtn'
   applyMainTabListPin(true, { force: true })
-  assert(isCanvasMainOpen(), 'M10: still open after reconcile')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: key survives host active loss')
+  assert(isCanvasMainOpen(), 'M10: still open after re-render')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M10: model active survives host active loss')
 
-  // Click same tab → close (must not re-open via onMainMirrorTabActivated)
+  // Click same tab → close (no host click on the close path)
   const hostClicksBeforeClose = b1.clickCount
   profileMirror.click()
+  await flush()
   assert(!isCanvasMainOpen(), 'M10: click active tab closes drawer')
   assertEqual(b1.clickCount, hostClicksBeforeClose, 'M10: close path does not host-click')
-  // Key retained for reopen parity (secondary-style)
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M10: key not cleared on close')
+  // Model active retained for reopen parity (secondary-style)
+  assertEqual(getModel()!.active.primary, PROFILE, 'M10: model active not cleared on close')
 
   // Different tab while open switches (not close)
   profileMirror.click() // reopen
+  await flush()
   assert(isCanvasMainOpen(), 'M10: reopen works')
   memoryMirror.click()
+  await flush()
   assert(isCanvasMainOpen(), 'M10: switch keeps drawer open')
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M10: active key updates to memory')
+  assertEqual(getModel()!.active.primary, MEMORY, 'M10: model active updates to memory')
   assertEqual(b2.clickCount, 1, 'M10: memory host clicked')
 }
 
-// M11: restore / hard-refresh — Canvas key exclusive vs host default Profile.
-// Host often leaves Profile tabBtnActive while restore activates another tab;
-// mirror must not show two active highlights.
+// M11: host tabBtnActive on Profile while the MODEL active is Memory —
+// exactly one mirror highlight (the model's); Profile click switches.
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  // Profile still host-active (default); Memory is the restored target.
+  reset()
   const profile = makeHostBtn('profile', 'Profile', true)
   const memory = makeHostBtn('memory', 'Memory', false)
   mainSidebar.appendChild(profile)
   mainSidebar.appendChild(memory)
-  applyMainTabListPin(true, { force: true })
+  await bootMirror({ active: MEMORY })
 
-  activateMainMirrorFromRestore(memory as unknown as HTMLElement, 'Memory')
-  applyMainTabListPin(true, { force: true })
+  // Open via the model-active mirror button (highlights are open-only).
+  const openList = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mmBtn = collectMirrorButtons(openList).find((m) => m.getAttribute('data-mirror-key') === MEMORY)!
+  mmBtn.click()
+  await flush()
 
-  assert(isCanvasMainOpen(), 'M11: drawer open after restore')
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M11: canvas key = memory')
-
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
   const mirrors = collectMirrorButtons(list)
-  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
-  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
+  const profileMirror = mirrors.find((m) => m.getAttribute('data-mirror-key') === PROFILE)!
+  const memoryMirror = mirrors.find((m) => m.getAttribute('data-mirror-key') === MEMORY)!
   assert(
     !profileMirror.classList.contains('sidebar-ux-tab-active'),
-    'M11: Profile not active when canvas key is Memory (host still tabBtnActive)',
-  )
-  assert(
-    memoryMirror.classList.contains('sidebar-ux-tab-active'),
-    'M11: Memory alone is active',
+    'M11: Profile not active when model active is Memory (host tabBtnActive ignored)',
   )
   assertEqual(
     mirrors.filter((m) => m.classList.contains('sidebar-ux-tab-active')).length,
-    1,
-    'M11: exactly one mirror active',
+    0,
+    'M11: no mirror highlighted while closed (open-only, model-owned)',
   )
 
-  // Click Profile (host still tabBtnActive, not canvas key) must switch, not close.
+  // Click Profile (host tabBtnActive, not the model active) must switch, not close.
   const profileClicksBefore = profile.clickCount
   profileMirror.click()
+  await flush()
   assert(isCanvasMainOpen(), 'M11: Profile click switches (stays open), not close')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M11: canvas key updates to profile')
+  assertEqual(getModel()!.active.primary, PROFILE, 'M11: model active updates to profile')
   assertEqual(profile.clickCount, profileClicksBefore + 1, 'M11: Profile host clicked on switch')
 }
 
-// M12: stale key heal after tab moves off primary (mirror button gone, host
-// replacement tabBtnActive). Reconcile must adopt host active + highlight.
+// M15: stale host tabBtnLabeled must not re-inflate mirror height; the
+// renderer derives label state from showTabLabels (twin class ignored).
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', false)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  applyMainTabListPin(true, { force: true })
-
-  const list0 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const memoryMirror0 = collectMirrorButtons(list0).find(
-    (m) => m.getAttribute('data-tab-id') === 'memory',
-  )!
-  memoryMirror0.click()
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M12: key = memory after click')
-
-  // Simulate move: remove Memory host button; Profile becomes host-active.
-  mainSidebar.removeChild(memory)
-  memory.isConnected = false
-  profile.classList.add('tabBtnActive')
-  profile.className = 'tabBtn tabBtnActive'
-  applyMainTabListPin(true, { force: true })
-
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M12: key healed to profile')
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const mirrors = collectMirrorButtons(list)
-  assertEqual(mirrors.length, 1, 'M12: only profile mirror remains')
-  assertEqual(mirrors[0].getAttribute('data-tab-id'), 'profile', 'M12: remaining mirror is profile')
-  assert(
-    mirrors[0].classList.contains('sidebar-ux-tab-active'),
-    'M12: profile mirror highlighted after heal',
-  )
-}
-
-// M12b: mid primary→secondary hide (display:none, host still in DOM) must
-// KEEP exclusive key even when host pendingActiveTabReset marks first tab
-// tabBtnActive. Healing to profile here made main-mirror "always first tab"
-// after active Move before handoff reassert could run.
-{
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', false)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  const notes = makeHostBtn('notes', 'Notes', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  mainSidebar.appendChild(notes)
-  applyMainTabListPin(true, { force: true })
-
-  __setActiveMainMirrorKeyForTest('id__memory')
-  // Host reset to first primary while moved host btn is only hidden.
-  memory.style.display = 'none'
-  profile.classList.add('tabBtnActive')
-  profile.className = 'tabBtn tabBtnActive'
-  applyMainTabListPin(true, { force: true })
-
-  assertEqual(
-    getActiveMainMirrorKey(),
-    'id__memory',
-    'M12b: mid-move display:none keeps exclusive key (not first-tab host)',
-  )
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const mirrors = collectMirrorButtons(list)
-  assert(
-    !mirrors.some((m) => m.getAttribute('data-tab-id') === 'memory'),
-    'M12b: memory mirror dropped while host hidden',
-  )
-  assert(
-    !mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')
-      ?.classList.contains('sidebar-ux-tab-active'),
-    'M12b: profile not strip-active (key still memory mid-move)',
-  )
-}
-
-// M13: exclusive key while both host buttons still present — heal must NOT
-// steal highlight to host tabBtnActive Profile when canvas key is Memory.
-{
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', true)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  applyMainTabListPin(true, { force: true })
-
-  activateMainMirrorFromRestore(memory as unknown as HTMLElement, 'Memory')
-  applyMainTabListPin(true, { force: true })
-
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M13: key stays memory after reconcile')
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const mirrors = collectMirrorButtons(list)
-  const profileMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'profile')!
-  const memoryMirror = mirrors.find((m) => m.getAttribute('data-tab-id') === 'memory')!
-  assert(
-    !profileMirror.classList.contains('sidebar-ux-tab-active'),
-    'M13: Profile not active (exclusive canvas key)',
-  )
-  assert(
-    memoryMirror.classList.contains('sidebar-ux-tab-active'),
-    'M13: Memory alone active',
-  )
-}
-
-// M14: adoptMainMirrorHostActivation switches key without requiring host class first
-{
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', true)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  applyMainTabListPin(true, { force: true })
-
-  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
-  assert(isCanvasMainOpen(), 'M14: adopt opens drawer')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M14: key = profile after adopt')
-
-  adoptMainMirrorHostActivation(memory as unknown as HTMLElement, 'Memory')
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M14: key switches to memory')
-  assert(isCanvasMainOpen(), 'M14: still open after second adopt')
-
-  // open: false does not force-open after close
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const profileMirror = collectMirrorButtons(list).find(
-    (m) => m.getAttribute('data-tab-id') === 'profile',
-  )!
-  // Close via toggle
-  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
-  profileMirror.click() // active → close
-  assert(!isCanvasMainOpen(), 'M14: closed after toggle')
-  adoptMainMirrorHostActivation(memory as unknown as HTMLElement, 'Memory', { open: false })
-  assert(!isCanvasMainOpen(), 'M14: open:false does not reopen')
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M14: key still updates with open:false')
-}
-
-// M15: hide labels via host settings — stale host tabBtnLabeled must not
-// re-inflate mirror height on reconcile/activate (empty label DOM).
-{
-  resetAll()
+  reset()
   clearHostSettingsCache()
   __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
-
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  // Stale host state after hide: class still labeled, but label span may lag.
   const profile = makeHostBtn('profile', 'Profile', true)
   profile.classList.add('tabBtnLabeled')
   profile.className = `${profile.className} tabBtnLabeled`
   mainSidebar.appendChild(profile)
+  await bootMirror({ primary: [PROFILE] })
 
-  applyMainTabListPin(true, { force: true })
-  let list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  let mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirror = collectMirrorButtons(list).find(
+    (m) => m.getAttribute('data-mirror-key') === PROFILE,
+  )!
   assert(
     !mirror.classList.contains('sidebar-ux-tab-labeled'),
-    'M15: no labeled class when showTabLabels false (stale host class ignored)',
+    'M15: no labeled class while showTabLabels off (stale host class ignored)',
   )
-  assertEqual(mirror.style.height, '48px', 'M15: icon-only height 48px after pin')
+  assertEqual(mirror.style.height, '48px', 'M15: icon-only height 48px')
 
-  // Click / activate path re-reconciles from host — must stay compact.
-  adoptMainMirrorHostActivation(profile as unknown as HTMLElement, 'Profile')
+  // Activate path re-renders — must stay compact.
+  mirror.click()
+  await flush()
   applyMainTabListPin(true, { force: true })
-  list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
+  const list2 = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirror2 = collectMirrorButtons(list2).find(
+    (m) => m.getAttribute('data-mirror-key') === PROFILE,
+  )!
   assert(
-    !mirror.classList.contains('sidebar-ux-tab-labeled'),
-    'M15: still unlabeled after activate/reconcile',
+    !mirror2.classList.contains('sidebar-ux-tab-labeled'),
+    'M15: still unlabeled after activate/re-render',
   )
-  assertEqual(mirror.style.height, '48px', 'M15: height stays 48px after activate/reconcile')
-  assert(
-    !String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
-    'M15: no label span in mirror HTML when labels off',
-  )
-
+  assertEqual(mirror2.style.height, '48px', 'M15: height stays 48px after activate/re-render')
   clearHostSettingsCache()
 }
 
-// M16: Show labels after hide rebuilds main-mirror label HTML (title
-// fallback when host .tabLabel not mounted yet — host React lag).
+// M16: Show labels rebuilds main-mirror label HTML from the twin's title
+// (twin .tabLabel span may not be mounted — host React lag cover).
 {
-  resetAll()
+  reset()
   clearHostSettingsCache()
-  __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
+  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
 
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  // Host after hide: no tabLabel span (Lumiverse unmounts it).
   const profile = makeHostBtn('profile', 'Profile', true)
+  // Host after hide: no tabLabel span (Lumiverse unmounts it).
   const hostLabel = profile.children.find((c) => String(c.className).includes('tabLabel'))
   if (hostLabel) profile.removeChild(hostLabel)
   mainSidebar.appendChild(profile)
+  await bootMirror({ primary: [PROFILE] })
 
-  applyMainTabListPin(true, { force: true })
-  let list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  let mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
-  assert(
-    !String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
-    'M16: no label HTML while showTabLabels false',
-  )
-
-  // Secondary Show path: patch cache then reconcile (same as sync → pin).
-  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
-  applyMainTabListPin(true, { force: true })
-  list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  mirror = collectMirrorButtons(list).find((m) => m.getAttribute('data-tab-id') === 'profile')!
-  assert(
-    mirror.classList.contains('sidebar-ux-tab-labeled'),
-    'M16: labeled class after showTabLabels true',
-  )
-  assertEqual(mirror.style.height, '56px', 'M16: labeled height 56px after show')
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirror = collectMirrorButtons(list).find(
+    (m) => m.getAttribute('data-mirror-key') === PROFILE,
+  )!
+  assert(mirror.classList.contains('sidebar-ux-tab-labeled'), 'M16: labeled class when showTabLabels on')
+  assertEqual(mirror.style.height, '56px', 'M16: labeled height 56px')
   assert(
     String(mirror.innerHTML || '').includes('sidebar-ux-tab-label'),
-    'M16: label span rebuilt from title when host tabLabel missing',
+    'M16: label span rebuilt from twin title',
   )
   assert(
-    String(mirror.innerHTML || '').includes('Profile'),
-    'M16: label text from title fallback',
+    String(mirror.innerHTML || '').includes('Prof'),
+    'M16: label text from twin title fallback',
   )
-
   clearHostSettingsCache()
 }
 
-// M17: header title survives force remount (side-change scenario).
-// mountMainMirror always creates the shell with title 'Drawer'; reconcile
-// must re-stamp the active tab's title after the remount.
+// M17: header title follows the MODEL active and survives force remount
+// (shell mounts with 'Drawer'; renderer re-stamps from the twin's title).
 {
-  resetAll()
-  clearHostSettingsCache()
-  __setHostSetSettingForTest(() => {}, { showTabLabels: false, tabOrder: [], hiddenTabIds: [], side: 'right' })
-
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   const b1 = makeHostBtn('profile', 'Profile', false)
   const b2 = makeHostBtn('memory', 'Memory', false)
   mainSidebar.appendChild(b1)
   mainSidebar.appendChild(b2)
+  void b2
+  await bootMirror({ active: PROFILE })
 
-  // Mount and activate Profile via click.
   applyMainTabListPin(true, { force: true })
-  const list0 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const profileMirror0 = collectMirrorButtons(list0).find(
-    (m) => m.getAttribute('data-tab-id') === 'profile',
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const profileMirror = collectMirrorButtons(list).find(
+    (m) => m.getAttribute('data-mirror-key') === PROFILE,
   )!
-  profileMirror0.click()
-
-  // Verify title was set after click (drawer opens + header stamped).
+  profileMirror.click()
+  await flush()
   assertEqual(
     (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
     'Profile',
@@ -1258,52 +1410,22 @@ function resetAll() {
   )
 
   // Force remount (simulates side change) — resets shell title to 'Drawer',
-  // then reconcileMainMirror must re-stamp.
+  // then the renderer re-stamps from the MODEL active.
   applyMainTabListPin(true, { force: true })
-
-  // Verify reconcile re-stamped the header title (not still 'Drawer').
   assertEqual(
     (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
     'Profile',
     'M17b: title = Profile after force remount (not "Drawer")',
   )
-
-  // Click Memory to switch, verify title updates + survives another remount.
-  const list1 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const memoryMirror1 = collectMirrorButtons(list1).find(
-    (m) => m.getAttribute('data-tab-id') === 'memory',
-  )!
-  memoryMirror1.click()
-  assertEqual(
-    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
-    'Memory',
-    'M17c: title = Memory after switch',
-  )
-
-  // Force remount again — title should stay Memory.
-  applyMainTabListPin(true, { force: true })
-  assertEqual(
-    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
-    'Memory',
-    'M17d: title = Memory after second remount',
-  )
-
-  clearHostSettingsCache()
 }
 
 // M18: Show tab labels must not label the Settings gear in main-mirror.
 // Host keeps Settings icon-only; title/aria still "Settings" for tooltips —
-// title fallback must not invent a short-name label.
+// the twin title must not be rendered as a short-name label.
 {
-  resetAll()
-  clearHostSettingsCache()
+  reset()
   __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
 
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
   const profile = makeHostBtn('profile', 'Profile', true)
   const settings = makeHostBtn('settings', 'Settings', false)
   settings.removeAttribute('data-tab-id')
@@ -1314,10 +1436,10 @@ function resetAll() {
   settings.className = `${settings.className} tabBtnLabeled`
   mainSidebar.appendChild(profile)
   mainSidebar.appendChild(settings)
+  await bootMirror({ primary: [PROFILE] })
 
-  applyMainTabListPin(true, { force: true })
   const host = getMainPinHost() as unknown as StubElement
-  const list = host.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
+  const list = mirrorListIn(host)
   const mainSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_MAIN_CLASS))!
   const bottomSec = list.children.find((c) => c.className.includes(MAIN_MIRROR_LIST_BOTTOM_CLASS))!
   const profileMirror = mainSec.children.find(
@@ -1325,262 +1447,137 @@ function resetAll() {
   )!
   const settingsMirror = bottomSec.children.find((c) => c.className.includes(MAIN_MIRROR_BTN_CLASS))!
 
-  assert(
-    profileMirror.classList.contains('sidebar-ux-tab-labeled'),
-    'M18: profile labeled when showTabLabels true',
-  )
-  assert(
-    String(profileMirror.innerHTML || '').includes('sidebar-ux-tab-label'),
-    'M18: profile has label span',
-  )
-  assert(
-    !settingsMirror.classList.contains('sidebar-ux-tab-labeled'),
-    'M18: Settings never gets labeled class',
-  )
+  assert(profileMirror.classList.contains('sidebar-ux-tab-labeled'), 'M18: profile labeled when showTabLabels true')
+  assert(String(profileMirror.innerHTML || '').includes('sidebar-ux-tab-label'), 'M18: profile has label span')
+  assert(!settingsMirror.classList.contains('sidebar-ux-tab-labeled'), 'M18: Settings never gets labeled class')
   assertEqual(settingsMirror.style.height, '48px', 'M18: Settings stays icon-only height')
-  assert(
-    !String(settingsMirror.innerHTML || '').includes('sidebar-ux-tab-label'),
-    'M18: Settings has no label span',
-  )
-  assert(
-    !String(settingsMirror.innerHTML || '').includes('Settings'),
-    'M18: Settings title not rendered as label text',
-  )
+  assert(!String(settingsMirror.innerHTML || '').includes('sidebar-ux-tab-label'), 'M18: Settings has no label span')
   assertEqual(settingsMirror.getAttribute('title'), 'Settings', 'M18: tooltip title preserved')
 
   clearHostSettingsCache()
 }
 
-// M19: first enable of taskbar mode seeds header from host tabBtnActive
-// (shell mounts with title "Drawer"; must not stay that way when a tab is active).
+// B1/B2 (S7): extension tab badge (host dt.badge → span.tabBadge) is copied
+// into the mirror button HTML after the label, and twin badge changes are
+// picked up by the next render (data-mirror-html cache invalidates).
 {
-  resetAll()
+  reset()
   clearHostSettingsCache()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  __setHostSetSettingForTest(() => {}, { showTabLabels: true, tabOrder: [], hiddenTabIds: [], side: 'right' })
+
   const profile = makeHostBtn('profile', 'Profile', true)
-  const memory = makeHostBtn('memory', 'Memory', false)
+  const badge = new StubElement()
+  badge.tagName = 'SPAN'
+  badge.className = 'tabBadge_xyz'
+  badge.classList.add('tabBadge_xyz')
+  ;(badge as any).textContent = '3'
+  profile.appendChild(badge)
   mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
+  await bootMirror({ primary: [PROFILE] })
 
-  // No prior Canvas key (fresh enable). Shell title defaults to Drawer.
-  assertEqual(getActiveMainMirrorKey(), null, 'M19: key null before enable')
-  applyMainTabListPin(true, { force: true })
-
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M19: key seeded from host active')
-  assertEqual(
-    (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
-    'Profile',
-    'M19: header title = host active tab (not "Drawer")',
-  )
-  // Secondary parity: closed drawer still no highlight even with seeded key.
-  const list = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  const profileMirror = collectMirrorButtons(list).find(
-    (m) => m.getAttribute('data-tab-id') === 'profile',
-  )!
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrorFor = () =>
+    collectMirrorButtons(list).find(
+      (m) => m.getAttribute('data-mirror-key') === PROFILE,
+    )!
+  const html = String(mirrorFor().innerHTML || '')
+  assert(html.includes('tabBadge'), 'B1: badge span copied into mirror HTML')
+  assert(html.includes('>3<'), 'B1: badge text carried over')
   assert(
-    !profileMirror.classList.contains('sidebar-ux-tab-active'),
-    'M19: no active highlight while drawer closed',
+    html.indexOf('sidebar-ux-tab-label') !== -1 &&
+      html.indexOf('tabBadge') > html.indexOf('sidebar-ux-tab-label'),
+    'B1: badge after label (host DOM order)',
   )
+
+  // B2: change the twin badge text → next render shows the new badge
+  // (production trigger: sidebar observer → scheduleReconcile → render;
+  // direct call exercises the render + data-mirror-html cache logic).
+  ;(badge as any).textContent = '7'
+  renderMainMirrorTabs()
+  const html2 = String(mirrorFor().innerHTML || '')
+  assert(html2.includes('>7<'), 'B2: updated badge text on re-render')
 
   clearHostSettingsCache()
 }
 
-// M19b: first enable must not seed Settings as header when only Settings is host-active.
+// M19: no host-sourced seeding — fresh mount with a null model active keeps
+// the shell title 'Drawer' and highlights nothing (model owns activation).
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const settings = makeHostBtn('settings', 'Settings', true)
-  settings.removeAttribute('data-tab-id')
-  settings.setAttribute('title', 'Settings')
-  settings.setAttribute('aria-label', 'Settings')
-  mainSidebar.appendChild(settings)
+  reset()
+  const b1 = makeHostBtn('profile', 'Profile', true)
+  const b2 = makeHostBtn('memory', 'Memory', false)
+  mainSidebar.appendChild(b1)
+  mainSidebar.appendChild(b2)
+  void b2
+  await bootMirror({ active: null })
 
-  applyMainTabListPin(true, { force: true })
-  assertEqual(getActiveMainMirrorKey(), null, 'M19b: Settings not adopted as canvas key')
+  assertEqual(getModel()!.active.primary, null, 'M19: model active null after mount')
   assertEqual(
     (getMainMirrorTitleEl() as unknown as StubElement)?.textContent,
     'Drawer',
-    'M19b: title stays Drawer when only Settings is host-active',
+    'M19: title stays Drawer (no host-based seeding)',
   )
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrors = collectMirrorButtons(list)
+  assert(mirrors.every((m) => !m.classList.contains('sidebar-ux-tab-active')), 'M19: no active highlight while closed')
 }
 
-// M20: restore activation must not clobber a user-picked mirror key
-// (2026-07-31 regression: after moving a tab to the second drawer,
-// diffActive → host.activate → activateMainMirrorFromRestore re-activated
-// the persisted primary.tabId "Databank" and stole the highlight from the
-// user's tab).
+// M20: restore activation cannot steal the model active — the thin
+// activateMainMirrorFromRestore clicks the host (content) and opens the
+// drawer, but never writes a selection; the MODEL keeps the user's pick.
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
+  reset()
   const profile = makeHostBtn('profile', 'Profile', false)
   const memory = makeHostBtn('memory', 'Memory', false)
   const databank = makeHostBtn('databank', 'Databank', false)
   mainSidebar.appendChild(profile)
   mainSidebar.appendChild(memory)
   mainSidebar.appendChild(databank)
-  applyMainTabListPin(true, { force: true })
+  void profile
+  void memory
+  await bootMirror()
 
-  // User clicks Memory → user-established key.
-  const list0 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  collectMirrorButtons(list0).find((m) => m.getAttribute('data-tab-id') === 'memory')!.click()
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M20: key = memory after user click')
+  // User clicks Memory → model established.
+  const list0 = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  collectMirrorButtons(list0).find((m) => m.getAttribute('data-mirror-key') === MEMORY)!.click()
+  await flush()
+  assertEqual(getModel()!.active.primary, MEMORY, 'M20: model active = memory after user click')
 
   // Late restore/host-driven activation targets the persisted tab (databank).
   const dbClicksBefore = databank.clickCount
   activateMainMirrorFromRestore(databank as unknown as HTMLElement, 'Databank')
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M20: user key survives restore activation')
-  assertEqual(databank.clickCount, dbClicksBefore, 'M20: no host click forced on user tab')
-
-  // Without a user pick (fresh pin, key null), restore still seeds the key.
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile2 = makeHostBtn('profile', 'Profile', false)
-  const databank2 = makeHostBtn('databank', 'Databank', false)
-  mainSidebar.appendChild(profile2)
-  mainSidebar.appendChild(databank2)
-  applyMainTabListPin(true, { force: true })
-  activateMainMirrorFromRestore(databank2 as unknown as HTMLElement, 'Databank')
-  assertEqual(getActiveMainMirrorKey(), 'id__databank', 'M20: restore seeds key when no user pick')
+  await flush()
+  assertEqual(getModel()!.active.primary, MEMORY, 'M20: model active survives restore activation')
+  assertEqual(databank.clickCount, dbClicksBefore + 1, 'M20: thin restore re-clicks the persisted tab for content')
 }
 
-// M21: adoptMainMirrorNeighbor hands the mirror to a neighbor after the user
-// moved their ACTIVE tab (07-19 neighbor-handoff design). It MAY override a
-// user-picked key (the user's own move drove it) but keeps userPicked=true
-// so a later restore activation cannot clobber the neighbor either.
+// U1: untagged host twin renders labeled — the twin carries no data-tab-id;
+// the renderer resolves it through the key's title fallback (findMainTabButton
+// byAttribute chain) and uses it read-only for chrome. The data-tab-id stamp
+// stays absent from the mirror (nothing resolved) and a later click still
+// reaches the twin.
 {
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', false)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  applyMainTabListPin(true, { force: true })
+  reset()
+  const honeyHostBtn = makeHostBtn('hone', 'Hone', false)
+  honeyHostBtn.removeAttribute('data-tab-id')
+  mainSidebar.appendChild(honeyHostBtn)
+  await bootMirror({
+    primary: [PROFILE, HONE],
+    extraTabs: [makeLiveTab(HONE, 'h:hone-ghost')],
+  })
 
-  // User clicks Memory → active.
-  const list0 = (getMainPinHost() as unknown as StubElement)!
-    .children.find((c) => c.className.includes(MAIN_MIRROR_LIST_CLASS))!
-  collectMirrorButtons(list0).find((m) => m.getAttribute('data-tab-id') === 'memory')!.click()
-  assertEqual(getActiveMainMirrorKey(), 'id__memory', 'M21: memory active after click')
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrors = collectMirrorButtons(list)
+  const honeMirror = mirrors.find((m) => m.getAttribute('data-mirror-key') === HONE)!
+  assert(!!honeMirror, 'U1: keyed mirror exists though the host twin is untagged')
+  assertEqual(honeMirror.getAttribute('title'), 'Hone', 'U1: chrome title from the twin')
+  assert(honeMirror.getAttribute('data-mirror-html') !== null && String(honeMirror.innerHTML || '').length > 0, 'U1: chrome HTML built')
+  assertEqual(honeMirror.getAttribute('data-tab-id'), 'h:hone-ghost', 'U1: resolved key stamped even when the twin lacks its tag')
 
-  // User moves Memory away: hand the chrome to the neighbor (Profile).
-  const profileClicksBefore = profile.clickCount
-  adoptMainMirrorNeighbor(profile as unknown as HTMLElement, 'Profile')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M21: key handed to neighbor')
-  assertEqual(profile.clickCount, profileClicksBefore + 1, 'M21: neighbor host button clicked (content settle)')
-
-  // A later restore activation of the persisted tab must not clobber it.
-  const databank = makeHostBtn('databank', 'Databank', false)
-  mainSidebar.appendChild(databank)
-  applyMainTabListPin(true, { force: true })
-  activateMainMirrorFromRestore(databank as unknown as HTMLElement, 'Databank')
-  assertEqual(getActiveMainMirrorKey(), 'id__profile', 'M21: neighbor survives restore activation')
-}
-
-// M22: findNeighborHostButtonFor picks the nearest visible neighbor (above
-// else below), skipping Settings chrome and hidden buttons (07-19 handoff).
-{
-  resetAll()
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    return []
-  }
-  const profile = makeHostBtn('profile', 'Profile', false)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  const settings = makeHostBtn('settings', 'Settings', false)
-  settings.removeAttribute('data-tab-id')
-  settings.setAttribute('title', 'Settings')
-  settings.setAttribute('aria-label', 'Settings')
-  const notes = makeHostBtn('notes', 'Notes', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  mainSidebar.appendChild(settings)
-  mainSidebar.appendChild(notes)
-
-  assertEqual(
-    (findNeighborHostButtonFor('memory') as unknown as StubElement)?.getAttribute('data-tab-id'),
-    'profile',
-    'M22: neighbor is the visible button above',
-  )
-  // Hidden buttons are excluded (the moved tab's own button is hidden by the
-  // time placement finishes — the handoff must capture the neighbor before).
-  profile.style.display = 'none'
-  assertEqual(
-    (findNeighborHostButtonFor('memory') as unknown as StubElement)?.getAttribute('title'),
-    'Notes',
-    'M22: falls through hidden + Settings to the button below',
-  )
-  profile.style.display = ''
-  assertEqual(findNeighborHostButtonFor('ghost'), null, 'M22: unknown tab → null')
-}
-
-// M23: captureMainMirrorMoveChrome — the shared pre-move chrome decision
-// used by both placementFirstMoveByLiveId (right-click) and the live DnD
-// cross-drawer path. Capture must happen BEFORE the moved tab's host button
-// is hidden (findNeighborHostButtonFor skips hidden buttons).
-{
-  resetAll()
-  const profile = makeHostBtn('profile', 'Profile', true)
-  const memory = makeHostBtn('memory', 'Memory', false)
-  mainSidebar.appendChild(profile)
-  mainSidebar.appendChild(memory)
-  mainSidebar.querySelectorAll = (sel: string): StubElement[] => {
-    if (sel.includes('tabBtn')) {
-      return mainSidebar.children.filter((c) => c.className.includes('tabBtn'))
-    }
-    return []
-  }
-
-  // Non-secondary targets never capture chrome.
-  let chrome = await captureMainMirrorMoveChrome('memory', 'primary')
-  assert(chrome.neighborBtn === null, 'M23: primary target → no neighbor')
-  assert(chrome.reassertId === null, 'M23: primary target → no reassert id')
-
-  // Pin disabled → no-op even for secondary targets.
-  __setMainTabPinEnabledForTest(false)
-  __setActiveMainMirrorKeyForTest('id__memory')
-  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
-  assert(chrome.neighborBtn === null, 'M23: pin disabled → no neighbor')
-  assert(chrome.reassertId === null, 'M23: pin disabled → no reassert id')
-
-  // Pin on, no mirror key → no-op.
-  __setMainTabPinEnabledForTest(true)
-  __setActiveMainMirrorKeyForTest(null)
-  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
-  assert(chrome.neighborBtn === null, 'M23: no mirror key → no neighbor')
-  assert(chrome.reassertId === null, 'M23: no mirror key → no reassert id')
-
-  // Moved tab IS the mirror's active → neighbor branch: nearest visible
-  // button above (Profile), captured while the moved button is still
-  // visible.
-  __setActiveMainMirrorKeyForTest('id__memory')
-  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
-  const neighbor = chrome.neighborBtn as unknown as StubElement | null
-  assertEqual(neighbor?.getAttribute('data-tab-id') ?? null, 'profile', 'M23: active-tab move captures neighbor above')
-  assert(chrome.reassertId === null, 'M23: active-tab move has no reassert id')
-
-  // Moved tab is NOT the mirror's active → re-assert branch: remember the
-  // mirror's active id for content re-assert after placement.
-  __setActiveMainMirrorKeyForTest('id__profile')
-  chrome = await captureMainMirrorMoveChrome('memory', 'secondary')
-  assert(chrome.neighborBtn === null, 'M23: inactive move → no neighbor')
-  assertEqual(chrome.reassertId, 'profile', 'M23: inactive move → reassert the mirror active id')
+  // Click still reaches the twin via the key→title fallback.
+  honeMirror.click()
+  await flush()
+  assertEqual(honeyHostBtn.clickCount, 1, 'U1: untagged twin clicked')
 }
 
 // M24: captureSecondaryNeighborForMove — the drawer-side chrome capture for
@@ -1589,7 +1586,7 @@ function resetAll() {
 // TRACKED active (the model lags — secondary clicks don't produce
 // host-syncs); neighbor = nearest visible button above, else below.
 {
-  resetAll()
+  reset()
   const secA = new StubElement()
   secA.tagName = 'BUTTON'
   secA.setAttribute('data-tab-id', 'tab-a')
@@ -1609,10 +1606,29 @@ function resetAll() {
     return []
   }
 
+  // Collapsed/absent model → no displayed window to hand off from: the
+  // capture bails before consulting the tracked active (reopen memory).
+  setActiveSecondaryTabId('tab-b')
+  let secChrome = await captureSecondaryNeighborForMove('tab-b')
+  assert(secChrome.neighborBtn === null, 'M24: collapsed drawer → no neighbor capture')
+
+  // Bootstrap an OPEN secondary drawer — only an open drawer displays the
+  // tracked active window the move must hand off from.
+  const host = await bootMirror()
+  const booted = getModel()!
+  bootstrap({
+    ...booted,
+    drawers: {
+      ...booted.drawers,
+      secondary: { ...booted.drawers.secondary, open: true },
+    },
+  }, host)
+  await flush()
+
   // Moved tab is NOT the drawer's tracked active → no capture (the active
   // tab keeps its replacement; quiet move).
   setActiveSecondaryTabId('tab-a')
-  let secChrome = await captureSecondaryNeighborForMove('tab-b')
+  secChrome = await captureSecondaryNeighborForMove('tab-b')
   assert(secChrome.neighborBtn === null, 'M24: not the tracked active → no neighbor')
 
   // Moved tab IS the tracked active → nearest visible button above.
@@ -1634,6 +1650,136 @@ function resetAll() {
   )
 
   setActiveSecondaryTabId(null)
+}
+
+
+// LR1: late-register tab appears — a tab merged into the model by a later
+// host-sync (enqueueHostSync membership adopt) renders without a manual
+// re-render (the renderer subscribes to model commits).
+{
+  reset()
+  const host = await bootMirror()
+  // Late extension tab registers in the host world + merges into the model.
+  const HONE2 = HONE
+  host.addTab(HONE2, 'h:hone-ghost', 'primary')
+  await flush()
+  const { getModel: gm } = await import('../../recon/dispatch')
+  // Simulate the membership adopt the enqueueHostSync path performs: append
+  // the key into the model and commit (bootstrap merge semantics).
+  const model = gm()!
+  const merged: LayoutModel = { ...model, primary: [...model.primary, HONE2] }
+  bootstrap(merged, host)
+  await flush()
+  applyMainTabListPin(true, { force: true })
+  const list = mirrorListIn(getMainPinHost() as unknown as StubElement)
+  const mirrors = collectMirrorButtons(list)
+  const late = mirrors.find((m) => m.getAttribute('data-mirror-key') === HONE2)!
+  assert(!!late, 'LR1: late-registered tab appears in the flat strip')
+  assertEqual(mirrors.length, 4, 'LR1: strip grew to 4')
+  shutdownModel()
+}
+shutdownModel()
+
+// ST1 (LUMI-14): strip-top Start is a PINNED first child across renders —
+// renderMainMirrorTabs must keep the lifted Start at list child 0 and main
+// right behind it, synchronously (no rAF reconcile needed). Also pins the
+// sweep guard: Start inside the main section survives when the gate is on.
+{
+  reset()
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: true })
+  const host = await bootMirror()
+  const pinHost = getMainPinHost() as unknown as StubElement
+  const list = mirrorListIn(pinHost)
+  // Simulate the ensure's lift: a direct list child above the main section,
+  // exactly what os/start-menu.ts ensureStartButtonForSide produces.
+  const startBtn = new StubElement()
+  startBtn.tagName = 'BUTTON'
+  startBtn.setAttribute('data-canvas-os-start', '1')
+  startBtn.setAttribute('data-canvas-start-side', 'primary')
+  startBtn.setAttribute('aria-label', 'Start')
+  list.insertBefore(startBtn, list.firstChild)
+
+  // Render 1: Start stays first child, main follows it.
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1: Start still the first list child after render')
+  assert(
+    list.children[1]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1: main section directly follows the pinned Start',
+  )
+  assert(startBtn.parentElement === list, 'ST1: Start not swept into a section')
+
+  // Render 2 (idempotence): no flicker reorder — same order again.
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1: order stable across a second render')
+  assertEqual(list.children.indexOf(startBtn as unknown as StubElement), 0, 'ST1: Start index 0')
+
+  // LUMI-15: with the strip-top divider present (ensureStartButtonForSide
+  // places it directly after Start), the renderer must treat button +
+  // divider as the PINNED HEAD: main inserts after the divider, never
+  // between button and divider — otherwise every render pushes the divider
+  // below the whole tab section (reproduced displacement, review blocker).
+  const dividerEl = new StubElement()
+  dividerEl.className = 'sidebar-ux-start-strip-top-divider'
+  list.insertBefore(dividerEl, startBtn.nextSibling)
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1+divider: Start still first')
+  assertEqual(list.children[1], dividerEl, 'ST1+divider: divider directly follows Start across renders')
+  assert(
+    list.children[2]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1+divider: main section directly follows the divider (not inserted between button and divider)',
+  )
+  renderMainMirrorTabs()
+  assertEqual(list.children[0], startBtn, 'ST1+divider: order stable across a second render')
+  assertEqual(list.children[1], dividerEl, 'ST1+divider: divider still index 1 after re-render')
+  // A divider that is NOT a direct child right after Start must not pin the
+  // structure: remove the real one, drop a stray divider at the list end —
+  // main must insert right after Start again (cleanup owns stray dividers).
+  dividerEl.parentElement!.removeChild(dividerEl)
+  const strayDivider = new StubElement()
+  strayDivider.className = 'sidebar-ux-start-strip-top-divider'
+  list.appendChild(strayDivider)
+  renderMainMirrorTabs()
+  assert(
+    list.children[1]?.className.includes('sidebar-ux-tab-list-main'),
+    'ST1+divider: a stray divider elsewhere does not displace main (only a direct child after Start pins)',
+  )
+  strayDivider.parentElement!.removeChild(strayDivider)
+
+  // Gate off → canonical order is absolute again (Start no longer pinned;
+  // the ensure's re-dock path owns the move — here it just must not be
+  // special-cased by the renderer anymore).
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: false })
+  renderMainMirrorTabs()
+  assert(
+    list.children[0] !== startBtn || startBtn.parentElement !== list,
+    'ST1: gate off → renderer stops pinning Start (canonical main-first order resumes)',
+  )
+
+  // Sweep guard: a legacy Start INSIDE the main section survives the sweep
+  // while the gate is on (it is the pinned child; sweeping it breaks the
+  // ensure's invariant).
+  hydrateSettings({ drawerLocation: 'sides', startButtonAtStripTop: true })
+  renderMainMirrorTabs()
+  const mainSection = list.children.find((c) => c.className.includes('sidebar-ux-tab-list-main'))!
+  const stray = new StubElement()
+  stray.tagName = 'BUTTON'
+  stray.setAttribute('data-canvas-os-start', '1')
+  mainSection.appendChild(stray)
+  renderMainMirrorTabs()
+  assert(
+    mainSection.children.includes(stray),
+    'ST1: Start inside the main section survives the non-mirror sweep while pinned',
+  )
+
+  // Control: a genuinely foreign node in the main section is still swept.
+  const junk = new StubElement()
+  junk.className = 'legacy-stray'
+  mainSection.appendChild(junk)
+  renderMainMirrorTabs()
+  assert(!mainSection.children.includes(junk), 'ST1: foreign nodes still swept from the main section')
+
+  shutdownModel()
+  void host
 }
 
 console.log(`main-tab-pin tests: ${passed} passed, ${failed} failed`)

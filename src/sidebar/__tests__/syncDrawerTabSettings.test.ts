@@ -38,6 +38,7 @@ class StubStyle {
   get paddingLeft() { return this._props['paddingLeft'] ?? '8px' }
   get borderTopWidth() { return this._props['borderTopWidth'] ?? '1px' }
   get gap() { return this._props['gap'] ?? '8px' }
+  getPropertyValue(k: string) { return this._props[k] ?? '' }
   setProperty(k: string, v: string) { this._props[k] = v; this._setPropertyCalls++ }
 }
 
@@ -100,6 +101,7 @@ secondaryWrapper.querySelector = (sel: string): StubElement | null => {
 
 // Stub getComputedStyle
 ;(globalThis as any).getComputedStyle = (_el: StubElement) => ({
+  getPropertyValue: (key: string) => _el.style.getPropertyValue(key),
   get marginTop() { return _el.style.marginTop },
   get paddingTop() { return _el.style.paddingTop },
   get paddingRight() { return _el.style.paddingRight },
@@ -407,6 +409,45 @@ import { getSettings } from '../../settings/state'
 }
 
 // ============================================================
+// C10 (live-verify #11): side-change reset + Canvas main override.
+//   A side change resets the sync caches (`_lastKnownVerticalPos = null`).
+//   With mirror ON and a Canvas main-handle override, the re-run must use
+//   the MAIN's EFFECTIVE position (override > host) — before the fix it
+//   re-stamped the stale host value and both handles snapped back to
+//   default after "Swap drawer locations".
+// ============================================================
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.style.marginTop = '0vh'  // stale host default
+  secondaryDrawerTab.style = new StubStyle()
+  _resetLastKnownVerticalPos()
+
+  const liveSettings = getSettings() as any
+  const prevMirror = liveSettings.mirrorCompactPosition
+  const prevMainOverride = liveSettings.mainDrawerTabOverrideVh
+  liveSettings.mirrorCompactPosition = true
+  liveSettings.mainDrawerTabOverrideVh = 35
+
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryDrawerTab.style.marginTop, '35vh',
+    'C10.a: mirror follows the main override, not the stale host position')
+
+  // No override → the mirror still follows the host position.
+  liveSettings.mainDrawerTabOverrideVh = undefined
+  mainDrawerTab.style.marginTop = '12vh'
+  _resetLastKnownVerticalPos()
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryDrawerTab.style.marginTop, '12vh',
+    'C10.b: without an override the mirror follows the host position')
+
+  // Restore settings
+  liveSettings.mirrorCompactPosition = prevMirror
+  liveSettings.mainDrawerTabOverrideVh = prevMainOverride
+}
+
+// ============================================================
 // T7: Coalescing — 10 calls in the same tick result in 1 body run.
 //   Regression for the bug where style observer + rAF retry + ResizeObserver
 //   all fired syncDrawerTabSettings() 12+ times per tick, flooding the console.
@@ -428,16 +469,16 @@ import { getSettings } from '../../settings/state'
   assertEqual(_rafQueue.length, 1, 'T7.a: 10 calls in same tick coalesce to exactly 1 rAF')
 
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T7.b: body ran once → 8 setProperty writes (not 80)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T7.b: body ran once → 9 setProperty writes (not 80)')
 
   // A second batch of 10 in a new tick should schedule a second rAF
   for (let i = 0; i < 10; i++) syncDrawerTabSettings()
   assertEqual(_rafQueue.length, 1, 'T7.c: 10 more calls in a new tick schedule exactly 1 rAF')
   _flushRaf()
   // Cache is the same value (7vh, same dimensions), so 0 new writes
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T7.d: second batch cache hit → still 8 setProperty writes (not 16)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T7.d: second batch cache hit → still 9 setProperty writes (not 16)')
 }
 
 // ============================================================
@@ -460,21 +501,21 @@ import { getSettings } from '../../settings/state'
 
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T8.a: first call writes 8 vars (cache miss from T7)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T8.a: first call writes 9 vars (cache miss from T7)')
 
   // Second call with IDENTICAL dimensions — should be a cache hit
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T8.b: second call cache hit → 0 new writes (counter still 8)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T8.b: second call cache hit → 0 new writes (counter still 9)')
 
   // Third call with one CHANGED dimension — should invalidate cache
-  mainDrawerTab.offsetWidth = 51
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '32px')
   syncDrawerTabSettings()
   _flushRaf()
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 16,
-    'T8.c: dimension change invalidates cache → 8 new writes (counter now 16)')
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 18,
+    'T8.c: dimension change invalidates cache → 9 new writes (counter now 18)')
 }
 
 // ============================================================
@@ -518,9 +559,9 @@ import { getSettings } from '../../settings/state'
   ;(globalThis as any).document.querySelector = _origQuerySelector
 
   _flushRaf()
-  // The retry found mainDrawerTab, ran the body, and wrote 8 vars
-  assertEqual(secondaryWrapper.style._setPropertyCalls, 8,
-    'T9.c: retry ran, found mainDrawerTab, wrote 8 vars')
+  // The retry found mainDrawerTab, ran the body, and wrote 9 vars
+  assertEqual(secondaryWrapper.style._setPropertyCalls, 9,
+    'T9.c: retry ran, found mainDrawerTab, wrote 9 vars')
 }
 
 // ============================================================
@@ -547,13 +588,13 @@ function _resetLastKnownVerticalPos() {
   const host = new LumiverseHost()
   await host.setSide('right')
 
-  assertEqual(getMainDrawerSideOverride(), null, 'SW1: NO-GO swap does NOT set a side override (DOM can never flip)')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW1: NO-GO swap does NOT leave a side override (revert drops it; DOM can never flip)')
   assertEqual(getMainDrawerSide(), 'right', 'SW2: getMainDrawerSide stays on the REAL side (store default right)')
 
   await host.setSide('left')
-  assertEqual(getMainDrawerSideOverride(), null, 'SW3: NO-GO swap back does NOT set a side override')
+  assertEqual(getMainDrawerSideOverride(), null, 'SW3: NO-GO swap back does NOT leave a side override')
   assertEqual(getMainDrawerSide(), 'right', 'SW4: real side unchanged (swap cannot move the DOM)')
-  assertEqual(__getLastKnownSideForTest(), null, 'SW5: no remount machinery touched on NO-GO (no stuck state)')
+  assertEqual(__getLastKnownSideForTest(), 'right', 'SW5: lastKnown stamped to the REAL side after degraded revert (no stuck desired state)')
 
   __resetSideApplyStateForTest()
   setMainDrawerSideOverride(null)
@@ -646,6 +687,29 @@ function _resetLastKnownVerticalPos() {
   clearHostSettingsCache()
   __resetSideApplyStateForTest()
   setMainDrawerSideOverride(null)
+}
+
+// Mode-switch measurements must not enlarge the Vanilla handles. A hidden
+// host can report a tall box; the logical chrome still specifies 48px width.
+{
+  mainDrawerTab.style = new StubStyle()
+  mainDrawerTab.offsetWidth = 390
+  mainDrawerTab.offsetHeight = 300
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '48px')
+  secondaryWrapper.style = new StubStyle()
+  secondaryWrapper.style.setProperty('--sidebar-ux-drawer-tab-h', '300px')
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w'), '48px', 'mode switch: uses host logical width, not transient full viewport')
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-h'), 'auto', 'mode switch: clears oversized frozen height')
+
+  mainDrawerTab.className = '_drawerTab_abc _drawerTabCompact_abc'
+  mainDrawerTab.style.setProperty('--drawer-tab-w', '32px')
+  syncDrawerTabSettings()
+  _flushRaf()
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-w'), '32px', 'mode switch: compact handle stays compact')
+  assertEqual(secondaryWrapper.style.getPropertyValue('--sidebar-ux-drawer-tab-icon-size'), '14px', 'mode switch: compact glyph matches host')
+  mainDrawerTab.className = '_drawerTab_abc'
 }
 
 // Cleanup

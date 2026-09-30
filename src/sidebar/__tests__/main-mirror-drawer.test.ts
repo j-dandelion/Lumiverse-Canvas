@@ -3,8 +3,9 @@
 // Verifies:
 // - Module exports exist and can be imported
 // - Reset clears state (isMainMirrorActive, isCanvasMainOpen)
-// - restartReparkWatch is exported
 // - Basic no-op paths when not active
+// - S3 content single-path: event-driven park — stale-node eviction,
+//   idempotent parking, and NO repark-poll exports (poll removed)
 
 let passed = 0
 let failed = 0
@@ -26,6 +27,20 @@ class StubStyle {
   set display(v: string) { this._props['display'] = v }
   get flexDirection() { return this._props['flexDirection'] ?? '' }
   set flexDirection(v: string) { this._props['flexDirection'] = v }
+  // S6 harness: createDrawerShell writes drawer chrome via cssText — parse
+  // the width declaration so full-bleed/var-driven assertions can read it.
+  set cssText(v: string) {
+    this._props = {}
+    for (const decl of String(v).split(';')) {
+      const i = decl.indexOf(':')
+      if (i > 0) this._props[decl.slice(0, i).trim()] = decl.slice(i + 1).trim()
+    }
+  }
+  get cssText() {
+    return Object.entries(this._props).map(([k, v]) => `${k}: ${v};`).join(' ')
+  }
+  get width() { return this._props['width'] ?? '' }
+  set width(v: string) { this._props['width'] = v }
   setProperty(k: string, v: string, _p?: string) { this._props[k] = v }
   removeProperty(k: string) { delete this._props[k] }
   getPropertyValue(k: string) { return this._props[k] ?? '' }
@@ -39,6 +54,7 @@ class StubElement {
   innerHTML = ''
   textContent: string | null = null
   parentElement: StubElement | null = null
+  nextSibling: StubElement | null = null
   children: StubElement[] = []
   isConnected = true
   dataset: Record<string, string> = {}
@@ -73,14 +89,27 @@ class StubElement {
   setAttribute(k: string, v: string) { this._attrs[k] = v }
   getAttribute(k: string) { return this._attrs[k] ?? null }
   removeAttribute(k: string) { delete this._attrs[k] }
+  /** DOM move semantics: detach from the previous parent first. */
+  private _reparent(child: StubElement) {
+    if (child.parentElement && child.parentElement !== this) {
+      child.parentElement.children = child.parentElement.children.filter(c => c !== child)
+    }
+  }
   appendChild(child: StubElement) {
+    this._reparent(child)
     child.parentElement = this as any
-    this.children.push(child)
+    if (!this.children.includes(child)) this.children.push(child)
     return child
   }
   insertBefore(child: StubElement, _ref: StubElement | null) {
+    this._reparent(child)
     child.parentElement = this as any
-    this.children.push(child)
+    if (!this.children.includes(child)) this.children.push(child)
+    return child
+  }
+  removeChild(child: StubElement) {
+    this.children = this.children.filter(c => c !== child)
+    child.parentElement = null
     return child
   }
   remove() {
@@ -91,10 +120,19 @@ class StubElement {
     }
   }
   querySelector(sel: string): StubElement | null {
+    if (sel.includes('sidebar-ux-drawer-tab')) {
+      return this.children.find(c => c.className.includes('sidebar-ux-drawer-tab')) ?? null
+    }
     if (sel.includes('sidebar-ux-tab-list')) {
       for (const c of this.children) {
         if (c.className.includes('sidebar-ux-tab-list')) return c
       }
+    }
+    if (sel.includes('_panel_')) {
+      return this.children.find(c => c.className.includes('_panel_')) ?? null
+    }
+    if (sel.includes('_panelContent_')) {
+      return this.children.find(c => c.className.includes('_panelContent_')) ?? null
     }
     return null
   }
@@ -151,9 +189,37 @@ function makeClassList() {
 const _docEl = {
   classList: makeClassList(),
   style: new StubStyle(),
+  // Reflow shadow ownership writes data-canvas-chat-shadow here.
+  _attrs: {} as Record<string, string>,
+  setAttribute(k: string, v: string) { this._attrs[k] = v },
+  removeAttribute(k: string) { delete this._attrs[k] },
+  getAttribute(k: string) { return this._attrs[k] ?? null },
 }
 
 let _bodyChildren: StubElement[] = []
+
+// Fake host chain for the content-park path (S3 eviction tests):
+//   [data-spindle-mount="sidebar"] → parentElement (holder)
+//   → [class*="_panel_"] → [class*="_panelContent_"]
+// Class names carry the literal '_panel_' / '_panelContent_' substrings
+// that dom/lumiverse's [class*="…"] selectors match.
+const fakePanel = new StubElement()
+fakePanel.className = 'drawer_panel_x'
+const fakePanelHolder = new StubElement()
+fakePanelHolder.appendChild(fakePanel)
+const fakeSidebar = new StubElement()
+fakeSidebar.parentElement = fakePanelHolder
+
+let fakeContent: StubElement | null = null
+function setFakeHostContent(el: StubElement | null) {
+  fakeContent = el
+  if (el) {
+    fakePanel.removeChild(el)
+    fakePanel.appendChild(el)
+  } else {
+    for (const c of Array.from(fakePanel.children)) fakePanel.removeChild(c)
+  }
+}
 
 ;(globalThis as any).document = {
   documentElement: _docEl,
@@ -164,7 +230,11 @@ let _bodyChildren: StubElement[] = []
   },
   getElementById(_id: string) { return null },
   createElement(_tag: string) { return new StubElement() },
-  querySelector(_sel: string) { return null },
+  querySelector(sel: string) {
+    if (sel === '[data-spindle-mount="sidebar"]') return fakeSidebar
+    if (sel.includes('data-canvas-main-panel-content')) return fakeContent
+    return null
+  },
   querySelectorAll(_sel: string) { return [] },
 }
 
@@ -176,13 +246,14 @@ const {
   isMainMirrorActive,
   isCanvasMainOpen,
   __resetMainMirrorForTest,
-  __getReparkIdleCountForTest,
-  restartReparkWatch,
   applyMainMirrorDrawer,
+  reconcileMainMirrorDrawer,
   openCanvasMainDrawer,
   closeCanvasMainDrawer,
   onMainMirrorTabActivated,
 } = await import('../main-mirror-drawer')
+
+const mainMirrorModule = await import('../main-mirror-drawer')
 
 export {}
 
@@ -197,19 +268,6 @@ export {}
   assert(!isCanvasMainOpen(), 'T1: isCanvasMainOpen false after reset')
 }
 
-// --- T2: Idle count starts at 0 after reset ---
-{
-  __resetMainMirrorForTest()
-  assertEqual(__getReparkIdleCountForTest(), 0, 'T2: idle count 0 after reset')
-}
-
-// --- T3: restartReparkWatch is exported and callable ---
-{
-  __resetMainMirrorForTest()
-  restartReparkWatch()
-  assert(true, 'T3: restartReparkWatch callable without error')
-}
-
 // --- T4: applyMainMirrorDrawer(false) stays inactive ---
 {
   __resetMainMirrorForTest()
@@ -217,12 +275,18 @@ export {}
   assert(!isMainMirrorActive(), 'T4: still inactive after apply(false)')
 }
 
-// --- T5: isMainMirrorActive false on mobile ---
+// --- T5 (S6): isMainMirrorActive TRUE on mobile — the shell owns the
+//     mobile main surface now (full-bleed mount, horizontal list). ---
 {
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 400
   applyMainMirrorDrawer(true)
-  assert(!isMainMirrorActive(), 'T5: inactive on mobile viewport')
+  assert(isMainMirrorActive(), 'T5 (S6): shell ACTIVE on mobile viewport (full-bleed mount)')
+  assert(
+    String((mainMirrorModule.getMainMirrorDrawer() as any)?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'T5b (S6): mobile mount is full-bleed (inline width = scaled-viewport calc)',
+  )
+  __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 1200
 }
 
@@ -245,7 +309,6 @@ export {}
   __resetMainMirrorForTest()
   assert(!isMainMirrorActive(), 'T8a: inactive after teardown')
   assert(!isCanvasMainOpen(), 'T8b: not open after teardown')
-  assertEqual(__getReparkIdleCountForTest(), 0, 'T8c: idle count reset')
 }
 
 // --- T9: applyMainMirrorDrawer(true) on desktop mounts successfully ---
@@ -270,6 +333,20 @@ export {}
   )
 }
 
+// --- T9b: data-drawer-open tracks the shell open state (closed-shadow
+//     suppression key; the main mirror used to never update it). ---
+{
+  // Use the module getter — the body-children spy array keeps stale wrappers
+  // from earlier mounts (remove() does not prune it).
+  const shell = mainMirrorModule.getMainMirrorWrapper() as any
+  assert(!!shell, 'T9b: mounted shell present')
+  assertEqual(shell?.dataset?.drawerOpen, 'false', 'T9b: closed mount → data-drawer-open=false')
+  openCanvasMainDrawer()
+  assertEqual(shell?.dataset?.drawerOpen, 'true', 'T9b: open → data-drawer-open=true')
+  closeCanvasMainDrawer()
+  assertEqual(shell?.dataset?.drawerOpen, 'false', 'T9b: close → data-drawer-open=false')
+}
+
 // --- T10: applyMainMirrorDrawer(false) after mount tears down ---
 {
   // T9 left it active
@@ -277,94 +354,392 @@ export {}
   assert(!isMainMirrorActive(), 'T10: inactive after apply(false)')
 }
 
-// --- T11: openCanvasMainDrawer re-arms repark watch after idle-stop ---
+// --- T13: S1 gate inversion — reconcileMainMirrorDrawer mounts the shell
+// on desktop with taskbarMode OFF (Canvas owns the main drawer
+// unconditionally; pin chrome is gated separately in main-tab-pin). ---
 {
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 1200
-  applyMainMirrorDrawer(true)
-  assert(isMainMirrorActive(), 'T11 setup: active after apply(true)')
-
-  // Sync setTimeout stub causes all ticks to fire immediately.
-  // After mount, the repark watch ticks until idle-stop (≥10 idle ticks).
-  const idleCountAfterMount = __getReparkIdleCountForTest()
+  // Default settings: taskbarMode = false.
+  reconcileMainMirrorDrawer()
+  assert(isMainMirrorActive(), 'T13: shell active after reconcile with taskbar OFF')
+  const shell = _bodyChildren.find((c) =>
+    String(c.className || '').includes('sidebar-ux-main-mirror-wrapper'),
+  )
+  assert(!!shell, 'T13: main-mirror wrapper present without taskbar mode')
+  // No pin host may be created by the shell mount (taskbar chrome off).
   assert(
-    idleCountAfterMount >= 10,
-    `T11 setup: repark watch idle-stopped (idle=${idleCountAfterMount})`,
+    !_bodyChildren.some((c) =>
+      String(c.className || '').includes('sidebar-ux-tab-list-pin-host')),
+    'T13: no pin host created (taskbar chrome off)',
+  )
+  // Tear down for the next case.
+  applyMainMirrorDrawer(false)
+}
+
+// --- T14 (S6): reconcile MOUNTS on mobile too (shell owns both surfaces) ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 400
+  reconcileMainMirrorDrawer()
+  assert(isMainMirrorActive(), 'T14 (S6): shell ACTIVE on mobile after reconcile')
+  ;(globalThis as any).window.innerWidth = 1200
+  __resetMainMirrorForTest()
+}
+
+// --- T15 (live-verify): restore content re-assert must NOT change the
+//     persisted open state. The boot placement pass's primary re-assert routes
+//     through activateMainMirrorFromRestore with `open:false`, so
+//     onMainMirrorTabActivated parks content/title but leaves a persisted-closed
+//     shell closed. Previously the re-assert (and its +500ms retry) reopened the
+//     drawer after restoreMainDrawerFromDom had honored `primary.open: false`. ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  applyMainMirrorDrawer(true) // mounts closed
+  assert(!isCanvasMainOpen(), 'T15: shell mounted closed')
+  onMainMirrorTabActivated('Theme', { open: false })
+  assert(!isCanvasMainOpen(), 'T15: activation with open:false keeps the shell closed')
+  onMainMirrorTabActivated('Theme')
+  assert(isCanvasMainOpen(), 'T15: default activation still opens')
+  __resetMainMirrorForTest()
+}
+
+// =====================================================================
+// S3 content single-path — event-driven park (repark poll removed)
+// =====================================================================
+
+// --- E1: stale parked node is evicted and replaced by the host's new
+// panelContent node on the next event-driven park. ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+
+  const fake1 = new StubElement()
+  fake1.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fake1)
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'E1 setup: active after apply(true)')
+
+  // Mount parks the host content event-driven — no timer involved.
+  const slot = fake1.parentElement
+  assert(!!slot && slot !== fakePanelHolder, 'E1: fake1 parked into shell slot on mount')
+  assert(
+    fake1.getAttribute('data-canvas-main-panel-content') === '1',
+    'E1: fake1 carries the content mark',
   )
 
-  // Switch to a deferred timer so the restart's ticks are captured but
-  // NOT fired. This lets us observe the intermediate state proving the
-  // watch was actually reset.
-  let capturedTick: Function | null = null
-  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
-    capturedTick = fn
-    return 0 as any
-  }
+  // Host React remounts panelContent → the host returns a NEW node.
+  const fake2 = new StubElement()
+  fake2.className = 'drawer_panelContent_stub2'
+  setFakeHostContent(fake2)
+  const { ensureHostContentParkedPublic } = mainMirrorModule
+  ensureHostContentParkedPublic()
 
+  // Old node evicted from the slot, unmarked, detached; new node parked.
+  assert(!slot!.children.includes(fake1), 'E1: stale fake1 evicted from slot')
+  assert(
+    fake1.getAttribute('data-canvas-main-panel-content') === null,
+    'E1: fake1 mark removed on eviction',
+  )
+  assert(slot!.children.includes(fake2), 'E1: new fake2 parked into slot')
+  assert(
+    fake2.getAttribute('data-canvas-main-panel-content') === '1',
+    'E1: fake2 carries the content mark',
+  )
+  assertEqual(fake2.parentElement, slot, 'E1: fake2 parent is the shell slot')
+
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+}
+
+// --- E2: park is idempotent — an already-parked node is left in place
+// (no eviction, no duplicate). ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+
+  const fake1 = new StubElement()
+  fake1.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fake1)
+  applyMainMirrorDrawer(true)
+  const slot = fake1.parentElement
+  assert(!!slot && slot !== fakePanelHolder, 'E2 setup: fake1 parked on mount')
+
+  // Re-park with the SAME host node: resolve returns it (host-first),
+  // identity matches the cache → no eviction, no re-append.
+  const { ensureHostContentParkedPublic } = mainMirrorModule
+  ensureHostContentParkedPublic()
+  ensureHostContentParkedPublic()
+
+  assertEqual(slot!.children.length, 1, 'E2: no duplicate park of the same node')
+  assert(slot!.children[0] === fake1, 'E2: parked node is still the host node')
+  assert(
+    fake1.getAttribute('data-canvas-main-panel-content') === '1',
+    'E2: mark retained',
+  )
+
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+}
+
+// --- E3: the repark poll is gone — no repark exports on the module. ---
+{
+  const mod = mainMirrorModule as Record<string, unknown>
+  assert(!('restartReparkWatch' in mod), 'E3: restartReparkWatch removed')
+  assert(!('__getReparkIdleCountForTest' in mod), 'E3: __getReparkIdleCountForTest removed')
+  assert(!('startReparkWatch' in mod), 'E3: startReparkWatch not exported')
+  assert(!('stopReparkWatch' in mod), 'E3: stopReparkWatch not exported')
+}
+
+// --- E4: open + tab activation still park (event-driven, no poll). ---
+{
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+
+  const fake1 = new StubElement()
+  fake1.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fake1)
+  applyMainMirrorDrawer(true)
+  const slot = fake1.parentElement
+  assert(!!slot && slot !== fakePanelHolder, 'E4 setup: parked on mount')
+
+  // Simulate a host-side re-insertion: detach the parked node, then fire
+  // the open/activation events — each re-parks once.
+  slot!.removeChild(fake1)
+  fakePanelHolder.appendChild(fake1)
+  setFakeHostContent(fake1)
   openCanvasMainDrawer()
+  assertEqual(fake1.parentElement, slot, 'E4: open re-parked the detached node')
 
-  // The watch was restarted: _reparkIdleCount was reset to 0 by
-  // startReparkWatch, but the deferred ticks haven't fired yet.
-  assertEqual(
-    __getReparkIdleCountForTest(), 0,
-    'T11: openCanvasMainDrawer restarted repark watch (idle reset to 0)',
-  )
+  slot!.removeChild(fake1)
+  fakePanelHolder.appendChild(fake1)
+  onMainMirrorTabActivated('E4 Tab')
+  assertEqual(fake1.parentElement, slot, 'E4: tab activation re-parked the node')
 
-  // Restore sync timers and advance the captured tick to prove the
-  // watch actually re-ran its idle cycle.
-  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
-    fn()
-    return 0 as any
-  }
-  // capturedTick was assigned inside the deferred stub's callback; TS cannot
-  // prove it ran, so cast to bypass the narrowing to never.
-  ;(capturedTick as (() => void) | null)?.()
-
-  const idleAfterAdvance = __getReparkIdleCountForTest()
-  assert(
-    idleAfterAdvance >= 10,
-    `T11: repark watch re-idled after restart (idle=${idleAfterAdvance})`,
-  )
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
 }
 
-// --- T12: onMainMirrorTabActivated re-arms repark watch after idle-stop ---
+// --- S5: shell open/close dispatches setDrawer(primary) through the real
+//     dispatch → the owned model carries SHELL truth (close persists). ---
 {
+  const { createEmptyModel, builtinKey } = require('../../core/model') as typeof import('../../core/model')
+  const { FakeHost } = require('../../host/fake/implementation') as typeof import('../../host/fake/implementation')
+  const { bootstrap, shutdown, flush } = require('../../recon/dispatch') as typeof import('../../recon/dispatch')
+
+  const key = builtinKey('profile')
+  const fakeHost = new FakeHost([
+    {
+      key, liveId: 'h:profile', location: 'primary',
+      hidden: false, activeInPrimary: true, activeInSecondary: false,
+      hasContentRoot: true, isBuiltin: true,
+    },
+  ])
+  shutdown()
+  bootstrap({
+    ...createEmptyModel(),
+    primary: [key],
+    secondary: [],
+    hidden: [],
+    active: { primary: key, secondary: null },
+    drawers: { primary: { open: false, width: 420 }, secondary: { open: false, width: 420 } },
+  }, fakeHost)
+
   __resetMainMirrorForTest()
   ;(globalThis as any).window.innerWidth = 1200
+  const fakeContent = new StubElement()
+  fakeContent.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContent)
   applyMainMirrorDrawer(true)
-  assert(isMainMirrorActive(), 'T12 setup: active after apply(true)')
+  assert(isMainMirrorActive(), 'S5 setup: shell active')
 
-  const idleBefore = __getReparkIdleCountForTest()
-  assert(idleBefore >= 10, `T12 setup: repark watch idle-stopped (idle=${idleBefore})`)
+  ;(async () => {
+    const dm = require('../../recon/dispatch') as typeof import('../../recon/dispatch')
+    // The shell's setDrawer dispatch is a fire-and-forget dynamic import
+    // chained onto the dispatch queue — poll the model instead of racing it.
+    const waitFor = async (pred: () => boolean, tries = 200): Promise<boolean> => {
+      for (let i = 0; i < tries; i++) {
+        if (pred()) return true
+        await Promise.resolve()
+      }
+      return false
+    }
 
-  // Deferred timer: capture the restart's tick without firing it.
-  let capturedTick: Function | null = null
-  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
-    capturedTick = fn
-    return 0 as any
-  }
+    openCanvasMainDrawer()
+    const opened = await waitFor(() => dm.getModel()!.drawers.primary.open === true)
+    assert(opened, 'S5.a: shell open → model primary.open=true')
+    assertEqual(dm.getModel()!.drawers.primary.width, 420, 'S5.a2: width carried with the open dispatch')
 
-  onMainMirrorTabActivated('Test Tab')
+    closeCanvasMainDrawer()
+    const closed = await waitFor(() => dm.getModel()!.drawers.primary.open === false)
+    assert(closed, 'S5.b: shell close → model primary.open=false (close persists)')
 
-  // Idle count reset to 0 proves the watch was restarted.
-  assertEqual(
-    __getReparkIdleCountForTest(), 0,
-    'T12: onMainMirrorTabActivated restarted repark watch (idle reset to 0)',
-  )
+    applyMainMirrorDrawer(false)
+    setFakeHostContent(null)
+    shutdown()
+    __resetMainMirrorForTest()
 
-  // Advance captured tick with sync timers to prove watch re-ran.
-  ;(globalThis as any).setTimeout = (fn: Function, _ms?: number) => {
-    fn()
-    return 0 as any
-  }
-  ;(capturedTick as (() => void) | null)?.()
-
-  const idleAfterAdvance = __getReparkIdleCountForTest()
-  assert(
-    idleAfterAdvance >= 10,
-    `T12: repark watch re-idled after restart (idle=${idleAfterAdvance})`,
-  )
+    await runS6Tests()
+  })()
 }
 
-console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
-if (failed > 0) process.exit(1)
+// =====================================================================
+// S6: mobile main shell — full-bleed mount, restyle-in-place crossing,
+// Canvas↔Canvas exclusion. Defined after the S5 block (hoisted); called
+// from the S5 tail so the summary prints once, at the true end.
+// =====================================================================
+async function runS6Tests(): Promise<void> {
+  const { syncMainMirrorToViewport } = mainMirrorModule
+  const { enforceExclusionOnOpen } = await import('../mobile-exclusion')
+  const { MAIN_MIRROR_WIDTH_VAR } = await import('../styles')
+
+  // Body classList stub — setMobileOpenClass touches document.body.
+  const bodyStub = (globalThis as any).document.body as any
+  if (!bodyStub.classList) {
+    const cls = new Set<string>()
+    bodyStub.classList = {
+      add: (c: string) => cls.add(c),
+      remove: (c: string) => cls.delete(c),
+      contains: (c: string) => cls.has(c),
+    }
+  }
+  // Drain the dynamic-import chains the S6 paths fire.
+  const settle = async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }
+
+  // ── S6.a: mobile mount — full-bleed, list rides IN the drawer ──
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentA = new StubElement()
+  fakeContentA.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentA)
+  applyMainMirrorDrawer(true)
+  assert(isMainMirrorActive(), 'S6.a1: shell active on mobile')
+  assert(
+    String((mainMirrorModule.getMainMirrorDrawer() as any)?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'S6.a2: full-bleed inline width at mobile mount',
+  )
+  const listAtMount = mainMirrorModule.getMainMirrorTabList() as any
+  assert(!!listAtMount && listAtMount.parentElement === mainMirrorModule.getMainMirrorDrawer(),
+    'S6.a3: tab list rides IN the drawer on mobile (no pin reparent)')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  ;(globalThis as any).window.innerWidth = 1200
+  __resetMainMirrorForTest()
+  await settle()
+
+  // ── S6.b: crossing sync — desktop → mobile → desktop, no remount ──
+  const fakeContentB = new StubElement()
+  fakeContentB.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentB)
+  applyMainMirrorDrawer(true)
+  _docEl.style.setProperty(MAIN_MIRROR_WIDTH_VAR, '420px')
+  closeCanvasMainDrawer()
+  const drawerB = mainMirrorModule.getMainMirrorDrawer() as any
+  assert(
+    String(drawerB?.style.width ?? '').includes('var(--sidebar-ux-main-mirror-w'),
+    'S6.b1: desktop width is var-driven',
+  )
+  ;(globalThis as any).window.innerWidth = 390
+  syncMainMirrorToViewport()
+  assert(
+    String(drawerB?.style.width ?? '').includes('app-scaled-viewport-width'),
+    'S6.b2: cross-down → full-bleed width (restyle-in-place)',
+  )
+  assertEqual(_docEl.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR), '390px', 'S6.b3: var = innerWidth approximation')
+  {
+    // Sign follows the shell's anchored side (stub store default may be
+    // either) — closed = ±(ceil(w)+1) away from the viewport edge.
+    const { closedTransformPx } = await import('../drawer-shell')
+    const { getMainDrawerSide } = await import('../../store')
+    const expected = `translateX(${closedTransformPx(getMainDrawerSide() as 'left' | 'right', 390)}px)`
+    assertEqual(
+      String((mainMirrorModule.getMainMirrorWrapper() as any)?.style.transform ?? ''),
+      expected,
+      'S6.b4: closed transform tracks the full-bleed width (ceil+1)',
+    )
+  }
+  ;(globalThis as any).window.innerWidth = 1200
+  syncMainMirrorToViewport()
+  assert(
+    String(drawerB?.style.width ?? '').includes('var(--sidebar-ux-main-mirror-w'),
+    'S6.b5: cross-up → width var-driven again',
+  )
+  assertEqual(_docEl.style.getPropertyValue(MAIN_MIRROR_WIDTH_VAR), '420px', 'S6.b6: desktop width restored from the cross-down capture')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  __resetMainMirrorForTest()
+  await settle()
+
+  // ── S6.c: exclusion — secondary opens → the SHELL closes directly ──
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentC = new StubElement()
+  fakeContentC.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentC)
+  applyMainMirrorDrawer(true)
+  openCanvasMainDrawer()
+  assert(isCanvasMainOpen(), 'S6.c1: shell open on mobile')
+  enforceExclusionOnOpen('secondary')
+  await settle()
+  assert(!isCanvasMainOpen(), 'S6.c2: secondary-open exclusion closed the SHELL (no host-toggle indirection)')
+  applyMainMirrorDrawer(false)
+  setFakeHostContent(null)
+  __resetMainMirrorForTest()
+  ;(globalThis as any).window.innerWidth = 1200
+  await settle()
+
+  // ── S6.d: the main edge toggle is never hidden by the DESKTOP hide
+  //     setting on mobile — the taskbar pin strip is not mounted there, so
+  //     the toggle is the only reopen affordance (secondary parity). ──
+  const { setSettings } = await import('../../settings/state')
+  const { updateMainMirrorDrawerTabVisibility } = mainMirrorModule
+  ;(globalThis as any).window.innerWidth = 500
+  const fakeContentD = new StubElement()
+  fakeContentD.className = 'drawer_panelContent_stub'
+  setFakeHostContent(fakeContentD)
+  try {
+    setSettings({ taskbarMode: true, moveControlsToOuterEdge: true, hideDrawerOpenCloseButtons: true })
+    applyMainMirrorDrawer(true)
+    const wrapperD = mainMirrorModule.getMainMirrorWrapper() as any
+    const tabD = wrapperD?.querySelector('.sidebar-ux-drawer-tab')
+    assert(!!tabD, 'S6.d0: main edge toggle exists on mobile mount')
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d1: mobile mount keeps the main edge toggle visible with hide ON',
+    )
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d2: mobile update keeps the main edge toggle visible with hide ON',
+    )
+    // Desktop: the setting hides the toggle again.
+    ;(globalThis as any).window.innerWidth = 1200
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'none',
+      'S6.d3: desktop update hides the toggle with hide ON',
+    )
+    // Desktop, hide OFF: visible.
+    setSettings({ hideDrawerOpenCloseButtons: false })
+    updateMainMirrorDrawerTabVisibility()
+    assertEqual(
+      String(tabD?.style.display ?? ''),
+      'flex',
+      'S6.d4: desktop hide OFF shows the toggle',
+    )
+  } finally {
+    // Module state — restore defaults so nothing leaks past this file.
+    setSettings({ taskbarMode: false, moveControlsToOuterEdge: false, hideDrawerOpenCloseButtons: false })
+    applyMainMirrorDrawer(false)
+    setFakeHostContent(null)
+    __resetMainMirrorForTest()
+    ;(globalThis as any).window.innerWidth = 1200
+    await settle()
+  }
+
+  console.log(`main-mirror-drawer tests: ${passed} passed, ${failed} failed`)
+  if (failed > 0) process.exit(1)
+}
+

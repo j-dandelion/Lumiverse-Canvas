@@ -25,6 +25,7 @@
 
 import { TAB_LIST_WIDTH_PX } from './styles'
 import { dlog } from '../debug/log'
+import { isInstanceActive } from '../lifecycle/instance'
 
 /** Strip width dock panels are shifted by (matches TAB_LIST_WIDTH_PX). */
 export const DOCK_EDGE_OFFSET_PX = TAB_LIST_WIDTH_PX
@@ -62,6 +63,9 @@ function stripPinnedOn(side: 'left' | 'right'): boolean {
   const hosts = document.querySelectorAll(PIN_HOST_SEL)
   for (const host of Array.from(hosts)) {
     const el = host as HTMLElement
+    // S8: horizontal hosts are full-width top/bottom strips — they do not
+    // occupy a vertical edge, so dock panels must stay flush.
+    if (el.getAttribute?.('data-strip-axis') === 'horizontal') continue
     const s = el.classList.contains(SIDE_LEFT_CLASS) ? 'left' : 'right'
     if (s === side) return true
   }
@@ -143,6 +147,7 @@ function dockEdgeOf(
  * add/remove/expand/collapse/resize) — recomputes from the live DOM.
  */
 export function updateDockOffsets(): void {
+  if (!isInstanceActive()) return
   if (typeof document === 'undefined' || typeof window === 'undefined') return
   // No dock inset anywhere → no dock panel to offset.
   const dock = getDockInsets()

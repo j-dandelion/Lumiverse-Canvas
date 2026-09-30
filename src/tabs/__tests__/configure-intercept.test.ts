@@ -53,7 +53,6 @@ mock.module('../../sidebar/drawer-sync', () => ({
   syncSecondaryTabLabels: syncSecondaryTabLabelsSpy,
   syncDrawerTabSettings: () => {},
   checkSideChanged: () => {},
-  restoreSecondaryTabButtons: () => {},
   startSideChangeWatcher: () => {},
   stopSideChangeWatcher: () => {},
   stopDrawerTabResizeWatcher: () => {},

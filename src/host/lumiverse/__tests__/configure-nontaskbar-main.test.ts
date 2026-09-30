@@ -115,6 +115,11 @@ const sidebarStub = {
 // ── Mocks: keep the host + buttons REAL; stub the store/observer/assignment
 // surfaces the real LumiverseHost reads. ──
 import { mock } from 'bun:test'
+// Spread the real modules so newly-imported exports keep linking; the stubs
+// below only neutralize what this test isolates.
+import * as actualMainMirror from '../../../sidebar/main-mirror-drawer'
+import * as actualStore from '../../../store'
+import * as actualLumiverse from '../../../dom/lumiverse'
 
 const state = {
   hostSettings: { tabOrder: [] as string[], hiddenTabIds: [] as string[] },
@@ -160,6 +165,7 @@ mock.module('../../../sidebar/drawer-observer', () => ({
 }))
 
 mock.module('../../../store', () => ({
+  ...actualStore,
   findStoreData: () => {},
   getMainDrawerSide: () => 'left',
   isMainDrawerOpen: () => false,
@@ -173,6 +179,7 @@ mock.module('../../../store', () => ({
 }))
 
 mock.module('../../../dom/lumiverse', () => ({
+  ...actualLumiverse,
   getMainSidebar: () => sidebarStub as unknown as HTMLElement,
   getMainDrawer: () => null,
   getMainPanel: () => null,
@@ -221,7 +228,15 @@ mock.module('../../../sidebar/secondary', () => ({
 }))
 
 mock.module('../../../sidebar/main-mirror-drawer', () => ({
+  ...actualMainMirror,
   getMainMirrorTabList: () => null,
+  getMainMirrorDrawer: () => null,
+  getMainMirrorPanel: () => null,
+  isMainMirrorActive: () => false,
+  onMainMirrorTabActivated: () => {},
+  applyMainMirrorDrawer: () => {},
+  openCanvasMainDrawer: () => {},
+  closeCanvasMainDrawer: () => {},
   getMainMirrorWrapper: () => null,
   getMainMirrorDrawer: () => null,
   getMainMirrorTitleEl: () => null,
@@ -237,8 +252,6 @@ mock.module('../../../sidebar/main-mirror-drawer', () => ({
   openCanvasMainDrawer: () => {},
   closeCanvasMainDrawer: () => {},
   ensureHostContentParkedPublic: () => {},
-  restartReparkWatch: () => {},
-  __getReparkIdleCountForTest: () => 0,
   __resetMainMirrorForTest: () => {},
   MAIN_MIRROR_WIDTH_VAR: '--sidebar-ux-main-mirror-w',
 }))
@@ -278,6 +291,11 @@ mock.module('../../../settings/state', () => ({
   getDualLayoutSlot: () => null,
   setSingleLayoutSlot: () => {},
   setDualLayoutSlot: () => {},
+  getOsSingleLayoutSlot: () => null,
+  getOsDualLayoutSlot: () => null,
+  setOsSingleLayoutSlot: () => {},
+  setOsDualLayoutSlot: () => {},
+  isOsModeEnabled: () => false,
   hydrateSettings: () => {},
   hydrateModeLayoutSlots: () => {},
   persistSettings: () => {},

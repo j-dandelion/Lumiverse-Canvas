@@ -171,6 +171,12 @@ export async function moveBuiltInTabToSecondaryContainer(
     // selection dropdown stayed empty. Pre-activate (click the main button)
     // FIRST so the root is created while the host still has the tab active.
     const prevMainOpen = isMainDrawerOpen()
+    // Live-verify #13: capture the host's active tab BEFORE the click so it
+    // can be restored immediately after the root mounts. The pre-activation
+    // is only a mount mechanism; leaving the moved tab active repaints the
+    // main content (and makes the host treat the later move-out as an
+    // ACTIVE-tab move, firing its first-remaining-tab reset).
+    const prevActiveTabId = hostMainDrawerDomState()?.tab ?? null
     dlog(
       `[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` +
       `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`,
@@ -198,6 +204,29 @@ export async function moveBuiltInTabToSecondaryContainer(
       },
       dlog,
     })
+    // Restore the user's previous active NOW — still inside the frame the
+    // pre-activation rAF belongs to, before the browser paints — so the moved
+    // tab's content never becomes visible. The mounted root stays cached.
+    if (prevActiveTabId && prevActiveTabId !== tabId) {
+      try {
+        const { findMainTabButton } = await import('./buttons')
+        const prevBtn = findMainTabButton(prevActiveTabId) as HTMLElement | null
+        // Never restore onto a hidden button: Canvas hides moved-out main
+        // buttons with inline display:none and the host's tabBtnActive can be
+        // stale, so clicking one would activate a tab that belongs to the
+        // secondary drawer (review batch 1).
+        if (prevBtn && prevBtn.isConnected && prevBtn.style.display !== 'none') {
+          prevBtn.click()
+        } else {
+          dlog(
+            `[tabmove] pre-activation restore skipped for "${prevActiveTabId}" ` +
+            `(button ${prevBtn ? 'hidden' : 'missing'})`,
+          )
+        }
+      } catch (err) {
+        dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`)
+      }
+    }
     // rAF #1: detached registry root commit + first useEffect (e.g. loadBooks)
     await new Promise<void>((r) => requestAnimationFrame(() => r()))
     dlog(
