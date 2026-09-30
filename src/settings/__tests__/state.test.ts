@@ -15,6 +15,7 @@ import {
   isDragAndDropDrawerTabsEnabled,
   getDrawerLocation,
   isHorizontalStrip,
+  setMobileViewportActive,
   hydrateModeLayoutSlots,
   getSingleLayoutSlot,
   setSingleLayoutSlot,
@@ -527,6 +528,72 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
   setSettings({ moveControlsToOuterEdge: true })
   assertEqual(getSettings().sidesChromePrefs?.moveControlsToOuterEdge, true, 'toggle records outer on')
   assertEqual(getSettings().sidesChromePrefs?.taskbarMode, false, 'toggle records taskbar default off')
+}
+
+// --- LUMI-44: mobile excludes Sides and remembers explicit Top/Bottom ---
+{
+  const original = { ...getSettings() }
+  try {
+    setMobileViewportActive(false)
+    hydrateSettings(null)
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'mobile layout: new install defaults remembered choice to top')
+
+    // AC1: Sides on desktop does not erase either explicit horizontal choice.
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'sides' })
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile entry: Sides resolves to remembered Top')
+    setMobileViewportActive(false)
+    assertEqual(getSettings().drawerLocation, 'top', 'desktop return keeps normalized Top active')
+
+    setSettings({ drawerLocation: 'sides' })
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'sides' })
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile entry: Sides resolves to remembered Bottom')
+
+    // AC2: most-recent explicit horizontal choice wins; Sides is not a choice.
+    setMobileViewportActive(false)
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'top' })
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'Sides leaves the latest explicit horizontal choice intact')
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile entry uses the latest alternating selection')
+
+    // AC3: selecting/restoring Sides on mobile cannot activate it or alter memory.
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile Sides selection stays on remembered Top')
+    assertEqual(getSettings().lastHorizontalDrawerLocation, 'top', 'mobile Sides selection does not overwrite memory')
+    setSettings({ drawerLocation: 'bottom' })
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile Sides selection after Bottom stays on Bottom')
+
+    // AC4: desktop Sides remains selectable, and entering mobile resolves it
+    // again without affecting the independent remembered mode.
+    setMobileViewportActive(false)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'desktop return preserves Bottom until another choice')
+    setSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'sides', 'Sides remains selectable on desktop')
+    setMobileViewportActive(true)
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile entry after desktop Sides restores Bottom')
+
+    // AC3: boot restore while mobile normalizes persisted Sides. Missing
+    // memory deterministically falls back to Top; explicit memory is retained.
+    hydrateSettings({ drawerLocation: 'sides' })
+    assertEqual(getSettings().drawerLocation, 'top', 'mobile restore with no horizontal choice falls back to Top')
+    hydrateSettings({ drawerLocation: 'sides', lastHorizontalDrawerLocation: 'bottom' })
+    assertEqual(getSettings().drawerLocation, 'bottom', 'mobile restore honors persisted Bottom memory')
+    assertEqual(
+      mergeCanvasSettings({ drawerLocation: 'bottom' }).lastHorizontalDrawerLocation,
+      'bottom',
+      'legacy Bottom preference seeds remembered mode during migration',
+    )
+  } finally {
+    setMobileViewportActive(false)
+    hydrateSettings(original)
+  }
 }
 
 // --- OS mode (cascade 2c/2d + osChromePrefs bookkeeping) ---

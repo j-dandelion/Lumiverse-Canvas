@@ -41,7 +41,7 @@ interface CanvasFeature {
 | `persistDrawerOpenStateFeature` | `persistDrawerOpenState` | Cancels in-flight save when open facet turns off |
 | `persistDrawerWidthFeature` | `persistDrawerWidth` | Cancels in-flight save when width facet turns off |
 | `slashFeature` | `slashCommandsEnabled` | Mounts/unmounts the slash command runtime |
-| `drawerLocationFeature` | `drawerLocation` | Sides (default) / Top / Bottom. Presentation + presence subscription + the single reconcile fan-out for the horizontal strip (init runs before any pin chrome); unconditional |
+| `drawerLocationFeature` | `drawerLocation` | Sides (default) / Top / Bottom. Mobile remembers the last explicit Top/Bottom choice separately and resolves Sides to it (Top if none), and the panel disables the Sides option while mobile; desktop return keeps that mode until Sides is explicitly chosen. Presentation + presence subscription + the single reconcile fan-out for the horizontal strip; unconditional |
 | `tabPositionFeature` | `moveControlsToOuterEdge` | Moves tab buttons to screen-edge side |
 | `taskbarModeFeature` | `taskbarMode` | Taskbar mode: pin tab strips when drawers are closed (requires `moveControlsToOuterEdge`); on desktop, main uses a full Canvas-owned shell |
 | `hideDrawerOpenCloseButtonsFeature` | `hideDrawerOpenCloseButtons` | Hides drawer open/close edge buttons (desktop only, requires `taskbarMode`) |

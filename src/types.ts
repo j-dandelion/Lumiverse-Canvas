@@ -80,6 +80,11 @@ export interface CanvasSettings {
    *  `sidesChromePrefs` (see `setSettings`). */
   drawerLocation?: DrawerLocation
 
+  /** Last explicitly selected horizontal drawer mode. Kept independently
+   *  from `drawerLocation` so desktop Sides mode does not erase the user's
+   *  Top/Bottom choice used when entering mobile. */
+  lastHorizontalDrawerLocation?: 'top' | 'bottom'
+
   /** Top/Bottom only, dual drawers only: where the boundary between the
    *  two drawers' strip regions sits, as a fraction of the strip width
    *  measured from the SECONDARY drawer's screen edge (0.5 = even split).
@@ -287,6 +292,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   mirrorCompactPosition: true,
   // Drawers
   drawerLocation: 'sides',
+  lastHorizontalDrawerLocation: 'top',
   horizontalSplit: 0.5,
   sidesChromePrefs: null,
   moveControlsToOuterEdge: false,
@@ -339,6 +345,7 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
  *
  * S8 (Drawer location) cascades — ORDER MATTERS:
  *   1. Enum coercion: corrupt/unknown `drawerLocation` → `'sides'`.
+ *   1a. Remembered horizontal location is always `'top'` or `'bottom'`.
  *   2. Location invariant: `'top' | 'bottom'` forces `moveControlsToOuterEdge`
  *      + `taskbarMode` on. Never forces them off — the Sides restore lives in
  *      `setSettings` (it needs prev/next, this function has only one state).
@@ -367,6 +374,9 @@ export function normalizeCanvasSettingsFields(
   // Cascade 1: enum coercion (corrupt disk values)
   if (out.drawerLocation !== 'top' && out.drawerLocation !== 'bottom') {
     out = { ...out, drawerLocation: 'sides' }
+  }
+  if (out.lastHorizontalDrawerLocation !== 'top' && out.lastHorizontalDrawerLocation !== 'bottom') {
+    out = { ...out, lastHorizontalDrawerLocation: 'top' }
   }
   // Cascade 2: drawer location invariant — horizontal strips need the
   // taskbar chrome (outer-edge tab controls + pinned strips).
@@ -505,6 +515,14 @@ export function mergeCanvasSettings(saved: CanvasSettings | null | undefined): R
     // historical main-only chrome → null (the new default).
     if (saved.startButtonLocation === undefined && raw.osSecondaryStartMenu === true) {
       out.startButtonLocation = 'both'
+    }
+    // Seed the remembered horizontal mode from pre-invariant settings. When
+    // the old setting was Sides (or absent), the existing Top default wins.
+    if (
+      saved.lastHorizontalDrawerLocation === undefined
+      && (saved.drawerLocation === 'top' || saved.drawerLocation === 'bottom')
+    ) {
+      out.lastHorizontalDrawerLocation = saved.drawerLocation
     }
   }
   return normalizeCanvasSettingsFields(out)

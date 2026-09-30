@@ -46,11 +46,12 @@ import { tagMainSidebarButtons } from './chat/tag-buttons'
 import { showAllMainTabButtons } from './tabs/buttons'
 import {
   getSettings, setLastLoadedLayout, refreshSettingsPanel, hydrateSettings,
+  setMobileViewportActive,
 } from './settings/state'
 import { FEATURES, alwaysCleanups } from './features/registry'
 import { registerCleanup, cleanupAll } from './sidebar/cleanup'
 import { startMainDrawerPersistence, stopMainDrawerPersistence, beginMainDrawerRestoreGuard, unsuppressMainDrawer } from './sidebar/main-persist'
-import { startMobileExclusion } from './sidebar/mobile-exclusion'
+import { isMobileViewport, startMobileExclusion } from './sidebar/mobile-exclusion'
 import { startSideChangeWatcher } from './sidebar/drawer-sync'
 import { drawerObserver } from './sidebar/drawer-observer'
 import { initSecondaryDrawer, teardownSecondaryDrawer } from './sidebar/secondary-drawer'
@@ -283,6 +284,9 @@ export function setup(ctx: SpindleFrontendContext) {
     // Hydrate settings from the settings payload. Defaults filled by
     // mergeCanvasSettings.
     const settingsPayload = settingsResult.status === 'ok' ? settingsResult.data : null
+    // Seed settings-state's viewport constraint before hydration so restored
+    // Sides can resolve to the remembered horizontal mode before drawer init.
+    setMobileViewportActive(isMobileViewport())
     hydrateSettings(settingsPayload?.settings ?? null)
     setDebug(getSettings().debugMode)
     setLastLoadedLayout(layout)
@@ -389,7 +393,7 @@ export function setup(ctx: SpindleFrontendContext) {
     registerCleanup(stopMainDrawerPersistence)
     // Mobile exclusion: mutual exclusion + viewport-cross detection
     dlog(`startMobileExclusion`)
-    registerCleanup(startMobileExclusion())
+    registerCleanup(startMobileExclusion(setMobileViewportActive))
     dlog(`startMobileExclusion done`)
     // Wire DrawerObserver to handle tab registration/unregistration
     dlog(`drawerObserver.onTabRegistered`)

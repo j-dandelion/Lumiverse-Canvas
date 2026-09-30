@@ -38,6 +38,9 @@ let _saveSettingsTimer: ReturnType<typeof setTimeout> | null = null
  *  `isLoadInProgress()` flag has no writer and was always false (L6
  *  2026-09-19). */
 let _hydrated = false
+/** Current strict mobile viewport state. setup() seeds this before settings
+ * hydration and the mobile-cross listener keeps it current afterwards. */
+let _mobileViewportActive = false
 /** A debounced/failed save is owed to disk; retried on failure and flushed on
  *  unload/teardown (N2 2026-09-19). */
 let _settingsDirty = false
@@ -197,8 +200,22 @@ export function getStripEdge(
 export function isSettingsHydrated(): boolean { return _hydrated }
 
 export function hydrateSettings(raw: Partial<CanvasSettings> | null | undefined): void {
-  _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null))
+  const merged = mergeCanvasSettings(raw ?? null)
+  if (_mobileViewportActive && merged.drawerLocation === 'sides') {
+    merged.drawerLocation = merged.lastHorizontalDrawerLocation
+  }
+  _settings = normalizeCanvasSettings(merged)
   _hydrated = true
+}
+
+/** Keep the settings invariant synchronized with the strict ≤600px mobile
+ * viewport. Entering mobile resolves Sides to the remembered horizontal mode;
+ * leaving mobile deliberately keeps that resolved mode until Sides is
+ * explicitly selected again on desktop. */
+export function setMobileViewportActive(active: boolean): void {
+  _mobileViewportActive = active
+  if (!active || !_hydrated || _settings.drawerLocation !== 'sides') return
+  setSettings({ drawerLocation: _settings.lastHorizontalDrawerLocation })
 }
 
 export function setSettings(patch: Partial<CanvasSettings>): void {
@@ -207,6 +224,16 @@ export function setSettings(patch: Partial<CanvasSettings>): void {
   for (const key of Object.keys(patch) as Array<keyof CanvasSettings>) {
     const v = patch[key]
     if (v !== undefined) (next as Record<string, unknown>)[key] = v
+  }
+
+  // Keep the last explicit horizontal choice independent of Sides. While
+  // mobile, coerce any requested/restored Sides value before feature apply so
+  // the disallowed geometry can never become the active overall mode.
+  if (patch.drawerLocation === 'top' || patch.drawerLocation === 'bottom') {
+    next.lastHorizontalDrawerLocation = patch.drawerLocation
+  }
+  if (_mobileViewportActive && next.drawerLocation === 'sides') {
+    next.drawerLocation = next.lastHorizontalDrawerLocation
   }
 
   // S8 (Drawer location): Top/Bottom force taskbar chrome on via the

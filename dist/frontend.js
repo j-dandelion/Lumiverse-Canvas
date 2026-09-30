@@ -114,6 +114,9 @@ function normalizeCanvasSettingsFields(s) {
   if (out.drawerLocation !== "top" && out.drawerLocation !== "bottom") {
     out = { ...out, drawerLocation: "sides" };
   }
+  if (out.lastHorizontalDrawerLocation !== "top" && out.lastHorizontalDrawerLocation !== "bottom") {
+    out = { ...out, lastHorizontalDrawerLocation: "top" };
+  }
   if (out.drawerLocation !== "sides") {
     out = { ...out, moveControlsToOuterEdge: true, taskbarMode: true };
   }
@@ -192,6 +195,9 @@ function mergeCanvasSettings(saved) {
     if (saved.startButtonLocation === undefined && raw.osSecondaryStartMenu === true) {
       out.startButtonLocation = "both";
     }
+    if (saved.lastHorizontalDrawerLocation === undefined && (saved.drawerLocation === "top" || saved.drawerLocation === "bottom")) {
+      out.lastHorizontalDrawerLocation = saved.drawerLocation;
+    }
   }
   return normalizeCanvasSettingsFields(out);
 }
@@ -202,6 +208,7 @@ var init_types = __esm(() => {
     resizeSidebars: true,
     mirrorCompactPosition: true,
     drawerLocation: "sides",
+    lastHorizontalDrawerLocation: "top",
     horizontalSplit: 0.5,
     sidesChromePrefs: null,
     moveControlsToOuterEdge: false,
@@ -18352,8 +18359,9 @@ function enforceExclusionOnOpen(which) {
     }
   }
 }
-function startMobileExclusion() {
+function startMobileExclusion(onViewportChange) {
   _mediaQuery3 = window.matchMedia("(max-width: 600px)");
+  onViewportChange?.(_mediaQuery3.matches);
   function _updateDrawerWidth() {
     const wrapper = getSecondaryWrapper();
     if (wrapper)
@@ -18374,6 +18382,7 @@ function startMobileExclusion() {
     syncHostMainDrawerToMobileWidth();
   }
   _onMediaChange3 = (e) => {
+    onViewportChange?.(e.matches);
     Promise.resolve().then(() => (init_main_mirror_drawer(), {})).then((m) => syncMainMirrorToViewport()).catch(() => {});
     if (e.matches) {
       _updateDrawerWidth();
@@ -20290,8 +20299,18 @@ function isSettingsHydrated() {
   return _hydrated;
 }
 function hydrateSettings(raw) {
-  _settings = normalizeCanvasSettings(mergeCanvasSettings(raw ?? null));
+  const merged = mergeCanvasSettings(raw ?? null);
+  if (_mobileViewportActive && merged.drawerLocation === "sides") {
+    merged.drawerLocation = merged.lastHorizontalDrawerLocation;
+  }
+  _settings = normalizeCanvasSettings(merged);
   _hydrated = true;
+}
+function setMobileViewportActive(active) {
+  _mobileViewportActive = active;
+  if (!active || !_hydrated || _settings.drawerLocation !== "sides")
+    return;
+  setSettings({ drawerLocation: _settings.lastHorizontalDrawerLocation });
 }
 function setSettings(patch) {
   const prev = _settings;
@@ -20300,6 +20319,12 @@ function setSettings(patch) {
     const v = patch[key];
     if (v !== undefined)
       next[key] = v;
+  }
+  if (patch.drawerLocation === "top" || patch.drawerLocation === "bottom") {
+    next.lastHorizontalDrawerLocation = patch.drawerLocation;
+  }
+  if (_mobileViewportActive && next.drawerLocation === "sides") {
+    next.drawerLocation = next.lastHorizontalDrawerLocation;
   }
   const chromeTouched = patch.taskbarMode !== undefined || patch.moveControlsToOuterEdge !== undefined;
   if (next.drawerLocation === "sides" && chromeTouched) {
@@ -20442,7 +20467,7 @@ function cancelSettingsSave() {
   _settingsDirty = false;
   _settingsRetryCount = 0;
 }
-var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _hydrated = false, _settingsDirty = false, _settingsRetryTimer = null, _settingsRetryCount = 0, _maxSettingsSaveRetries = 2, SETTINGS_RETRY_MS = 1000, _singleLayout = null, _dualLayout = null, _osSingleLayout = null, _osDualLayout = null, _panelRefresh = null;
+var _settings, _lastLoadedLayout = null, _saveSettingsTimer = null, _hydrated = false, _mobileViewportActive = false, _settingsDirty = false, _settingsRetryTimer = null, _settingsRetryCount = 0, _maxSettingsSaveRetries = 2, SETTINGS_RETRY_MS = 1000, _singleLayout = null, _dualLayout = null, _osSingleLayout = null, _osDualLayout = null, _panelRefresh = null;
 var init_state = __esm(() => {
   init_types();
   init_log();
@@ -23491,12 +23516,17 @@ function buildSegmentedControl(options, value, onChange) {
   root.className = "sidebar-ux-panel-segmented";
   root.setAttribute("role", "radiogroup");
   let current = value;
+  let controlDisabled = false;
+  const optionDisabled = new Set;
   const entries = [];
   const render = () => {
     for (const { btn, value: v } of entries) {
       const active = v === current;
+      const disabled = controlDisabled || optionDisabled.has(v);
       btn.classList.toggle("sidebar-ux-panel-segmented-btn-active", active);
       btn.setAttribute("aria-checked", String(active));
+      btn.disabled = disabled;
+      btn.setAttribute("aria-disabled", String(disabled));
       btn.tabIndex = active ? 0 : -1;
     }
   };
@@ -23558,10 +23588,15 @@ function buildSegmentedControl(options, value, onChange) {
       render();
     },
     setDisabled(disabled) {
-      for (const { btn } of entries) {
-        btn.disabled = disabled;
-        btn.setAttribute("aria-disabled", String(disabled));
-      }
+      controlDisabled = disabled;
+      render();
+    },
+    setOptionDisabled(value, disabled) {
+      if (disabled)
+        optionDisabled.add(value);
+      else
+        optionDisabled.delete(value);
+      render();
     }
   };
 }
@@ -24475,6 +24510,7 @@ function buildSettingsPanelDOM() {
     modes.setDisabled(!isSettingsHydrated());
     drawerLocation.refresh(s.drawerLocation);
     drawerLocation.setDisabled(!isSettingsHydrated());
+    drawerLocation.setOptionDisabled("sides", _isMobileViewportForPanel());
     drawerLocationRow.setDisabled(!isSettingsHydrated());
     const override = safeMainSideOverride();
     mainSide.refresh(override ?? safeMainSide());
@@ -24598,7 +24634,7 @@ function applySettings(prev, next) {
     }
   }
 }
-var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_OS_MOBILE_HINT = "On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", UNHIDE_VANILLA_TABS_HINT = "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
+var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically. On narrow (mobile) screens Sides is unavailable and the last Top/Bottom choice is used instead.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_OS_MOBILE_HINT = "On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", UNHIDE_VANILLA_TABS_HINT = "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
@@ -26399,6 +26435,7 @@ function setup(ctx) {
       dwarn(`Layout was saved by v${layout.version}, running v${CANVAS_VERSION}. ` + `Hard-refresh (Ctrl+F5) to load the updated extension.`);
     }
     const settingsPayload = settingsResult.status === "ok" ? settingsResult.data : null;
+    setMobileViewportActive(isMobileViewport());
     hydrateSettings(settingsPayload?.settings ?? null);
     setDebug(getSettings().debugMode);
     setLastLoadedLayout(layout);
@@ -26461,7 +26498,7 @@ function setup(ctx) {
     dlog(`startMainDrawerPersistence done`);
     registerCleanup(stopMainDrawerPersistence);
     dlog(`startMobileExclusion`);
-    registerCleanup(startMobileExclusion());
+    registerCleanup(startMobileExclusion(setMobileViewportActive));
     dlog(`startMobileExclusion done`);
     dlog(`drawerObserver.onTabRegistered`);
     drawerObserver.onTabRegistered(() => {

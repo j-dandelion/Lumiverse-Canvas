@@ -67,7 +67,7 @@ import {
 const MODE_TILES_HINT =
   'Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.'
 const DRAWER_LAYOUT_HINT =
-  'Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically.'
+  'Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically. On narrow (mobile) screens Sides is unavailable and the last Top/Bottom choice is used instead.'
 const MAIN_SIDE_HINT =
   "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree."
 const MAIN_SIDE_SWAP_HINT = 'Swapping drawer sides…'
@@ -1184,9 +1184,12 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     modes.setDisabled(!isSettingsHydrated())
 
     // Drawer layout: sync selection; disabled while the settings load is in
-    // flight (the load overwrites pre-hydration picks).
+    // flight (the load overwrites pre-hydration picks). On a mobile viewport
+    // Sides is not offered (LUMI-44): the state layer resolves it to the
+    // remembered Top/Bottom choice, so the option is disabled here too.
     drawerLocation.refresh(s.drawerLocation)
     drawerLocation.setDisabled(!isSettingsHydrated())
+    drawerLocation.setOptionDisabled('sides', _isMobileViewportForPanel())
     drawerLocationRow.setDisabled(!isSettingsHydrated())
 
     // Main drawer side: live-derived from the host; locked until the store

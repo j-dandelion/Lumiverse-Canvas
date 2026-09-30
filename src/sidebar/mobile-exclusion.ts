@@ -237,8 +237,12 @@ let _onMediaChange: ((e: MediaQueryListEvent) => void) | null = null
 /** Register the matchMedia listener for viewport-cross detection.
  *  Returns a cleanup function that removes listeners and the
  *  injected <style> element. */
-export function startMobileExclusion(): () => void {
+export function startMobileExclusion(
+  onViewportChange?: (isMobile: boolean) => void,
+): () => void {
   _mediaQuery = window.matchMedia('(max-width: 600px)')
+  // Seed the consumer on startup as well as on later viewport crossings.
+  onViewportChange?.(_mediaQuery.matches)
 
   /** Update the secondary drawer's inline width based on viewport.
    *  On mobile, force the host-aligned scaled viewport width via CSS var
@@ -286,6 +290,10 @@ export function startMobileExclusion(): () => void {
   }
 
   _onMediaChange = (e: MediaQueryListEvent) => {
+    // Settings state uses this strict viewport transition to prevent Sides
+    // from becoming active on mobile and to preserve the resolved mode on the
+    // return to desktop.
+    onViewportChange?.(e.matches)
     // S6: restyle the main shell in place on EVERY crossing (mobile →
     // full-bleed + horizontal list via @media CSS; desktop → restored
     // width + pins). No remount — content stays parked.

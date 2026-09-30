@@ -363,6 +363,8 @@ export interface SegmentedControlHandle<T extends string> {
   refresh: (value: T) => void
   /** Disable/enable every option (pre-hydration guard, locked rows). */
   setDisabled: (disabled: boolean) => void
+  /** Disable/enable a single option by value (e.g. Sides on mobile). */
+  setOptionDisabled: (value: T, disabled: boolean) => void
 }
 
 /**
@@ -381,13 +383,18 @@ export function buildSegmentedControl<T extends string>(
   root.setAttribute('role', 'radiogroup')
 
   let current = value
+  let controlDisabled = false
+  const optionDisabled = new Set<T>()
   const entries: Array<{ btn: HTMLButtonElement; value: T }> = []
 
   const render = () => {
     for (const { btn, value: v } of entries) {
       const active = v === current
+      const disabled = controlDisabled || optionDisabled.has(v)
       btn.classList.toggle('sidebar-ux-panel-segmented-btn-active', active)
       btn.setAttribute('aria-checked', String(active))
+      btn.disabled = disabled
+      btn.setAttribute('aria-disabled', String(disabled))
       btn.tabIndex = active ? 0 : -1
     }
   }
@@ -451,10 +458,13 @@ export function buildSegmentedControl<T extends string>(
       render()
     },
     setDisabled(disabled: boolean) {
-      for (const { btn } of entries) {
-        btn.disabled = disabled
-        btn.setAttribute('aria-disabled', String(disabled))
-      }
+      controlDisabled = disabled
+      render()
+    },
+    setOptionDisabled(value: T, disabled: boolean) {
+      if (disabled) optionDisabled.add(value)
+      else optionDisabled.delete(value)
+      render()
     },
   }
 }
