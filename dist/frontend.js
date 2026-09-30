@@ -246,7 +246,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "2.0.0";
+var _backendCtx = null, CANVAS_VERSION = "2.0.1";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -607,6 +607,852 @@ function injectStyles(id, css) {
   document.head.appendChild(style);
 }
 
+// src/lifecycle/instance.ts
+function beginLifecycle() {
+  _generation++;
+  _active = true;
+  return _generation;
+}
+function endLifecycle(generation) {
+  if (generation !== _generation)
+    return;
+  _active = false;
+}
+function currentLifecycleGeneration() {
+  return _generation;
+}
+function isInstanceActive() {
+  return _generation === 0 || _active;
+}
+function isLifecycleCurrent(generation) {
+  return generation === _generation && (_generation === 0 || _active);
+}
+var _generation = 0, _active = false;
+
+// src/core/model.ts
+function builtinKey(id) {
+  return `${BUILTIN_PREFIX}${id}`;
+}
+function extensionKey(extensionId, tabName) {
+  return `${EXT_PREFIX}${extensionId}/${tabName}`;
+}
+function isBuiltinKey(key) {
+  return key.startsWith(BUILTIN_PREFIX);
+}
+function isExtensionKey(key) {
+  return key.startsWith(EXT_PREFIX);
+}
+function parseBuiltinKey(key) {
+  if (!isBuiltinKey(key))
+    return null;
+  return key.slice(BUILTIN_PREFIX.length);
+}
+function parseExtensionKey(key) {
+  if (!isExtensionKey(key))
+    return null;
+  const rest = key.slice(EXT_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash === -1)
+    return null;
+  return { extensionId: rest.slice(0, slash), tabName: rest.slice(slash + 1) };
+}
+function createEmptyModel(side = "left") {
+  return {
+    version: 2,
+    primary: [],
+    secondary: [],
+    hidden: [],
+    menuHidden: [],
+    closed: [],
+    active: { primary: null, secondary: null },
+    drawers: {
+      primary: { open: false, width: 420 },
+      secondary: { open: false, width: 420 }
+    },
+    side
+  };
+}
+var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
+
+// src/core/select.ts
+function listForSide(model, side) {
+  return side === "primary" ? model.primary : model.secondary;
+}
+function visibleKeys(model, side) {
+  const list = listForSide(model, side);
+  return list.filter((k) => !model.hidden.includes(k));
+}
+function isHidden(model, key) {
+  return model.hidden.includes(key);
+}
+function visibleToAbsoluteIndex(model, side, visibleIndex) {
+  const list = listForSide(model, side);
+  if (visibleIndex < 0)
+    return list.length;
+  let vi = 0;
+  for (let i = 0;i < list.length; i++) {
+    if (!isHidden(model, list[i])) {
+      if (vi === visibleIndex)
+        return i;
+      vi++;
+    }
+  }
+  return list.length;
+}
+function activeAfterRemoval(model, side, removed) {
+  const list = listForSide(model, side);
+  const idx = list.indexOf(removed);
+  if (idx === -1)
+    return null;
+  for (let i = idx - 1;i >= 0; i--) {
+    const key = list[i];
+    if (!isHidden(model, key) && !model.closed.includes(key))
+      return key;
+  }
+  for (let i = idx + 1;i < list.length; i++) {
+    const key = list[i];
+    if (!isHidden(model, key) && !model.closed.includes(key))
+      return key;
+  }
+  return null;
+}
+function keyExists(model, key) {
+  return model.primary.includes(key) || model.secondary.includes(key);
+}
+function sideOfKey(model, key) {
+  if (model.primary.includes(key))
+    return "primary";
+  if (model.secondary.includes(key))
+    return "secondary";
+  return null;
+}
+
+// src/core/reduce.ts
+function removeFrom(list, key) {
+  return list.filter((k) => k !== key);
+}
+function insertAt(list, key, index) {
+  const next = list.slice();
+  next.splice(index, 0, key);
+  return next;
+}
+function toggleHidden(hidden, key, hide) {
+  return toggleMembership(hidden, key, hide);
+}
+function toggleMembership(list, key, add) {
+  const has = list.includes(key);
+  if (add && !has)
+    return [...list, key];
+  if (!add && has)
+    return list.filter((k) => k !== key);
+  return list;
+}
+function applyMove(model, key, to, index, activateDest) {
+  const from = sideOfKey(model, key);
+  if (!from)
+    return model;
+  const srcList = listForSide(model, from);
+  const idx = srcList.indexOf(key);
+  if (idx === -1)
+    return model;
+  const wasActiveInSource = model.active[from] === key;
+  const wasActiveInDest = model.active[to] === key;
+  let sourceReplacement = null;
+  if (wasActiveInSource && from !== to) {
+    sourceReplacement = activeAfterRemoval(model, from, key);
+  }
+  let next = model;
+  if (from === to) {
+    const without = removeFrom(srcList, key);
+    const absIdx = visibleToAbsoluteIndex({ ...model, [from]: without }, from, index);
+    const newList = insertAt(without, key, absIdx);
+    if (sameOrder(newList, srcList))
+      return model;
+    next = { ...model, [from]: newList };
+  } else {
+    const newSrc = removeFrom(srcList, key);
+    const destList = listForSide(model, to);
+    const absIdx = visibleToAbsoluteIndex({ ...model, [from]: newSrc }, to, index);
+    const newDest = insertAt(destList, key, absIdx);
+    next = {
+      ...model,
+      [from]: newSrc,
+      [to]: newDest
+    };
+  }
+  if (wasActiveInSource && from !== to) {
+    next = { ...next, active: { ...next.active, [from]: sourceReplacement } };
+    if (!activateDest && wasActiveInDest) {
+      next = { ...next, active: { ...next.active, [to]: key } };
+    }
+  }
+  if (activateDest && !isHidden(next, key)) {
+    next = { ...next, active: { ...next.active, [to]: key } };
+  }
+  return next;
+}
+function applyReorder(model, key, side, index) {
+  const list = listForSide(model, side);
+  const idx = list.indexOf(key);
+  if (idx === -1)
+    return model;
+  const without = removeFrom(list, key);
+  const absIdx = visibleToAbsoluteIndex({ ...model, [side]: without }, side, index);
+  const newList = insertAt(without, key, absIdx);
+  if (sameOrder(newList, list))
+    return model;
+  return { ...model, [side]: newList };
+}
+function sameOrder(a, b) {
+  if (a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++) {
+    if (a[i] !== b[i])
+      return false;
+  }
+  return true;
+}
+function applySetHidden(model, key, hide) {
+  if (!keyExists(model, key))
+    return model;
+  const nextHidden = toggleHidden(model.hidden, key, hide);
+  const membershipChanged = nextHidden !== model.hidden;
+  const activeAffected = hide && (model.active.primary === key || model.active.secondary === key);
+  if (!membershipChanged && !activeAffected)
+    return model;
+  let next = membershipChanged ? { ...model, hidden: nextHidden } : model;
+  if (hide) {
+    if (model.active.primary === key) {
+      const replacement = activeAfterRemoval(next, "primary", key);
+      next = { ...next, active: { ...next.active, primary: replacement } };
+    }
+    if (model.active.secondary === key) {
+      const replacement = activeAfterRemoval(next, "secondary", key);
+      next = { ...next, active: { ...next.active, secondary: replacement } };
+    }
+  }
+  return next;
+}
+function applySetMenuHidden(model, key, hide) {
+  if (!keyExists(model, key))
+    return model;
+  const nextMenuHidden = toggleMembership(model.menuHidden, key, hide);
+  if (nextMenuHidden === model.menuHidden)
+    return model;
+  return { ...model, menuHidden: nextMenuHidden };
+}
+function applySetClosed(model, key, closed) {
+  if (!keyExists(model, key))
+    return model;
+  const nextClosed = toggleMembership(model.closed, key, closed);
+  const membershipChanged = nextClosed !== model.closed;
+  const activeAffected = closed && (model.active.primary === key || model.active.secondary === key);
+  if (!membershipChanged && !activeAffected)
+    return model;
+  let next = membershipChanged ? { ...model, closed: nextClosed } : model;
+  if (closed && model.active.primary === key) {
+    next = { ...next, active: { ...next.active, primary: null } };
+  }
+  if (closed && model.active.secondary === key) {
+    next = { ...next, active: { ...next.active, secondary: null } };
+  }
+  return next;
+}
+function applyDeactivate(model, side) {
+  if (model.active[side] == null)
+    return model;
+  return { ...model, active: { ...model.active, [side]: null } };
+}
+function applyActivate(model, key, side) {
+  const list = listForSide(model, side);
+  if (!list.includes(key))
+    return model;
+  if (isHidden(model, key))
+    return model;
+  if (model.closed.includes(key))
+    return model;
+  if (model.active[side] === key)
+    return model;
+  return { ...model, active: { ...model.active, [side]: key } };
+}
+function applySyncActive(model, primary, secondary) {
+  let next = model;
+  const closed = (m, k) => m.closed.includes(k);
+  if (primary !== null && next.active.primary !== primary) {
+    const list = listForSide(next, "primary");
+    if (list.includes(primary) && !isHidden(next, primary) && !closed(next, primary)) {
+      next = { ...next, active: { ...next.active, primary } };
+    }
+  }
+  if (secondary !== null && next.active.secondary !== secondary) {
+    const list = listForSide(next, "secondary");
+    if (list.includes(secondary) && !isHidden(next, secondary) && !closed(next, secondary)) {
+      next = { ...next, active: { ...next.active, secondary } };
+    }
+  }
+  return next;
+}
+function applySetDrawer(model, side, open, width) {
+  const current = model.drawers[side];
+  const newOpen = open !== undefined ? open : current.open;
+  const newWidth = width !== undefined ? width : current.width;
+  if (newOpen === current.open && newWidth === current.width)
+    return model;
+  return {
+    ...model,
+    drawers: {
+      ...model.drawers,
+      [side]: { open: newOpen, width: newWidth }
+    }
+  };
+}
+function applySwapSides(model) {
+  const newSide = model.side === "left" ? "right" : "left";
+  return { ...model, side: newSide };
+}
+function applySyncFromHost(model, observed) {
+  const observedKeys = new Set(observed.tabs.map((t) => t.key));
+  const observedMap = new Map(observed.tabs.map((t) => [t.key, t]));
+  let next = model;
+  const removeFromSide = (side, keys) => {
+    const list = listForSide(next, side);
+    return list.filter((k) => keys.has(k));
+  };
+  const newPrimary = [];
+  const newSecondary = [];
+  const seen = new Set;
+  for (const tab of observed.tabs) {
+    if (seen.has(tab.key)) {
+      if (tab.location === "primary") {
+        const idx = newPrimary.indexOf(tab.key);
+        if (idx >= 0)
+          newPrimary.splice(idx, 1);
+        if (newSecondary.includes(tab.key)) {
+          const sidx = newSecondary.indexOf(tab.key);
+          if (sidx >= 0)
+            newSecondary.splice(sidx, 1);
+        }
+      } else {
+        const idx = newSecondary.indexOf(tab.key);
+        if (idx >= 0)
+          newSecondary.splice(idx, 1);
+        if (newPrimary.includes(tab.key)) {
+          const pidx = newPrimary.indexOf(tab.key);
+          if (pidx >= 0)
+            newPrimary.splice(pidx, 1);
+        }
+      }
+    }
+    seen.add(tab.key);
+    if (tab.location === "primary")
+      newPrimary.push(tab.key);
+    else
+      newSecondary.push(tab.key);
+  }
+  next = { ...next, primary: newPrimary, secondary: newSecondary };
+  next = {
+    ...next,
+    hidden: next.hidden.filter((k) => observedKeys.has(k)),
+    menuHidden: next.menuHidden.filter((k) => observedKeys.has(k))
+  };
+  const adoptActive = (side) => {
+    for (const tab of observed.tabs) {
+      const isActive = side === "primary" ? tab.isActiveInPrimary : tab.isActiveInSecondary;
+      if (isActive && tab.location === side && !isHidden(next, tab.key) && !next.closed.includes(tab.key)) {
+        return tab.key;
+      }
+    }
+    const current = next.active[side];
+    const currentTab = current === null ? undefined : observedMap.get(current);
+    if (current !== null && currentTab?.location === side && !isHidden(next, current)) {
+      return current;
+    }
+    return null;
+  };
+  next = {
+    ...next,
+    active: {
+      primary: adoptActive("primary"),
+      secondary: adoptActive("secondary")
+    }
+  };
+  next = {
+    ...next,
+    side: observed.drawerSide,
+    drawers: {
+      ...next.drawers,
+      primary: { open: observed.primaryOpen, width: observed.primaryWidth },
+      secondary: { open: observed.secondaryOpen, width: observed.secondaryWidth }
+    }
+  };
+  const sameContent = sameKeys(next.primary, model.primary) && sameKeys(next.secondary, model.secondary) && sameKeys(next.hidden, model.hidden) && sameKeys(next.menuHidden, model.menuHidden) && next.active.primary === model.active.primary && next.active.secondary === model.active.secondary && next.side === model.side && next.drawers.primary.open === model.drawers.primary.open && next.drawers.primary.width === model.drawers.primary.width && next.drawers.secondary.open === model.drawers.secondary.open && next.drawers.secondary.width === model.drawers.secondary.width;
+  if (sameContent)
+    return model;
+  return next;
+}
+function sameKeys(a, b) {
+  if (a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++) {
+    if (a[i] !== b[i])
+      return false;
+  }
+  return true;
+}
+function reduce(model, intent) {
+  switch (intent.t) {
+    case "move":
+      return applyMove(model, intent.key, intent.to, intent.index, intent.activateDest);
+    case "reorder":
+      return applyReorder(model, intent.key, intent.side, intent.index);
+    case "setHidden":
+      return applySetHidden(model, intent.key, intent.hidden);
+    case "setMenuHidden":
+      return applySetMenuHidden(model, intent.key, intent.hidden);
+    case "setClosed":
+      return applySetClosed(model, intent.key, intent.closed);
+    case "activate":
+      return applyActivate(model, intent.key, intent.side);
+    case "deactivate":
+      return applyDeactivate(model, intent.side);
+    case "syncActive":
+      return applySyncActive(model, intent.primary, intent.secondary);
+    case "setDrawer":
+      return applySetDrawer(model, intent.side, intent.open, intent.width);
+    case "swapSides":
+      return applySwapSides(model);
+    case "syncFromHost":
+      return applySyncFromHost(model, intent.observed);
+    default: {
+      const _exhaustive = intent;
+      return model;
+    }
+  }
+}
+function foldIntents(model, intents) {
+  let next = model;
+  for (const intent of intents) {
+    next = reduce(next, intent);
+  }
+  return next;
+}
+var init_reduce = () => {};
+
+// src/dom/motion-prefs.ts
+function prefersReducedMotion() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  } catch {
+    return false;
+  }
+}
+
+// src/sidebar/animation.ts
+function parseTranslateX(transform) {
+  if (!transform || transform === "none")
+    return 0;
+  const m = transform.match(/translateX\(\s*(-?[\d.]+)\s*px\s*\)/);
+  if (m)
+    return parseFloat(m[1]) || 0;
+  const n = transform.match(/-?[\d.]+/);
+  return n ? parseFloat(n[0]) || 0 : 0;
+}
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
+}
+function runSettleCallbacks(callbacks) {
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch {}
+  }
+}
+function markWrapperAnimating(wrapper) {
+  wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
+}
+function clearWrapperAnimating(wrapper) {
+  wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
+}
+function animFrame(wrapper, state, now) {
+  if (state.start === null)
+    state.start = now;
+  const elapsed = now - state.start;
+  const progress = Math.min(elapsed / ANIM_DURATION_MS, 1);
+  const eased = easeOutCubic(progress);
+  const val = state.from + (state.to - state.from) * eased;
+  wrapper.style.transform = `translateX(${val}px)`;
+  if (progress < 1) {
+    state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t));
+  } else {
+    state.raf = null;
+    state.start = null;
+    _liveTranslateWrappers.delete(wrapper);
+    clearWrapperAnimating(wrapper);
+    const done = state.onComplete;
+    state.onComplete = null;
+    const callbacks = state.settleCallbacks;
+    state.settleCallbacks = [];
+    if (done) {
+      try {
+        done();
+      } catch {}
+    }
+    runSettleCallbacks(callbacks);
+  }
+}
+function cancelTranslateTween(wrapper) {
+  const state = _anims.get(wrapper);
+  const wasLive = _liveTranslateWrappers.has(wrapper) || state?.raf != null;
+  const pending = state ? state.settleCallbacks : [];
+  if (state) {
+    if (state.raf != null) {
+      cancelAnimationFrame(state.raf);
+      state.raf = null;
+      state.start = null;
+      state.onComplete = null;
+    }
+    state.settleCallbacks = [];
+  }
+  _liveTranslateWrappers.delete(wrapper);
+  if (wasLive)
+    clearWrapperAnimating(wrapper);
+  return pending;
+}
+function cancelWrapperAnimation(wrapper) {
+  const target = wrapper ?? _lastWrapper;
+  if (!target)
+    return;
+  const drained = cancelTranslateTween(target);
+  cancelPanelToggle(target);
+  runSettleCallbacks(drained);
+}
+function cancelAllWrapperAnimations() {
+  for (const wrapper of Array.from(_liveTranslateWrappers)) {
+    const drained = cancelTranslateTween(wrapper);
+    runSettleCallbacks(drained);
+  }
+  for (const wrapper of Array.from(_livePanelWrappers))
+    cancelPanelToggle(wrapper);
+}
+function animateWrapper(wrapper, targetPx, onComplete) {
+  _lastWrapper = wrapper;
+  cancelPanelToggle(wrapper);
+  let state = _anims.get(wrapper);
+  if (!state) {
+    state = { raf: null, start: null, from: 0, to: 0, onComplete: null, settleCallbacks: [] };
+    _anims.set(wrapper, state);
+  }
+  const carried = state.settleCallbacks;
+  state.settleCallbacks = [];
+  const current = parseTranslateX(wrapper.style.transform);
+  state.from = current;
+  state.to = targetPx;
+  state.start = null;
+  state.onComplete = onComplete ?? null;
+  if (state.raf !== null)
+    cancelAnimationFrame(state.raf);
+  if (current === targetPx) {
+    wrapper.style.transform = `translateX(${targetPx}px)`;
+    state.raf = null;
+    _liveTranslateWrappers.delete(wrapper);
+    clearWrapperAnimating(wrapper);
+    const done = state.onComplete;
+    state.onComplete = null;
+    if (done) {
+      try {
+        done();
+      } catch {}
+    }
+    runSettleCallbacks(carried);
+    return;
+  }
+  state.settleCallbacks = carried;
+  _liveTranslateWrappers.add(wrapper);
+  markWrapperAnimating(wrapper);
+  state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t));
+}
+function computePanelAnchor(button, drawer) {
+  if (!(drawer.width > 0) || !(drawer.height > 0))
+    return null;
+  const cx = button.left + button.width / 2;
+  const cy = button.top + button.height / 2;
+  return {
+    x: (cx - drawer.left) / drawer.width * 100,
+    y: (cy - drawer.top) / drawer.height * 100
+  };
+}
+function panelRailSign(edge) {
+  return edge === "top" ? -1 : 1;
+}
+function applyPanelPose(drawer, panel, pose, edge, anchor) {
+  drawer.style.opacity = String(pose.opacity);
+  drawer.style.transform = `translateY(${pose.ty}px) scale(${pose.scale})`;
+  drawer.style.transformOrigin = anchor ? `${anchor.x}% ${anchor.y}%` : edge === "top" ? "50% 0%" : "50% 100%";
+  if (panel)
+    panel.style.opacity = String(pose.ui);
+}
+function resetPanelStyles(drawer, panel) {
+  drawer.style.opacity = "";
+  drawer.style.transform = "";
+  drawer.style.transformOrigin = "";
+  drawer.style.willChange = "";
+  drawer.style.pointerEvents = "auto";
+  if (panel)
+    panel.style.opacity = "";
+}
+function settlePanelToggle(state, opts) {
+  if (state.done)
+    return;
+  state.done = true;
+  if (state.raf !== null) {
+    cancelAnimationFrame(state.raf);
+    state.raf = null;
+  }
+  if (state.timer !== null) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  if (_panelAnims.get(state.wrapper) === state)
+    _panelAnims.delete(state.wrapper);
+  _livePanelWrappers.delete(state.wrapper);
+  resetPanelStyles(state.drawer, state.panel);
+  state.wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
+  if (!state.open && !opts?.cancelled) {
+    state.wrapper.style.transform = `translateX(${state.closedPx}px)`;
+  }
+  const done = state.onComplete;
+  state.onComplete = null;
+  const callbacks = state.settleCallbacks;
+  state.settleCallbacks = [];
+  if (done) {
+    try {
+      done();
+    } catch {}
+  }
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch {}
+  }
+}
+function cancelPanelToggle(wrapper) {
+  const state = _panelAnims.get(wrapper);
+  if (state)
+    settlePanelToggle(state, { cancelled: true });
+}
+function isPanelAnimating(wrapper) {
+  return _panelAnims.has(wrapper) || _liveTranslateWrappers.has(wrapper);
+}
+function whenPanelMotionSettles(wrapper, cb) {
+  const bloom = _panelAnims.get(wrapper);
+  if (bloom) {
+    bloom.settleCallbacks.push(cb);
+    return;
+  }
+  const tween = _anims.get(wrapper);
+  if (tween && _liveTranslateWrappers.has(wrapper)) {
+    tween.settleCallbacks.push(cb);
+    return;
+  }
+  cb();
+}
+function panelFrame(state, now) {
+  if (state.done)
+    return;
+  if (state.start === null)
+    state.start = now;
+  const t = Math.min((now - state.start) / state.duration, 1);
+  const eased = easeOutCubic(t);
+  const uiT = state.open ? easeOutCubic(Math.max(0, (t - PANEL_UI_PHASE) / (1 - PANEL_UI_PHASE))) : 0;
+  const pose = {
+    opacity: state.from.opacity + (state.to.opacity - state.from.opacity) * eased,
+    ty: state.from.ty + (state.to.ty - state.from.ty) * eased,
+    scale: state.from.scale + (state.to.scale - state.from.scale) * eased,
+    ui: state.open ? state.from.ui + (state.to.ui - state.from.ui) * uiT : state.from.ui
+  };
+  state.cur = pose;
+  applyPanelPose(state.drawer, state.panel, pose, state.edge, state.anchor);
+  if (t < 1) {
+    state.raf = requestAnimationFrame((n) => panelFrame(state, n));
+  } else {
+    settlePanelToggle(state);
+  }
+}
+function animatePanelToggle(wrapper, drawer, opts) {
+  _lastWrapper = wrapper;
+  const carried = cancelTranslateTween(wrapper);
+  const closedPx = opts.closedPx ?? 0;
+  let existing = _panelAnims.get(wrapper) ?? null;
+  if (existing) {
+    if (!opts.open && !existing.open) {
+      runSettleCallbacks(carried);
+      return;
+    }
+    if (existing.raf !== null)
+      cancelAnimationFrame(existing.raf);
+    if (existing.timer !== null)
+      clearTimeout(existing.timer);
+    existing.done = true;
+    existing.raf = null;
+    existing.timer = null;
+    existing.settleCallbacks = [];
+  } else if (!opts.open && parseTranslateX(wrapper.style.transform) === closedPx) {
+    runSettleCallbacks(carried);
+    return;
+  }
+  const panel = drawer.querySelector?.(".sidebar-ux-panel") ?? null;
+  const anchor = opts.anchor && Number.isFinite(opts.anchor.x) && Number.isFinite(opts.anchor.y) ? opts.anchor : null;
+  const sign = panelRailSign(opts.edge);
+  const from = existing ? existing.cur : opts.open ? {
+    opacity: 0,
+    ty: sign * PANEL_ENTER_PX,
+    scale: PANEL_SCALE,
+    ui: PANEL_UI_FROM
+  } : { opacity: 1, ty: 0, scale: 1, ui: 1 };
+  const to = opts.open ? { opacity: 1, ty: 0, scale: 1, ui: 1 } : anchor ? { opacity: 0, ty: sign * PANEL_EXIT_PX, scale: PANEL_SCALE, ui: from.ui } : { opacity: 0, ty: 0, scale: 1, ui: from.ui };
+  const state = {
+    raf: null,
+    timer: null,
+    start: null,
+    duration: opts.open ? PANEL_OPEN_MS : PANEL_CLOSE_MS,
+    open: opts.open,
+    edge: opts.edge,
+    closedPx,
+    wrapper,
+    drawer,
+    panel,
+    anchor,
+    from,
+    to,
+    cur: from,
+    onComplete: opts.onComplete ?? null,
+    settleCallbacks: carried,
+    done: false
+  };
+  if (opts.open)
+    wrapper.style.transform = "translateX(0)";
+  applyPanelPose(drawer, panel, from, opts.edge, anchor);
+  drawer.style.pointerEvents = "none";
+  drawer.style.willChange = "opacity, transform";
+  wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
+  _panelAnims.set(wrapper, state);
+  _livePanelWrappers.add(wrapper);
+  if (prefersReducedMotion()) {
+    applyPanelPose(drawer, panel, to, opts.edge, anchor);
+    state.cur = to;
+    settlePanelToggle(state);
+    return;
+  }
+  state.timer = setTimeout(() => settlePanelToggle(state), state.duration + PANEL_SETTLE_GRACE_MS);
+  state.raf = requestAnimationFrame((n) => panelFrame(state, n));
+}
+var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
+var init_animation = __esm(() => {
+  _anims = new WeakMap;
+  _liveTranslateWrappers = new Set;
+  _panelAnims = new WeakMap;
+  _livePanelWrappers = new Set;
+});
+
+// src/sidebar/panel-motion.ts
+function suppressNextCloseAnchor(side) {
+  _suppressCloseAnchor[side] = true;
+}
+function ensureAnchorTracking() {
+  if (_tracking)
+    return;
+  _tracking = true;
+  Promise.resolve().then(() => (init_dispatch(), {})).then(({}) => {
+    const sync = () => {
+      const model = getModel();
+      if (!model)
+        return;
+      const host = getHost();
+      for (const side of Object.keys(_anchors)) {
+        const key = model?.active[side] ?? null;
+        if (!key) {
+          _anchors[side].current = null;
+          continue;
+        }
+        const rec = { key, liveId: host ? host.resolve(key) : null };
+        _anchors[side].current = rec;
+        _anchors[side].last = rec;
+      }
+    };
+    sync();
+    onModelChanged(sync);
+  }).catch(() => {});
+}
+function findStripButton(side, rec) {
+  if (!rec || typeof document === "undefined")
+    return null;
+  const owner = side === "primary" ? PIN_OWNER_MAIN : PIN_OWNER_SECONDARY;
+  const candidates = document.querySelectorAll("button[data-tab-id], button[data-mirror-key]");
+  for (const el of Array.from(candidates)) {
+    const matches = rec.liveId !== null && el.getAttribute("data-tab-id") === rec.liveId || side === "primary" && el.getAttribute("data-mirror-key") === rec.key;
+    if (!matches || !el.isConnected)
+      continue;
+    const host = el.closest(PIN_HOST_SEL);
+    if (!host || host.getAttribute(PIN_OWNER_ATTR) !== owner)
+      continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0)
+      return el;
+  }
+  return null;
+}
+function resolveAnchor(side, drawer, mode) {
+  const state = _anchors[side];
+  const rec = mode === "open" ? state.current : state.current ?? state.last;
+  const button = findStripButton(side, rec);
+  if (!button)
+    return null;
+  return computePanelAnchor(button.getBoundingClientRect(), drawer.getBoundingClientRect());
+}
+function animateDrawerOpen(wrapper, drawer, side) {
+  if (!isHorizontalStrip()) {
+    animateWrapper(wrapper, 0);
+    return;
+  }
+  ensureAnchorTracking();
+  wrapper.style.transform = "translateX(0)";
+  const anchor = resolveAnchor(side, drawer, "open");
+  animatePanelToggle(wrapper, drawer, {
+    open: true,
+    edge: getStripEdge() ?? "top",
+    anchor
+  });
+}
+function animateDrawerClose(wrapper, drawer, closedPx, side) {
+  const suppressed = _suppressCloseAnchor[side];
+  _suppressCloseAnchor[side] = false;
+  if (!isHorizontalStrip()) {
+    animateWrapper(wrapper, closedPx);
+    return;
+  }
+  ensureAnchorTracking();
+  animatePanelToggle(wrapper, drawer, {
+    open: false,
+    edge: getStripEdge() ?? "top",
+    closedPx,
+    anchor: suppressed ? null : resolveAnchor(side, drawer, "close")
+  });
+}
+var PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host", PIN_OWNER_ATTR = "data-pin-owner", PIN_OWNER_MAIN = "main", PIN_OWNER_SECONDARY = "secondary", _anchors, _tracking = false, _suppressCloseAnchor;
+var init_panel_motion = __esm(() => {
+  init_animation();
+  init_state();
+  _anchors = {
+    primary: { current: null, last: null },
+    secondary: { current: null, last: null }
+  };
+  _suppressCloseAnchor = { primary: false, secondary: false };
+  ensureAnchorTracking();
+});
+
 // src/sidebar/styles.ts
 function injectHorizontalStripStyles() {
   injectStyles("sidebar-ux-location-horizontal", HORIZONTAL_STRIP_CSS);
@@ -625,6 +1471,7 @@ function injectDrawerTabStyles() {
       display: none !important;
     }
     .sidebar-ux-drawer-tab {
+      box-sizing: border-box;
       flex-shrink: 0;
       align-self: flex-start;
       width: var(--sidebar-ux-drawer-tab-w, 48px);
@@ -665,6 +1512,11 @@ function injectDrawerTabStyles() {
       align-items: center;
       justify-content: center;
       color: var(--lumiverse-primary);
+    }
+    .sidebar-ux-drawer-tab-icon svg {
+      width: var(--sidebar-ux-drawer-tab-icon-size, 16px);
+      height: var(--sidebar-ux-drawer-tab-icon-size, 16px);
+      flex-shrink: 0;
     }
     /* Icon container — matches main drawer .extIconSvg
        (ViewportDrawer.module.css:284-290). */
@@ -1616,1815 +2468,6 @@ html.${LOCATION_CLASS_BOTTOM} [data-component="LandingPage"]:not(#__theme_studio
 `;
 });
 
-// src/lifecycle/instance.ts
-function beginLifecycle() {
-  _generation++;
-  _active = true;
-  return _generation;
-}
-function endLifecycle(generation) {
-  if (generation !== _generation)
-    return;
-  _active = false;
-}
-function currentLifecycleGeneration() {
-  return _generation;
-}
-function isInstanceActive() {
-  return _generation === 0 || _active;
-}
-function isLifecycleCurrent(generation) {
-  return generation === _generation && (_generation === 0 || _active);
-}
-var _generation = 0, _active = false;
-
-// src/sidebar/dock-offset.ts
-function getDockInsets() {
-  if (typeof document === "undefined")
-    return { left: 0, right: 0 };
-  const appEl = document.querySelector("[data-app-root]");
-  if (!appEl)
-    return { left: 0, right: 0 };
-  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
-  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
-  return { left, right };
-}
-function stripPinnedOn(side) {
-  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-    return false;
-  }
-  const hosts = document.querySelectorAll(PIN_HOST_SEL);
-  for (const host of Array.from(hosts)) {
-    const el = host;
-    if (el.getAttribute?.("data-strip-axis") === "horizontal")
-      continue;
-    const s = el.classList.contains(SIDE_LEFT_CLASS) ? "left" : "right";
-    if (s === side)
-      return true;
-  }
-  return false;
-}
-function readComputedStyle(el) {
-  try {
-    return window.getComputedStyle(el);
-  } catch {
-    return null;
-  }
-}
-function findDockPanels() {
-  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
-    return [];
-  }
-  const out = [];
-  for (const cached of Array.from(_knownDockNodes)) {
-    if (!cached.isConnected)
-      _knownDockNodes.delete(cached);
-  }
-  const els = document.querySelectorAll("div");
-  for (const el of Array.from(els)) {
-    if (_knownDockNodes.has(el)) {
-      out.push(el);
-      continue;
-    }
-    const cs = readComputedStyle(el);
-    if (!cs)
-      continue;
-    if (cs.position !== "fixed")
-      continue;
-    if (cs.zIndex !== "9980")
-      continue;
-    if (cs.top !== "0px" || cs.bottom !== "0px")
-      continue;
-    if (cs.left !== "0px" && cs.right !== "0px" && !el.style.left && !el.style.right)
-      continue;
-    _knownDockNodes.add(el);
-    out.push(el);
-  }
-  return out;
-}
-function dockEdgeOf(panel, cs) {
-  if (cs) {
-    if (cs.right === "0px")
-      return "right";
-    if (cs.left === "0px")
-      return "left";
-    if (panel.style.left && cs.right === "auto")
-      return "left";
-    if (panel.style.right && cs.left === "auto")
-      return "right";
-  }
-  if (panel.style.left)
-    return "left";
-  if (panel.style.right)
-    return "right";
-  return null;
-}
-function updateDockOffsets() {
-  if (!isInstanceActive())
-    return;
-  if (typeof document === "undefined" || typeof window === "undefined")
-    return;
-  const dock = getDockInsets();
-  if (dock.left === 0 && dock.right === 0)
-    return;
-  const stripLeft = stripPinnedOn("left");
-  const stripRight = stripPinnedOn("right");
-  const insetsChanged = _lastInsets === null || _lastInsets.left !== dock.left || _lastInsets.right !== dock.right;
-  _lastInsets = { left: dock.left, right: dock.right };
-  const panels = insetsChanged ? findDockPanels() : Array.from(_knownDockNodes);
-  for (const panel of panels) {
-    const cs = readComputedStyle(panel);
-    const edge = dockEdgeOf(panel, cs);
-    if (!edge)
-      continue;
-    const offset = edge === "left" ? stripLeft : stripRight;
-    if (offset) {
-      if (edge === "left") {
-        if (panel.style.left !== `${DOCK_EDGE_OFFSET_PX}px`) {
-          panel.style.left = `${DOCK_EDGE_OFFSET_PX}px`;
-          dlog("[dock-offset] shifted left dock right of strip", { offset: DOCK_EDGE_OFFSET_PX });
-        }
-        if (panel.style.right)
-          panel.style.right = "";
-      } else {
-        if (panel.style.right !== `${DOCK_EDGE_OFFSET_PX}px`) {
-          panel.style.right = `${DOCK_EDGE_OFFSET_PX}px`;
-          dlog("[dock-offset] shifted right dock left of strip", { offset: DOCK_EDGE_OFFSET_PX });
-        }
-        if (panel.style.left)
-          panel.style.left = "";
-      }
-    } else if (panel.style.left || panel.style.right) {
-      panel.style.left = "";
-      panel.style.right = "";
-      dlog("[dock-offset] cleared dock edge offset", { edge });
-    }
-  }
-}
-var DOCK_EDGE_OFFSET_PX, PIN_HOST_SEL = ".sidebar-ux-tab-list-pin-host", SIDE_LEFT_CLASS = "sidebar-ux-side-left", _knownDockNodes, _lastInsets = null;
-var init_dock_offset = __esm(() => {
-  init_styles();
-  init_log();
-  DOCK_EDGE_OFFSET_PX = TAB_LIST_WIDTH_PX;
-  _knownDockNodes = new Set;
-});
-
-// src/dom/motion-prefs.ts
-function prefersReducedMotion() {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
-  } catch {
-    return false;
-  }
-}
-
-// src/sidebar/animation.ts
-function parseTranslateX(transform) {
-  if (!transform || transform === "none")
-    return 0;
-  const m = transform.match(/translateX\(\s*(-?[\d.]+)\s*px\s*\)/);
-  if (m)
-    return parseFloat(m[1]) || 0;
-  const n = transform.match(/-?[\d.]+/);
-  return n ? parseFloat(n[0]) || 0 : 0;
-}
-function easeOutCubic(t) {
-  return 1 - Math.pow(1 - t, 3);
-}
-function runSettleCallbacks(callbacks) {
-  for (const cb of callbacks) {
-    try {
-      cb();
-    } catch {}
-  }
-}
-function markWrapperAnimating(wrapper) {
-  wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
-}
-function clearWrapperAnimating(wrapper) {
-  wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
-}
-function animFrame(wrapper, state, now) {
-  if (state.start === null)
-    state.start = now;
-  const elapsed = now - state.start;
-  const progress = Math.min(elapsed / ANIM_DURATION_MS, 1);
-  const eased = easeOutCubic(progress);
-  const val = state.from + (state.to - state.from) * eased;
-  wrapper.style.transform = `translateX(${val}px)`;
-  if (progress < 1) {
-    state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t));
-  } else {
-    state.raf = null;
-    state.start = null;
-    _liveTranslateWrappers.delete(wrapper);
-    clearWrapperAnimating(wrapper);
-    const done = state.onComplete;
-    state.onComplete = null;
-    const callbacks = state.settleCallbacks;
-    state.settleCallbacks = [];
-    if (done) {
-      try {
-        done();
-      } catch {}
-    }
-    runSettleCallbacks(callbacks);
-  }
-}
-function cancelTranslateTween(wrapper) {
-  const state = _anims.get(wrapper);
-  const wasLive = _liveTranslateWrappers.has(wrapper) || state?.raf != null;
-  const pending = state ? state.settleCallbacks : [];
-  if (state) {
-    if (state.raf != null) {
-      cancelAnimationFrame(state.raf);
-      state.raf = null;
-      state.start = null;
-      state.onComplete = null;
-    }
-    state.settleCallbacks = [];
-  }
-  _liveTranslateWrappers.delete(wrapper);
-  if (wasLive)
-    clearWrapperAnimating(wrapper);
-  return pending;
-}
-function cancelWrapperAnimation(wrapper) {
-  const target = wrapper ?? _lastWrapper;
-  if (!target)
-    return;
-  const drained = cancelTranslateTween(target);
-  cancelPanelToggle(target);
-  runSettleCallbacks(drained);
-}
-function cancelAllWrapperAnimations() {
-  for (const wrapper of Array.from(_liveTranslateWrappers)) {
-    const drained = cancelTranslateTween(wrapper);
-    runSettleCallbacks(drained);
-  }
-  for (const wrapper of Array.from(_livePanelWrappers))
-    cancelPanelToggle(wrapper);
-}
-function animateWrapper(wrapper, targetPx, onComplete) {
-  _lastWrapper = wrapper;
-  cancelPanelToggle(wrapper);
-  let state = _anims.get(wrapper);
-  if (!state) {
-    state = { raf: null, start: null, from: 0, to: 0, onComplete: null, settleCallbacks: [] };
-    _anims.set(wrapper, state);
-  }
-  const carried = state.settleCallbacks;
-  state.settleCallbacks = [];
-  const current = parseTranslateX(wrapper.style.transform);
-  state.from = current;
-  state.to = targetPx;
-  state.start = null;
-  state.onComplete = onComplete ?? null;
-  if (state.raf !== null)
-    cancelAnimationFrame(state.raf);
-  if (current === targetPx) {
-    wrapper.style.transform = `translateX(${targetPx}px)`;
-    state.raf = null;
-    _liveTranslateWrappers.delete(wrapper);
-    clearWrapperAnimating(wrapper);
-    const done = state.onComplete;
-    state.onComplete = null;
-    if (done) {
-      try {
-        done();
-      } catch {}
-    }
-    runSettleCallbacks(carried);
-    return;
-  }
-  state.settleCallbacks = carried;
-  _liveTranslateWrappers.add(wrapper);
-  markWrapperAnimating(wrapper);
-  state.raf = requestAnimationFrame((t) => animFrame(wrapper, state, t));
-}
-function computePanelAnchor(button, drawer) {
-  if (!(drawer.width > 0) || !(drawer.height > 0))
-    return null;
-  const cx = button.left + button.width / 2;
-  const cy = button.top + button.height / 2;
-  return {
-    x: (cx - drawer.left) / drawer.width * 100,
-    y: (cy - drawer.top) / drawer.height * 100
-  };
-}
-function panelRailSign(edge) {
-  return edge === "top" ? -1 : 1;
-}
-function applyPanelPose(drawer, panel, pose, edge, anchor) {
-  drawer.style.opacity = String(pose.opacity);
-  drawer.style.transform = `translateY(${pose.ty}px) scale(${pose.scale})`;
-  drawer.style.transformOrigin = anchor ? `${anchor.x}% ${anchor.y}%` : edge === "top" ? "50% 0%" : "50% 100%";
-  if (panel)
-    panel.style.opacity = String(pose.ui);
-}
-function resetPanelStyles(drawer, panel) {
-  drawer.style.opacity = "";
-  drawer.style.transform = "";
-  drawer.style.transformOrigin = "";
-  drawer.style.willChange = "";
-  drawer.style.pointerEvents = "auto";
-  if (panel)
-    panel.style.opacity = "";
-}
-function settlePanelToggle(state, opts) {
-  if (state.done)
-    return;
-  state.done = true;
-  if (state.raf !== null) {
-    cancelAnimationFrame(state.raf);
-    state.raf = null;
-  }
-  if (state.timer !== null) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
-  if (_panelAnims.get(state.wrapper) === state)
-    _panelAnims.delete(state.wrapper);
-  _livePanelWrappers.delete(state.wrapper);
-  resetPanelStyles(state.drawer, state.panel);
-  state.wrapper.removeAttribute(PANEL_ANIMATING_ATTR);
-  if (!state.open && !opts?.cancelled) {
-    state.wrapper.style.transform = `translateX(${state.closedPx}px)`;
-  }
-  const done = state.onComplete;
-  state.onComplete = null;
-  const callbacks = state.settleCallbacks;
-  state.settleCallbacks = [];
-  if (done) {
-    try {
-      done();
-    } catch {}
-  }
-  for (const cb of callbacks) {
-    try {
-      cb();
-    } catch {}
-  }
-}
-function cancelPanelToggle(wrapper) {
-  const state = _panelAnims.get(wrapper);
-  if (state)
-    settlePanelToggle(state, { cancelled: true });
-}
-function isPanelAnimating(wrapper) {
-  return _panelAnims.has(wrapper) || _liveTranslateWrappers.has(wrapper);
-}
-function whenPanelMotionSettles(wrapper, cb) {
-  const bloom = _panelAnims.get(wrapper);
-  if (bloom) {
-    bloom.settleCallbacks.push(cb);
-    return;
-  }
-  const tween = _anims.get(wrapper);
-  if (tween && _liveTranslateWrappers.has(wrapper)) {
-    tween.settleCallbacks.push(cb);
-    return;
-  }
-  cb();
-}
-function panelFrame(state, now) {
-  if (state.done)
-    return;
-  if (state.start === null)
-    state.start = now;
-  const t = Math.min((now - state.start) / state.duration, 1);
-  const eased = easeOutCubic(t);
-  const uiT = state.open ? easeOutCubic(Math.max(0, (t - PANEL_UI_PHASE) / (1 - PANEL_UI_PHASE))) : 0;
-  const pose = {
-    opacity: state.from.opacity + (state.to.opacity - state.from.opacity) * eased,
-    ty: state.from.ty + (state.to.ty - state.from.ty) * eased,
-    scale: state.from.scale + (state.to.scale - state.from.scale) * eased,
-    ui: state.open ? state.from.ui + (state.to.ui - state.from.ui) * uiT : state.from.ui
-  };
-  state.cur = pose;
-  applyPanelPose(state.drawer, state.panel, pose, state.edge, state.anchor);
-  if (t < 1) {
-    state.raf = requestAnimationFrame((n) => panelFrame(state, n));
-  } else {
-    settlePanelToggle(state);
-  }
-}
-function animatePanelToggle(wrapper, drawer, opts) {
-  _lastWrapper = wrapper;
-  const carried = cancelTranslateTween(wrapper);
-  const closedPx = opts.closedPx ?? 0;
-  let existing = _panelAnims.get(wrapper) ?? null;
-  if (existing) {
-    if (!opts.open && !existing.open) {
-      runSettleCallbacks(carried);
-      return;
-    }
-    if (existing.raf !== null)
-      cancelAnimationFrame(existing.raf);
-    if (existing.timer !== null)
-      clearTimeout(existing.timer);
-    existing.done = true;
-    existing.raf = null;
-    existing.timer = null;
-    existing.settleCallbacks = [];
-  } else if (!opts.open && parseTranslateX(wrapper.style.transform) === closedPx) {
-    runSettleCallbacks(carried);
-    return;
-  }
-  const panel = drawer.querySelector?.(".sidebar-ux-panel") ?? null;
-  const anchor = opts.anchor && Number.isFinite(opts.anchor.x) && Number.isFinite(opts.anchor.y) ? opts.anchor : null;
-  const sign = panelRailSign(opts.edge);
-  const from = existing ? existing.cur : opts.open ? {
-    opacity: 0,
-    ty: sign * PANEL_ENTER_PX,
-    scale: PANEL_SCALE,
-    ui: PANEL_UI_FROM
-  } : { opacity: 1, ty: 0, scale: 1, ui: 1 };
-  const to = opts.open ? { opacity: 1, ty: 0, scale: 1, ui: 1 } : anchor ? { opacity: 0, ty: sign * PANEL_EXIT_PX, scale: PANEL_SCALE, ui: from.ui } : { opacity: 0, ty: 0, scale: 1, ui: from.ui };
-  const state = {
-    raf: null,
-    timer: null,
-    start: null,
-    duration: opts.open ? PANEL_OPEN_MS : PANEL_CLOSE_MS,
-    open: opts.open,
-    edge: opts.edge,
-    closedPx,
-    wrapper,
-    drawer,
-    panel,
-    anchor,
-    from,
-    to,
-    cur: from,
-    onComplete: opts.onComplete ?? null,
-    settleCallbacks: carried,
-    done: false
-  };
-  if (opts.open)
-    wrapper.style.transform = "translateX(0)";
-  applyPanelPose(drawer, panel, from, opts.edge, anchor);
-  drawer.style.pointerEvents = "none";
-  drawer.style.willChange = "opacity, transform";
-  wrapper.setAttribute(PANEL_ANIMATING_ATTR, "1");
-  _panelAnims.set(wrapper, state);
-  _livePanelWrappers.add(wrapper);
-  if (prefersReducedMotion()) {
-    applyPanelPose(drawer, panel, to, opts.edge, anchor);
-    state.cur = to;
-    settlePanelToggle(state);
-    return;
-  }
-  state.timer = setTimeout(() => settlePanelToggle(state), state.duration + PANEL_SETTLE_GRACE_MS);
-  state.raf = requestAnimationFrame((n) => panelFrame(state, n));
-}
-var ANIM_DURATION_MS = 350, _anims, _lastWrapper = null, _liveTranslateWrappers, _panelAnims, _livePanelWrappers, PANEL_OPEN_MS = 270, PANEL_CLOSE_MS = 270, PANEL_ENTER_PX = 10, PANEL_EXIT_PX = 8, PANEL_SCALE = 0.985, PANEL_UI_FROM = 0.55, PANEL_UI_PHASE = 0.1, PANEL_SETTLE_GRACE_MS = 100, PANEL_ANIMATING_ATTR = "data-canvas-panel-animating";
-var init_animation = __esm(() => {
-  _anims = new WeakMap;
-  _liveTranslateWrappers = new Set;
-  _panelAnims = new WeakMap;
-  _livePanelWrappers = new Set;
-});
-
-// src/core/model.ts
-function builtinKey(id) {
-  return `${BUILTIN_PREFIX}${id}`;
-}
-function extensionKey(extensionId, tabName) {
-  return `${EXT_PREFIX}${extensionId}/${tabName}`;
-}
-function isBuiltinKey(key) {
-  return key.startsWith(BUILTIN_PREFIX);
-}
-function isExtensionKey(key) {
-  return key.startsWith(EXT_PREFIX);
-}
-function parseBuiltinKey(key) {
-  if (!isBuiltinKey(key))
-    return null;
-  return key.slice(BUILTIN_PREFIX.length);
-}
-function parseExtensionKey(key) {
-  if (!isExtensionKey(key))
-    return null;
-  const rest = key.slice(EXT_PREFIX.length);
-  const slash = rest.indexOf("/");
-  if (slash === -1)
-    return null;
-  return { extensionId: rest.slice(0, slash), tabName: rest.slice(slash + 1) };
-}
-function createEmptyModel(side = "left") {
-  return {
-    version: 2,
-    primary: [],
-    secondary: [],
-    hidden: [],
-    menuHidden: [],
-    closed: [],
-    active: { primary: null, secondary: null },
-    drawers: {
-      primary: { open: false, width: 420 },
-      secondary: { open: false, width: 420 }
-    },
-    side
-  };
-}
-var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
-
-// src/core/select.ts
-function listForSide(model, side) {
-  return side === "primary" ? model.primary : model.secondary;
-}
-function visibleKeys(model, side) {
-  const list = listForSide(model, side);
-  return list.filter((k) => !model.hidden.includes(k));
-}
-function isHidden(model, key) {
-  return model.hidden.includes(key);
-}
-function visibleToAbsoluteIndex(model, side, visibleIndex) {
-  const list = listForSide(model, side);
-  if (visibleIndex < 0)
-    return list.length;
-  let vi = 0;
-  for (let i = 0;i < list.length; i++) {
-    if (!isHidden(model, list[i])) {
-      if (vi === visibleIndex)
-        return i;
-      vi++;
-    }
-  }
-  return list.length;
-}
-function activeAfterRemoval(model, side, removed) {
-  const list = listForSide(model, side);
-  const idx = list.indexOf(removed);
-  if (idx === -1)
-    return null;
-  for (let i = idx - 1;i >= 0; i--) {
-    const key = list[i];
-    if (!isHidden(model, key) && !model.closed.includes(key))
-      return key;
-  }
-  for (let i = idx + 1;i < list.length; i++) {
-    const key = list[i];
-    if (!isHidden(model, key) && !model.closed.includes(key))
-      return key;
-  }
-  return null;
-}
-function keyExists(model, key) {
-  return model.primary.includes(key) || model.secondary.includes(key);
-}
-function sideOfKey(model, key) {
-  if (model.primary.includes(key))
-    return "primary";
-  if (model.secondary.includes(key))
-    return "secondary";
-  return null;
-}
-
-// src/core/reduce.ts
-function removeFrom(list, key) {
-  return list.filter((k) => k !== key);
-}
-function insertAt(list, key, index) {
-  const next = list.slice();
-  next.splice(index, 0, key);
-  return next;
-}
-function toggleHidden(hidden, key, hide) {
-  return toggleMembership(hidden, key, hide);
-}
-function toggleMembership(list, key, add) {
-  const has = list.includes(key);
-  if (add && !has)
-    return [...list, key];
-  if (!add && has)
-    return list.filter((k) => k !== key);
-  return list;
-}
-function applyMove(model, key, to, index, activateDest) {
-  const from = sideOfKey(model, key);
-  if (!from)
-    return model;
-  const srcList = listForSide(model, from);
-  const idx = srcList.indexOf(key);
-  if (idx === -1)
-    return model;
-  const wasActiveInSource = model.active[from] === key;
-  const wasActiveInDest = model.active[to] === key;
-  let sourceReplacement = null;
-  if (wasActiveInSource && from !== to) {
-    sourceReplacement = activeAfterRemoval(model, from, key);
-  }
-  let next = model;
-  if (from === to) {
-    const without = removeFrom(srcList, key);
-    const absIdx = visibleToAbsoluteIndex({ ...model, [from]: without }, from, index);
-    const newList = insertAt(without, key, absIdx);
-    if (sameOrder(newList, srcList))
-      return model;
-    next = { ...model, [from]: newList };
-  } else {
-    const newSrc = removeFrom(srcList, key);
-    const destList = listForSide(model, to);
-    const absIdx = visibleToAbsoluteIndex({ ...model, [from]: newSrc }, to, index);
-    const newDest = insertAt(destList, key, absIdx);
-    next = {
-      ...model,
-      [from]: newSrc,
-      [to]: newDest
-    };
-  }
-  if (wasActiveInSource && from !== to) {
-    next = { ...next, active: { ...next.active, [from]: sourceReplacement } };
-    if (!activateDest && wasActiveInDest) {
-      next = { ...next, active: { ...next.active, [to]: key } };
-    }
-  }
-  if (activateDest && !isHidden(next, key)) {
-    next = { ...next, active: { ...next.active, [to]: key } };
-  }
-  return next;
-}
-function applyReorder(model, key, side, index) {
-  const list = listForSide(model, side);
-  const idx = list.indexOf(key);
-  if (idx === -1)
-    return model;
-  const without = removeFrom(list, key);
-  const absIdx = visibleToAbsoluteIndex({ ...model, [side]: without }, side, index);
-  const newList = insertAt(without, key, absIdx);
-  if (sameOrder(newList, list))
-    return model;
-  return { ...model, [side]: newList };
-}
-function sameOrder(a, b) {
-  if (a.length !== b.length)
-    return false;
-  for (let i = 0;i < a.length; i++) {
-    if (a[i] !== b[i])
-      return false;
-  }
-  return true;
-}
-function applySetHidden(model, key, hide) {
-  if (!keyExists(model, key))
-    return model;
-  const nextHidden = toggleHidden(model.hidden, key, hide);
-  const membershipChanged = nextHidden !== model.hidden;
-  const activeAffected = hide && (model.active.primary === key || model.active.secondary === key);
-  if (!membershipChanged && !activeAffected)
-    return model;
-  let next = membershipChanged ? { ...model, hidden: nextHidden } : model;
-  if (hide) {
-    if (model.active.primary === key) {
-      const replacement = activeAfterRemoval(next, "primary", key);
-      next = { ...next, active: { ...next.active, primary: replacement } };
-    }
-    if (model.active.secondary === key) {
-      const replacement = activeAfterRemoval(next, "secondary", key);
-      next = { ...next, active: { ...next.active, secondary: replacement } };
-    }
-  }
-  return next;
-}
-function applySetMenuHidden(model, key, hide) {
-  if (!keyExists(model, key))
-    return model;
-  const nextMenuHidden = toggleMembership(model.menuHidden, key, hide);
-  if (nextMenuHidden === model.menuHidden)
-    return model;
-  return { ...model, menuHidden: nextMenuHidden };
-}
-function applySetClosed(model, key, closed) {
-  if (!keyExists(model, key))
-    return model;
-  const nextClosed = toggleMembership(model.closed, key, closed);
-  const membershipChanged = nextClosed !== model.closed;
-  const activeAffected = closed && (model.active.primary === key || model.active.secondary === key);
-  if (!membershipChanged && !activeAffected)
-    return model;
-  let next = membershipChanged ? { ...model, closed: nextClosed } : model;
-  if (closed && model.active.primary === key) {
-    next = { ...next, active: { ...next.active, primary: null } };
-  }
-  if (closed && model.active.secondary === key) {
-    next = { ...next, active: { ...next.active, secondary: null } };
-  }
-  return next;
-}
-function applyDeactivate(model, side) {
-  if (model.active[side] == null)
-    return model;
-  return { ...model, active: { ...model.active, [side]: null } };
-}
-function applyActivate(model, key, side) {
-  const list = listForSide(model, side);
-  if (!list.includes(key))
-    return model;
-  if (isHidden(model, key))
-    return model;
-  if (model.closed.includes(key))
-    return model;
-  if (model.active[side] === key)
-    return model;
-  return { ...model, active: { ...model.active, [side]: key } };
-}
-function applySyncActive(model, primary, secondary) {
-  let next = model;
-  const closed = (m, k) => m.closed.includes(k);
-  if (primary !== null && next.active.primary !== primary) {
-    const list = listForSide(next, "primary");
-    if (list.includes(primary) && !isHidden(next, primary) && !closed(next, primary)) {
-      next = { ...next, active: { ...next.active, primary } };
-    }
-  }
-  if (secondary !== null && next.active.secondary !== secondary) {
-    const list = listForSide(next, "secondary");
-    if (list.includes(secondary) && !isHidden(next, secondary) && !closed(next, secondary)) {
-      next = { ...next, active: { ...next.active, secondary } };
-    }
-  }
-  return next;
-}
-function applySetDrawer(model, side, open, width) {
-  const current = model.drawers[side];
-  const newOpen = open !== undefined ? open : current.open;
-  const newWidth = width !== undefined ? width : current.width;
-  if (newOpen === current.open && newWidth === current.width)
-    return model;
-  return {
-    ...model,
-    drawers: {
-      ...model.drawers,
-      [side]: { open: newOpen, width: newWidth }
-    }
-  };
-}
-function applySwapSides(model) {
-  const newSide = model.side === "left" ? "right" : "left";
-  return { ...model, side: newSide };
-}
-function applySyncFromHost(model, observed) {
-  const observedKeys = new Set(observed.tabs.map((t) => t.key));
-  const observedMap = new Map(observed.tabs.map((t) => [t.key, t]));
-  let next = model;
-  const removeFromSide = (side, keys) => {
-    const list = listForSide(next, side);
-    return list.filter((k) => keys.has(k));
-  };
-  const newPrimary = [];
-  const newSecondary = [];
-  const seen = new Set;
-  for (const tab of observed.tabs) {
-    if (seen.has(tab.key)) {
-      if (tab.location === "primary") {
-        const idx = newPrimary.indexOf(tab.key);
-        if (idx >= 0)
-          newPrimary.splice(idx, 1);
-        if (newSecondary.includes(tab.key)) {
-          const sidx = newSecondary.indexOf(tab.key);
-          if (sidx >= 0)
-            newSecondary.splice(sidx, 1);
-        }
-      } else {
-        const idx = newSecondary.indexOf(tab.key);
-        if (idx >= 0)
-          newSecondary.splice(idx, 1);
-        if (newPrimary.includes(tab.key)) {
-          const pidx = newPrimary.indexOf(tab.key);
-          if (pidx >= 0)
-            newPrimary.splice(pidx, 1);
-        }
-      }
-    }
-    seen.add(tab.key);
-    if (tab.location === "primary")
-      newPrimary.push(tab.key);
-    else
-      newSecondary.push(tab.key);
-  }
-  next = { ...next, primary: newPrimary, secondary: newSecondary };
-  next = {
-    ...next,
-    hidden: next.hidden.filter((k) => observedKeys.has(k)),
-    menuHidden: next.menuHidden.filter((k) => observedKeys.has(k))
-  };
-  const adoptActive = (side) => {
-    for (const tab of observed.tabs) {
-      const isActive = side === "primary" ? tab.isActiveInPrimary : tab.isActiveInSecondary;
-      if (isActive && tab.location === side && !isHidden(next, tab.key) && !next.closed.includes(tab.key)) {
-        return tab.key;
-      }
-    }
-    const current = next.active[side];
-    const currentTab = current === null ? undefined : observedMap.get(current);
-    if (current !== null && currentTab?.location === side && !isHidden(next, current)) {
-      return current;
-    }
-    return null;
-  };
-  next = {
-    ...next,
-    active: {
-      primary: adoptActive("primary"),
-      secondary: adoptActive("secondary")
-    }
-  };
-  next = {
-    ...next,
-    side: observed.drawerSide,
-    drawers: {
-      ...next.drawers,
-      primary: { open: observed.primaryOpen, width: observed.primaryWidth },
-      secondary: { open: observed.secondaryOpen, width: observed.secondaryWidth }
-    }
-  };
-  const sameContent = sameKeys(next.primary, model.primary) && sameKeys(next.secondary, model.secondary) && sameKeys(next.hidden, model.hidden) && sameKeys(next.menuHidden, model.menuHidden) && next.active.primary === model.active.primary && next.active.secondary === model.active.secondary && next.side === model.side && next.drawers.primary.open === model.drawers.primary.open && next.drawers.primary.width === model.drawers.primary.width && next.drawers.secondary.open === model.drawers.secondary.open && next.drawers.secondary.width === model.drawers.secondary.width;
-  if (sameContent)
-    return model;
-  return next;
-}
-function sameKeys(a, b) {
-  if (a.length !== b.length)
-    return false;
-  for (let i = 0;i < a.length; i++) {
-    if (a[i] !== b[i])
-      return false;
-  }
-  return true;
-}
-function reduce(model, intent) {
-  switch (intent.t) {
-    case "move":
-      return applyMove(model, intent.key, intent.to, intent.index, intent.activateDest);
-    case "reorder":
-      return applyReorder(model, intent.key, intent.side, intent.index);
-    case "setHidden":
-      return applySetHidden(model, intent.key, intent.hidden);
-    case "setMenuHidden":
-      return applySetMenuHidden(model, intent.key, intent.hidden);
-    case "setClosed":
-      return applySetClosed(model, intent.key, intent.closed);
-    case "activate":
-      return applyActivate(model, intent.key, intent.side);
-    case "deactivate":
-      return applyDeactivate(model, intent.side);
-    case "syncActive":
-      return applySyncActive(model, intent.primary, intent.secondary);
-    case "setDrawer":
-      return applySetDrawer(model, intent.side, intent.open, intent.width);
-    case "swapSides":
-      return applySwapSides(model);
-    case "syncFromHost":
-      return applySyncFromHost(model, intent.observed);
-    default: {
-      const _exhaustive = intent;
-      return model;
-    }
-  }
-}
-function foldIntents(model, intents) {
-  let next = model;
-  for (const intent of intents) {
-    next = reduce(next, intent);
-  }
-  return next;
-}
-var init_reduce = () => {};
-
-// src/tabs/active-tab.ts
-function getActiveTabId() {
-  findStoreData(true);
-  const store = getStoreSnapshot();
-  if (store && typeof store.drawerOpen === "boolean") {
-    if (!store.drawerOpen)
-      return { state: "closed" };
-    if (typeof store.drawerTab === "string") {
-      return { state: "active", id: store.drawerTab };
-    }
-  }
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return { state: "unknown" };
-  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]');
-  if (!activeBtn)
-    return { state: "unknown" };
-  const activeTitle = activeBtn.getAttribute("title") || "";
-  if (!activeTitle)
-    return { state: "unknown" };
-  const tabs = getDrawerTabs();
-  const tab = tabs.find((t) => t.title === activeTitle);
-  if (tab)
-    return { state: "active", id: tab.id };
-  return { state: "active", id: activeTitle };
-}
-function resolvePrimaryActiveTabId() {
-  const model = getModel();
-  if (model && isMainMirrorActive()) {
-    const key = model.active.primary;
-    if (!key)
-      return null;
-    return getHost()?.resolve(key) ?? null;
-  }
-  const sidebar = getMainSidebar();
-  if (sidebar) {
-    const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-    const id = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || null;
-    if (id)
-      return id;
-  }
-  const active = getActiveTabId();
-  if (active.state === "active")
-    return active.id;
-  return null;
-}
-function isTabActiveInMainDrawer(tabId) {
-  const id = resolvePrimaryActiveTabId();
-  return id != null && id === tabId;
-}
-function getActiveSecondaryTabId() {
-  return _activeSecondaryTabId;
-}
-function setActiveSecondaryTabId(tabId, opts) {
-  const changed = tabId !== null && tabId !== _activeSecondaryTabId;
-  _activeSecondaryTabId = tabId;
-  if (changed && !opts?.silent) {
-    Promise.resolve().then(() => (init_dispatch(), {})).then((m) => dispatchTrackedActiveSync()).catch(() => {});
-  }
-}
-var _activeSecondaryTabId = null;
-var init_active_tab = __esm(() => {
-  init_store();
-  init_dispatch();
-  init_main_mirror_drawer();
-});
-
-// src/recon/reconcile.ts
-function modelMatchesWorld(model, resolved, world) {
-  for (const side of ["primary", "secondary"]) {
-    if (diffSetOrder(model, side, resolved, world) !== null)
-      return false;
-    if (diffHidden(model, side, resolved, world) !== null)
-      return false;
-    if (diffActive(model, side, resolved, world) !== null)
-      return false;
-    if (diffDrawer(model, side, world) !== null)
-      return false;
-  }
-  if (diffSide(model, world) !== null)
-    return false;
-  return true;
-}
-function mkStep(step, status, ops, reason) {
-  const r = { step, status, ops };
-  if (reason)
-    r.reason = reason;
-  return r;
-}
-function mergeSideOrder(model, side, resolved) {
-  const list = listForSide(model, side);
-  const out = [];
-  for (const key of list) {
-    if (side === "secondary" && isHidden(model, key))
-      continue;
-    const id = resolved.get(key);
-    if (id)
-      out.push(id);
-  }
-  return out;
-}
-function observeSideOrder(world, side) {
-  return world.tabs.filter((t) => t.location === side && !(side === "secondary" && t.isHidden)).map((t) => t.liveId);
-}
-function diffSetOrder(model, side, resolved, world) {
-  const want = mergeSideOrder(model, side, resolved);
-  const have = observeSideOrder(world, side);
-  if (want.length !== have.length)
-    return want;
-  for (let i = 0;i < want.length; i++) {
-    if (want[i] !== have[i])
-      return want;
-  }
-  return null;
-}
-function diffHidden(model, side, resolved, world) {
-  const modelHiddenIds = [];
-  const list = listForSide(model, side);
-  for (const key of list) {
-    const id = resolved.get(key);
-    if (!id)
-      continue;
-    if (model.hidden.includes(key)) {
-      modelHiddenIds.push(id);
-    }
-  }
-  const tabMap = new Map(world.tabs.map((t) => [t.key, t]));
-  const liveHidden = new Map;
-  for (const [key, id] of resolved) {
-    const obs = tabMap.get(key);
-    if (obs && obs.location === side) {
-      liveHidden.set(id, obs.isHidden);
-    }
-  }
-  const diff = [];
-  for (const [key, id] of resolved) {
-    const obs = tabMap.get(key);
-    if (!obs || obs.location !== side)
-      continue;
-    const wantHidden = model.hidden.includes(key);
-    const isObsHidden = obs.isHidden;
-    if (wantHidden && !isObsHidden)
-      diff.push(id);
-  }
-  for (const [key, id] of resolved) {
-    const obs = tabMap.get(key);
-    if (!obs || obs.location !== side)
-      continue;
-    const wantHidden = model.hidden.includes(key);
-    const isObsHidden = obs.isHidden;
-    if (!wantHidden && isObsHidden)
-      diff.push(id);
-  }
-  return diff.length > 0 ? modelHiddenIds : null;
-}
-function diffActive(model, side, resolved, world) {
-  const modelActive = model.active[side];
-  if (!modelActive)
-    return null;
-  if (side === "secondary") {
-    const trackedId = getActiveSecondaryTabId();
-    if (trackedId !== null) {
-      let trackedKey = null;
-      for (const [key, id] of resolved) {
-        if (id === trackedId) {
-          trackedKey = key;
-          break;
-        }
-      }
-      if (trackedKey !== null && trackedKey !== modelActive)
-        return null;
-    }
-  }
-  const id = resolved.get(modelActive);
-  if (!id)
-    return null;
-  const tabMap = new Map(world.tabs.map((t) => [t.key, t]));
-  const obs = tabMap.get(modelActive);
-  const isActive = side === "primary" ? obs?.isActiveInPrimary ?? false : obs?.isActiveInSecondary ?? false;
-  return isActive ? null : id;
-}
-function diffDrawer(model, side, world) {
-  const m = model.drawers[side];
-  const wOpen = side === "primary" ? world.primaryOpen : world.secondaryOpen;
-  const wWidth = side === "primary" ? world.primaryWidth : world.secondaryWidth;
-  if (m.open !== wOpen || m.width !== wWidth) {
-    return { open: m.open, width: m.width };
-  }
-  return null;
-}
-function diffSide(model, world) {
-  return model.side !== world.drawerSide ? model.side : null;
-}
-async function reconcile(model, host) {
-  const world = host.observe();
-  const steps = [];
-  let totalOps = 0;
-  const observedTabMap = new Map(world.tabs.map((t) => [t.key, t]));
-  const allKeys = new Set;
-  for (const k of model.primary)
-    allKeys.add(k);
-  for (const k of model.secondary)
-    allKeys.add(k);
-  const resolved = new Map;
-  const unresolved = [];
-  let identityOps = 0;
-  for (const key of allKeys) {
-    const id = host.resolve(key);
-    if (id) {
-      resolved.set(key, id);
-      identityOps++;
-    } else {
-      unresolved.push(key);
-    }
-  }
-  steps.push(mkStep("identity", unresolved.length === 0 ? "ok" : "degraded", identityOps, unresolved.length ? `${unresolved.length} tab(s) not present in host` : undefined));
-  {
-    const status = world.inventory?.status;
-    const inventoryStatus = status === "partial" || status === "empty" ? "degraded" : "ok";
-    steps.push(mkStep("inventory", inventoryStatus, 0, status === undefined ? "inventory not reported by host" : status === "partial" ? "inventory partial" : status === "empty" ? "inventory empty" : status));
-  }
-  steps.push(mkStep("shell", "ok", 0));
-  const epochId = ++_epochId;
-  _activeEpoch = true;
-  const unsub = host.onWorldChanged(() => {
-    if (!_activeEpoch || _epochId !== epochId) {
-      _queuedPostEpoch = true;
-      return;
-    }
-    const w = host.observe();
-    if (modelMatchesWorld(model, resolved, w)) {
-      _echoDropped++;
-    } else {
-      _nonEchoDetected++;
-      _queuedPostEpoch = true;
-    }
-  });
-  let placeOps = 0;
-  let placeIssues = 0;
-  let orderOps = 0;
-  let orderIssues = 0;
-  let actOps = 0;
-  let actIssues = 0;
-  let drawerOps = 0;
-  let visOps = 0;
-  let visDegraded = 0;
-  let totalOpsLocal = 0;
-  let scheduled;
-  let modelSideCorrection = null;
-  try {
-    for (const [key, id] of resolved) {
-      const modelSide = sideOfKey(model, key);
-      if (!modelSide)
-        continue;
-      const obs = observedTabMap.get(key);
-      if (!obs)
-        continue;
-      if (obs.location !== modelSide) {
-        placeOps++;
-        const result = await host.placeTab(id, modelSide);
-        if (!result.placed)
-          placeIssues++;
-      }
-    }
-    steps.push(mkStep("placement", placeIssues > 0 ? "degraded" : "ok", placeOps, placeIssues ? `${placeIssues} placement(s) failed` : undefined));
-    totalOps += placeOps;
-    for (const side of ["primary", "secondary"]) {
-      const hids = diffHidden(model, side, resolved, world);
-      if (hids !== null) {
-        visOps++;
-        const result = await host.setHidden(side, hids);
-        if (result !== "ok")
-          visDegraded++;
-      }
-    }
-    steps.push(mkStep("visibility", visDegraded > 0 ? "degraded" : "ok", visOps, visDegraded ? `${visDegraded} visibility write(s) degraded` : undefined));
-    totalOps += visOps;
-    for (const side of ["primary", "secondary"]) {
-      const want = diffSetOrder(model, side, resolved, world);
-      if (want !== null) {
-        dlog("[reconcile] setOrder", {
-          side,
-          want,
-          observed: observeSideOrder(world, side),
-          model: mergeSideOrder(model, side, resolved)
-        });
-        orderOps++;
-        const result = await host.setOrder(side, want);
-        if (result !== "ok")
-          orderIssues++;
-      }
-    }
-    steps.push(mkStep("order", orderIssues > 0 ? "degraded" : "ok", orderOps, orderIssues ? `${orderIssues} order write(s) degraded` : undefined));
-    totalOps += orderOps;
-    for (const side of ["primary", "secondary"]) {
-      const id = diffActive(model, side, resolved, world);
-      if (id !== null) {
-        actOps++;
-        const result = await host.activate(side, id);
-        if (result !== "ok")
-          actIssues++;
-      }
-    }
-    steps.push(mkStep("activation", actIssues > 0 ? "degraded" : "ok", actOps, actIssues ? `${actIssues} activation(s) degraded` : undefined));
-    totalOps += actOps;
-    for (const side of ["primary", "secondary"]) {
-      const ds = diffDrawer(model, side, world);
-      if (ds) {
-        drawerOps++;
-        await host.setDrawer(side, ds);
-      }
-    }
-    const newSide = diffSide(model, world);
-    if (newSide) {
-      drawerOps++;
-      const result = await host.setSide(newSide);
-      if (result !== "ok") {
-        modelSideCorrection = world.drawerSide;
-      }
-    }
-    steps.push(mkStep("drawers", "ok", drawerOps));
-    totalOps += drawerOps;
-    scheduled = _queuedPostEpoch;
-  } finally {
-    _activeEpoch = false;
-    unsub();
-  }
-  _queuedPostEpoch = false;
-  const echoInfo = {
-    echoDropped: _echoDropped,
-    nonEcho: _nonEchoDetected,
-    postEpochScheduled: scheduled
-  };
-  _echoDropped = 0;
-  _nonEchoDetected = 0;
-  const report = {
-    ops: totalOps,
-    steps,
-    unresolved,
-    echo: echoInfo
-  };
-  if (modelSideCorrection !== null) {
-    report.modelSideCorrection = modelSideCorrection;
-  }
-  return report;
-}
-var _epochId = 0, _activeEpoch = false, _echoDropped = 0, _nonEchoDetected = 0, _queuedPostEpoch = false;
-var init_reconcile = __esm(() => {
-  init_log();
-  init_active_tab();
-});
-
-// src/persist/tab-id-heal.ts
-function stripTabIdSuffix(id) {
-  return id.replace(/:\d+$/, "");
-}
-function pairStoredToLiveIds(storedIds, liveIds) {
-  const result = new Map;
-  const available = new Set(liveIds);
-  for (const stored of storedIds) {
-    if (available.has(stored)) {
-      result.set(stored, stored);
-      available.delete(stored);
-    }
-  }
-  const groups = new Map;
-  for (const stored of storedIds.filter((id) => !result.has(id))) {
-    const key = stripTabIdSuffix(stored);
-    const group = groups.get(key) ?? { stored: [], live: [] };
-    group.stored.push(stored);
-    groups.set(key, group);
-  }
-  for (const live of available)
-    groups.get(stripTabIdSuffix(live))?.live.push(live);
-  for (const group of groups.values()) {
-    group.stored.sort();
-    group.live.sort();
-    const count = Math.min(group.stored.length, group.live.length);
-    for (let i = 0;i < count; i++) {
-      result.set(group.stored[i], group.live[i]);
-      available.delete(group.live[i]);
-    }
-    for (let i = count;i < group.stored.length; i++)
-      result.set(group.stored[i], null);
-  }
-  for (const stored of storedIds)
-    if (!result.has(stored))
-      result.set(stored, null);
-  return result;
-}
-function isTabIdHidden(tabId, hiddenIds, liveIds) {
-  const stored = [...hiddenIds];
-  if (stored.includes(tabId))
-    return true;
-  if (!liveIds?.length)
-    return false;
-  return [...pairStoredToLiveIds(stored, [...liveIds]).values()].includes(tabId);
-}
-function healHiddenTabIds(storedHidden, liveIds, opts) {
-  const pairing = pairStoredToLiveIds([...storedHidden], [...liveIds]);
-  const out = [];
-  const seen = new Set;
-  for (const stored of storedHidden) {
-    const live = pairing.get(stored);
-    const id = live ?? (opts?.keepUnmatched ? stored : null);
-    if (id && !seen.has(id)) {
-      seen.add(id);
-      out.push(id);
-    }
-  }
-  return out;
-}
-
-// src/persist/layout-model.ts
-function buildModelFromLayout(layout, findKey, side) {
-  const model = createEmptyModel(side ?? "left");
-  if (!layout)
-    return model;
-  const tabOrder = layout.tabOrder ?? [];
-  const detached = layout.detachedTabs ?? [];
-  const secondaryIds = new Set(detached.map((d) => d.tabId));
-  const isSecondaryStoredId = (id) => {
-    if (secondaryIds.has(id))
-      return true;
-    const base = stripTabIdSuffix(id);
-    for (const secondaryId of secondaryIds) {
-      if (stripTabIdSuffix(secondaryId) === base)
-        return true;
-    }
-    return false;
-  };
-  const primary = [];
-  const secondary = [];
-  const unresolvedIds = [];
-  const appendOnce = (list, key) => {
-    if (!primary.includes(key) && !secondary.includes(key))
-      list.push(key);
-  };
-  for (const storedId of tabOrder) {
-    const key = resolveStoredId(storedId, findKey);
-    if (!key) {
-      unresolvedIds.push(storedId);
-      continue;
-    }
-    appendOnce(isSecondaryStoredId(storedId) ? secondary : primary, key);
-  }
-  for (const d of detached) {
-    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null;
-    const key = fromTitle ?? resolveStoredId(d.tabId, findKey);
-    if (key && !primary.includes(key) && !secondary.includes(key)) {
-      appendOnce(secondary, key);
-    }
-  }
-  const hidden = [];
-  for (const storedId of layout.hiddenTabIds ?? []) {
-    const key = resolveStoredId(storedId, findKey);
-    if (key && (primary.includes(key) || secondary.includes(key)) && !hidden.includes(key)) {
-      hidden.push(key);
-    }
-  }
-  const menuHidden = [];
-  for (const storedId of layout.menuHiddenTabIds ?? []) {
-    const key = resolveStoredId(storedId, findKey);
-    if (key && (primary.includes(key) || secondary.includes(key)) && !menuHidden.includes(key)) {
-      menuHidden.push(key);
-    }
-  }
-  const closed = [];
-  for (const storedId of layout.closedTabIds ?? []) {
-    const key = resolveStoredId(storedId, findKey);
-    if (key && (primary.includes(key) || secondary.includes(key)) && !closed.includes(key)) {
-      closed.push(key);
-    }
-  }
-  const activePrimaryCandidate = layout.primary?.tabId ? resolveStoredId(layout.primary.tabId, findKey) : null;
-  const activeSecondaryCandidate = layout.secondary?.activeTabId ? resolveStoredId(layout.secondary.activeTabId, findKey) : null;
-  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate) && !closed.includes(activePrimaryCandidate) ? activePrimaryCandidate : null;
-  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate) && !closed.includes(activeSecondaryCandidate) ? activeSecondaryCandidate : null;
-  const primaryOpen = layout.primary?.open ?? false;
-  const primaryWidth = layout.primary?.width ?? 420;
-  const secondaryOpen = layout.secondary?.open ?? false;
-  const secondaryWidth = layout.secondary?.width ?? 420;
-  return {
-    version: 2,
-    primary,
-    secondary,
-    hidden,
-    menuHidden,
-    closed,
-    active: {
-      primary: activePrimary ?? null,
-      secondary: activeSecondary ?? null
-    },
-    drawers: {
-      primary: { open: primaryOpen, width: primaryWidth },
-      secondary: { open: secondaryOpen, width: secondaryWidth }
-    },
-    side: layout.drawerSide ?? side ?? "left"
-  };
-}
-function serializeModelToSingleLayout(model, resolve, version) {
-  return {
-    version,
-    primary: {
-      open: model.drawers.primary.open,
-      width: model.drawers.primary.width,
-      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined
-    },
-    secondary: { open: false, width: 420, activeTabId: undefined },
-    detachedTabs: [],
-    tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
-    hiddenTabIds: model.hidden.map((key) => resolve(key)).filter(Boolean),
-    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
-    closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
-    drawerSide: model.side
-  };
-}
-function foldLayoutToSingleShape(layout) {
-  const detached = layout.detachedTabs ?? [];
-  const order = Array.isArray(layout.tabOrder) ? [...layout.tabOrder] : [];
-  for (const d of detached) {
-    const id = d?.tabId;
-    if (id && !order.includes(id))
-      order.push(id);
-  }
-  return {
-    ...layout,
-    secondary: { open: false, width: 420, activeTabId: undefined },
-    detachedTabs: [],
-    tabOrder: order
-  };
-}
-function layoutHasTabs(layout) {
-  if (!layout)
-    return false;
-  return Array.isArray(layout.tabOrder) && layout.tabOrder.length > 0 || Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0;
-}
-function slotResolves(slot, findKey) {
-  if (!slot)
-    return false;
-  const ids = [];
-  if (Array.isArray(slot.tabOrder)) {
-    for (const id of slot.tabOrder)
-      if (typeof id === "string")
-        ids.push(id);
-  }
-  if (Array.isArray(slot.detachedTabs)) {
-    for (const tab of slot.detachedTabs) {
-      if (tab && typeof tab === "object") {
-        const t = tab;
-        if (typeof t.tabId === "string")
-          ids.push(t.tabId);
-        if (typeof t.tabTitle === "string")
-          ids.push(t.tabTitle);
-      }
-    }
-  }
-  for (const id of ids) {
-    if (findKey(id))
-      return true;
-  }
-  return false;
-}
-function resolveStoredId(storedId, findKey) {
-  const exact = findKey(storedId);
-  if (exact)
-    return exact;
-  const stripped = stripTabIdSuffix(storedId);
-  if (stripped === storedId)
-    return null;
-  return findKey(stripped) ?? null;
-}
-function serializeModelToLayout(model, resolve, version) {
-  const primary = resolveList(model.primary, resolve);
-  const secondary = resolveList(model.secondary, resolve);
-  const tabOrder = [...primary, ...secondary];
-  const detachedTabs = [
-    ...model.secondary.map((key) => {
-      const id = resolve(key);
-      return id ? { tabId: id, tabTitle: key, sidebar: "secondary" } : null;
-    })
-  ].filter(Boolean);
-  const hiddenTabIds = model.hidden.map((key) => resolve(key)).filter(Boolean);
-  return {
-    version,
-    primary: {
-      open: model.drawers.primary.open,
-      width: model.drawers.primary.width,
-      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined
-    },
-    secondary: {
-      open: model.drawers.secondary.open,
-      width: model.drawers.secondary.width,
-      activeTabId: model.active.secondary ? resolve(model.active.secondary) ?? undefined : undefined
-    },
-    detachedTabs,
-    tabOrder,
-    hiddenTabIds,
-    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
-    closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
-    drawerSide: model.side
-  };
-}
-function resolveList(keys, resolve) {
-  return keys.map((key) => resolve(key)).filter(Boolean);
-}
-var init_layout_model = () => {};
-
-// src/persist/layout-repo.ts
-function getBootLoadWindowMs() {
-  return _windowMs;
-}
-function getBootLoadIntervalMs() {
-  return _intervalMs;
-}
-function setLayoutRepoBackendCtx(ctx) {
-  _ctx = ctx;
-}
-function isLayoutRepoArmed() {
-  return _armed;
-}
-function armLayoutRepo() {
-  _armed = true;
-}
-function disarmLayoutRepo() {
-  _armed = false;
-  for (const [id, { reject, timer }] of _pendingSaves) {
-    clearTimeout(timer);
-    _pendingSaves.delete(id);
-    reject(new Error("layout repo disarmed"));
-  }
-}
-function loadLayoutFromDisk() {
-  const ctx = _ctx;
-  if (!ctx)
-    return Promise.resolve({ status: "error", reason: "no backend" });
-  return new Promise((resolve) => {
-    let settled = false;
-    let unsub = null;
-    let attempts = 0;
-    const startedAt = Date.now();
-    function attempt() {
-      if (settled)
-        return;
-      const handler = (payload) => {
-        if (payload.type !== "LAYOUT_DATA")
-          return;
-        if (settled)
-          return;
-        settled = true;
-        if (typeof unsub === "function")
-          unsub();
-        const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
-        if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
-          bootStep(`layout-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt}ms (${result.status})`);
-          resolve(result);
-        } else {
-          resolve({ status: "error", reason: "malformed response" });
-        }
-      };
-      unsub = ctx.onBackendMessage(handler);
-      attempts++;
-      ctx.sendToBackend({ type: "LOAD_LAYOUT" });
-      setTimeout(() => {
-        if (settled)
-          return;
-        const elapsed = Date.now() - startedAt;
-        if (elapsed < getBootLoadWindowMs()) {
-          if (typeof unsub === "function")
-            unsub();
-          if (attempts > 1 && attempts % 5 === 1) {
-            bootWarn(`layout-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
-          }
-          attempt();
-        } else {
-          settled = true;
-          if (typeof unsub === "function")
-            unsub();
-          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
-          bootWarn(`layout-load-timeout`, reason);
-          resolve({ status: "error", reason });
-        }
-      }, getBootLoadIntervalMs());
-    }
-    attempt();
-  });
-}
-function saveLayoutToDisk(layout) {
-  const ctx = _ctx;
-  if (!ctx)
-    return Promise.resolve({ status: "error", reason: "no backend" });
-  if (!_armed)
-    return Promise.resolve({ status: "error", reason: "not armed" });
-  const id = ++_saveCounter;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (_pendingSaves.has(id)) {
-        _pendingSaves.delete(id);
-        resolve({ status: "error", reason: "save timed out" });
-      }
-    }, 5000);
-    _pendingSaves.set(id, { resolve, reject, timer });
-    ctx.sendToBackend({ type: "SAVE_LAYOUT", layout, saveId: id });
-  });
-}
-function __resolveLayoutSave(saveId, result) {
-  const pending = _pendingSaves.get(saveId);
-  if (!pending)
-    return;
-  _pendingSaves.delete(saveId);
-  clearTimeout(pending.timer);
-  pending.resolve(result);
-}
-function bindLayoutSaveResultBridge() {
-  const ctx = _ctx;
-  if (!ctx)
-    return () => {};
-  return ctx.onBackendMessage((payload) => {
-    if (!payload || payload.type !== "SAVE_LAYOUT_RESULT")
-      return;
-    const saveId = typeof payload.saveId === "number" ? payload.saveId : 0;
-    const result = payload.result;
-    if (result && typeof result === "object" && (result.status === "ok" || result.status === "error")) {
-      __resolveLayoutSave(saveId, result);
-    }
-  });
-}
-var BOOT_LOAD_WINDOW_MS = 15000, BOOT_LOAD_INTERVAL_MS = 1000, _windowMs, _intervalMs, _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
-var init_layout_repo = __esm(() => {
-  init_boot_diag();
-  _windowMs = BOOT_LOAD_WINDOW_MS;
-  _intervalMs = BOOT_LOAD_INTERVAL_MS;
-  _pendingSaves = new Map;
-});
-
-// src/dom/host-settings.ts
-function scanForHostSettings(fiber, depth, maxDepth, visited) {
-  if (!fiber || depth > maxDepth || visited.has(fiber))
-    return;
-  visited.add(fiber);
-  let hook = fiber.memoizedState;
-  let hookIdx = 0;
-  while (hook && hookIdx < 40) {
-    const state = hook.memoizedState;
-    if (state && typeof state === "object" && !Array.isArray(state)) {
-      const keys = Object.keys(state);
-      const hasDrawerSettings = keys.includes("drawerSettings");
-      const hasSetSetting = keys.includes("setSetting") && typeof state.setSetting === "function";
-      if (hasDrawerSettings) {
-        _cachedDrawerSettings = state.drawerSettings;
-      }
-      if (hasSetSetting) {
-        _cachedSetSetting = state.setSetting;
-      }
-      if (hasDrawerSettings && hasSetSetting) {
-        _cacheTimestamp = Date.now();
-        return;
-      }
-    }
-    hook = hook.next;
-    hookIdx++;
-  }
-  scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
-  scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
-}
-function walkElementForHostSettings(el, visited) {
-  if (!el)
-    return;
-  const rootFiber = getFiberFromElement(el);
-  if (!rootFiber)
-    return;
-  let fiber = rootFiber;
-  const ancestors = [];
-  while (fiber) {
-    ancestors.push(fiber);
-    fiber = fiber.return;
-  }
-  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 8); i--) {
-    scanForHostSettings(ancestors[i], 0, 40, visited);
-    if (_cachedSetSetting && _cachedDrawerSettings)
-      return;
-  }
-}
-function findHostSettings(force = false) {
-  const now = Date.now();
-  if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp < CACHE_TTL_MS) {
-    return;
-  }
-  if (_testSetSetting) {
-    if (_cachedDrawerSettings)
-      return;
-    _cachedDrawerSettings = { tabOrder: [], hiddenTabIds: [], side: "right" };
-    return;
-  }
-  if (typeof document === "undefined")
-    return;
-  const visited = new Set;
-  walkElementForHostSettings(getMainSidebar(), visited);
-  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
-    walkElementForHostSettings(getMainPanel(), visited);
-  }
-  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
-    walkElementForHostSettings(getMainWrapper(), visited);
-  }
-  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
-    const getById = typeof document.getElementById === "function" ? (id) => document.getElementById(id) : () => null;
-    const appRoot = getById("root") || getById("app") || document.body || null;
-    walkElementForHostSettings(appRoot, visited);
-  }
-  if (_cachedSetSetting || _cachedDrawerSettings) {
-    _cacheTimestamp = Date.now();
-  }
-}
-function getHostDrawerSettings() {
-  findHostSettings();
-  return _cachedDrawerSettings;
-}
-function refreshHostDrawerSettings() {
-  findHostSettings(true);
-  return _cachedDrawerSettings;
-}
-function patchHostDrawerSettings(partial) {
-  findHostSettings();
-  if (_testSetSetting) {
-    const current = getHostDrawerSettings() ?? {};
-    const merged = { ...current, ...partial };
-    _testSetSetting("drawerSettings", merged);
-    _cachedDrawerSettings = merged;
-    _cacheTimestamp = Date.now();
-    findStoreData(true);
-    return true;
-  }
-  if (!_cachedSetSetting) {
-    findStoreData(true);
-    const snap = getStoreSnapshot();
-    if (snap && typeof snap.setSetting === "function") {
-      _cachedSetSetting = snap.setSetting.bind(snap);
-      if (snap.drawerSettings && typeof snap.drawerSettings === "object") {
-        _cachedDrawerSettings = snap.drawerSettings;
-      }
-      _cacheTimestamp = Date.now();
-      dlog("patchHostDrawerSettings: setSetting recovered from store snapshot");
-    }
-  }
-  const current = _cachedDrawerSettings ?? {};
-  const merged = { ...current, ...partial };
-  _cachedDrawerSettings = merged;
-  _cacheTimestamp = Date.now();
-  if (!_cachedSetSetting) {
-    if ("side" in partial) {
-      delete merged.side;
-      _cachedDrawerSettings = merged;
-    }
-    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
-    return false;
-  }
-  _cachedSetSetting("drawerSettings", merged);
-  findStoreData(true);
-  return true;
-}
-async function writeHostDrawerSettingsViaApi(patch, signal) {
-  const controller = new AbortController;
-  const abortFromCaller = () => controller.abort();
-  if (signal?.aborted)
-    controller.abort();
-  else
-    signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = setTimeout(() => controller.abort(), 3000);
-  try {
-    const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
-    const initBase = { signal: controller.signal };
-    let current = {};
-    const getRes = await doFetch("/api/v1/settings/drawerSettings", {
-      ...initBase,
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" }
-    });
-    if (getRes.status !== 404) {
-      if (!getRes.ok) {
-        dlog("writeHostDrawerSettingsViaApi: read rejected", { status: getRes.status });
-        return false;
-      }
-      try {
-        const row = await getRes.json();
-        if (!row || typeof row.value !== "object" || row.value === null)
-          return false;
-        current = row.value;
-      } catch {
-        dlog("writeHostDrawerSettingsViaApi: unreadable settings row");
-        return false;
-      }
-    }
-    const merged = { ...current, ...patch };
-    const res = await doFetch("/api/v1/settings/drawerSettings", {
-      ...initBase,
-      method: "PUT",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: merged })
-    });
-    if (res.ok) {
-      dlog("writeHostDrawerSettingsViaApi: ok", { patch });
-      return true;
-    }
-    dlog("writeHostDrawerSettingsViaApi: rejected", { status: res.status });
-    return false;
-  } catch (err) {
-    dlog("writeHostDrawerSettingsViaApi: failed", String(err));
-    return false;
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abortFromCaller);
-  }
-}
-function isHostDrawerSettingsWritable() {
-  if (_testSetSetting)
-    return true;
-  findHostSettings();
-  return _cachedSetSetting !== null;
-}
-var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
-var init_host_settings = __esm(() => {
-  init_fiber();
-  init_log();
-  init_store();
-});
-
 // src/sidebar/drawer-shell.ts
 function closedTransformPx(side, widthPx) {
   const w = Math.ceil(widthPx) + 1;
@@ -3705,6 +2748,137 @@ var init_drawer_shell = __esm(() => {
   init_styles();
 });
 
+// src/sidebar/dock-offset.ts
+function getDockInsets() {
+  if (typeof document === "undefined")
+    return { left: 0, right: 0 };
+  const appEl = document.querySelector("[data-app-root]");
+  if (!appEl)
+    return { left: 0, right: 0 };
+  const left = parseFloat(appEl.style.getPropertyValue("--spindle-dock-left")) || 0;
+  const right = parseFloat(appEl.style.getPropertyValue("--spindle-dock-right")) || 0;
+  return { left, right };
+}
+function stripPinnedOn(side) {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return false;
+  }
+  const hosts = document.querySelectorAll(PIN_HOST_SEL2);
+  for (const host of Array.from(hosts)) {
+    const el = host;
+    if (el.getAttribute?.("data-strip-axis") === "horizontal")
+      continue;
+    const s = el.classList.contains(SIDE_LEFT_CLASS) ? "left" : "right";
+    if (s === side)
+      return true;
+  }
+  return false;
+}
+function readComputedStyle(el) {
+  try {
+    return window.getComputedStyle(el);
+  } catch {
+    return null;
+  }
+}
+function findDockPanels() {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") {
+    return [];
+  }
+  const out = [];
+  for (const cached of Array.from(_knownDockNodes)) {
+    if (!cached.isConnected)
+      _knownDockNodes.delete(cached);
+  }
+  const els = document.querySelectorAll("div");
+  for (const el of Array.from(els)) {
+    if (_knownDockNodes.has(el)) {
+      out.push(el);
+      continue;
+    }
+    const cs = readComputedStyle(el);
+    if (!cs)
+      continue;
+    if (cs.position !== "fixed")
+      continue;
+    if (cs.zIndex !== "9980")
+      continue;
+    if (cs.top !== "0px" || cs.bottom !== "0px")
+      continue;
+    if (cs.left !== "0px" && cs.right !== "0px" && !el.style.left && !el.style.right)
+      continue;
+    _knownDockNodes.add(el);
+    out.push(el);
+  }
+  return out;
+}
+function dockEdgeOf(panel, cs) {
+  if (cs) {
+    if (cs.right === "0px")
+      return "right";
+    if (cs.left === "0px")
+      return "left";
+    if (panel.style.left && cs.right === "auto")
+      return "left";
+    if (panel.style.right && cs.left === "auto")
+      return "right";
+  }
+  if (panel.style.left)
+    return "left";
+  if (panel.style.right)
+    return "right";
+  return null;
+}
+function updateDockOffsets() {
+  if (!isInstanceActive())
+    return;
+  if (typeof document === "undefined" || typeof window === "undefined")
+    return;
+  const dock = getDockInsets();
+  if (dock.left === 0 && dock.right === 0)
+    return;
+  const stripLeft = stripPinnedOn("left");
+  const stripRight = stripPinnedOn("right");
+  const insetsChanged = _lastInsets === null || _lastInsets.left !== dock.left || _lastInsets.right !== dock.right;
+  _lastInsets = { left: dock.left, right: dock.right };
+  const panels = insetsChanged ? findDockPanels() : Array.from(_knownDockNodes);
+  for (const panel of panels) {
+    const cs = readComputedStyle(panel);
+    const edge = dockEdgeOf(panel, cs);
+    if (!edge)
+      continue;
+    const offset = edge === "left" ? stripLeft : stripRight;
+    if (offset) {
+      if (edge === "left") {
+        if (panel.style.left !== `${DOCK_EDGE_OFFSET_PX}px`) {
+          panel.style.left = `${DOCK_EDGE_OFFSET_PX}px`;
+          dlog("[dock-offset] shifted left dock right of strip", { offset: DOCK_EDGE_OFFSET_PX });
+        }
+        if (panel.style.right)
+          panel.style.right = "";
+      } else {
+        if (panel.style.right !== `${DOCK_EDGE_OFFSET_PX}px`) {
+          panel.style.right = `${DOCK_EDGE_OFFSET_PX}px`;
+          dlog("[dock-offset] shifted right dock left of strip", { offset: DOCK_EDGE_OFFSET_PX });
+        }
+        if (panel.style.left)
+          panel.style.left = "";
+      }
+    } else if (panel.style.left || panel.style.right) {
+      panel.style.left = "";
+      panel.style.right = "";
+      dlog("[dock-offset] cleared dock edge offset", { edge });
+    }
+  }
+}
+var DOCK_EDGE_OFFSET_PX, PIN_HOST_SEL2 = ".sidebar-ux-tab-list-pin-host", SIDE_LEFT_CLASS = "sidebar-ux-side-left", _knownDockNodes, _lastInsets = null;
+var init_dock_offset = __esm(() => {
+  init_styles();
+  init_log();
+  DOCK_EDGE_OFFSET_PX = TAB_LIST_WIDTH_PX;
+  _knownDockNodes = new Set;
+});
+
 // src/sidebar/strip-gutter.ts
 function injectStripGutterStyles() {
   injectStyles(STYLE_ID, `
@@ -3862,7 +3036,7 @@ function ensureMainPinHost(side) {
     document.body.appendChild(_mainPinHost);
   }
   sweepStrayPinHosts();
-  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN);
+  applyPinHostChrome(_mainPinHost, side, PIN_OWNER_MAIN2);
   return _mainPinHost;
 }
 function destroyMainPinHost() {
@@ -3953,7 +3127,7 @@ function applyPinHostChrome(host, side, owner) {
     host.setAttribute(STRIP_EDGE_ATTR, edge);
   const s = host.style;
   setIfDifferent(s, "position", "fixed");
-  setIfDifferent(s, "zIndex", owner === PIN_OWNER_SECONDARY && horizontal ? PIN_Z_INDEX_SECONDARY : PIN_Z_INDEX);
+  setIfDifferent(s, "zIndex", owner === PIN_OWNER_SECONDARY2 && horizontal ? PIN_Z_INDEX_SECONDARY : PIN_Z_INDEX);
   setIfDifferent(s, "pointerEvents", "none");
   if (horizontal) {
     setImportant(s, "height", "var(--sidebar-ux-strip-h, 56px)");
@@ -3964,7 +3138,7 @@ function applyPinHostChrome(host, side, owner) {
       setIfDifferent(s, "bottom", SAFE_BOTTOM);
       setIfDifferent(s, "top", "");
     }
-    if (owner === PIN_OWNER_MAIN) {
+    if (owner === PIN_OWNER_MAIN2) {
       setImportant(s, "width", "100%");
     } else {
       setImportant(s, "width", `var(${SPLIT_VAR}, 50%)`);
@@ -4140,7 +3314,7 @@ function ensurePinHost(side) {
     document.body.appendChild(_pinHost);
   }
   sweepStrayPinHosts();
-  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
+  applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY2);
   syncHorizontalSplit();
   return _pinHost;
 }
@@ -4500,7 +3674,7 @@ function pinTabList(tabList) {
     }
     removeOrphanTabListsFromHost(tabList);
   } else if (_pinHost) {
-    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY);
+    applyPinHostChrome(_pinHost, side, PIN_OWNER_SECONDARY2);
     removeOrphanTabListsFromHost(tabList);
   }
   syncSpacerForLocation(_pinSpacer, getDrawerLocation());
@@ -4563,7 +3737,7 @@ function destroyPinChrome() {
   clearSplitVar();
   sweepStrayPinHosts();
 }
-var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY = "secondary", PIN_OWNER_MAIN = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_HANDLE_NEAR_CLASS = "sidebar-ux-hsplit-handle--near", SPLIT_REVEAL_RADIUS_PX = 100, SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _splitDragFinish = null, _splitProximityCleanup = null, _mainPinHost = null;
+var TAB_LIST_PINNED_CLASS = "sidebar-ux-tab-list--pinned", TAB_LIST_PIN_HOST_CLASS = "sidebar-ux-tab-list-pin-host", PIN_OWNER_SECONDARY2 = "secondary", PIN_OWNER_MAIN2 = "main", TAB_LIST_SPACER_CLASS = "sidebar-ux-tab-list-spacer", STRIP_AXIS_ATTR = "data-strip-axis", STRIP_EDGE_ATTR = "data-strip-edge", STRIP_AXIS_HORIZONTAL = "horizontal", STRIP_AXIS_VERTICAL = "vertical", PIN_Z_INDEX = "10000", PIN_Z_INDEX_SECONDARY = "10001", SAFE_TOP = "env(safe-area-inset-top, 0px)", SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)", SAFE_LEFT = "env(safe-area-inset-left, 0px)", SAFE_RIGHT = "env(safe-area-inset-right, 0px)", INNER_BORDER = "1px solid var(--lumiverse-primary-020)", CHAT_FACING_BORDER = "1px solid var(--lumiverse-primary-020)", SPLIT_VAR = "--sidebar-ux-hsplit", SPLIT_HANDLE_CLASS = "sidebar-ux-hsplit-handle", SPLIT_HANDLE_NEAR_CLASS = "sidebar-ux-hsplit-handle--near", SPLIT_REVEAL_RADIUS_PX = 100, SPLIT_MIN_SIDE_PX = 64, _pinHost = null, _pinSpacer = null, _restoreParent = null, _restoreNext = null, _splitHandle = null, _splitDragging = false, _splitDragCancel = null, _splitDragFinish = null, _splitProximityCleanup = null, _mainPinHost = null;
 var init_tab_position = __esm(() => {
   init_store();
   init_state();
@@ -4575,21 +3749,648 @@ var init_tab_position = __esm(() => {
   init_drawer_shell();
 });
 
-// src/os/start-strip-top-gate.ts
-function isStartAtStripTopGate() {
-  try {
-    if (!getSettings().startButtonAtStripTop)
-      return false;
-    if (isHorizontalStrip())
-      return false;
-    return !isMobileViewport();
-  } catch {
-    return !!getSettings().startButtonAtStripTop && getSettings().drawerLocation === "sides";
+// src/dom/host-settings.ts
+function scanForHostSettings(fiber, depth, maxDepth, visited) {
+  if (!fiber || depth > maxDepth || visited.has(fiber))
+    return;
+  visited.add(fiber);
+  let hook = fiber.memoizedState;
+  let hookIdx = 0;
+  while (hook && hookIdx < 40) {
+    const state = hook.memoizedState;
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const keys = Object.keys(state);
+      const hasDrawerSettings = keys.includes("drawerSettings");
+      const hasSetSetting = keys.includes("setSetting") && typeof state.setSetting === "function";
+      if (hasDrawerSettings) {
+        _cachedDrawerSettings = state.drawerSettings;
+      }
+      if (hasSetSetting) {
+        _cachedSetSetting = state.setSetting;
+      }
+      if (hasDrawerSettings && hasSetSetting) {
+        _cacheTimestamp = Date.now();
+        return;
+      }
+    }
+    hook = hook.next;
+    hookIdx++;
+  }
+  scanForHostSettings(fiber.child, depth + 1, maxDepth, visited);
+  scanForHostSettings(fiber.sibling, depth, maxDepth, visited);
+}
+function walkElementForHostSettings(el, visited) {
+  if (!el)
+    return;
+  const rootFiber = getFiberFromElement(el);
+  if (!rootFiber)
+    return;
+  let fiber = rootFiber;
+  const ancestors = [];
+  while (fiber) {
+    ancestors.push(fiber);
+    fiber = fiber.return;
+  }
+  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 8); i--) {
+    scanForHostSettings(ancestors[i], 0, 40, visited);
+    if (_cachedSetSetting && _cachedDrawerSettings)
+      return;
   }
 }
-var init_start_strip_top_gate = __esm(() => {
-  init_state();
-  init_mobile_exclusion();
+function findHostSettings(force = false) {
+  const now = Date.now();
+  if (!force && _cachedSetSetting && _cachedDrawerSettings && now - _cacheTimestamp < CACHE_TTL_MS) {
+    return;
+  }
+  if (_testSetSetting) {
+    if (_cachedDrawerSettings)
+      return;
+    _cachedDrawerSettings = { tabOrder: [], hiddenTabIds: [], side: "right" };
+    return;
+  }
+  if (typeof document === "undefined")
+    return;
+  const visited = new Set;
+  walkElementForHostSettings(getMainSidebar(), visited);
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainPanel(), visited);
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    walkElementForHostSettings(getMainWrapper(), visited);
+  }
+  if (!(_cachedSetSetting && _cachedDrawerSettings)) {
+    const getById = typeof document.getElementById === "function" ? (id) => document.getElementById(id) : () => null;
+    const appRoot = getById("root") || getById("app") || document.body || null;
+    walkElementForHostSettings(appRoot, visited);
+  }
+  if (_cachedSetSetting || _cachedDrawerSettings) {
+    _cacheTimestamp = Date.now();
+  }
+}
+function getHostDrawerSettings() {
+  findHostSettings();
+  return _cachedDrawerSettings;
+}
+function refreshHostDrawerSettings() {
+  findHostSettings(true);
+  return _cachedDrawerSettings;
+}
+function patchHostDrawerSettings(partial) {
+  findHostSettings();
+  if (_testSetSetting) {
+    const current = getHostDrawerSettings() ?? {};
+    const merged = { ...current, ...partial };
+    _testSetSetting("drawerSettings", merged);
+    _cachedDrawerSettings = merged;
+    _cacheTimestamp = Date.now();
+    findStoreData(true);
+    return true;
+  }
+  if (!_cachedSetSetting) {
+    findStoreData(true);
+    const snap = getStoreSnapshot();
+    if (snap && typeof snap.setSetting === "function") {
+      _cachedSetSetting = snap.setSetting.bind(snap);
+      if (snap.drawerSettings && typeof snap.drawerSettings === "object") {
+        _cachedDrawerSettings = snap.drawerSettings;
+      }
+      _cacheTimestamp = Date.now();
+      dlog("patchHostDrawerSettings: setSetting recovered from store snapshot");
+    }
+  }
+  const current = _cachedDrawerSettings ?? {};
+  const merged = { ...current, ...partial };
+  _cachedDrawerSettings = merged;
+  _cacheTimestamp = Date.now();
+  if (!_cachedSetSetting) {
+    if ("side" in partial) {
+      delete merged.side;
+      _cachedDrawerSettings = merged;
+    }
+    dlog("patchHostDrawerSettings: setSetting not available (NO-GO)");
+    return false;
+  }
+  _cachedSetSetting("drawerSettings", merged);
+  findStoreData(true);
+  return true;
+}
+async function writeHostDrawerSettingsViaApi(patch, signal) {
+  const controller = new AbortController;
+  const abortFromCaller = () => controller.abort();
+  if (signal?.aborted)
+    controller.abort();
+  else
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
+    const initBase = { signal: controller.signal };
+    let current = {};
+    const getRes = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    if (getRes.status !== 404) {
+      if (!getRes.ok) {
+        dlog("writeHostDrawerSettingsViaApi: read rejected", { status: getRes.status });
+        return false;
+      }
+      try {
+        const row = await getRes.json();
+        if (!row || typeof row.value !== "object" || row.value === null)
+          return false;
+        current = row.value;
+      } catch {
+        dlog("writeHostDrawerSettingsViaApi: unreadable settings row");
+        return false;
+      }
+    }
+    const merged = { ...current, ...patch };
+    const res = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: merged })
+    });
+    if (res.ok) {
+      dlog("writeHostDrawerSettingsViaApi: ok", { patch });
+      return true;
+    }
+    dlog("writeHostDrawerSettingsViaApi: rejected", { status: res.status });
+    return false;
+  } catch (err) {
+    dlog("writeHostDrawerSettingsViaApi: failed", String(err));
+    return false;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+function isHostDrawerSettingsWritable() {
+  if (_testSetSetting)
+    return true;
+  findHostSettings();
+  return _cachedSetSetting !== null;
+}
+var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
+var init_host_settings = __esm(() => {
+  init_fiber();
+  init_log();
+  init_store();
+});
+
+// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
+function m(n, l) {
+  for (var u in l)
+    n[u] = l[u];
+  return n;
+}
+function b(n) {
+  n && n.parentNode && n.parentNode.removeChild(n);
+}
+function k(l, u, t) {
+  var i, r, o, e = {};
+  for (o in u)
+    o == "key" ? i = u[o] : o == "ref" ? r = u[o] : e[o] = u[o];
+  if (arguments.length > 2 && (e.children = arguments.length > 3 ? n.call(arguments, 2) : t), typeof l == "function" && l.defaultProps != null)
+    for (o in l.defaultProps)
+      e[o] === undefined && (e[o] = l.defaultProps[o]);
+  return x(l, e, i, r, null);
+}
+function x(n, t, i, r, o) {
+  var e = { type: n, props: t, key: i, ref: r, __k: null, __: null, __b: 0, __e: null, __c: null, constructor: undefined, __v: o == null ? ++u : o, __i: -1, __u: 0 };
+  return o == null && l.vnode != null && l.vnode(e), e;
+}
+function S(n) {
+  return n.children;
+}
+function C(n, l) {
+  this.props = n, this.context = l;
+}
+function $(n, l) {
+  if (l == null)
+    return n.__ ? $(n.__, n.__i + 1) : null;
+  for (var u;l < n.__k.length; l++)
+    if ((u = n.__k[l]) != null && u.__e != null)
+      return u.__e;
+  return typeof n.type == "function" ? $(n) : null;
+}
+function I(n) {
+  if (n.__P && n.__d) {
+    var u = n.__v, t = u.__e, i = [], r = [], o = m({}, u);
+    o.__v = u.__v + 1, l.vnode && l.vnode(o), q(n.__P, o, u, n.__n, n.__P.namespaceURI, 32 & u.__u ? [t] : null, i, t == null ? $(u) : t, !!(32 & u.__u), r), o.__v = u.__v, o.__.__k[o.__i] = o, D(i, o, r), u.__e = u.__ = null, o.__e != t && P(o);
+  }
+}
+function P(n) {
+  if ((n = n.__) != null && n.__c != null)
+    return n.__e = n.__c.base = null, n.__k.some(function(l) {
+      if (l != null && l.__e != null)
+        return n.__e = n.__c.base = l.__e;
+    }), P(n);
+}
+function A(n) {
+  (!n.__d && (n.__d = true) && i.push(n) && !H.__r++ || r != l.debounceRendering) && ((r = l.debounceRendering) || o)(H);
+}
+function H() {
+  try {
+    for (var n, l = 1;i.length; )
+      i.length > l && i.sort(e), n = i.shift(), l = i.length, I(n);
+  } finally {
+    i.length = H.__r = 0;
+  }
+}
+function L(n, l, u, t, i, r, o, e, f, c, a) {
+  var s, h, p, v, y, _, g, m = t && t.__k || w, b = l.length;
+  for (f = T(u, l, m, f, b), s = 0;s < b; s++)
+    (p = u.__k[s]) != null && (h = p.__i != -1 && m[p.__i] || d, p.__i = s, _ = q(n, p, h, i, r, o, e, f, c, a), v = p.__e, p.ref && h.ref != p.ref && (h.ref && J(h.ref, null, p), a.push(p.ref, p.__c || v, p)), y == null && v != null && (y = v), (g = !!(4 & p.__u)) || h.__k === p.__k ? (f = j(p, f, n, g), g && h.__e && (h.__e = null)) : typeof p.type == "function" && _ !== undefined ? f = _ : v && (f = v.nextSibling), p.__u &= -7);
+  return u.__e = y, f;
+}
+function T(n, l, u, t, i) {
+  var r, o, e, f, c, a = u.length, s = a, h = 0;
+  for (n.__k = new Array(i), r = 0;r < i; r++)
+    (o = l[r]) != null && typeof o != "boolean" && typeof o != "function" ? (typeof o == "string" || typeof o == "number" || typeof o == "bigint" || o.constructor == String ? o = n.__k[r] = x(null, o, null, null, null) : g(o) ? o = n.__k[r] = x(S, { children: o }, null, null, null) : o.constructor === undefined && o.__b > 0 ? o = n.__k[r] = x(o.type, o.props, o.key, o.ref ? o.ref : null, o.__v) : n.__k[r] = o, f = r + h, o.__ = n, o.__b = n.__b + 1, e = null, (c = o.__i = O(o, u, f, s)) != -1 && (s--, (e = u[c]) && (e.__u |= 2)), e == null || e.__v == null ? (c == -1 && (i > a ? h-- : i < a && h++), typeof o.type != "function" && (o.__u |= 4)) : c != f && (c == f - 1 ? h-- : c == f + 1 ? h++ : (c > f ? h-- : h++, o.__u |= 4))) : n.__k[r] = null;
+  if (s)
+    for (r = 0;r < a; r++)
+      (e = u[r]) != null && (2 & e.__u) == 0 && (e.__e == t && (t = $(e)), K(e, e));
+  return t;
+}
+function j(n, l, u, t) {
+  var i, r;
+  if (typeof n.type == "function") {
+    for (i = n.__k, r = 0;i && r < i.length; r++)
+      i[r] && (i[r].__ = n, l = j(i[r], l, u, t));
+    return l;
+  }
+  n.__e != l && (t && (l && n.type && !l.parentNode && (l = $(n)), u.insertBefore(n.__e, l || null)), l = n.__e);
+  do {
+    l = l && l.nextSibling;
+  } while (l != null && l.nodeType == 8);
+  return l;
+}
+function O(n, l, u, t) {
+  var i, r, o, { key: e, type: f } = n, c = l[u], a = c != null && (2 & c.__u) == 0;
+  if (c === null && e == null || a && e == c.key && f == c.type)
+    return u;
+  if (t > (a ? 1 : 0)) {
+    for (i = u - 1, r = u + 1;i >= 0 || r < l.length; )
+      if ((c = l[o = i >= 0 ? i-- : r++]) != null && (2 & c.__u) == 0 && e == c.key && f == c.type)
+        return o;
+  }
+  return -1;
+}
+function z(n, l, u) {
+  l[0] == "-" ? n.setProperty(l, u == null ? "" : u) : n[l] = u == null ? "" : typeof u != "number" || _.test(l) ? u : u + "px";
+}
+function N(n, l, u, t, i) {
+  var r, o;
+  n:
+    if (l == "style")
+      if (typeof u == "string")
+        n.style.cssText = u;
+      else {
+        if (typeof t == "string" && (n.style.cssText = t = ""), t)
+          for (l in t)
+            u && l in u || z(n.style, l, "");
+        if (u)
+          for (l in u)
+            t && u[l] == t[l] || z(n.style, l, u[l]);
+      }
+    else if (l[0] == "o" && l[1] == "n")
+      r = l != (l = l.replace(s, "$1")), o = l.toLowerCase(), l = o in n || l == "onFocusOut" || l == "onFocusIn" ? o.slice(2) : l.slice(2), n.l || (n.l = {}), n.l[l + r] = u, u ? t ? u[a] = t[a] : (u[a] = h, n.addEventListener(l, r ? v : p, r)) : n.removeEventListener(l, r ? v : p, r);
+    else {
+      if (i == "http://www.w3.org/2000/svg")
+        l = l.replace(/xlink(H|:h)/, "h").replace(/sName$/, "s");
+      else if (l != "width" && l != "height" && l != "href" && l != "list" && l != "form" && l != "tabIndex" && l != "download" && l != "rowSpan" && l != "colSpan" && l != "role" && l != "popover" && l in n)
+        try {
+          n[l] = u == null ? "" : u;
+          break n;
+        } catch (n) {}
+      typeof u == "function" || (u == null || u === false && l[4] != "-" ? n.removeAttribute(l) : n.setAttribute(l, l == "popover" && u == 1 ? "" : u));
+    }
+}
+function V(n) {
+  return function(u) {
+    if (this.l) {
+      var t = this.l[u.type + n];
+      if (u[c] == null)
+        u[c] = h++;
+      else if (u[c] < t[a])
+        return;
+      return t(l.event ? l.event(u) : u);
+    }
+  };
+}
+function q(n, u, t, i, r, o, e, f, c, a) {
+  var s, h, p, v, y, d, _, k, x, M, $, I, P, A, H, T = u.type;
+  if (u.constructor !== undefined)
+    return null;
+  128 & t.__u && (c = !!(32 & t.__u), o = [f = u.__e = t.__e]), (s = l.__b) && s(u);
+  n:
+    if (typeof T == "function")
+      try {
+        if (k = u.props, x = T.prototype && T.prototype.render, M = (s = T.contextType) && i[s.__c], $ = s ? M ? M.props.value : s.__ : i, t.__c ? _ = (h = u.__c = t.__c).__ = h.__E : (x ? u.__c = h = new T(k, $) : (u.__c = h = new C(k, $), h.constructor = T, h.render = Q), M && M.sub(h), h.state || (h.state = {}), h.__n = i, p = h.__d = true, h.__h = [], h._sb = []), x && h.__s == null && (h.__s = h.state), x && T.getDerivedStateFromProps != null && (h.__s == h.state && (h.__s = m({}, h.__s)), m(h.__s, T.getDerivedStateFromProps(k, h.__s))), v = h.props, y = h.state, h.__v = u, p)
+          x && T.getDerivedStateFromProps == null && h.componentWillMount != null && h.componentWillMount(), x && h.componentDidMount != null && h.__h.push(h.componentDidMount);
+        else {
+          if (x && T.getDerivedStateFromProps == null && k !== v && h.componentWillReceiveProps != null && h.componentWillReceiveProps(k, $), u.__v == t.__v || !h.__e && h.shouldComponentUpdate != null && h.shouldComponentUpdate(k, h.__s, $) === false) {
+            u.__v != t.__v && (h.props = k, h.state = h.__s, h.__d = false), u.__e = t.__e, u.__k = t.__k, u.__k.some(function(n) {
+              n && (n.__ = u);
+            }), w.push.apply(h.__h, h._sb), h._sb = [], h.__h.length && e.push(h);
+            break n;
+          }
+          h.componentWillUpdate != null && h.componentWillUpdate(k, h.__s, $), x && h.componentDidUpdate != null && h.__h.push(function() {
+            h.componentDidUpdate(v, y, d);
+          });
+        }
+        if (h.context = $, h.props = k, h.__P = n, h.__e = false, I = l.__r, P = 0, x)
+          h.state = h.__s, h.__d = false, I && I(u), s = h.render(h.props, h.state, h.context), w.push.apply(h.__h, h._sb), h._sb = [];
+        else
+          do {
+            h.__d = false, I && I(u), s = h.render(h.props, h.state, h.context), h.state = h.__s;
+          } while (h.__d && ++P < 25);
+        h.state = h.__s, h.getChildContext != null && (i = m(m({}, i), h.getChildContext())), x && !p && h.getSnapshotBeforeUpdate != null && (d = h.getSnapshotBeforeUpdate(v, y)), A = s != null && s.type === S && s.key == null ? E(s.props.children) : s, f = L(n, g(A) ? A : [A], u, t, i, r, o, e, f, c, a), h.base = u.__e, u.__u &= -161, h.__h.length && e.push(h), _ && (h.__E = h.__ = null);
+      } catch (n) {
+        if (u.__v = null, c || o != null)
+          if (n.then) {
+            for (u.__u |= c ? 160 : 128;f && f.nodeType == 8 && f.nextSibling; )
+              f = f.nextSibling;
+            o[o.indexOf(f)] = null, u.__e = f;
+          } else {
+            for (H = o.length;H--; )
+              b(o[H]);
+            B(u);
+          }
+        else
+          u.__e = t.__e, u.__k = t.__k, n.then || B(u);
+        l.__e(n, u, t);
+      }
+    else
+      o == null && u.__v == t.__v ? (u.__k = t.__k, u.__e = t.__e) : f = u.__e = G(t.__e, u, t, i, r, o, e, c, a);
+  return (s = l.diffed) && s(u), 128 & u.__u ? undefined : f;
+}
+function B(n) {
+  n && (n.__c && (n.__c.__e = true), n.__k && n.__k.some(B));
+}
+function D(n, u, t) {
+  for (var i = 0;i < t.length; i++)
+    J(t[i], t[++i], t[++i]);
+  l.__c && l.__c(u, n), n.some(function(u) {
+    try {
+      n = u.__h, u.__h = [], n.some(function(n) {
+        n.call(u);
+      });
+    } catch (n) {
+      l.__e(n, u.__v);
+    }
+  });
+}
+function E(n) {
+  return typeof n != "object" || n == null || n.__b > 0 ? n : g(n) ? n.map(E) : n.constructor !== undefined ? null : m({}, n);
+}
+function G(u, t, i, r, o, e, f, c, a) {
+  var s, h, p, v, y, w, _, m = i.props || d, { props: k, type: x } = t;
+  if (x == "svg" ? o = "http://www.w3.org/2000/svg" : x == "math" ? o = "http://www.w3.org/1998/Math/MathML" : o || (o = "http://www.w3.org/1999/xhtml"), e != null) {
+    for (s = 0;s < e.length; s++)
+      if ((y = e[s]) && "setAttribute" in y == !!x && (x ? y.localName == x : y.nodeType == 3)) {
+        u = y, e[s] = null;
+        break;
+      }
+  }
+  if (u == null) {
+    if (x == null)
+      return document.createTextNode(k);
+    u = document.createElementNS(o, x, k.is && k), c && (l.__m && l.__m(t, e), c = false), e = null;
+  }
+  if (x == null)
+    m === k || c && u.data == k || (u.data = k);
+  else {
+    if (e = x == "textarea" && k.defaultValue != null ? null : e && n.call(u.childNodes), !c && e != null)
+      for (m = {}, s = 0;s < u.attributes.length; s++)
+        m[(y = u.attributes[s]).name] = y.value;
+    for (s in m)
+      y = m[s], s == "dangerouslySetInnerHTML" ? p = y : s == "children" || (s in k) || s == "value" && ("defaultValue" in k) || s == "checked" && ("defaultChecked" in k) || N(u, s, null, y, o);
+    for (s in k)
+      y = k[s], s == "children" ? v = y : s == "dangerouslySetInnerHTML" ? h = y : s == "value" ? w = y : s == "checked" ? _ = y : c && typeof y != "function" || m[s] === y || N(u, s, y, m[s], o);
+    if (h)
+      c || p && (h.__html == p.__html || h.__html == u.innerHTML) || (u.innerHTML = h.__html), t.__k = [];
+    else if (p && (u.innerHTML = ""), L(t.type == "template" ? u.content : u, g(v) ? v : [v], t, i, r, x == "foreignObject" ? "http://www.w3.org/1999/xhtml" : o, e, f, e ? e[0] : i.__k && $(i, 0), c, a), e != null)
+      for (s = e.length;s--; )
+        b(e[s]);
+    c && x != "textarea" || (s = "value", x == "progress" && w == null ? u.removeAttribute("value") : w != null && (w !== u[s] || x == "progress" && !w || x == "option" && w != m[s]) && N(u, s, w, m[s], o), s = "checked", _ != null && _ != u[s] && N(u, s, _, m[s], o));
+  }
+  return u;
+}
+function J(n, u, t) {
+  try {
+    if (typeof n == "function") {
+      var i = typeof n.__u == "function";
+      i && n.__u(), i && u == null || (n.__u = n(u));
+    } else
+      n.current = u;
+  } catch (n) {
+    l.__e(n, t);
+  }
+}
+function K(n, u, t) {
+  var i, r;
+  if (l.unmount && l.unmount(n), (i = n.ref) && (i.current && i.current != n.__e || J(i, null, u)), (i = n.__c) != null) {
+    if (i.componentWillUnmount)
+      try {
+        i.componentWillUnmount();
+      } catch (n) {
+        l.__e(n, u);
+      }
+    i.base = i.__P = null;
+  }
+  if (i = n.__k)
+    for (r = 0;r < i.length; r++)
+      i[r] && K(i[r], u, t || typeof n.type != "function");
+  t || b(n.__e), n.__c = n.__ = n.__e = undefined;
+}
+function Q(n, l, u) {
+  return this.constructor(n, u);
+}
+function R(u, t, i) {
+  var r, o, e, f;
+  t == document && (t = document.documentElement), l.__ && l.__(u, t), o = (r = typeof i == "function") ? null : i && i.__k || t.__k, e = [], f = [], q(t, u = (!r && i || t).__k = k(S, null, [u]), o || d, d, t.namespaceURI, !r && i ? [i] : o ? null : t.firstChild ? n.call(t.childNodes) : null, e, !r && i ? i : o ? o.__e : t.firstChild, r, f), D(e, u, f);
+}
+var n, l, u, t, i, r, o, e, f, c, a, s, h, p, v, y, d, w, _, g;
+var init_preact_module = __esm(() => {
+  d = {};
+  w = [];
+  _ = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
+  g = Array.isArray;
+  n = w.slice, l = { __e: function(n, l, u, t) {
+    for (var i, r, o;l = l.__; )
+      if ((i = l.__c) && !i.__)
+        try {
+          if ((r = i.constructor) && r.getDerivedStateFromError != null && (i.setState(r.getDerivedStateFromError(n)), o = i.__d), i.componentDidCatch != null && (i.componentDidCatch(n, t || {}), o = i.__d), o)
+            return i.__E = i;
+        } catch (l) {
+          n = l;
+        }
+    throw n;
+  } }, u = 0, t = function(n) {
+    return n != null && n.constructor === undefined;
+  }, C.prototype.setState = function(n, l) {
+    var u;
+    u = this.__s != null && this.__s != this.state ? this.__s : this.__s = m({}, this.state), typeof n == "function" && (n = n(m({}, u), this.props)), n && m(u, n), n != null && this.__v && (l && this._sb.push(l), A(this));
+  }, C.prototype.forceUpdate = function(n) {
+    this.__v && (this.__e = true, n && this.__h.push(n), A(this));
+  }, C.prototype.render = S, i = [], o = typeof Promise == "function" ? Promise.prototype.then.bind(Promise.resolve()) : setTimeout, e = function(n, l) {
+    return n.__v.__b - l.__v.__b;
+  }, H.__r = 0, f = Math.random().toString(8), c = "__d" + f, a = "__a" + f, s = /(PointerCapture)$|Capture$/i, h = 0, p = V(false), v = V(true), y = 0;
+});
+
+// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
+function p2(n, t) {
+  c2.__h && c2.__h(r2, n, o2 || t), o2 = 0;
+  var u = r2.__H || (r2.__H = { __: [], __h: [] });
+  return n >= u.__.length && u.__.push({}), u.__[n];
+}
+function d2(n) {
+  return o2 = 1, h2(D2, n);
+}
+function h2(n, u, i) {
+  var o = p2(t2++, 2);
+  if (o.t = n, !o.__c && (o.__ = [i ? i(u) : D2(undefined, u), function(n) {
+    var t = o.__N ? o.__N[0] : o.__[0], r = o.t(t, n);
+    t !== r && (o.__N = [r, o.__[1]], o.__c.setState({}));
+  }], o.__c = r2, !r2.__f)) {
+    var f = function(n, t, r) {
+      if (!o.__c.__H)
+        return true;
+      var u = o.__c.__H.__.filter(function(n) {
+        return n.__c;
+      });
+      if (u.every(function(n) {
+        return !n.__N;
+      }))
+        return !c || c.call(this, n, t, r);
+      var i = o.__c.props !== n;
+      return u.some(function(n) {
+        if (n.__N) {
+          var t = n.__[0];
+          n.__ = n.__N, n.__N = undefined, t !== n.__[0] && (i = true);
+        }
+      }), c && c.call(this, n, t, r) || i;
+    };
+    r2.__f = true;
+    var c = r2.shouldComponentUpdate, e = r2.componentWillUpdate;
+    r2.componentWillUpdate = function(n, t, r) {
+      if (this.__e) {
+        var u = c;
+        c = undefined, f(n, t, r), c = u;
+      }
+      e && e.call(this, n, t, r);
+    }, r2.shouldComponentUpdate = f;
+  }
+  return o.__N || o.__;
+}
+function y2(n, u) {
+  var i = p2(t2++, 3);
+  !c2.__s && C2(i.__H, u) && (i.__ = n, i.u = u, r2.__H.__h.push(i));
+}
+function A2(n) {
+  return o2 = 5, T2(function() {
+    return { current: n };
+  }, []);
+}
+function T2(n, r) {
+  var u = p2(t2++, 7);
+  return C2(u.__H, r) && (u.__ = n(), u.__H = r, u.__h = n), u.__;
+}
+function q2(n, t) {
+  return o2 = 8, T2(function() {
+    return n;
+  }, t);
+}
+function j2() {
+  for (var n;n = f2.shift(); ) {
+    var t = n.__H;
+    if (n.__P && t)
+      try {
+        t.__h.some(z2), t.__h.some(B2), t.__h = [];
+      } catch (r) {
+        t.__h = [], c2.__e(r, n.__v);
+      }
+  }
+}
+function w2(n) {
+  var t, r = function() {
+    clearTimeout(u), k2 && cancelAnimationFrame(t), setTimeout(n);
+  }, u = setTimeout(r, 35);
+  k2 && (t = requestAnimationFrame(r));
+}
+function z2(n) {
+  var t = r2, u = n.__c;
+  typeof u == "function" && (n.__c = undefined, u()), r2 = t;
+}
+function B2(n) {
+  var t = r2;
+  n.__c = n.__(), r2 = t;
+}
+function C2(n, t) {
+  return !n || n.length !== t.length || t.some(function(t, r) {
+    return t !== n[r];
+  });
+}
+function D2(n, t) {
+  return typeof t == "function" ? t(n) : t;
+}
+var t2, r2, u2, i2, o2 = 0, f2, c2, e2, a2, v2, l2, m2, s2, k2;
+var init_hooks_module = __esm(() => {
+  init_preact_module();
+  f2 = [];
+  c2 = l;
+  e2 = c2.__b;
+  a2 = c2.__r;
+  v2 = c2.diffed;
+  l2 = c2.__c;
+  m2 = c2.unmount;
+  s2 = c2.__;
+  c2.__b = function(n) {
+    r2 = null, e2 && e2(n);
+  }, c2.__ = function(n, t) {
+    n && t.__k && t.__k.__m && (n.__m = t.__k.__m), s2 && s2(n, t);
+  }, c2.__r = function(n) {
+    a2 && a2(n), t2 = 0;
+    var i = (r2 = n.__c).__H;
+    i && (u2 === r2 ? (i.__h = [], r2.__h = [], i.__.some(function(n) {
+      n.__N && (n.__ = n.__N), n.u = n.__N = undefined;
+    })) : (i.__h.some(z2), i.__h.some(B2), i.__h = [], t2 = 0)), u2 = r2;
+  }, c2.diffed = function(n) {
+    v2 && v2(n);
+    var t = n.__c;
+    t && t.__H && (t.__H.__h.length && (f2.push(t) !== 1 && i2 === c2.requestAnimationFrame || ((i2 = c2.requestAnimationFrame) || w2)(j2)), t.__H.__.some(function(n) {
+      n.u && (n.__H = n.u), n.u = undefined;
+    })), u2 = r2 = null;
+  }, c2.__c = function(n, t) {
+    t.some(function(n) {
+      try {
+        n.__h.some(z2), n.__h = n.__h.filter(function(n) {
+          return !n.__ || B2(n);
+        });
+      } catch (r) {
+        t.some(function(n) {
+          n.__h && (n.__h = []);
+        }), t = [], c2.__e(r, n.__v);
+      }
+    }), l2 && l2(n, t);
+  }, c2.unmount = function(n) {
+    m2 && m2(n);
+    var t, r = n.__c;
+    r && r.__H && (r.__H.__.some(function(n) {
+      try {
+        z2(n);
+      } catch (n) {
+        t = n;
+      }
+    }), r.__H = undefined, t && c2.__e(t, r.__v));
+  };
+  k2 = typeof requestAnimationFrame == "function";
 });
 
 // src/tabs/core-tabs.ts
@@ -4611,6 +4412,817 @@ var init_core_tabs = __esm(() => {
   ]);
 });
 
+// src/tabs/configure-catalog.ts
+function humanizeTabId(id) {
+  const known = BUILTIN_TAB_TITLES[id];
+  if (known)
+    return known;
+  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  return words.join(" ");
+}
+function getBuiltinCatalog() {
+  return BUILTIN_TAB_IDS.map((id) => ({
+    id,
+    kind: "builtin",
+    title: humanizeTabId(id),
+    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
+    hideLocked: CORE_HIDE_LOCKED.has(id)
+  }));
+}
+function isExtensionDrawerTab(t) {
+  if (t.extensionId)
+    return true;
+  const root = t.root;
+  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
+    return true;
+  }
+  return t.id.includes(":");
+}
+function getExtensionCatalog() {
+  const tabs = getDrawerTabs();
+  if (!tabs || tabs.length === 0)
+    return [];
+  return tabs.filter(isExtensionDrawerTab).map((t) => ({
+    id: t.id,
+    kind: "extension",
+    title: t.title || humanizeTabId(t.id),
+    description: t.description || `Open ${t.title || t.id} extension tab`,
+    hideLocked: false,
+    extensionId: t.extensionId || undefined,
+    iconSvg: t.iconSvg || undefined,
+    iconUrl: t.iconUrl || undefined
+  }));
+}
+function getFullCatalog() {
+  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
+}
+function filterCatalogToLive(catalog, host, knownLiveIds) {
+  if (!host)
+    return catalog;
+  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
+}
+function isHideLocked(tabId) {
+  return isCoreTabId(tabId);
+}
+var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
+var init_configure_catalog = __esm(() => {
+  init_store();
+  init_core_tabs();
+  init_core_tabs();
+  BUILTIN_TAB_IDS = [
+    "profile",
+    "presets",
+    "loom",
+    "weaver",
+    "connections",
+    "browser",
+    "characters",
+    "personas",
+    "multiplayer",
+    "lorebook",
+    "cortex",
+    "databank",
+    "create",
+    "ooc",
+    "prompt",
+    "council",
+    "summary",
+    "feedback",
+    "worldinfo",
+    "imagegen",
+    "wallpaper",
+    "regex",
+    "branches",
+    "theme",
+    "spindle"
+  ];
+  BUILTIN_TAB_TITLES = {
+    profile: "Profile",
+    presets: "Reasoning",
+    loom: "Loom",
+    weaver: "Weaver",
+    connections: "Connections",
+    browser: "Pack Browser",
+    characters: "Characters",
+    personas: "Personas",
+    multiplayer: "Multiplayer",
+    lorebook: "Lorebook",
+    cortex: "Memory Cortex",
+    databank: "Databank",
+    create: "Creator Workshop",
+    ooc: "OOC",
+    prompt: "Composition",
+    council: "Council",
+    summary: "Summary",
+    feedback: "Council Feedback",
+    worldinfo: "World Info",
+    imagegen: "Image Generation",
+    wallpaper: "Wallpaper",
+    regex: "Regex Scripts",
+    branches: "Branch Tree",
+    theme: "Theme",
+    spindle: "Extensions"
+  };
+  BUILTIN_TAB_DESCRIPTIONS = {
+    profile: "View and edit the active character",
+    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
+    loom: "Configure narrative structure and story beats",
+    weaver: "Craft a character from your idea",
+    connections: "Manage API connections and providers",
+    browser: "Browse and manage content packs",
+    characters: "Browse and manage your character cards",
+    personas: "Manage your user personas",
+    multiplayer: "Host or join a room and chat with bots alongside friends",
+    lorebook: "Edit world book and lorebook entries",
+    cortex: "View and manage memory cortex entries",
+    databank: "Upload and manage reference documents for AI context",
+    create: "Create and edit Lumia items and Loom presets",
+    ooc: "Out-of-character comment display settings",
+    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
+    council: "Configure the Lumia Council and tool functions",
+    summary: "Configure context summarization and truncation",
+    feedback: "View the latest council execution results",
+    worldinfo: "View currently activated world info entries",
+    imagegen: "Configure and control AI scene generation",
+    wallpaper: "Set global or per-chat background wallpapers",
+    regex: "Create and manage regex find/replace scripts",
+    branches: "View and navigate the chat branch history",
+    theme: "Customize colors, accent, and visual style",
+    spindle: "Manage Spindle extensions"
+  };
+});
+
+// src/tabs/identity.ts
+function liveIdForKey(key, tabs) {
+  const frozen = tabs.find((t) => t.key === key);
+  if (frozen)
+    return frozen.id;
+  if (isBuiltinKey(key)) {
+    const builtinId = parseBuiltinKey(key) ?? "";
+    const base = builtinId.includes(":") ? builtinId.slice(0, builtinId.lastIndexOf(":")) : builtinId;
+    const idMatch = tabs.find((t) => {
+      if (t.id === builtinId)
+        return true;
+      const tBase = t.id.includes(":") ? t.id.slice(0, t.id.lastIndexOf(":")) : t.id;
+      return tBase === base;
+    });
+    if (idMatch)
+      return idMatch.id;
+    const titleMatch = builtinId ? tabs.find((t) => t.title === builtinId) : undefined;
+    if (titleMatch)
+      return titleMatch.id;
+    return builtinId;
+  }
+  const parsed = parseExtensionKey(key);
+  if (!parsed)
+    return null;
+  const extMatch = tabs.find((t) => (t.extensionId === parsed.extensionId || !t.extensionId && parsed.extensionId === "unknown") && t.title === parsed.tabName);
+  if (extMatch)
+    return extMatch.id;
+  const titleMatch = tabs.find((t) => t.title === parsed.tabName);
+  return titleMatch ? titleMatch.id : null;
+}
+function keyForLiveId(id, tabs) {
+  let match = tabs.find((t) => t.id === id);
+  if (match)
+    return match.key ?? null;
+  const idBase = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
+  match = tabs.find((t) => {
+    const tBase = t.id.includes(":") ? t.id.slice(0, t.id.lastIndexOf(":")) : t.id;
+    return tBase === id || tBase === idBase;
+  });
+  if (match)
+    return match.key ?? null;
+  match = tabs.find((t) => t.title === id || t.titles?.has(id));
+  if (match)
+    return match.key ?? null;
+  match = tabs.find((t) => {
+    const btn = t.root;
+    return !!btn && btn.getAttribute("data-tab-id") === id;
+  });
+  if (match)
+    return match.key ?? null;
+  return null;
+}
+function liveIdForTitle(title, tabs) {
+  const t = tabs.find((x) => x.title === title || x.titles?.has(title));
+  return t ? t.id : null;
+}
+var init_identity = () => {};
+
+// src/tabs/configure-model.ts
+function normalizeIdsToCatalog(ids, catalog) {
+  const byTitle = new Map;
+  for (const tab of catalog) {
+    if (tab.title && !byTitle.has(tab.title))
+      byTitle.set(tab.title, tab.id);
+  }
+  const observed = drawerObserver.getAllTabs().map((t) => ({
+    id: t.tabId,
+    extensionId: t.extensionId,
+    title: t.title
+  }));
+  return ids.map((id) => byTitle.get(id) ?? liveIdForTitle(id, observed) ?? id);
+}
+function builtinIdSet() {
+  return _builtinIdSet ??= new Set(BUILTIN_TAB_IDS);
+}
+function partitionOrderByCatalog(tabOrder, catalog) {
+  const builtinOrder = [];
+  const extensionOrder = [];
+  const seen = new Set;
+  for (const id of tabOrder) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    if (builtinIdSet().has(id)) {
+      builtinOrder.push(id);
+    } else {
+      extensionOrder.push(id);
+    }
+  }
+  for (const tab of catalog) {
+    if (!seen.has(tab.id)) {
+      seen.add(tab.id);
+      if (tab.kind === "builtin") {
+        builtinOrder.push(tab.id);
+      } else {
+        extensionOrder.push(tab.id);
+      }
+    }
+  }
+  return { builtinOrder, extensionOrder };
+}
+function resolveSide(tabId, assignments) {
+  return assignments.get(tabId) ?? "primary";
+}
+function syncKindOrders(draft) {
+  const builtinOrder = [];
+  const extensionOrder = [];
+  const seen = new Set;
+  const all = [...draft.primaryIds, ...draft.secondaryIds];
+  for (const id of all) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    if (builtinIdSet().has(id)) {
+      builtinOrder.push(id);
+    } else {
+      extensionOrder.push(id);
+    }
+  }
+  return { builtinOrder, extensionOrder };
+}
+function createDraft(input) {
+  const { catalog, tabOrder, hiddenTabIds, drawerSide, assignments } = input;
+  const tabOrderNormalized = normalizeIdsToCatalog(tabOrder, catalog);
+  const hiddenNormalized = normalizeIdsToCatalog(hiddenTabIds, catalog);
+  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrderNormalized, catalog);
+  const hiddenSet = new Set(hiddenNormalized);
+  const allOrdered = [...builtinOrder, ...extensionOrder];
+  const primaryIds = [];
+  const secondaryIds = [];
+  for (const id of allOrdered) {
+    const side = resolveSide(id, assignments);
+    if (side === "primary") {
+      primaryIds.push(id);
+    } else {
+      secondaryIds.push(id);
+    }
+  }
+  return {
+    drawerSide,
+    primaryIds,
+    secondaryIds,
+    builtinOrder,
+    extensionOrder,
+    hiddenIds: hiddenSet
+  };
+}
+function encodeHostTabOrder(draft) {
+  return [...draft.builtinOrder, ...draft.extensionOrder];
+}
+function baseSnapshotFromDraft(draft) {
+  const assignments = new Map;
+  for (const id of draft.primaryIds) {
+    assignments.set(id, "primary");
+  }
+  for (const id of draft.secondaryIds) {
+    assignments.set(id, "secondary");
+  }
+  return {
+    tabOrder: encodeHostTabOrder(draft),
+    hiddenTabIds: [...draft.hiddenIds],
+    drawerSide: draft.drawerSide,
+    assignments
+  };
+}
+function rebaseBaseIfEpochUnchanged(draftToCommit, epochAtStart, currentEpoch) {
+  if (epochAtStart !== currentEpoch)
+    return null;
+  return baseSnapshotFromDraft(draftToCommit);
+}
+function isDraftDirty(draft, base) {
+  const order = encodeHostTabOrder(draft);
+  if (order.length !== base.tabOrder.length)
+    return true;
+  for (let i = 0;i < order.length; i++) {
+    if (order[i] !== base.tabOrder[i])
+      return true;
+  }
+  if (draft.hiddenIds.size !== base.hiddenTabIds.length)
+    return true;
+  for (const id of draft.hiddenIds) {
+    if (!base.hiddenTabIds.includes(id))
+      return true;
+  }
+  if (draft.drawerSide !== base.drawerSide)
+    return true;
+  for (const id of draft.primaryIds) {
+    const baseSide = base.assignments.get(id) ?? "primary";
+    if (baseSide !== "primary")
+      return true;
+  }
+  for (const id of draft.secondaryIds) {
+    const baseSide = base.assignments.get(id) ?? "primary";
+    if (baseSide !== "secondary")
+      return true;
+  }
+  return false;
+}
+function swapDrawerSide(draft) {
+  return { ...draft, drawerSide: draft.drawerSide === "left" ? "right" : "left" };
+}
+function moveTab(draft, tabId, to, index) {
+  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
+  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
+  const source = [...draft[fromList]];
+  const srcIdx = source.indexOf(tabId);
+  if (srcIdx === -1)
+    return draft;
+  source.splice(srcIdx, 1);
+  const target = [...draft[toList]];
+  const insertAt = index < 0 ? target.length : Math.min(index, target.length);
+  target.splice(insertAt, 0, tabId);
+  const next = { ...draft, [fromList]: source, [toList]: target };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function reorderWithin(draft, side, fromIndex, toIndex) {
+  const isSecondaryList = draft.drawerSide === "right" && side === "left" || draft.drawerSide === "left" && side === "right";
+  const listKey = isSecondaryList ? "secondaryIds" : "primaryIds";
+  const list = [...draft[listKey]];
+  if (fromIndex < 0 || fromIndex >= list.length)
+    return draft;
+  const [moved] = list.splice(fromIndex, 1);
+  const insertAt = toIndex < 0 ? list.length : Math.min(toIndex, list.length);
+  list.splice(insertAt, 0, moved);
+  const next = { ...draft, [listKey]: list };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function alignIdsToLiveVisibleOrder(sideIds, liveVisibleIds, hiddenIds) {
+  if (sideIds.length === 0)
+    return [];
+  const sideSet = new Set(sideIds);
+  const liveOnSide = liveVisibleIds.filter((id) => sideSet.has(id));
+  const liveSet = new Set(liveOnSide);
+  const missingVisible = sideIds.filter((id) => !hiddenIds.has(id) && !liveSet.has(id));
+  const nextVisible = [...liveOnSide, ...missingVisible];
+  if (nextVisible.length === 0) {
+    return sideIds.slice();
+  }
+  let vi = 0;
+  return sideIds.map((id) => hiddenIds.has(id) ? id : nextVisible[vi++]);
+}
+function alignDraftToLiveVisibleOrder(draft, livePrimaryIds, liveSecondaryIds) {
+  const primaryIds = alignIdsToLiveVisibleOrder(draft.primaryIds, livePrimaryIds, draft.hiddenIds);
+  const secondaryIds = alignIdsToLiveVisibleOrder(draft.secondaryIds, liveSecondaryIds, draft.hiddenIds);
+  const primarySame = primaryIds.length === draft.primaryIds.length && primaryIds.every((id, i) => id === draft.primaryIds[i]);
+  const secondarySame = secondaryIds.length === draft.secondaryIds.length && secondaryIds.every((id, i) => id === draft.secondaryIds[i]);
+  if (primarySame && secondarySame)
+    return draft;
+  const next = { ...draft, primaryIds, secondaryIds };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function reorderVisibleInList(fullIds, movedId, toVisibleIndex, hiddenIds) {
+  const isVisible = (id) => !hiddenIds.has(id);
+  const visible = fullIds.filter(isVisible);
+  const from = visible.indexOf(movedId);
+  if (from === -1)
+    return fullIds.slice();
+  const nextVis = visible.slice();
+  nextVis.splice(from, 1);
+  const insertAt = toVisibleIndex < 0 ? nextVis.length : Math.min(toVisibleIndex, nextVis.length);
+  nextVis.splice(insertAt, 0, movedId);
+  let vi = 0;
+  return fullIds.map((id) => isVisible(id) ? nextVis[vi++] : id);
+}
+function insertAtVisibleIndex(fullIds, tabId, toVisibleIndex, hiddenIds) {
+  const without = fullIds.filter((id) => id !== tabId);
+  const visibleCount = without.reduce((n, id) => n + (hiddenIds.has(id) ? 0 : 1), 0);
+  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
+  if (targetVis >= visibleCount) {
+    return [...without, tabId];
+  }
+  let seen = 0;
+  for (let i = 0;i < without.length; i++) {
+    if (hiddenIds.has(without[i]))
+      continue;
+    if (seen === targetVis) {
+      const next = without.slice();
+      next.splice(i, 0, tabId);
+      return next;
+    }
+    seen++;
+  }
+  return [...without, tabId];
+}
+function reorderWithinVisible(draft, listKey, tabId, toVisibleIndex) {
+  const list = draft[listKey];
+  const nextList = reorderVisibleInList(list, tabId, toVisibleIndex, draft.hiddenIds);
+  if (nextList.length === list.length && nextList.every((id, i) => id === list[i])) {
+    return draft;
+  }
+  const next = { ...draft, [listKey]: nextList };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function moveTabVisible(draft, tabId, to, toVisibleIndex) {
+  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
+  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
+  if (fromList === toList) {
+    return reorderWithinVisible(draft, fromList, tabId, toVisibleIndex);
+  }
+  const source = draft[fromList].filter((id) => id !== tabId);
+  const target = insertAtVisibleIndex(draft[toList], tabId, toVisibleIndex, draft.hiddenIds);
+  const next = { ...draft, [fromList]: source, [toList]: target };
+  const { builtinOrder, extensionOrder } = syncKindOrders(next);
+  return { ...next, builtinOrder, extensionOrder };
+}
+function setHidden(draft, tabId, hidden, allowCore = false) {
+  if (!allowCore && isHideLocked(tabId))
+    return draft;
+  const next = new Set(draft.hiddenIds);
+  if (hidden) {
+    next.add(tabId);
+  } else {
+    next.delete(tabId);
+  }
+  return { ...draft, hiddenIds: next };
+}
+function partitionDisplayLists(draft, catalog) {
+  const catalogById = new Map(catalog.map((t) => [t.id, t]));
+  const primary = [];
+  const secondary = [];
+  for (const id of draft.secondaryIds) {
+    const tab = catalogById.get(id);
+    if (!tab)
+      continue;
+    secondary.push(tab);
+  }
+  for (const id of draft.primaryIds) {
+    const tab = catalogById.get(id);
+    if (!tab)
+      continue;
+    primary.push(tab);
+  }
+  return { primary, secondary };
+}
+function leftColumnIsSecondary(drawerSide) {
+  return drawerSide === "right";
+}
+var _builtinIdSet = null;
+var init_configure_model = __esm(() => {
+  init_configure_catalog();
+  init_identity();
+  init_drawer_observer();
+});
+
+// src/tabs/builtin-icons.ts
+var BUILTIN_ICON_SVGS;
+var init_builtin_icons = __esm(() => {
+  BUILTIN_ICON_SVGS = {
+    profile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+    presets: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>`,
+    loom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>`,
+    weaver: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>`,
+    connections: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`,
+    browser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/></svg>`,
+    characters: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+    personas: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11h.01"/><path d="M14 6h.01"/><path d="M18 6h.01"/><path d="M6.5 13.1h.01"/><path d="M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3"/><path d="M17.4 9.9c-.8.8-2 .8-2.8 0"/><path d="M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7"/><path d="M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4"/></svg>`,
+    multiplayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>`,
+    lorebook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
+    cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>`,
+    databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
+    create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg>`,
+    ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
+    prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+    council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`,
+    summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
+    feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></svg>`,
+    worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
+    imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
+    wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="2"/><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
+    regex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 1 2-2"/><path d="M16 10a2 2 0 0 1-2-2"/><path d="M20 2a2 2 0 0 1 2 2"/><path d="M22 8a2 2 0 0 1-2 2"/><path d="m3 7 3 3 3-3"/><path d="M6 10V5a3 3 0 0 1 3-3h1"/><rect x="2" y="14" width="8" height="8" rx="2"/></svg>`,
+    branches: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
+    theme: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`,
+    spindle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
+  };
+});
+
+// src/tabs/canvas-hidden.ts
+function normalizeHiddenIds(ids) {
+  if (!Array.isArray(ids))
+    return [];
+  const out = [];
+  const seen = new Set;
+  for (const id of ids) {
+    if (typeof id !== "string" || !id.length)
+      continue;
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+function getCanvasHiddenTabIds() {
+  return _canvasHiddenTabIds.slice();
+}
+function setCanvasHiddenTabIds(ids) {
+  _canvasHiddenTabIds = normalizeHiddenIds(ids);
+}
+function hydrateCanvasHiddenFromLayout(layout) {
+  if (!layout || typeof layout !== "object")
+    return;
+  const raw = layout.hiddenTabIds;
+  if (!Array.isArray(raw))
+    return;
+  _canvasHiddenTabIds = normalizeHiddenIds(raw);
+}
+function mergeHiddenTabIdLists(hostIds, canvasIds) {
+  const out = [];
+  const seen = new Set;
+  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
+    if (seen.has(id))
+      continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+function resetCanvasHiddenTabIds() {
+  _canvasHiddenTabIds = [];
+}
+var _canvasHiddenTabIds;
+var init_canvas_hidden = __esm(() => {
+  _canvasHiddenTabIds = [];
+});
+
+// src/persist/tab-id-heal.ts
+function stripTabIdSuffix(id) {
+  return id.replace(/:\d+$/, "");
+}
+function pairStoredToLiveIds(storedIds, liveIds) {
+  const result = new Map;
+  const available = new Set(liveIds);
+  for (const stored of storedIds) {
+    if (available.has(stored)) {
+      result.set(stored, stored);
+      available.delete(stored);
+    }
+  }
+  const groups = new Map;
+  for (const stored of storedIds.filter((id) => !result.has(id))) {
+    const key = stripTabIdSuffix(stored);
+    const group = groups.get(key) ?? { stored: [], live: [] };
+    group.stored.push(stored);
+    groups.set(key, group);
+  }
+  for (const live of available)
+    groups.get(stripTabIdSuffix(live))?.live.push(live);
+  for (const group of groups.values()) {
+    group.stored.sort();
+    group.live.sort();
+    const count = Math.min(group.stored.length, group.live.length);
+    for (let i = 0;i < count; i++) {
+      result.set(group.stored[i], group.live[i]);
+      available.delete(group.live[i]);
+    }
+    for (let i = count;i < group.stored.length; i++)
+      result.set(group.stored[i], null);
+  }
+  for (const stored of storedIds)
+    if (!result.has(stored))
+      result.set(stored, null);
+  return result;
+}
+function isTabIdHidden(tabId, hiddenIds, liveIds) {
+  const stored = [...hiddenIds];
+  if (stored.includes(tabId))
+    return true;
+  if (!liveIds?.length)
+    return false;
+  return [...pairStoredToLiveIds(stored, [...liveIds]).values()].includes(tabId);
+}
+function healHiddenTabIds(storedHidden, liveIds, opts) {
+  const pairing = pairStoredToLiveIds([...storedHidden], [...liveIds]);
+  const out = [];
+  const seen = new Set;
+  for (const stored of storedHidden) {
+    const live = pairing.get(stored);
+    const id = live ?? (opts?.keepUnmatched ? stored : null);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+// src/tabs/hidden-tabs.ts
+function collectLiveTabIdsForHiddenHeal() {
+  const ids = new Set;
+  for (const id of BUILTIN_TAB_IDS)
+    ids.add(id);
+  for (const t of getDrawerTabs()) {
+    if (t?.id)
+      ids.add(t.id);
+  }
+  try {
+    const list = getSecondaryTabList();
+    if (list) {
+      for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
+        const tid = btn.getAttribute("data-tab-id");
+        if (tid)
+          ids.add(tid);
+      }
+    }
+  } catch {}
+  if (typeof document !== "undefined") {
+    for (const btn of Array.from(document.querySelectorAll('.sidebar button[data-tab-id], [class*="tabList"] button[data-tab-id]'))) {
+      const tid = btn.getAttribute("data-tab-id");
+      if (tid)
+        ids.add(tid);
+    }
+  }
+  return [...ids];
+}
+function cancelScheduledHiddenTabsSync() {
+  if (_debouncedSyncTimer !== null) {
+    clearTimeout(_debouncedSyncTimer);
+    _debouncedSyncTimer = null;
+  }
+}
+function scheduleSyncHiddenTabsFromHost(opts) {
+  const delayMs = opts?.delayMs ?? 50;
+  if (_debouncedSyncTimer !== null)
+    clearTimeout(_debouncedSyncTimer);
+  const armedGeneration = currentLifecycleGeneration();
+  _debouncedSyncTimer = setTimeout(() => {
+    _debouncedSyncTimer = null;
+    if (!isLifecycleCurrent(armedGeneration))
+      return;
+    try {
+      syncHiddenTabsFromHost({ unhideHostTabs: opts?.unhideHostTabs });
+    } catch {}
+  }, delayMs);
+}
+function syncHiddenTabsFromHost(opts) {
+  if (!isInstanceActive())
+    return { hiddenIds: getCanvasHiddenTabIds() };
+  const host = getHostDrawerSettings();
+  const rawHostStored = normalizeHiddenIds(host?.hiddenTabIds);
+  const unhideHostIds = opts?.unhideHostTabs ? new Set(rawHostStored) : null;
+  const hostStored = unhideHostIds ? [] : rawHostStored;
+  const canvasStored = unhideHostIds ? getCanvasHiddenTabIds().filter((id) => !unhideHostIds.has(id)) : getCanvasHiddenTabIds();
+  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
+  const liveIds = collectLiveTabIdsForHiddenHeal();
+  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
+  const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
+  setCanvasHiddenTabIds(forCanvas);
+  const closedOnlyLiveIds = new Set;
+  const armedGeneration = currentLifecycleGeneration();
+  try {
+    Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
+      if (!isLifecycleCurrent(armedGeneration))
+        return;
+      const model = getModel();
+      if (!model || model.closed.length === 0)
+        return applySets(forDom, stored, liveIds);
+      const hiddenKeys = new Set(model.hidden);
+      const resolved = new Set;
+      const hostMod = getHost();
+      for (const key of model.closed) {
+        if (hiddenKeys.has(key))
+          continue;
+        const liveId = hostMod?.resolve(key);
+        if (liveId)
+          resolved.add(liveId);
+      }
+      applySets(forDom, stored, liveIds, resolved);
+    }).catch(() => {});
+  } catch {}
+  function applySets(dom, all, live, extra) {
+    const applySet = new Set([
+      ...dom,
+      ...all.filter((id) => live.includes(id)),
+      ...extra ?? []
+    ]);
+    applyHiddenTabIdsToSecondary(applySet);
+    applyHiddenTabIdsToMirror(applySet);
+    applyHiddenTabIdsToHostMain(applySet);
+  }
+  applySets(forDom, stored, liveIds);
+  return { hiddenIds: forCanvas };
+}
+function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
+  const stored = normalizeHiddenIds(storedHidden);
+  if (!stored.length)
+    return [];
+  return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
+}
+var _debouncedSyncTimer = null;
+var init_hidden_tabs = __esm(() => {
+  init_host_settings();
+  init_store();
+  init_configure_catalog();
+  init_buttons();
+  init_secondary();
+  init_canvas_hidden();
+  init_canvas_hidden();
+});
+
+// src/settings/mode-transition.ts
+function beginModeSwitchBarrier() {
+  _modeSwitchBarrierDepth++;
+}
+function endModeSwitchBarrier() {
+  if (_modeSwitchBarrierDepth > 0)
+    _modeSwitchBarrierDepth--;
+}
+function isModeSwitchBarrierActive() {
+  return _modeSwitchBarrierDepth > 0;
+}
+async function withModeSwitchBarrier(fn) {
+  const nested = isModeSwitchBarrierActive();
+  if (!nested) {
+    try {
+      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+      if (isConfigureTabsModalOpen()) {
+        await flushConfigureCommits();
+      }
+    } catch {}
+  }
+  beginModeSwitchBarrier();
+  try {
+    return await fn();
+  } finally {
+    endModeSwitchBarrier();
+  }
+}
+function runOsTransition(fn) {
+  const result = _osChain.then(() => runDrawerTransition(fn));
+  _osChain = result.then(noop, noop);
+  return result;
+}
+function runDrawerTransition(fn) {
+  const result = _drawerChain.then(fn);
+  _drawerChain = result.then(noop, noop);
+  return result;
+}
+function runNestedDrawerTransition(fn) {
+  try {
+    return Promise.resolve(fn());
+  } catch (err) {
+    return Promise.reject(err);
+  }
+}
+var noop = () => {}, _osChain, _drawerChain, _modeSwitchBarrierDepth = 0;
+var init_mode_transition = __esm(() => {
+  _osChain = Promise.resolve();
+  _drawerChain = Promise.resolve();
+});
+
+// src/os/start-strip-top-gate.ts
+function isStartAtStripTopGate() {
+  try {
+    if (!getSettings().startButtonAtStripTop)
+      return false;
+    if (isHorizontalStrip())
+      return false;
+    return !isMobileViewport();
+  } catch {
+    return !!getSettings().startButtonAtStripTop && getSettings().drawerLocation === "sides";
+  }
+}
+var init_start_strip_top_gate = __esm(() => {
+  init_state();
+  init_mobile_exclusion();
+});
+
 // src/os/drawer-command.ts
 function setDrawerCommandHandler(handler) {
   _handler = handler;
@@ -4625,1286 +5237,6 @@ function commandDrawerOpen(side, open) {
   }
 }
 var _handler = null;
-
-// src/tabs/dom-placed-builtin.ts
-function isDomPlacedBuiltIn(tabId) {
-  if (_domPlacedIds.has(tabId))
-    return true;
-  if (typeof document === "undefined")
-    return false;
-  try {
-    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-  } catch {
-    return false;
-  }
-}
-function markDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.add(tabId);
-}
-function clearDomPlacedBuiltIn(tabId) {
-  _domPlacedIds.delete(tabId);
-}
-function restoreDomPlacedBuiltInToMain(tabId, root) {
-  let el = root ?? null;
-  if (!el && typeof document !== "undefined") {
-    try {
-      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
-      if (!el) {
-        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
-      }
-    } catch {
-      el = null;
-    }
-  }
-  if (el) {
-    if (el.parentElement) {
-      try {
-        el.parentElement.removeChild(el);
-      } catch {}
-    }
-    el.removeAttribute("data-canvas-moved");
-    el.removeAttribute("data-canvas-active");
-    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-    el.style.removeProperty("position");
-    el.style.removeProperty("inset");
-    el.style.removeProperty("display");
-  }
-  _domPlacedIds.delete(tabId);
-  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
-  return !!el;
-}
-var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
-var init_dom_placed_builtin = __esm(() => {
-  init_log();
-  _domPlacedIds = new Set;
-});
-
-// src/tabs/host-tab-location.ts
-function readActiveTabStoreSnapshot() {
-  let snap = getStoreSnapshot();
-  const usable = !!snap && (typeof snap.clearPendingActiveTabReset === "function" || typeof snap.drawerTab === "string");
-  if (!usable) {
-    findStoreData(true);
-    snap = getStoreSnapshot();
-  }
-  return snap;
-}
-function clearSpuriousActiveTabReset(movedTabId) {
-  let activeId = "";
-  let snap = null;
-  if (_testHostActiveTabId !== undefined) {
-    activeId = _testHostActiveTabId ?? "";
-  } else {
-    try {
-      const activeBtn = getMainSidebar()?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-      activeId = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || "";
-    } catch {}
-    if (!activeId) {
-      snap = readActiveTabStoreSnapshot();
-      if (typeof snap?.drawerTab === "string")
-        activeId = snap.drawerTab;
-    }
-  }
-  if (!activeId) {
-    dlog(`[tabmove] spurious-reset guard skipped: host active unknown (moved "${movedTabId}")`);
-    return false;
-  }
-  const movedIsActive = !!activeId && (activeId === movedTabId || movedTabId.endsWith(`:${activeId}`) || movedTabId.includes(`:tab:${activeId}`));
-  if (movedIsActive)
-    return false;
-  let clear = _testClearPendingActiveTabReset;
-  if (!clear) {
-    snap = snap ?? readActiveTabStoreSnapshot();
-    if (snap && typeof snap.clearPendingActiveTabReset === "function") {
-      clear = snap.clearPendingActiveTabReset;
-    }
-  }
-  if (!clear) {
-    dlog(`[tabmove] spurious-reset guard: clearPendingActiveTabReset unavailable (moved "${movedTabId}")`);
-    return false;
-  }
-  try {
-    clear();
-    dlog(`[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId}")`);
-    return true;
-  } catch (err) {
-    dwarn("[tabmove] clearPendingActiveTabReset threw:", err);
-    return false;
-  }
-}
-function locationMatches(actual, expected) {
-  const effective = actual ?? { kind: "main-drawer" };
-  if (effective.kind !== expected.kind)
-    return false;
-  if (expected.kind === "container") {
-    return effective.containerId === expected.containerId;
-  }
-  return true;
-}
-function readLocation(tabId) {
-  const ui = getHostBridge()?.ui;
-  if (ui?.getTabLocation) {
-    try {
-      return ui.getTabLocation(tabId) ?? null;
-    } catch {}
-  }
-  findStoreData(true);
-  const snap = getStoreSnapshot();
-  const loc = snap?.tabLocations?.[tabId];
-  return loc ?? null;
-}
-function scanFiberForMoveTabTo(fiber, depth, maxDepth, visited) {
-  if (!fiber || depth > maxDepth || visited.has(fiber))
-    return null;
-  visited.add(fiber);
-  let hook = fiber.memoizedState;
-  let hookIdx = 0;
-  while (hook && hookIdx < 40) {
-    const state = hook.memoizedState;
-    if (state && typeof state === "object" && !Array.isArray(state)) {
-      const move = state.moveTabTo;
-      if (typeof move === "function") {
-        return move;
-      }
-    }
-    hook = hook.next;
-    hookIdx++;
-  }
-  const child = scanFiberForMoveTabTo(fiber.child, depth + 1, maxDepth, visited);
-  if (child)
-    return child;
-  return scanFiberForMoveTabTo(fiber.sibling, depth, maxDepth, visited);
-}
-function walkElementForMoveTabTo(el, visited) {
-  if (!el)
-    return null;
-  const rootFiber = getFiberFromElement(el);
-  if (!rootFiber)
-    return null;
-  let fiber = rootFiber;
-  const ancestors = [];
-  while (fiber) {
-    ancestors.push(fiber);
-    fiber = fiber.return;
-  }
-  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 8); i--) {
-    const found = scanFiberForMoveTabTo(ancestors[i], 0, 40, visited);
-    if (found)
-      return found;
-  }
-  return null;
-}
-function getHostMoveTabTo(force = false) {
-  if (_testMoveTabTo)
-    return _testMoveTabTo;
-  const now = Date.now();
-  if (!force && _cachedMoveTabTo && now - _moveTabToCacheTs < MOVE_TAB_TO_TTL_MS) {
-    return _cachedMoveTabTo;
-  }
-  findStoreData(force);
-  const snap = getStoreSnapshot();
-  if (snap && typeof snap.moveTabTo === "function") {
-    _cachedMoveTabTo = snap.moveTabTo;
-    _moveTabToCacheTs = now;
-    return _cachedMoveTabTo;
-  }
-  if (typeof document === "undefined")
-    return null;
-  const visited = new Set;
-  const anchors = [
-    getMainSidebar(),
-    getMainPanel(),
-    getMainWrapper()
-  ];
-  if (typeof document.getElementById === "function") {
-    anchors.push(document.getElementById("root"), document.getElementById("app"), document.body);
-  }
-  for (const el of anchors) {
-    const found = walkElementForMoveTabTo(el, visited);
-    if (found) {
-      _cachedMoveTabTo = found;
-      _moveTabToCacheTs = now;
-      return found;
-    }
-  }
-  _cachedMoveTabTo = null;
-  _moveTabToCacheTs = now;
-  return null;
-}
-function requestHostTabLocation(tabId, location) {
-  const ui = getHostBridge()?.ui;
-  if (ui?.requestTabLocation) {
-    try {
-      ui.requestTabLocation(tabId, location);
-    } catch (err) {
-      dwarn(`[tabmove] requestTabLocation threw for "${tabId}":`, err);
-    }
-    const after = readLocation(tabId);
-    if (locationMatches(after, location)) {
-      dlog(`[tabmove] requestHostTabLocation ok via=bridge tab=${tabId} loc=${JSON.stringify(location)}`);
-      return { ok: true, via: "bridge" };
-    }
-    dlog(`[tabmove] requestTabLocation did not stick for "${tabId}" ` + `(got ${JSON.stringify(after)}; often non-CORE allowlist silent no-op). Trying store.moveTabTo.`);
-  }
-  const moveTabTo = getHostMoveTabTo(true);
-  if (!moveTabTo) {
-    dlog(`[tabmove] bridge+store unavailable for "${tabId}" ` + `(allowlist no-op and moveTabTo missing) — caller may DOM-place.`);
-    return { ok: false, via: "none" };
-  }
-  try {
-    moveTabTo(tabId, location);
-  } catch (err) {
-    dwarn(`[tabmove] store.moveTabTo threw for "${tabId}":`, err);
-    return { ok: false, via: "none" };
-  }
-  const afterStore = readLocation(tabId);
-  if (locationMatches(afterStore, location)) {
-    dlog(`[tabmove] requestHostTabLocation ok via=store tab=${tabId} loc=${JSON.stringify(location)}`);
-    return { ok: true, via: "store" };
-  }
-  dwarn(`[tabmove] store.moveTabTo for "${tabId}" did not stick (loc=${JSON.stringify(afterStore)}).`);
-  return { ok: false, via: "none" };
-}
-function requestHostTabToSecondary(tabId) {
-  const res = requestHostTabLocation(tabId, {
-    kind: "container",
-    containerId: CANVAS_SECONDARY_CONTAINER_ID
-  });
-  clearSpuriousActiveTabReset(tabId);
-  return res;
-}
-function requestHostTabToMain(tabId) {
-  return requestHostTabLocation(tabId, { kind: "main-drawer" });
-}
-var CANVAS_SECONDARY_CONTAINER_ID = "canvas-secondary-drawer", _cachedMoveTabTo = null, _moveTabToCacheTs = 0, MOVE_TAB_TO_TTL_MS = 3000, _testMoveTabTo = null, _testHostActiveTabId, _testClearPendingActiveTabReset = null;
-var init_host_tab_location = __esm(() => {
-  init_fiber();
-  init_store();
-  init_log();
-});
-
-// src/tabs/builtin-move.ts
-function findMainDrawerToggle(wrapper) {
-  for (const btn of Array.from(wrapper.querySelectorAll(":scope > button"))) {
-    if (/drawerTab/i.test(btn.className)) {
-      return btn;
-    }
-  }
-  return null;
-}
-function hostMainDrawerDomState() {
-  try {
-    const wrapper = getMainWrapper();
-    const open = wrapper ? /wrapperOpen/.test(wrapper.className) : false;
-    const sidebar = getMainSidebar();
-    const activeBtn = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-    const tab = activeBtn?.getAttribute("data-tab-id") ?? activeBtn?.getAttribute("title") ?? null;
-    return { open, tab };
-  } catch {
-    return null;
-  }
-}
-function tryDomPlaceRoot(tabId, root) {
-  const secondaryContent = _testSecondaryContent ?? getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-  if (!secondaryContent) {
-    dwarn(`[tabmove] cannot DOM-place "${tabId}" — secondary .sidebar-ux-panel-content missing`);
-    return false;
-  }
-  try {
-    if (root.parentElement !== secondaryContent) {
-      secondaryContent.appendChild(root);
-    }
-  } catch (err) {
-    dwarn(`[tabmove] DOM appendChild failed for "${tabId}":`, err);
-    return false;
-  }
-  const inSecondary = root.parentElement === secondaryContent || typeof secondaryContent.contains === "function" && secondaryContent.contains(root);
-  if (!inSecondary) {
-    dwarn(`[tabmove] DOM place for "${tabId}" did not stick (parent not secondary content)`);
-    return false;
-  }
-  root.setAttribute("data-canvas-moved", tabId);
-  root.setAttribute(CANVAS_DOM_PLACED_ATTR, "");
-  markDomPlacedBuiltIn(tabId);
-  dlog(`[tabmove] place built-in "${tabId}" ok via=dom ` + `(bridge+store unavailable; registry root reparented into secondary)`);
-  return true;
-}
-async function moveBuiltInTabToSecondaryContainer(opts) {
-  const { tabId, deferActivation = false } = opts;
-  const bridge = getHostBridge();
-  const ui = bridge?.ui;
-  if (!ui?.getBuiltInTabRoot) {
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=BRIDGE_MISSING ` + `hasGetBuiltInTabRoot=${!!ui?.getBuiltInTabRoot} hasRequestTabLocation=${!!ui?.requestTabLocation}`);
-    return;
-  }
-  let root = opts.root;
-  if (!root) {
-    const prevMainOpen = isMainDrawerOpen();
-    const prevActiveTabId = hostMainDrawerDomState()?.tab ?? null;
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` + `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`);
-    await Promise.resolve().then(() => init_assignment());
-    await ensureBuiltInTabActiveInMain(tabId, {
-      isTabActiveInMainDrawer: () => {
-        const st = hostMainDrawerDomState();
-        return st != null && st.open && st.tab === tabId;
-      },
-      getBuiltInTabRoot: (id) => {
-        try {
-          return ui.getBuiltInTabRoot?.(id);
-        } catch {
-          return;
-        }
-      },
-      dlog
-    });
-    if (prevActiveTabId && prevActiveTabId !== tabId) {
-      try {
-        await Promise.resolve().then(() => init_buttons());
-        const prevBtn = findMainTabButton(prevActiveTabId);
-        if (prevBtn && prevBtn.isConnected && prevBtn.style.display !== "none") {
-          prevBtn.click();
-        } else {
-          dlog(`[tabmove] pre-activation restore skipped for "${prevActiveTabId}" (button ${prevBtn ? "hidden" : "missing"})`);
-        }
-      } catch (err) {
-        dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`);
-      }
-    }
-    await new Promise((r) => requestAnimationFrame(() => r()));
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_POST_ACTIVATE tab=${tabId} hostDrawer=${JSON.stringify(hostMainDrawerDomState())}`);
-    if (!prevMainOpen && isMainDrawerOpen()) {
-      const wrapper = getMainWrapper();
-      const toggle = wrapper ? findMainDrawerToggle(wrapper) : null;
-      toggle?.click();
-    }
-    try {
-      root = ui.getBuiltInTabRoot(tabId);
-    } catch {
-      root = undefined;
-    }
-    if (!root) {
-      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
-      dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId });
-      return;
-    }
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
-  } else {
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_BRIDGE_ROOT tab=${tabId} branch=ROOT_READY via=opts-or-getBuiltInTabRoot`);
-  }
-  root.setAttribute("data-canvas-moved", tabId);
-  if (!deferActivation) {
-    root.setAttribute("data-canvas-active", "");
-  }
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} branch=REQUEST_TAB_LOCATION`);
-  const placed = requestHostTabToSecondary(tabId);
-  if (placed.ok) {
-    root.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-    clearDomPlacedBuiltIn(tabId);
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} via=${placed.via} container=${CANVAS_SECONDARY_CONTAINER_ID}`);
-    const afterLoc = ui.getTabLocation?.(tabId) ?? {
-      kind: "container",
-      containerId: CANVAS_SECONDARY_CONTAINER_ID
-    };
-    watchForContainerPass3Reset(bridge, tabId, root, afterLoc);
-    return root;
-  }
-  if (tryDomPlaceRoot(tabId, root)) {
-    if (!deferActivation) {
-      root.setAttribute("data-canvas-active", "");
-    }
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} via=dom container=${CANVAS_SECONDARY_CONTAINER_ID}`);
-    return root;
-  }
-  root.removeAttribute("data-canvas-moved");
-  root.removeAttribute("data-canvas-active");
-  root.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-  clearDomPlacedBuiltIn(tabId);
-  dwarn(`[tabmove] built-in "${tabId}" not moved to secondary — host allowlist denied, ` + `store.moveTabTo unavailable/failed, and DOM reparent failed. Aborting assign.`);
-  return;
-}
-function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
-  queueMicrotask(() => {
-    try {
-      const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
-      const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-      const rootInContainer = typeof microContainer?.contains === "function" ? microContainer.contains(builtInRoot) : false;
-      if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
-        dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to main-drawer because the target container is missing from Lumiverse's containers store. Fix: ensure the secondary drawer's panel content element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx — the call exists but may be failing silently.)`);
-      }
-    } catch {}
-  });
-}
-var _testSecondaryContent = null;
-var init_builtin_move = __esm(() => {
-  init_log();
-  init_store();
-  init_secondary();
-  init_dom_placed_builtin();
-  init_host_tab_location();
-  init_dom_placed_builtin();
-});
-
-// src/sidebar/secondary-drawer.ts
-function isRestoringFromLayout() {
-  return _restoringFromLayout;
-}
-function setSuppressAutoActivation(value) {
-  _suppressAutoActivation = value;
-}
-function isSuppressAutoActivation() {
-  return _suppressAutoActivation;
-}
-function findStoreTab(tabIdOrTitle) {
-  findStoreData(true);
-  const tabs = getDrawerTabs();
-  return tabs.find((t) => t.id === tabIdOrTitle) || tabs.find((t) => t.title === tabIdOrTitle) || null;
-}
-function initSecondaryDrawer(_ctx) {
-  drawerObserver.onTabUnregistered((tabId) => {
-    if (getTabAssignments().has(tabId)) {
-      if (_restoringFromLayout)
-        return;
-      deleteTabAssignment(tabId);
-      removeSecondaryTabButton(tabId);
-      if (_activeTabId === tabId) {
-        _activeTabId = null;
-        _state = getTabAssignments().size > 0 ? "open" : "closed";
-        if (_state === "closed") {
-          closeSecondarySidebar();
-          updateDrawerTabVisibility();
-        }
-      }
-    }
-  });
-}
-async function finalizeAssignToSecondary(opts) {
-  const {
-    resolvedId,
-    title,
-    root,
-    iconSvg,
-    shortName,
-    deferActivation,
-    wireAssignment = true,
-    openOnClosed = true,
-    setActiveWhenReady = true,
-    showAndPersist = true,
-    facadeKey
-  } = opts;
-  addSecondaryTabButton({
-    id: resolvedId,
-    title,
-    root,
-    iconSvg,
-    shortName,
-    facadeKey
-  });
-  updateDrawerTabVisibility();
-  if (wireAssignment) {
-    setTabAssignment(resolvedId, "secondary");
-    hideMainTabButton(resolvedId);
-  }
-  dlog("[SecondaryDrawer] finalize open-gate", {
-    resolvedId,
-    openOnClosed,
-    state: _state,
-    sidebarOpen: isSecondarySidebarOpen(),
-    mobile: isMobileViewport(),
-    restoring: isRestoringFromLayout(),
-    deferActivation,
-    setActiveWhenReady
-  });
-  if (openOnClosed && _state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-    await openSecondarySidebar();
-    dlog("[SecondaryDrawer] finalize open-gate:BRANCH open+tab_active", { resolvedId });
-    if (!deferActivation) {
-      _state = "tab_active";
-      _activeTabId = resolvedId;
-      setActiveSecondaryTabId(resolvedId);
-    }
-  } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
-    dlog("[SecondaryDrawer] finalize open-gate:BRANCH tab_active-only", { resolvedId });
-    _activeTabId = resolvedId;
-    _state = "tab_active";
-    setActiveSecondaryTabId(resolvedId);
-  } else {
-    dlog("[SecondaryDrawer] finalize open-gate:BRANCH none", { resolvedId });
-  }
-  const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
-  if (headerTitle && !deferActivation) {
-    headerTitle.textContent = title;
-  }
-  if (showAndPersist) {
-    if (!isMobileViewport() && !deferActivation) {
-      showSecondaryTab(resolvedId);
-    }
-  }
-  if (wireAssignment) {
-    try {
-      const m = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
-      reconcileMainTabListPin();
-    } catch {}
-  }
-}
-function readHostMainDrawerState() {
-  const wrapper = getMainWrapper();
-  const sidebar = getMainSidebar();
-  const activeButton = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
-  return {
-    open: wrapper ? /wrapperOpen/.test(wrapper.className) : isMainDrawerOpen(),
-    tabId: activeButton?.getAttribute("data-tab-id") || activeButton?.getAttribute("title") || null
-  };
-}
-function findMainDrawerToggle2() {
-  const wrapper = getMainWrapper();
-  if (!wrapper)
-    return null;
-  for (const button of Array.from(wrapper.querySelectorAll(":scope > button"))) {
-    if (/drawerTab/i.test(button.className)) {
-      return button;
-    }
-  }
-  return null;
-}
-function findMainExtensionButton(resolvedId, title) {
-  const sidebar = getMainSidebar();
-  return sidebar?.querySelector(`button[data-tab-id="${CSS.escape(resolvedId)}"]`) || sidebar?.querySelector(`button[title="${CSS.escape(title)}"]`);
-}
-function isExtensionButton(button, resolvedId, title) {
-  const id = button.getAttribute("data-tab-id") || "";
-  const buttonTitle = button.getAttribute("title") || "";
-  return id === resolvedId || id === title || buttonTitle === title;
-}
-function usableMainButton(button) {
-  return !!button && button.isConnected && button.style.display !== "none" && !isSettingsButton(button);
-}
-function findPrimaryRestoreButton(preferredId, resolvedId, title) {
-  const sidebar = getMainSidebar();
-  if (!sidebar)
-    return null;
-  if (preferredId) {
-    const preferred = findMainTabButton(preferredId);
-    if (usableMainButton(preferred) && !isExtensionButton(preferred, resolvedId, title))
-      return preferred;
-  }
-  return Array.from(sidebar.querySelectorAll("button[data-tab-id], button[title]")).map((button) => button).find((button) => usableMainButton(button) && !isExtensionButton(button, resolvedId, title)) ?? null;
-}
-function nextFrame() {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
-async function mountExtensionRootFromMain(args) {
-  const { resolvedId, title, findRoot } = args;
-  if (isMobileViewport()) {
-    dlog("[SecondaryDrawer] extension mount activation skipped on mobile", { resolvedId });
-    return null;
-  }
-  const sidebar = getMainSidebar();
-  const targetButton = findMainExtensionButton(resolvedId, title);
-  if (!sidebar || !targetButton || !targetButton.isConnected) {
-    dwarn("[SecondaryDrawer] cannot mount extension root: main button unavailable", {
-      resolvedId,
-      title,
-      hasSidebar: !!sidebar,
-      hasButton: !!targetButton
-    });
-    return null;
-  }
-  const before = readHostMainDrawerState();
-  const beforeExtensionRoots = new Set(Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]")));
-  const capturedRoots = new Set;
-  const hostTab = getHostStoreTabs().find((item) => item.id === resolvedId || item.id === title || item.title === title);
-  const expectedTabId = hostTab?.id.startsWith("spindle:") ? hostTab.id : null;
-  const expectedExtensionId = hostTab?.extensionId && hostTab.extensionId !== "unknown" ? hostTab.extensionId : null;
-  const captureAddedRoots = (records) => {
-    for (const record of records) {
-      if (record.type === "attributes" && record.target instanceof HTMLElement && record.target.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") && !beforeExtensionRoots.has(record.target) && !capturedRoots.has(record.target)) {
-        capturedRoots.add(record.target);
-        dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
-          tabId: record.target.getAttribute("data-spindle-drawer-tab"),
-          extensionId: record.target.getAttribute("data-spindle-ext-id"),
-          connected: record.target.isConnected
-        }));
-      }
-      for (const node of Array.from(record.addedNodes)) {
-        if (!(node instanceof HTMLElement))
-          continue;
-        const roots = [
-          ...node.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") ? [node] : [],
-          ...Array.from(node.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))
-        ];
-        for (const root of roots) {
-          if (!beforeExtensionRoots.has(root) && root.tagName !== "BUTTON" && !capturedRoots.has(root)) {
-            capturedRoots.add(root);
-            dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
-              tabId: root.getAttribute("data-spindle-drawer-tab"),
-              extensionId: root.getAttribute("data-spindle-ext-id"),
-              connected: root.isConnected
-            }));
-          }
-        }
-      }
-    }
-  };
-  const rootObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(captureAddedRoots);
-  rootObserver?.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["data-spindle-drawer-tab", "data-spindle-ext-id"]
-  });
-  const findNewlyMountedRoot = () => {
-    const candidates = new Set(capturedRoots);
-    for (const element of Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))) {
-      if (!beforeExtensionRoots.has(element))
-        candidates.add(element);
-    }
-    const all = Array.from(candidates);
-    const matchingTab = expectedTabId ? all.filter((element) => element.getAttribute("data-spindle-drawer-tab") === expectedTabId) : [];
-    if (matchingTab.length === 1)
-      return matchingTab[0];
-    const matchingExtension = expectedExtensionId ? all.filter((element) => element.getAttribute("data-spindle-ext-id") === expectedExtensionId) : [];
-    if (matchingExtension.length === 1)
-      return matchingExtension[0];
-    return all.length === 1 ? all[0] : null;
-  };
-  let capturedRoot = null;
-  const findMountedRoot = () => {
-    capturedRoot = capturedRoot || findRoot() || findNewlyMountedRoot();
-    return capturedRoot;
-  };
-  const wasTargetHidden = targetButton.style.display === "none";
-  if (wasTargetHidden)
-    targetButton.style.display = "";
-  const targetWasSelected = before.tabId === resolvedId || before.tabId === title;
-  dlog("[SecondaryDrawer] mounting extension root via main activation", JSON.stringify({
-    resolvedId,
-    title,
-    before,
-    targetWasSelected,
-    wasTargetHidden,
-    expectedTabId,
-    expectedExtensionId,
-    storeEntry: hostTab ? { id: hostTab.id, extensionId: hostTab.extensionId, hasRoot: !!hostTab.root } : null
-  }));
-  let root = null;
-  try {
-    if (!before.open) {
-      const toggle = findMainDrawerToggle2();
-      if (toggle)
-        toggle.click();
-      else
-        targetButton.click();
-      await nextFrame();
-    }
-    const afterOpen = readHostMainDrawerState();
-    dlog("[SecondaryDrawer] host state after opening for extension activation", JSON.stringify(afterOpen));
-    if (afterOpen.tabId === resolvedId || afterOpen.tabId === title) {
-      const handoffButton = findPrimaryRestoreButton(resolvePrimaryActiveTabId(), resolvedId, title);
-      if (handoffButton) {
-        const handoffId = handoffButton.getAttribute("data-tab-id") || handoffButton.getAttribute("title") || "";
-        dlog("[SecondaryDrawer] deselecting rootless host extension before mount", JSON.stringify({
-          resolvedId,
-          handoffId,
-          wasTargetHidden
-        }));
-        handoffButton.click();
-        await nextFrame();
-      } else {
-        dwarn("[SecondaryDrawer] rootless selected extension has no main-tab handoff", {
-          resolvedId
-        });
-      }
-    }
-    const beforeSelect = readHostMainDrawerState();
-    if (beforeSelect.tabId !== resolvedId && beforeSelect.tabId !== title) {
-      const liveTargetButton = findMainExtensionButton(resolvedId, title);
-      dlog("[SecondaryDrawer] selecting host extension for mount", JSON.stringify({
-        resolvedId,
-        beforeSelect,
-        originalButtonConnected: targetButton.isConnected,
-        liveButtonFound: !!liveTargetButton,
-        sameButton: liveTargetButton === targetButton,
-        liveButtonDisplay: liveTargetButton?.style.display ?? null
-      }));
-      if (liveTargetButton) {
-        if (liveTargetButton.style.display === "none")
-          liveTargetButton.style.display = "";
-        liveTargetButton.click();
-      }
-    }
-    dlog("[SecondaryDrawer] host state after selecting extension", JSON.stringify(readHostMainDrawerState()));
-    const deadline = Date.now() + 2500;
-    let delayMs = 16;
-    while (Date.now() < deadline) {
-      root = findMountedRoot();
-      if (root && root.tagName !== "BUTTON")
-        break;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      delayMs = Math.min(125, delayMs * 2);
-    }
-    root = root && root.tagName !== "BUTTON" ? root : null;
-    if (root)
-      await nextFrame();
-  } finally {
-    if (rootObserver) {
-      captureAddedRoots(rootObserver.takeRecords());
-      rootObserver.disconnect();
-    }
-    root = root || findRoot() || findNewlyMountedRoot();
-    if (before.tabId) {
-      const desiredId = before.tabId === resolvedId || before.tabId === title ? resolvePrimaryActiveTabId() : before.tabId;
-      const restoreButton = findPrimaryRestoreButton(desiredId, resolvedId, title);
-      if (restoreButton) {
-        const afterActivation = readHostMainDrawerState();
-        const restoreId = restoreButton.getAttribute("data-tab-id") || restoreButton.getAttribute("title") || "";
-        if (afterActivation.tabId !== restoreId)
-          restoreButton.click();
-      }
-    }
-    if (!before.open && isMainDrawerOpen()) {
-      findMainDrawerToggle2()?.click();
-    }
-    await nextFrame();
-    if (wasTargetHidden && !root)
-      targetButton.style.display = "none";
-  }
-  if (root && root.tagName !== "BUTTON") {
-    const currentRoot = findMountedRoot();
-    return currentRoot && currentRoot.tagName !== "BUTTON" ? currentRoot : root;
-  }
-  dlog("[SecondaryDrawer] extension root did not mount after main activation", JSON.stringify({
-    resolvedId,
-    title,
-    after: readHostMainDrawerState(),
-    expectedTabId,
-    expectedExtensionId,
-    candidates: Array.from(capturedRoots).map((element) => ({
-      tabId: element.getAttribute("data-spindle-drawer-tab"),
-      extensionId: element.getAttribute("data-spindle-ext-id"),
-      connected: element.isConnected
-    }))
-  }));
-  return null;
-}
-function scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey) {
-  showMainTabButton(resolvedId);
-  if (_restoringFromLayout) {
-    dlog("[SecondaryDrawer] retaining rootless extension assignment during layout restore", {
-      resolvedId
-    });
-    return;
-  }
-  setTimeout(() => {
-    Promise.resolve().then(() => (init_dispatch(), {})).then(({}) => {
-      if (!getModel()) {
-        deleteTabAssignment(resolvedId);
-        return;
-      }
-      if (getTabSidebar(facadeKey) !== "secondary")
-        return;
-      return dispatch({
-        t: "move",
-        key: facadeKey,
-        to: "primary",
-        index: -1,
-        activateDest: false
-      });
-    }).catch((err) => {
-      dwarn("[SecondaryDrawer] failed extension placement rollback threw:", err);
-    });
-  }, 0);
-}
-async function assignExtensionTabToSecondary(ctx) {
-  const { tabId, tab, resolvedId, facadeKey, iconSvg, shortName, deferActivation } = ctx;
-  const assignmentSideAtStart = getTabSidebar(facadeKey);
-  setTabAssignment(resolvedId, "secondary");
-  if (_state === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
-    await openSecondarySidebar();
-    _state = "open";
-  }
-  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
-  const bareId = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
-  const existingRoot = secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(bareId)}"]`);
-  if (existingRoot) {
-    const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-    hideMainTabButton(resolvedId);
-    await finalizeAssignToSecondary({
-      resolvedId,
-      title: tab.title || storeTabForButton?.title || resolvedId,
-      root: existingRoot,
-      iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || storeTabForButton?.iconSvg,
-      shortName: shortName || readMainButtonShortName(tab.button) || storeTabForButton?.shortName,
-      deferActivation,
-      wireAssignment: false,
-      openOnClosed: false,
-      facadeKey,
-      setActiveWhenReady: ctx.setActiveWhenReady ?? true
-    });
-    return;
-  }
-  const secondaryWrapper = getSecondaryWrapper();
-  const secondaryContentMain = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-  if (!secondaryContentMain) {
-    dwarn("[SecondaryDrawer] cannot place extension root: secondary content missing", {
-      resolvedId,
-      title: tab.title
-    });
-    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
-    return;
-  }
-  const findHostStoreTab = () => {
-    const hostStoreTabs = getHostStoreTabs();
-    return hostStoreTabs.find((item) => item.id === resolvedId) || hostStoreTabs.find((item) => item.id === tabId) || hostStoreTabs.find((item) => item.title === tab.title) || null;
-  };
-  const findRealRoot = () => {
-    const fiberTab = findHostStoreTab();
-    const storeRoot = fiberTab?.root && fiberTab.root !== tab.button ? fiberTab.root : null;
-    if (storeRoot?.isConnected && storeRoot.tagName !== "BUTTON")
-      return storeRoot;
-    const stampedIds = [fiberTab?.id, resolvedId, tabId].filter((id) => !!id);
-    for (const id of stampedIds) {
-      const stampedRoot = document.querySelector(`[data-spindle-drawer-tab="${CSS.escape(id)}"]`);
-      if (stampedRoot?.isConnected && stampedRoot.tagName !== "BUTTON")
-        return stampedRoot;
-    }
-    return null;
-  };
-  let realRoot = findRealRoot();
-  if (!realRoot) {
-    try {
-      realRoot = await mountExtensionRootFromMain({
-        resolvedId,
-        title: tab.title || storeTab?.title || resolvedId,
-        findRoot: findRealRoot
-      });
-    } catch (err) {
-      dwarn("[SecondaryDrawer] extension main activation failed:", err);
-      scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
-      return;
-    }
-  }
-  const currentMainButton = findMainExtensionButton(resolvedId, tab.title || storeTab?.title || resolvedId);
-  const currentSide = getTabSidebar(facadeKey);
-  const movedBackDuringMount = assignmentSideAtStart === "secondary" && currentSide !== "secondary";
-  if (movedBackDuringMount || !currentMainButton?.isConnected) {
-    showMainTabButton(resolvedId);
-    dlog("[SecondaryDrawer] extension mount placement cancelled after host activation", JSON.stringify({
-      resolvedId,
-      initialSide: assignmentSideAtStart,
-      currentSide,
-      mainButtonFound: !!currentMainButton,
-      hostStoreEntryFound: !!findHostStoreTab()
-    }));
-    return;
-  }
-  if (!realRoot || realRoot.tagName === "BUTTON") {
-    dwarn("[SecondaryDrawer] extension root unavailable after main activation; placement did not complete", JSON.stringify({
-      resolvedId,
-      title: tab.title || storeTab?.title || resolvedId,
-      mainButtonFound: !!currentMainButton,
-      hostStoreEntryFound: !!findHostStoreTab()
-    }));
-    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
-    return;
-  }
-  const root = realRoot;
-  root.setAttribute("data-canvas-moved", resolvedId);
-  if (root.parentElement !== secondaryContentMain) {
-    secondaryContentMain.appendChild(root);
-  }
-  await nextFrame();
-  if (!secondaryContentMain.contains(root)) {
-    dlog("[SecondaryDrawer] host reclaimed extension root during activation restore; retrying DOM placement", {
-      resolvedId,
-      parentTag: root.parentElement?.tagName || null
-    });
-    secondaryContentMain.appendChild(root);
-    await nextFrame();
-  }
-  if (!secondaryContentMain.contains(root)) {
-    root.removeAttribute("data-canvas-moved");
-    root.removeAttribute("data-canvas-active");
-    dwarn("[SecondaryDrawer] host reclaimed extension root after DOM placement; placement did not complete", {
-      resolvedId,
-      title: tab.title || storeTab?.title || resolvedId
-    });
-    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
-    return;
-  }
-  if (!deferActivation) {
-    for (const child of Array.from(secondaryContentMain.children)) {
-      if (child instanceof HTMLElement) {
-        if (child === root) {
-          child.setAttribute("data-canvas-active", "");
-        } else {
-          child.removeAttribute("data-canvas-active");
-        }
-      }
-    }
-  }
-  setTabAssignment(resolvedId, "secondary");
-  hideMainTabButton(resolvedId);
-  await finalizeAssignToSecondary({
-    resolvedId,
-    title: tab.title || storeTab?.title || resolvedId,
-    root,
-    iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
-    shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
-    deferActivation,
-    wireAssignment: false,
-    openOnClosed: false,
-    facadeKey,
-    setActiveWhenReady: ctx.setActiveWhenReady ?? true
-  });
-  return;
-}
-async function assignBuiltInTabToSecondary(ctx) {
-  const { tabId, tab, resolvedId, facadeKey, deferActivation } = ctx;
-  const secondaryWrapper = getSecondaryWrapper();
-  const secondaryContent = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
-  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
-  const wSpindle = getHostBridge();
-  const wSpindleUi = wSpindle?.ui;
-  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!storeTab} hasSecondaryContent=${!!secondaryContent}`);
-  let alreadyInSecondary = null;
-  if (secondaryContent) {
-    const idsToTry = resolvedId !== tabId ? [resolvedId, tabId] : [resolvedId];
-    for (const id of idsToTry) {
-      alreadyInSecondary = secondaryContent.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]`);
-      if (alreadyInSecondary)
-        break;
-    }
-  }
-  if (alreadyInSecondary) {
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
-    const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
-    await finalizeAssignToSecondary({
-      resolvedId,
-      title,
-      root: alreadyInSecondary,
-      iconSvg: tab.button?.querySelector("svg")?.outerHTML || alreadyInSecondary.querySelector("svg")?.outerHTML,
-      shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
-      deferActivation,
-      wireAssignment: true,
-      openOnClosed: ctx.openOnClosed ?? true,
-      facadeKey,
-      setActiveWhenReady: ctx.setActiveWhenReady ?? false
-    });
-    return;
-  }
-  if (!secondaryContent) {
-    dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
-      tabId,
-      resolvedId
-    });
-    return;
-  }
-  let root;
-  let placedViaHost = false;
-  if (wSpindleUi?.getBuiltInTabRoot) {
-    await Promise.resolve().then(() => init_builtin_move());
-    root = await moveBuiltInTabToSecondaryContainer({
-      tabId,
-      deferActivation
-    });
-    placedViaHost = !!root;
-  }
-  if (!root && storeTab?.root && storeTab.extensionId) {
-    root = storeTab.root;
-    if (root.parentElement !== secondaryContent) {
-      secondaryContent.appendChild(root);
-    }
-    root.setAttribute("data-canvas-moved", resolvedId);
-    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
-  }
-  if (!root) {
-    dwarn("[SecondaryDrawer] assignToSecondary: built-in tab not placed (host location write failed, DOM reparent failed, or root missing).", { tabId, resolvedId, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot });
-    return;
-  }
-  if (!deferActivation) {
-    for (const child of Array.from(secondaryContent.children)) {
-      if (child instanceof HTMLElement) {
-        if (child === root || child.getAttribute("data-canvas-moved") === resolvedId) {
-          child.setAttribute("data-canvas-active", "");
-        } else if (child.hasAttribute("data-canvas-moved")) {
-          child.removeAttribute("data-canvas-active");
-        }
-      }
-    }
-  }
-  const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
-  const iconSvg = tab.button?.querySelector("svg")?.outerHTML || root.querySelector("svg")?.outerHTML;
-  const shortName = readMainButtonShortName(tab.button) || storeTab?.shortName;
-  if (placedViaHost) {
-    try {
-      const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
-      if (isMainMirrorActive())
-        ensureHostContentParkedPublic();
-    } catch {}
-  }
-  await finalizeAssignToSecondary({
-    resolvedId,
-    title,
-    root,
-    iconSvg,
-    shortName,
-    deferActivation,
-    wireAssignment: true,
-    openOnClosed: ctx.openOnClosed ?? true,
-    facadeKey,
-    setActiveWhenReady: ctx.setActiveWhenReady ?? false
-  });
-}
-async function assignToSecondary(tabId, opts) {
-  const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
-  if (!ensureSecondaryShellMounted({ initialOpen: false })) {
-    dwarn(`[SecondaryDrawer] assignToSecondary: secondary shell unavailable; skip "${tabId}"`);
-    return;
-  }
-  let tab = drawerObserver.getTab(tabId);
-  let iconSvg;
-  let shortName;
-  if (!tab) {
-    const storeTab = findStoreTab(tabId);
-    if (!storeTab) {
-      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} not found in DrawerObserver or store`);
-      return;
-    }
-    const button = findMainTabButton(storeTab.title);
-    if (!button) {
-      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} found in store but no main sidebar button (title="${storeTab.title}")`);
-      return;
-    }
-    tab = {
-      tabId: storeTab.id,
-      button,
-      extensionId: storeTab.extensionId,
-      title: storeTab.title,
-      key: keyForTabShape(storeTab.id, storeTab.extensionId, storeTab.title),
-      titles: new Set([storeTab.title])
-    };
-    iconSvg = storeTab.iconSvg;
-    shortName = storeTab.shortName;
-  } else {
-    iconSvg = tab.button.querySelector("svg")?.outerHTML;
-  }
-  const resolvedId = tab.tabId;
-  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
-  const facadeKey = opts?.facadeKey ?? tab.key;
-  let isExtensionTab = isExtensionKey(facadeKey) || !!tab.extensionId && tab.extensionId !== "unknown";
-  if (!isExtensionTab || !tab.extensionId || tab.extensionId === "unknown" || tab.tabId === tab.title) {
-    if (!tab)
-      return;
-    const t = tab;
-    const hostStoreTabs = getHostStoreTabs();
-    const storeTab = hostStoreTabs.find((x) => x.id === tabId) || hostStoreTabs.find((x) => x.id === t.tabId) || hostStoreTabs.find((x) => x.title === t.title);
-    if (storeTab?.extensionId && storeTab.extensionId !== "unknown") {
-      dlog("[SecondaryDrawer] assignToSecondary: observer entry stale — upgraded from store", {
-        fromId: t.tabId,
-        toId: storeTab.id,
-        extFrom: t.extensionId,
-        extTo: storeTab.extensionId
-      });
-      tab = {
-        ...tab,
-        tabId: storeTab.id,
-        extensionId: storeTab.extensionId,
-        title: storeTab.title,
-        titles: new Set([storeTab.title])
-      };
-      iconSvg = iconSvg ?? storeTab.iconSvg;
-      shortName = shortName ?? storeTab.shortName;
-      isExtensionTab = true;
-    }
-  }
-  const ctx = {
-    tabId,
-    tab,
-    resolvedId: tab.tabId,
-    facadeKey,
-    iconSvg,
-    shortName,
-    deferActivation,
-    openOnClosed: opts?.openOnClosed,
-    setActiveWhenReady: opts?.setActiveWhenReady
-  };
-  if (isExtensionTab) {
-    await assignExtensionTabToSecondary(ctx);
-  } else {
-    await assignBuiltInTabToSecondary(ctx);
-  }
-}
-async function unassignFromSecondary(tabId) {
-  dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`);
-  let resolvedShowId = tabId;
-  let resolvedExtId;
-  findStoreData(true);
-  const _tabs = getDrawerTabs();
-  const _bySegment = _tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
-  if (_bySegment) {
-    resolvedShowId = _bySegment.id;
-    resolvedExtId = _bySegment.extensionId;
-  } else {
-    const storeTab = findStoreTab(tabId);
-    if (storeTab) {
-      resolvedShowId = storeTab.id;
-      resolvedExtId = storeTab.extensionId;
-    } else {
-      dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map((t) => ({ id: t.id, title: t.title })));
-    }
-  }
-  const bridge = getHostBridge();
-  const bridgeUi = bridge?.ui;
-  let bridgeRoot;
-  try {
-    bridgeRoot = bridgeUi?.getBuiltInTabRoot?.(tabId) || (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) : undefined);
-  } catch {
-    bridgeRoot = undefined;
-  }
-  const isBuiltIn = bridgeRoot != null || !!(bridgeUi?.getBuiltInTabTitle?.(tabId) || (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabTitle?.(resolvedShowId) : undefined));
-  const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-  let _movedRoot = null;
-  if (_secondaryContentForUnassign) {
-    const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
-    for (const id of idsToTry) {
-      _movedRoot = _secondaryContentForUnassign.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
-      if (_movedRoot)
-        break;
-    }
-  }
-  if (isBuiltIn) {
-    const hostTabId = bridgeRoot?.getAttribute?.("data-tab-id") || tabId;
-    let hostResetOk = false;
-    try {
-      await Promise.resolve().then(() => init_host_tab_location());
-      const result = requestHostTabToMain(hostTabId);
-      hostResetOk = result.ok;
-      if (!result.ok) {
-        dwarn(`[SecondaryDrawer] unassign: could not reset tabLocations for ${hostTabId} (via=${result.via})`);
-      }
-    } catch (err) {
-      dwarn(`[SecondaryDrawer] unassign: requestHostTabToMain failed for ${hostTabId}:`, err);
-    }
-    await Promise.resolve().then(() => init_builtin_move());
-    const domPlaced = isDomPlacedBuiltIn(hostTabId) || isDomPlacedBuiltIn(tabId) || !!_movedRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR) || !!bridgeRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR);
-    if (domPlaced || !hostResetOk && _movedRoot) {
-      restoreDomPlacedBuiltInToMain(hostTabId, _movedRoot || bridgeRoot);
-      if (tabId !== hostTabId) {
-        await Promise.resolve().then(() => init_builtin_move());
-        clearDomPlacedBuiltIn(tabId);
-      }
-    } else {
-      const clearAttrs = (el) => {
-        if (!el)
-          return;
-        el.removeAttribute("data-canvas-moved");
-        el.removeAttribute("data-canvas-active");
-        el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
-      };
-      clearAttrs(_movedRoot);
-      clearAttrs(bridgeRoot);
-      if (!_movedRoot && typeof document !== "undefined") {
-        const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
-        for (const id of idsToTry) {
-          const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
-          if (residual) {
-            clearAttrs(residual);
-            break;
-          }
-        }
-      }
-    }
-  } else if (_movedRoot) {
-    let hostResetOk = false;
-    try {
-      await Promise.resolve().then(() => init_host_tab_location());
-      const result = requestHostTabToMain(resolvedShowId);
-      hostResetOk = result.ok;
-      dlog("[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain", {
-        tabId: resolvedShowId,
-        ok: result.ok,
-        via: result.via
-      });
-    } catch (err) {
-      dwarn(`[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain failed for ${resolvedShowId}:`, err);
-    }
-    if (!hostResetOk) {
-      if (_movedRoot.parentElement) {
-        try {
-          _movedRoot.parentElement.removeChild(_movedRoot);
-        } catch {}
-      }
-    }
-    _movedRoot.removeAttribute("data-canvas-moved");
-    _movedRoot.removeAttribute("data-canvas-active");
-    _movedRoot.style?.removeProperty?.("position");
-    _movedRoot.style?.removeProperty?.("inset");
-    _movedRoot.style?.removeProperty?.("display");
-  } else if (typeof document !== "undefined") {
-    const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
-    for (const id of idsToTry) {
-      const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
-      if (residual) {
-        residual.removeAttribute("data-canvas-moved");
-        residual.removeAttribute("data-canvas-active");
-        break;
-      }
-    }
-  }
-  deleteTabAssignment(tabId);
-  if (resolvedShowId !== tabId) {
-    deleteTabAssignment(resolvedShowId);
-  }
-  removeSecondaryTabButton(tabId);
-  const activeId = getActiveSecondaryTabId();
-  if (activeId === tabId || activeId === resolvedShowId) {
-    _activeTabId = null;
-    setActiveSecondaryTabId(null);
-    clearSecondaryTabButtonActive();
-  }
-  showMainTabButton(resolvedShowId);
-  try {
-    const m = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
-    reconcileMainTabListPin();
-  } catch {}
-  if (getTabAssignments().size === 0) {
-    _state = "closed";
-    _activeTabId = null;
-    setActiveSecondaryTabId(null);
-    closeSecondarySidebar();
-    updateDrawerTabVisibility();
-  }
-}
-function activateSecondaryTab(tabId) {
-  _activeTabId = tabId;
-  _state = "tab_active";
-  showSecondaryTab(tabId);
-}
-function markDrawerOpenState(open) {
-  if (open) {
-    _state = _activeTabId ? "tab_active" : "open";
-  } else {
-    _state = "closed";
-  }
-}
-function teardownSecondaryDrawer() {
-  _state = "closed";
-  _activeTabId = null;
-  setActiveSecondaryTabId(null);
-}
-var _state = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
-var init_secondary_drawer = __esm(() => {
-  init_drawer_observer();
-  init_buttons();
-  init_assignment();
-  init_active_tab();
-  init_secondary();
-  init_store();
-  init_log();
-  init_mobile_exclusion();
-});
 
 // src/os/actions.ts
 function shouldHideOnClose(key) {
@@ -6317,38 +5649,6 @@ var init_settings_dock = __esm(() => {
     display: none !important;
   }
 `;
-});
-
-// src/tabs/builtin-icons.ts
-var BUILTIN_ICON_SVGS;
-var init_builtin_icons = __esm(() => {
-  BUILTIN_ICON_SVGS = {
-    profile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
-    presets: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>`,
-    loom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>`,
-    weaver: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>`,
-    connections: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`,
-    browser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/></svg>`,
-    characters: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-    personas: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11h.01"/><path d="M14 6h.01"/><path d="M18 6h.01"/><path d="M6.5 13.1h.01"/><path d="M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3"/><path d="M17.4 9.9c-.8.8-2 .8-2.8 0"/><path d="M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7"/><path d="M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4"/></svg>`,
-    multiplayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>`,
-    lorebook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
-    cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>`,
-    databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
-    create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg>`,
-    ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
-    prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
-    council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`,
-    summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
-    feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></svg>`,
-    worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
-    imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
-    wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="2"/><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
-    regex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 1 2-2"/><path d="M16 10a2 2 0 0 1-2-2"/><path d="M20 2a2 2 0 0 1 2 2"/><path d="M22 8a2 2 0 0 1-2 2"/><path d="m3 7 3 3 3-3"/><path d="M6 10V5a3 3 0 0 1 3-3h1"/><rect x="2" y="14" width="8" height="8" rx="2"/></svg>`,
-    branches: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
-    theme: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`,
-    spindle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`
-  };
 });
 
 // src/os/start-menu-styles.ts
@@ -8050,13 +7350,13 @@ var init_main_renderer = __esm(() => {
 
 // src/sidebar/main-tab-pin.ts
 function commitState(updater) {
-  Object.assign(_state2, updater(_state2));
+  Object.assign(_state, updater(_state));
 }
 function applyMainTabListPin(enabled, opts) {
   if (isMobileViewport() && !isHorizontalStrip()) {
     applyMainMirrorDrawer(true, { force: false });
     initMainRenderer();
-    if (_state2.enabled) {
+    if (_state.enabled) {
       commitState(() => ({ enabled: false }));
       unpinMainMirrorForChromeOff();
     }
@@ -8069,7 +7369,7 @@ function applyMainTabListPin(enabled, opts) {
     applyMainMirrorDrawer(true, { force: false });
   }
   initMainRenderer();
-  if (_state2.enabled === enabled && !opts?.force) {
+  if (_state.enabled === enabled && !opts?.force) {
     scheduleReconcile();
     return;
   }
@@ -8111,7 +7411,7 @@ function reconcileMainTabListPin() {
     ensureObservers();
     reconcileMainMirror();
   } else {
-    if (_state2.enabled) {
+    if (_state.enabled) {
       commitState(() => ({ enabled: false }));
       unpinMainMirrorForChromeOff();
     }
@@ -8126,7 +7426,7 @@ function reconcileMainTabListPin() {
   Promise.resolve().then(() => (init_strip_gutter(), {})).then((m) => updateStripGutters());
 }
 function isMainTabListPinActive() {
-  return _state2.enabled && isMainMirrorActive();
+  return _state.enabled && isMainMirrorActive();
 }
 function teardownMainPin() {
   commitState(() => ({ enabled: false }));
@@ -8139,7 +7439,7 @@ function effectivePinGate() {
   return isTaskbarModeEnabled() && (!isMobileViewport() || isHorizontalStrip());
 }
 function scheduleReconcile() {
-  if (_state2.reconcileRaf !== null)
+  if (_state.reconcileRaf !== null)
     return;
   const wantPinAtSchedule = effectivePinGate();
   commitState(() => ({
@@ -8161,7 +7461,7 @@ function reconcileMainMirror() {
   if (!isMainMirrorActive())
     return;
   const side = getMainDrawerSide();
-  const pinned = _state2.enabled;
+  const pinned = _state.enabled;
   let host = null;
   if (pinned) {
     host = pinMainMirrorShellTabList(side);
@@ -8180,7 +7480,7 @@ function reconcileMainMirror() {
     list.classList.remove(TAB_LIST_PINNED_CLASS);
   }
   const sidebar = getMainSidebar();
-  if (sidebar && sidebar !== _state2.sidebar) {
+  if (sidebar && sidebar !== _state.sidebar) {
     attachSidebarObserver(sidebar);
   }
   renderMainMirrorTabs();
@@ -8189,7 +7489,7 @@ function resolveMirrorList() {
   const fromShell = getMainMirrorTabList();
   if (fromShell)
     return fromShell;
-  if (!_state2.enabled)
+  if (!_state.enabled)
     return null;
   const side = getMainDrawerSide();
   const host = ensureMainPinHost(side);
@@ -8218,10 +7518,10 @@ function ensureObservers() {
     attachSidebarObserver(sidebar);
 }
 function attachSidebarObserver(sidebar) {
-  if (_state2.observer && _state2.sidebar === sidebar)
+  if (_state.observer && _state.sidebar === sidebar)
     return;
-  if (_state2.observer) {
-    _state2.observer.disconnect();
+  if (_state.observer) {
+    _state.observer.disconnect();
     commitState(() => ({ observer: null }));
   }
   commitState(() => ({ sidebar }));
@@ -8237,16 +7537,16 @@ function attachSidebarObserver(sidebar) {
   commitState(() => ({ observer }));
 }
 function stopObservers() {
-  if (_state2.observer) {
-    _state2.observer.disconnect();
+  if (_state.observer) {
+    _state.observer.disconnect();
     commitState(() => ({ observer: null, sidebar: null }));
   }
-  if (_state2.reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_state2.reconcileRaf);
+  if (_state.reconcileRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_state.reconcileRaf);
     commitState(() => ({ reconcileRaf: null }));
   }
 }
-var initialState, _state2;
+var initialState, _state;
 var init_main_tab_pin = __esm(() => {
   init_store();
   init_state();
@@ -8260,1108 +7560,1569 @@ var init_main_tab_pin = __esm(() => {
     observer: null,
     reconcileRaf: null
   };
-  _state2 = { ...initialState };
+  _state = { ...initialState };
 });
 
-// src/tabs/configure-catalog.ts
-function humanizeTabId(id) {
-  const known = BUILTIN_TAB_TITLES[id];
-  if (known)
-    return known;
-  const words = id.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[-_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
-  return words.join(" ");
-}
-function getBuiltinCatalog() {
-  return BUILTIN_TAB_IDS.map((id) => ({
-    id,
-    kind: "builtin",
-    title: humanizeTabId(id),
-    description: BUILTIN_TAB_DESCRIPTIONS[id] || undefined,
-    hideLocked: CORE_HIDE_LOCKED.has(id)
-  }));
-}
-function isExtensionDrawerTab(t) {
-  if (t.extensionId)
+// src/tabs/dom-placed-builtin.ts
+function isDomPlacedBuiltIn(tabId) {
+  if (_domPlacedIds.has(tabId))
     return true;
-  const root = t.root;
-  if (root && typeof root.className === "string" && root.className.includes("tabBtnExtension")) {
-    return true;
+  if (typeof document === "undefined")
+    return false;
+  try {
+    return !!document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+  } catch {
+    return false;
   }
-  return t.id.includes(":");
 }
-function getExtensionCatalog() {
-  const tabs = getDrawerTabs();
-  if (!tabs || tabs.length === 0)
-    return [];
-  return tabs.filter(isExtensionDrawerTab).map((t) => ({
-    id: t.id,
-    kind: "extension",
-    title: t.title || humanizeTabId(t.id),
-    description: t.description || `Open ${t.title || t.id} extension tab`,
-    hideLocked: false,
-    extensionId: t.extensionId || undefined,
-    iconSvg: t.iconSvg || undefined,
-    iconUrl: t.iconUrl || undefined
-  }));
+function markDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.add(tabId);
 }
-function getFullCatalog() {
-  return [...getBuiltinCatalog(), ...getExtensionCatalog()];
+function clearDomPlacedBuiltIn(tabId) {
+  _domPlacedIds.delete(tabId);
 }
-function filterCatalogToLive(catalog, host, knownLiveIds) {
-  if (!host)
-    return catalog;
-  return catalog.filter((tab) => host.findKey(tab.id) !== null || knownLiveIds.has(tab.id));
+function restoreDomPlacedBuiltInToMain(tabId, root) {
+  let el = root ?? null;
+  if (!el && typeof document !== "undefined") {
+    try {
+      el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"][${CANVAS_DOM_PLACED_ATTR}]`);
+      if (!el) {
+        el = document.querySelector(`[data-canvas-moved="${CSS.escape(tabId)}"]:not([data-canvas-secondary])`);
+      }
+    } catch {
+      el = null;
+    }
+  }
+  if (el) {
+    if (el.parentElement) {
+      try {
+        el.parentElement.removeChild(el);
+      } catch {}
+    }
+    el.removeAttribute("data-canvas-moved");
+    el.removeAttribute("data-canvas-active");
+    el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+    el.style.removeProperty("position");
+    el.style.removeProperty("inset");
+    el.style.removeProperty("display");
+  }
+  _domPlacedIds.delete(tabId);
+  dlog(`[tabmove] restoreDomPlacedBuiltInToMain tab=${tabId} restored=${!!el} (detached — host re-attaches on activation)`);
+  return !!el;
 }
-function isHideLocked(tabId) {
-  return isCoreTabId(tabId);
-}
-var BUILTIN_TAB_IDS, BUILTIN_TAB_TITLES, BUILTIN_TAB_DESCRIPTIONS;
-var init_configure_catalog = __esm(() => {
-  init_store();
-  init_core_tabs();
-  init_core_tabs();
-  BUILTIN_TAB_IDS = [
-    "profile",
-    "presets",
-    "loom",
-    "weaver",
-    "connections",
-    "browser",
-    "characters",
-    "personas",
-    "multiplayer",
-    "lorebook",
-    "cortex",
-    "databank",
-    "create",
-    "ooc",
-    "prompt",
-    "council",
-    "summary",
-    "feedback",
-    "worldinfo",
-    "imagegen",
-    "wallpaper",
-    "regex",
-    "branches",
-    "theme",
-    "spindle"
-  ];
-  BUILTIN_TAB_TITLES = {
-    profile: "Profile",
-    presets: "Reasoning",
-    loom: "Loom",
-    weaver: "Weaver",
-    connections: "Connections",
-    browser: "Pack Browser",
-    characters: "Characters",
-    personas: "Personas",
-    multiplayer: "Multiplayer",
-    lorebook: "Lorebook",
-    cortex: "Memory Cortex",
-    databank: "Databank",
-    create: "Creator Workshop",
-    ooc: "OOC",
-    prompt: "Composition",
-    council: "Council",
-    summary: "Summary",
-    feedback: "Council Feedback",
-    worldinfo: "World Info",
-    imagegen: "Image Generation",
-    wallpaper: "Wallpaper",
-    regex: "Regex Scripts",
-    branches: "Branch Tree",
-    theme: "Theme",
-    spindle: "Extensions"
-  };
-  BUILTIN_TAB_DESCRIPTIONS = {
-    profile: "View and edit the active character",
-    presets: "Configure reasoning, chain-of-thought, and prompt behavior",
-    loom: "Configure narrative structure and story beats",
-    weaver: "Craft a character from your idea",
-    connections: "Manage API connections and providers",
-    browser: "Browse and manage content packs",
-    characters: "Browse and manage your character cards",
-    personas: "Manage your user personas",
-    multiplayer: "Host or join a room and chat with bots alongside friends",
-    lorebook: "Edit world book and lorebook entries",
-    cortex: "View and manage memory cortex entries",
-    databank: "Upload and manage reference documents for AI context",
-    create: "Create and edit Lumia items and Loom presets",
-    ooc: "Out-of-character comment display settings",
-    prompt: "Pick Lumia and Loom content, Sovereign Hand, and context filters",
-    council: "Configure the Lumia Council and tool functions",
-    summary: "Configure context summarization and truncation",
-    feedback: "View the latest council execution results",
-    worldinfo: "View currently activated world info entries",
-    imagegen: "Configure and control AI scene generation",
-    wallpaper: "Set global or per-chat background wallpapers",
-    regex: "Create and manage regex find/replace scripts",
-    branches: "View and navigate the chat branch history",
-    theme: "Customize colors, accent, and visual style",
-    spindle: "Manage Spindle extensions"
-  };
+var CANVAS_DOM_PLACED_ATTR = "data-canvas-dom-placed", _domPlacedIds;
+var init_dom_placed_builtin = __esm(() => {
+  init_log();
+  _domPlacedIds = new Set;
 });
 
-// src/tabs/identity.ts
-function liveIdForKey(key, tabs) {
-  const frozen = tabs.find((t) => t.key === key);
-  if (frozen)
-    return frozen.id;
-  if (isBuiltinKey(key)) {
-    const builtinId = parseBuiltinKey(key) ?? "";
-    const base = builtinId.includes(":") ? builtinId.slice(0, builtinId.lastIndexOf(":")) : builtinId;
-    const idMatch = tabs.find((t) => {
-      if (t.id === builtinId)
-        return true;
-      const tBase = t.id.includes(":") ? t.id.slice(0, t.id.lastIndexOf(":")) : t.id;
-      return tBase === base;
-    });
-    if (idMatch)
-      return idMatch.id;
-    const titleMatch = builtinId ? tabs.find((t) => t.title === builtinId) : undefined;
-    if (titleMatch)
-      return titleMatch.id;
-    return builtinId;
+// src/tabs/host-tab-location.ts
+function readActiveTabStoreSnapshot() {
+  let snap = getStoreSnapshot();
+  const usable = !!snap && (typeof snap.clearPendingActiveTabReset === "function" || typeof snap.drawerTab === "string");
+  if (!usable) {
+    findStoreData(true);
+    snap = getStoreSnapshot();
   }
-  const parsed = parseExtensionKey(key);
-  if (!parsed)
+  return snap;
+}
+function clearSpuriousActiveTabReset(movedTabId) {
+  let activeId = "";
+  let snap = null;
+  if (_testHostActiveTabId !== undefined) {
+    activeId = _testHostActiveTabId ?? "";
+  } else {
+    try {
+      const activeBtn = getMainSidebar()?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+      activeId = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || "";
+    } catch {}
+    if (!activeId) {
+      snap = readActiveTabStoreSnapshot();
+      if (typeof snap?.drawerTab === "string")
+        activeId = snap.drawerTab;
+    }
+  }
+  if (!activeId) {
+    dlog(`[tabmove] spurious-reset guard skipped: host active unknown (moved "${movedTabId}")`);
+    return false;
+  }
+  const movedIsActive = !!activeId && (activeId === movedTabId || movedTabId.endsWith(`:${activeId}`) || movedTabId.includes(`:tab:${activeId}`));
+  if (movedIsActive)
+    return false;
+  let clear = _testClearPendingActiveTabReset;
+  if (!clear) {
+    snap = snap ?? readActiveTabStoreSnapshot();
+    if (snap && typeof snap.clearPendingActiveTabReset === "function") {
+      clear = snap.clearPendingActiveTabReset;
+    }
+  }
+  if (!clear) {
+    dlog(`[tabmove] spurious-reset guard: clearPendingActiveTabReset unavailable (moved "${movedTabId}")`);
+    return false;
+  }
+  try {
+    clear();
+    dlog(`[tabmove] cleared spurious pendingActiveTabReset (moved non-active "${movedTabId}", host active "${activeId}")`);
+    return true;
+  } catch (err) {
+    dwarn("[tabmove] clearPendingActiveTabReset threw:", err);
+    return false;
+  }
+}
+function locationMatches(actual, expected) {
+  const effective = actual ?? { kind: "main-drawer" };
+  if (effective.kind !== expected.kind)
+    return false;
+  if (expected.kind === "container") {
+    return effective.containerId === expected.containerId;
+  }
+  return true;
+}
+function readLocation(tabId) {
+  const ui = getHostBridge()?.ui;
+  if (ui?.getTabLocation) {
+    try {
+      return ui.getTabLocation(tabId) ?? null;
+    } catch {}
+  }
+  findStoreData(true);
+  const snap = getStoreSnapshot();
+  const loc = snap?.tabLocations?.[tabId];
+  return loc ?? null;
+}
+function scanFiberForMoveTabTo(fiber, depth, maxDepth, visited) {
+  if (!fiber || depth > maxDepth || visited.has(fiber))
     return null;
-  const extMatch = tabs.find((t) => (t.extensionId === parsed.extensionId || !t.extensionId && parsed.extensionId === "unknown") && t.title === parsed.tabName);
-  if (extMatch)
-    return extMatch.id;
-  const titleMatch = tabs.find((t) => t.title === parsed.tabName);
-  return titleMatch ? titleMatch.id : null;
+  visited.add(fiber);
+  let hook = fiber.memoizedState;
+  let hookIdx = 0;
+  while (hook && hookIdx < 40) {
+    const state = hook.memoizedState;
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const move = state.moveTabTo;
+      if (typeof move === "function") {
+        return move;
+      }
+    }
+    hook = hook.next;
+    hookIdx++;
+  }
+  const child = scanFiberForMoveTabTo(fiber.child, depth + 1, maxDepth, visited);
+  if (child)
+    return child;
+  return scanFiberForMoveTabTo(fiber.sibling, depth, maxDepth, visited);
 }
-function keyForLiveId(id, tabs) {
-  let match = tabs.find((t) => t.id === id);
-  if (match)
-    return match.key ?? null;
-  const idBase = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
-  match = tabs.find((t) => {
-    const tBase = t.id.includes(":") ? t.id.slice(0, t.id.lastIndexOf(":")) : t.id;
-    return tBase === id || tBase === idBase;
-  });
-  if (match)
-    return match.key ?? null;
-  match = tabs.find((t) => t.title === id || t.titles?.has(id));
-  if (match)
-    return match.key ?? null;
-  match = tabs.find((t) => {
-    const btn = t.root;
-    return !!btn && btn.getAttribute("data-tab-id") === id;
-  });
-  if (match)
-    return match.key ?? null;
+function walkElementForMoveTabTo(el, visited) {
+  if (!el)
+    return null;
+  const rootFiber = getFiberFromElement(el);
+  if (!rootFiber)
+    return null;
+  let fiber = rootFiber;
+  const ancestors = [];
+  while (fiber) {
+    ancestors.push(fiber);
+    fiber = fiber.return;
+  }
+  for (let i = ancestors.length - 1;i >= Math.max(0, ancestors.length - 8); i--) {
+    const found = scanFiberForMoveTabTo(ancestors[i], 0, 40, visited);
+    if (found)
+      return found;
+  }
   return null;
 }
-function liveIdForTitle(title, tabs) {
-  const t = tabs.find((x) => x.title === title || x.titles?.has(title));
-  return t ? t.id : null;
-}
-var init_identity = () => {};
-
-// src/tabs/configure-model.ts
-function normalizeIdsToCatalog(ids, catalog) {
-  const byTitle = new Map;
-  for (const tab of catalog) {
-    if (tab.title && !byTitle.has(tab.title))
-      byTitle.set(tab.title, tab.id);
+function getHostMoveTabTo(force = false) {
+  if (_testMoveTabTo)
+    return _testMoveTabTo;
+  const now = Date.now();
+  if (!force && _cachedMoveTabTo && now - _moveTabToCacheTs < MOVE_TAB_TO_TTL_MS) {
+    return _cachedMoveTabTo;
   }
-  const observed = drawerObserver.getAllTabs().map((t) => ({
-    id: t.tabId,
-    extensionId: t.extensionId,
-    title: t.title
-  }));
-  return ids.map((id) => byTitle.get(id) ?? liveIdForTitle(id, observed) ?? id);
-}
-function builtinIdSet() {
-  return _builtinIdSet ??= new Set(BUILTIN_TAB_IDS);
-}
-function partitionOrderByCatalog(tabOrder, catalog) {
-  const builtinOrder = [];
-  const extensionOrder = [];
-  const seen = new Set;
-  for (const id of tabOrder) {
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    if (builtinIdSet().has(id)) {
-      builtinOrder.push(id);
-    } else {
-      extensionOrder.push(id);
-    }
+  findStoreData(force);
+  const snap = getStoreSnapshot();
+  if (snap && typeof snap.moveTabTo === "function") {
+    _cachedMoveTabTo = snap.moveTabTo;
+    _moveTabToCacheTs = now;
+    return _cachedMoveTabTo;
   }
-  for (const tab of catalog) {
-    if (!seen.has(tab.id)) {
-      seen.add(tab.id);
-      if (tab.kind === "builtin") {
-        builtinOrder.push(tab.id);
-      } else {
-        extensionOrder.push(tab.id);
-      }
-    }
-  }
-  return { builtinOrder, extensionOrder };
-}
-function resolveSide(tabId, assignments) {
-  return assignments.get(tabId) ?? "primary";
-}
-function syncKindOrders(draft) {
-  const builtinOrder = [];
-  const extensionOrder = [];
-  const seen = new Set;
-  const all = [...draft.primaryIds, ...draft.secondaryIds];
-  for (const id of all) {
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    if (builtinIdSet().has(id)) {
-      builtinOrder.push(id);
-    } else {
-      extensionOrder.push(id);
-    }
-  }
-  return { builtinOrder, extensionOrder };
-}
-function createDraft(input) {
-  const { catalog, tabOrder, hiddenTabIds, drawerSide, assignments } = input;
-  const tabOrderNormalized = normalizeIdsToCatalog(tabOrder, catalog);
-  const hiddenNormalized = normalizeIdsToCatalog(hiddenTabIds, catalog);
-  const { builtinOrder, extensionOrder } = partitionOrderByCatalog(tabOrderNormalized, catalog);
-  const hiddenSet = new Set(hiddenNormalized);
-  const allOrdered = [...builtinOrder, ...extensionOrder];
-  const primaryIds = [];
-  const secondaryIds = [];
-  for (const id of allOrdered) {
-    const side = resolveSide(id, assignments);
-    if (side === "primary") {
-      primaryIds.push(id);
-    } else {
-      secondaryIds.push(id);
-    }
-  }
-  return {
-    drawerSide,
-    primaryIds,
-    secondaryIds,
-    builtinOrder,
-    extensionOrder,
-    hiddenIds: hiddenSet
-  };
-}
-function encodeHostTabOrder(draft) {
-  return [...draft.builtinOrder, ...draft.extensionOrder];
-}
-function baseSnapshotFromDraft(draft) {
-  const assignments = new Map;
-  for (const id of draft.primaryIds) {
-    assignments.set(id, "primary");
-  }
-  for (const id of draft.secondaryIds) {
-    assignments.set(id, "secondary");
-  }
-  return {
-    tabOrder: encodeHostTabOrder(draft),
-    hiddenTabIds: [...draft.hiddenIds],
-    drawerSide: draft.drawerSide,
-    assignments
-  };
-}
-function rebaseBaseIfEpochUnchanged(draftToCommit, epochAtStart, currentEpoch) {
-  if (epochAtStart !== currentEpoch)
+  if (typeof document === "undefined")
     return null;
-  return baseSnapshotFromDraft(draftToCommit);
-}
-function isDraftDirty(draft, base) {
-  const order = encodeHostTabOrder(draft);
-  if (order.length !== base.tabOrder.length)
-    return true;
-  for (let i = 0;i < order.length; i++) {
-    if (order[i] !== base.tabOrder[i])
-      return true;
+  const visited = new Set;
+  const anchors = [
+    getMainSidebar(),
+    getMainPanel(),
+    getMainWrapper()
+  ];
+  if (typeof document.getElementById === "function") {
+    anchors.push(document.getElementById("root"), document.getElementById("app"), document.body);
   }
-  if (draft.hiddenIds.size !== base.hiddenTabIds.length)
-    return true;
-  for (const id of draft.hiddenIds) {
-    if (!base.hiddenTabIds.includes(id))
-      return true;
-  }
-  if (draft.drawerSide !== base.drawerSide)
-    return true;
-  for (const id of draft.primaryIds) {
-    const baseSide = base.assignments.get(id) ?? "primary";
-    if (baseSide !== "primary")
-      return true;
-  }
-  for (const id of draft.secondaryIds) {
-    const baseSide = base.assignments.get(id) ?? "primary";
-    if (baseSide !== "secondary")
-      return true;
-  }
-  return false;
-}
-function swapDrawerSide(draft) {
-  return { ...draft, drawerSide: draft.drawerSide === "left" ? "right" : "left" };
-}
-function moveTab(draft, tabId, to, index) {
-  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
-  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
-  const source = [...draft[fromList]];
-  const srcIdx = source.indexOf(tabId);
-  if (srcIdx === -1)
-    return draft;
-  source.splice(srcIdx, 1);
-  const target = [...draft[toList]];
-  const insertAt = index < 0 ? target.length : Math.min(index, target.length);
-  target.splice(insertAt, 0, tabId);
-  const next = { ...draft, [fromList]: source, [toList]: target };
-  const { builtinOrder, extensionOrder } = syncKindOrders(next);
-  return { ...next, builtinOrder, extensionOrder };
-}
-function reorderWithin(draft, side, fromIndex, toIndex) {
-  const isSecondaryList = draft.drawerSide === "right" && side === "left" || draft.drawerSide === "left" && side === "right";
-  const listKey = isSecondaryList ? "secondaryIds" : "primaryIds";
-  const list = [...draft[listKey]];
-  if (fromIndex < 0 || fromIndex >= list.length)
-    return draft;
-  const [moved] = list.splice(fromIndex, 1);
-  const insertAt = toIndex < 0 ? list.length : Math.min(toIndex, list.length);
-  list.splice(insertAt, 0, moved);
-  const next = { ...draft, [listKey]: list };
-  const { builtinOrder, extensionOrder } = syncKindOrders(next);
-  return { ...next, builtinOrder, extensionOrder };
-}
-function alignIdsToLiveVisibleOrder(sideIds, liveVisibleIds, hiddenIds) {
-  if (sideIds.length === 0)
-    return [];
-  const sideSet = new Set(sideIds);
-  const liveOnSide = liveVisibleIds.filter((id) => sideSet.has(id));
-  const liveSet = new Set(liveOnSide);
-  const missingVisible = sideIds.filter((id) => !hiddenIds.has(id) && !liveSet.has(id));
-  const nextVisible = [...liveOnSide, ...missingVisible];
-  if (nextVisible.length === 0) {
-    return sideIds.slice();
-  }
-  let vi = 0;
-  return sideIds.map((id) => hiddenIds.has(id) ? id : nextVisible[vi++]);
-}
-function alignDraftToLiveVisibleOrder(draft, livePrimaryIds, liveSecondaryIds) {
-  const primaryIds = alignIdsToLiveVisibleOrder(draft.primaryIds, livePrimaryIds, draft.hiddenIds);
-  const secondaryIds = alignIdsToLiveVisibleOrder(draft.secondaryIds, liveSecondaryIds, draft.hiddenIds);
-  const primarySame = primaryIds.length === draft.primaryIds.length && primaryIds.every((id, i) => id === draft.primaryIds[i]);
-  const secondarySame = secondaryIds.length === draft.secondaryIds.length && secondaryIds.every((id, i) => id === draft.secondaryIds[i]);
-  if (primarySame && secondarySame)
-    return draft;
-  const next = { ...draft, primaryIds, secondaryIds };
-  const { builtinOrder, extensionOrder } = syncKindOrders(next);
-  return { ...next, builtinOrder, extensionOrder };
-}
-function reorderVisibleInList(fullIds, movedId, toVisibleIndex, hiddenIds) {
-  const isVisible = (id) => !hiddenIds.has(id);
-  const visible = fullIds.filter(isVisible);
-  const from = visible.indexOf(movedId);
-  if (from === -1)
-    return fullIds.slice();
-  const nextVis = visible.slice();
-  nextVis.splice(from, 1);
-  const insertAt = toVisibleIndex < 0 ? nextVis.length : Math.min(toVisibleIndex, nextVis.length);
-  nextVis.splice(insertAt, 0, movedId);
-  let vi = 0;
-  return fullIds.map((id) => isVisible(id) ? nextVis[vi++] : id);
-}
-function insertAtVisibleIndex(fullIds, tabId, toVisibleIndex, hiddenIds) {
-  const without = fullIds.filter((id) => id !== tabId);
-  const visibleCount = without.reduce((n, id) => n + (hiddenIds.has(id) ? 0 : 1), 0);
-  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
-  if (targetVis >= visibleCount) {
-    return [...without, tabId];
-  }
-  let seen = 0;
-  for (let i = 0;i < without.length; i++) {
-    if (hiddenIds.has(without[i]))
-      continue;
-    if (seen === targetVis) {
-      const next = without.slice();
-      next.splice(i, 0, tabId);
-      return next;
+  for (const el of anchors) {
+    const found = walkElementForMoveTabTo(el, visited);
+    if (found) {
+      _cachedMoveTabTo = found;
+      _moveTabToCacheTs = now;
+      return found;
     }
-    seen++;
   }
-  return [...without, tabId];
+  _cachedMoveTabTo = null;
+  _moveTabToCacheTs = now;
+  return null;
 }
-function reorderWithinVisible(draft, listKey, tabId, toVisibleIndex) {
-  const list = draft[listKey];
-  const nextList = reorderVisibleInList(list, tabId, toVisibleIndex, draft.hiddenIds);
-  if (nextList.length === list.length && nextList.every((id, i) => id === list[i])) {
-    return draft;
+function requestHostTabLocation(tabId, location) {
+  const ui = getHostBridge()?.ui;
+  if (ui?.requestTabLocation) {
+    try {
+      ui.requestTabLocation(tabId, location);
+    } catch (err) {
+      dwarn(`[tabmove] requestTabLocation threw for "${tabId}":`, err);
+    }
+    const after = readLocation(tabId);
+    if (locationMatches(after, location)) {
+      dlog(`[tabmove] requestHostTabLocation ok via=bridge tab=${tabId} loc=${JSON.stringify(location)}`);
+      return { ok: true, via: "bridge" };
+    }
+    dlog(`[tabmove] requestTabLocation did not stick for "${tabId}" ` + `(got ${JSON.stringify(after)}; often non-CORE allowlist silent no-op). Trying store.moveTabTo.`);
   }
-  const next = { ...draft, [listKey]: nextList };
-  const { builtinOrder, extensionOrder } = syncKindOrders(next);
-  return { ...next, builtinOrder, extensionOrder };
-}
-function moveTabVisible(draft, tabId, to, toVisibleIndex) {
-  const fromList = draft.primaryIds.includes(tabId) ? "primaryIds" : "secondaryIds";
-  const toList = to === "primary" ? "primaryIds" : "secondaryIds";
-  if (fromList === toList) {
-    return reorderWithinVisible(draft, fromList, tabId, toVisibleIndex);
+  const moveTabTo = getHostMoveTabTo(true);
+  if (!moveTabTo) {
+    dlog(`[tabmove] bridge+store unavailable for "${tabId}" ` + `(allowlist no-op and moveTabTo missing) — caller may DOM-place.`);
+    return { ok: false, via: "none" };
   }
-  const source = draft[fromList].filter((id) => id !== tabId);
-  const target = insertAtVisibleIndex(draft[toList], tabId, toVisibleIndex, draft.hiddenIds);
-  const next = { ...draft, [fromList]: source, [toList]: target };
-  const { builtinOrder, extensionOrder } = syncKindOrders(next);
-  return { ...next, builtinOrder, extensionOrder };
-}
-function setHidden(draft, tabId, hidden, allowCore = false) {
-  if (!allowCore && isHideLocked(tabId))
-    return draft;
-  const next = new Set(draft.hiddenIds);
-  if (hidden) {
-    next.add(tabId);
-  } else {
-    next.delete(tabId);
+  try {
+    moveTabTo(tabId, location);
+  } catch (err) {
+    dwarn(`[tabmove] store.moveTabTo threw for "${tabId}":`, err);
+    return { ok: false, via: "none" };
   }
-  return { ...draft, hiddenIds: next };
-}
-function partitionDisplayLists(draft, catalog) {
-  const catalogById = new Map(catalog.map((t) => [t.id, t]));
-  const primary = [];
-  const secondary = [];
-  for (const id of draft.secondaryIds) {
-    const tab = catalogById.get(id);
-    if (!tab)
-      continue;
-    secondary.push(tab);
+  const afterStore = readLocation(tabId);
+  if (locationMatches(afterStore, location)) {
+    dlog(`[tabmove] requestHostTabLocation ok via=store tab=${tabId} loc=${JSON.stringify(location)}`);
+    return { ok: true, via: "store" };
   }
-  for (const id of draft.primaryIds) {
-    const tab = catalogById.get(id);
-    if (!tab)
-      continue;
-    primary.push(tab);
-  }
-  return { primary, secondary };
+  dwarn(`[tabmove] store.moveTabTo for "${tabId}" did not stick (loc=${JSON.stringify(afterStore)}).`);
+  return { ok: false, via: "none" };
 }
-function leftColumnIsSecondary(drawerSide) {
-  return drawerSide === "right";
+function requestHostTabToSecondary(tabId) {
+  const res = requestHostTabLocation(tabId, {
+    kind: "container",
+    containerId: CANVAS_SECONDARY_CONTAINER_ID
+  });
+  clearSpuriousActiveTabReset(tabId);
+  return res;
 }
-var _builtinIdSet = null;
-var init_configure_model = __esm(() => {
-  init_configure_catalog();
-  init_identity();
-  init_drawer_observer();
+function requestHostTabToMain(tabId) {
+  return requestHostTabLocation(tabId, { kind: "main-drawer" });
+}
+var CANVAS_SECONDARY_CONTAINER_ID = "canvas-secondary-drawer", _cachedMoveTabTo = null, _moveTabToCacheTs = 0, MOVE_TAB_TO_TTL_MS = 3000, _testMoveTabTo = null, _testHostActiveTabId, _testClearPendingActiveTabReset = null;
+var init_host_tab_location = __esm(() => {
+  init_fiber();
+  init_store();
+  init_log();
 });
 
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
-function m(n, l) {
-  for (var u in l)
-    n[u] = l[u];
-  return n;
-}
-function b(n) {
-  n && n.parentNode && n.parentNode.removeChild(n);
-}
-function k(l, u, t) {
-  var i, r, o, e = {};
-  for (o in u)
-    o == "key" ? i = u[o] : o == "ref" ? r = u[o] : e[o] = u[o];
-  if (arguments.length > 2 && (e.children = arguments.length > 3 ? n.call(arguments, 2) : t), typeof l == "function" && l.defaultProps != null)
-    for (o in l.defaultProps)
-      e[o] === undefined && (e[o] = l.defaultProps[o]);
-  return x(l, e, i, r, null);
-}
-function x(n, t, i, r, o) {
-  var e = { type: n, props: t, key: i, ref: r, __k: null, __: null, __b: 0, __e: null, __c: null, constructor: undefined, __v: o == null ? ++u : o, __i: -1, __u: 0 };
-  return o == null && l.vnode != null && l.vnode(e), e;
-}
-function S(n) {
-  return n.children;
-}
-function C(n, l) {
-  this.props = n, this.context = l;
-}
-function $(n, l) {
-  if (l == null)
-    return n.__ ? $(n.__, n.__i + 1) : null;
-  for (var u;l < n.__k.length; l++)
-    if ((u = n.__k[l]) != null && u.__e != null)
-      return u.__e;
-  return typeof n.type == "function" ? $(n) : null;
-}
-function I(n) {
-  if (n.__P && n.__d) {
-    var u = n.__v, t = u.__e, i = [], r = [], o = m({}, u);
-    o.__v = u.__v + 1, l.vnode && l.vnode(o), q(n.__P, o, u, n.__n, n.__P.namespaceURI, 32 & u.__u ? [t] : null, i, t == null ? $(u) : t, !!(32 & u.__u), r), o.__v = u.__v, o.__.__k[o.__i] = o, D(i, o, r), u.__e = u.__ = null, o.__e != t && P(o);
+// src/tabs/builtin-move.ts
+function findMainDrawerToggle(wrapper) {
+  for (const btn of Array.from(wrapper.querySelectorAll(":scope > button"))) {
+    if (/drawerTab/i.test(btn.className)) {
+      return btn;
+    }
   }
+  return null;
 }
-function P(n) {
-  if ((n = n.__) != null && n.__c != null)
-    return n.__e = n.__c.base = null, n.__k.some(function(l) {
-      if (l != null && l.__e != null)
-        return n.__e = n.__c.base = l.__e;
-    }), P(n);
-}
-function A(n) {
-  (!n.__d && (n.__d = true) && i.push(n) && !H.__r++ || r != l.debounceRendering) && ((r = l.debounceRendering) || o)(H);
-}
-function H() {
+function hostMainDrawerDomState() {
   try {
-    for (var n, l = 1;i.length; )
-      i.length > l && i.sort(e), n = i.shift(), l = i.length, I(n);
-  } finally {
-    i.length = H.__r = 0;
-  }
-}
-function L(n, l, u, t, i, r, o, e, f, c, a) {
-  var s, h, p, v, y, _, g, m = t && t.__k || w, b = l.length;
-  for (f = T(u, l, m, f, b), s = 0;s < b; s++)
-    (p = u.__k[s]) != null && (h = p.__i != -1 && m[p.__i] || d, p.__i = s, _ = q(n, p, h, i, r, o, e, f, c, a), v = p.__e, p.ref && h.ref != p.ref && (h.ref && J(h.ref, null, p), a.push(p.ref, p.__c || v, p)), y == null && v != null && (y = v), (g = !!(4 & p.__u)) || h.__k === p.__k ? (f = j(p, f, n, g), g && h.__e && (h.__e = null)) : typeof p.type == "function" && _ !== undefined ? f = _ : v && (f = v.nextSibling), p.__u &= -7);
-  return u.__e = y, f;
-}
-function T(n, l, u, t, i) {
-  var r, o, e, f, c, a = u.length, s = a, h = 0;
-  for (n.__k = new Array(i), r = 0;r < i; r++)
-    (o = l[r]) != null && typeof o != "boolean" && typeof o != "function" ? (typeof o == "string" || typeof o == "number" || typeof o == "bigint" || o.constructor == String ? o = n.__k[r] = x(null, o, null, null, null) : g(o) ? o = n.__k[r] = x(S, { children: o }, null, null, null) : o.constructor === undefined && o.__b > 0 ? o = n.__k[r] = x(o.type, o.props, o.key, o.ref ? o.ref : null, o.__v) : n.__k[r] = o, f = r + h, o.__ = n, o.__b = n.__b + 1, e = null, (c = o.__i = O(o, u, f, s)) != -1 && (s--, (e = u[c]) && (e.__u |= 2)), e == null || e.__v == null ? (c == -1 && (i > a ? h-- : i < a && h++), typeof o.type != "function" && (o.__u |= 4)) : c != f && (c == f - 1 ? h-- : c == f + 1 ? h++ : (c > f ? h-- : h++, o.__u |= 4))) : n.__k[r] = null;
-  if (s)
-    for (r = 0;r < a; r++)
-      (e = u[r]) != null && (2 & e.__u) == 0 && (e.__e == t && (t = $(e)), K(e, e));
-  return t;
-}
-function j(n, l, u, t) {
-  var i, r;
-  if (typeof n.type == "function") {
-    for (i = n.__k, r = 0;i && r < i.length; r++)
-      i[r] && (i[r].__ = n, l = j(i[r], l, u, t));
-    return l;
-  }
-  n.__e != l && (t && (l && n.type && !l.parentNode && (l = $(n)), u.insertBefore(n.__e, l || null)), l = n.__e);
-  do {
-    l = l && l.nextSibling;
-  } while (l != null && l.nodeType == 8);
-  return l;
-}
-function O(n, l, u, t) {
-  var i, r, o, { key: e, type: f } = n, c = l[u], a = c != null && (2 & c.__u) == 0;
-  if (c === null && e == null || a && e == c.key && f == c.type)
-    return u;
-  if (t > (a ? 1 : 0)) {
-    for (i = u - 1, r = u + 1;i >= 0 || r < l.length; )
-      if ((c = l[o = i >= 0 ? i-- : r++]) != null && (2 & c.__u) == 0 && e == c.key && f == c.type)
-        return o;
-  }
-  return -1;
-}
-function z(n, l, u) {
-  l[0] == "-" ? n.setProperty(l, u == null ? "" : u) : n[l] = u == null ? "" : typeof u != "number" || _.test(l) ? u : u + "px";
-}
-function N(n, l, u, t, i) {
-  var r, o;
-  n:
-    if (l == "style")
-      if (typeof u == "string")
-        n.style.cssText = u;
-      else {
-        if (typeof t == "string" && (n.style.cssText = t = ""), t)
-          for (l in t)
-            u && l in u || z(n.style, l, "");
-        if (u)
-          for (l in u)
-            t && u[l] == t[l] || z(n.style, l, u[l]);
-      }
-    else if (l[0] == "o" && l[1] == "n")
-      r = l != (l = l.replace(s, "$1")), o = l.toLowerCase(), l = o in n || l == "onFocusOut" || l == "onFocusIn" ? o.slice(2) : l.slice(2), n.l || (n.l = {}), n.l[l + r] = u, u ? t ? u[a] = t[a] : (u[a] = h, n.addEventListener(l, r ? v : p, r)) : n.removeEventListener(l, r ? v : p, r);
-    else {
-      if (i == "http://www.w3.org/2000/svg")
-        l = l.replace(/xlink(H|:h)/, "h").replace(/sName$/, "s");
-      else if (l != "width" && l != "height" && l != "href" && l != "list" && l != "form" && l != "tabIndex" && l != "download" && l != "rowSpan" && l != "colSpan" && l != "role" && l != "popover" && l in n)
-        try {
-          n[l] = u == null ? "" : u;
-          break n;
-        } catch (n) {}
-      typeof u == "function" || (u == null || u === false && l[4] != "-" ? n.removeAttribute(l) : n.setAttribute(l, l == "popover" && u == 1 ? "" : u));
-    }
-}
-function V(n) {
-  return function(u) {
-    if (this.l) {
-      var t = this.l[u.type + n];
-      if (u[c] == null)
-        u[c] = h++;
-      else if (u[c] < t[a])
-        return;
-      return t(l.event ? l.event(u) : u);
-    }
-  };
-}
-function q(n, u, t, i, r, o, e, f, c, a) {
-  var s, h, p, v, y, d, _, k, x, M, $, I, P, A, H, T = u.type;
-  if (u.constructor !== undefined)
+    const wrapper = getMainWrapper();
+    const open = wrapper ? /wrapperOpen/.test(wrapper.className) : false;
+    const sidebar = getMainSidebar();
+    const activeBtn = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const tab = activeBtn?.getAttribute("data-tab-id") ?? activeBtn?.getAttribute("title") ?? null;
+    return { open, tab };
+  } catch {
     return null;
-  128 & t.__u && (c = !!(32 & t.__u), o = [f = u.__e = t.__e]), (s = l.__b) && s(u);
-  n:
-    if (typeof T == "function")
-      try {
-        if (k = u.props, x = T.prototype && T.prototype.render, M = (s = T.contextType) && i[s.__c], $ = s ? M ? M.props.value : s.__ : i, t.__c ? _ = (h = u.__c = t.__c).__ = h.__E : (x ? u.__c = h = new T(k, $) : (u.__c = h = new C(k, $), h.constructor = T, h.render = Q), M && M.sub(h), h.state || (h.state = {}), h.__n = i, p = h.__d = true, h.__h = [], h._sb = []), x && h.__s == null && (h.__s = h.state), x && T.getDerivedStateFromProps != null && (h.__s == h.state && (h.__s = m({}, h.__s)), m(h.__s, T.getDerivedStateFromProps(k, h.__s))), v = h.props, y = h.state, h.__v = u, p)
-          x && T.getDerivedStateFromProps == null && h.componentWillMount != null && h.componentWillMount(), x && h.componentDidMount != null && h.__h.push(h.componentDidMount);
-        else {
-          if (x && T.getDerivedStateFromProps == null && k !== v && h.componentWillReceiveProps != null && h.componentWillReceiveProps(k, $), u.__v == t.__v || !h.__e && h.shouldComponentUpdate != null && h.shouldComponentUpdate(k, h.__s, $) === false) {
-            u.__v != t.__v && (h.props = k, h.state = h.__s, h.__d = false), u.__e = t.__e, u.__k = t.__k, u.__k.some(function(n) {
-              n && (n.__ = u);
-            }), w.push.apply(h.__h, h._sb), h._sb = [], h.__h.length && e.push(h);
-            break n;
-          }
-          h.componentWillUpdate != null && h.componentWillUpdate(k, h.__s, $), x && h.componentDidUpdate != null && h.__h.push(function() {
-            h.componentDidUpdate(v, y, d);
-          });
+  }
+}
+function tryDomPlaceRoot(tabId, root) {
+  const secondaryContent = _testSecondaryContent ?? getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  if (!secondaryContent) {
+    dwarn(`[tabmove] cannot DOM-place "${tabId}" — secondary .sidebar-ux-panel-content missing`);
+    return false;
+  }
+  try {
+    if (root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(root);
+    }
+  } catch (err) {
+    dwarn(`[tabmove] DOM appendChild failed for "${tabId}":`, err);
+    return false;
+  }
+  const inSecondary = root.parentElement === secondaryContent || typeof secondaryContent.contains === "function" && secondaryContent.contains(root);
+  if (!inSecondary) {
+    dwarn(`[tabmove] DOM place for "${tabId}" did not stick (parent not secondary content)`);
+    return false;
+  }
+  root.setAttribute("data-canvas-moved", tabId);
+  root.setAttribute(CANVAS_DOM_PLACED_ATTR, "");
+  markDomPlacedBuiltIn(tabId);
+  dlog(`[tabmove] place built-in "${tabId}" ok via=dom ` + `(bridge+store unavailable; registry root reparented into secondary)`);
+  return true;
+}
+async function moveBuiltInTabToSecondaryContainer(opts) {
+  const { tabId, deferActivation = false } = opts;
+  const bridge = getHostBridge();
+  const ui = bridge?.ui;
+  if (!ui?.getBuiltInTabRoot) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=BRIDGE_MISSING ` + `hasGetBuiltInTabRoot=${!!ui?.getBuiltInTabRoot} hasRequestTabLocation=${!!ui?.requestTabLocation}`);
+    return;
+  }
+  let root = opts.root;
+  if (!root) {
+    const prevMainOpen = isMainDrawerOpen();
+    const prevActiveTabId = hostMainDrawerDomState()?.tab ?? null;
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_PRE_ACTIVATE tab=${tabId} ` + `hostDrawer=${JSON.stringify(hostMainDrawerDomState())} prevMainOpen=${prevMainOpen}`);
+    await Promise.resolve().then(() => init_assignment());
+    await ensureBuiltInTabActiveInMain(tabId, {
+      isTabActiveInMainDrawer: () => {
+        const st = hostMainDrawerDomState();
+        return st != null && st.open && st.tab === tabId;
+      },
+      getBuiltInTabRoot: (id) => {
+        try {
+          return ui.getBuiltInTabRoot?.(id);
+        } catch {
+          return;
         }
-        if (h.context = $, h.props = k, h.__P = n, h.__e = false, I = l.__r, P = 0, x)
-          h.state = h.__s, h.__d = false, I && I(u), s = h.render(h.props, h.state, h.context), w.push.apply(h.__h, h._sb), h._sb = [];
-        else
-          do {
-            h.__d = false, I && I(u), s = h.render(h.props, h.state, h.context), h.state = h.__s;
-          } while (h.__d && ++P < 25);
-        h.state = h.__s, h.getChildContext != null && (i = m(m({}, i), h.getChildContext())), x && !p && h.getSnapshotBeforeUpdate != null && (d = h.getSnapshotBeforeUpdate(v, y)), A = s != null && s.type === S && s.key == null ? E(s.props.children) : s, f = L(n, g(A) ? A : [A], u, t, i, r, o, e, f, c, a), h.base = u.__e, u.__u &= -161, h.__h.length && e.push(h), _ && (h.__E = h.__ = null);
-      } catch (n) {
-        if (u.__v = null, c || o != null)
-          if (n.then) {
-            for (u.__u |= c ? 160 : 128;f && f.nodeType == 8 && f.nextSibling; )
-              f = f.nextSibling;
-            o[o.indexOf(f)] = null, u.__e = f;
-          } else {
-            for (H = o.length;H--; )
-              b(o[H]);
-            B(u);
-          }
-        else
-          u.__e = t.__e, u.__k = t.__k, n.then || B(u);
-        l.__e(n, u, t);
+      },
+      dlog
+    });
+    if (prevActiveTabId && prevActiveTabId !== tabId) {
+      try {
+        await Promise.resolve().then(() => init_buttons());
+        const prevBtn = findMainTabButton(prevActiveTabId);
+        if (prevBtn && prevBtn.isConnected && prevBtn.style.display !== "none") {
+          prevBtn.click();
+        } else {
+          dlog(`[tabmove] pre-activation restore skipped for "${prevActiveTabId}" (button ${prevBtn ? "hidden" : "missing"})`);
+        }
+      } catch (err) {
+        dlog(`[tabmove] pre-activation restore failed for "${prevActiveTabId}": ${String(err)}`);
       }
-    else
-      o == null && u.__v == t.__v ? (u.__k = t.__k, u.__e = t.__e) : f = u.__e = G(t.__e, u, t, i, r, o, e, c, a);
-  return (s = l.diffed) && s(u), 128 & u.__u ? undefined : f;
-}
-function B(n) {
-  n && (n.__c && (n.__c.__e = true), n.__k && n.__k.some(B));
-}
-function D(n, u, t) {
-  for (var i = 0;i < t.length; i++)
-    J(t[i], t[++i], t[++i]);
-  l.__c && l.__c(u, n), n.some(function(u) {
+    }
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_POST_ACTIVATE tab=${tabId} hostDrawer=${JSON.stringify(hostMainDrawerDomState())}`);
+    if (!prevMainOpen && isMainDrawerOpen()) {
+      const wrapper = getMainWrapper();
+      const toggle = wrapper ? findMainDrawerToggle(wrapper) : null;
+      toggle?.click();
+    }
     try {
-      n = u.__h, u.__h = [], n.some(function(n) {
-        n.call(u);
-      });
-    } catch (n) {
-      l.__e(n, u.__v);
+      root = ui.getBuiltInTabRoot(tabId);
+    } catch {
+      root = undefined;
+    }
+    if (!root) {
+      dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=EARLY_RETURN getBuiltInTabRootReturned=undefined`);
+      dwarn("[SecondaryDrawer] assignToSecondary: built-in tabId not registered (stale or renamed). Skipping restore.", { tabId });
+      return;
+    }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_LAZY_MOUNT tab=${tabId} branch=LAZY_MOUNT_OK getBuiltInTabRootReturned=element`);
+  } else {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_BRIDGE_ROOT tab=${tabId} branch=ROOT_READY via=opts-or-getBuiltInTabRoot`);
+  }
+  root.setAttribute("data-canvas-moved", tabId);
+  if (!deferActivation) {
+    root.setAttribute("data-canvas-active", "");
+  }
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} branch=REQUEST_TAB_LOCATION`);
+  const placed = requestHostTabToSecondary(tabId);
+  if (placed.ok) {
+    root.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+    clearDomPlacedBuiltIn(tabId);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} via=${placed.via} container=${CANVAS_SECONDARY_CONTAINER_ID}`);
+    const afterLoc = ui.getTabLocation?.(tabId) ?? {
+      kind: "container",
+      containerId: CANVAS_SECONDARY_CONTAINER_ID
+    };
+    watchForContainerPass3Reset(bridge, tabId, root, afterLoc);
+    return root;
+  }
+  if (tryDomPlaceRoot(tabId, root)) {
+    if (!deferActivation) {
+      root.setAttribute("data-canvas-active", "");
+    }
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_HOST_MOVE tab=${tabId} via=dom container=${CANVAS_SECONDARY_CONTAINER_ID}`);
+    return root;
+  }
+  root.removeAttribute("data-canvas-moved");
+  root.removeAttribute("data-canvas-active");
+  root.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+  clearDomPlacedBuiltIn(tabId);
+  dwarn(`[tabmove] built-in "${tabId}" not moved to secondary — host allowlist denied, ` + `store.moveTabTo unavailable/failed, and DOM reparent failed. Aborting assign.`);
+  return;
+}
+function watchForContainerPass3Reset(bridge, tabId, builtInRoot, afterLoc) {
+  queueMicrotask(() => {
+    try {
+      const microLoc = bridge.ui.getTabLocation?.(tabId) ?? null;
+      const microContainer = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+      const rootInContainer = typeof microContainer?.contains === "function" ? microContainer.contains(builtInRoot) : false;
+      if (afterLoc?.kind === "container" && microLoc?.kind === "main-drawer") {
+        dwarn(`[tabmove] PASS 3 RESET DETECTED: tabLocations["${tabId}"] was set to ${JSON.stringify(afterLoc)} but ContainerTabContent Pass 3 reset it to main-drawer because the target container is missing from Lumiverse's containers store. Fix: ensure the secondary drawer's panel content element is registered via bridge.containers.registerContainer BEFORE ` + `the move. (See secondary.tsx — the call exists but may be failing silently.)`);
+      }
+    } catch {}
+  });
+}
+var _testSecondaryContent = null;
+var init_builtin_move = __esm(() => {
+  init_log();
+  init_store();
+  init_secondary();
+  init_dom_placed_builtin();
+  init_host_tab_location();
+  init_dom_placed_builtin();
+});
+
+// src/sidebar/secondary-drawer.ts
+function isRestoringFromLayout() {
+  return _restoringFromLayout;
+}
+function setSuppressAutoActivation(value) {
+  _suppressAutoActivation = value;
+}
+function isSuppressAutoActivation() {
+  return _suppressAutoActivation;
+}
+function findStoreTab(tabIdOrTitle) {
+  findStoreData(true);
+  const tabs = getDrawerTabs();
+  return tabs.find((t) => t.id === tabIdOrTitle) || tabs.find((t) => t.title === tabIdOrTitle) || null;
+}
+function initSecondaryDrawer(_ctx) {
+  drawerObserver.onTabUnregistered((tabId) => {
+    if (getTabAssignments().has(tabId)) {
+      if (_restoringFromLayout)
+        return;
+      deleteTabAssignment(tabId);
+      removeSecondaryTabButton(tabId);
+      if (_activeTabId === tabId) {
+        _activeTabId = null;
+        _state2 = getTabAssignments().size > 0 ? "open" : "closed";
+        if (_state2 === "closed") {
+          closeSecondarySidebar();
+          updateDrawerTabVisibility();
+        }
+      }
     }
   });
 }
-function E(n) {
-  return typeof n != "object" || n == null || n.__b > 0 ? n : g(n) ? n.map(E) : n.constructor !== undefined ? null : m({}, n);
+async function finalizeAssignToSecondary(opts) {
+  const {
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment = true,
+    openOnClosed = true,
+    setActiveWhenReady = true,
+    showAndPersist = true,
+    facadeKey
+  } = opts;
+  addSecondaryTabButton({
+    id: resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    facadeKey
+  });
+  updateDrawerTabVisibility();
+  if (wireAssignment) {
+    setTabAssignment(resolvedId, "secondary");
+    hideMainTabButton(resolvedId);
+  }
+  dlog("[SecondaryDrawer] finalize open-gate", {
+    resolvedId,
+    openOnClosed,
+    state: _state2,
+    sidebarOpen: isSecondarySidebarOpen(),
+    mobile: isMobileViewport(),
+    restoring: isRestoringFromLayout(),
+    deferActivation,
+    setActiveWhenReady
+  });
+  if (openOnClosed && _state2 === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+    await openSecondarySidebar();
+    dlog("[SecondaryDrawer] finalize open-gate:BRANCH open+tab_active", { resolvedId });
+    if (!deferActivation) {
+      _state2 = "tab_active";
+      _activeTabId = resolvedId;
+      setActiveSecondaryTabId(resolvedId);
+    }
+  } else if (setActiveWhenReady && !isMobileViewport() && !deferActivation) {
+    dlog("[SecondaryDrawer] finalize open-gate:BRANCH tab_active-only", { resolvedId });
+    _activeTabId = resolvedId;
+    _state2 = "tab_active";
+    setActiveSecondaryTabId(resolvedId);
+  } else {
+    dlog("[SecondaryDrawer] finalize open-gate:BRANCH none", { resolvedId });
+  }
+  const headerTitle = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-title");
+  if (headerTitle && !deferActivation) {
+    headerTitle.textContent = title;
+  }
+  if (showAndPersist) {
+    if (!isMobileViewport() && !deferActivation) {
+      showSecondaryTab(resolvedId);
+    }
+  }
+  if (wireAssignment) {
+    try {
+      const m = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
+      reconcileMainTabListPin();
+    } catch {}
+  }
 }
-function G(u, t, i, r, o, e, f, c, a) {
-  var s, h, p, v, y, w, _, m = i.props || d, { props: k, type: x } = t;
-  if (x == "svg" ? o = "http://www.w3.org/2000/svg" : x == "math" ? o = "http://www.w3.org/1998/Math/MathML" : o || (o = "http://www.w3.org/1999/xhtml"), e != null) {
-    for (s = 0;s < e.length; s++)
-      if ((y = e[s]) && "setAttribute" in y == !!x && (x ? y.localName == x : y.nodeType == 3)) {
-        u = y, e[s] = null;
+function readHostMainDrawerState() {
+  const wrapper = getMainWrapper();
+  const sidebar = getMainSidebar();
+  const activeButton = sidebar?.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+  return {
+    open: wrapper ? /wrapperOpen/.test(wrapper.className) : isMainDrawerOpen(),
+    tabId: activeButton?.getAttribute("data-tab-id") || activeButton?.getAttribute("title") || null
+  };
+}
+function findMainDrawerToggle2() {
+  const wrapper = getMainWrapper();
+  if (!wrapper)
+    return null;
+  for (const button of Array.from(wrapper.querySelectorAll(":scope > button"))) {
+    if (/drawerTab/i.test(button.className)) {
+      return button;
+    }
+  }
+  return null;
+}
+function findMainExtensionButton(resolvedId, title) {
+  const sidebar = getMainSidebar();
+  return sidebar?.querySelector(`button[data-tab-id="${CSS.escape(resolvedId)}"]`) || sidebar?.querySelector(`button[title="${CSS.escape(title)}"]`);
+}
+function isExtensionButton(button, resolvedId, title) {
+  const id = button.getAttribute("data-tab-id") || "";
+  const buttonTitle = button.getAttribute("title") || "";
+  return id === resolvedId || id === title || buttonTitle === title;
+}
+function usableMainButton(button) {
+  return !!button && button.isConnected && button.style.display !== "none" && !isSettingsButton(button);
+}
+function findPrimaryRestoreButton(preferredId, resolvedId, title) {
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return null;
+  if (preferredId) {
+    const preferred = findMainTabButton(preferredId);
+    if (usableMainButton(preferred) && !isExtensionButton(preferred, resolvedId, title))
+      return preferred;
+  }
+  return Array.from(sidebar.querySelectorAll("button[data-tab-id], button[title]")).map((button) => button).find((button) => usableMainButton(button) && !isExtensionButton(button, resolvedId, title)) ?? null;
+}
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+async function mountExtensionRootFromMain(args) {
+  const { resolvedId, title, findRoot } = args;
+  if (isMobileViewport()) {
+    dlog("[SecondaryDrawer] extension mount activation skipped on mobile", { resolvedId });
+    return null;
+  }
+  const sidebar = getMainSidebar();
+  const targetButton = findMainExtensionButton(resolvedId, title);
+  if (!sidebar || !targetButton || !targetButton.isConnected) {
+    dwarn("[SecondaryDrawer] cannot mount extension root: main button unavailable", {
+      resolvedId,
+      title,
+      hasSidebar: !!sidebar,
+      hasButton: !!targetButton
+    });
+    return null;
+  }
+  const before = readHostMainDrawerState();
+  const beforeExtensionRoots = new Set(Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]")));
+  const capturedRoots = new Set;
+  const hostTab = getHostStoreTabs().find((item) => item.id === resolvedId || item.id === title || item.title === title);
+  const expectedTabId = hostTab?.id.startsWith("spindle:") ? hostTab.id : null;
+  const expectedExtensionId = hostTab?.extensionId && hostTab.extensionId !== "unknown" ? hostTab.extensionId : null;
+  const captureAddedRoots = (records) => {
+    for (const record of records) {
+      if (record.type === "attributes" && record.target instanceof HTMLElement && record.target.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") && !beforeExtensionRoots.has(record.target) && !capturedRoots.has(record.target)) {
+        capturedRoots.add(record.target);
+        dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
+          tabId: record.target.getAttribute("data-spindle-drawer-tab"),
+          extensionId: record.target.getAttribute("data-spindle-ext-id"),
+          connected: record.target.isConnected
+        }));
+      }
+      for (const node of Array.from(record.addedNodes)) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        const roots = [
+          ...node.matches("[data-spindle-drawer-tab][data-spindle-ext-id]") ? [node] : [],
+          ...Array.from(node.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))
+        ];
+        for (const root of roots) {
+          if (!beforeExtensionRoots.has(root) && root.tagName !== "BUTTON" && !capturedRoots.has(root)) {
+            capturedRoots.add(root);
+            dlog("[SecondaryDrawer] captured extension root during main activation", JSON.stringify({
+              tabId: root.getAttribute("data-spindle-drawer-tab"),
+              extensionId: root.getAttribute("data-spindle-ext-id"),
+              connected: root.isConnected
+            }));
+          }
+        }
+      }
+    }
+  };
+  const rootObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(captureAddedRoots);
+  rootObserver?.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-spindle-drawer-tab", "data-spindle-ext-id"]
+  });
+  const findNewlyMountedRoot = () => {
+    const candidates = new Set(capturedRoots);
+    for (const element of Array.from(document.querySelectorAll("[data-spindle-drawer-tab][data-spindle-ext-id]"))) {
+      if (!beforeExtensionRoots.has(element))
+        candidates.add(element);
+    }
+    const all = Array.from(candidates);
+    const matchingTab = expectedTabId ? all.filter((element) => element.getAttribute("data-spindle-drawer-tab") === expectedTabId) : [];
+    if (matchingTab.length === 1)
+      return matchingTab[0];
+    const matchingExtension = expectedExtensionId ? all.filter((element) => element.getAttribute("data-spindle-ext-id") === expectedExtensionId) : [];
+    if (matchingExtension.length === 1)
+      return matchingExtension[0];
+    return all.length === 1 ? all[0] : null;
+  };
+  let capturedRoot = null;
+  const findMountedRoot = () => {
+    capturedRoot = capturedRoot || findRoot() || findNewlyMountedRoot();
+    return capturedRoot;
+  };
+  const wasTargetHidden = targetButton.style.display === "none";
+  if (wasTargetHidden)
+    targetButton.style.display = "";
+  const targetWasSelected = before.tabId === resolvedId || before.tabId === title;
+  dlog("[SecondaryDrawer] mounting extension root via main activation", JSON.stringify({
+    resolvedId,
+    title,
+    before,
+    targetWasSelected,
+    wasTargetHidden,
+    expectedTabId,
+    expectedExtensionId,
+    storeEntry: hostTab ? { id: hostTab.id, extensionId: hostTab.extensionId, hasRoot: !!hostTab.root } : null
+  }));
+  let root = null;
+  try {
+    if (!before.open) {
+      const toggle = findMainDrawerToggle2();
+      if (toggle)
+        toggle.click();
+      else
+        targetButton.click();
+      await nextFrame();
+    }
+    const afterOpen = readHostMainDrawerState();
+    dlog("[SecondaryDrawer] host state after opening for extension activation", JSON.stringify(afterOpen));
+    if (afterOpen.tabId === resolvedId || afterOpen.tabId === title) {
+      const handoffButton = findPrimaryRestoreButton(resolvePrimaryActiveTabId(), resolvedId, title);
+      if (handoffButton) {
+        const handoffId = handoffButton.getAttribute("data-tab-id") || handoffButton.getAttribute("title") || "";
+        dlog("[SecondaryDrawer] deselecting rootless host extension before mount", JSON.stringify({
+          resolvedId,
+          handoffId,
+          wasTargetHidden
+        }));
+        handoffButton.click();
+        await nextFrame();
+      } else {
+        dwarn("[SecondaryDrawer] rootless selected extension has no main-tab handoff", {
+          resolvedId
+        });
+      }
+    }
+    const beforeSelect = readHostMainDrawerState();
+    if (beforeSelect.tabId !== resolvedId && beforeSelect.tabId !== title) {
+      const liveTargetButton = findMainExtensionButton(resolvedId, title);
+      dlog("[SecondaryDrawer] selecting host extension for mount", JSON.stringify({
+        resolvedId,
+        beforeSelect,
+        originalButtonConnected: targetButton.isConnected,
+        liveButtonFound: !!liveTargetButton,
+        sameButton: liveTargetButton === targetButton,
+        liveButtonDisplay: liveTargetButton?.style.display ?? null
+      }));
+      if (liveTargetButton) {
+        if (liveTargetButton.style.display === "none")
+          liveTargetButton.style.display = "";
+        liveTargetButton.click();
+      }
+    }
+    dlog("[SecondaryDrawer] host state after selecting extension", JSON.stringify(readHostMainDrawerState()));
+    const deadline = Date.now() + 2500;
+    let delayMs = 16;
+    while (Date.now() < deadline) {
+      root = findMountedRoot();
+      if (root && root.tagName !== "BUTTON")
+        break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      delayMs = Math.min(125, delayMs * 2);
+    }
+    root = root && root.tagName !== "BUTTON" ? root : null;
+    if (root)
+      await nextFrame();
+  } finally {
+    if (rootObserver) {
+      captureAddedRoots(rootObserver.takeRecords());
+      rootObserver.disconnect();
+    }
+    root = root || findRoot() || findNewlyMountedRoot();
+    if (before.tabId) {
+      const desiredId = before.tabId === resolvedId || before.tabId === title ? resolvePrimaryActiveTabId() : before.tabId;
+      const restoreButton = findPrimaryRestoreButton(desiredId, resolvedId, title);
+      if (restoreButton) {
+        const afterActivation = readHostMainDrawerState();
+        const restoreId = restoreButton.getAttribute("data-tab-id") || restoreButton.getAttribute("title") || "";
+        if (afterActivation.tabId !== restoreId)
+          restoreButton.click();
+      }
+    }
+    if (!before.open && isMainDrawerOpen()) {
+      findMainDrawerToggle2()?.click();
+    }
+    await nextFrame();
+    if (wasTargetHidden && !root)
+      targetButton.style.display = "none";
+  }
+  if (root && root.tagName !== "BUTTON") {
+    const currentRoot = findMountedRoot();
+    return currentRoot && currentRoot.tagName !== "BUTTON" ? currentRoot : root;
+  }
+  dlog("[SecondaryDrawer] extension root did not mount after main activation", JSON.stringify({
+    resolvedId,
+    title,
+    after: readHostMainDrawerState(),
+    expectedTabId,
+    expectedExtensionId,
+    candidates: Array.from(capturedRoots).map((element) => ({
+      tabId: element.getAttribute("data-spindle-drawer-tab"),
+      extensionId: element.getAttribute("data-spindle-ext-id"),
+      connected: element.isConnected
+    }))
+  }));
+  return null;
+}
+function scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey) {
+  showMainTabButton(resolvedId);
+  if (_restoringFromLayout) {
+    dlog("[SecondaryDrawer] retaining rootless extension assignment during layout restore", {
+      resolvedId
+    });
+    return;
+  }
+  setTimeout(() => {
+    Promise.resolve().then(() => (init_dispatch(), {})).then(({}) => {
+      if (!getModel()) {
+        deleteTabAssignment(resolvedId);
+        return;
+      }
+      if (getTabSidebar(facadeKey) !== "secondary")
+        return;
+      return dispatch({
+        t: "move",
+        key: facadeKey,
+        to: "primary",
+        index: -1,
+        activateDest: false
+      });
+    }).catch((err) => {
+      dwarn("[SecondaryDrawer] failed extension placement rollback threw:", err);
+    });
+  }, 0);
+}
+async function assignExtensionTabToSecondary(ctx) {
+  const { tabId, tab, resolvedId, facadeKey, iconSvg, shortName, deferActivation } = ctx;
+  const assignmentSideAtStart = getTabSidebar(facadeKey);
+  setTabAssignment(resolvedId, "secondary");
+  if (_state2 === "closed" && !isSecondarySidebarOpen() && !isMobileViewport() && !isRestoringFromLayout()) {
+    await openSecondarySidebar();
+    _state2 = "open";
+  }
+  const secondaryContent = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content") ?? null;
+  const bareId = resolvedId.includes(":") ? resolvedId.replace(/:\d+$/, "").split(":").pop() ?? resolvedId : resolvedId;
+  const existingRoot = secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(resolvedId)}"]`) ?? secondaryContent?.querySelector(`[data-canvas-moved="${CSS.escape(bareId)}"]`);
+  if (existingRoot) {
+    const storeTabForButton = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+    hideMainTabButton(resolvedId);
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title: tab.title || storeTabForButton?.title || resolvedId,
+      root: existingRoot,
+      iconSvg: iconSvg || tab.button?.querySelector("svg")?.outerHTML || storeTabForButton?.iconSvg,
+      shortName: shortName || readMainButtonShortName(tab.button) || storeTabForButton?.shortName,
+      deferActivation,
+      wireAssignment: false,
+      openOnClosed: false,
+      facadeKey,
+      setActiveWhenReady: ctx.setActiveWhenReady ?? true
+    });
+    return;
+  }
+  const secondaryWrapper = getSecondaryWrapper();
+  const secondaryContentMain = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+  if (!secondaryContentMain) {
+    dwarn("[SecondaryDrawer] cannot place extension root: secondary content missing", {
+      resolvedId,
+      title: tab.title
+    });
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  const findHostStoreTab = () => {
+    const hostStoreTabs = getHostStoreTabs();
+    return hostStoreTabs.find((item) => item.id === resolvedId) || hostStoreTabs.find((item) => item.id === tabId) || hostStoreTabs.find((item) => item.title === tab.title) || null;
+  };
+  const findRealRoot = () => {
+    const fiberTab = findHostStoreTab();
+    const storeRoot = fiberTab?.root && fiberTab.root !== tab.button ? fiberTab.root : null;
+    if (storeRoot?.isConnected && storeRoot.tagName !== "BUTTON")
+      return storeRoot;
+    const stampedIds = [fiberTab?.id, resolvedId, tabId].filter((id) => !!id);
+    for (const id of stampedIds) {
+      const stampedRoot = document.querySelector(`[data-spindle-drawer-tab="${CSS.escape(id)}"]`);
+      if (stampedRoot?.isConnected && stampedRoot.tagName !== "BUTTON")
+        return stampedRoot;
+    }
+    return null;
+  };
+  let realRoot = findRealRoot();
+  if (!realRoot) {
+    try {
+      realRoot = await mountExtensionRootFromMain({
+        resolvedId,
+        title: tab.title || storeTab?.title || resolvedId,
+        findRoot: findRealRoot
+      });
+    } catch (err) {
+      dwarn("[SecondaryDrawer] extension main activation failed:", err);
+      scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+      return;
+    }
+  }
+  const currentMainButton = findMainExtensionButton(resolvedId, tab.title || storeTab?.title || resolvedId);
+  const currentSide = getTabSidebar(facadeKey);
+  const movedBackDuringMount = assignmentSideAtStart === "secondary" && currentSide !== "secondary";
+  if (movedBackDuringMount || !currentMainButton?.isConnected) {
+    showMainTabButton(resolvedId);
+    dlog("[SecondaryDrawer] extension mount placement cancelled after host activation", JSON.stringify({
+      resolvedId,
+      initialSide: assignmentSideAtStart,
+      currentSide,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab()
+    }));
+    return;
+  }
+  if (!realRoot || realRoot.tagName === "BUTTON") {
+    dwarn("[SecondaryDrawer] extension root unavailable after main activation; placement did not complete", JSON.stringify({
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId,
+      mainButtonFound: !!currentMainButton,
+      hostStoreEntryFound: !!findHostStoreTab()
+    }));
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  const root = realRoot;
+  root.setAttribute("data-canvas-moved", resolvedId);
+  if (root.parentElement !== secondaryContentMain) {
+    secondaryContentMain.appendChild(root);
+  }
+  await nextFrame();
+  if (!secondaryContentMain.contains(root)) {
+    dlog("[SecondaryDrawer] host reclaimed extension root during activation restore; retrying DOM placement", {
+      resolvedId,
+      parentTag: root.parentElement?.tagName || null
+    });
+    secondaryContentMain.appendChild(root);
+    await nextFrame();
+  }
+  if (!secondaryContentMain.contains(root)) {
+    root.removeAttribute("data-canvas-moved");
+    root.removeAttribute("data-canvas-active");
+    dwarn("[SecondaryDrawer] host reclaimed extension root after DOM placement; placement did not complete", {
+      resolvedId,
+      title: tab.title || storeTab?.title || resolvedId
+    });
+    scheduleFailedExtensionPlacementRollback(resolvedId, facadeKey);
+    return;
+  }
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContentMain.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root) {
+          child.setAttribute("data-canvas-active", "");
+        } else {
+          child.removeAttribute("data-canvas-active");
+        }
+      }
+    }
+  }
+  setTabAssignment(resolvedId, "secondary");
+  hideMainTabButton(resolvedId);
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title: tab.title || storeTab?.title || resolvedId,
+    root,
+    iconSvg: tab.button?.querySelector("svg")?.outerHTML || storeTab?.iconSvg,
+    shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
+    deferActivation,
+    wireAssignment: false,
+    openOnClosed: false,
+    facadeKey,
+    setActiveWhenReady: ctx.setActiveWhenReady ?? true
+  });
+  return;
+}
+async function assignBuiltInTabToSecondary(ctx) {
+  const { tabId, tab, resolvedId, facadeKey, deferActivation } = ctx;
+  const secondaryWrapper = getSecondaryWrapper();
+  const secondaryContent = secondaryWrapper?.querySelector(".sidebar-ux-panel-content");
+  const storeTab = findStoreTab(resolvedId) || findStoreTab(tabId) || findStoreTab(tab.title);
+  const wSpindle = getHostBridge();
+  const wSpindleUi = wSpindle?.ui;
+  dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_ENTER tab=${resolvedId} hasStoreTab=${!!storeTab} hasSecondaryContent=${!!secondaryContent}`);
+  let alreadyInSecondary = null;
+  if (secondaryContent) {
+    const idsToTry = resolvedId !== tabId ? [resolvedId, tabId] : [resolvedId];
+    for (const id of idsToTry) {
+      alreadyInSecondary = secondaryContent.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]`);
+      if (alreadyInSecondary)
+        break;
+    }
+  }
+  if (alreadyInSecondary) {
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_EARLY_RETURN tab=${resolvedId} branch=ALREADY_IN_SECONDARY`);
+    const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
+    await finalizeAssignToSecondary({
+      resolvedId,
+      title,
+      root: alreadyInSecondary,
+      iconSvg: tab.button?.querySelector("svg")?.outerHTML || alreadyInSecondary.querySelector("svg")?.outerHTML,
+      shortName: readMainButtonShortName(tab.button) || storeTab?.shortName,
+      deferActivation,
+      wireAssignment: true,
+      openOnClosed: ctx.openOnClosed ?? true,
+      facadeKey,
+      setActiveWhenReady: ctx.setActiveWhenReady ?? false
+    });
+    return;
+  }
+  if (!secondaryContent) {
+    dwarn("[SecondaryDrawer] assignToSecondary: secondary content missing; cannot place built-in.", {
+      tabId,
+      resolvedId
+    });
+    return;
+  }
+  let root;
+  let placedViaHost = false;
+  if (wSpindleUi?.getBuiltInTabRoot) {
+    await Promise.resolve().then(() => init_builtin_move());
+    root = await moveBuiltInTabToSecondaryContainer({
+      tabId,
+      deferActivation
+    });
+    placedViaHost = !!root;
+  }
+  if (!root && storeTab?.root && storeTab.extensionId) {
+    root = storeTab.root;
+    if (root.parentElement !== secondaryContent) {
+      secondaryContent.appendChild(root);
+    }
+    root.setAttribute("data-canvas-moved", resolvedId);
+    dlog(`[canvas-debug] ASSIGN_SEC_BUILTIN_STORE_REPARENT tab=${resolvedId} branch=STORE_ROOT`);
+  }
+  if (!root) {
+    dwarn("[SecondaryDrawer] assignToSecondary: built-in tab not placed (host location write failed, DOM reparent failed, or root missing).", { tabId, resolvedId, hasGetRoot: !!wSpindleUi?.getBuiltInTabRoot });
+    return;
+  }
+  if (!deferActivation) {
+    for (const child of Array.from(secondaryContent.children)) {
+      if (child instanceof HTMLElement) {
+        if (child === root || child.getAttribute("data-canvas-moved") === resolvedId) {
+          child.setAttribute("data-canvas-active", "");
+        } else if (child.hasAttribute("data-canvas-moved")) {
+          child.removeAttribute("data-canvas-active");
+        }
+      }
+    }
+  }
+  const title = wSpindleUi?.getBuiltInTabTitle?.(tabId) || tab.title || storeTab?.title || resolvedId;
+  const iconSvg = tab.button?.querySelector("svg")?.outerHTML || root.querySelector("svg")?.outerHTML;
+  const shortName = readMainButtonShortName(tab.button) || storeTab?.shortName;
+  if (placedViaHost) {
+    try {
+      const m = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
+      if (isMainMirrorActive())
+        ensureHostContentParkedPublic();
+    } catch {}
+  }
+  await finalizeAssignToSecondary({
+    resolvedId,
+    title,
+    root,
+    iconSvg,
+    shortName,
+    deferActivation,
+    wireAssignment: true,
+    openOnClosed: ctx.openOnClosed ?? true,
+    facadeKey,
+    setActiveWhenReady: ctx.setActiveWhenReady ?? false
+  });
+}
+async function assignToSecondary(tabId, opts) {
+  const deferActivation = isRestoringFromLayout() || isSuppressAutoActivation();
+  if (!ensureSecondaryShellMounted({ initialOpen: false })) {
+    dwarn(`[SecondaryDrawer] assignToSecondary: secondary shell unavailable; skip "${tabId}"`);
+    return;
+  }
+  let tab = drawerObserver.getTab(tabId);
+  let iconSvg;
+  let shortName;
+  if (!tab) {
+    const storeTab = findStoreTab(tabId);
+    if (!storeTab) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} not found in DrawerObserver or store`);
+      return;
+    }
+    const button = findMainTabButton(storeTab.title);
+    if (!button) {
+      dwarn(`[SecondaryDrawer] assignToSecondary: tab ${tabId} found in store but no main sidebar button (title="${storeTab.title}")`);
+      return;
+    }
+    tab = {
+      tabId: storeTab.id,
+      button,
+      extensionId: storeTab.extensionId,
+      title: storeTab.title,
+      key: keyForTabShape(storeTab.id, storeTab.extensionId, storeTab.title),
+      titles: new Set([storeTab.title])
+    };
+    iconSvg = storeTab.iconSvg;
+    shortName = storeTab.shortName;
+  } else {
+    iconSvg = tab.button.querySelector("svg")?.outerHTML;
+  }
+  const resolvedId = tab.tabId;
+  dlog(`[SecondaryDrawer] assigning ${resolvedId} to secondary (ext=${tab.extensionId})`);
+  const facadeKey = opts?.facadeKey ?? tab.key;
+  let isExtensionTab = isExtensionKey(facadeKey) || !!tab.extensionId && tab.extensionId !== "unknown";
+  if (!isExtensionTab || !tab.extensionId || tab.extensionId === "unknown" || tab.tabId === tab.title) {
+    if (!tab)
+      return;
+    const t = tab;
+    const hostStoreTabs = getHostStoreTabs();
+    const storeTab = hostStoreTabs.find((x) => x.id === tabId) || hostStoreTabs.find((x) => x.id === t.tabId) || hostStoreTabs.find((x) => x.title === t.title);
+    if (storeTab?.extensionId && storeTab.extensionId !== "unknown") {
+      dlog("[SecondaryDrawer] assignToSecondary: observer entry stale — upgraded from store", {
+        fromId: t.tabId,
+        toId: storeTab.id,
+        extFrom: t.extensionId,
+        extTo: storeTab.extensionId
+      });
+      tab = {
+        ...tab,
+        tabId: storeTab.id,
+        extensionId: storeTab.extensionId,
+        title: storeTab.title,
+        titles: new Set([storeTab.title])
+      };
+      iconSvg = iconSvg ?? storeTab.iconSvg;
+      shortName = shortName ?? storeTab.shortName;
+      isExtensionTab = true;
+    }
+  }
+  const ctx = {
+    tabId,
+    tab,
+    resolvedId: tab.tabId,
+    facadeKey,
+    iconSvg,
+    shortName,
+    deferActivation,
+    openOnClosed: opts?.openOnClosed,
+    setActiveWhenReady: opts?.setActiveWhenReady
+  };
+  if (isExtensionTab) {
+    await assignExtensionTabToSecondary(ctx);
+  } else {
+    await assignBuiltInTabToSecondary(ctx);
+  }
+}
+async function unassignFromSecondary(tabId) {
+  dlog(`[SecondaryDrawer] unassigning ${tabId} from secondary`);
+  let resolvedShowId = tabId;
+  let resolvedExtId;
+  findStoreData(true);
+  const _tabs = getDrawerTabs();
+  const _bySegment = _tabs.find((t) => t.id.includes(`:tab:${tabId}:`) || t.id === tabId);
+  if (_bySegment) {
+    resolvedShowId = _bySegment.id;
+    resolvedExtId = _bySegment.extensionId;
+  } else {
+    const storeTab = findStoreTab(tabId);
+    if (storeTab) {
+      resolvedShowId = storeTab.id;
+      resolvedExtId = storeTab.extensionId;
+    } else {
+      dwarn(`[SecondaryDrawer] unassign: could not resolve bare id "${tabId}" to composite id; known tabs=`, _tabs.map((t) => ({ id: t.id, title: t.title })));
+    }
+  }
+  const bridge = getHostBridge();
+  const bridgeUi = bridge?.ui;
+  let bridgeRoot;
+  try {
+    bridgeRoot = bridgeUi?.getBuiltInTabRoot?.(tabId) || (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabRoot?.(resolvedShowId) : undefined);
+  } catch {
+    bridgeRoot = undefined;
+  }
+  const isBuiltIn = bridgeRoot != null || !!(bridgeUi?.getBuiltInTabTitle?.(tabId) || (resolvedShowId !== tabId ? bridgeUi?.getBuiltInTabTitle?.(resolvedShowId) : undefined));
+  const _secondaryContentForUnassign = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+  let _movedRoot = null;
+  if (_secondaryContentForUnassign) {
+    const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
+    for (const id of idsToTry) {
+      _movedRoot = _secondaryContentForUnassign.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
+      if (_movedRoot)
+        break;
+    }
+  }
+  if (isBuiltIn) {
+    const hostTabId = bridgeRoot?.getAttribute?.("data-tab-id") || tabId;
+    let hostResetOk = false;
+    try {
+      await Promise.resolve().then(() => init_host_tab_location());
+      const result = requestHostTabToMain(hostTabId);
+      hostResetOk = result.ok;
+      if (!result.ok) {
+        dwarn(`[SecondaryDrawer] unassign: could not reset tabLocations for ${hostTabId} (via=${result.via})`);
+      }
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassign: requestHostTabToMain failed for ${hostTabId}:`, err);
+    }
+    await Promise.resolve().then(() => init_builtin_move());
+    const domPlaced = isDomPlacedBuiltIn(hostTabId) || isDomPlacedBuiltIn(tabId) || !!_movedRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR) || !!bridgeRoot?.hasAttribute?.(CANVAS_DOM_PLACED_ATTR);
+    if (domPlaced || !hostResetOk && _movedRoot) {
+      restoreDomPlacedBuiltInToMain(hostTabId, _movedRoot || bridgeRoot);
+      if (tabId !== hostTabId) {
+        await Promise.resolve().then(() => init_builtin_move());
+        clearDomPlacedBuiltIn(tabId);
+      }
+    } else {
+      const clearAttrs = (el) => {
+        if (!el)
+          return;
+        el.removeAttribute("data-canvas-moved");
+        el.removeAttribute("data-canvas-active");
+        el.removeAttribute(CANVAS_DOM_PLACED_ATTR);
+      };
+      clearAttrs(_movedRoot);
+      clearAttrs(bridgeRoot);
+      if (!_movedRoot && typeof document !== "undefined") {
+        const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
+        for (const id of idsToTry) {
+          const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
+          if (residual) {
+            clearAttrs(residual);
+            break;
+          }
+        }
+      }
+    }
+  } else if (_movedRoot) {
+    let hostResetOk = false;
+    try {
+      await Promise.resolve().then(() => init_host_tab_location());
+      const result = requestHostTabToMain(resolvedShowId);
+      hostResetOk = result.ok;
+      dlog("[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain", {
+        tabId: resolvedShowId,
+        ok: result.ok,
+        via: result.via
+      });
+    } catch (err) {
+      dwarn(`[SecondaryDrawer] unassignExtensionTab: requestHostTabToMain failed for ${resolvedShowId}:`, err);
+    }
+    if (!hostResetOk) {
+      if (_movedRoot.parentElement) {
+        try {
+          _movedRoot.parentElement.removeChild(_movedRoot);
+        } catch {}
+      }
+    }
+    _movedRoot.removeAttribute("data-canvas-moved");
+    _movedRoot.removeAttribute("data-canvas-active");
+    _movedRoot.style?.removeProperty?.("position");
+    _movedRoot.style?.removeProperty?.("inset");
+    _movedRoot.style?.removeProperty?.("display");
+  } else if (typeof document !== "undefined") {
+    const idsToTry = resolvedShowId !== tabId ? [resolvedShowId, tabId] : [resolvedShowId];
+    for (const id of idsToTry) {
+      const residual = document.querySelector(`[data-canvas-moved="${CSS.escape(id)}"]:not([data-canvas-secondary])`);
+      if (residual) {
+        residual.removeAttribute("data-canvas-moved");
+        residual.removeAttribute("data-canvas-active");
         break;
       }
-  }
-  if (u == null) {
-    if (x == null)
-      return document.createTextNode(k);
-    u = document.createElementNS(o, x, k.is && k), c && (l.__m && l.__m(t, e), c = false), e = null;
-  }
-  if (x == null)
-    m === k || c && u.data == k || (u.data = k);
-  else {
-    if (e = x == "textarea" && k.defaultValue != null ? null : e && n.call(u.childNodes), !c && e != null)
-      for (m = {}, s = 0;s < u.attributes.length; s++)
-        m[(y = u.attributes[s]).name] = y.value;
-    for (s in m)
-      y = m[s], s == "dangerouslySetInnerHTML" ? p = y : s == "children" || (s in k) || s == "value" && ("defaultValue" in k) || s == "checked" && ("defaultChecked" in k) || N(u, s, null, y, o);
-    for (s in k)
-      y = k[s], s == "children" ? v = y : s == "dangerouslySetInnerHTML" ? h = y : s == "value" ? w = y : s == "checked" ? _ = y : c && typeof y != "function" || m[s] === y || N(u, s, y, m[s], o);
-    if (h)
-      c || p && (h.__html == p.__html || h.__html == u.innerHTML) || (u.innerHTML = h.__html), t.__k = [];
-    else if (p && (u.innerHTML = ""), L(t.type == "template" ? u.content : u, g(v) ? v : [v], t, i, r, x == "foreignObject" ? "http://www.w3.org/1999/xhtml" : o, e, f, e ? e[0] : i.__k && $(i, 0), c, a), e != null)
-      for (s = e.length;s--; )
-        b(e[s]);
-    c && x != "textarea" || (s = "value", x == "progress" && w == null ? u.removeAttribute("value") : w != null && (w !== u[s] || x == "progress" && !w || x == "option" && w != m[s]) && N(u, s, w, m[s], o), s = "checked", _ != null && _ != u[s] && N(u, s, _, m[s], o));
-  }
-  return u;
-}
-function J(n, u, t) {
-  try {
-    if (typeof n == "function") {
-      var i = typeof n.__u == "function";
-      i && n.__u(), i && u == null || (n.__u = n(u));
-    } else
-      n.current = u;
-  } catch (n) {
-    l.__e(n, t);
-  }
-}
-function K(n, u, t) {
-  var i, r;
-  if (l.unmount && l.unmount(n), (i = n.ref) && (i.current && i.current != n.__e || J(i, null, u)), (i = n.__c) != null) {
-    if (i.componentWillUnmount)
-      try {
-        i.componentWillUnmount();
-      } catch (n) {
-        l.__e(n, u);
-      }
-    i.base = i.__P = null;
-  }
-  if (i = n.__k)
-    for (r = 0;r < i.length; r++)
-      i[r] && K(i[r], u, t || typeof n.type != "function");
-  t || b(n.__e), n.__c = n.__ = n.__e = undefined;
-}
-function Q(n, l, u) {
-  return this.constructor(n, u);
-}
-function R(u, t, i) {
-  var r, o, e, f;
-  t == document && (t = document.documentElement), l.__ && l.__(u, t), o = (r = typeof i == "function") ? null : i && i.__k || t.__k, e = [], f = [], q(t, u = (!r && i || t).__k = k(S, null, [u]), o || d, d, t.namespaceURI, !r && i ? [i] : o ? null : t.firstChild ? n.call(t.childNodes) : null, e, !r && i ? i : o ? o.__e : t.firstChild, r, f), D(e, u, f);
-}
-var n, l, u, t, i, r, o, e, f, c, a, s, h, p, v, y, d, w, _, g;
-var init_preact_module = __esm(() => {
-  d = {};
-  w = [];
-  _ = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
-  g = Array.isArray;
-  n = w.slice, l = { __e: function(n, l, u, t) {
-    for (var i, r, o;l = l.__; )
-      if ((i = l.__c) && !i.__)
-        try {
-          if ((r = i.constructor) && r.getDerivedStateFromError != null && (i.setState(r.getDerivedStateFromError(n)), o = i.__d), i.componentDidCatch != null && (i.componentDidCatch(n, t || {}), o = i.__d), o)
-            return i.__E = i;
-        } catch (l) {
-          n = l;
-        }
-    throw n;
-  } }, u = 0, t = function(n) {
-    return n != null && n.constructor === undefined;
-  }, C.prototype.setState = function(n, l) {
-    var u;
-    u = this.__s != null && this.__s != this.state ? this.__s : this.__s = m({}, this.state), typeof n == "function" && (n = n(m({}, u), this.props)), n && m(u, n), n != null && this.__v && (l && this._sb.push(l), A(this));
-  }, C.prototype.forceUpdate = function(n) {
-    this.__v && (this.__e = true, n && this.__h.push(n), A(this));
-  }, C.prototype.render = S, i = [], o = typeof Promise == "function" ? Promise.prototype.then.bind(Promise.resolve()) : setTimeout, e = function(n, l) {
-    return n.__v.__b - l.__v.__b;
-  }, H.__r = 0, f = Math.random().toString(8), c = "__d" + f, a = "__a" + f, s = /(PointerCapture)$|Capture$/i, h = 0, p = V(false), v = V(true), y = 0;
-});
-
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
-function p2(n, t) {
-  c2.__h && c2.__h(r2, n, o2 || t), o2 = 0;
-  var u = r2.__H || (r2.__H = { __: [], __h: [] });
-  return n >= u.__.length && u.__.push({}), u.__[n];
-}
-function d2(n) {
-  return o2 = 1, h2(D2, n);
-}
-function h2(n, u, i) {
-  var o = p2(t2++, 2);
-  if (o.t = n, !o.__c && (o.__ = [i ? i(u) : D2(undefined, u), function(n) {
-    var t = o.__N ? o.__N[0] : o.__[0], r = o.t(t, n);
-    t !== r && (o.__N = [r, o.__[1]], o.__c.setState({}));
-  }], o.__c = r2, !r2.__f)) {
-    var f = function(n, t, r) {
-      if (!o.__c.__H)
-        return true;
-      var u = o.__c.__H.__.filter(function(n) {
-        return n.__c;
-      });
-      if (u.every(function(n) {
-        return !n.__N;
-      }))
-        return !c || c.call(this, n, t, r);
-      var i = o.__c.props !== n;
-      return u.some(function(n) {
-        if (n.__N) {
-          var t = n.__[0];
-          n.__ = n.__N, n.__N = undefined, t !== n.__[0] && (i = true);
-        }
-      }), c && c.call(this, n, t, r) || i;
-    };
-    r2.__f = true;
-    var c = r2.shouldComponentUpdate, e = r2.componentWillUpdate;
-    r2.componentWillUpdate = function(n, t, r) {
-      if (this.__e) {
-        var u = c;
-        c = undefined, f(n, t, r), c = u;
-      }
-      e && e.call(this, n, t, r);
-    }, r2.shouldComponentUpdate = f;
-  }
-  return o.__N || o.__;
-}
-function y2(n, u) {
-  var i = p2(t2++, 3);
-  !c2.__s && C2(i.__H, u) && (i.__ = n, i.u = u, r2.__H.__h.push(i));
-}
-function A2(n) {
-  return o2 = 5, T2(function() {
-    return { current: n };
-  }, []);
-}
-function T2(n, r) {
-  var u = p2(t2++, 7);
-  return C2(u.__H, r) && (u.__ = n(), u.__H = r, u.__h = n), u.__;
-}
-function q2(n, t) {
-  return o2 = 8, T2(function() {
-    return n;
-  }, t);
-}
-function j2() {
-  for (var n;n = f2.shift(); ) {
-    var t = n.__H;
-    if (n.__P && t)
-      try {
-        t.__h.some(z2), t.__h.some(B2), t.__h = [];
-      } catch (r) {
-        t.__h = [], c2.__e(r, n.__v);
-      }
-  }
-}
-function w2(n) {
-  var t, r = function() {
-    clearTimeout(u), k2 && cancelAnimationFrame(t), setTimeout(n);
-  }, u = setTimeout(r, 35);
-  k2 && (t = requestAnimationFrame(r));
-}
-function z2(n) {
-  var t = r2, u = n.__c;
-  typeof u == "function" && (n.__c = undefined, u()), r2 = t;
-}
-function B2(n) {
-  var t = r2;
-  n.__c = n.__(), r2 = t;
-}
-function C2(n, t) {
-  return !n || n.length !== t.length || t.some(function(t, r) {
-    return t !== n[r];
-  });
-}
-function D2(n, t) {
-  return typeof t == "function" ? t(n) : t;
-}
-var t2, r2, u2, i2, o2 = 0, f2, c2, e2, a2, v2, l2, m2, s2, k2;
-var init_hooks_module = __esm(() => {
-  init_preact_module();
-  f2 = [];
-  c2 = l;
-  e2 = c2.__b;
-  a2 = c2.__r;
-  v2 = c2.diffed;
-  l2 = c2.__c;
-  m2 = c2.unmount;
-  s2 = c2.__;
-  c2.__b = function(n) {
-    r2 = null, e2 && e2(n);
-  }, c2.__ = function(n, t) {
-    n && t.__k && t.__k.__m && (n.__m = t.__k.__m), s2 && s2(n, t);
-  }, c2.__r = function(n) {
-    a2 && a2(n), t2 = 0;
-    var i = (r2 = n.__c).__H;
-    i && (u2 === r2 ? (i.__h = [], r2.__h = [], i.__.some(function(n) {
-      n.__N && (n.__ = n.__N), n.u = n.__N = undefined;
-    })) : (i.__h.some(z2), i.__h.some(B2), i.__h = [], t2 = 0)), u2 = r2;
-  }, c2.diffed = function(n) {
-    v2 && v2(n);
-    var t = n.__c;
-    t && t.__H && (t.__H.__h.length && (f2.push(t) !== 1 && i2 === c2.requestAnimationFrame || ((i2 = c2.requestAnimationFrame) || w2)(j2)), t.__H.__.some(function(n) {
-      n.u && (n.__H = n.u), n.u = undefined;
-    })), u2 = r2 = null;
-  }, c2.__c = function(n, t) {
-    t.some(function(n) {
-      try {
-        n.__h.some(z2), n.__h = n.__h.filter(function(n) {
-          return !n.__ || B2(n);
-        });
-      } catch (r) {
-        t.some(function(n) {
-          n.__h && (n.__h = []);
-        }), t = [], c2.__e(r, n.__v);
-      }
-    }), l2 && l2(n, t);
-  }, c2.unmount = function(n) {
-    m2 && m2(n);
-    var t, r = n.__c;
-    r && r.__H && (r.__H.__.some(function(n) {
-      try {
-        z2(n);
-      } catch (n) {
-        t = n;
-      }
-    }), r.__H = undefined, t && c2.__e(t, r.__v));
-  };
-  k2 = typeof requestAnimationFrame == "function";
-});
-
-// src/tabs/canvas-hidden.ts
-function normalizeHiddenIds(ids) {
-  if (!Array.isArray(ids))
-    return [];
-  const out = [];
-  const seen = new Set;
-  for (const id of ids) {
-    if (typeof id !== "string" || !id.length)
-      continue;
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
-function getCanvasHiddenTabIds() {
-  return _canvasHiddenTabIds.slice();
-}
-function setCanvasHiddenTabIds(ids) {
-  _canvasHiddenTabIds = normalizeHiddenIds(ids);
-}
-function hydrateCanvasHiddenFromLayout(layout) {
-  if (!layout || typeof layout !== "object")
-    return;
-  const raw = layout.hiddenTabIds;
-  if (!Array.isArray(raw))
-    return;
-  _canvasHiddenTabIds = normalizeHiddenIds(raw);
-}
-function mergeHiddenTabIdLists(hostIds, canvasIds) {
-  const out = [];
-  const seen = new Set;
-  for (const id of [...normalizeHiddenIds(hostIds), ...normalizeHiddenIds(canvasIds)]) {
-    if (seen.has(id))
-      continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
-function resetCanvasHiddenTabIds() {
-  _canvasHiddenTabIds = [];
-}
-var _canvasHiddenTabIds;
-var init_canvas_hidden = __esm(() => {
-  _canvasHiddenTabIds = [];
-});
-
-// src/tabs/hidden-tabs.ts
-function collectLiveTabIdsForHiddenHeal() {
-  const ids = new Set;
-  for (const id of BUILTIN_TAB_IDS)
-    ids.add(id);
-  for (const t of getDrawerTabs()) {
-    if (t?.id)
-      ids.add(t.id);
-  }
-  try {
-    const list = getSecondaryTabList();
-    if (list) {
-      for (const btn of Array.from(list.querySelectorAll("button[data-tab-id]"))) {
-        const tid = btn.getAttribute("data-tab-id");
-        if (tid)
-          ids.add(tid);
-      }
-    }
-  } catch {}
-  if (typeof document !== "undefined") {
-    for (const btn of Array.from(document.querySelectorAll('.sidebar button[data-tab-id], [class*="tabList"] button[data-tab-id]'))) {
-      const tid = btn.getAttribute("data-tab-id");
-      if (tid)
-        ids.add(tid);
     }
   }
-  return [...ids];
-}
-function cancelScheduledHiddenTabsSync() {
-  if (_debouncedSyncTimer !== null) {
-    clearTimeout(_debouncedSyncTimer);
-    _debouncedSyncTimer = null;
+  deleteTabAssignment(tabId);
+  if (resolvedShowId !== tabId) {
+    deleteTabAssignment(resolvedShowId);
   }
-}
-function scheduleSyncHiddenTabsFromHost(opts) {
-  const delayMs = opts?.delayMs ?? 50;
-  if (_debouncedSyncTimer !== null)
-    clearTimeout(_debouncedSyncTimer);
-  const armedGeneration = currentLifecycleGeneration();
-  _debouncedSyncTimer = setTimeout(() => {
-    _debouncedSyncTimer = null;
-    if (!isLifecycleCurrent(armedGeneration))
-      return;
-    try {
-      syncHiddenTabsFromHost({ unhideHostTabs: opts?.unhideHostTabs });
-    } catch {}
-  }, delayMs);
-}
-function syncHiddenTabsFromHost(opts) {
-  if (!isInstanceActive())
-    return { hiddenIds: getCanvasHiddenTabIds() };
-  const host = getHostDrawerSettings();
-  const rawHostStored = normalizeHiddenIds(host?.hiddenTabIds);
-  const unhideHostIds = opts?.unhideHostTabs ? new Set(rawHostStored) : null;
-  const hostStored = unhideHostIds ? [] : rawHostStored;
-  const canvasStored = unhideHostIds ? getCanvasHiddenTabIds().filter((id) => !unhideHostIds.has(id)) : getCanvasHiddenTabIds();
-  const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
-  const liveIds = collectLiveTabIdsForHiddenHeal();
-  const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
-  const forDom = healHiddenTabIds(stored, liveIds, { keepUnmatched: false });
-  setCanvasHiddenTabIds(forCanvas);
-  const closedOnlyLiveIds = new Set;
-  const armedGeneration = currentLifecycleGeneration();
+  removeSecondaryTabButton(tabId);
+  const activeId = getActiveSecondaryTabId();
+  if (activeId === tabId || activeId === resolvedShowId) {
+    _activeTabId = null;
+    setActiveSecondaryTabId(null);
+    clearSecondaryTabButtonActive();
+  }
+  showMainTabButton(resolvedShowId);
   try {
-    Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
-      if (!isLifecycleCurrent(armedGeneration))
-        return;
-      const model = getModel();
-      if (!model || model.closed.length === 0)
-        return applySets(forDom, stored, liveIds);
-      const hiddenKeys = new Set(model.hidden);
-      const resolved = new Set;
-      const hostMod = getHost();
-      for (const key of model.closed) {
-        if (hiddenKeys.has(key))
-          continue;
-        const liveId = hostMod?.resolve(key);
-        if (liveId)
-          resolved.add(liveId);
-      }
-      applySets(forDom, stored, liveIds, resolved);
-    }).catch(() => {});
+    const m = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
+    reconcileMainTabListPin();
   } catch {}
-  function applySets(dom, all, live, extra) {
-    const applySet = new Set([
-      ...dom,
-      ...all.filter((id) => live.includes(id)),
-      ...extra ?? []
-    ]);
-    applyHiddenTabIdsToSecondary(applySet);
-    applyHiddenTabIdsToMirror(applySet);
-    applyHiddenTabIdsToHostMain(applySet);
+  if (getTabAssignments().size === 0) {
+    _state2 = "closed";
+    _activeTabId = null;
+    setActiveSecondaryTabId(null);
+    closeSecondarySidebar();
+    updateDrawerTabVisibility();
   }
-  applySets(forDom, stored, liveIds);
-  return { hiddenIds: forCanvas };
 }
-function resolveHiddenTabIdsForDraft(storedHidden, liveCatalogIds) {
-  const stored = normalizeHiddenIds(storedHidden);
-  if (!stored.length)
-    return [];
-  return healHiddenTabIds(stored, liveCatalogIds, { keepUnmatched: true });
+function activateSecondaryTab(tabId) {
+  _activeTabId = tabId;
+  _state2 = "tab_active";
+  showSecondaryTab(tabId);
 }
-var _debouncedSyncTimer = null;
-var init_hidden_tabs = __esm(() => {
-  init_host_settings();
-  init_store();
-  init_configure_catalog();
+function markDrawerOpenState(open) {
+  if (open) {
+    _state2 = _activeTabId ? "tab_active" : "open";
+  } else {
+    _state2 = "closed";
+  }
+}
+function teardownSecondaryDrawer() {
+  _state2 = "closed";
+  _activeTabId = null;
+  setActiveSecondaryTabId(null);
+}
+var _state2 = "closed", _activeTabId = null, _restoringFromLayout = false, _suppressAutoActivation = false;
+var init_secondary_drawer = __esm(() => {
+  init_drawer_observer();
   init_buttons();
+  init_assignment();
+  init_active_tab();
   init_secondary();
-  init_canvas_hidden();
-  init_canvas_hidden();
+  init_store();
+  init_log();
+  init_mobile_exclusion();
+});
+
+// src/tabs/owned-commit.ts
+function plannedMovesForCommit(model, desiredSide) {
+  const moves = [];
+  for (const [key, side] of desiredSide) {
+    const current = sideOfKey(model, key);
+    if (current && current !== side)
+      moves.push({ key, to: side });
+  }
+  return moves;
+}
+function missingSecondaryButtonKeys(model, desiredSide, resolve, hasButton) {
+  const missing = [];
+  for (const [key, side] of desiredSide) {
+    if (side !== "secondary")
+      continue;
+    if (sideOfKey(model, key) !== "secondary")
+      continue;
+    const liveId = resolve(key);
+    if (liveId && !hasButton(liveId))
+      missing.push({ key, to: "secondary" });
+  }
+  return missing;
+}
+async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
+  if (isModeSwitchBarrierActive()) {
+    return { ok: false, error: "mode-switch-in-progress", superseded: true };
+  }
+  const host = getHost();
+  if (!host)
+    return { ok: false, error: "Canvas tab model is not ready." };
+  try {
+    const commitBaseModel = getModel();
+    const observedBeforeRebase = host.observe();
+    await dispatchBatch([{ t: "syncFromHost", observed: host.observe() }]);
+    const model = getModel();
+    if (!model)
+      return { ok: false, error: "Canvas tab model is not ready." };
+    dlog("[owned-commit] rebased", {
+      primary: model.primary,
+      secondary: model.secondary
+    });
+    const keyFor = (id) => host.findKey(id);
+    const primary = resolveKeys(draft.primaryIds, keyFor);
+    const secondary = resolveKeys(draft.secondaryIds, keyFor);
+    const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor));
+    if (primary.length !== draft.primaryIds.length || secondary.length !== draft.secondaryIds.length) {
+      dlog("[owned-commit] resolution failed — rolling back rebase", {
+        expectedPrimary: draft.primaryIds.length,
+        gotPrimary: primary.length,
+        expectedSecondary: draft.secondaryIds.length,
+        gotSecondary: secondary.length
+      });
+      await dispatchBatch([{ t: "syncFromHost", observed: observedBeforeRebase }]);
+      return { ok: false, error: "A tab changed while Configure Tabs was open. Please retry." };
+    }
+    const intents = [];
+    if (draft.drawerSide !== model.side) {
+      dlog("[owned-commit] drawer side swap requested", {
+        draftSide: draft.drawerSide,
+        modelSide: model.side
+      });
+      intents.push({ t: "swapSides" });
+    }
+    const desiredSide = new Map;
+    for (const key of primary)
+      desiredSide.set(key, "primary");
+    for (const key of secondary)
+      desiredSide.set(key, "secondary");
+    for (const [key, side] of desiredSide) {
+      const current = sideOfKey(model, key);
+      if (current && current !== side) {
+        intents.push({
+          t: "move",
+          key,
+          to: side,
+          index: visibleKeys(model, side).length,
+          activateDest: false
+        });
+      }
+    }
+    dlog("[owned-commit] reorder index context", {
+      hiddenCount: hidden.size,
+      hiddenKeys: [...hidden],
+      primaryCount: primary.length,
+      secondaryCount: secondary.length,
+      visiblePrimary: model.primary.filter((k) => !hidden.has(k)).length,
+      visibleSecondary: model.secondary.filter((k) => !hidden.has(k)).length
+    });
+    for (const [side, keys] of [["primary", primary], ["secondary", secondary]]) {
+      for (let index = 0;index < keys.length; index++) {
+        const key = keys[index];
+        intents.push({ t: "reorder", key, side, index });
+      }
+    }
+    for (const key of [...model.primary, ...model.secondary]) {
+      intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
+    }
+    for (const key of model.closed) {
+      if (model.hidden.includes(key) && !hidden.has(key)) {
+        intents.push({ t: "setClosed", key, closed: false });
+      }
+    }
+    if (commitBaseModel) {
+      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
+      for (const source of ["primary", "secondary"]) {
+        const active = activeBeforeRebase[source];
+        if (!active || hidden.has(active))
+          continue;
+        const destination = desiredSide.get(active);
+        if (destination === source) {
+          intents.push({ t: "activate", key: active, side: source });
+          continue;
+        }
+        if (destination) {
+          const replacement = activeAfterRemoval(commitBaseModel, source, active);
+          if (replacement && !hidden.has(replacement)) {
+            intents.push({ t: "activate", key: replacement, side: source });
+          }
+          const destinationActive = activeBeforeRebase[destination];
+          if (destinationActive && destinationActive !== active && !hidden.has(destinationActive)) {
+            intents.push({ t: "activate", key: destinationActive, side: destination });
+          }
+        }
+      }
+    }
+    if (isModeSwitchBarrierActive()) {
+      return { ok: false, error: "mode-switch-in-progress", superseded: true };
+    }
+    dlog("[owned-commit] dispatching", {
+      intents,
+      primary,
+      secondary
+    });
+    const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide);
+    if (typeof document !== "undefined") {
+      try {
+        await Promise.resolve().then(() => init_buttons());
+        await Promise.resolve().then(() => init_secondary());
+        const missing = missingSecondaryButtonKeys(model, desiredSide, (key) => host.resolve(key), (liveId) => {
+          const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+          return !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
+        });
+        if (missing.length > 0) {
+          dlog("[owned-commit] placement pass: model-vs-DOM divergence healed", {
+            missing: missing.map((m) => m.key)
+          });
+          plannedMoves.push(...missing);
+        }
+      } catch (err) {
+        dwarn("[owned-commit] divergence heal failed:", err);
+      }
+    }
+    const mirrorChrome = new Map;
+    const secondaryChrome = new Map;
+    if (!opts?.skipChrome) {
+      for (const move of plannedMoves) {
+        const liveId = host.resolve(move.key);
+        if (!liveId)
+          continue;
+        if (move.to === "secondary") {
+          mirrorChrome.set(move.key, await captureMainMirrorMoveChrome(liveId, "secondary"));
+        } else {
+          secondaryChrome.set(move.key, await captureSecondaryNeighborForMove(liveId));
+        }
+      }
+    }
+    await dispatchBatch(intents);
+    const committed = getModel();
+    dlog("[owned-commit] committed", {
+      primary: committed?.primary,
+      secondary: committed?.secondary
+    });
+    if (plannedMoves.length > 0 && typeof document !== "undefined") {
+      try {
+        const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+        setSuppressAutoActivation(true);
+        let placed = 0;
+        const failed = [];
+        try {
+          for (const move of plannedMoves) {
+            const liveId = host.resolve(move.key);
+            if (!liveId) {
+              dlog("[owned-commit] placement pass: host.resolve returned null", {
+                key: move.key,
+                to: move.to
+              });
+              continue;
+            }
+            try {
+              if (move.to === "secondary") {
+                await assignToSecondary(liveId, {
+                  facadeKey: move.key,
+                  openOnClosed: false,
+                  setActiveWhenReady: false
+                });
+                if (isExtensionKey(move.key)) {
+                  await Promise.resolve().then(() => init_secondary());
+                  await Promise.resolve().then(() => init_buttons());
+                  const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+                  const rootPresent = !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
+                  if (!rootPresent) {
+                    failed.push(move.key);
+                    dwarn("[owned-commit] placement returned without secondary root", {
+                      key: move.key,
+                      liveId,
+                      secondaryContentFound: !!content
+                    });
+                    continue;
+                  }
+                }
+              } else {
+                await unassignFromSecondary(liveId);
+              }
+              placed++;
+            } catch (err) {
+              failed.push(move.key);
+              dwarn("[owned-commit] placement failed for", move.key, String(err));
+            }
+          }
+        } finally {
+          setSuppressAutoActivation(false);
+        }
+        dlog("[owned-commit] placement pass", {
+          moves: plannedMoves.length,
+          placed,
+          failed,
+          toSecondary: plannedMoves.filter((m) => m.to === "secondary").map((m) => m.key),
+          toPrimary: plannedMoves.filter((m) => m.to === "primary").map((m) => m.key)
+        });
+        const modelAfter = getModel();
+        if (modelAfter && modelAfter.secondary.length > 0) {
+          await Promise.resolve().then(() => init_buttons());
+          const ids = modelAfter.secondary.map((k) => host.resolve(k)).filter((id) => !!id);
+          if (secondaryTabButtonsReady(ids))
+            reorderSecondaryTabButtons(ids);
+        }
+      } catch (err) {
+        dwarn("[owned-commit] placement pass failed:", err);
+      }
+    }
+    if (!opts?.skipChrome) {
+      for (const move of plannedMoves) {
+        const liveId = host.resolve(move.key);
+        if (!liveId)
+          continue;
+        try {
+          if (move.to === "secondary") {
+            await applyMainMirrorMoveChrome(mirrorChrome.get(move.key) ?? { neighborBtn: null, reassertId: null }, liveId);
+          } else {
+            await applySecondaryNeighborHandoff(secondaryChrome.get(move.key) ?? { neighborBtn: null }, liveId);
+          }
+        } catch (err) {
+          dwarn("[owned-commit] chrome handoff failed for", move.key, String(err));
+        }
+      }
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+function resolveKeys(ids, resolve) {
+  const keys = [];
+  for (const id of ids) {
+    const key = resolve(id);
+    if (key)
+      keys.push(key);
+  }
+  return keys;
+}
+function activeSelection(world) {
+  return {
+    primary: world.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
+    secondary: world.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
+  };
+}
+var init_owned_commit = __esm(() => {
+  init_dispatch();
+  init_log();
+  init_mode_transition();
 });
 
 // src/tabs/live-tab-order.ts
@@ -9412,7 +9173,7 @@ var init_live_tab_order = __esm(() => {
   _titleResolvedLogged = new Set;
 });
 
-// node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
+// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e, t, n, o, i, u) {
   t || (t = {});
   var a, c, p = t;
@@ -9601,6 +9362,133 @@ var init_unhide_vanilla = __esm(() => {
   init_log();
   init_canvas_hidden();
   init_hidden_tabs();
+});
+
+// src/persist/layout-repo.ts
+function getBootLoadWindowMs() {
+  return _windowMs;
+}
+function getBootLoadIntervalMs() {
+  return _intervalMs;
+}
+function setLayoutRepoBackendCtx(ctx) {
+  _ctx = ctx;
+}
+function isLayoutRepoArmed() {
+  return _armed;
+}
+function armLayoutRepo() {
+  _armed = true;
+}
+function disarmLayoutRepo() {
+  _armed = false;
+  for (const [id, { reject, timer }] of _pendingSaves) {
+    clearTimeout(timer);
+    _pendingSaves.delete(id);
+    reject(new Error("layout repo disarmed"));
+  }
+}
+function loadLayoutFromDisk() {
+  const ctx = _ctx;
+  if (!ctx)
+    return Promise.resolve({ status: "error", reason: "no backend" });
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsub = null;
+    let attempts = 0;
+    const startedAt = Date.now();
+    function attempt() {
+      if (settled)
+        return;
+      const handler = (payload) => {
+        if (payload.type !== "LAYOUT_DATA")
+          return;
+        if (settled)
+          return;
+        settled = true;
+        if (typeof unsub === "function")
+          unsub();
+        const result = payload && typeof payload === "object" && "result" in payload ? payload.result : null;
+        if (result && typeof result === "object" && (result.status === "ok" || result.status === "empty" || result.status === "error")) {
+          bootStep(`layout-load-resolved`, `attempt ${attempts} after ${Date.now() - startedAt}ms (${result.status})`);
+          resolve(result);
+        } else {
+          resolve({ status: "error", reason: "malformed response" });
+        }
+      };
+      unsub = ctx.onBackendMessage(handler);
+      attempts++;
+      ctx.sendToBackend({ type: "LOAD_LAYOUT" });
+      setTimeout(() => {
+        if (settled)
+          return;
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < getBootLoadWindowMs()) {
+          if (typeof unsub === "function")
+            unsub();
+          if (attempts > 1 && attempts % 5 === 1) {
+            bootWarn(`layout-load-still-pending`, `attempt ${attempts} no response after ${elapsed}ms — transport not ready (WS connecting or worker spawning)`);
+          }
+          attempt();
+        } else {
+          settled = true;
+          if (typeof unsub === "function")
+            unsub();
+          const reason = `load timed out after ${attempts} attempts (${elapsed}ms)`;
+          bootWarn(`layout-load-timeout`, reason);
+          resolve({ status: "error", reason });
+        }
+      }, getBootLoadIntervalMs());
+    }
+    attempt();
+  });
+}
+function saveLayoutToDisk(layout) {
+  const ctx = _ctx;
+  if (!ctx)
+    return Promise.resolve({ status: "error", reason: "no backend" });
+  if (!_armed)
+    return Promise.resolve({ status: "error", reason: "not armed" });
+  const id = ++_saveCounter;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (_pendingSaves.has(id)) {
+        _pendingSaves.delete(id);
+        resolve({ status: "error", reason: "save timed out" });
+      }
+    }, 5000);
+    _pendingSaves.set(id, { resolve, reject, timer });
+    ctx.sendToBackend({ type: "SAVE_LAYOUT", layout, saveId: id });
+  });
+}
+function __resolveLayoutSave(saveId, result) {
+  const pending = _pendingSaves.get(saveId);
+  if (!pending)
+    return;
+  _pendingSaves.delete(saveId);
+  clearTimeout(pending.timer);
+  pending.resolve(result);
+}
+function bindLayoutSaveResultBridge() {
+  const ctx = _ctx;
+  if (!ctx)
+    return () => {};
+  return ctx.onBackendMessage((payload) => {
+    if (!payload || payload.type !== "SAVE_LAYOUT_RESULT")
+      return;
+    const saveId = typeof payload.saveId === "number" ? payload.saveId : 0;
+    const result = payload.result;
+    if (result && typeof result === "object" && (result.status === "ok" || result.status === "error")) {
+      __resolveLayoutSave(saveId, result);
+    }
+  });
+}
+var BOOT_LOAD_WINDOW_MS = 15000, BOOT_LOAD_INTERVAL_MS = 1000, _windowMs, _intervalMs, _ctx = null, _armed = false, _saveCounter = 0, _pendingSaves;
+var init_layout_repo = __esm(() => {
+  init_boot_diag();
+  _windowMs = BOOT_LOAD_WINDOW_MS;
+  _intervalMs = BOOT_LOAD_INTERVAL_MS;
+  _pendingSaves = new Map;
 });
 
 // src/persist/layout-load.ts
@@ -9815,6 +9703,201 @@ var init_mode_profiles = __esm(() => {
   init_state();
 });
 
+// src/persist/layout-model.ts
+function buildModelFromLayout(layout, findKey, side) {
+  const model = createEmptyModel(side ?? "left");
+  if (!layout)
+    return model;
+  const tabOrder = layout.tabOrder ?? [];
+  const detached = layout.detachedTabs ?? [];
+  const secondaryIds = new Set(detached.map((d) => d.tabId));
+  const isSecondaryStoredId = (id) => {
+    if (secondaryIds.has(id))
+      return true;
+    const base = stripTabIdSuffix(id);
+    for (const secondaryId of secondaryIds) {
+      if (stripTabIdSuffix(secondaryId) === base)
+        return true;
+    }
+    return false;
+  };
+  const primary = [];
+  const secondary = [];
+  const unresolvedIds = [];
+  const appendOnce = (list, key) => {
+    if (!primary.includes(key) && !secondary.includes(key))
+      list.push(key);
+  };
+  for (const storedId of tabOrder) {
+    const key = resolveStoredId(storedId, findKey);
+    if (!key) {
+      unresolvedIds.push(storedId);
+      continue;
+    }
+    appendOnce(isSecondaryStoredId(storedId) ? secondary : primary, key);
+  }
+  for (const d of detached) {
+    const fromTitle = d.tabTitle ? resolveStoredId(d.tabTitle, findKey) : null;
+    const key = fromTitle ?? resolveStoredId(d.tabId, findKey);
+    if (key && !primary.includes(key) && !secondary.includes(key)) {
+      appendOnce(secondary, key);
+    }
+  }
+  const hidden = [];
+  for (const storedId of layout.hiddenTabIds ?? []) {
+    const key = resolveStoredId(storedId, findKey);
+    if (key && (primary.includes(key) || secondary.includes(key)) && !hidden.includes(key)) {
+      hidden.push(key);
+    }
+  }
+  const menuHidden = [];
+  for (const storedId of layout.menuHiddenTabIds ?? []) {
+    const key = resolveStoredId(storedId, findKey);
+    if (key && (primary.includes(key) || secondary.includes(key)) && !menuHidden.includes(key)) {
+      menuHidden.push(key);
+    }
+  }
+  const closed = [];
+  for (const storedId of layout.closedTabIds ?? []) {
+    const key = resolveStoredId(storedId, findKey);
+    if (key && (primary.includes(key) || secondary.includes(key)) && !closed.includes(key)) {
+      closed.push(key);
+    }
+  }
+  const activePrimaryCandidate = layout.primary?.tabId ? resolveStoredId(layout.primary.tabId, findKey) : null;
+  const activeSecondaryCandidate = layout.secondary?.activeTabId ? resolveStoredId(layout.secondary.activeTabId, findKey) : null;
+  const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate) && !closed.includes(activePrimaryCandidate) ? activePrimaryCandidate : null;
+  const activeSecondary = activeSecondaryCandidate && secondary.includes(activeSecondaryCandidate) && !hidden.includes(activeSecondaryCandidate) && !closed.includes(activeSecondaryCandidate) ? activeSecondaryCandidate : null;
+  const primaryOpen = layout.primary?.open ?? false;
+  const primaryWidth = layout.primary?.width ?? 420;
+  const secondaryOpen = layout.secondary?.open ?? false;
+  const secondaryWidth = layout.secondary?.width ?? 420;
+  return {
+    version: 2,
+    primary,
+    secondary,
+    hidden,
+    menuHidden,
+    closed,
+    active: {
+      primary: activePrimary ?? null,
+      secondary: activeSecondary ?? null
+    },
+    drawers: {
+      primary: { open: primaryOpen, width: primaryWidth },
+      secondary: { open: secondaryOpen, width: secondaryWidth }
+    },
+    side: layout.drawerSide ?? side ?? "left"
+  };
+}
+function serializeModelToSingleLayout(model, resolve, version) {
+  return {
+    version,
+    primary: {
+      open: model.drawers.primary.open,
+      width: model.drawers.primary.width,
+      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined
+    },
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
+    hiddenTabIds: model.hidden.map((key) => resolve(key)).filter(Boolean),
+    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
+    closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
+    drawerSide: model.side
+  };
+}
+function foldLayoutToSingleShape(layout) {
+  const detached = layout.detachedTabs ?? [];
+  const order = Array.isArray(layout.tabOrder) ? [...layout.tabOrder] : [];
+  for (const d of detached) {
+    const id = d?.tabId;
+    if (id && !order.includes(id))
+      order.push(id);
+  }
+  return {
+    ...layout,
+    secondary: { open: false, width: 420, activeTabId: undefined },
+    detachedTabs: [],
+    tabOrder: order
+  };
+}
+function layoutHasTabs(layout) {
+  if (!layout)
+    return false;
+  return Array.isArray(layout.tabOrder) && layout.tabOrder.length > 0 || Array.isArray(layout.detachedTabs) && layout.detachedTabs.length > 0;
+}
+function slotResolves(slot, findKey) {
+  if (!slot)
+    return false;
+  const ids = [];
+  if (Array.isArray(slot.tabOrder)) {
+    for (const id of slot.tabOrder)
+      if (typeof id === "string")
+        ids.push(id);
+  }
+  if (Array.isArray(slot.detachedTabs)) {
+    for (const tab of slot.detachedTabs) {
+      if (tab && typeof tab === "object") {
+        const t = tab;
+        if (typeof t.tabId === "string")
+          ids.push(t.tabId);
+        if (typeof t.tabTitle === "string")
+          ids.push(t.tabTitle);
+      }
+    }
+  }
+  for (const id of ids) {
+    if (findKey(id))
+      return true;
+  }
+  return false;
+}
+function resolveStoredId(storedId, findKey) {
+  const exact = findKey(storedId);
+  if (exact)
+    return exact;
+  const stripped = stripTabIdSuffix(storedId);
+  if (stripped === storedId)
+    return null;
+  return findKey(stripped) ?? null;
+}
+function serializeModelToLayout(model, resolve, version) {
+  const primary = resolveList(model.primary, resolve);
+  const secondary = resolveList(model.secondary, resolve);
+  const tabOrder = [...primary, ...secondary];
+  const detachedTabs = [
+    ...model.secondary.map((key) => {
+      const id = resolve(key);
+      return id ? { tabId: id, tabTitle: key, sidebar: "secondary" } : null;
+    })
+  ].filter(Boolean);
+  const hiddenTabIds = model.hidden.map((key) => resolve(key)).filter(Boolean);
+  return {
+    version,
+    primary: {
+      open: model.drawers.primary.open,
+      width: model.drawers.primary.width,
+      tabId: model.active.primary ? resolve(model.active.primary) ?? undefined : undefined
+    },
+    secondary: {
+      open: model.drawers.secondary.open,
+      width: model.drawers.secondary.width,
+      activeTabId: model.active.secondary ? resolve(model.active.secondary) ?? undefined : undefined
+    },
+    detachedTabs,
+    tabOrder,
+    hiddenTabIds,
+    menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
+    closedTabIds: model.closed.map((key) => resolve(key)).filter(Boolean),
+    drawerSide: model.side
+  };
+}
+function resolveList(keys, resolve) {
+  return keys.map((key) => resolve(key)).filter(Boolean);
+}
+var init_layout_model = () => {};
+
 // src/os/os-configure-gate.ts
 function setOsConfigureWillRestore(value) {
   _osConfigureWillRestore = value;
@@ -9868,11 +9951,11 @@ function syncOsMobileDrawerMode(opts) {
 }
 async function runSyncOsMobileDrawerMode(nested = false) {
   const s = getSettings();
-  const force = !!s.osMode && isMobileViewportLocal();
+  const force = (!!s.osMode || !!s.taskbarMode && !!s.moveControlsToOuterEdge) && isMobileViewportLocal();
   if (force && s.secondSidebarEnabled) {
     if (!s.osForcedSingleDrawer)
       setSettings({ osForcedSingleDrawer: true });
-    dlog("[os] mobile: forcing single-drawer mode");
+    dlog("[os] mobile taskbar: forcing single-drawer mode");
     await Promise.resolve().then(() => init_second_drawer_mode());
     await requestSecondDrawerMode(false, nested ? { silent: true, nested: true } : { silent: true });
     return;
@@ -10045,8 +10128,10 @@ async function runOsDisable() {
 function applyOsModeChange(prev, next) {
   if (prev.osMode === next.osMode)
     return Promise.resolve();
-  if (_osDrain)
+  if (_osDrain) {
+    trackModeRevealWork(_osDrain);
     return _osDrain;
+  }
   _osDrain = runOsTransition(async () => {
     try {
       let last = prev.osMode === true;
@@ -10066,6 +10151,7 @@ function applyOsModeChange(prev, next) {
       _osDrain = null;
     }
   });
+  trackModeRevealWork(_osDrain);
   return _osDrain;
 }
 var _mobileDrawerSync = null, _mobileDrawerSyncDirty = false, _mobileDrawerSyncNested = false, _osDrain = null;
@@ -10078,6 +10164,1459 @@ var init_os_mode = __esm(() => {
   init_mode_transition();
   init_state();
   init_log();
+  init_mode_reveal();
+});
+
+// src/tabs/tab-list-dnd.ts
+function isLiveTabListDndAllowed() {
+  return !isMobileViewport() && !isPointerResizeActive();
+}
+function shouldActivateDragFromDistance(dx, dy, threshold = DRAG_ACTIVATE_DISTANCE_PX) {
+  return Math.sqrt(dx * dx + dy * dy) >= threshold;
+}
+function usesLongPressActivation(pointerType) {
+  return pointerType === "touch" || pointerType === "pen";
+}
+function removeDragContextMenuSuppressor() {
+  if (!_dragContextMenuSuppressor)
+    return;
+  document.removeEventListener("contextmenu", _dragContextMenuSuppressor, true);
+  _dragContextMenuSuppressor = null;
+}
+function containerAxis(el) {
+  if (!el)
+    return "y";
+  let cur = el;
+  while (cur) {
+    const axis = cur.getAttribute?.("data-strip-axis");
+    if (axis === "horizontal")
+      return "x";
+    if (axis === "vertical")
+      return "y";
+    cur = cur.parentElement;
+  }
+  if (el.classList?.contains?.("sidebar-ux-tab-list--pinned") || el.classList?.contains?.(MIRROR_MAIN_CLASS) || el.classList?.contains?.(MIRROR_BOTTOM_CLASS)) {
+    let p = el.parentElement;
+    while (p) {
+      if (p.getAttribute?.("data-strip-axis") === "horizontal")
+        return "x";
+      p = p.parentElement;
+    }
+  }
+  try {
+    if (typeof getComputedStyle === "function") {
+      const fd = getComputedStyle(el).flexDirection;
+      if (typeof fd === "string" && fd.includes("row"))
+        return "x";
+    }
+  } catch {}
+  return "y";
+}
+function axisMidpoint(rect, axis) {
+  return axis === "x" ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
+}
+function axisCoordinate(geom, axis) {
+  return axis === "x" ? geom.centerX : geom.centerY;
+}
+function seamChoice(centerX, leftRect, rightRect) {
+  const boundary = (leftRect.right + rightRect.left) / 2;
+  return centerX < boundary ? "left" : "right";
+}
+function flipDelta(prev, curr) {
+  return { dx: prev.left - curr.left, dy: prev.top - curr.top };
+}
+function invalidateDndGeometry() {
+  _geometryCache = null;
+  _geomDirty = true;
+}
+function isDndDragActive() {
+  return _drag.phase === "dragging";
+}
+function dndOrderSnapshot() {
+  return {
+    primary: readLivePrimaryTabIds(),
+    secondary: readLiveSecondaryTabIds()
+  };
+}
+function logDndOrder(label, extra = {}) {
+  dlog("[tab-list-dnd]", label, { ...extra, live: dndOrderSnapshot() });
+}
+function injectDndStyles() {
+  if (typeof document === "undefined")
+    return;
+  if (document.getElementById(DND_STYLE_ID))
+    return;
+  const style = document.createElement("style");
+  style.id = DND_STYLE_ID;
+  style.textContent = `
+    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
+         pointer-events:none so synthetic click targets the real tab under the
+         cursor (document capture suppressor can stop activation). ── */
+    .canvas-tab-list-dnd-overlay-clone {
+      position: fixed;
+      z-index: 13000;
+      pointer-events: none !important;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--lumiverse-border, #333);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
+      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+        0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
+      color: var(--lumiverse-text, #eee);
+      font-family: var(--lumiverse-font-family, sans-serif);
+      opacity: 1 !important;
+      will-change: transform;
+      cursor: grabbing;
+    }
+    /* Defense: never inherit invisible-placeholder opacity onto the float */
+    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
+    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
+      opacity: 1 !important;
+      pointer-events: none !important;
+    }
+
+    /* ── Inner button clone — host CSS-module classes may not reflow the
+         floating clone the same way; force tab-btn layout so icons stay
+         centered (was left-biased after lift). ── */
+    .canvas-tab-list-dnd-overlay-clone-btn {
+      border: none !important;
+      background: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex-shrink: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 1px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
+    }
+
+    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
+    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
+    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
+      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
+      font-weight: 500 !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: 48px !important;
+      flex-shrink: 0 !important;
+    }
+
+    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
+    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      width: 20px !important;
+      height: 20px !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn svg {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
+    }
+    .canvas-tab-list-dnd-overlay-clone-btn img {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0 !important;
+      display: block !important;
+    }
+
+    /* ── Source button while being dragged — invisible slot holder (keeps
+         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
+         transition:none while hidden so removing the class does not fade
+         opacity via strip transition:all 0.2s. ── */
+    .canvas-tab-list-dnd-placeholder {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transition: none !important;
+    }
+
+    /* ── While dragging: strip buttons do not receive pointer hits.
+         Overlay is pointer-events:none so the cursor would otherwise
+         :hover the tab underneath (host hover glow/background). Hit-test
+         uses document pointer coords, not elementFromPoint. ── */
+    body.canvas-tab-list-dnd-dragging button[data-tab-id],
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
+    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
+      pointer-events: none !important;
+    }
+
+    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
+    .canvas-tab-list-dnd-flipping {
+      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
+    }
+
+    /* ── Drop settle: floating clone eases into its destination slot ── */
+    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
+      transition:
+        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS}ms ease,
+        opacity ${SETTLE_DURATION_MS}ms ease !important;
+      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
+        0 0 0 1px var(--lumiverse-border, #333);
+      cursor: default;
+      opacity: 0.92 !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+function isSecondaryButton(btn) {
+  if (btn.classList.contains(MIRROR_BTN_CLASS))
+    return false;
+  if (btn.closest(`.${MIRROR_LIST_CLASS}`))
+    return false;
+  return !!btn.closest(`.${TAB_LIST_CLASS}`);
+}
+function getButtonTabId(btn) {
+  return buttonTabId(btn);
+}
+function isReorderableContainer(el) {
+  if (el.classList.contains(MIRROR_MAIN_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_BOTTOM_CLASS))
+    return true;
+  if (el.classList.contains(MIRROR_LIST_CLASS))
+    return true;
+  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
+    return true;
+  }
+  return false;
+}
+function getReorderParent(btn) {
+  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
+    const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
+    return section ?? btn.parentElement;
+  }
+  if (isSecondaryButton(btn)) {
+    const list = btn.closest(`.${TAB_LIST_CLASS}`);
+    if (list && !list.classList.contains(MIRROR_LIST_CLASS))
+      return list;
+  }
+  return null;
+}
+function getDropContainers() {
+  const containers = [];
+  if (getSecondaryWrapper()) {
+    const secList = getSecondaryTabList();
+    if (secList)
+      containers.push({ el: secList, secondary: true, axis: containerAxis(secList) });
+  }
+  const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
+  if (mirrorList) {
+    const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
+    if (main) {
+      containers.push({ el: main, secondary: false, axis: containerAxis(main) });
+    } else {
+      containers.push({ el: mirrorList, secondary: false, axis: containerAxis(mirrorList) });
+    }
+  }
+  return containers;
+}
+function getAllButtonsInContainer(container) {
+  if (container.classList.contains(MIRROR_MAIN_CLASS) || container.classList.contains(MIRROR_BOTTOM_CLASS)) {
+    return Array.from(container.querySelectorAll(`:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`));
+  }
+  if (container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`));
+  }
+  if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
+    return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
+  }
+  return Array.from(container.querySelectorAll("button[data-tab-id]"));
+}
+function isDisplayedTabButton(el) {
+  return el.style?.display !== "none";
+}
+function domInsertIndexFromVisibleIndex(siblingHidden, toVisibleIndex) {
+  const visibleCount = siblingHidden.reduce((n, hidden) => n + (hidden ? 0 : 1), 0);
+  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
+  if (targetVis >= visibleCount) {
+    let lastVisible = -1;
+    for (let i = 0;i < siblingHidden.length; i++) {
+      if (!siblingHidden[i])
+        lastVisible = i;
+    }
+    return lastVisible + 1;
+  }
+  let seen = 0;
+  for (let i = 0;i < siblingHidden.length; i++) {
+    if (siblingHidden[i])
+      continue;
+    if (seen === targetVis)
+      return i;
+    seen++;
+  }
+  return siblingHidden.length;
+}
+function getButtonsInContainer(container, _secondary, excludeTabId) {
+  return getAllButtonsInContainer(container).filter((el) => {
+    if (!isDisplayedTabButton(el))
+      return false;
+    if (excludeTabId && getButtonTabId(el) === excludeTabId) {
+      return false;
+    }
+    return true;
+  });
+}
+function buildDraftAndBase() {
+  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
+  const hostSettings = getHostDrawerSettings();
+  const currentAssignments = new Map(getLiveIdAssignments());
+  const drawerSide = hostSettings?.side || getMainDrawerSide();
+  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t) => t.id));
+  const draftFromHost = createDraft({
+    catalog,
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: healedHidden,
+    drawerSide,
+    assignments: currentAssignments
+  });
+  const livePrimary = readLivePrimaryTabIds();
+  const liveSecondary = readLiveSecondaryTabIds();
+  const draft = alignDraftToLiveVisibleOrder(draftFromHost, livePrimary, liveSecondary);
+  dlog("[tab-list-dnd] draft-built (live order)", {
+    livePrimary,
+    liveSecondary,
+    draftPrimary: draft.primaryIds,
+    draftSecondary: draft.secondaryIds,
+    hidden: [...draft.hiddenIds]
+  });
+  const base = {
+    tabOrder: hostSettings?.tabOrder || [],
+    hiddenTabIds: healedHidden,
+    drawerSide,
+    assignments: new Map(currentAssignments)
+  };
+  return { draft, base, catalog };
+}
+function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
+  const w = Math.max(0, overlayWidth);
+  const h = Math.max(0, overlayHeight);
+  return {
+    centerX: overlayTx + w / 2,
+    centerY: overlayTy + h / 2,
+    left: overlayTx,
+    top: overlayTy,
+    right: overlayTx + w,
+    bottom: overlayTy + h
+  };
+}
+function overlayOverlapsContainer(overlay, container, padY = 8, padX = 80) {
+  const overlapsX = overlay.right > container.left - padX && overlay.left < container.right + padX;
+  const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
+  return overlapsX && overlapsY;
+}
+function insertIndexFromMidpoints(y, midpoints) {
+  for (let i = 0;i < midpoints.length; i++) {
+    if (y < midpoints[i])
+      return i;
+  }
+  return midpoints.length;
+}
+function hitTestDropTarget(geom, dragTabId) {
+  const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
+  const candidates = [];
+  for (const { el: container, secondary, axis } of containers) {
+    const rect = container.getBoundingClientRect();
+    const padY = axis === "x" ? 80 : 8;
+    const padX = axis === "x" ? 8 : 80;
+    if (!overlayOverlapsContainer(geom, rect, padY, padX))
+      continue;
+    const buttons = getButtonsInContainer(container, secondary, dragTabId);
+    let index = 0;
+    if (buttons.length > 0) {
+      const midpoints = buttons.map((btn) => axisMidpoint(btn.getBoundingClientRect(), axis));
+      index = insertIndexFromMidpoints(axisCoordinate(geom, axis), midpoints);
+      dlog("[tab-list-dnd] hit-test", {
+        containerCls: String(container.className || ""),
+        secondary,
+        axis,
+        dragTabId,
+        buttons: buttons.length,
+        midpoints: midpoints.length,
+        centerY: Math.round(geom.centerY),
+        centerX: Math.round(geom.centerX),
+        index
+      });
+    }
+    const containerMidX = rect.left + rect.width / 2;
+    const distX = Math.abs(geom.centerX - containerMidX);
+    candidates.push({ container, index, secondary, axis, rect, distX });
+  }
+  if (candidates.length === 0)
+    return null;
+  const horizontal = candidates.filter((c) => c.axis === "x");
+  if (horizontal.length >= 2) {
+    const sorted = [...horizontal].sort((a, b) => a.rect.left - b.rect.left);
+    const left = sorted[0];
+    const right = sorted[sorted.length - 1];
+    const chosen = seamChoice(geom.centerX, left.rect, right.rect) === "left" ? left : right;
+    return {
+      container: chosen.container,
+      index: chosen.index,
+      secondary: chosen.secondary
+    };
+  }
+  let best = candidates[0];
+  for (const c of candidates) {
+    if (c.distX < best.distX)
+      best = c;
+  }
+  return { container: best.container, index: best.index, secondary: best.secondary };
+}
+function settleDestFromButtonRects(index, rects, emptyFallback, axis = "y") {
+  if (rects.length === 0)
+    return emptyFallback;
+  if (index >= rects.length) {
+    const last = rects[rects.length - 1];
+    return axis === "x" ? { left: last.left + last.width, top: last.top } : { left: last.left, top: last.top + last.height };
+  }
+  const ref = rects[index];
+  return { left: ref.left, top: ref.top };
+}
+function resolveSettleDestination(dragElement, tabId, target, overlayWidth) {
+  if (dragElement && target && target.container.contains(dragElement)) {
+    const r = dragElement.getBoundingClientRect();
+    return { left: r.left, top: r.top };
+  }
+  if (target && tabId) {
+    const buttons = getButtonsInContainer(target.container, target.secondary, tabId);
+    const rects = buttons.map((b) => {
+      const r = b.getBoundingClientRect();
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    });
+    const cr = target.container.getBoundingClientRect();
+    const emptyFallback = {
+      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
+      top: cr.top
+    };
+    return settleDestFromButtonRects(target.index, rects, emptyFallback, containerAxis(target.container));
+  }
+  if (dragElement) {
+    const r = dragElement.getBoundingClientRect();
+    return { left: r.left, top: r.top };
+  }
+  return null;
+}
+function animateOverlaySettle(overlay, currentTx, currentTy, destLeft, destTop) {
+  const dx = destLeft - currentTx;
+  const dy = destTop - currentTy;
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    return Promise.resolve({ tx: destLeft, ty: destTop });
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done)
+        return;
+      done = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      if (_settleTimer !== null) {
+        clearTimeout(_settleTimer);
+        _settleTimer = null;
+      }
+      resolve({ tx: destLeft, ty: destTop });
+    };
+    const onEnd = (e) => {
+      if (e.target !== overlay)
+        return;
+      if (e.propertyName && e.propertyName !== "transform")
+        return;
+      finish();
+    };
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
+    overlay.offsetWidth;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
+    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+  });
+}
+function cancelOverlaySettle(overlay) {
+  if (_settleTimer !== null) {
+    clearTimeout(_settleTimer);
+    _settleTimer = null;
+  }
+  if (overlay) {
+    overlay.classList.remove("canvas-tab-list-dnd-overlay-settling");
+  }
+}
+function installDropSlotSpacer(placeholder) {
+  if (!placeholder?.parentElement)
+    return null;
+  const parent = placeholder.parentElement;
+  const rect = placeholder.getBoundingClientRect();
+  const axis = containerAxis(parent);
+  const sizeProps = axis === "x" ? [`width:${Math.max(Math.round(rect.width), 1)}px`, "height:100%"] : [`height:${Math.max(Math.round(rect.height), 1)}px`, "width:100%"];
+  const spacer = document.createElement("div");
+  spacer.className = "canvas-tab-list-dnd-slot-spacer";
+  spacer.setAttribute("aria-hidden", "true");
+  spacer.style.cssText = [
+    ...sizeProps,
+    "flex-shrink:0",
+    "pointer-events:none",
+    "visibility:hidden",
+    "box-sizing:border-box",
+    "margin:0",
+    "padding:0",
+    "border:none"
+  ].join(";");
+  parent.insertBefore(spacer, placeholder.nextSibling);
+  return spacer;
+}
+function removeDropSlotSpacer(spacer) {
+  if (spacer?.isConnected)
+    spacer.remove();
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-slot-spacer"))) {
+      el.remove();
+    }
+  }
+}
+function clearInsertIndicator() {
+  if (_insertIndicatorEl) {
+    _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
+    _insertIndicatorEl = null;
+  }
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-insert-before"))) {
+      el.classList.remove("canvas-tab-list-dnd-insert-before");
+    }
+  }
+}
+function snapshotButtonRects(container) {
+  const rects = new Map;
+  for (const btn of getAllButtonsInContainer(container)) {
+    const id = getButtonTabId(btn);
+    if (id)
+      rects.set(id, btn.getBoundingClientRect());
+  }
+  return rects;
+}
+function mergeRects(into, from) {
+  for (const [k, v] of from)
+    into.set(k, v);
+}
+function applyFLIP(prevRects, excludeTabId, containers) {
+  const animated = [];
+  const seen = new Set;
+  for (const container of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      if (seen.has(btn))
+        continue;
+      seen.add(btn);
+      const id = getButtonTabId(btn);
+      if (!id || id === excludeTabId || !prevRects.has(id))
+        continue;
+      const prev = prevRects.get(id);
+      const curr = btn.getBoundingClientRect();
+      const { dx, dy } = flipDelta(prev, curr);
+      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5)
+        continue;
+      btn.style.setProperty("transition", "none", "important");
+      btn.style.setProperty("transform", `translate(${dx}px, ${dy}px)`, "important");
+      animated.push(btn);
+    }
+  }
+  if (animated.length === 0)
+    return;
+  document.body.offsetHeight;
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
+      node.style.setProperty("transform", "", "important");
+      node.style.removeProperty("transform");
+    }
+    if (_flipActiveTimer)
+      clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = setTimeout(() => {
+      for (const node of animated) {
+        node.style.removeProperty("transition");
+        node.style.removeProperty("transform");
+      }
+      _flipActiveTimer = null;
+    }, 220);
+  });
+}
+function clearFLIPStyles() {
+  if (_flipActiveTimer) {
+    clearTimeout(_flipActiveTimer);
+    _flipActiveTimer = null;
+  }
+  const containers = _geometryCache?.containers ?? getDropContainers();
+  for (const { el: container } of containers) {
+    for (const btn of getAllButtonsInContainer(container)) {
+      btn.style.removeProperty("transition");
+      btn.style.removeProperty("transform");
+    }
+  }
+}
+function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
+  if (!sourceTabId)
+    return false;
+  if (!isReorderableContainer(container))
+    return false;
+  const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b) => getButtonTabId(b) === sourceTabId) ?? null;
+  if (!sourceBtn)
+    return false;
+  const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b) => b !== sourceBtn);
+  const siblingHidden = buttonsWithoutSource.map((b) => !isDisplayedTabButton(b));
+  const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
+  if (insertIdx >= buttonsWithoutSource.length) {
+    const endDock = getSecondaryStartDock(container);
+    if (sourceBtn.parentElement === container && (sourceBtn.nextElementSibling === null || sourceBtn.nextElementSibling === endDock)) {
+      return false;
+    }
+    appendSecondaryTabNode(container, sourceBtn);
+    return true;
+  }
+  const referenceBtn = buttonsWithoutSource[insertIdx];
+  if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
+    return false;
+  }
+  container.insertBefore(sourceBtn, referenceBtn);
+  return true;
+}
+function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
+  if (!dragElement || !originalParent)
+    return;
+  const parent = dragElement.parentNode;
+  if (parent === originalParent) {
+    if (originalNextSibling) {
+      if (dragElement.nextElementSibling === originalNextSibling)
+        return;
+      originalParent.insertBefore(dragElement, originalNextSibling);
+    } else {
+      if (dragElement.nextElementSibling === null && dragElement.parentNode === originalParent)
+        return;
+      originalParent.insertBefore(dragElement, null);
+    }
+  } else {
+    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+      originalParent.insertBefore(dragElement, originalNextSibling);
+    } else {
+      originalParent.appendChild(dragElement);
+    }
+  }
+}
+function createDragOverlay(sourceBtn) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
+  const clone = sourceBtn.cloneNode(true);
+  clone.classList.remove("canvas-tab-list-dnd-placeholder");
+  clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
+  const rect = sourceBtn.getBoundingClientRect();
+  wrapper.style.width = rect.width + "px";
+  wrapper.style.height = rect.height + "px";
+  wrapper.style.left = "0px";
+  wrapper.style.top = "0px";
+  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+  return wrapper;
+}
+function suppressSyntheticClick(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+}
+function installClickSuppressor(el) {
+  removeClickSuppressorNow();
+  _clickSuppressor = suppressSyntheticClick;
+  _clickSuppressorEl = el;
+  el.addEventListener("click", _clickSuppressor, true);
+  _docClickSuppressor = suppressSyntheticClick;
+  document.addEventListener("click", _docClickSuppressor, true);
+}
+function scheduleClickSuppressorRemoval() {
+  if (_clickSuppressorTimer !== null)
+    clearTimeout(_clickSuppressorTimer);
+  _clickSuppressorTimer = setTimeout(() => {
+    removeClickSuppressorNow();
+  }, 0);
+}
+function removeClickSuppressorNow() {
+  if (_clickSuppressorTimer !== null) {
+    clearTimeout(_clickSuppressorTimer);
+    _clickSuppressorTimer = null;
+  }
+  if (_clickSuppressor && _clickSuppressorEl) {
+    _clickSuppressorEl.removeEventListener("click", _clickSuppressor, true);
+  }
+  _clickSuppressor = null;
+  _clickSuppressorEl = null;
+  if (_docClickSuppressor) {
+    document.removeEventListener("click", _docClickSuppressor, true);
+    _docClickSuppressor = null;
+  }
+}
+function autoScrollHorizontal(geom) {
+  const containers = _geometryCache?.containers ?? [];
+  const EDGE_PX = 24;
+  const STEP_PX = 14;
+  let scrolling = false;
+  for (const { el, axis } of containers) {
+    if (axis !== "x")
+      continue;
+    const rect = el.getBoundingClientRect();
+    if (geom.centerY < rect.top || geom.centerY > rect.bottom)
+      continue;
+    if (geom.centerX < rect.left || geom.centerX > rect.right)
+      continue;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    if (maxScroll <= 0)
+      continue;
+    if (geom.centerX < rect.left + EDGE_PX) {
+      const next = Math.max(0, el.scrollLeft - STEP_PX);
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next;
+        scrolling = true;
+      }
+    } else if (geom.centerX > rect.right - EDGE_PX) {
+      const next = Math.min(maxScroll, el.scrollLeft + STEP_PX);
+      if (next !== el.scrollLeft) {
+        el.scrollLeft = next;
+        scrolling = true;
+      }
+    }
+  }
+  return scrolling;
+}
+function scheduleDragFrame() {
+  if (_rafId !== null)
+    return;
+  _rafId = requestAnimationFrame(() => {
+    _rafId = null;
+    if (_drag.phase !== "dragging")
+      return;
+    if (_geomDirty || !_geometryCache) {
+      _geometryCache = { containers: getDropContainers() };
+      _geomDirty = false;
+    }
+    const geom = dragHitGeometry(_drag.overlayTx, _drag.overlayTy, _drag.overlayWidth || 48, _drag.overlayHeight || 48);
+    if (autoScrollHorizontal(geom)) {
+      scheduleDragFrame();
+    }
+    const target = hitTestDropTarget(geom, _drag.tabId);
+    const prev = _drag.lastDropTarget;
+    const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
+    if (!target) {
+      if (prev) {
+        clearInsertIndicator();
+      }
+      return;
+    }
+    if (!sameTarget) {
+      const isReorderable = isReorderableContainer(target.container);
+      const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
+      dlog("[tab-list-dnd] target change", {
+        tabId: _drag.tabId,
+        index: target.index,
+        secondary: target.secondary,
+        containerCls: String(target.container.className || ""),
+        isReorderable,
+        sourceIsInCanvasList: _drag.sourceIsInCanvasList,
+        fromSecondary: _drag.fromSecondary
+      });
+      if (isReorderable && _drag.sourceIsInCanvasList) {
+        const prevRects = new Map;
+        const flipContainers = [];
+        const sourceParent = _drag.element?.parentElement;
+        if (sourceParent && isReorderableContainer(sourceParent)) {
+          mergeRects(prevRects, snapshotButtonRects(sourceParent));
+          flipContainers.push(sourceParent);
+        }
+        if (prev?.container && prev.container !== sourceParent) {
+          mergeRects(prevRects, snapshotButtonRects(prev.container));
+          if (!flipContainers.includes(prev.container)) {
+            flipContainers.push(prev.container);
+          }
+        }
+        mergeRects(prevRects, snapshotButtonRects(target.container));
+        if (!flipContainers.includes(target.container)) {
+          flipContainers.push(target.container);
+        }
+        const didReorder = reorderCanvasListDOM(target.container, target, _drag.tabId, _drag.element);
+        if (didReorder) {
+          applyFLIP(prevRects, _drag.tabId, flipContainers);
+          _geomDirty = true;
+        }
+      } else if (prevReorderable && !isReorderable && prev) {
+        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
+        clearFLIPStyles();
+        _geomDirty = true;
+      }
+      _drag.lastDropTarget = target;
+    }
+  });
+}
+function startDrag(btn, pointerEvent) {
+  if (!isLiveTabListDndAllowed())
+    return;
+  const tabId = getButtonTabId(btn);
+  if (!tabId) {
+    dlog("[tab-list-dnd] startDrag bail: no tab id", {
+      title: btn.getAttribute("title") || null,
+      cls: String(btn.className || ""),
+      mirrorKey: btn.getAttribute("data-mirror-key") || null
+    });
+    return;
+  }
+  const fromSecondary = isSecondaryButton(btn);
+  const activeAtGestureStart = captureActiveSelection();
+  const element = btn;
+  const originalParent = btn.parentElement;
+  const originalNextSibling = btn.nextElementSibling;
+  const sourceIsInCanvasList = getReorderParent(btn) != null;
+  logDndOrder("start", {
+    tabId,
+    fromSecondary,
+    sourceIsInCanvasList,
+    hasDataTabId: btn.hasAttribute("data-tab-id"),
+    mirrorKey: btn.getAttribute("data-mirror-key") || null,
+    reorderParent: sourceIsInCanvasList ? getReorderParent(btn)?.className : null
+  });
+  const rect = btn.getBoundingClientRect();
+  const offsetX = pointerEvent.clientX - rect.left;
+  const offsetY = pointerEvent.clientY - rect.top;
+  const overlay = createDragOverlay(btn);
+  const overlayInner = overlay.querySelector(".canvas-tab-list-dnd-overlay-clone-btn");
+  btn.classList.add("canvas-tab-list-dnd-placeholder");
+  _geometryCache = { containers: getDropContainers() };
+  _geomDirty = false;
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+  document.body.classList.add("canvas-tab-list-dnd-dragging");
+  removeDragContextMenuSuppressor();
+  const suppressCtx = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  _dragContextMenuSuppressor = suppressCtx;
+  document.addEventListener("contextmenu", suppressCtx, true);
+  installClickSuppressor(btn);
+  const onMove = (ev) => {
+    if (_drag.phase !== "dragging")
+      return;
+    _drag.overlayTx = ev.clientX - _drag.offsetX;
+    _drag.overlayTy = ev.clientY - _drag.offsetY;
+    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`;
+    _pendingPointerX = ev.clientX;
+    _pendingPointerY = ev.clientY;
+    scheduleDragFrame();
+  };
+  const onUp = async (ev) => {
+    ev.preventDefault();
+    if (_drag.phase !== "dragging")
+      return;
+    const capturedTabId = tabId;
+    const capturedFromSecondary = fromSecondary;
+    const capturedActiveSelection = activeAtGestureStart;
+    const capturedTarget = _drag.lastDropTarget;
+    logDndOrder("pointerup", {
+      tabId: capturedTabId,
+      fromSecondary: capturedFromSecondary,
+      target: capturedTarget ? {
+        index: capturedTarget.index,
+        secondary: capturedTarget.secondary,
+        container: capturedTarget.container.className
+      } : null
+    });
+    removeDragContextMenuSuppressor();
+    scheduleClickSuppressorRemoval();
+    detachDragPointerListeners();
+    _drag = {
+      phase: "settling",
+      tabId: capturedTabId,
+      element,
+      fromSecondary: capturedFromSecondary,
+      activeAtGestureStart: capturedActiveSelection,
+      overlay
+    };
+    clearInsertIndicator();
+    let slotSpacer = null;
+    try {
+      if (capturedTarget && capturedTabId) {
+        const crossList = capturedFromSecondary !== capturedTarget.secondary;
+        const dest = resolveSettleDestination(element, capturedTabId, capturedTarget, rect.width);
+        if (dest) {
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top);
+        }
+        if (crossList && capturedFromSecondary) {
+          slotSpacer = installDropSlotSpacer(element);
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        }
+        let moveChrome = { neighborBtn: null, reassertId: null };
+        let secondaryChrome = { neighborBtn: null };
+        if (crossList && !capturedFromSecondary) {
+          moveChrome = await captureMainMirrorMoveChrome(capturedTabId, "secondary");
+          hideMainTabButton(capturedTabId);
+        } else if (crossList && capturedFromSecondary) {
+          secondaryChrome = await captureSecondaryNeighborForMove(capturedTabId);
+        }
+        const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedActiveSelection, capturedTarget);
+        logDndOrder("post-commit-before-cleanup", {
+          tabId: capturedTabId,
+          ok
+        });
+        if (ok && crossList) {
+          try {
+            if (!capturedFromSecondary) {
+              await applyMainMirrorMoveChrome(moveChrome, capturedTabId);
+            } else {
+              await applySecondaryNeighborHandoff(secondaryChrome, capturedTabId);
+            }
+          } catch (err) {
+            dwarn("[tab-list-dnd] post-commit cross-drawer chrome failed:", err);
+          }
+        } else if (!ok) {
+          if (crossList && !capturedFromSecondary) {
+            showMainTabButton(capturedTabId);
+            try {
+              const mp = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
+              reconcileMainTabListPin?.();
+            } catch {}
+          }
+          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        }
+      } else {
+        restoreSourceButtonDOM(element, originalParent, originalNextSibling);
+        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width);
+        if (dest) {
+          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
+          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
+          await animateOverlaySettle(overlay, currentTx, currentTy, dest.left, dest.top);
+        }
+      }
+    } finally {
+      removeDropSlotSpacer(slotSpacer);
+      cancelOverlaySettle(overlay);
+      cleanupDragVisuals();
+      logDndOrder("cleanup-complete", { tabId: capturedTabId });
+    }
+  };
+  _drag = {
+    phase: "dragging",
+    tabId,
+    element,
+    fromSecondary,
+    activeAtGestureStart,
+    overlay,
+    overlayInner,
+    offsetX,
+    offsetY,
+    overlayTx: rect.left,
+    overlayTy: rect.top,
+    overlayWidth: rect.width,
+    overlayHeight: rect.height,
+    originalParent,
+    originalNextSibling,
+    sourceIsInCanvasList,
+    lastDropTarget: null,
+    moveHandler: onMove,
+    upHandler: onUp
+  };
+  document.addEventListener("pointermove", onMove, { passive: true });
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+function captureActiveSelection() {
+  const world = getHost()?.observe();
+  return {
+    primary: world?.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
+    secondary: world?.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
+  };
+}
+function detachDragPointerListeners() {
+  if (_drag.phase === "dragging") {
+    document.removeEventListener("pointermove", _drag.moveHandler);
+    document.removeEventListener("pointerup", _drag.upHandler);
+    document.removeEventListener("pointercancel", _drag.upHandler);
+  }
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+  if (_rafId !== null) {
+    cancelAnimationFrame(_rafId);
+    _rafId = null;
+  }
+  _geometryCache = null;
+  _geomDirty = false;
+}
+function clearDragState() {
+  detachDragPointerListeners();
+  _drag = { phase: "idle" };
+}
+function cleanupDragVisuals() {
+  clearFLIPStyles();
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const el = _drag.element;
+    el.style.setProperty("transition", "none", "important");
+    el.classList.remove("canvas-tab-list-dnd-placeholder");
+    el.offsetWidth;
+    requestAnimationFrame(() => {
+      el.style.removeProperty("transition");
+    });
+  }
+  if (_drag.phase === "dragging" || _drag.phase === "settling") {
+    const overlay = _drag.overlay;
+    document.body.offsetWidth;
+    overlay.remove();
+  }
+  clearInsertIndicator();
+  if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
+  }
+  _drag = { phase: "idle" };
+}
+async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
+  try {
+    const { draft, base } = buildDraftAndBase();
+    dlog("[tab-list-dnd]", "draft-built", {
+      tabId,
+      fromSecondary,
+      target: { index: target.index, secondary: target.secondary },
+      draft: {
+        primary: draft.primaryIds,
+        secondary: draft.secondaryIds
+      },
+      base: { tabOrder: base.tabOrder },
+      live: dndOrderSnapshot()
+    });
+    if (fromSecondary !== target.secondary) {
+      const targetSide = target.secondary ? "secondary" : "primary";
+      const updated = moveTabVisible(draft, tabId, targetSide, target.index);
+      const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
+      dlog("[tab-list-dnd]", "cross-commit-result", {
+        tabId,
+        ok: result.ok,
+        updated: {
+          primary: updated.primaryIds,
+          secondary: updated.secondaryIds
+        },
+        live: dndOrderSnapshot()
+      });
+      if (!result.ok) {
+        dwarn("[tab-list-dnd] cross-drawer commit failed:", result.error);
+        return false;
+      }
+      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+      const modalWasOpen = isConfigureTabsModalOpen();
+      refreshConfigureDraftFromLive();
+      dlog("[tab-list-dnd] configure modal sync (cross-drawer)", {
+        modalWasOpen,
+        refreshed: modalWasOpen
+      });
+      return true;
+    }
+    const listKey = target.secondary ? "secondaryIds" : "primaryIds";
+    const fullList = draft[listKey];
+    if (!fullList.includes(tabId)) {
+      dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
+      return false;
+    }
+    const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
+    if (updated === draft && !isDraftDirty(draft, base)) {
+      return true;
+    }
+    const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
+    dlog("[tab-list-dnd]", "reorder-commit-result", {
+      tabId,
+      ok: result.ok,
+      updated: {
+        primary: updated.primaryIds,
+        secondary: updated.secondaryIds
+      },
+      live: dndOrderSnapshot()
+    });
+    if (!result.ok) {
+      dwarn("[tab-list-dnd] reorder commit failed:", result.error);
+      return false;
+    }
+    const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
+    const modalWasOpen = isConfigureTabsModalOpen();
+    refreshConfigureDraftFromLive();
+    dlog("[tab-list-dnd] configure modal sync (reorder)", {
+      modalWasOpen,
+      refreshed: modalWasOpen
+    });
+    return true;
+  } catch (err) {
+    dwarn("[tab-list-dnd] drop failed:", err);
+    return false;
+  }
+}
+function installDragOnButton(btn) {
+  if (_installed.has(btn))
+    return;
+  const tabId = getButtonTabId(btn);
+  if (!tabId) {
+    dlog("[tab-list-dnd] install skip: no tab id", {
+      tag: btn.tagName,
+      cls: String(btn.className || ""),
+      title: btn.getAttribute("title") || null,
+      aria: btn.getAttribute("aria-label") || null,
+      hasDataTabId: btn.hasAttribute("data-tab-id"),
+      mirrorKey: btn.getAttribute("data-mirror-key") || null,
+      parentCls: btn.parentElement ? String(btn.parentElement.className || "") : null
+    });
+    return;
+  }
+  if (isSettingsButton(btn)) {
+    dlog("[tab-list-dnd] install skip: settings", {
+      title: btn.getAttribute("title") || null,
+      cls: String(btn.className || "")
+    });
+    return;
+  }
+  _installed.add(btn);
+  let longPressTimer = null;
+  let dragActivated = false;
+  let armingCancelled = false;
+  let pendingPointerMove = null;
+  let pendingPointerUp = null;
+  let pendingPointerCancel = null;
+  const cleanupPendingListeners = () => {
+    if (pendingPointerMove) {
+      document.removeEventListener("pointermove", pendingPointerMove);
+      pendingPointerMove = null;
+    }
+    if (pendingPointerUp) {
+      document.removeEventListener("pointerup", pendingPointerUp);
+      pendingPointerUp = null;
+    }
+    if (pendingPointerCancel) {
+      document.removeEventListener("pointercancel", pendingPointerCancel);
+      pendingPointerCancel = null;
+    }
+  };
+  const cancelArming = () => {
+    if (longPressTimer != null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    cleanupPendingListeners();
+  };
+  const onPointerDown = (e) => {
+    if (!_active2)
+      return;
+    if (!isLiveTabListDndAllowed())
+      return;
+    if (e.button !== 0)
+      return;
+    if (_drag.phase !== "idle")
+      return;
+    dlog("[tab-list-dnd] pointerdown arm", {
+      tabId: getButtonTabId(btn),
+      title: btn.getAttribute("title") || btn.getAttribute("aria-label") || null,
+      hasDataTabId: btn.hasAttribute("data-tab-id"),
+      cls: String(btn.className || ""),
+      pointerType: e.pointerType
+    });
+    dragActivated = false;
+    armingCancelled = false;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const longPress = usesLongPressActivation(e.pointerType);
+    if (longPress) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        cleanupPendingListeners();
+        if (armingCancelled)
+          return;
+        if (!isLiveTabListDndAllowed())
+          return;
+        dragActivated = true;
+        startDrag(btn, e);
+      }, LONG_PRESS_MS);
+    }
+    const onMove = (ev) => {
+      if (dragActivated)
+        return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (longPress) {
+        if (shouldActivateDragFromDistance(dx, dy)) {
+          armingCancelled = true;
+          cancelArming();
+        }
+        return;
+      }
+      if (!shouldActivateDragFromDistance(dx, dy))
+        return;
+      dragActivated = true;
+      cleanupPendingListeners();
+      if (!isLiveTabListDndAllowed())
+        return;
+      startDrag(btn, ev);
+    };
+    const onUp = () => {
+      cancelArming();
+    };
+    pendingPointerMove = onMove;
+    pendingPointerUp = onUp;
+    pendingPointerCancel = onUp;
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  };
+  btn.addEventListener("pointerdown", onPointerDown);
+}
+function installTabListDnd() {
+  if (_active2)
+    return null;
+  _active2 = true;
+  dlog("[tab-list-dnd] install: diagnostic build active");
+  injectDndStyles();
+  const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+  for (const btn of existing) {
+    installDragOnButton(btn);
+  }
+  dlog("[tab-list-dnd] install: existing buttons visited", { count: existing.length });
+  _observer = new MutationObserver((mutations) => {
+    for (const mut of mutations) {
+      for (const node of mut.addedNodes) {
+        if (!(node instanceof HTMLElement))
+          continue;
+        if (node.tagName === "BUTTON" && (node.hasAttribute("data-tab-id") || node.classList.contains("sidebar-ux-main-tab-mirror-btn"))) {
+          installDragOnButton(node);
+        }
+        const descendants = node.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
+        for (const child of descendants) {
+          installDragOnButton(child);
+        }
+      }
+    }
+  });
+  _observer.observe(document.body, { childList: true, subtree: true });
+  return () => {
+    tearDownTabListDnd();
+  };
+}
+function tearDownTabListDnd() {
+  _active2 = false;
+  if (_observer) {
+    _observer.disconnect();
+    _observer = null;
+  }
+  if (_drag.phase !== "idle") {
+    removeClickSuppressorNow();
+    removeDragContextMenuSuppressor();
+    detachDragPointerListeners();
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId);
+      _rafId = null;
+    }
+    if (_drag.phase === "dragging" || _drag.phase === "settling") {
+      cancelOverlaySettle(_drag.overlay);
+    }
+    if (_drag.phase === "dragging") {
+      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
+    }
+    cleanupDragVisuals();
+    clearDragState();
+  }
+  if (typeof document !== "undefined") {
+    document.body.classList.remove("canvas-tab-list-dnd-dragging");
+    document.getElementById(DND_STYLE_ID)?.remove();
+  }
+}
+var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
+var init_tab_list_dnd = __esm(() => {
+  init_configure_model();
+  init_owned_commit();
+  init_dispatch();
+  init_configure_catalog();
+  init_canvas_hidden();
+  init_hidden_tabs();
+  init_host_settings();
+  init_assignment();
+  init_store();
+  init_secondary();
+  init_buttons();
+  init_mobile_exclusion();
+  init_handles();
+  init_log();
+  init_live_tab_order();
+  _drag = { phase: "idle" };
+  _installed = new WeakSet;
+});
+
+// src/sidebar/drawer-location.ts
+function stripEdgeFor(loc) {
+  return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
+}
+function applyLocationPresentation(loc) {
+  if (typeof document === "undefined" || !document.documentElement)
+    return;
+  const root = document.documentElement;
+  const cl = root.classList;
+  if (typeof cl?.toggle === "function") {
+    cl.toggle(LOCATION_CLASS_TOP, loc === "top");
+    cl.toggle(LOCATION_CLASS_BOTTOM, loc === "bottom");
+    cl.toggle(LOCATION_CLASS_SIDES, loc === "sides");
+  }
+  root.style?.setProperty?.(STRIP_HEIGHT_VAR, `${STRIP_HEIGHT_PX}px`);
+  const edge = stripEdgeFor(loc);
+  applyWrapperStripEdge(getSecondaryWrapper(), edge);
+  applyWrapperStripEdge(getMainMirrorWrapper(), edge);
+}
+function hideHandles() {
+  const secondary = getSecondaryWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
+  if (secondary?.style)
+    secondary.style.display = "none";
+  const main = getMainMirrorWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
+  if (main?.style)
+    main.style.display = "none";
+}
+function secondaryZonePresent2() {
+  return !!getSettings().secondSidebarEnabled && isSecondaryShellLive() && hasSecondaryAssignedTabs();
+}
+function computeKey(loc) {
+  return [
+    loc,
+    isMobileViewport() ? "mobile" : "desktop",
+    getMainDrawerSide(),
+    getSettings().secondSidebarEnabled ? "1" : "0",
+    isSecondaryShellLive() ? "1" : "0",
+    secondaryZonePresent2() ? "1" : "0"
+  ].join("|");
+}
+function reconcileDrawerLocation(opts) {
+  if (!isInstanceActive())
+    return;
+  if (_pending) {
+    _dirty = true;
+    return;
+  }
+  _pending = true;
+  try {
+    runReconcile(opts?.force === true);
+    if (_dirty) {
+      _dirty = false;
+      runReconcile(true);
+    }
+  } finally {
+    _pending = false;
+  }
+}
+function runReconcile(force) {
+  const gen = ++_locGen;
+  const loc = getDrawerLocation();
+  const horizontal = isHorizontalStrip();
+  syncHorizontalSplit();
+  const key = computeKey(loc);
+  if (!force && key === _lastKey)
+    return;
+  _lastKey = key;
+  applyLocationPresentation(loc);
+  reconcileTabListPin();
+  reconcileMainTabListPin();
+  if (gen !== _locGen)
+    return;
+  syncHorizontalSplit();
+  if (isDndDragActive())
+    invalidateDndGeometry();
+  updateDrawerTabVisibility();
+  updateMainMirrorDrawerTabVisibility();
+  if (horizontal)
+    hideHandles();
+  updateStripGutters();
+  updateChatReflow();
+}
+function schedulePresenceReconcile() {
+  if (_presenceRaf !== null)
+    return;
+  const run = () => {
+    _presenceRaf = null;
+    reconcileDrawerLocation();
+  };
+  if (typeof requestAnimationFrame === "function") {
+    _presenceRaf = requestAnimationFrame(run);
+  } else {
+    run();
+  }
+}
+function mountDrawerLocation() {
+  initDrawerLocation();
+  reconcileDrawerLocation({ force: true });
+  if (!_unsubModel) {
+    _unsubModel = onModelChanged(() => schedulePresenceReconcile());
+  }
+  return () => {
+    if (_unsubModel) {
+      _unsubModel();
+      _unsubModel = null;
+    }
+    if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(_presenceRaf);
+    }
+    _presenceRaf = null;
+  };
+}
+function initDrawerLocation() {
+  injectHorizontalStripStyles();
+  applyLocationPresentation(getDrawerLocation());
+}
+function clearDrawerLocation() {
+  _locGen++;
+  _pending = false;
+  _dirty = false;
+  _lastKey = null;
+  if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(_presenceRaf);
+  }
+  _presenceRaf = null;
+  if (_unsubModel) {
+    _unsubModel();
+    _unsubModel = null;
+  }
+  clearHorizontalSplit();
+  if (typeof document === "undefined" || !document.documentElement)
+    return;
+  const root = document.documentElement;
+  root.classList?.remove?.(LOCATION_CLASS_SIDES);
+  root.classList?.remove?.(LOCATION_CLASS_TOP);
+  root.classList?.remove?.(LOCATION_CLASS_BOTTOM);
+  root.style?.removeProperty?.(STRIP_HEIGHT_VAR);
+  applyWrapperStripEdge(getSecondaryWrapper(), null);
+  applyWrapperStripEdge(getMainMirrorWrapper(), null);
+}
+var _pending = false, _dirty = false, _locGen = 0, _lastKey = null, _unsubModel = null, _presenceRaf = null;
+var init_drawer_location = __esm(() => {
+  init_state();
+  init_dispatch();
+  init_assignment();
+  init_store();
+  init_mobile_exclusion();
+  init_styles();
+  init_drawer_shell();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_tab_position();
+  init_main_tab_pin();
+  init_strip_gutter();
+  init_reflow();
+  init_buttons();
+  init_tab_list_dnd();
 });
 
 // src/settings/second-drawer-mode.ts
@@ -10463,8 +12002,9 @@ async function runSecondDrawerSwitch(target, opts) {
   if (target) {
     if (getSettings().secondSidebarEnabled)
       return;
-    if (getSettings().osMode && isMobileViewportLocal2()) {
-      dlog("[second-drawer-mode] enable ignored: OS mode forces single drawer on mobile");
+    const settings = getSettings();
+    if ((settings.osMode || settings.taskbarMode && settings.moveControlsToOuterEdge) && isMobileViewportLocal2()) {
+      dlog("[second-drawer-mode] enable ignored: mobile taskbars force single drawer");
       return;
     }
     const enableChoice = await guardConfigureDirty({ silent: opts?.silent });
@@ -10810,10 +12350,10 @@ function injectModalStyles() {
     /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
     .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
       transition:
-        left ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        top ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        box-shadow ${SETTLE_DURATION_MS}ms ease,
-        opacity ${SETTLE_DURATION_MS}ms ease !important;
+        left ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        top ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        box-shadow ${SETTLE_DURATION_MS2}ms ease,
+        opacity ${SETTLE_DURATION_MS2}ms ease !important;
       box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
       cursor: default;
     }
@@ -11126,10 +12666,10 @@ function detachDragListeners() {
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
 }
-function cancelOverlaySettle() {
-  if (_settleTimer !== null) {
-    clearTimeout(_settleTimer);
-    _settleTimer = null;
+function cancelOverlaySettle2() {
+  if (_settleTimer2 !== null) {
+    clearTimeout(_settleTimer2);
+    _settleTimer2 = null;
   }
   if (_dragOverlay) {
     _dragOverlay.classList.remove("canvas-configure-tabs-overlay-settling");
@@ -11147,7 +12687,7 @@ function resolveConfigureSettleDestination(tabId) {
   }
   return null;
 }
-function animateOverlaySettle(destLeft, destTop) {
+function animateOverlaySettle2(destLeft, destTop) {
   const overlay = _dragOverlay;
   if (!overlay)
     return Promise.resolve();
@@ -11155,7 +12695,7 @@ function animateOverlaySettle(destLeft, destTop) {
   const curTop = parseFloat(overlay.style.top) || 0;
   const dx = destLeft - curLeft;
   const dy = destTop - curTop;
-  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
     overlay.style.left = `${destLeft}px`;
     overlay.style.top = `${destTop}px`;
     return Promise.resolve();
@@ -11167,9 +12707,9 @@ function animateOverlaySettle(destLeft, destTop) {
         return;
       done = true;
       overlay.removeEventListener("transitionend", onEnd);
-      if (_settleTimer !== null) {
-        clearTimeout(_settleTimer);
-        _settleTimer = null;
+      if (_settleTimer2 !== null) {
+        clearTimeout(_settleTimer2);
+        _settleTimer2 = null;
       }
       resolve();
     };
@@ -11186,7 +12726,7 @@ function animateOverlaySettle(destLeft, destTop) {
     overlay.offsetWidth;
     overlay.style.left = `${destLeft}px`;
     overlay.style.top = `${destTop}px`;
-    _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40);
+    _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
   });
 }
 function cloneConfigureDraft(d) {
@@ -11199,8 +12739,8 @@ function cloneConfigureDraft(d) {
     hiddenIds: new Set(d.hiddenIds)
   };
 }
-function clearDragState() {
-  cancelOverlaySettle();
+function clearDragState2() {
+  cancelOverlaySettle2();
   stopAutoScroll();
   if (_dragOverlay) {
     _dragOverlay.remove();
@@ -11320,7 +12860,7 @@ function autoScrollFrame() {
 function runHitTestAndReorder(x, y) {
   if (!_dragTabId || _settling)
     return;
-  const target_ = hitTestDropTarget(x, y);
+  const target_ = hitTestDropTarget2(x, y);
   if (!target_)
     return;
   const prev = _lastDropTarget;
@@ -11338,7 +12878,7 @@ function snapshotFLIPRects() {
   }
   return rects;
 }
-function applyFLIP(prevRects, excludeTabId) {
+function applyFLIP2(prevRects, excludeTabId) {
   const animated = [];
   const rows = document.querySelectorAll(".canvas-configure-tabs-row");
   for (const el of rows) {
@@ -11370,7 +12910,7 @@ function applyFLIP(prevRects, excludeTabId) {
     }, 220);
   });
 }
-function createDragOverlay(sourceRow) {
+function createDragOverlay2(sourceRow) {
   const overlay = sourceRow.cloneNode(true);
   overlay.className = "canvas-configure-tabs-overlay-clone";
   const rect = sourceRow.getBoundingClientRect();
@@ -11384,7 +12924,7 @@ function createDragOverlay(sourceRow) {
   document.body.appendChild(overlay);
   return overlay;
 }
-function hitTestDropTarget(x, y) {
+function hitTestDropTarget2(x, y) {
   const lists = document.querySelectorAll(".canvas-configure-tabs-list");
   for (const list of lists) {
     const listRect = list.getBoundingClientRect();
@@ -11427,7 +12967,7 @@ function performDragMove(tabId, toSide, toIndex) {
   }
   _dragFromSide = toSide;
   renderModal(_draftRef, _catalogRef, null, false);
-  applyFLIP(prevRects, tabId);
+  applyFLIP2(prevRects, tabId);
   for (const r of document.querySelectorAll(".canvas-configure-tabs-row")) {
     if (r.getAttribute("data-tab-id") === tabId) {
       r.classList.add("row-dragging");
@@ -11440,7 +12980,7 @@ function cancelDrag(opts) {
   if (revert && _dragDraftSnapshot) {
     _draftRef = cloneConfigureDraft(_dragDraftSnapshot);
   }
-  clearDragState();
+  clearDragState2();
   if (revert && _draftRef) {
     renderModal(_draftRef, _catalogRef, null, false);
   }
@@ -11509,7 +13049,7 @@ function ConfigureTabsModalInner(props) {
     onDone
   } = props;
   const leftIsSecondaryVal = leftColumnIsSecondary(draft.drawerSide);
-  const osMobileSingle = !!getSettings().osMode && _isMobileViewportForConfigure();
+  const mobileTaskbarSingle = (getSettings().osMode || getSettings().taskbarMode && getSettings().moveControlsToOuterEdge) && _isMobileViewportForConfigure();
   const committingRef = A2(committing);
   committingRef.current = committing;
   const cancelRef = A2(onCancel);
@@ -11560,7 +13100,7 @@ function ConfigureTabsModalInner(props) {
           _dragOffsetX = ev.clientX - rowRect.left;
           _dragOffsetY = ev.clientY - rowRect.top;
           sourceRow.classList.add("row-dragging");
-          _dragOverlay = createDragOverlay(sourceRow);
+          _dragOverlay = createDragOverlay2(sourceRow);
         }
       }
       if (_dragOverlay) {
@@ -11580,11 +13120,11 @@ function ConfigureTabsModalInner(props) {
         if (_dragActive && _dragOverlay && _dragTabId) {
           const dest = resolveConfigureSettleDestination(_dragTabId);
           if (dest) {
-            await animateOverlaySettle(dest.left, dest.top);
+            await animateOverlaySettle2(dest.left, dest.top);
           }
         }
       } finally {
-        clearDragState();
+        clearDragState2();
         autoCommit();
       }
     };
@@ -11842,20 +13382,20 @@ function ConfigureTabsModalInner(props) {
                   children: [
                     /* @__PURE__ */ u3("span", {
                       class: "canvas-configure-tabs-second-drawer-toggle-label",
-                      title: osMobileSingle ? "OS mode uses single-drawer mode on mobile — disable OS mode first." : undefined,
+                      title: mobileTaskbarSingle ? "OS and Taskbar use single-drawer mode on mobile — choose Vanilla first." : undefined,
                       onClick: () => {
-                        if (!osMobileSingle)
+                        if (!mobileTaskbarSingle)
                           onToggleSecondDrawer();
                       },
                       children: "Second drawer"
                     }),
                     /* @__PURE__ */ u3("button", {
                       class: `canvas-configure-tabs-toggle${secondDrawerEnabled ? " toggle-on" : ""}`,
-                      disabled: osMobileSingle,
-                      title: osMobileSingle ? "OS mode uses single-drawer mode on mobile — disable OS mode first." : undefined,
+                      disabled: mobileTaskbarSingle,
+                      title: mobileTaskbarSingle ? "OS and Taskbar use single-drawer mode on mobile — choose Vanilla first." : undefined,
                       onClick: (e) => {
                         e.stopPropagation();
-                        if (!osMobileSingle)
+                        if (!mobileTaskbarSingle)
                           onToggleSecondDrawer();
                       }
                     })
@@ -12096,10 +13636,10 @@ function unmountModal() {
   _modalContainer = null;
   _draftRef = null;
   _baseSnapshotRef = null;
-  clearDragState();
+  clearDragState2();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer2 = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -12118,2445 +13658,6 @@ var init_configure_modal = __esm(() => {
   init_log();
   init_jsxRuntime_module();
   _catalogRef = [];
-});
-
-// src/settings/mode-transition.ts
-function beginModeSwitchBarrier() {
-  _modeSwitchBarrierDepth++;
-}
-function endModeSwitchBarrier() {
-  if (_modeSwitchBarrierDepth > 0)
-    _modeSwitchBarrierDepth--;
-}
-function isModeSwitchBarrierActive() {
-  return _modeSwitchBarrierDepth > 0;
-}
-async function withModeSwitchBarrier(fn) {
-  const nested = isModeSwitchBarrierActive();
-  if (!nested) {
-    try {
-      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-      if (isConfigureTabsModalOpen()) {
-        await flushConfigureCommits();
-      }
-    } catch {}
-  }
-  beginModeSwitchBarrier();
-  try {
-    return await fn();
-  } finally {
-    endModeSwitchBarrier();
-  }
-}
-function runOsTransition(fn) {
-  const result = _osChain.then(() => runDrawerTransition(fn));
-  _osChain = result.then(noop, noop);
-  return result;
-}
-function runDrawerTransition(fn) {
-  const result = _drawerChain.then(fn);
-  _drawerChain = result.then(noop, noop);
-  return result;
-}
-function runNestedDrawerTransition(fn) {
-  try {
-    return Promise.resolve(fn());
-  } catch (err) {
-    return Promise.reject(err);
-  }
-}
-var noop = () => {}, _osChain, _drawerChain, _modeSwitchBarrierDepth = 0;
-var init_mode_transition = __esm(() => {
-  _osChain = Promise.resolve();
-  _drawerChain = Promise.resolve();
-});
-
-// src/tabs/owned-commit.ts
-function plannedMovesForCommit(model, desiredSide) {
-  const moves = [];
-  for (const [key, side] of desiredSide) {
-    const current = sideOfKey(model, key);
-    if (current && current !== side)
-      moves.push({ key, to: side });
-  }
-  return moves;
-}
-function missingSecondaryButtonKeys(model, desiredSide, resolve, hasButton) {
-  const missing = [];
-  for (const [key, side] of desiredSide) {
-    if (side !== "secondary")
-      continue;
-    if (sideOfKey(model, key) !== "secondary")
-      continue;
-    const liveId = resolve(key);
-    if (liveId && !hasButton(liveId))
-      missing.push({ key, to: "secondary" });
-  }
-  return missing;
-}
-async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
-  if (isModeSwitchBarrierActive()) {
-    return { ok: false, error: "mode-switch-in-progress", superseded: true };
-  }
-  const host = getHost();
-  if (!host)
-    return { ok: false, error: "Canvas tab model is not ready." };
-  try {
-    const commitBaseModel = getModel();
-    const observedBeforeRebase = host.observe();
-    await dispatchBatch([{ t: "syncFromHost", observed: host.observe() }]);
-    const model = getModel();
-    if (!model)
-      return { ok: false, error: "Canvas tab model is not ready." };
-    dlog("[owned-commit] rebased", {
-      primary: model.primary,
-      secondary: model.secondary
-    });
-    const keyFor = (id) => host.findKey(id);
-    const primary = resolveKeys(draft.primaryIds, keyFor);
-    const secondary = resolveKeys(draft.secondaryIds, keyFor);
-    const hidden = new Set(resolveKeys([...draft.hiddenIds], keyFor));
-    if (primary.length !== draft.primaryIds.length || secondary.length !== draft.secondaryIds.length) {
-      dlog("[owned-commit] resolution failed — rolling back rebase", {
-        expectedPrimary: draft.primaryIds.length,
-        gotPrimary: primary.length,
-        expectedSecondary: draft.secondaryIds.length,
-        gotSecondary: secondary.length
-      });
-      await dispatchBatch([{ t: "syncFromHost", observed: observedBeforeRebase }]);
-      return { ok: false, error: "A tab changed while Configure Tabs was open. Please retry." };
-    }
-    const intents = [];
-    if (draft.drawerSide !== model.side) {
-      dlog("[owned-commit] drawer side swap requested", {
-        draftSide: draft.drawerSide,
-        modelSide: model.side
-      });
-      intents.push({ t: "swapSides" });
-    }
-    const desiredSide = new Map;
-    for (const key of primary)
-      desiredSide.set(key, "primary");
-    for (const key of secondary)
-      desiredSide.set(key, "secondary");
-    for (const [key, side] of desiredSide) {
-      const current = sideOfKey(model, key);
-      if (current && current !== side) {
-        intents.push({
-          t: "move",
-          key,
-          to: side,
-          index: visibleKeys(model, side).length,
-          activateDest: false
-        });
-      }
-    }
-    dlog("[owned-commit] reorder index context", {
-      hiddenCount: hidden.size,
-      hiddenKeys: [...hidden],
-      primaryCount: primary.length,
-      secondaryCount: secondary.length,
-      visiblePrimary: model.primary.filter((k) => !hidden.has(k)).length,
-      visibleSecondary: model.secondary.filter((k) => !hidden.has(k)).length
-    });
-    for (const [side, keys] of [["primary", primary], ["secondary", secondary]]) {
-      for (let index = 0;index < keys.length; index++) {
-        const key = keys[index];
-        intents.push({ t: "reorder", key, side, index });
-      }
-    }
-    for (const key of [...model.primary, ...model.secondary]) {
-      intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
-    }
-    for (const key of model.closed) {
-      if (model.hidden.includes(key) && !hidden.has(key)) {
-        intents.push({ t: "setClosed", key, closed: false });
-      }
-    }
-    if (commitBaseModel) {
-      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
-      for (const source of ["primary", "secondary"]) {
-        const active = activeBeforeRebase[source];
-        if (!active || hidden.has(active))
-          continue;
-        const destination = desiredSide.get(active);
-        if (destination === source) {
-          intents.push({ t: "activate", key: active, side: source });
-          continue;
-        }
-        if (destination) {
-          const replacement = activeAfterRemoval(commitBaseModel, source, active);
-          if (replacement && !hidden.has(replacement)) {
-            intents.push({ t: "activate", key: replacement, side: source });
-          }
-          const destinationActive = activeBeforeRebase[destination];
-          if (destinationActive && destinationActive !== active && !hidden.has(destinationActive)) {
-            intents.push({ t: "activate", key: destinationActive, side: destination });
-          }
-        }
-      }
-    }
-    if (isModeSwitchBarrierActive()) {
-      return { ok: false, error: "mode-switch-in-progress", superseded: true };
-    }
-    dlog("[owned-commit] dispatching", {
-      intents,
-      primary,
-      secondary
-    });
-    const plannedMoves = plannedMovesForCommit(commitBaseModel ?? model, desiredSide);
-    if (typeof document !== "undefined") {
-      try {
-        await Promise.resolve().then(() => init_buttons());
-        await Promise.resolve().then(() => init_secondary());
-        const missing = missingSecondaryButtonKeys(model, desiredSide, (key) => host.resolve(key), (liveId) => {
-          const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-          return !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
-        });
-        if (missing.length > 0) {
-          dlog("[owned-commit] placement pass: model-vs-DOM divergence healed", {
-            missing: missing.map((m) => m.key)
-          });
-          plannedMoves.push(...missing);
-        }
-      } catch (err) {
-        dwarn("[owned-commit] divergence heal failed:", err);
-      }
-    }
-    const mirrorChrome = new Map;
-    const secondaryChrome = new Map;
-    if (!opts?.skipChrome) {
-      for (const move of plannedMoves) {
-        const liveId = host.resolve(move.key);
-        if (!liveId)
-          continue;
-        if (move.to === "secondary") {
-          mirrorChrome.set(move.key, await captureMainMirrorMoveChrome(liveId, "secondary"));
-        } else {
-          secondaryChrome.set(move.key, await captureSecondaryNeighborForMove(liveId));
-        }
-      }
-    }
-    await dispatchBatch(intents);
-    const committed = getModel();
-    dlog("[owned-commit] committed", {
-      primary: committed?.primary,
-      secondary: committed?.secondary
-    });
-    if (plannedMoves.length > 0 && typeof document !== "undefined") {
-      try {
-        const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
-        setSuppressAutoActivation(true);
-        let placed = 0;
-        const failed = [];
-        try {
-          for (const move of plannedMoves) {
-            const liveId = host.resolve(move.key);
-            if (!liveId) {
-              dlog("[owned-commit] placement pass: host.resolve returned null", {
-                key: move.key,
-                to: move.to
-              });
-              continue;
-            }
-            try {
-              if (move.to === "secondary") {
-                await assignToSecondary(liveId, {
-                  facadeKey: move.key,
-                  openOnClosed: false,
-                  setActiveWhenReady: false
-                });
-                if (isExtensionKey(move.key)) {
-                  await Promise.resolve().then(() => init_secondary());
-                  await Promise.resolve().then(() => init_buttons());
-                  const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-                  const rootPresent = !!content?.querySelector(`[data-canvas-moved="${cssEscape2(liveId)}"]`);
-                  if (!rootPresent) {
-                    failed.push(move.key);
-                    dwarn("[owned-commit] placement returned without secondary root", {
-                      key: move.key,
-                      liveId,
-                      secondaryContentFound: !!content
-                    });
-                    continue;
-                  }
-                }
-              } else {
-                await unassignFromSecondary(liveId);
-              }
-              placed++;
-            } catch (err) {
-              failed.push(move.key);
-              dwarn("[owned-commit] placement failed for", move.key, String(err));
-            }
-          }
-        } finally {
-          setSuppressAutoActivation(false);
-        }
-        dlog("[owned-commit] placement pass", {
-          moves: plannedMoves.length,
-          placed,
-          failed,
-          toSecondary: plannedMoves.filter((m) => m.to === "secondary").map((m) => m.key),
-          toPrimary: plannedMoves.filter((m) => m.to === "primary").map((m) => m.key)
-        });
-        const modelAfter = getModel();
-        if (modelAfter && modelAfter.secondary.length > 0) {
-          await Promise.resolve().then(() => init_buttons());
-          const ids = modelAfter.secondary.map((k) => host.resolve(k)).filter((id) => !!id);
-          if (secondaryTabButtonsReady(ids))
-            reorderSecondaryTabButtons(ids);
-        }
-      } catch (err) {
-        dwarn("[owned-commit] placement pass failed:", err);
-      }
-    }
-    if (!opts?.skipChrome) {
-      for (const move of plannedMoves) {
-        const liveId = host.resolve(move.key);
-        if (!liveId)
-          continue;
-        try {
-          if (move.to === "secondary") {
-            await applyMainMirrorMoveChrome(mirrorChrome.get(move.key) ?? { neighborBtn: null, reassertId: null }, liveId);
-          } else {
-            await applySecondaryNeighborHandoff(secondaryChrome.get(move.key) ?? { neighborBtn: null }, liveId);
-          }
-        } catch (err) {
-          dwarn("[owned-commit] chrome handoff failed for", move.key, String(err));
-        }
-      }
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-function resolveKeys(ids, resolve) {
-  const keys = [];
-  for (const id of ids) {
-    const key = resolve(id);
-    if (key)
-      keys.push(key);
-  }
-  return keys;
-}
-function activeSelection(world) {
-  return {
-    primary: world.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
-    secondary: world.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
-  };
-}
-var init_owned_commit = __esm(() => {
-  init_dispatch();
-  init_log();
-  init_mode_transition();
-});
-
-// src/tabs/tab-list-dnd.ts
-function isLiveTabListDndAllowed() {
-  return !isMobileViewport() && !isPointerResizeActive();
-}
-function shouldActivateDragFromDistance(dx, dy, threshold = DRAG_ACTIVATE_DISTANCE_PX) {
-  return Math.sqrt(dx * dx + dy * dy) >= threshold;
-}
-function usesLongPressActivation(pointerType) {
-  return pointerType === "touch" || pointerType === "pen";
-}
-function removeDragContextMenuSuppressor() {
-  if (!_dragContextMenuSuppressor)
-    return;
-  document.removeEventListener("contextmenu", _dragContextMenuSuppressor, true);
-  _dragContextMenuSuppressor = null;
-}
-function containerAxis(el) {
-  if (!el)
-    return "y";
-  let cur = el;
-  while (cur) {
-    const axis = cur.getAttribute?.("data-strip-axis");
-    if (axis === "horizontal")
-      return "x";
-    if (axis === "vertical")
-      return "y";
-    cur = cur.parentElement;
-  }
-  if (el.classList?.contains?.("sidebar-ux-tab-list--pinned") || el.classList?.contains?.(MIRROR_MAIN_CLASS) || el.classList?.contains?.(MIRROR_BOTTOM_CLASS)) {
-    let p = el.parentElement;
-    while (p) {
-      if (p.getAttribute?.("data-strip-axis") === "horizontal")
-        return "x";
-      p = p.parentElement;
-    }
-  }
-  try {
-    if (typeof getComputedStyle === "function") {
-      const fd = getComputedStyle(el).flexDirection;
-      if (typeof fd === "string" && fd.includes("row"))
-        return "x";
-    }
-  } catch {}
-  return "y";
-}
-function axisMidpoint(rect, axis) {
-  return axis === "x" ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
-}
-function axisCoordinate(geom, axis) {
-  return axis === "x" ? geom.centerX : geom.centerY;
-}
-function seamChoice(centerX, leftRect, rightRect) {
-  const boundary = (leftRect.right + rightRect.left) / 2;
-  return centerX < boundary ? "left" : "right";
-}
-function flipDelta(prev, curr) {
-  return { dx: prev.left - curr.left, dy: prev.top - curr.top };
-}
-function invalidateDndGeometry() {
-  _geometryCache = null;
-  _geomDirty = true;
-}
-function isDndDragActive() {
-  return _drag.phase === "dragging";
-}
-function dndOrderSnapshot() {
-  return {
-    primary: readLivePrimaryTabIds(),
-    secondary: readLiveSecondaryTabIds()
-  };
-}
-function logDndOrder(label, extra = {}) {
-  dlog("[tab-list-dnd]", label, { ...extra, live: dndOrderSnapshot() });
-}
-function injectDndStyles() {
-  if (typeof document === "undefined")
-    return;
-  if (document.getElementById(DND_STYLE_ID))
-    return;
-  const style = document.createElement("style");
-  style.id = DND_STYLE_ID;
-  style.textContent = `
-    /* ── Floating overlay clone (wrapper) — matches configure-modal overlay-clone treatment.
-         pointer-events:none so synthetic click targets the real tab under the
-         cursor (document capture suppressor can stop activation). ── */
-    .canvas-tab-list-dnd-overlay-clone {
-      position: fixed;
-      z-index: 13000;
-      pointer-events: none !important;
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--lumiverse-border, #333);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--lumiverse-primary, #4a9eff) 8%, var(--lumiverse-bg-panel, var(--lumiverse-bg, #1a1a2e)));
-      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
-        0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary, #4a9eff));
-      color: var(--lumiverse-text, #eee);
-      font-family: var(--lumiverse-font-family, sans-serif);
-      opacity: 1 !important;
-      will-change: transform;
-      cursor: grabbing;
-    }
-    /* Defense: never inherit invisible-placeholder opacity onto the float */
-    .canvas-tab-list-dnd-overlay-clone .canvas-tab-list-dnd-placeholder,
-    .canvas-tab-list-dnd-overlay-clone-btn.canvas-tab-list-dnd-placeholder {
-      opacity: 1 !important;
-      pointer-events: none !important;
-    }
-
-    /* ── Inner button clone — host CSS-module classes may not reflow the
-         floating clone the same way; force tab-btn layout so icons stay
-         centered (was left-biased after lift). ── */
-    .canvas-tab-list-dnd-overlay-clone-btn {
-      border: none !important;
-      background: none !important;
-      box-shadow: none !important;
-      outline: none !important;
-      width: 100% !important;
-      height: 100% !important;
-      flex-shrink: 0 !important;
-      display: flex !important;
-      flex-direction: column !important;
-      align-items: center !important;
-      justify-content: center !important;
-      gap: 1px !important;
-      padding: 0 !important;
-      margin: 0 !important;
-      box-sizing: border-box !important;
-    }
-
-    /* ── Override label font for overlay clone (lost .sidebar-ux-tab-list ancestry) ── */
-    .canvas-tab-list-dnd-overlay-clone .sidebar-ux-tab-label,
-    .canvas-tab-list-dnd-overlay-clone span[class*="tabLabel"] {
-      font-size: calc(9px * var(--lumiverse-font-scale, 1)) !important;
-      font-weight: 500 !important;
-      line-height: 1 !important;
-      text-align: center !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-      white-space: nowrap !important;
-      max-width: 48px !important;
-      flex-shrink: 0 !important;
-    }
-
-    /* ── Icon wrap + svg sizing (host builtins = button>svg; mirror/secondary = span>svg) ── */
-    .canvas-tab-list-dnd-overlay-clone-btn > span:first-child {
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      flex-shrink: 0 !important;
-      width: 20px !important;
-      height: 20px !important;
-    }
-    .canvas-tab-list-dnd-overlay-clone-btn svg {
-      width: 20px !important;
-      height: 20px !important;
-      flex-shrink: 0 !important;
-      display: block !important;
-    }
-    .canvas-tab-list-dnd-overlay-clone-btn img {
-      width: 20px !important;
-      height: 20px !important;
-      flex-shrink: 0 !important;
-      display: block !important;
-    }
-
-    /* ── Source button while being dragged — invisible slot holder (keeps
-         layout / mid-drag FLIP geometry; floating overlay is the visible tab).
-         transition:none while hidden so removing the class does not fade
-         opacity via strip transition:all 0.2s. ── */
-    .canvas-tab-list-dnd-placeholder {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      transition: none !important;
-    }
-
-    /* ── While dragging: strip buttons do not receive pointer hits.
-         Overlay is pointer-events:none so the cursor would otherwise
-         :hover the tab underneath (host hover glow/background). Hit-test
-         uses document pointer coords, not elementFromPoint. ── */
-    body.canvas-tab-list-dnd-dragging button[data-tab-id],
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-mirror-btn,
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-tab-list button,
-    body.canvas-tab-list-dnd-dragging .sidebar-ux-main-tab-list-mirror button {
-      pointer-events: none !important;
-    }
-
-    /* ── FLIP animation on Canvas-owned list buttons during mid-drag reorder ── */
-    .canvas-tab-list-dnd-flipping {
-      transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1) !important;
-    }
-
-    /* ── Drop settle: floating clone eases into its destination slot ── */
-    .canvas-tab-list-dnd-overlay-clone.canvas-tab-list-dnd-overlay-settling {
-      transition:
-        transform ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
-        box-shadow ${SETTLE_DURATION_MS2}ms ease,
-        opacity ${SETTLE_DURATION_MS2}ms ease !important;
-      box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.35),
-        0 0 0 1px var(--lumiverse-border, #333);
-      cursor: default;
-      opacity: 0.92 !important;
-    }
-  `;
-  document.head.appendChild(style);
-}
-function isSecondaryButton(btn) {
-  if (btn.classList.contains(MIRROR_BTN_CLASS))
-    return false;
-  if (btn.closest(`.${MIRROR_LIST_CLASS}`))
-    return false;
-  return !!btn.closest(`.${TAB_LIST_CLASS}`);
-}
-function getButtonTabId(btn) {
-  return buttonTabId(btn);
-}
-function isReorderableContainer(el) {
-  if (el.classList.contains(MIRROR_MAIN_CLASS))
-    return true;
-  if (el.classList.contains(MIRROR_BOTTOM_CLASS))
-    return true;
-  if (el.classList.contains(MIRROR_LIST_CLASS))
-    return true;
-  if (el.classList.contains(TAB_LIST_CLASS) && !el.classList.contains(MIRROR_LIST_CLASS)) {
-    return true;
-  }
-  return false;
-}
-function getReorderParent(btn) {
-  if (btn.classList.contains(MIRROR_BTN_CLASS) || btn.closest(`.${MIRROR_LIST_CLASS}`)) {
-    const section = btn.closest(`.${MIRROR_MAIN_CLASS}, .${MIRROR_BOTTOM_CLASS}`);
-    return section ?? btn.parentElement;
-  }
-  if (isSecondaryButton(btn)) {
-    const list = btn.closest(`.${TAB_LIST_CLASS}`);
-    if (list && !list.classList.contains(MIRROR_LIST_CLASS))
-      return list;
-  }
-  return null;
-}
-function getDropContainers() {
-  const containers = [];
-  if (getSecondaryWrapper()) {
-    const secList = getSecondaryTabList();
-    if (secList)
-      containers.push({ el: secList, secondary: true, axis: containerAxis(secList) });
-  }
-  const mirrorList = document.querySelector(`.${MIRROR_LIST_CLASS}`);
-  if (mirrorList) {
-    const main = mirrorList.querySelector(`:scope > .${MIRROR_MAIN_CLASS}`);
-    if (main) {
-      containers.push({ el: main, secondary: false, axis: containerAxis(main) });
-    } else {
-      containers.push({ el: mirrorList, secondary: false, axis: containerAxis(mirrorList) });
-    }
-  }
-  return containers;
-}
-function getAllButtonsInContainer(container) {
-  if (container.classList.contains(MIRROR_MAIN_CLASS) || container.classList.contains(MIRROR_BOTTOM_CLASS)) {
-    return Array.from(container.querySelectorAll(`:scope > button.${MIRROR_BTN_CLASS}, :scope > button[data-tab-id]`));
-  }
-  if (container.classList.contains(MIRROR_LIST_CLASS)) {
-    return Array.from(container.querySelectorAll(`button.${MIRROR_BTN_CLASS}`));
-  }
-  if (container.classList.contains(TAB_LIST_CLASS) && !container.classList.contains(MIRROR_LIST_CLASS)) {
-    return Array.from(container.querySelectorAll(":scope > button[data-tab-id]"));
-  }
-  return Array.from(container.querySelectorAll("button[data-tab-id]"));
-}
-function isDisplayedTabButton(el) {
-  return el.style?.display !== "none";
-}
-function domInsertIndexFromVisibleIndex(siblingHidden, toVisibleIndex) {
-  const visibleCount = siblingHidden.reduce((n, hidden) => n + (hidden ? 0 : 1), 0);
-  const targetVis = toVisibleIndex < 0 ? visibleCount : Math.min(toVisibleIndex, visibleCount);
-  if (targetVis >= visibleCount) {
-    let lastVisible = -1;
-    for (let i = 0;i < siblingHidden.length; i++) {
-      if (!siblingHidden[i])
-        lastVisible = i;
-    }
-    return lastVisible + 1;
-  }
-  let seen = 0;
-  for (let i = 0;i < siblingHidden.length; i++) {
-    if (siblingHidden[i])
-      continue;
-    if (seen === targetVis)
-      return i;
-    seen++;
-  }
-  return siblingHidden.length;
-}
-function getButtonsInContainer(container, _secondary, excludeTabId) {
-  return getAllButtonsInContainer(container).filter((el) => {
-    if (!isDisplayedTabButton(el))
-      return false;
-    if (excludeTabId && getButtonTabId(el) === excludeTabId) {
-      return false;
-    }
-    return true;
-  });
-}
-function buildDraftAndBase() {
-  const catalog = filterCatalogToLive(getFullCatalog(), getHost(), new Set(getLiveIdAssignments().keys()));
-  const hostSettings = getHostDrawerSettings();
-  const currentAssignments = new Map(getLiveIdAssignments());
-  const drawerSide = hostSettings?.side || getMainDrawerSide();
-  const healedHidden = resolveHiddenTabIdsForDraft(mergeHiddenTabIdLists(hostSettings?.hiddenTabIds, getCanvasHiddenTabIds()), catalog.map((t) => t.id));
-  const draftFromHost = createDraft({
-    catalog,
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: healedHidden,
-    drawerSide,
-    assignments: currentAssignments
-  });
-  const livePrimary = readLivePrimaryTabIds();
-  const liveSecondary = readLiveSecondaryTabIds();
-  const draft = alignDraftToLiveVisibleOrder(draftFromHost, livePrimary, liveSecondary);
-  dlog("[tab-list-dnd] draft-built (live order)", {
-    livePrimary,
-    liveSecondary,
-    draftPrimary: draft.primaryIds,
-    draftSecondary: draft.secondaryIds,
-    hidden: [...draft.hiddenIds]
-  });
-  const base = {
-    tabOrder: hostSettings?.tabOrder || [],
-    hiddenTabIds: healedHidden,
-    drawerSide,
-    assignments: new Map(currentAssignments)
-  };
-  return { draft, base, catalog };
-}
-function dragHitGeometry(overlayTx, overlayTy, overlayWidth, overlayHeight) {
-  const w = Math.max(0, overlayWidth);
-  const h = Math.max(0, overlayHeight);
-  return {
-    centerX: overlayTx + w / 2,
-    centerY: overlayTy + h / 2,
-    left: overlayTx,
-    top: overlayTy,
-    right: overlayTx + w,
-    bottom: overlayTy + h
-  };
-}
-function overlayOverlapsContainer(overlay, container, padY = 8, padX = 80) {
-  const overlapsX = overlay.right > container.left - padX && overlay.left < container.right + padX;
-  const overlapsY = overlay.bottom > container.top - padY && overlay.top < container.bottom + padY;
-  return overlapsX && overlapsY;
-}
-function insertIndexFromMidpoints(y, midpoints) {
-  for (let i = 0;i < midpoints.length; i++) {
-    if (y < midpoints[i])
-      return i;
-  }
-  return midpoints.length;
-}
-function hitTestDropTarget2(geom, dragTabId) {
-  const containers = _geometryCache ? _geometryCache.containers : getDropContainers();
-  const candidates = [];
-  for (const { el: container, secondary, axis } of containers) {
-    const rect = container.getBoundingClientRect();
-    const padY = axis === "x" ? 80 : 8;
-    const padX = axis === "x" ? 8 : 80;
-    if (!overlayOverlapsContainer(geom, rect, padY, padX))
-      continue;
-    const buttons = getButtonsInContainer(container, secondary, dragTabId);
-    let index = 0;
-    if (buttons.length > 0) {
-      const midpoints = buttons.map((btn) => axisMidpoint(btn.getBoundingClientRect(), axis));
-      index = insertIndexFromMidpoints(axisCoordinate(geom, axis), midpoints);
-      dlog("[tab-list-dnd] hit-test", {
-        containerCls: String(container.className || ""),
-        secondary,
-        axis,
-        dragTabId,
-        buttons: buttons.length,
-        midpoints: midpoints.length,
-        centerY: Math.round(geom.centerY),
-        centerX: Math.round(geom.centerX),
-        index
-      });
-    }
-    const containerMidX = rect.left + rect.width / 2;
-    const distX = Math.abs(geom.centerX - containerMidX);
-    candidates.push({ container, index, secondary, axis, rect, distX });
-  }
-  if (candidates.length === 0)
-    return null;
-  const horizontal = candidates.filter((c) => c.axis === "x");
-  if (horizontal.length >= 2) {
-    const sorted = [...horizontal].sort((a, b) => a.rect.left - b.rect.left);
-    const left = sorted[0];
-    const right = sorted[sorted.length - 1];
-    const chosen = seamChoice(geom.centerX, left.rect, right.rect) === "left" ? left : right;
-    return {
-      container: chosen.container,
-      index: chosen.index,
-      secondary: chosen.secondary
-    };
-  }
-  let best = candidates[0];
-  for (const c of candidates) {
-    if (c.distX < best.distX)
-      best = c;
-  }
-  return { container: best.container, index: best.index, secondary: best.secondary };
-}
-function settleDestFromButtonRects(index, rects, emptyFallback, axis = "y") {
-  if (rects.length === 0)
-    return emptyFallback;
-  if (index >= rects.length) {
-    const last = rects[rects.length - 1];
-    return axis === "x" ? { left: last.left + last.width, top: last.top } : { left: last.left, top: last.top + last.height };
-  }
-  const ref = rects[index];
-  return { left: ref.left, top: ref.top };
-}
-function resolveSettleDestination(dragElement, tabId, target, overlayWidth) {
-  if (dragElement && target && target.container.contains(dragElement)) {
-    const r = dragElement.getBoundingClientRect();
-    return { left: r.left, top: r.top };
-  }
-  if (target && tabId) {
-    const buttons = getButtonsInContainer(target.container, target.secondary, tabId);
-    const rects = buttons.map((b) => {
-      const r = b.getBoundingClientRect();
-      return { left: r.left, top: r.top, width: r.width, height: r.height };
-    });
-    const cr = target.container.getBoundingClientRect();
-    const emptyFallback = {
-      left: cr.left + Math.max(0, (cr.width - (overlayWidth || 48)) / 2),
-      top: cr.top
-    };
-    return settleDestFromButtonRects(target.index, rects, emptyFallback, containerAxis(target.container));
-  }
-  if (dragElement) {
-    const r = dragElement.getBoundingClientRect();
-    return { left: r.left, top: r.top };
-  }
-  return null;
-}
-function animateOverlaySettle2(overlay, currentTx, currentTy, destLeft, destTop) {
-  const dx = destLeft - currentTx;
-  const dy = destTop - currentTy;
-  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
-    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    return Promise.resolve({ tx: destLeft, ty: destTop });
-  }
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done)
-        return;
-      done = true;
-      overlay.removeEventListener("transitionend", onEnd);
-      if (_settleTimer2 !== null) {
-        clearTimeout(_settleTimer2);
-        _settleTimer2 = null;
-      }
-      resolve({ tx: destLeft, ty: destTop });
-    };
-    const onEnd = (e) => {
-      if (e.target !== overlay)
-        return;
-      if (e.propertyName && e.propertyName !== "transform")
-        return;
-      finish();
-    };
-    overlay.addEventListener("transitionend", onEnd);
-    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
-    overlay.offsetWidth;
-    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
-    _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
-  });
-}
-function cancelOverlaySettle2(overlay) {
-  if (_settleTimer2 !== null) {
-    clearTimeout(_settleTimer2);
-    _settleTimer2 = null;
-  }
-  if (overlay) {
-    overlay.classList.remove("canvas-tab-list-dnd-overlay-settling");
-  }
-}
-function installDropSlotSpacer(placeholder) {
-  if (!placeholder?.parentElement)
-    return null;
-  const parent = placeholder.parentElement;
-  const rect = placeholder.getBoundingClientRect();
-  const axis = containerAxis(parent);
-  const sizeProps = axis === "x" ? [`width:${Math.max(Math.round(rect.width), 1)}px`, "height:100%"] : [`height:${Math.max(Math.round(rect.height), 1)}px`, "width:100%"];
-  const spacer = document.createElement("div");
-  spacer.className = "canvas-tab-list-dnd-slot-spacer";
-  spacer.setAttribute("aria-hidden", "true");
-  spacer.style.cssText = [
-    ...sizeProps,
-    "flex-shrink:0",
-    "pointer-events:none",
-    "visibility:hidden",
-    "box-sizing:border-box",
-    "margin:0",
-    "padding:0",
-    "border:none"
-  ].join(";");
-  parent.insertBefore(spacer, placeholder.nextSibling);
-  return spacer;
-}
-function removeDropSlotSpacer(spacer) {
-  if (spacer?.isConnected)
-    spacer.remove();
-  if (typeof document !== "undefined") {
-    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-slot-spacer"))) {
-      el.remove();
-    }
-  }
-}
-function clearInsertIndicator() {
-  if (_insertIndicatorEl) {
-    _insertIndicatorEl.classList.remove("canvas-tab-list-dnd-insert-before");
-    _insertIndicatorEl = null;
-  }
-  if (typeof document !== "undefined") {
-    for (const el of Array.from(document.querySelectorAll(".canvas-tab-list-dnd-insert-before"))) {
-      el.classList.remove("canvas-tab-list-dnd-insert-before");
-    }
-  }
-}
-function snapshotButtonRects(container) {
-  const rects = new Map;
-  for (const btn of getAllButtonsInContainer(container)) {
-    const id = getButtonTabId(btn);
-    if (id)
-      rects.set(id, btn.getBoundingClientRect());
-  }
-  return rects;
-}
-function mergeRects(into, from) {
-  for (const [k, v] of from)
-    into.set(k, v);
-}
-function applyFLIP2(prevRects, excludeTabId, containers) {
-  const animated = [];
-  const seen = new Set;
-  for (const container of containers) {
-    for (const btn of getAllButtonsInContainer(container)) {
-      if (seen.has(btn))
-        continue;
-      seen.add(btn);
-      const id = getButtonTabId(btn);
-      if (!id || id === excludeTabId || !prevRects.has(id))
-        continue;
-      const prev = prevRects.get(id);
-      const curr = btn.getBoundingClientRect();
-      const { dx, dy } = flipDelta(prev, curr);
-      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5)
-        continue;
-      btn.style.setProperty("transition", "none", "important");
-      btn.style.setProperty("transform", `translate(${dx}px, ${dy}px)`, "important");
-      animated.push(btn);
-    }
-  }
-  if (animated.length === 0)
-    return;
-  document.body.offsetHeight;
-  requestAnimationFrame(() => {
-    for (const node of animated) {
-      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
-      node.style.setProperty("transform", "", "important");
-      node.style.removeProperty("transform");
-    }
-    if (_flipActiveTimer)
-      clearTimeout(_flipActiveTimer);
-    _flipActiveTimer = setTimeout(() => {
-      for (const node of animated) {
-        node.style.removeProperty("transition");
-        node.style.removeProperty("transform");
-      }
-      _flipActiveTimer = null;
-    }, 220);
-  });
-}
-function clearFLIPStyles() {
-  if (_flipActiveTimer) {
-    clearTimeout(_flipActiveTimer);
-    _flipActiveTimer = null;
-  }
-  const containers = _geometryCache?.containers ?? getDropContainers();
-  for (const { el: container } of containers) {
-    for (const btn of getAllButtonsInContainer(container)) {
-      btn.style.removeProperty("transition");
-      btn.style.removeProperty("transform");
-    }
-  }
-}
-function reorderCanvasListDOM(container, target, sourceTabId, dragElement) {
-  if (!sourceTabId)
-    return false;
-  if (!isReorderableContainer(container))
-    return false;
-  const sourceBtn = dragElement && getButtonTabId(dragElement) === sourceTabId ? dragElement : getAllButtonsInContainer(container).find((b) => getButtonTabId(b) === sourceTabId) ?? null;
-  if (!sourceBtn)
-    return false;
-  const buttonsWithoutSource = getAllButtonsInContainer(container).filter((b) => b !== sourceBtn);
-  const siblingHidden = buttonsWithoutSource.map((b) => !isDisplayedTabButton(b));
-  const insertIdx = domInsertIndexFromVisibleIndex(siblingHidden, target.index);
-  if (insertIdx >= buttonsWithoutSource.length) {
-    const endDock = getSecondaryStartDock(container);
-    if (sourceBtn.parentElement === container && (sourceBtn.nextElementSibling === null || sourceBtn.nextElementSibling === endDock)) {
-      return false;
-    }
-    appendSecondaryTabNode(container, sourceBtn);
-    return true;
-  }
-  const referenceBtn = buttonsWithoutSource[insertIdx];
-  if (sourceBtn.parentElement === container && sourceBtn.nextElementSibling === referenceBtn) {
-    return false;
-  }
-  container.insertBefore(sourceBtn, referenceBtn);
-  return true;
-}
-function restoreSourceButtonDOM(dragElement, originalParent, originalNextSibling) {
-  if (!dragElement || !originalParent)
-    return;
-  const parent = dragElement.parentNode;
-  if (parent === originalParent) {
-    if (originalNextSibling) {
-      if (dragElement.nextElementSibling === originalNextSibling)
-        return;
-      originalParent.insertBefore(dragElement, originalNextSibling);
-    } else {
-      if (dragElement.nextElementSibling === null && dragElement.parentNode === originalParent)
-        return;
-      originalParent.insertBefore(dragElement, null);
-    }
-  } else {
-    if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
-      originalParent.insertBefore(dragElement, originalNextSibling);
-    } else {
-      originalParent.appendChild(dragElement);
-    }
-  }
-}
-function createDragOverlay2(sourceBtn) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
-  const clone = sourceBtn.cloneNode(true);
-  clone.classList.remove("canvas-tab-list-dnd-placeholder");
-  clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
-  const rect = sourceBtn.getBoundingClientRect();
-  wrapper.style.width = rect.width + "px";
-  wrapper.style.height = rect.height + "px";
-  wrapper.style.left = "0px";
-  wrapper.style.top = "0px";
-  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
-  return wrapper;
-}
-function suppressSyntheticClick(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  e.stopImmediatePropagation();
-}
-function installClickSuppressor(el) {
-  removeClickSuppressorNow();
-  _clickSuppressor = suppressSyntheticClick;
-  _clickSuppressorEl = el;
-  el.addEventListener("click", _clickSuppressor, true);
-  _docClickSuppressor = suppressSyntheticClick;
-  document.addEventListener("click", _docClickSuppressor, true);
-}
-function scheduleClickSuppressorRemoval() {
-  if (_clickSuppressorTimer !== null)
-    clearTimeout(_clickSuppressorTimer);
-  _clickSuppressorTimer = setTimeout(() => {
-    removeClickSuppressorNow();
-  }, 0);
-}
-function removeClickSuppressorNow() {
-  if (_clickSuppressorTimer !== null) {
-    clearTimeout(_clickSuppressorTimer);
-    _clickSuppressorTimer = null;
-  }
-  if (_clickSuppressor && _clickSuppressorEl) {
-    _clickSuppressorEl.removeEventListener("click", _clickSuppressor, true);
-  }
-  _clickSuppressor = null;
-  _clickSuppressorEl = null;
-  if (_docClickSuppressor) {
-    document.removeEventListener("click", _docClickSuppressor, true);
-    _docClickSuppressor = null;
-  }
-}
-function autoScrollHorizontal(geom) {
-  const containers = _geometryCache?.containers ?? [];
-  const EDGE_PX = 24;
-  const STEP_PX = 14;
-  let scrolling = false;
-  for (const { el, axis } of containers) {
-    if (axis !== "x")
-      continue;
-    const rect = el.getBoundingClientRect();
-    if (geom.centerY < rect.top || geom.centerY > rect.bottom)
-      continue;
-    if (geom.centerX < rect.left || geom.centerX > rect.right)
-      continue;
-    const maxScroll = el.scrollWidth - el.clientWidth;
-    if (maxScroll <= 0)
-      continue;
-    if (geom.centerX < rect.left + EDGE_PX) {
-      const next = Math.max(0, el.scrollLeft - STEP_PX);
-      if (next !== el.scrollLeft) {
-        el.scrollLeft = next;
-        scrolling = true;
-      }
-    } else if (geom.centerX > rect.right - EDGE_PX) {
-      const next = Math.min(maxScroll, el.scrollLeft + STEP_PX);
-      if (next !== el.scrollLeft) {
-        el.scrollLeft = next;
-        scrolling = true;
-      }
-    }
-  }
-  return scrolling;
-}
-function scheduleDragFrame() {
-  if (_rafId !== null)
-    return;
-  _rafId = requestAnimationFrame(() => {
-    _rafId = null;
-    if (_drag.phase !== "dragging")
-      return;
-    if (_geomDirty || !_geometryCache) {
-      _geometryCache = { containers: getDropContainers() };
-      _geomDirty = false;
-    }
-    const geom = dragHitGeometry(_drag.overlayTx, _drag.overlayTy, _drag.overlayWidth || 48, _drag.overlayHeight || 48);
-    if (autoScrollHorizontal(geom)) {
-      scheduleDragFrame();
-    }
-    const target = hitTestDropTarget2(geom, _drag.tabId);
-    const prev = _drag.lastDropTarget;
-    const sameTarget = prev && target && prev.container === target.container && prev.index === target.index && prev.secondary === target.secondary;
-    if (!target) {
-      if (prev) {
-        clearInsertIndicator();
-      }
-      return;
-    }
-    if (!sameTarget) {
-      const isReorderable = isReorderableContainer(target.container);
-      const prevReorderable = prev ? isReorderableContainer(prev.container) : false;
-      dlog("[tab-list-dnd] target change", {
-        tabId: _drag.tabId,
-        index: target.index,
-        secondary: target.secondary,
-        containerCls: String(target.container.className || ""),
-        isReorderable,
-        sourceIsInCanvasList: _drag.sourceIsInCanvasList,
-        fromSecondary: _drag.fromSecondary
-      });
-      if (isReorderable && _drag.sourceIsInCanvasList) {
-        const prevRects = new Map;
-        const flipContainers = [];
-        const sourceParent = _drag.element?.parentElement;
-        if (sourceParent && isReorderableContainer(sourceParent)) {
-          mergeRects(prevRects, snapshotButtonRects(sourceParent));
-          flipContainers.push(sourceParent);
-        }
-        if (prev?.container && prev.container !== sourceParent) {
-          mergeRects(prevRects, snapshotButtonRects(prev.container));
-          if (!flipContainers.includes(prev.container)) {
-            flipContainers.push(prev.container);
-          }
-        }
-        mergeRects(prevRects, snapshotButtonRects(target.container));
-        if (!flipContainers.includes(target.container)) {
-          flipContainers.push(target.container);
-        }
-        const didReorder = reorderCanvasListDOM(target.container, target, _drag.tabId, _drag.element);
-        if (didReorder) {
-          applyFLIP2(prevRects, _drag.tabId, flipContainers);
-          _geomDirty = true;
-        }
-      } else if (prevReorderable && !isReorderable && prev) {
-        restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
-        clearFLIPStyles();
-        _geomDirty = true;
-      }
-      _drag.lastDropTarget = target;
-    }
-  });
-}
-function startDrag(btn, pointerEvent) {
-  if (!isLiveTabListDndAllowed())
-    return;
-  const tabId = getButtonTabId(btn);
-  if (!tabId) {
-    dlog("[tab-list-dnd] startDrag bail: no tab id", {
-      title: btn.getAttribute("title") || null,
-      cls: String(btn.className || ""),
-      mirrorKey: btn.getAttribute("data-mirror-key") || null
-    });
-    return;
-  }
-  const fromSecondary = isSecondaryButton(btn);
-  const activeAtGestureStart = captureActiveSelection();
-  const element = btn;
-  const originalParent = btn.parentElement;
-  const originalNextSibling = btn.nextElementSibling;
-  const sourceIsInCanvasList = getReorderParent(btn) != null;
-  logDndOrder("start", {
-    tabId,
-    fromSecondary,
-    sourceIsInCanvasList,
-    hasDataTabId: btn.hasAttribute("data-tab-id"),
-    mirrorKey: btn.getAttribute("data-mirror-key") || null,
-    reorderParent: sourceIsInCanvasList ? getReorderParent(btn)?.className : null
-  });
-  const rect = btn.getBoundingClientRect();
-  const offsetX = pointerEvent.clientX - rect.left;
-  const offsetY = pointerEvent.clientY - rect.top;
-  const overlay = createDragOverlay2(btn);
-  const overlayInner = overlay.querySelector(".canvas-tab-list-dnd-overlay-clone-btn");
-  btn.classList.add("canvas-tab-list-dnd-placeholder");
-  _geometryCache = { containers: getDropContainers() };
-  _geomDirty = false;
-  document.body.style.userSelect = "none";
-  document.body.style.cursor = "grabbing";
-  document.body.classList.add("canvas-tab-list-dnd-dragging");
-  removeDragContextMenuSuppressor();
-  const suppressCtx = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-  _dragContextMenuSuppressor = suppressCtx;
-  document.addEventListener("contextmenu", suppressCtx, true);
-  installClickSuppressor(btn);
-  const onMove = (ev) => {
-    if (_drag.phase !== "dragging")
-      return;
-    _drag.overlayTx = ev.clientX - _drag.offsetX;
-    _drag.overlayTy = ev.clientY - _drag.offsetY;
-    _drag.overlay.style.transform = `translate3d(${_drag.overlayTx}px, ${_drag.overlayTy}px, 0)`;
-    _pendingPointerX = ev.clientX;
-    _pendingPointerY = ev.clientY;
-    scheduleDragFrame();
-  };
-  const onUp = async (ev) => {
-    ev.preventDefault();
-    if (_drag.phase !== "dragging")
-      return;
-    const capturedTabId = tabId;
-    const capturedFromSecondary = fromSecondary;
-    const capturedActiveSelection = activeAtGestureStart;
-    const capturedTarget = _drag.lastDropTarget;
-    logDndOrder("pointerup", {
-      tabId: capturedTabId,
-      fromSecondary: capturedFromSecondary,
-      target: capturedTarget ? {
-        index: capturedTarget.index,
-        secondary: capturedTarget.secondary,
-        container: capturedTarget.container.className
-      } : null
-    });
-    removeDragContextMenuSuppressor();
-    scheduleClickSuppressorRemoval();
-    detachDragPointerListeners();
-    _drag = {
-      phase: "settling",
-      tabId: capturedTabId,
-      element,
-      fromSecondary: capturedFromSecondary,
-      activeAtGestureStart: capturedActiveSelection,
-      overlay
-    };
-    clearInsertIndicator();
-    let slotSpacer = null;
-    try {
-      if (capturedTarget && capturedTabId) {
-        const crossList = capturedFromSecondary !== capturedTarget.secondary;
-        const dest = resolveSettleDestination(element, capturedTabId, capturedTarget, rect.width);
-        if (dest) {
-          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
-          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
-          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
-        }
-        if (crossList && capturedFromSecondary) {
-          slotSpacer = installDropSlotSpacer(element);
-          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        }
-        let moveChrome = { neighborBtn: null, reassertId: null };
-        let secondaryChrome = { neighborBtn: null };
-        if (crossList && !capturedFromSecondary) {
-          moveChrome = await captureMainMirrorMoveChrome(capturedTabId, "secondary");
-          hideMainTabButton(capturedTabId);
-        } else if (crossList && capturedFromSecondary) {
-          secondaryChrome = await captureSecondaryNeighborForMove(capturedTabId);
-        }
-        const ok = await performDrop(capturedTabId, capturedFromSecondary, capturedActiveSelection, capturedTarget);
-        logDndOrder("post-commit-before-cleanup", {
-          tabId: capturedTabId,
-          ok
-        });
-        if (ok && crossList) {
-          try {
-            if (!capturedFromSecondary) {
-              await applyMainMirrorMoveChrome(moveChrome, capturedTabId);
-            } else {
-              await applySecondaryNeighborHandoff(secondaryChrome, capturedTabId);
-            }
-          } catch (err) {
-            dwarn("[tab-list-dnd] post-commit cross-drawer chrome failed:", err);
-          }
-        } else if (!ok) {
-          if (crossList && !capturedFromSecondary) {
-            showMainTabButton(capturedTabId);
-            try {
-              const mp = await Promise.resolve().then(() => (init_main_tab_pin(), {}));
-              reconcileMainTabListPin?.();
-            } catch {}
-          }
-          restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        }
-      } else {
-        restoreSourceButtonDOM(element, originalParent, originalNextSibling);
-        const dest = resolveSettleDestination(element, capturedTabId, null, rect.width);
-        if (dest) {
-          const currentTx = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\(([^,]+)/)?.[1] || "0") : 0;
-          const currentTy = overlay.style.transform ? parseFloat(overlay.style.transform.match(/translate3d\([^,]+,\s*([^,]+)/)?.[1] || "0") : 0;
-          await animateOverlaySettle2(overlay, currentTx, currentTy, dest.left, dest.top);
-        }
-      }
-    } finally {
-      removeDropSlotSpacer(slotSpacer);
-      cancelOverlaySettle2(overlay);
-      cleanupDragVisuals();
-      logDndOrder("cleanup-complete", { tabId: capturedTabId });
-    }
-  };
-  _drag = {
-    phase: "dragging",
-    tabId,
-    element,
-    fromSecondary,
-    activeAtGestureStart,
-    overlay,
-    overlayInner,
-    offsetX,
-    offsetY,
-    overlayTx: rect.left,
-    overlayTy: rect.top,
-    overlayWidth: rect.width,
-    overlayHeight: rect.height,
-    originalParent,
-    originalNextSibling,
-    sourceIsInCanvasList,
-    lastDropTarget: null,
-    moveHandler: onMove,
-    upHandler: onUp
-  };
-  document.addEventListener("pointermove", onMove, { passive: true });
-  document.addEventListener("pointerup", onUp);
-  document.addEventListener("pointercancel", onUp);
-}
-function captureActiveSelection() {
-  const world = getHost()?.observe();
-  return {
-    primary: world?.tabs.find((tab) => tab.location === "primary" && tab.isActiveInPrimary)?.key ?? null,
-    secondary: world?.tabs.find((tab) => tab.location === "secondary" && tab.isActiveInSecondary)?.key ?? null
-  };
-}
-function detachDragPointerListeners() {
-  if (_drag.phase === "dragging") {
-    document.removeEventListener("pointermove", _drag.moveHandler);
-    document.removeEventListener("pointerup", _drag.upHandler);
-    document.removeEventListener("pointercancel", _drag.upHandler);
-  }
-  document.body.style.userSelect = "";
-  document.body.style.cursor = "";
-  if (_rafId !== null) {
-    cancelAnimationFrame(_rafId);
-    _rafId = null;
-  }
-  _geometryCache = null;
-  _geomDirty = false;
-}
-function clearDragState2() {
-  detachDragPointerListeners();
-  _drag = { phase: "idle" };
-}
-function cleanupDragVisuals() {
-  clearFLIPStyles();
-  if (_drag.phase === "dragging" || _drag.phase === "settling") {
-    const el = _drag.element;
-    el.style.setProperty("transition", "none", "important");
-    el.classList.remove("canvas-tab-list-dnd-placeholder");
-    el.offsetWidth;
-    requestAnimationFrame(() => {
-      el.style.removeProperty("transition");
-    });
-  }
-  if (_drag.phase === "dragging" || _drag.phase === "settling") {
-    const overlay = _drag.overlay;
-    document.body.offsetWidth;
-    overlay.remove();
-  }
-  clearInsertIndicator();
-  if (typeof document !== "undefined") {
-    document.body.classList.remove("canvas-tab-list-dnd-dragging");
-  }
-  _drag = { phase: "idle" };
-}
-async function performDrop(tabId, fromSecondary, activeAtGestureStart, target) {
-  try {
-    const { draft, base } = buildDraftAndBase();
-    dlog("[tab-list-dnd]", "draft-built", {
-      tabId,
-      fromSecondary,
-      target: { index: target.index, secondary: target.secondary },
-      draft: {
-        primary: draft.primaryIds,
-        secondary: draft.secondaryIds
-      },
-      base: { tabOrder: base.tabOrder },
-      live: dndOrderSnapshot()
-    });
-    if (fromSecondary !== target.secondary) {
-      const targetSide = target.secondary ? "secondary" : "primary";
-      const updated = moveTabVisible(draft, tabId, targetSide, target.index);
-      const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
-      dlog("[tab-list-dnd]", "cross-commit-result", {
-        tabId,
-        ok: result.ok,
-        updated: {
-          primary: updated.primaryIds,
-          secondary: updated.secondaryIds
-        },
-        live: dndOrderSnapshot()
-      });
-      if (!result.ok) {
-        dwarn("[tab-list-dnd] cross-drawer commit failed:", result.error);
-        return false;
-      }
-      const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-      const modalWasOpen = isConfigureTabsModalOpen();
-      refreshConfigureDraftFromLive();
-      dlog("[tab-list-dnd] configure modal sync (cross-drawer)", {
-        modalWasOpen,
-        refreshed: modalWasOpen
-      });
-      return true;
-    }
-    const listKey = target.secondary ? "secondaryIds" : "primaryIds";
-    const fullList = draft[listKey];
-    if (!fullList.includes(tabId)) {
-      dwarn("[tab-list-dnd] tab not found in draft for reorder:", tabId);
-      return false;
-    }
-    const updated = reorderWithinVisible(draft, listKey, tabId, target.index);
-    if (updated === draft && !isDraftDirty(draft, base)) {
-      return true;
-    }
-    const result = await commitDraftToOwnedModel(updated, activeAtGestureStart, { skipChrome: true });
-    dlog("[tab-list-dnd]", "reorder-commit-result", {
-      tabId,
-      ok: result.ok,
-      updated: {
-        primary: updated.primaryIds,
-        secondary: updated.secondaryIds
-      },
-      live: dndOrderSnapshot()
-    });
-    if (!result.ok) {
-      dwarn("[tab-list-dnd] reorder commit failed:", result.error);
-      return false;
-    }
-    const m = await Promise.resolve().then(() => (init_configure_modal(), {}));
-    const modalWasOpen = isConfigureTabsModalOpen();
-    refreshConfigureDraftFromLive();
-    dlog("[tab-list-dnd] configure modal sync (reorder)", {
-      modalWasOpen,
-      refreshed: modalWasOpen
-    });
-    return true;
-  } catch (err) {
-    dwarn("[tab-list-dnd] drop failed:", err);
-    return false;
-  }
-}
-function installDragOnButton(btn) {
-  if (_installed.has(btn))
-    return;
-  const tabId = getButtonTabId(btn);
-  if (!tabId) {
-    dlog("[tab-list-dnd] install skip: no tab id", {
-      tag: btn.tagName,
-      cls: String(btn.className || ""),
-      title: btn.getAttribute("title") || null,
-      aria: btn.getAttribute("aria-label") || null,
-      hasDataTabId: btn.hasAttribute("data-tab-id"),
-      mirrorKey: btn.getAttribute("data-mirror-key") || null,
-      parentCls: btn.parentElement ? String(btn.parentElement.className || "") : null
-    });
-    return;
-  }
-  if (isSettingsButton(btn)) {
-    dlog("[tab-list-dnd] install skip: settings", {
-      title: btn.getAttribute("title") || null,
-      cls: String(btn.className || "")
-    });
-    return;
-  }
-  _installed.add(btn);
-  let longPressTimer = null;
-  let dragActivated = false;
-  let armingCancelled = false;
-  let pendingPointerMove = null;
-  let pendingPointerUp = null;
-  let pendingPointerCancel = null;
-  const cleanupPendingListeners = () => {
-    if (pendingPointerMove) {
-      document.removeEventListener("pointermove", pendingPointerMove);
-      pendingPointerMove = null;
-    }
-    if (pendingPointerUp) {
-      document.removeEventListener("pointerup", pendingPointerUp);
-      pendingPointerUp = null;
-    }
-    if (pendingPointerCancel) {
-      document.removeEventListener("pointercancel", pendingPointerCancel);
-      pendingPointerCancel = null;
-    }
-  };
-  const cancelArming = () => {
-    if (longPressTimer != null) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    cleanupPendingListeners();
-  };
-  const onPointerDown = (e) => {
-    if (!_active2)
-      return;
-    if (!isLiveTabListDndAllowed())
-      return;
-    if (e.button !== 0)
-      return;
-    if (_drag.phase !== "idle")
-      return;
-    dlog("[tab-list-dnd] pointerdown arm", {
-      tabId: getButtonTabId(btn),
-      title: btn.getAttribute("title") || btn.getAttribute("aria-label") || null,
-      hasDataTabId: btn.hasAttribute("data-tab-id"),
-      cls: String(btn.className || ""),
-      pointerType: e.pointerType
-    });
-    dragActivated = false;
-    armingCancelled = false;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const longPress = usesLongPressActivation(e.pointerType);
-    if (longPress) {
-      longPressTimer = setTimeout(() => {
-        longPressTimer = null;
-        cleanupPendingListeners();
-        if (armingCancelled)
-          return;
-        if (!isLiveTabListDndAllowed())
-          return;
-        dragActivated = true;
-        startDrag(btn, e);
-      }, LONG_PRESS_MS);
-    }
-    const onMove = (ev) => {
-      if (dragActivated)
-        return;
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      if (longPress) {
-        if (shouldActivateDragFromDistance(dx, dy)) {
-          armingCancelled = true;
-          cancelArming();
-        }
-        return;
-      }
-      if (!shouldActivateDragFromDistance(dx, dy))
-        return;
-      dragActivated = true;
-      cleanupPendingListeners();
-      if (!isLiveTabListDndAllowed())
-        return;
-      startDrag(btn, ev);
-    };
-    const onUp = () => {
-      cancelArming();
-    };
-    pendingPointerMove = onMove;
-    pendingPointerUp = onUp;
-    pendingPointerCancel = onUp;
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-    document.addEventListener("pointercancel", onUp);
-  };
-  btn.addEventListener("pointerdown", onPointerDown);
-}
-function installTabListDnd() {
-  if (_active2)
-    return null;
-  _active2 = true;
-  dlog("[tab-list-dnd] install: diagnostic build active");
-  injectDndStyles();
-  const existing = document.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
-  for (const btn of existing) {
-    installDragOnButton(btn);
-  }
-  dlog("[tab-list-dnd] install: existing buttons visited", { count: existing.length });
-  _observer = new MutationObserver((mutations) => {
-    for (const mut of mutations) {
-      for (const node of mut.addedNodes) {
-        if (!(node instanceof HTMLElement))
-          continue;
-        if (node.tagName === "BUTTON" && (node.hasAttribute("data-tab-id") || node.classList.contains("sidebar-ux-main-tab-mirror-btn"))) {
-          installDragOnButton(node);
-        }
-        const descendants = node.querySelectorAll("button[data-tab-id], .sidebar-ux-main-tab-mirror-btn");
-        for (const child of descendants) {
-          installDragOnButton(child);
-        }
-      }
-    }
-  });
-  _observer.observe(document.body, { childList: true, subtree: true });
-  return () => {
-    tearDownTabListDnd();
-  };
-}
-function tearDownTabListDnd() {
-  _active2 = false;
-  if (_observer) {
-    _observer.disconnect();
-    _observer = null;
-  }
-  if (_drag.phase !== "idle") {
-    removeClickSuppressorNow();
-    removeDragContextMenuSuppressor();
-    detachDragPointerListeners();
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId);
-      _rafId = null;
-    }
-    if (_drag.phase === "dragging" || _drag.phase === "settling") {
-      cancelOverlaySettle2(_drag.overlay);
-    }
-    if (_drag.phase === "dragging") {
-      restoreSourceButtonDOM(_drag.element, _drag.originalParent, _drag.originalNextSibling);
-    }
-    cleanupDragVisuals();
-    clearDragState2();
-  }
-  if (typeof document !== "undefined") {
-    document.body.classList.remove("canvas-tab-list-dnd-dragging");
-    document.getElementById(DND_STYLE_ID)?.remove();
-  }
-}
-var DRAG_ACTIVATE_DISTANCE_PX = 6, LONG_PRESS_MS = 200, _drag, _clickSuppressor = null, _clickSuppressorEl = null, _docClickSuppressor = null, _clickSuppressorTimer = null, _dragContextMenuSuppressor = null, _rafId = null, _pendingPointerX = 0, _pendingPointerY = 0, _settleTimer2 = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, _geometryCache = null, _geomDirty = false, _insertIndicatorEl = null, _installed, _flipActiveTimer = null, DND_STYLE_ID = "canvas-tab-list-dnd-styles", MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MIRROR_MAIN_CLASS = "sidebar-ux-tab-list-main", MIRROR_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", TAB_LIST_CLASS = "sidebar-ux-tab-list", _active2 = false, _observer = null;
-var init_tab_list_dnd = __esm(() => {
-  init_configure_model();
-  init_owned_commit();
-  init_dispatch();
-  init_configure_catalog();
-  init_canvas_hidden();
-  init_hidden_tabs();
-  init_host_settings();
-  init_assignment();
-  init_store();
-  init_secondary();
-  init_buttons();
-  init_mobile_exclusion();
-  init_handles();
-  init_log();
-  init_live_tab_order();
-  _drag = { phase: "idle" };
-  _installed = new WeakSet;
-});
-
-// src/sidebar/drawer-location.ts
-function stripEdgeFor(loc) {
-  return loc === "top" ? "top" : loc === "bottom" ? "bottom" : null;
-}
-function applyLocationPresentation(loc) {
-  if (typeof document === "undefined" || !document.documentElement)
-    return;
-  const root = document.documentElement;
-  const cl = root.classList;
-  if (typeof cl?.toggle === "function") {
-    cl.toggle(LOCATION_CLASS_TOP, loc === "top");
-    cl.toggle(LOCATION_CLASS_BOTTOM, loc === "bottom");
-    cl.toggle(LOCATION_CLASS_SIDES, loc === "sides");
-  }
-  root.style?.setProperty?.(STRIP_HEIGHT_VAR, `${STRIP_HEIGHT_PX}px`);
-  const edge = stripEdgeFor(loc);
-  applyWrapperStripEdge(getSecondaryWrapper(), edge);
-  applyWrapperStripEdge(getMainMirrorWrapper(), edge);
-}
-function hideHandles() {
-  const secondary = getSecondaryWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
-  if (secondary?.style)
-    secondary.style.display = "none";
-  const main = getMainMirrorWrapper()?.querySelector?.(".sidebar-ux-drawer-tab");
-  if (main?.style)
-    main.style.display = "none";
-}
-function secondaryZonePresent2() {
-  return !!getSettings().secondSidebarEnabled && isSecondaryShellLive() && hasSecondaryAssignedTabs();
-}
-function computeKey(loc) {
-  return [
-    loc,
-    isMobileViewport() ? "mobile" : "desktop",
-    getMainDrawerSide(),
-    getSettings().secondSidebarEnabled ? "1" : "0",
-    isSecondaryShellLive() ? "1" : "0",
-    secondaryZonePresent2() ? "1" : "0"
-  ].join("|");
-}
-function reconcileDrawerLocation(opts) {
-  if (!isInstanceActive())
-    return;
-  if (_pending) {
-    _dirty = true;
-    return;
-  }
-  _pending = true;
-  try {
-    runReconcile(opts?.force === true);
-    if (_dirty) {
-      _dirty = false;
-      runReconcile(true);
-    }
-  } finally {
-    _pending = false;
-  }
-}
-function runReconcile(force) {
-  const gen = ++_locGen;
-  const loc = getDrawerLocation();
-  const horizontal = isHorizontalStrip();
-  syncHorizontalSplit();
-  const key = computeKey(loc);
-  if (!force && key === _lastKey)
-    return;
-  _lastKey = key;
-  applyLocationPresentation(loc);
-  reconcileTabListPin();
-  reconcileMainTabListPin();
-  if (gen !== _locGen)
-    return;
-  syncHorizontalSplit();
-  if (isDndDragActive())
-    invalidateDndGeometry();
-  updateDrawerTabVisibility();
-  updateMainMirrorDrawerTabVisibility();
-  if (horizontal)
-    hideHandles();
-  updateStripGutters();
-  updateChatReflow();
-}
-function schedulePresenceReconcile() {
-  if (_presenceRaf !== null)
-    return;
-  const run = () => {
-    _presenceRaf = null;
-    reconcileDrawerLocation();
-  };
-  if (typeof requestAnimationFrame === "function") {
-    _presenceRaf = requestAnimationFrame(run);
-  } else {
-    run();
-  }
-}
-function mountDrawerLocation() {
-  initDrawerLocation();
-  reconcileDrawerLocation({ force: true });
-  if (!_unsubModel) {
-    _unsubModel = onModelChanged(() => schedulePresenceReconcile());
-  }
-  return () => {
-    if (_unsubModel) {
-      _unsubModel();
-      _unsubModel = null;
-    }
-    if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(_presenceRaf);
-    }
-    _presenceRaf = null;
-  };
-}
-function initDrawerLocation() {
-  injectHorizontalStripStyles();
-  applyLocationPresentation(getDrawerLocation());
-}
-function clearDrawerLocation() {
-  _locGen++;
-  _pending = false;
-  _dirty = false;
-  _lastKey = null;
-  if (_presenceRaf !== null && typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(_presenceRaf);
-  }
-  _presenceRaf = null;
-  if (_unsubModel) {
-    _unsubModel();
-    _unsubModel = null;
-  }
-  clearHorizontalSplit();
-  if (typeof document === "undefined" || !document.documentElement)
-    return;
-  const root = document.documentElement;
-  root.classList?.remove?.(LOCATION_CLASS_SIDES);
-  root.classList?.remove?.(LOCATION_CLASS_TOP);
-  root.classList?.remove?.(LOCATION_CLASS_BOTTOM);
-  root.style?.removeProperty?.(STRIP_HEIGHT_VAR);
-  applyWrapperStripEdge(getSecondaryWrapper(), null);
-  applyWrapperStripEdge(getMainMirrorWrapper(), null);
-}
-var _pending = false, _dirty = false, _locGen = 0, _lastKey = null, _unsubModel = null, _presenceRaf = null;
-var init_drawer_location = __esm(() => {
-  init_state();
-  init_dispatch();
-  init_assignment();
-  init_store();
-  init_mobile_exclusion();
-  init_styles();
-  init_drawer_shell();
-  init_main_mirror_drawer();
-  init_secondary();
-  init_tab_position();
-  init_main_tab_pin();
-  init_strip_gutter();
-  init_reflow();
-  init_buttons();
-  init_tab_list_dnd();
-});
-
-// src/sidebar/drawer-sync.ts
-class ObserverCoordinator {
-  pending = new Map;
-  frame = null;
-  _stopped = false;
-  signal(kind, payload) {
-    if (this._stopped)
-      return;
-    this.pending.set(kind, payload ?? null);
-    if (this.frame === null) {
-      this.frame = requestAnimationFrame(() => {
-        this.frame = null;
-        if (this._stopped)
-          return;
-        const entries = [...this.pending];
-        this.pending.clear();
-        this.flush(entries);
-      });
-    }
-  }
-  stop() {
-    this._stopped = true;
-    if (this.frame !== null) {
-      cancelAnimationFrame(this.frame);
-      this.frame = null;
-    }
-    this.pending.clear();
-  }
-  flush(entries) {
-    const hasSideChange = entries.some(([kind]) => kind === "side");
-    const hasLightSignals = entries.some(([kind]) => kind !== "side");
-    if (hasSideChange) {
-      checkSideChanged();
-    }
-    if (hasLightSignals) {
-      _runSyncDrawerTabSettings();
-    }
-  }
-}
-function getHostSide() {
-  const host = getHostDrawerSettings();
-  if (host && (host.side === "left" || host.side === "right"))
-    return host.side;
-  try {
-    const snap = getStoreSnapshot();
-    const s = snap?.drawerSettings?.side;
-    if (s === "left" || s === "right")
-      return s;
-  } catch {}
-  return null;
-}
-async function syncHostSideToModel(modelSide) {
-  const hostSide = getHostSide();
-  if (hostSide === modelSide)
-    return true;
-  const ok = patchHostDrawerSettings({ side: modelSide });
-  if (ok) {
-    _lastSeenHostSide = modelSide;
-    dlog("[drawer-sync] syncHostSideToModel: host side written to match model", { modelSide, prevHostSide: hostSide });
-    return true;
-  }
-  if (isHostedBrowserContext()) {
-    const m = await Promise.resolve().then(() => (init_host_settings(), {}));
-    const apiOk = await writeHostDrawerSettingsViaApi({ side: modelSide });
-    if (apiOk) {
-      _lastSeenHostSide = modelSide;
-      dlog("[drawer-sync] syncHostSideToModel: host side written via API", { modelSide });
-    }
-    return apiOk;
-  }
-  return false;
-}
-function isHostedBrowserContext() {
-  try {
-    return typeof window !== "undefined" && typeof window.location !== "undefined" && /^https?:/.test(window.location.protocol);
-  } catch {
-    return false;
-  }
-}
-function convergeModelToHostSide(hostSide) {
-  Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
-    const modelSide = getModel()?.side;
-    if (!modelSide || modelSide === hostSide)
-      return;
-    if (Date.now() - _lastCanvasSwapMs < 800) {
-      dlog("[drawer-sync] host side change ignored — recent Canvas swap", { hostSide, modelSide });
-      return;
-    }
-    dlog("[drawer-sync] host side change detected — unifying via Canvas", { hostSide, modelSide });
-    return dispatch({ t: "swapSides" }).catch((err) => {
-      dwarn("[drawer-sync] host side unify dispatch failed:", err);
-    });
-  });
-}
-function startHostSideWatcher() {
-  if (_hostWatcherStarted)
-    return;
-  _hostWatcherStarted = true;
-  const initialHost = getHostSide();
-  const modelSide = getMainDrawerSide();
-  _lastSeenHostSide = initialHost;
-  if (initialHost && initialHost !== modelSide) {
-    dlog("[drawer-sync] host side differs from model on boot — syncing host to model", { hostSide: initialHost, modelSide });
-    syncHostSideToModel(modelSide);
-  }
-  _hostSideWatcher = setInterval(() => {
-    const hostSide = getHostSide();
-    if (!hostSide)
-      return;
-    if (hostSide === _lastSeenHostSide)
-      return;
-    _lastSeenHostSide = hostSide;
-    convergeModelToHostSide(hostSide);
-  }, 500);
-  _hostSideWatcher.unref?.();
-  registerCleanup(() => stopHostSideWatcher());
-}
-function stopHostSideWatcher() {
-  if (_hostSideWatcher) {
-    clearInterval(_hostSideWatcher);
-    _hostSideWatcher = null;
-  }
-  _hostWatcherStarted = false;
-}
-async function recordCanvasSwapAndSyncHost(desired) {
-  _lastCanvasSwapMs = Date.now();
-  _lastSeenHostSide = desired;
-  const ok = patchHostDrawerSettings({ side: desired });
-  if (ok)
-    return true;
-  try {
-    const m = await Promise.resolve().then(() => (init_host_settings(), {}));
-    const apiOk = await writeHostDrawerSettingsViaApi({ side: desired });
-    if (apiOk) {
-      _lastSeenHostSide = desired;
-      dlog("[drawer-sync] recordCanvasSwapAndSyncHost: host side written via API", { desired });
-    }
-    return apiOk;
-  } catch {
-    return false;
-  }
-}
-function isShowTabLabels() {
-  const host = getHostDrawerSettings();
-  if (host && typeof host.showTabLabels === "boolean") {
-    return host.showTabLabels;
-  }
-  const store = getStoreSnapshot();
-  if (store) {
-    const snapshot = asDrawerStore(store);
-    if (snapshot.drawerSettings && typeof snapshot.drawerSettings.showTabLabels === "boolean") {
-      return snapshot.drawerSettings.showTabLabels;
-    }
-  }
-  const sidebar = getMainSidebar();
-  if (sidebar) {
-    return !!sidebar.querySelector('button[class*="tabBtnLabeled"]');
-  }
-  return true;
-}
-function syncDrawerTabSettings() {
-  if (_syncPending)
-    return;
-  _syncPending = true;
-  requestAnimationFrame(() => {
-    _syncPending = false;
-    _runSyncDrawerTabSettings();
-  });
-}
-function _runSyncDrawerTabSettings() {
-  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
-  const mainMirrorWrapperEarly = getMainMirrorWrapper();
-  if (!drawerTab && !mainMirrorWrapperEarly)
-    return;
-  let mainDrawerTab = null;
-  const mainWrapper = getMainWrapper();
-  if (mainWrapper) {
-    mainDrawerTab = mainWrapper.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
-  }
-  if (!mainDrawerTab) {
-    mainDrawerTab = document.querySelector('[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
-  }
-  if (!mainDrawerTab) {
-    _drawerTabRetryCount++;
-    if (!_drawerTabRetryLogged) {
-      _drawerTabRetryLogged = true;
-      dlog("[drawer-sync] main drawer tab not found — bounded retry engaged", {
-        retryMax: DRAWER_TAB_RETRY_MAX
-      });
-    }
-    if (_drawerTabRetryCount < DRAWER_TAB_RETRY_MAX) {
-      requestAnimationFrame(() => _runSyncDrawerTabSettings());
-    }
-    return;
-  }
-  _drawerTabRetryCount = 0;
-  const w = mainDrawerTab.offsetWidth;
-  const h = mainDrawerTab.offsetHeight;
-  if (w < 16 || w > 120 || h < 16 || h > 400) {
-    dlog(`[drawer-sync] main drawer tab dimensions look wrong (w=${w} h=${h}), skipping mirror`);
-    return;
-  }
-  if (!_mainDrawerTabResizeObserver) {
-    const coordinator = ensureObserverCoordinator();
-    _mainDrawerTabResizeObserver = new ResizeObserver(() => {
-      coordinator.signal("resize");
-    });
-    _mainDrawerTabResizeObserver.observe(mainDrawerTab);
-    registerCleanup(stopDrawerTabResizeWatcher);
-  }
-  if (!_mainDrawerTabClassObserver) {
-    const coordinator = ensureObserverCoordinator();
-    _mainDrawerTabClassObserver = new MutationObserver(() => {
-      coordinator.signal("class");
-    });
-    _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["class"] });
-    registerCleanup(stopDrawerTabClassObserver);
-  }
-  if (!_mainDrawerTabStyleObserver) {
-    const coordinator = ensureObserverCoordinator();
-    _mainDrawerTabStyleObserver = new MutationObserver(() => {
-      coordinator.signal("style");
-    });
-    _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
-    registerCleanup(stopDrawerTabStyleObserver);
-  }
-  const secondaryWrapper = getSecondaryWrapper();
-  const mainMirrorWrapper = getMainMirrorWrapper();
-  const mainStyle = getComputedStyle(mainDrawerTab);
-  const newVars = [
-    `${mainDrawerTab.offsetWidth}px`,
-    `${mainDrawerTab.offsetHeight}px`,
-    mainStyle.paddingTop,
-    mainStyle.paddingRight,
-    mainStyle.paddingBottom,
-    mainStyle.paddingLeft,
-    mainStyle.gap,
-    `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`
-  ].join("|");
-  if (newVars !== _lastWrittenDrawerTabVars) {
-    _lastWrittenDrawerTabVars = newVars;
-    const parts = newVars.split("|");
-    const stamp = (wrapper) => {
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
-      wrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
-    };
-    if (secondaryWrapper)
-      stamp(secondaryWrapper);
-    if (mainMirrorWrapper)
-      stamp(mainMirrorWrapper);
-  } else {
-    if (mainMirrorWrapper && !mainMirrorWrapper.style.getPropertyValue("--sidebar-ux-drawer-tab-w")) {
-      const parts = newVars.split("|");
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-w", parts[0]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-h", parts[1]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pt", parts[2]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pr", parts[3]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pb", parts[4]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-pl", parts[5]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-gap", parts[6]);
-      mainMirrorWrapper.style.setProperty("--sidebar-ux-drawer-tab-border", parts[7]);
-    }
-  }
-  const mainParent = mainDrawerTab.parentElement;
-  const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0;
-  const mainMarginStyle = mainDrawerTab.style.marginTop;
-  const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
-  const horizontalLocation = isHorizontalStrip();
-  if (horizontalLocation) {
-    if (drawerTab?.style.marginTop)
-      drawerTab.style.marginTop = "";
-    const mainMirrorTabH = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
-    if (mainMirrorTabH?.style.marginTop)
-      mainMirrorTabH.style.marginTop = "";
-    _lastKnownVerticalPos = null;
-  } else if (_lastKnownVerticalPos !== posVh) {
-    const settings = getSettings();
-    const effectiveMainVh = settings.mainDrawerTabOverrideVh !== undefined ? settings.mainDrawerTabOverrideVh : posVh;
-    if (settings.mirrorCompactPosition) {
-      if (drawerTab)
-        drawerTab.style.marginTop = `${effectiveMainVh}vh`;
-      const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
-      if (mainMirrorTab)
-        mainMirrorTab.style.marginTop = `${effectiveMainVh}vh`;
-    } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
-      if (drawerTab)
-        drawerTab.style.marginTop = "";
-    }
-    _lastKnownVerticalPos = posVh;
-  }
-  if (drawerTab) {
-    drawerTab.classList.toggle("sidebar-ux-drawer-tab--active", isSecondarySidebarOpen());
-  }
-  const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
-  if (mainMirrorTab && isMainMirrorActive()) {
-    mainMirrorTab.classList.toggle("sidebar-ux-drawer-tab--active", isCanvasMainOpen());
-  }
-  syncSecondaryTabLabels();
-}
-function syncSecondaryTabLabels(forceShow) {
-  const showLabels = typeof forceShow === "boolean" ? forceShow : isShowTabLabels();
-  const cacheKey = showLabels ? "show" : "hide";
-  const forced = typeof forceShow === "boolean";
-  if (!forced && cacheKey === _lastWrittenLabelsKey)
-    return;
-  _lastWrittenLabelsKey = cacheKey;
-  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function")
-    return;
-  const labels = document.querySelectorAll(".sidebar-ux-tab-label");
-  for (let i = 0;i < labels.length; i++) {
-    const label = labels[i];
-    if (showLabels) {
-      label.style.display = "";
-      label.style.visibility = "visible";
-      label.style.opacity = "1";
-      label.style.height = "auto";
-      label.style.minHeight = "";
-      label.style.marginTop = "1px";
-    } else {
-      label.style.display = "none";
-      label.style.visibility = "hidden";
-      label.style.opacity = "0";
-      label.style.height = "0";
-      label.style.minHeight = "0";
-      label.style.marginTop = "0";
-    }
-    const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
-    if (btn) {
-      btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
-      btn.style.height = showLabels ? "56px" : "48px";
-    }
-  }
-  Promise.resolve().then(() => (init_main_tab_pin(), {})).then((m) => {
-    try {
-      reconcileMainTabListPin();
-    } catch {}
-  });
-}
-function checkSideChanged() {
-  const currentSide = getMainDrawerSide();
-  _lastWrittenDrawerTabVars = null;
-  _lastWrittenLabelsKey = null;
-  _lastKnownVerticalPos = null;
-  stopDrawerTabResizeWatcher();
-  stopDrawerTabClassObserver();
-  stopDrawerTabStyleObserver();
-  if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
-    dlog("[drawer-sync] side changed detected (geometry-only)", {
-      from: _lastKnownSide,
-      to: currentSide,
-      secondDrawerEnabled: getSettings().secondSidebarEnabled
-    });
-    applyCanvasSideChange(currentSide, { syncHost: false });
-    convergeModelToHostSide(currentSide);
-    refreshSettingsPanelForSideChange();
-  } else {
-    _lastKnownSide = currentSide;
-    syncDrawerTabSettings();
-  }
-  Promise.resolve().then(() => (init_handles(), {})).then((m) => {
-    try {
-      refreshResizeHandles();
-    } catch {}
-  });
-}
-function resetSideRemountStateAfterDisable() {
-  setMainDrawerSideOverride(null);
-  _lastKnownSide = getMainDrawerSide();
-  Promise.resolve().then(() => (init_chrome_locations(), {})).then((m) => reconcileChromeLocations()).catch(() => {});
-  refreshSettingsPanelForSideChange();
-}
-function refreshSettingsPanelForSideChange() {
-  Promise.resolve().then(() => (init_state(), {})).then((m) => refreshSettingsPanel()).catch(() => {});
-}
-function clearSideOverrideWithPanelRefresh() {
-  if (getMainDrawerSideOverride() === null)
-    return;
-  setMainDrawerSideOverride(null);
-  refreshSettingsPanelForSideChange();
-}
-function refreshSideGeometry() {
-  Promise.resolve().then(() => (init_handles(), {})).then((m) => {
-    try {
-      refreshResizeHandles();
-    } catch {}
-  });
-  Promise.resolve().then(() => (init_reflow(), {})).then((m) => {
-    try {
-      updateChatReflow();
-    } catch {}
-  });
-  Promise.resolve().then(() => (init_strip_gutter(), {})).then((m) => {
-    try {
-      updateStripGutters();
-    } catch {}
-  });
-  Promise.resolve().then(() => (init_main_tab_pin(), {})).then((m) => {
-    try {
-      reconcileMainTabListPin();
-    } catch {}
-  });
-  try {
-    reconcileTabListPin();
-  } catch {}
-  try {
-    applyTabListPosition(getSettings().moveControlsToOuterEdge);
-  } catch {}
-  try {
-    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
-      mainDrawer: getMainMirrorDrawer(),
-      mainTabList: getMainMirrorTabList(),
-      mainPanel: getMainMirrorPanel()
-    });
-  } catch {}
-  syncDrawerTabSettings();
-  updateDrawerTabVisibility();
-  Promise.resolve().then(() => (init_drawer_location(), {})).then((m) => reconcileDrawerLocation()).catch(() => {});
-  Promise.resolve().then(() => (init_chrome_locations(), {})).then((m) => reconcileChromeLocations()).catch(() => {});
-}
-async function applyCanvasSideChange(desired, opts) {
-  const gen = ++_sideApplyGen;
-  const syncHost = opts?.syncHost !== false;
-  const run = async () => {
-    if (gen !== _sideApplyGen)
-      return { writeOk: true };
-    dlog("[drawer-sync] apply canvas side change (geometry-only)", {
-      desired,
-      syncHost
-    });
-    const priorSide = readMainWrapperSideFromDom() ?? (desired === "left" ? "right" : "left");
-    setMainDrawerSideOverride(desired);
-    let writeOk = true;
-    if (syncHost) {
-      writeOk = await recordCanvasSwapAndSyncHost(desired);
-    }
-    restyleMainShellSide(desired);
-    restyleSecondaryShellSide(desired === "left" ? "right" : "left");
-    refreshSideGeometry();
-    if (!writeOk) {
-      const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide;
-      clearSideOverrideWithPanelRefresh();
-      restyleMainShellSide(realSide);
-      restyleSecondaryShellSide(realSide === "left" ? "right" : "left");
-      _lastKnownSide = realSide;
-      refreshSideGeometry();
-      return { writeOk: false };
-    }
-    _lastKnownSide = desired;
-    refreshSettingsPanelForSideChange();
-    waitForSideSettle(desired, gen).then(() => {
-      if (gen !== _sideApplyGen)
-        return;
-      _lastKnownSide = desired;
-      rebindSideChangeWatcherIfNeeded();
-    });
-    return { writeOk: true };
-  };
-  const next = _applySideChain.then(run, run);
-  _applySideChain = next.then(() => {}, () => {});
-  return next;
-}
-function readMainWrapperSideFromDom() {
-  const wrapper = getMainWrapper();
-  if (!wrapper)
-    return null;
-  const cls = wrapper.classList.toString();
-  if (cls.includes("wrapperLeft"))
-    return "left";
-  if (cls.includes("wrapperRight"))
-    return "right";
-  if (/\bwrapper\w*/.test(cls) && !cls.includes("wrapperLeft"))
-    return "right";
-  return null;
-}
-function reconcileSideOverrideFromDom() {
-  const override = getMainDrawerSideOverride();
-  if (override === null)
-    return;
-  const domSide = readMainWrapperSideFromDom();
-  if (domSide === null)
-    return;
-  if (domSide === override) {
-    clearSideOverrideWithPanelRefresh();
-    return;
-  }
-  const hostSide = getHostDrawerSettings()?.side;
-  if ((hostSide === "left" || hostSide === "right") && hostSide !== override && hostSide === domSide) {
-    clearSideOverrideWithPanelRefresh();
-  }
-}
-function waitForSideSettle(desired, gen) {
-  return new Promise((resolve) => {
-    if (gen !== _sideApplyGen) {
-      resolve();
-      return;
-    }
-    let observed = getMainWrapper();
-    if (!observed) {
-      resolve();
-      return;
-    }
-    if (readMainWrapperSideFromDom() === desired) {
-      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-        clearSideOverrideWithPanelRefresh();
-      }
-      resolve();
-      return;
-    }
-    let settled = false;
-    let timer = null;
-    let observer;
-    const finish = () => {
-      if (settled)
-        return;
-      settled = true;
-      if (timer != null)
-        clearTimeout(timer);
-      try {
-        observer.disconnect();
-      } catch {}
-      resolve();
-    };
-    observer = new MutationObserver(() => {
-      if (settled)
-        return;
-      if (gen !== _sideApplyGen) {
-        finish();
-        return;
-      }
-      if (!observed || !observed.isConnected) {
-        observer.disconnect();
-        const next = getMainWrapper();
-        if (!next)
-          return;
-        observed = next;
-        observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
-      }
-      if (readMainWrapperSideFromDom() === desired) {
-        if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
-          clearSideOverrideWithPanelRefresh();
-        }
-        finish();
-      }
-    });
-    observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
-    timer = setTimeout(() => {
-      if (settled)
-        return;
-      if (gen === _sideApplyGen) {
-        _lastKnownSide = desired;
-        dwarn(`[drawer-sync] applyCanvasSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`);
-      }
-      finish();
-    }, _sideSettleHardMs);
-  });
-}
-function rebindSideChangeWatcherIfNeeded() {
-  const wrapper = getMainWrapper();
-  if (!wrapper)
-    return;
-  if (_sideObserver !== null && _observedMainWrapper === wrapper)
-    return;
-  if (_sideObserver !== null) {
-    try {
-      _sideObserver.disconnect();
-    } catch {}
-    _sideObserver = null;
-    _observedMainWrapper = null;
-  }
-  startSideChangeWatcher();
-}
-function startSideChangeWatcher() {
-  if (_sideObserver !== null)
-    return;
-  if (_lastKnownSide === null) {
-    _lastKnownSide = getMainDrawerSide();
-  }
-  const wrapper = getMainWrapper();
-  if (!wrapper) {
-    dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
-    return;
-  }
-  const coordinator = ensureObserverCoordinator();
-  _sideObserver = new MutationObserver(() => {
-    reconcileSideOverrideFromDom();
-    coordinator.signal("side");
-  });
-  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
-  _observedMainWrapper = wrapper;
-  if (!_sideWatcherCleanupRegistered) {
-    _sideWatcherCleanupRegistered = true;
-    registerCleanup(() => stopSideChangeWatcher());
-  }
-  startHostSideWatcher();
-}
-function stopSideChangeWatcher() {
-  if (_sideObserver === null)
-    return;
-  _sideObserver.disconnect();
-  _sideObserver = null;
-  _observedMainWrapper = null;
-}
-function stopDrawerTabResizeWatcher() {
-  if (_mainDrawerTabResizeObserver) {
-    _mainDrawerTabResizeObserver.disconnect();
-    _mainDrawerTabResizeObserver = null;
-  }
-}
-function stopDrawerTabClassObserver() {
-  if (_mainDrawerTabClassObserver) {
-    _mainDrawerTabClassObserver.disconnect();
-    _mainDrawerTabClassObserver = null;
-  }
-}
-function stopDrawerTabStyleObserver() {
-  if (_mainDrawerTabStyleObserver) {
-    _mainDrawerTabStyleObserver.disconnect();
-    _mainDrawerTabStyleObserver = null;
-  }
-}
-function ensureObserverCoordinator() {
-  if (!_observerCoordinator) {
-    _observerCoordinator = new ObserverCoordinator;
-    registerCleanup(stopObserverCoordinator);
-  }
-  return _observerCoordinator;
-}
-function stopObserverCoordinator() {
-  if (_observerCoordinator) {
-    _observerCoordinator.stop();
-    _observerCoordinator = null;
-  }
-}
-var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _applySideChain, _sideApplyGen = 0, _hostSideWatcher = null, _lastSeenHostSide = null, _lastCanvasSwapMs = 0, _hostWatcherStarted = false, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
-var init_drawer_sync = __esm(() => {
-  init_host_settings();
-  init_store();
-  init_log();
-  init_secondary();
-  init_main_mirror_drawer();
-  init_cleanup();
-  init_state();
-  init_tab_position();
-  init_buttons();
-  _applySideChain = Promise.resolve();
-  _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
 });
 
 // src/tabs/tab-context-menu.ts
@@ -15212,883 +14313,637 @@ var init_buttons = __esm(() => {
   _buttonTabIdLogged = new Set;
 });
 
-// src/recon/dispatch.ts
-var exports_dispatch = {};
-__export(exports_dispatch, {
-  __getPendingRestoreFlagsForTest: () => __getPendingRestoreFlagsForTest,
-  applyMainMirrorMoveChrome: () => applyMainMirrorMoveChrome,
-  applySecondaryNeighborHandoff: () => applySecondaryNeighborHandoff,
-  bootPlacementDone: () => bootPlacementDone,
-  bootstrap: () => bootstrap,
-  bootstrapFromLayout: () => bootstrapFromLayout,
-  captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
-  captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
-  dispatch: () => dispatch,
-  dispatchActivateByLiveId: () => dispatchActivateByLiveId,
-  dispatchBatch: () => dispatchBatch,
-  dispatchMoveByLiveId: () => dispatchMoveByLiveId,
-  dispatchTrackedActiveSync: () => dispatchTrackedActiveSync,
-  flush: () => flush,
-  getHost: () => getHost,
-  getModel: () => getModel,
-  onModelChanged: () => onModelChanged,
-  placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
-  setPersistOsOverride: () => setPersistOsOverride,
-  shutdown: () => shutdown,
-  snapshotOwnedModelLayout: () => snapshotOwnedModelLayout
-});
-function setPersistOsOverride(osActive) {
-  _persistOsOverride = osActive;
-}
-function onModelChanged(cb) {
-  _modelSubscribers.add(cb);
-  return () => {
-    _modelSubscribers.delete(cb);
-  };
-}
-function commitModel(next) {
-  if (_model === next)
-    return;
-  _model = next;
-  if (next === null)
-    return;
-  for (const cb of Array.from(_modelSubscribers)) {
-    try {
-      cb();
-    } catch {}
-  }
-}
-function pendingLayoutTabCount(layout) {
-  if (!layout || typeof layout !== "object")
-    return 0;
-  const ids = new Set;
-  for (const id of Array.isArray(layout.tabOrder) ? layout.tabOrder : []) {
-    if (typeof id === "string")
-      ids.add(id);
-  }
-  for (const tab of Array.isArray(layout.detachedTabs) ? layout.detachedTabs : []) {
-    if (typeof tab?.tabId === "string")
-      ids.add(tab.tabId);
-  }
-  return ids.size;
-}
-function inventoryIsReady(observed) {
-  const status = observed.inventory?.status;
-  return status === undefined || status === "ready" || status === "degraded";
-}
-function mergeResolvedInto(current, rebuilt) {
-  const inModel = new Set([...current.primary, ...current.secondary]);
-  const mergeSide = (side) => {
-    const cur = listForSide(current, side);
-    const reb = listForSide(rebuilt, side);
-    const fresh = reb.filter((k) => !inModel.has(k));
-    if (fresh.length === 0)
-      return cur;
-    const next = cur.slice();
-    for (const k of fresh) {
-      inModel.add(k);
-      next.splice(Math.min(reb.indexOf(k), next.length), 0, k);
+// src/sidebar/drawer-sync.ts
+class ObserverCoordinator {
+  pending = new Map;
+  frame = null;
+  _stopped = false;
+  signal(kind, payload) {
+    if (this._stopped)
+      return;
+    this.pending.set(kind, payload ?? null);
+    if (this.frame === null) {
+      this.frame = requestAnimationFrame(() => {
+        this.frame = null;
+        if (this._stopped)
+          return;
+        const entries = [...this.pending];
+        this.pending.clear();
+        this.flush(entries);
+      });
     }
-    return next;
-  };
-  const primary = mergeSide("primary");
-  const secondary = mergeSide("secondary");
-  const hidden = rebuilt.hidden.filter((k) => inModel.has(k));
-  const menuHidden = rebuilt.menuHidden.filter((k) => inModel.has(k));
-  const keepUser = _pendingWindowUserState;
-  const next = {
-    ...current,
-    primary,
-    secondary,
-    hidden: keepUser ? current.hidden : hidden,
-    menuHidden: keepUser ? current.menuHidden : menuHidden,
-    active: {
-      primary: current.active.primary ?? rebuilt.active.primary,
-      secondary: current.active.secondary ?? rebuilt.active.secondary
-    },
-    drawers: keepUser ? current.drawers : rebuilt.drawers,
-    side: keepUser ? current.side : rebuilt.side
-  };
-  if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && sameKeys2(next.menuHidden, current.menuHidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
-    return current;
   }
-  return next;
-}
-function markPendingWindowUserIntent(intent) {
-  if (_pendingLayout === null)
-    return;
-  const t = intent.t;
-  if (t === "setDrawer" || t === "swapSides" || t === "setHidden" || t === "setMenuHidden") {
-    _pendingWindowUserState = true;
+  stop() {
+    this._stopped = true;
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    this.pending.clear();
+  }
+  flush(entries) {
+    const hasSideChange = entries.some(([kind]) => kind === "side");
+    const hasLightSignals = entries.some(([kind]) => kind !== "side");
+    if (hasSideChange) {
+      checkSideChanged();
+    }
+    if (hasLightSignals) {
+      _runSyncDrawerTabSettings();
+    }
   }
 }
-function sameKeys2(a, b) {
-  if (a.length !== b.length)
+function getHostSide() {
+  const host = getHostDrawerSettings();
+  if (host && (host.side === "left" || host.side === "right"))
+    return host.side;
+  try {
+    const snap = getStoreSnapshot();
+    const s = snap?.drawerSettings?.side;
+    if (s === "left" || s === "right")
+      return s;
+  } catch {}
+  return null;
+}
+async function syncHostSideToModel(modelSide) {
+  const hostSide = getHostSide();
+  if (hostSide === modelSide)
+    return true;
+  const ok = patchHostDrawerSettings({ side: modelSide });
+  if (ok) {
+    _lastSeenHostSide = modelSide;
+    dlog("[drawer-sync] syncHostSideToModel: host side written to match model", { modelSide, prevHostSide: hostSide });
+    return true;
+  }
+  if (isHostedBrowserContext()) {
+    const m = await Promise.resolve().then(() => (init_host_settings(), {}));
+    const apiOk = await writeHostDrawerSettingsViaApi({ side: modelSide });
+    if (apiOk) {
+      _lastSeenHostSide = modelSide;
+      dlog("[drawer-sync] syncHostSideToModel: host side written via API", { modelSide });
+    }
+    return apiOk;
+  }
+  return false;
+}
+function isHostedBrowserContext() {
+  try {
+    return typeof window !== "undefined" && typeof window.location !== "undefined" && /^https?:/.test(window.location.protocol);
+  } catch {
     return false;
-  for (let i = 0;i < a.length; i++) {
-    if (a[i] !== b[i])
-      return false;
+  }
+}
+function convergeModelToHostSide(hostSide) {
+  Promise.resolve().then(() => (init_dispatch(), {})).then((m) => {
+    const modelSide = getModel()?.side;
+    if (!modelSide || modelSide === hostSide)
+      return;
+    if (Date.now() - _lastCanvasSwapMs < 800) {
+      dlog("[drawer-sync] host side change ignored — recent Canvas swap", { hostSide, modelSide });
+      return;
+    }
+    dlog("[drawer-sync] host side change detected — unifying via Canvas", { hostSide, modelSide });
+    return dispatch({ t: "swapSides" }).catch((err) => {
+      dwarn("[drawer-sync] host side unify dispatch failed:", err);
+    });
+  });
+}
+function startHostSideWatcher() {
+  if (_hostWatcherStarted)
+    return;
+  _hostWatcherStarted = true;
+  const initialHost = getHostSide();
+  const modelSide = getMainDrawerSide();
+  _lastSeenHostSide = initialHost;
+  if (initialHost && initialHost !== modelSide) {
+    dlog("[drawer-sync] host side differs from model on boot — syncing host to model", { hostSide: initialHost, modelSide });
+    syncHostSideToModel(modelSide);
+  }
+  _hostSideWatcher = setInterval(() => {
+    const hostSide = getHostSide();
+    if (!hostSide)
+      return;
+    if (hostSide === _lastSeenHostSide)
+      return;
+    _lastSeenHostSide = hostSide;
+    convergeModelToHostSide(hostSide);
+  }, 500);
+  _hostSideWatcher.unref?.();
+  registerCleanup(() => stopHostSideWatcher());
+}
+function stopHostSideWatcher() {
+  if (_hostSideWatcher) {
+    clearInterval(_hostSideWatcher);
+    _hostSideWatcher = null;
+  }
+  _hostWatcherStarted = false;
+}
+async function recordCanvasSwapAndSyncHost(desired) {
+  _lastCanvasSwapMs = Date.now();
+  _lastSeenHostSide = desired;
+  const ok = patchHostDrawerSettings({ side: desired });
+  if (ok)
+    return true;
+  try {
+    const m = await Promise.resolve().then(() => (init_host_settings(), {}));
+    const apiOk = await writeHostDrawerSettingsViaApi({ side: desired });
+    if (apiOk) {
+      _lastSeenHostSide = desired;
+      dlog("[drawer-sync] recordCanvasSwapAndSyncHost: host side written via API", { desired });
+    }
+    return apiOk;
+  } catch {
+    return false;
+  }
+}
+function isShowTabLabels() {
+  const host = getHostDrawerSettings();
+  if (host && typeof host.showTabLabels === "boolean") {
+    return host.showTabLabels;
+  }
+  const store = getStoreSnapshot();
+  if (store) {
+    const snapshot = asDrawerStore(store);
+    if (snapshot.drawerSettings && typeof snapshot.drawerSettings.showTabLabels === "boolean") {
+      return snapshot.drawerSettings.showTabLabels;
+    }
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar) {
+    return !!sidebar.querySelector('button[class*="tabBtnLabeled"]');
   }
   return true;
 }
-function bootstrap(model, host, version) {
-  _unsubscribeWorldChanged?.();
-  const gen = ++_generation2;
-  commitModel(model);
-  _host = host;
-  _version = version ?? "unknown";
-  _bootstrapping = true;
-  _worldSyncPending = false;
-  _unsubscribeWorldChanged = host.onWorldChanged(() => {
-    if (gen !== _generation2 || _host !== host)
-      return;
-    if (_bootstrapping) {
-      _worldSyncPending = true;
-      return;
-    }
-    enqueueHostSync(host, gen).catch(() => {});
-  });
-  const task = reconcileAndPersist(model, gen);
-  _queue = task.catch(() => {}).then(() => {});
-  task.then((next) => {
-    if (gen !== _generation2 || _host !== host)
-      return;
-    _persistOsBootOverride = null;
-    if (next !== model)
-      commitModel(next);
-    _bootstrapping = false;
-    if (_worldSyncPending) {
-      _worldSyncPending = false;
-      enqueueHostSync(host, gen).catch(() => {});
-    }
-  }, () => {
-    if (gen === _generation2 && _host === host) {
-      _persistOsBootOverride = null;
-      _bootstrapping = false;
-    }
+function syncDrawerTabSettings() {
+  if (_syncPending)
+    return;
+  _syncPending = true;
+  requestAnimationFrame(() => {
+    _syncPending = false;
+    _runSyncDrawerTabSettings();
   });
 }
-function enqueueHostSync(host, generation) {
-  const task = _queue.then(async () => {
-    if (generation !== _generation2 || _host !== host || !_model)
-      return;
-    const observed = host.observe();
-    if (_pendingLayout !== null && inventoryIsReady(observed) && observed.tabs.length > 0) {
-      if (_restoringPending)
-        return;
-      if (Date.now() > _restoreDeadline) {
-        dlog("[dispatch] pending-layout restore aborted (retry window expired)");
-        _pendingLayout = null;
-        _persistResolvedWhilePending = false;
-        _persistOsBootOverride = null;
-        return;
-      }
-      const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
-      const expected = pendingLayoutTabCount(_pendingLayout);
-      const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected;
-      const merged = mergeResolvedInto(_model, rebuilt);
-      if (resolvedAll) {
-        _pendingLayout = null;
-        _persistResolvedWhilePending = false;
-        _pendingWindowUserState = false;
-      }
-      if (merged !== _model) {
-        _restoringPending = true;
-        try {
-          if (generation === _generation2) {
-            commitModel(await reconcileAndPersist(merged, generation));
-          }
-        } finally {
-          _restoringPending = false;
-        }
-      }
-      return;
-    }
-    const next = reduce(_model, { t: "syncFromHost", observed });
-    if (!inventoryIsReady(observed)) {
-      dlog("[dispatch] host-sync skipped non-ready inventory", {
-        inventory: observed.inventory
+function _runSyncDrawerTabSettings() {
+  const drawerTab = getSecondaryWrapper()?.querySelector(".sidebar-ux-drawer-tab");
+  const mainMirrorWrapperEarly = getMainMirrorWrapper();
+  if (!drawerTab && !mainMirrorWrapperEarly)
+    return;
+  let mainDrawerTab = null;
+  const mainWrapper = getMainWrapper();
+  if (mainWrapper) {
+    mainDrawerTab = mainWrapper.querySelector('button[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
+  }
+  if (!mainDrawerTab) {
+    mainDrawerTab = document.querySelector('button[class*="_drawerTab_"]:not(.sidebar-ux-drawer-tab)');
+  }
+  if (!mainDrawerTab) {
+    _drawerTabRetryCount++;
+    if (!_drawerTabRetryLogged) {
+      _drawerTabRetryLogged = true;
+      dlog("[drawer-sync] main drawer tab not found — bounded retry engaged", {
+        retryMax: DRAWER_TAB_RETRY_MAX
       });
-      return;
     }
-    if (observed.tabs.length === 0 && (_model.primary.length > 0 || _model.secondary.length > 0)) {
-      dlog("[dispatch] host-sync skipped empty observed world", {
-        before: { primary: _model.primary, secondary: _model.secondary }
-      });
-      return;
+    if (_drawerTabRetryCount < DRAWER_TAB_RETRY_MAX) {
+      requestAnimationFrame(() => _runSyncDrawerTabSettings());
     }
-    dlog("[dispatch] host-sync", {
-      observed: observed.tabs.map((t) => `${t.liveId}:${t.location}`),
-      observedDrawerSide: observed.drawerSide,
-      before: { primary: _model.primary, secondary: _model.secondary, side: _model.side },
-      after: { primary: next.primary, secondary: next.secondary, side: next.side }
+    return;
+  }
+  _drawerTabRetryCount = 0;
+  if (!_mainDrawerTabResizeObserver) {
+    const coordinator = ensureObserverCoordinator();
+    _mainDrawerTabResizeObserver = new ResizeObserver(() => {
+      coordinator.signal("resize");
     });
-    if (next.side !== _model.side) {
-      dlog('[dispatch] host drawer side adopted (Lumiverse "Drawer side" setting toggled)', {
-        observed: observed.drawerSide,
-        modelBefore: _model.side,
-        modelAfter: next.side
-      });
-    }
-    if (next === _model)
+    _mainDrawerTabResizeObserver.observe(mainDrawerTab);
+    registerCleanup(stopDrawerTabResizeWatcher);
+  }
+  if (!_mainDrawerTabClassObserver) {
+    const coordinator = ensureObserverCoordinator();
+    _mainDrawerTabClassObserver = new MutationObserver(() => {
+      coordinator.signal("class");
+    });
+    _mainDrawerTabClassObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["class"] });
+    registerCleanup(stopDrawerTabClassObserver);
+  }
+  if (!_mainDrawerTabStyleObserver) {
+    const coordinator = ensureObserverCoordinator();
+    _mainDrawerTabStyleObserver = new MutationObserver(() => {
+      coordinator.signal("style");
+    });
+    _mainDrawerTabStyleObserver.observe(mainDrawerTab, { attributes: true, attributeFilter: ["style"] });
+    registerCleanup(stopDrawerTabStyleObserver);
+  }
+  const mainStyle = getComputedStyle(mainDrawerTab);
+  const compact = String(mainDrawerTab.className).includes("drawerTabCompact");
+  const hostWidth = parseFloat(mainStyle.getPropertyValue("--drawer-tab-w"));
+  const width = Number.isFinite(hostWidth) && hostWidth >= 16 && hostWidth <= 64 ? hostWidth : compact ? 32 : 48;
+  const values = [
+    `${width}px`,
+    "auto",
+    mainStyle.paddingTop,
+    mainStyle.paddingRight,
+    mainStyle.paddingBottom,
+    mainStyle.paddingLeft,
+    mainStyle.gap,
+    `${mainStyle.borderTopWidth} solid var(--lumiverse-border-hover)`,
+    compact ? "14px" : "16px"
+  ];
+  const names = ["w", "h", "pt", "pr", "pb", "pl", "gap", "border", "icon-size"];
+  const newVars = values.join("|");
+  const stamp = (wrapper) => {
+    if (!wrapper)
       return;
-    const result = await reconcileAndPersist(next, generation);
-    if (generation === _generation2)
-      commitModel(result);
-  });
-  _queue = task.catch(() => {});
-  return task;
-}
-function shutdown() {
-  _generation2++;
-  _unsubscribeWorldChanged?.();
-  _unsubscribeWorldChanged = null;
-  _bootstrapping = false;
-  _worldSyncPending = false;
-  _trackedSyncScheduled = false;
-  _trackedSyncQueued = false;
-  _host = null;
-  _model = null;
-  _version = "unknown";
-  _pendingLayout = null;
-  _persistResolvedWhilePending = false;
-  _persistOsOverride = null;
-  _persistOsBootOverride = null;
-  _restoringPending = false;
-  _restoreDeadline = 0;
-  _pendingWindowUserState = false;
-  _bootPlacementPass = null;
-  _lastPersistedLayout = null;
-  _queue = Promise.resolve();
-}
-function getModel() {
-  return _model;
-}
-function getHost() {
-  return _host;
-}
-function snapshotOwnedModelLayout() {
-  const host = _host;
-  const model = _model;
-  if (!host || !model)
-    return null;
-  return serializeModelToLayout(model, (key) => host.resolve(key), _version);
-}
-function buildPersistedBlob(model, resolve) {
-  const layout = serializeModelToLayout(model, resolve, _version);
-  const isDual = model.secondary.length > 0;
-  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled();
-  const base = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
-  const s = getSettings();
-  const lastPrimary = getLastLoadedLayout()?.primary ?? null;
-  const basePrimary = base.primary ?? {};
-  const lastOpen = lastPrimary?.open;
-  const lastWidth = lastPrimary?.width;
-  const frozenOpen = typeof lastOpen === "boolean" ? lastOpen : basePrimary.open;
-  const frozenWidth = typeof lastWidth === "number" ? lastWidth : basePrimary.width;
-  return {
-    ...base,
-    primary: {
-      ...basePrimary,
-      open: s.persistDrawerOpenState ? basePrimary.open : frozenOpen,
-      width: s.persistDrawerWidth ? basePrimary.width : frozenWidth
-    },
-    dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
-    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
-    osDualLayout: isDual ? os ? base : getOsDualLayoutSlot() : getOsDualLayoutSlot(),
-    osSingleLayout: isDual ? getOsSingleLayoutSlot() : os ? base : getOsSingleLayoutSlot()
+    if (newVars === _lastWrittenDrawerTabVars && wrapper.style.getPropertyValue("--sidebar-ux-drawer-tab-w") === values[0] && wrapper.style.getPropertyValue("--sidebar-ux-drawer-tab-h") === "auto")
+      return;
+    names.forEach((name, i) => wrapper.style.setProperty(`--sidebar-ux-drawer-tab-${name}`, values[i]));
   };
-}
-function persistModel(model) {
-  const host = _host;
-  if (!host)
-    return;
-  const layout = buildPersistedBlob(model, (key) => host.resolve(key));
-  const json = JSON.stringify(layout);
-  if (json === _lastPersistedLayout) {
-    dlog("[dispatch] persist layout skipped (byte-identical)");
-    return;
-  }
-  _lastPersistedLayout = json;
-  const persistedTabs = Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0;
-  const persistedSecondary = Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0;
-  dlog("[dispatch] persist layout", {
-    drawerSide: layout.drawerSide,
-    primary: persistedTabs - persistedSecondary,
-    secondary: persistedSecondary,
-    hidden: Array.isArray(layout.hiddenTabIds) ? layout.hiddenTabIds.length : 0,
-    activePrimary: layout.primary?.tabId ?? null,
-    activeSecondary: layout.secondary?.activeTabId ?? null,
-    singleSlot: layout.singleLayout != null,
-    dualSlot: layout.dualLayout != null,
-    bytes: json.length
-  });
-  saveLayoutToDisk(layout).then((r) => {
-    if (r.status === "error") {
-      if (_lastPersistedLayout === json)
-        _lastPersistedLayout = null;
-      console.warn("[canvas] saveLayoutToDisk failed:", r.reason);
+  const mainMirrorWrapper = getMainMirrorWrapper();
+  stamp(getSecondaryWrapper());
+  stamp(mainMirrorWrapper);
+  _lastWrittenDrawerTabVars = newVars;
+  const mainParent = mainDrawerTab.parentElement;
+  const verticalPos = mainParent ? parseFloat(getComputedStyle(mainDrawerTab).marginTop) / window.innerHeight * 100 : 0;
+  const mainMarginStyle = mainDrawerTab.style.marginTop;
+  const posVh = mainMarginStyle ? parseFloat(mainMarginStyle) : 0;
+  const horizontalLocation = isHorizontalStrip();
+  if (horizontalLocation) {
+    if (drawerTab?.style.marginTop)
+      drawerTab.style.marginTop = "";
+    const mainMirrorTabH = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+    if (mainMirrorTabH?.style.marginTop)
+      mainMirrorTabH.style.marginTop = "";
+    _lastKnownVerticalPos = null;
+  } else if (_lastKnownVerticalPos !== posVh) {
+    const settings = getSettings();
+    const effectiveMainVh = settings.mainDrawerTabOverrideVh !== undefined ? settings.mainDrawerTabOverrideVh : posVh;
+    if (settings.mirrorCompactPosition) {
+      if (drawerTab)
+        drawerTab.style.marginTop = `${effectiveMainVh}vh`;
+      const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+      if (mainMirrorTab)
+        mainMirrorTab.style.marginTop = `${effectiveMainVh}vh`;
+    } else if (settings.secondaryDrawerTabOverrideVh === undefined) {
+      if (drawerTab)
+        drawerTab.style.marginTop = "";
     }
-  }).catch((err) => {
-    if (_lastPersistedLayout === json)
-      _lastPersistedLayout = null;
-    console.warn("[canvas] saveLayoutToDisk rejected:", err);
-  });
-}
-async function reconcileAndPersist(model, generation = _generation2) {
-  const host = _host;
-  if (!host || generation !== _generation2)
-    return model;
-  const report = await reconcile(model, host);
-  if (report.modelSideCorrection !== undefined && model.side !== report.modelSideCorrection) {
-    model = { ...model, side: report.modelSideCorrection };
+    _lastKnownVerticalPos = posVh;
   }
-  const hasTabs = model.primary.length > 0 || model.secondary.length > 0;
-  const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending;
-  if (generation === _generation2 && _host === host && persistAllowed && hasTabs) {
-    persistModel(model);
+  if (drawerTab) {
+    drawerTab.classList.toggle("sidebar-ux-drawer-tab--active", isSecondarySidebarOpen());
   }
-  return model;
-}
-function dispatch(intent) {
-  const gen = _generation2;
-  const host = _host;
-  if (host)
-    dlog("[dispatch] intent", { t: intent.t, intent });
-  if (!host)
-    return Promise.resolve();
-  const task = _queue.then(async () => {
-    if (gen !== _generation2)
-      return;
-    if (!_model || !_host)
-      return;
-    markPendingWindowUserIntent(intent);
-    const next = reduce(_model, intent);
-    if (next === _model) {
-      dlog("[dispatch] no-op (reduce returned same model)", { t: intent.t });
-      return;
-    }
-    commitModel(next);
-    commitModel(await reconcileAndPersist(next, gen));
-  });
-  _queue = task.catch(() => {});
-  return task;
-}
-function dispatchBatch(intents) {
-  const gen = _generation2;
-  const host = _host;
-  if (!host)
-    return Promise.resolve();
-  const task = _queue.then(async () => {
-    if (gen !== _generation2)
-      return;
-    if (!_model || !_host)
-      return;
-    for (const intent of intents)
-      markPendingWindowUserIntent(intent);
-    const next = foldIntents(_model, intents);
-    dlog("[dispatch] batch", {
-      intents,
-      before: { primary: _model.primary, secondary: _model.secondary },
-      after: { primary: next.primary, secondary: next.secondary }
-    });
-    if (next === _model)
-      return;
-    commitModel(next);
-    commitModel(await reconcileAndPersist(next, gen));
-  });
-  _queue = task.catch(() => {});
-  return task;
-}
-function dispatchMoveByLiveId(liveId, activateDest = true, visibleIndex) {
-  const host = _host;
-  const model = _model;
-  if (!host || !model)
-    return Promise.resolve();
-  const key = host.findKey(liveId);
-  if (!key)
-    return Promise.resolve();
-  let from = sideOfKey(model, key);
-  if (!from) {
-    return dispatch({ t: "syncFromHost", observed: host.observe() }).then(() => {
-      const nextModel = _model;
-      if (!nextModel)
-        return;
-      const nextFrom = sideOfKey(nextModel, key);
-      if (!nextFrom)
-        return;
-      const nextTo = nextFrom === "primary" ? "secondary" : "primary";
-      const destVisible = visibleKeys(nextModel, nextTo).length;
-      return dispatch({
-        t: "move",
-        key,
-        to: nextTo,
-        index: visibleIndex ?? destVisible,
-        activateDest
-      });
-    });
+  const mainMirrorTab = mainMirrorWrapper?.querySelector(".sidebar-ux-drawer-tab");
+  if (mainMirrorTab && isMainMirrorActive()) {
+    mainMirrorTab.classList.toggle("sidebar-ux-drawer-tab--active", isCanvasMainOpen());
   }
-  const to = from === "primary" ? "secondary" : "primary";
-  const destVisible = visibleKeys(model, to).length;
-  return dispatch({
-    t: "move",
-    key,
-    to,
-    index: visibleIndex ?? destVisible,
-    activateDest
-  });
+  syncSecondaryTabLabels();
 }
-function dispatchActivateByLiveId(liveId, side) {
-  const host = _host;
-  if (!host)
-    return Promise.resolve();
-  const key = host.findKey(liveId);
-  if (!key) {
-    dlog("[dispatch] dispatchActivateByLiveId: findKey returned null", { liveId, side });
-    return Promise.resolve();
-  }
-  return dispatch({ t: "activate", key, side });
-}
-async function dispatchTrackedActiveSync() {
-  if (_trackedSyncScheduled) {
-    _trackedSyncQueued = true;
+function syncSecondaryTabLabels(forceShow) {
+  const showLabels = typeof forceShow === "boolean" ? forceShow : isShowTabLabels();
+  const cacheKey = showLabels ? "show" : "hide";
+  const forced = typeof forceShow === "boolean";
+  if (!forced && cacheKey === _lastWrittenLabelsKey)
     return;
-  }
-  _trackedSyncScheduled = true;
-  try {
-    do {
-      _trackedSyncQueued = false;
-      await dispatchTrackedActiveSyncInner();
-    } while (_trackedSyncQueued);
-  } finally {
-    _trackedSyncScheduled = false;
-  }
-}
-async function dispatchTrackedActiveSyncInner() {
-  const host = _host;
-  if (!host)
+  _lastWrittenLabelsKey = cacheKey;
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function")
     return;
-  if (_bootstrapping || _restoringPending) {
-    dlog("[dispatch] dispatchTrackedActiveSync skipped (model mid-boot/restore)");
-    return;
-  }
-  const active = await Promise.resolve().then(() => (init_active_tab(), {}));
-  const primaryId = resolvePrimaryActiveTabId();
-  const secondaryId = getActiveSecondaryTabId();
-  const primary = primaryId ? host.findKey(primaryId) : null;
-  const secondary = secondaryId ? host.findKey(secondaryId) : null;
-  if (!primary && !secondary) {
-    dlog("[dispatch] dispatchTrackedActiveSync: nothing resolvable", { primaryId, secondaryId });
-    return;
-  }
-  await dispatch({ t: "syncActive", primary, secondary });
-}
-async function captureMainMirrorMoveChrome(liveId, target) {
-  return { neighborBtn: null, reassertId: null };
-}
-async function applyMainMirrorMoveChrome(chrome, liveId) {
-  const model = _model;
-  const host = _host;
-  if (!model || !host)
-    return;
-  const key = model.active.primary;
-  if (!key)
-    return;
-  const id = host.resolve(key);
-  if (!id || id === liveId)
-    return;
-  await Promise.resolve().then(() => init_buttons());
-  const btn = findMainTabButton(id);
-  if (btn && btn.isConnected) {
-    dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`);
-    try {
-      btn.click();
-    } catch {}
-  } else {
-    dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { id });
-  }
-}
-async function captureSecondaryNeighborForMove(liveId) {
-  if (getModel()?.drawers.secondary.open !== true)
-    return { neighborBtn: null };
-  await Promise.resolve().then(() => init_active_tab());
-  if (getActiveSecondaryTabId() !== liveId)
-    return { neighborBtn: null };
-  await Promise.resolve().then(() => init_buttons());
-  const neighborBtn = findNeighborSecondaryButtonFor(liveId);
-  if (neighborBtn) {
-    dlog("[tabmove] capture secondary chrome: active tab moved — neighbor target", {
-      liveId,
-      neighbor: neighborBtn.getAttribute("title") || neighborBtn.getAttribute("data-tab-id")
-    });
-  }
-  return { neighborBtn };
-}
-async function applySecondaryNeighborHandoff(chrome, liveId) {
-  const { neighborBtn } = chrome;
-  if (!neighborBtn)
-    return;
-  const neighborId = neighborBtn.getAttribute("data-tab-id");
-  if (!neighborId)
-    return;
-  const title = neighborBtn.getAttribute("title") || neighborBtn.getAttribute("aria-label") || undefined;
-  dlog(`[tabmove] apply secondary chrome: activating neighbor (${title ?? neighborId})`);
-  if (neighborBtn.isConnected) {
-    try {
-      const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
-      activateSecondaryTab(neighborId);
-    } catch {}
-  }
-  const neighborKey = _host?.findKey(neighborId);
-  if (neighborKey && _model?.active.secondary !== neighborKey) {
-    dlog(`[tabmove] apply secondary chrome: converging model active to neighbor (${neighborKey})`);
-    dispatch({ t: "activate", key: neighborKey, side: "secondary" }).catch((err) => {
-      dwarn("[tabmove] apply secondary chrome: neighbor activate dispatch failed:", err);
-    });
-  }
-}
-async function placementFirstMoveByLiveId(liveId, target) {
-  const host = _host;
-  if (!host) {
-    dlog("[tabmove] placementFirstMove: no host, bailing", { liveId, target });
-    return;
-  }
-  const chrome = await captureMainMirrorMoveChrome(liveId, target);
-  const secondaryChrome = target === "primary" ? await captureSecondaryNeighborForMove(liveId) : { neighborBtn: null };
-  let placed = false;
-  try {
-    const sidebar = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
-    if (target === "secondary") {
-      const facadeKey = host.findKey(liveId);
-      await assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined);
-      if (facadeKey && isExtensionKey(facadeKey)) {
-        await Promise.resolve().then(() => init_secondary());
-        const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
-        const rootPresent = !!content?.querySelector(`[data-canvas-moved="${CSS.escape(liveId)}"]`);
-        if (!rootPresent) {
-          dwarn("[tabmove] extension placement returned without secondary root", {
-            liveId,
-            facadeKey,
-            secondaryContentFound: !!content
-          });
-          return;
-        }
-      }
+  const labels = document.querySelectorAll(".sidebar-ux-tab-label");
+  for (let i = 0;i < labels.length; i++) {
+    const label = labels[i];
+    if (showLabels) {
+      label.style.display = "";
+      label.style.visibility = "visible";
+      label.style.opacity = "1";
+      label.style.height = "auto";
+      label.style.minHeight = "";
+      label.style.marginTop = "1px";
     } else {
-      await unassignFromSecondary(liveId);
+      label.style.display = "none";
+      label.style.visibility = "hidden";
+      label.style.opacity = "0";
+      label.style.height = "0";
+      label.style.minHeight = "0";
+      label.style.marginTop = "0";
     }
-    placed = true;
-  } catch (err) {
-    dwarn("[tabmove] placementFirstMove: placement threw", { liveId, target, err: String(err) });
-  }
-  if (!placed) {
-    dlog("[tabmove] placementFirstMove: placement did not complete; skipping model update", { liveId, target });
-    return;
-  }
-  if (target === "secondary") {
-    const secondary = await Promise.resolve().then(() => (init_secondary(), {}));
-    if (!isSecondarySidebarOpen()) {
-      await Promise.resolve().then(() => init_mobile_exclusion());
-      if (!isMobileViewport()) {
-        dlog("[tabmove] placementFirstMove: secondary drawer not open; opening explicitly");
-        openSecondarySidebar();
-      } else {
-        dlog("[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)");
-      }
+    const btn = label.closest("button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn");
+    if (btn) {
+      btn.classList.toggle("sidebar-ux-tab-labeled", showLabels);
+      btn.style.height = showLabels ? "56px" : "48px";
     }
   }
-  const key = host.findKey(liveId);
-  if (!key) {
-    dlog("[tabmove] placementFirstMove: findKey returned null after placement", { liveId, target });
-    return;
-  }
-  const model = _model;
-  if (!model) {
-    dlog("[tabmove] placementFirstMove: no model after placement", { liveId, target });
-    return;
-  }
-  const from = sideOfKey(model, key);
-  if (from !== target) {
-    const neighborId = secondaryChrome.neighborBtn?.getAttribute("data-tab-id") ?? null;
-    const neighborKey = neighborId ? host.findKey(neighborId) : null;
-    if (neighborKey) {
-      dlog("[tabmove] placementFirstMove: dispatching move + secondary neighbor activate", {
-        liveId,
-        key,
-        from,
-        to: target,
-        neighbor: neighborKey
-      });
-      await dispatchBatch([
-        { t: "move", key, to: target, index: -1, activateDest: false },
-        { t: "activate", key: neighborKey, side: "secondary" }
-      ]);
-    } else {
-      dlog("[tabmove] placementFirstMove: dispatching move", { liveId, key, from, to: target });
-      await dispatch({ t: "move", key, to: target, index: -1, activateDest: false });
-    }
-  } else {
-    dlog("[tabmove] placementFirstMove: model already in target", { liveId, key, target });
-  }
-  if (target === "primary") {
-    await applySecondaryNeighborHandoff(secondaryChrome, liveId);
-  }
-  if (target === "secondary") {
-    await applyMainMirrorMoveChrome(chrome, liveId);
-  }
-}
-function bootstrapFromLayout(layout, host, version, opts) {
-  let model = buildModelFromLayout(layout, (id) => host.findKey(id));
-  if (!(opts?.osActive ?? isOsModeEnabled()) && model.closed.length > 0) {
-    dlog("[dispatch] dropped OS closed-set on non-OS boot/restore", {
-      closed: model.closed.length
-    });
-    model = { ...model, closed: [] };
-  }
-  if (!(opts?.osActive ?? isOsModeEnabled()) && model.menuHidden.length > 0) {
-    dlog("[dispatch] dropped OS menu-hidden set on non-OS boot/restore", {
-      menuHidden: model.menuHidden.length
-    });
-    model = { ...model, menuHidden: [] };
-  }
-  if (pendingLayoutTabCount(layout) === 0) {
-    const observed = host.observe();
-    if (inventoryIsReady(observed) && observed.tabs.length > 0) {
-      model = reduce(model, { t: "syncFromHost", observed });
-    }
-  }
-  _restoringPending = false;
-  _pendingWindowUserState = false;
-  const expected = pendingLayoutTabCount(layout);
-  const resolved = model.primary.length + model.secondary.length;
-  _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
-  _persistResolvedWhilePending = opts?.persistWhilePending === true;
-  _persistOsBootOverride = opts?.osActive === undefined ? null : opts.osActive;
-  _pendingLayout = layout != null && resolved < expected ? layout : null;
-  if (_pendingLayout !== null) {
-    dlog("[dispatch] pending-layout armed", {
-      expected,
-      resolved,
-      persistWhilePending: _persistResolvedWhilePending
-    });
-  }
-  bootstrap(model, host, version);
-  const passGen = _generation2;
-  const savedLayout = layout ?? {};
-  dlog("[dispatch] boot restore", {
-    expectedTabs: expected,
-    resolvedTabs: resolved,
-    pendingRetry: _pendingLayout !== null,
-    savedDrawerSide: savedLayout.drawerSide ?? null,
-    savedSecondary: Array.isArray(savedLayout.detachedTabs) ? savedLayout.detachedTabs.length : 0,
-    modelSide: model.side,
-    modelPrimary: model.primary.length,
-    modelSecondary: model.secondary.length
-  });
-  const primaryBootKey = model.active.primary;
-  const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
-  const restorePending = _pendingLayout !== null;
-  _bootPlacementPass = (async () => {
-    if (passGen !== _generation2)
-      return;
-    let gate = null;
-    let gateReleased = false;
-    let gateSafety = null;
-    const releaseGate = () => {
-      if (gateReleased)
-        return;
-      gateReleased = true;
-      try {
-        gate?.releaseSecondaryPlacementReveal();
-      } catch {}
-    };
-    if (passGen !== _generation2)
-      return;
+  Promise.resolve().then(() => (init_main_tab_pin(), {})).then((m) => {
     try {
-      gate = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
-      gate.holdSecondaryPlacementReveal();
-      gateSafety = setTimeout(releaseGate, 5000);
+      reconcileMainTabListPin();
     } catch {}
+  });
+}
+function checkSideChanged() {
+  const currentSide = getMainDrawerSide();
+  _lastWrittenDrawerTabVars = null;
+  _lastWrittenLabelsKey = null;
+  _lastKnownVerticalPos = null;
+  stopDrawerTabResizeWatcher();
+  stopDrawerTabClassObserver();
+  stopDrawerTabStyleObserver();
+  if (_lastKnownSide !== null && _lastKnownSide !== currentSide) {
+    dlog("[drawer-sync] side changed detected (geometry-only)", {
+      from: _lastKnownSide,
+      to: currentSide,
+      secondDrawerEnabled: getSettings().secondSidebarEnabled
+    });
+    applyCanvasSideChange(currentSide, { syncHost: false });
+    convergeModelToHostSide(currentSide);
+    refreshSettingsPanelForSideChange();
+  } else {
+    _lastKnownSide = currentSide;
+    syncDrawerTabSettings();
+  }
+  Promise.resolve().then(() => (init_handles(), {})).then((m) => {
     try {
-      const m = await Promise.resolve().then(() => (init_secondary(), {}));
-      if (passGen !== _generation2)
-        return;
-      await reassignSecondaryTabsFromModel({
-        openOnClosed: false,
-        setActiveWhenReady: false,
-        activateKey: model.active.secondary ?? null
-      });
-      if (!restorePending) {
-        if (passGen !== _generation2)
-          return;
-        try {
-          await unassignSecondaryTabsNotInModel();
-        } catch (err) {
-          dwarn("[bootstrap] unassignSecondaryTabsNotInModel failed:", err);
-        }
-      }
-      if (primaryBootLiveId === null)
-        return;
-      const reassertPrimary = async () => {
-        let mp = null;
-        let mm = null;
-        try {
-          mp = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
-        } catch {}
-        try {
-          mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
-        } catch {}
-        if (passGen !== _generation2)
-          return;
-        try {
-          mp?.ensureRestoredPrimaryTab(primaryBootLiveId);
-        } catch {}
-        try {
-          mm?.ensureHostContentParkedPublic();
-        } catch {}
-      };
-      if (passGen !== _generation2)
-        return;
-      await reassertPrimary();
-      if (passGen !== _generation2)
-        return;
-      try {
-        const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
-        if (isMainMirrorActive()) {
-          setTimeout(() => {
-            if (passGen !== _generation2)
-              return;
-            reassertPrimary();
-          }, 500);
-        }
-      } catch {}
-    } catch (err) {
-      dwarn("[bootstrap] reassignSecondaryTabsFromModel failed:", err);
-    } finally {
-      if (gateSafety)
-        clearTimeout(gateSafety);
-      releaseGate();
+      refreshResizeHandles();
+    } catch {}
+  });
+}
+function resetSideRemountStateAfterDisable() {
+  setMainDrawerSideOverride(null);
+  _lastKnownSide = getMainDrawerSide();
+  Promise.resolve().then(() => (init_chrome_locations(), {})).then((m) => reconcileChromeLocations()).catch(() => {});
+  refreshSettingsPanelForSideChange();
+}
+function refreshSettingsPanelForSideChange() {
+  Promise.resolve().then(() => (init_state(), {})).then((m) => refreshSettingsPanel()).catch(() => {});
+}
+function clearSideOverrideWithPanelRefresh() {
+  if (getMainDrawerSideOverride() === null)
+    return;
+  setMainDrawerSideOverride(null);
+  refreshSettingsPanelForSideChange();
+}
+function refreshSideGeometry() {
+  Promise.resolve().then(() => (init_handles(), {})).then((m) => {
+    try {
+      refreshResizeHandles();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_reflow(), {})).then((m) => {
+    try {
+      updateChatReflow();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_strip_gutter(), {})).then((m) => {
+    try {
+      updateStripGutters();
+    } catch {}
+  });
+  Promise.resolve().then(() => (init_main_tab_pin(), {})).then((m) => {
+    try {
+      reconcileMainTabListPin();
+    } catch {}
+  });
+  try {
+    reconcileTabListPin();
+  } catch {}
+  try {
+    applyTabListPosition(getSettings().moveControlsToOuterEdge);
+  } catch {}
+  try {
+    applyTabListPosition(getSettings().moveControlsToOuterEdge, {
+      mainDrawer: getMainMirrorDrawer(),
+      mainTabList: getMainMirrorTabList(),
+      mainPanel: getMainMirrorPanel()
+    });
+  } catch {}
+  syncDrawerTabSettings();
+  updateDrawerTabVisibility();
+  Promise.resolve().then(() => (init_drawer_location(), {})).then((m) => reconcileDrawerLocation()).catch(() => {});
+  Promise.resolve().then(() => (init_chrome_locations(), {})).then((m) => reconcileChromeLocations()).catch(() => {});
+}
+async function applyCanvasSideChange(desired, opts) {
+  const gen = ++_sideApplyGen;
+  const syncHost = opts?.syncHost !== false;
+  const run = async () => {
+    if (gen !== _sideApplyGen)
+      return { writeOk: true };
+    dlog("[drawer-sync] apply canvas side change (geometry-only)", {
+      desired,
+      syncHost
+    });
+    const priorSide = readMainWrapperSideFromDom() ?? (desired === "left" ? "right" : "left");
+    setMainDrawerSideOverride(desired);
+    let writeOk = true;
+    if (syncHost) {
+      writeOk = await recordCanvasSwapAndSyncHost(desired);
     }
-  })();
-}
-function bootPlacementDone() {
-  return _bootPlacementPass ?? Promise.resolve();
-}
-function flush() {
-  return _queue;
-}
-function __getPendingRestoreFlagsForTest() {
-  return {
-    persistResolvedWhilePending: _persistResolvedWhilePending,
-    pendingWindowUserState: _pendingWindowUserState
+    restyleMainShellSide(desired);
+    restyleSecondaryShellSide(desired === "left" ? "right" : "left");
+    refreshSideGeometry();
+    if (!writeOk) {
+      const realSide = readMainWrapperSideFromDom() ?? getHostSide() ?? priorSide;
+      clearSideOverrideWithPanelRefresh();
+      restyleMainShellSide(realSide);
+      restyleSecondaryShellSide(realSide === "left" ? "right" : "left");
+      _lastKnownSide = realSide;
+      refreshSideGeometry();
+      return { writeOk: false };
+    }
+    _lastKnownSide = desired;
+    refreshSettingsPanelForSideChange();
+    waitForSideSettle(desired, gen).then(() => {
+      if (gen !== _sideApplyGen)
+        return;
+      _lastKnownSide = desired;
+      rebindSideChangeWatcherIfNeeded();
+    });
+    return { writeOk: true };
   };
+  const next = _applySideChain.then(run, run);
+  _applySideChain = next.then(() => {}, () => {});
+  return next;
 }
-var _host = null, _model = null, _queue, _generation2 = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _persistOsOverride = null, _persistOsBootOverride = null, _persistResolvedWhilePending = false, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
-var init_dispatch = __esm(() => {
-  init_reduce();
-  init_reconcile();
-  init_layout_model();
-  init_layout_repo();
-  init_state();
-  init_log();
-  _queue = Promise.resolve();
-  _modelSubscribers = new Set;
-});
-
-// src/sidebar/panel-motion.ts
-function suppressNextCloseAnchor(side) {
-  _suppressCloseAnchor[side] = true;
-}
-function ensureAnchorTracking() {
-  if (_tracking)
-    return;
-  _tracking = true;
-  Promise.resolve().then(() => (init_dispatch(), {})).then(({}) => {
-    const sync = () => {
-      const model = getModel();
-      if (!model)
-        return;
-      const host = getHost();
-      for (const side of Object.keys(_anchors)) {
-        const key = model?.active[side] ?? null;
-        if (!key) {
-          _anchors[side].current = null;
-          continue;
-        }
-        const rec = { key, liveId: host ? host.resolve(key) : null };
-        _anchors[side].current = rec;
-        _anchors[side].last = rec;
-      }
-    };
-    sync();
-    onModelChanged(sync);
-  }).catch(() => {});
-}
-function findStripButton(side, rec) {
-  if (!rec || typeof document === "undefined")
+function readMainWrapperSideFromDom() {
+  const wrapper = getMainWrapper();
+  if (!wrapper)
     return null;
-  const owner = side === "primary" ? PIN_OWNER_MAIN2 : PIN_OWNER_SECONDARY2;
-  const candidates = document.querySelectorAll("button[data-tab-id], button[data-mirror-key]");
-  for (const el of Array.from(candidates)) {
-    const matches = rec.liveId !== null && el.getAttribute("data-tab-id") === rec.liveId || side === "primary" && el.getAttribute("data-mirror-key") === rec.key;
-    if (!matches || !el.isConnected)
-      continue;
-    const host = el.closest(PIN_HOST_SEL2);
-    if (!host || host.getAttribute(PIN_OWNER_ATTR) !== owner)
-      continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0)
-      return el;
-  }
+  const cls = wrapper.classList.toString();
+  if (cls.includes("wrapperLeft"))
+    return "left";
+  if (cls.includes("wrapperRight"))
+    return "right";
+  if (/\bwrapper\w*/.test(cls) && !cls.includes("wrapperLeft"))
+    return "right";
   return null;
 }
-function resolveAnchor(side, drawer, mode) {
-  const state = _anchors[side];
-  const rec = mode === "open" ? state.current : state.current ?? state.last;
-  const button = findStripButton(side, rec);
-  if (!button)
-    return null;
-  return computePanelAnchor(button.getBoundingClientRect(), drawer.getBoundingClientRect());
-}
-function animateDrawerOpen(wrapper, drawer, side) {
-  if (!isHorizontalStrip()) {
-    animateWrapper(wrapper, 0);
+function reconcileSideOverrideFromDom() {
+  const override = getMainDrawerSideOverride();
+  if (override === null)
+    return;
+  const domSide = readMainWrapperSideFromDom();
+  if (domSide === null)
+    return;
+  if (domSide === override) {
+    clearSideOverrideWithPanelRefresh();
     return;
   }
-  ensureAnchorTracking();
-  wrapper.style.transform = "translateX(0)";
-  const anchor = resolveAnchor(side, drawer, "open");
-  animatePanelToggle(wrapper, drawer, {
-    open: true,
-    edge: getStripEdge() ?? "top",
-    anchor
+  const hostSide = getHostDrawerSettings()?.side;
+  if ((hostSide === "left" || hostSide === "right") && hostSide !== override && hostSide === domSide) {
+    clearSideOverrideWithPanelRefresh();
+  }
+}
+function waitForSideSettle(desired, gen) {
+  return new Promise((resolve) => {
+    if (gen !== _sideApplyGen) {
+      resolve();
+      return;
+    }
+    let observed = getMainWrapper();
+    if (!observed) {
+      resolve();
+      return;
+    }
+    if (readMainWrapperSideFromDom() === desired) {
+      if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+        clearSideOverrideWithPanelRefresh();
+      }
+      resolve();
+      return;
+    }
+    let settled = false;
+    let timer = null;
+    let observer;
+    const finish = () => {
+      if (settled)
+        return;
+      settled = true;
+      if (timer != null)
+        clearTimeout(timer);
+      try {
+        observer.disconnect();
+      } catch {}
+      resolve();
+    };
+    observer = new MutationObserver(() => {
+      if (settled)
+        return;
+      if (gen !== _sideApplyGen) {
+        finish();
+        return;
+      }
+      if (!observed || !observed.isConnected) {
+        observer.disconnect();
+        const next = getMainWrapper();
+        if (!next)
+          return;
+        observed = next;
+        observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
+      }
+      if (readMainWrapperSideFromDom() === desired) {
+        if (gen === _sideApplyGen && getMainDrawerSideOverride() === desired) {
+          clearSideOverrideWithPanelRefresh();
+        }
+        finish();
+      }
+    });
+    observer.observe(observed, { attributes: true, attributeFilter: ["class"] });
+    timer = setTimeout(() => {
+      if (settled)
+        return;
+      if (gen === _sideApplyGen) {
+        _lastKnownSide = desired;
+        dwarn(`[drawer-sync] applyCanvasSideChange: host DOM side did not settle to "${desired}" within ${_sideSettleHardMs}ms; keeping override until DOM matches or host writes a different side`);
+      }
+      finish();
+    }, _sideSettleHardMs);
   });
 }
-function animateDrawerClose(wrapper, drawer, closedPx, side) {
-  const suppressed = _suppressCloseAnchor[side];
-  _suppressCloseAnchor[side] = false;
-  if (!isHorizontalStrip()) {
-    animateWrapper(wrapper, closedPx);
+function rebindSideChangeWatcherIfNeeded() {
+  const wrapper = getMainWrapper();
+  if (!wrapper)
+    return;
+  if (_sideObserver !== null && _observedMainWrapper === wrapper)
+    return;
+  if (_sideObserver !== null) {
+    try {
+      _sideObserver.disconnect();
+    } catch {}
+    _sideObserver = null;
+    _observedMainWrapper = null;
+  }
+  startSideChangeWatcher();
+}
+function startSideChangeWatcher() {
+  if (_sideObserver !== null)
+    return;
+  if (_lastKnownSide === null) {
+    _lastKnownSide = getMainDrawerSide();
+  }
+  const wrapper = getMainWrapper();
+  if (!wrapper) {
+    dwarn("startSideChangeWatcher: no main wrapper found; side changes will not be detected until the wrapper appears");
     return;
   }
-  ensureAnchorTracking();
-  animatePanelToggle(wrapper, drawer, {
-    open: false,
-    edge: getStripEdge() ?? "top",
-    closedPx,
-    anchor: suppressed ? null : resolveAnchor(side, drawer, "close")
+  const coordinator = ensureObserverCoordinator();
+  _sideObserver = new MutationObserver(() => {
+    reconcileSideOverrideFromDom();
+    coordinator.signal("side");
   });
+  _sideObserver.observe(wrapper, { attributes: true, attributeFilter: ["class"] });
+  _observedMainWrapper = wrapper;
+  if (!_sideWatcherCleanupRegistered) {
+    _sideWatcherCleanupRegistered = true;
+    registerCleanup(() => stopSideChangeWatcher());
+  }
+  startHostSideWatcher();
 }
-var PIN_HOST_SEL2 = ".sidebar-ux-tab-list-pin-host", PIN_OWNER_ATTR = "data-pin-owner", PIN_OWNER_MAIN2 = "main", PIN_OWNER_SECONDARY2 = "secondary", _anchors, _tracking = false, _suppressCloseAnchor;
-var init_panel_motion = __esm(() => {
-  init_animation();
+function stopSideChangeWatcher() {
+  if (_sideObserver === null)
+    return;
+  _sideObserver.disconnect();
+  _sideObserver = null;
+  _observedMainWrapper = null;
+}
+function stopDrawerTabResizeWatcher() {
+  if (_mainDrawerTabResizeObserver) {
+    _mainDrawerTabResizeObserver.disconnect();
+    _mainDrawerTabResizeObserver = null;
+  }
+}
+function stopDrawerTabClassObserver() {
+  if (_mainDrawerTabClassObserver) {
+    _mainDrawerTabClassObserver.disconnect();
+    _mainDrawerTabClassObserver = null;
+  }
+}
+function stopDrawerTabStyleObserver() {
+  if (_mainDrawerTabStyleObserver) {
+    _mainDrawerTabStyleObserver.disconnect();
+    _mainDrawerTabStyleObserver = null;
+  }
+}
+function ensureObserverCoordinator() {
+  if (!_observerCoordinator) {
+    _observerCoordinator = new ObserverCoordinator;
+    registerCleanup(stopObserverCoordinator);
+  }
+  return _observerCoordinator;
+}
+function stopObserverCoordinator() {
+  if (_observerCoordinator) {
+    _observerCoordinator.stop();
+    _observerCoordinator = null;
+  }
+}
+var _lastKnownSide = null, _lastKnownVerticalPos = null, _mainDrawerTabResizeObserver = null, _mainDrawerTabClassObserver = null, _mainDrawerTabStyleObserver = null, _observerCoordinator = null, _applySideChain, _sideApplyGen = 0, _hostSideWatcher = null, _lastSeenHostSide = null, _lastCanvasSwapMs = 0, _hostWatcherStarted = false, _syncPending = false, _drawerTabRetryCount = 0, DRAWER_TAB_RETRY_MAX = 30, _drawerTabRetryLogged = false, _lastWrittenDrawerTabVars = null, _lastWrittenLabelsKey = null, _sideObserver = null, _observedMainWrapper = null, _sideWatcherCleanupRegistered = false, SIDE_SETTLE_HARD_MS = 2500, _sideSettleHardMs;
+var init_drawer_sync = __esm(() => {
+  init_host_settings();
+  init_store();
+  init_log();
+  init_secondary();
+  init_main_mirror_drawer();
+  init_cleanup();
   init_state();
-  _anchors = {
-    primary: { current: null, last: null },
-    secondary: { current: null, last: null }
-  };
-  _suppressCloseAnchor = { primary: false, secondary: false };
-  ensureAnchorTracking();
+  init_tab_position();
+  init_buttons();
+  _applySideChain = Promise.resolve();
+  _sideSettleHardMs = SIDE_SETTLE_HARD_MS;
 });
 
 // src/sidebar/panel-header-sync.ts
@@ -16905,6 +15760,1325 @@ var init_main_mirror_drawer = __esm(() => {
   init_panel_header_sync();
 });
 
+// src/tabs/active-tab.ts
+function getActiveTabId() {
+  findStoreData(true);
+  const store = getStoreSnapshot();
+  if (store && typeof store.drawerOpen === "boolean") {
+    if (!store.drawerOpen)
+      return { state: "closed" };
+    if (typeof store.drawerTab === "string") {
+      return { state: "active", id: store.drawerTab };
+    }
+  }
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return { state: "unknown" };
+  const activeBtn = sidebar.querySelector('button[class*="tabBtnActive"]');
+  if (!activeBtn)
+    return { state: "unknown" };
+  const activeTitle = activeBtn.getAttribute("title") || "";
+  if (!activeTitle)
+    return { state: "unknown" };
+  const tabs = getDrawerTabs();
+  const tab = tabs.find((t) => t.title === activeTitle);
+  if (tab)
+    return { state: "active", id: tab.id };
+  return { state: "active", id: activeTitle };
+}
+function resolvePrimaryActiveTabId() {
+  const model = getModel();
+  if (model && isMainMirrorActive()) {
+    const key = model.active.primary;
+    if (!key)
+      return null;
+    return getHost()?.resolve(key) ?? null;
+  }
+  const sidebar = getMainSidebar();
+  if (sidebar) {
+    const activeBtn = sidebar.querySelector('button.tabBtnActive, button[class*="tabBtnActive"]');
+    const id = activeBtn?.getAttribute("data-tab-id") || activeBtn?.getAttribute("title") || null;
+    if (id)
+      return id;
+  }
+  const active = getActiveTabId();
+  if (active.state === "active")
+    return active.id;
+  return null;
+}
+function isTabActiveInMainDrawer(tabId) {
+  const id = resolvePrimaryActiveTabId();
+  return id != null && id === tabId;
+}
+function getActiveSecondaryTabId() {
+  return _activeSecondaryTabId;
+}
+function setActiveSecondaryTabId(tabId, opts) {
+  const changed = tabId !== null && tabId !== _activeSecondaryTabId;
+  _activeSecondaryTabId = tabId;
+  if (changed && !opts?.silent) {
+    Promise.resolve().then(() => (init_dispatch(), {})).then((m) => dispatchTrackedActiveSync()).catch(() => {});
+  }
+}
+var _activeSecondaryTabId = null;
+var init_active_tab = __esm(() => {
+  init_store();
+  init_dispatch();
+  init_main_mirror_drawer();
+});
+
+// src/recon/reconcile.ts
+function modelMatchesWorld(model, resolved, world) {
+  for (const side of ["primary", "secondary"]) {
+    if (diffSetOrder(model, side, resolved, world) !== null)
+      return false;
+    if (diffHidden(model, side, resolved, world) !== null)
+      return false;
+    if (diffActive(model, side, resolved, world) !== null)
+      return false;
+    if (diffDrawer(model, side, world) !== null)
+      return false;
+  }
+  if (diffSide(model, world) !== null)
+    return false;
+  return true;
+}
+function mkStep(step, status, ops, reason) {
+  const r = { step, status, ops };
+  if (reason)
+    r.reason = reason;
+  return r;
+}
+function mergeSideOrder(model, side, resolved) {
+  const list = listForSide(model, side);
+  const out = [];
+  for (const key of list) {
+    if (side === "secondary" && isHidden(model, key))
+      continue;
+    const id = resolved.get(key);
+    if (id)
+      out.push(id);
+  }
+  return out;
+}
+function observeSideOrder(world, side) {
+  return world.tabs.filter((t) => t.location === side && !(side === "secondary" && t.isHidden)).map((t) => t.liveId);
+}
+function diffSetOrder(model, side, resolved, world) {
+  const want = mergeSideOrder(model, side, resolved);
+  const have = observeSideOrder(world, side);
+  if (want.length !== have.length)
+    return want;
+  for (let i = 0;i < want.length; i++) {
+    if (want[i] !== have[i])
+      return want;
+  }
+  return null;
+}
+function diffHidden(model, side, resolved, world) {
+  const modelHiddenIds = [];
+  const list = listForSide(model, side);
+  for (const key of list) {
+    const id = resolved.get(key);
+    if (!id)
+      continue;
+    if (model.hidden.includes(key)) {
+      modelHiddenIds.push(id);
+    }
+  }
+  const tabMap = new Map(world.tabs.map((t) => [t.key, t]));
+  const liveHidden = new Map;
+  for (const [key, id] of resolved) {
+    const obs = tabMap.get(key);
+    if (obs && obs.location === side) {
+      liveHidden.set(id, obs.isHidden);
+    }
+  }
+  const diff = [];
+  for (const [key, id] of resolved) {
+    const obs = tabMap.get(key);
+    if (!obs || obs.location !== side)
+      continue;
+    const wantHidden = model.hidden.includes(key);
+    const isObsHidden = obs.isHidden;
+    if (wantHidden && !isObsHidden)
+      diff.push(id);
+  }
+  for (const [key, id] of resolved) {
+    const obs = tabMap.get(key);
+    if (!obs || obs.location !== side)
+      continue;
+    const wantHidden = model.hidden.includes(key);
+    const isObsHidden = obs.isHidden;
+    if (!wantHidden && isObsHidden)
+      diff.push(id);
+  }
+  return diff.length > 0 ? modelHiddenIds : null;
+}
+function diffActive(model, side, resolved, world) {
+  const modelActive = model.active[side];
+  if (!modelActive)
+    return null;
+  if (side === "secondary") {
+    const trackedId = getActiveSecondaryTabId();
+    if (trackedId !== null) {
+      let trackedKey = null;
+      for (const [key, id] of resolved) {
+        if (id === trackedId) {
+          trackedKey = key;
+          break;
+        }
+      }
+      if (trackedKey !== null && trackedKey !== modelActive)
+        return null;
+    }
+  }
+  const id = resolved.get(modelActive);
+  if (!id)
+    return null;
+  const tabMap = new Map(world.tabs.map((t) => [t.key, t]));
+  const obs = tabMap.get(modelActive);
+  const isActive = side === "primary" ? obs?.isActiveInPrimary ?? false : obs?.isActiveInSecondary ?? false;
+  return isActive ? null : id;
+}
+function diffDrawer(model, side, world) {
+  const m = model.drawers[side];
+  const wOpen = side === "primary" ? world.primaryOpen : world.secondaryOpen;
+  const wWidth = side === "primary" ? world.primaryWidth : world.secondaryWidth;
+  if (m.open !== wOpen || m.width !== wWidth) {
+    return { open: m.open, width: m.width };
+  }
+  return null;
+}
+function diffSide(model, world) {
+  return model.side !== world.drawerSide ? model.side : null;
+}
+async function reconcile(model, host) {
+  const world = host.observe();
+  const steps = [];
+  let totalOps = 0;
+  const observedTabMap = new Map(world.tabs.map((t) => [t.key, t]));
+  const allKeys = new Set;
+  for (const k of model.primary)
+    allKeys.add(k);
+  for (const k of model.secondary)
+    allKeys.add(k);
+  const resolved = new Map;
+  const unresolved = [];
+  let identityOps = 0;
+  for (const key of allKeys) {
+    const id = host.resolve(key);
+    if (id) {
+      resolved.set(key, id);
+      identityOps++;
+    } else {
+      unresolved.push(key);
+    }
+  }
+  steps.push(mkStep("identity", unresolved.length === 0 ? "ok" : "degraded", identityOps, unresolved.length ? `${unresolved.length} tab(s) not present in host` : undefined));
+  {
+    const status = world.inventory?.status;
+    const inventoryStatus = status === "partial" || status === "empty" ? "degraded" : "ok";
+    steps.push(mkStep("inventory", inventoryStatus, 0, status === undefined ? "inventory not reported by host" : status === "partial" ? "inventory partial" : status === "empty" ? "inventory empty" : status));
+  }
+  steps.push(mkStep("shell", "ok", 0));
+  const epochId = ++_epochId;
+  _activeEpoch = true;
+  const unsub = host.onWorldChanged(() => {
+    if (!_activeEpoch || _epochId !== epochId) {
+      _queuedPostEpoch = true;
+      return;
+    }
+    const w = host.observe();
+    if (modelMatchesWorld(model, resolved, w)) {
+      _echoDropped++;
+    } else {
+      _nonEchoDetected++;
+      _queuedPostEpoch = true;
+    }
+  });
+  let placeOps = 0;
+  let placeIssues = 0;
+  let orderOps = 0;
+  let orderIssues = 0;
+  let actOps = 0;
+  let actIssues = 0;
+  let drawerOps = 0;
+  let visOps = 0;
+  let visDegraded = 0;
+  let totalOpsLocal = 0;
+  let scheduled;
+  let modelSideCorrection = null;
+  try {
+    for (const [key, id] of resolved) {
+      const modelSide = sideOfKey(model, key);
+      if (!modelSide)
+        continue;
+      const obs = observedTabMap.get(key);
+      if (!obs)
+        continue;
+      if (obs.location !== modelSide) {
+        placeOps++;
+        const result = await host.placeTab(id, modelSide);
+        if (!result.placed)
+          placeIssues++;
+      }
+    }
+    steps.push(mkStep("placement", placeIssues > 0 ? "degraded" : "ok", placeOps, placeIssues ? `${placeIssues} placement(s) failed` : undefined));
+    totalOps += placeOps;
+    for (const side of ["primary", "secondary"]) {
+      const hids = diffHidden(model, side, resolved, world);
+      if (hids !== null) {
+        visOps++;
+        const result = await host.setHidden(side, hids);
+        if (result !== "ok")
+          visDegraded++;
+      }
+    }
+    steps.push(mkStep("visibility", visDegraded > 0 ? "degraded" : "ok", visOps, visDegraded ? `${visDegraded} visibility write(s) degraded` : undefined));
+    totalOps += visOps;
+    for (const side of ["primary", "secondary"]) {
+      const want = diffSetOrder(model, side, resolved, world);
+      if (want !== null) {
+        dlog("[reconcile] setOrder", {
+          side,
+          want,
+          observed: observeSideOrder(world, side),
+          model: mergeSideOrder(model, side, resolved)
+        });
+        orderOps++;
+        const result = await host.setOrder(side, want);
+        if (result !== "ok")
+          orderIssues++;
+      }
+    }
+    steps.push(mkStep("order", orderIssues > 0 ? "degraded" : "ok", orderOps, orderIssues ? `${orderIssues} order write(s) degraded` : undefined));
+    totalOps += orderOps;
+    for (const side of ["primary", "secondary"]) {
+      const id = diffActive(model, side, resolved, world);
+      if (id !== null) {
+        actOps++;
+        const result = await host.activate(side, id);
+        if (result !== "ok")
+          actIssues++;
+      }
+    }
+    steps.push(mkStep("activation", actIssues > 0 ? "degraded" : "ok", actOps, actIssues ? `${actIssues} activation(s) degraded` : undefined));
+    totalOps += actOps;
+    for (const side of ["primary", "secondary"]) {
+      const ds = diffDrawer(model, side, world);
+      if (ds) {
+        drawerOps++;
+        await host.setDrawer(side, ds);
+      }
+    }
+    const newSide = diffSide(model, world);
+    if (newSide) {
+      drawerOps++;
+      const result = await host.setSide(newSide);
+      if (result !== "ok") {
+        modelSideCorrection = world.drawerSide;
+      }
+    }
+    steps.push(mkStep("drawers", "ok", drawerOps));
+    totalOps += drawerOps;
+    scheduled = _queuedPostEpoch;
+  } finally {
+    _activeEpoch = false;
+    unsub();
+  }
+  _queuedPostEpoch = false;
+  const echoInfo = {
+    echoDropped: _echoDropped,
+    nonEcho: _nonEchoDetected,
+    postEpochScheduled: scheduled
+  };
+  _echoDropped = 0;
+  _nonEchoDetected = 0;
+  const report = {
+    ops: totalOps,
+    steps,
+    unresolved,
+    echo: echoInfo
+  };
+  if (modelSideCorrection !== null) {
+    report.modelSideCorrection = modelSideCorrection;
+  }
+  return report;
+}
+var _epochId = 0, _activeEpoch = false, _echoDropped = 0, _nonEchoDetected = 0, _queuedPostEpoch = false;
+var init_reconcile = __esm(() => {
+  init_log();
+  init_active_tab();
+});
+
+// src/recon/dispatch.ts
+var exports_dispatch = {};
+__export(exports_dispatch, {
+  __getPendingRestoreFlagsForTest: () => __getPendingRestoreFlagsForTest,
+  applyMainMirrorMoveChrome: () => applyMainMirrorMoveChrome,
+  applySecondaryNeighborHandoff: () => applySecondaryNeighborHandoff,
+  bootPlacementDone: () => bootPlacementDone,
+  bootstrap: () => bootstrap,
+  bootstrapFromLayout: () => bootstrapFromLayout,
+  captureMainMirrorMoveChrome: () => captureMainMirrorMoveChrome,
+  captureSecondaryNeighborForMove: () => captureSecondaryNeighborForMove,
+  dispatch: () => dispatch,
+  dispatchActivateByLiveId: () => dispatchActivateByLiveId,
+  dispatchBatch: () => dispatchBatch,
+  dispatchMoveByLiveId: () => dispatchMoveByLiveId,
+  dispatchTrackedActiveSync: () => dispatchTrackedActiveSync,
+  flush: () => flush,
+  getHost: () => getHost,
+  getModel: () => getModel,
+  onModelChanged: () => onModelChanged,
+  placementFirstMoveByLiveId: () => placementFirstMoveByLiveId,
+  setPersistOsOverride: () => setPersistOsOverride,
+  shutdown: () => shutdown,
+  snapshotOwnedModelLayout: () => snapshotOwnedModelLayout
+});
+function setPersistOsOverride(osActive) {
+  _persistOsOverride = osActive;
+}
+function onModelChanged(cb) {
+  _modelSubscribers.add(cb);
+  return () => {
+    _modelSubscribers.delete(cb);
+  };
+}
+function commitModel(next) {
+  if (_model === next)
+    return;
+  _model = next;
+  if (next === null)
+    return;
+  for (const cb of Array.from(_modelSubscribers)) {
+    try {
+      cb();
+    } catch {}
+  }
+}
+function pendingLayoutTabCount(layout) {
+  if (!layout || typeof layout !== "object")
+    return 0;
+  const ids = new Set;
+  for (const id of Array.isArray(layout.tabOrder) ? layout.tabOrder : []) {
+    if (typeof id === "string")
+      ids.add(id);
+  }
+  for (const tab of Array.isArray(layout.detachedTabs) ? layout.detachedTabs : []) {
+    if (typeof tab?.tabId === "string")
+      ids.add(tab.tabId);
+  }
+  return ids.size;
+}
+function inventoryIsReady(observed) {
+  const status = observed.inventory?.status;
+  return status === undefined || status === "ready" || status === "degraded";
+}
+function mergeResolvedInto(current, rebuilt) {
+  const inModel = new Set([...current.primary, ...current.secondary]);
+  const mergeSide = (side) => {
+    const cur = listForSide(current, side);
+    const reb = listForSide(rebuilt, side);
+    const fresh = reb.filter((k) => !inModel.has(k));
+    if (fresh.length === 0)
+      return cur;
+    const next = cur.slice();
+    for (const k of fresh) {
+      inModel.add(k);
+      next.splice(Math.min(reb.indexOf(k), next.length), 0, k);
+    }
+    return next;
+  };
+  const primary = mergeSide("primary");
+  const secondary = mergeSide("secondary");
+  const hidden = rebuilt.hidden.filter((k) => inModel.has(k));
+  const menuHidden = rebuilt.menuHidden.filter((k) => inModel.has(k));
+  const keepUser = _pendingWindowUserState;
+  const next = {
+    ...current,
+    primary,
+    secondary,
+    hidden: keepUser ? current.hidden : hidden,
+    menuHidden: keepUser ? current.menuHidden : menuHidden,
+    active: {
+      primary: current.active.primary ?? rebuilt.active.primary,
+      secondary: current.active.secondary ?? rebuilt.active.secondary
+    },
+    drawers: keepUser ? current.drawers : rebuilt.drawers,
+    side: keepUser ? current.side : rebuilt.side
+  };
+  if (sameKeys2(next.primary, current.primary) && sameKeys2(next.secondary, current.secondary) && sameKeys2(next.hidden, current.hidden) && sameKeys2(next.menuHidden, current.menuHidden) && next.active.primary === current.active.primary && next.active.secondary === current.active.secondary && next.drawers.primary.open === current.drawers.primary.open && next.drawers.primary.width === current.drawers.primary.width && next.drawers.secondary.open === current.drawers.secondary.open && next.drawers.secondary.width === current.drawers.secondary.width && next.side === current.side) {
+    return current;
+  }
+  return next;
+}
+function markPendingWindowUserIntent(intent) {
+  if (_pendingLayout === null)
+    return;
+  const t = intent.t;
+  if (t === "setDrawer" || t === "swapSides" || t === "setHidden" || t === "setMenuHidden") {
+    _pendingWindowUserState = true;
+  }
+}
+function sameKeys2(a, b) {
+  if (a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++) {
+    if (a[i] !== b[i])
+      return false;
+  }
+  return true;
+}
+function bootstrap(model, host, version) {
+  _unsubscribeWorldChanged?.();
+  const gen = ++_generation2;
+  commitModel(model);
+  _host = host;
+  _version = version ?? "unknown";
+  _bootstrapping = true;
+  _worldSyncPending = false;
+  _unsubscribeWorldChanged = host.onWorldChanged(() => {
+    if (gen !== _generation2 || _host !== host)
+      return;
+    if (_bootstrapping) {
+      _worldSyncPending = true;
+      return;
+    }
+    enqueueHostSync(host, gen).catch(() => {});
+  });
+  const task = reconcileAndPersist(model, gen);
+  _queue = task.catch(() => {}).then(() => {});
+  task.then((next) => {
+    if (gen !== _generation2 || _host !== host)
+      return;
+    _persistOsBootOverride = null;
+    if (next !== model)
+      commitModel(next);
+    _bootstrapping = false;
+    if (_worldSyncPending) {
+      _worldSyncPending = false;
+      enqueueHostSync(host, gen).catch(() => {});
+    }
+  }, () => {
+    if (gen === _generation2 && _host === host) {
+      _persistOsBootOverride = null;
+      _bootstrapping = false;
+    }
+  });
+}
+function enqueueHostSync(host, generation) {
+  const task = _queue.then(async () => {
+    if (generation !== _generation2 || _host !== host || !_model)
+      return;
+    const observed = host.observe();
+    if (_pendingLayout !== null && inventoryIsReady(observed) && observed.tabs.length > 0) {
+      if (_restoringPending)
+        return;
+      if (Date.now() > _restoreDeadline) {
+        dlog("[dispatch] pending-layout restore aborted (retry window expired)");
+        _pendingLayout = null;
+        _persistResolvedWhilePending = false;
+        _persistOsBootOverride = null;
+        return;
+      }
+      const rebuilt = buildModelFromLayout(_pendingLayout, (id) => host.findKey(id), observed.drawerSide);
+      const expected = pendingLayoutTabCount(_pendingLayout);
+      const resolvedAll = rebuilt.primary.length + rebuilt.secondary.length >= expected;
+      const merged = mergeResolvedInto(_model, rebuilt);
+      if (resolvedAll) {
+        _pendingLayout = null;
+        _persistResolvedWhilePending = false;
+        _pendingWindowUserState = false;
+      }
+      if (merged !== _model) {
+        _restoringPending = true;
+        try {
+          if (generation === _generation2) {
+            commitModel(await reconcileAndPersist(merged, generation));
+          }
+        } finally {
+          _restoringPending = false;
+        }
+      }
+      return;
+    }
+    const next = reduce(_model, { t: "syncFromHost", observed });
+    if (!inventoryIsReady(observed)) {
+      dlog("[dispatch] host-sync skipped non-ready inventory", {
+        inventory: observed.inventory
+      });
+      return;
+    }
+    if (observed.tabs.length === 0 && (_model.primary.length > 0 || _model.secondary.length > 0)) {
+      dlog("[dispatch] host-sync skipped empty observed world", {
+        before: { primary: _model.primary, secondary: _model.secondary }
+      });
+      return;
+    }
+    dlog("[dispatch] host-sync", {
+      observed: observed.tabs.map((t) => `${t.liveId}:${t.location}`),
+      observedDrawerSide: observed.drawerSide,
+      before: { primary: _model.primary, secondary: _model.secondary, side: _model.side },
+      after: { primary: next.primary, secondary: next.secondary, side: next.side }
+    });
+    if (next.side !== _model.side) {
+      dlog('[dispatch] host drawer side adopted (Lumiverse "Drawer side" setting toggled)', {
+        observed: observed.drawerSide,
+        modelBefore: _model.side,
+        modelAfter: next.side
+      });
+    }
+    if (next === _model)
+      return;
+    const result = await reconcileAndPersist(next, generation);
+    if (generation === _generation2)
+      commitModel(result);
+  });
+  _queue = task.catch(() => {});
+  return task;
+}
+function shutdown() {
+  _generation2++;
+  _unsubscribeWorldChanged?.();
+  _unsubscribeWorldChanged = null;
+  _bootstrapping = false;
+  _worldSyncPending = false;
+  _trackedSyncScheduled = false;
+  _trackedSyncQueued = false;
+  _host = null;
+  _model = null;
+  _version = "unknown";
+  _pendingLayout = null;
+  _persistResolvedWhilePending = false;
+  _persistOsOverride = null;
+  _persistOsBootOverride = null;
+  _restoringPending = false;
+  _restoreDeadline = 0;
+  _pendingWindowUserState = false;
+  _bootPlacementPass = null;
+  _lastPersistedLayout = null;
+  _queue = Promise.resolve();
+}
+function getModel() {
+  return _model;
+}
+function getHost() {
+  return _host;
+}
+function snapshotOwnedModelLayout() {
+  const host = _host;
+  const model = _model;
+  if (!host || !model)
+    return null;
+  return serializeModelToLayout(model, (key) => host.resolve(key), _version);
+}
+function buildPersistedBlob(model, resolve) {
+  const layout = serializeModelToLayout(model, resolve, _version);
+  const isDual = model.secondary.length > 0;
+  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled();
+  const base = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
+  const s = getSettings();
+  const lastPrimary = getLastLoadedLayout()?.primary ?? null;
+  const basePrimary = base.primary ?? {};
+  const lastOpen = lastPrimary?.open;
+  const lastWidth = lastPrimary?.width;
+  const frozenOpen = typeof lastOpen === "boolean" ? lastOpen : basePrimary.open;
+  const frozenWidth = typeof lastWidth === "number" ? lastWidth : basePrimary.width;
+  return {
+    ...base,
+    primary: {
+      ...basePrimary,
+      open: s.persistDrawerOpenState ? basePrimary.open : frozenOpen,
+      width: s.persistDrawerWidth ? basePrimary.width : frozenWidth
+    },
+    dualLayout: os ? getDualLayoutSlot() : isDual ? base : getDualLayoutSlot(),
+    singleLayout: os ? getSingleLayoutSlot() : isDual ? getSingleLayoutSlot() : base,
+    osDualLayout: isDual ? os ? base : getOsDualLayoutSlot() : getOsDualLayoutSlot(),
+    osSingleLayout: isDual ? getOsSingleLayoutSlot() : os ? base : getOsSingleLayoutSlot()
+  };
+}
+function persistModel(model) {
+  const host = _host;
+  if (!host)
+    return;
+  const layout = buildPersistedBlob(model, (key) => host.resolve(key));
+  const json = JSON.stringify(layout);
+  if (json === _lastPersistedLayout) {
+    dlog("[dispatch] persist layout skipped (byte-identical)");
+    return;
+  }
+  _lastPersistedLayout = json;
+  const persistedTabs = Array.isArray(layout.tabOrder) ? layout.tabOrder.length : 0;
+  const persistedSecondary = Array.isArray(layout.detachedTabs) ? layout.detachedTabs.length : 0;
+  dlog("[dispatch] persist layout", {
+    drawerSide: layout.drawerSide,
+    primary: persistedTabs - persistedSecondary,
+    secondary: persistedSecondary,
+    hidden: Array.isArray(layout.hiddenTabIds) ? layout.hiddenTabIds.length : 0,
+    activePrimary: layout.primary?.tabId ?? null,
+    activeSecondary: layout.secondary?.activeTabId ?? null,
+    singleSlot: layout.singleLayout != null,
+    dualSlot: layout.dualLayout != null,
+    bytes: json.length
+  });
+  saveLayoutToDisk(layout).then((r) => {
+    if (r.status === "error") {
+      if (_lastPersistedLayout === json)
+        _lastPersistedLayout = null;
+      console.warn("[canvas] saveLayoutToDisk failed:", r.reason);
+    }
+  }).catch((err) => {
+    if (_lastPersistedLayout === json)
+      _lastPersistedLayout = null;
+    console.warn("[canvas] saveLayoutToDisk rejected:", err);
+  });
+}
+async function reconcileAndPersist(model, generation = _generation2) {
+  const host = _host;
+  if (!host || generation !== _generation2)
+    return model;
+  const report = await reconcile(model, host);
+  if (report.modelSideCorrection !== undefined && model.side !== report.modelSideCorrection) {
+    model = { ...model, side: report.modelSideCorrection };
+  }
+  const hasTabs = model.primary.length > 0 || model.secondary.length > 0;
+  const persistAllowed = _pendingLayout === null || _persistResolvedWhilePending;
+  if (generation === _generation2 && _host === host && persistAllowed && hasTabs) {
+    persistModel(model);
+  }
+  return model;
+}
+function dispatch(intent) {
+  const gen = _generation2;
+  const host = _host;
+  if (host)
+    dlog("[dispatch] intent", { t: intent.t, intent });
+  if (!host)
+    return Promise.resolve();
+  const task = _queue.then(async () => {
+    if (gen !== _generation2)
+      return;
+    if (!_model || !_host)
+      return;
+    markPendingWindowUserIntent(intent);
+    const next = reduce(_model, intent);
+    if (next === _model) {
+      dlog("[dispatch] no-op (reduce returned same model)", { t: intent.t });
+      return;
+    }
+    commitModel(next);
+    commitModel(await reconcileAndPersist(next, gen));
+  });
+  _queue = task.catch(() => {});
+  return task;
+}
+function dispatchBatch(intents) {
+  const gen = _generation2;
+  const host = _host;
+  if (!host)
+    return Promise.resolve();
+  const task = _queue.then(async () => {
+    if (gen !== _generation2)
+      return;
+    if (!_model || !_host)
+      return;
+    for (const intent of intents)
+      markPendingWindowUserIntent(intent);
+    const next = foldIntents(_model, intents);
+    dlog("[dispatch] batch", {
+      intents,
+      before: { primary: _model.primary, secondary: _model.secondary },
+      after: { primary: next.primary, secondary: next.secondary }
+    });
+    if (next === _model)
+      return;
+    commitModel(next);
+    commitModel(await reconcileAndPersist(next, gen));
+  });
+  _queue = task.catch(() => {});
+  return task;
+}
+function dispatchMoveByLiveId(liveId, activateDest = true, visibleIndex) {
+  const host = _host;
+  const model = _model;
+  if (!host || !model)
+    return Promise.resolve();
+  const key = host.findKey(liveId);
+  if (!key)
+    return Promise.resolve();
+  let from = sideOfKey(model, key);
+  if (!from) {
+    return dispatch({ t: "syncFromHost", observed: host.observe() }).then(() => {
+      const nextModel = _model;
+      if (!nextModel)
+        return;
+      const nextFrom = sideOfKey(nextModel, key);
+      if (!nextFrom)
+        return;
+      const nextTo = nextFrom === "primary" ? "secondary" : "primary";
+      const destVisible = visibleKeys(nextModel, nextTo).length;
+      return dispatch({
+        t: "move",
+        key,
+        to: nextTo,
+        index: visibleIndex ?? destVisible,
+        activateDest
+      });
+    });
+  }
+  const to = from === "primary" ? "secondary" : "primary";
+  const destVisible = visibleKeys(model, to).length;
+  return dispatch({
+    t: "move",
+    key,
+    to,
+    index: visibleIndex ?? destVisible,
+    activateDest
+  });
+}
+function dispatchActivateByLiveId(liveId, side) {
+  const host = _host;
+  if (!host)
+    return Promise.resolve();
+  const key = host.findKey(liveId);
+  if (!key) {
+    dlog("[dispatch] dispatchActivateByLiveId: findKey returned null", { liveId, side });
+    return Promise.resolve();
+  }
+  return dispatch({ t: "activate", key, side });
+}
+async function dispatchTrackedActiveSync() {
+  if (_trackedSyncScheduled) {
+    _trackedSyncQueued = true;
+    return;
+  }
+  _trackedSyncScheduled = true;
+  try {
+    do {
+      _trackedSyncQueued = false;
+      await dispatchTrackedActiveSyncInner();
+    } while (_trackedSyncQueued);
+  } finally {
+    _trackedSyncScheduled = false;
+  }
+}
+async function dispatchTrackedActiveSyncInner() {
+  const host = _host;
+  if (!host)
+    return;
+  if (_bootstrapping || _restoringPending) {
+    dlog("[dispatch] dispatchTrackedActiveSync skipped (model mid-boot/restore)");
+    return;
+  }
+  const active = await Promise.resolve().then(() => (init_active_tab(), {}));
+  const primaryId = resolvePrimaryActiveTabId();
+  const secondaryId = getActiveSecondaryTabId();
+  const primary = primaryId ? host.findKey(primaryId) : null;
+  const secondary = secondaryId ? host.findKey(secondaryId) : null;
+  if (!primary && !secondary) {
+    dlog("[dispatch] dispatchTrackedActiveSync: nothing resolvable", { primaryId, secondaryId });
+    return;
+  }
+  await dispatch({ t: "syncActive", primary, secondary });
+}
+async function captureMainMirrorMoveChrome(liveId, target) {
+  return { neighborBtn: null, reassertId: null };
+}
+async function applyMainMirrorMoveChrome(chrome, liveId) {
+  const model = _model;
+  const host = _host;
+  if (!model || !host)
+    return;
+  const key = model.active.primary;
+  if (!key)
+    return;
+  const id = host.resolve(key);
+  if (!id || id === liveId)
+    return;
+  await Promise.resolve().then(() => init_buttons());
+  const btn = findMainTabButton(id);
+  if (btn && btn.isConnected) {
+    dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`);
+    try {
+      btn.click();
+    } catch {}
+  } else {
+    dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { id });
+  }
+}
+async function captureSecondaryNeighborForMove(liveId) {
+  if (getModel()?.drawers.secondary.open !== true)
+    return { neighborBtn: null };
+  await Promise.resolve().then(() => init_active_tab());
+  if (getActiveSecondaryTabId() !== liveId)
+    return { neighborBtn: null };
+  await Promise.resolve().then(() => init_buttons());
+  const neighborBtn = findNeighborSecondaryButtonFor(liveId);
+  if (neighborBtn) {
+    dlog("[tabmove] capture secondary chrome: active tab moved — neighbor target", {
+      liveId,
+      neighbor: neighborBtn.getAttribute("title") || neighborBtn.getAttribute("data-tab-id")
+    });
+  }
+  return { neighborBtn };
+}
+async function applySecondaryNeighborHandoff(chrome, liveId) {
+  const { neighborBtn } = chrome;
+  if (!neighborBtn)
+    return;
+  const neighborId = neighborBtn.getAttribute("data-tab-id");
+  if (!neighborId)
+    return;
+  const title = neighborBtn.getAttribute("title") || neighborBtn.getAttribute("aria-label") || undefined;
+  dlog(`[tabmove] apply secondary chrome: activating neighbor (${title ?? neighborId})`);
+  if (neighborBtn.isConnected) {
+    try {
+      const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+      activateSecondaryTab(neighborId);
+    } catch {}
+  }
+  const neighborKey = _host?.findKey(neighborId);
+  if (neighborKey && _model?.active.secondary !== neighborKey) {
+    dlog(`[tabmove] apply secondary chrome: converging model active to neighbor (${neighborKey})`);
+    dispatch({ t: "activate", key: neighborKey, side: "secondary" }).catch((err) => {
+      dwarn("[tabmove] apply secondary chrome: neighbor activate dispatch failed:", err);
+    });
+  }
+}
+async function placementFirstMoveByLiveId(liveId, target) {
+  const host = _host;
+  if (!host) {
+    dlog("[tabmove] placementFirstMove: no host, bailing", { liveId, target });
+    return;
+  }
+  const chrome = await captureMainMirrorMoveChrome(liveId, target);
+  const secondaryChrome = target === "primary" ? await captureSecondaryNeighborForMove(liveId) : { neighborBtn: null };
+  let placed = false;
+  try {
+    const sidebar = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+    if (target === "secondary") {
+      const facadeKey = host.findKey(liveId);
+      await assignToSecondary(liveId, facadeKey ? { facadeKey } : undefined);
+      if (facadeKey && isExtensionKey(facadeKey)) {
+        await Promise.resolve().then(() => init_secondary());
+        const content = getSecondaryWrapper()?.querySelector(".sidebar-ux-panel-content");
+        const rootPresent = !!content?.querySelector(`[data-canvas-moved="${CSS.escape(liveId)}"]`);
+        if (!rootPresent) {
+          dwarn("[tabmove] extension placement returned without secondary root", {
+            liveId,
+            facadeKey,
+            secondaryContentFound: !!content
+          });
+          return;
+        }
+      }
+    } else {
+      await unassignFromSecondary(liveId);
+    }
+    placed = true;
+  } catch (err) {
+    dwarn("[tabmove] placementFirstMove: placement threw", { liveId, target, err: String(err) });
+  }
+  if (!placed) {
+    dlog("[tabmove] placementFirstMove: placement did not complete; skipping model update", { liveId, target });
+    return;
+  }
+  if (target === "secondary") {
+    const secondary = await Promise.resolve().then(() => (init_secondary(), {}));
+    if (!isSecondarySidebarOpen()) {
+      await Promise.resolve().then(() => init_mobile_exclusion());
+      if (!isMobileViewport()) {
+        dlog("[tabmove] placementFirstMove: secondary drawer not open; opening explicitly");
+        openSecondarySidebar();
+      } else {
+        dlog("[tabmove] placementFirstMove: mobile — drawer left closed (no auto-open on move)");
+      }
+    }
+  }
+  const key = host.findKey(liveId);
+  if (!key) {
+    dlog("[tabmove] placementFirstMove: findKey returned null after placement", { liveId, target });
+    return;
+  }
+  const model = _model;
+  if (!model) {
+    dlog("[tabmove] placementFirstMove: no model after placement", { liveId, target });
+    return;
+  }
+  const from = sideOfKey(model, key);
+  if (from !== target) {
+    const neighborId = secondaryChrome.neighborBtn?.getAttribute("data-tab-id") ?? null;
+    const neighborKey = neighborId ? host.findKey(neighborId) : null;
+    if (neighborKey) {
+      dlog("[tabmove] placementFirstMove: dispatching move + secondary neighbor activate", {
+        liveId,
+        key,
+        from,
+        to: target,
+        neighbor: neighborKey
+      });
+      await dispatchBatch([
+        { t: "move", key, to: target, index: -1, activateDest: false },
+        { t: "activate", key: neighborKey, side: "secondary" }
+      ]);
+    } else {
+      dlog("[tabmove] placementFirstMove: dispatching move", { liveId, key, from, to: target });
+      await dispatch({ t: "move", key, to: target, index: -1, activateDest: false });
+    }
+  } else {
+    dlog("[tabmove] placementFirstMove: model already in target", { liveId, key, target });
+  }
+  if (target === "primary") {
+    await applySecondaryNeighborHandoff(secondaryChrome, liveId);
+  }
+  if (target === "secondary") {
+    await applyMainMirrorMoveChrome(chrome, liveId);
+  }
+}
+function bootstrapFromLayout(layout, host, version, opts) {
+  let model = buildModelFromLayout(layout, (id) => host.findKey(id));
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.closed.length > 0) {
+    dlog("[dispatch] dropped OS closed-set on non-OS boot/restore", {
+      closed: model.closed.length
+    });
+    model = { ...model, closed: [] };
+  }
+  if (!(opts?.osActive ?? isOsModeEnabled()) && model.menuHidden.length > 0) {
+    dlog("[dispatch] dropped OS menu-hidden set on non-OS boot/restore", {
+      menuHidden: model.menuHidden.length
+    });
+    model = { ...model, menuHidden: [] };
+  }
+  if (pendingLayoutTabCount(layout) === 0) {
+    const observed = host.observe();
+    if (inventoryIsReady(observed) && observed.tabs.length > 0) {
+      model = reduce(model, { t: "syncFromHost", observed });
+    }
+  }
+  _restoringPending = false;
+  _pendingWindowUserState = false;
+  const expected = pendingLayoutTabCount(layout);
+  const resolved = model.primary.length + model.secondary.length;
+  _restoreDeadline = Date.now() + RESTORE_RETRY_WINDOW_MS;
+  _persistResolvedWhilePending = opts?.persistWhilePending === true;
+  _persistOsBootOverride = opts?.osActive === undefined ? null : opts.osActive;
+  _pendingLayout = layout != null && resolved < expected ? layout : null;
+  if (_pendingLayout !== null) {
+    dlog("[dispatch] pending-layout armed", {
+      expected,
+      resolved,
+      persistWhilePending: _persistResolvedWhilePending
+    });
+  }
+  bootstrap(model, host, version);
+  const passGen = _generation2;
+  const savedLayout = layout ?? {};
+  dlog("[dispatch] boot restore", {
+    expectedTabs: expected,
+    resolvedTabs: resolved,
+    pendingRetry: _pendingLayout !== null,
+    savedDrawerSide: savedLayout.drawerSide ?? null,
+    savedSecondary: Array.isArray(savedLayout.detachedTabs) ? savedLayout.detachedTabs.length : 0,
+    modelSide: model.side,
+    modelPrimary: model.primary.length,
+    modelSecondary: model.secondary.length
+  });
+  const primaryBootKey = model.active.primary;
+  const primaryBootLiveId = primaryBootKey !== null && model.secondary.length > 0 && !model.secondary.includes(primaryBootKey) ? host.resolve(primaryBootKey) : null;
+  const restorePending = _pendingLayout !== null;
+  _bootPlacementPass = (async () => {
+    if (passGen !== _generation2)
+      return;
+    let gate = null;
+    let gateReleased = false;
+    let gateSafety = null;
+    const releaseGate = () => {
+      if (gateReleased)
+        return;
+      gateReleased = true;
+      try {
+        gate?.releaseSecondaryPlacementReveal();
+      } catch {}
+    };
+    if (passGen !== _generation2)
+      return;
+    try {
+      gate = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
+      gate.holdSecondaryPlacementReveal();
+      gateSafety = setTimeout(releaseGate, 5000);
+    } catch {}
+    try {
+      const m = await Promise.resolve().then(() => (init_secondary(), {}));
+      if (passGen !== _generation2)
+        return;
+      await reassignSecondaryTabsFromModel({
+        openOnClosed: false,
+        setActiveWhenReady: false,
+        activateKey: model.active.secondary ?? null
+      });
+      if (!restorePending) {
+        if (passGen !== _generation2)
+          return;
+        try {
+          await unassignSecondaryTabsNotInModel();
+        } catch (err) {
+          dwarn("[bootstrap] unassignSecondaryTabsNotInModel failed:", err);
+        }
+      }
+      if (primaryBootLiveId === null)
+        return;
+      const reassertPrimary = async () => {
+        let mp = null;
+        let mm = null;
+        try {
+          mp = await Promise.resolve().then(() => (init_main_persist(), exports_main_persist));
+        } catch {}
+        try {
+          mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), exports_main_mirror_drawer));
+        } catch {}
+        if (passGen !== _generation2)
+          return;
+        try {
+          mp?.ensureRestoredPrimaryTab(primaryBootLiveId);
+        } catch {}
+        try {
+          mm?.ensureHostContentParkedPublic();
+        } catch {}
+      };
+      if (passGen !== _generation2)
+        return;
+      await reassertPrimary();
+      if (passGen !== _generation2)
+        return;
+      try {
+        const mm = await Promise.resolve().then(() => (init_main_mirror_drawer(), {}));
+        if (isMainMirrorActive()) {
+          setTimeout(() => {
+            if (passGen !== _generation2)
+              return;
+            reassertPrimary();
+          }, 500);
+        }
+      } catch {}
+    } catch (err) {
+      dwarn("[bootstrap] reassignSecondaryTabsFromModel failed:", err);
+    } finally {
+      if (gateSafety)
+        clearTimeout(gateSafety);
+      releaseGate();
+    }
+  })();
+}
+function bootPlacementDone() {
+  return _bootPlacementPass ?? Promise.resolve();
+}
+function flush() {
+  return _queue;
+}
+function __getPendingRestoreFlagsForTest() {
+  return {
+    persistResolvedWhilePending: _persistResolvedWhilePending,
+    pendingWindowUserState: _pendingWindowUserState
+  };
+}
+var _host = null, _model = null, _queue, _generation2 = 0, _version = "unknown", _unsubscribeWorldChanged = null, _bootstrapping = false, _worldSyncPending = false, _pendingLayout = null, _persistOsOverride = null, _persistOsBootOverride = null, _persistResolvedWhilePending = false, _pendingWindowUserState = false, _restoringPending = false, _trackedSyncScheduled = false, _trackedSyncQueued = false, _restoreDeadline = 0, RESTORE_RETRY_WINDOW_MS = 30000, _bootPlacementPass = null, _modelSubscribers, _lastPersistedLayout = null;
+var init_dispatch = __esm(() => {
+  init_reduce();
+  init_reconcile();
+  init_layout_model();
+  init_layout_repo();
+  init_state();
+  init_log();
+  _queue = Promise.resolve();
+  _modelSubscribers = new Set;
+});
+
+// src/settings/mode-reveal.ts
+function beginModeReveal(prev, next) {
+  if (prev.osMode === next.osMode && pinned(prev) === pinned(next) && prev.drawerLocation === next.drawerLocation)
+    return;
+  if (typeof document === "undefined" || !document.head || !document.documentElement?.classList || !isInstanceActive())
+    return;
+  if (_fadeTimer !== null)
+    clearTimeout(_fadeTimer);
+  _fadeTimer = null;
+  injectStyles(STYLE_ID4, CSS2);
+  document.documentElement.classList.remove(REVEAL);
+  if (!_session) {
+    document.documentElement.classList.remove(STRIP_CHANGE);
+    let end;
+    const ended = new Promise((resolve) => {
+      end = resolve;
+    });
+    _session = { revision: 0, work: new Set, finishing: null, timer: null, ended, end, reflow: null };
+  }
+  const session = _session;
+  session.revision++;
+  document.documentElement.classList.add(PENDING);
+  if (pinned(prev) !== pinned(next) || prev.drawerLocation !== next.drawerLocation) {
+    document.documentElement.classList.add(STRIP_CHANGE);
+  }
+  if (session.timer !== null)
+    clearTimeout(session.timer);
+  session.timer = setTimeout(() => {
+    if (_session !== session)
+      return;
+    dwarn("[mode-reveal] restore timed out; releasing the visual guard");
+    release(session, false);
+  }, MAX_HOLD_MS);
+  session.timer.unref?.();
+}
+function trackModeRevealWork(work) {
+  const session = _session;
+  if (!session)
+    return;
+  session.revision++;
+  const settled = work.then(() => {}, () => {});
+  session.work.add(settled);
+  settled.then(() => {
+    session.work.delete(settled);
+  });
+}
+function deferModeRevealReflow(reflow) {
+  if (!_session)
+    return false;
+  _session.reflow = reflow;
+  return true;
+}
+function frame() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function")
+      requestAnimationFrame(() => resolve());
+    else
+      resolve();
+  });
+}
+function finishModeReveal() {
+  const session = _session;
+  if (!session)
+    return Promise.resolve();
+  if (session.finishing)
+    return session.finishing;
+  session.finishing = (async () => {
+    try {
+      while (_session === session) {
+        const revision = session.revision;
+        await Promise.race([Promise.all([...session.work]), session.ended]);
+        if (_session !== session)
+          return;
+        const [dispatch, main] = await Promise.all([
+          Promise.resolve().then(() => (init_dispatch(), {})),
+          Promise.resolve().then(() => (init_main_persist(), {}))
+        ]);
+        if (_session !== session)
+          return;
+        await Promise.race([bootPlacementDone(), session.ended]);
+        if (_session !== session)
+          return;
+        await Promise.race([flush(), session.ended]);
+        if (_session !== session)
+          return;
+        await Promise.race([waitForMainContentSettled(1000), session.ended]);
+        if (_session !== session)
+          return;
+        if (revision !== session.revision || session.work.size > 0)
+          continue;
+        const [drawer, sync, chrome] = await Promise.all([
+          Promise.resolve().then(() => (init_drawer_location(), {})),
+          Promise.resolve().then(() => (init_drawer_sync(), {})),
+          Promise.resolve().then(() => (init_chrome_locations(), {}))
+        ]);
+        if (_session !== session)
+          return;
+        reconcileDrawerLocation({ force: true });
+        syncDrawerTabSettings();
+        reconcileChromeLocations();
+        await Promise.race([frame().then(frame), session.ended]);
+        if (_session !== session)
+          return;
+        if (revision !== session.revision || session.work.size > 0)
+          continue;
+        release(session, true);
+      }
+    } catch (err) {
+      dwarn("[mode-reveal] settle failed:", err);
+      if (_session === session)
+        release(session, false);
+    }
+  })();
+  return session.finishing;
+}
+function release(session, animate, reflow = true) {
+  if (_session !== session)
+    return;
+  _session = null;
+  if (session.timer !== null)
+    clearTimeout(session.timer);
+  session.end();
+  document.documentElement.classList.remove(PENDING);
+  if (animate) {
+    document.documentElement.classList.add(REVEAL);
+    _fadeTimer = setTimeout(() => {
+      _fadeTimer = null;
+      document.documentElement.classList.remove(REVEAL, STRIP_CHANGE);
+    }, FADE_MS + 60);
+  } else {
+    document.documentElement.classList.remove(REVEAL, STRIP_CHANGE);
+  }
+  if (reflow && isInstanceActive())
+    session.reflow?.();
+}
+function cancelModeReveal() {
+  if (_session)
+    release(_session, false, false);
+  if (_fadeTimer !== null)
+    clearTimeout(_fadeTimer);
+  _fadeTimer = null;
+  if (typeof document !== "undefined") {
+    document.documentElement?.classList?.remove(PENDING, REVEAL, STRIP_CHANGE);
+    document.getElementById?.(STYLE_ID4)?.remove();
+  }
+}
+var STYLE_ID4 = "canvas-mode-reveal-styles", PENDING = "sidebar-ux-mode-switch-pending", REVEAL = "sidebar-ux-mode-switch-reveal", STRIP_CHANGE = "sidebar-ux-mode-switch-strip-change", FADE_MS = 180, MAX_HOLD_MS = 15000, SURFACES, MAIN_STRIP = '.sidebar-ux-tab-list-pin-host[data-pin-owner="main"]', scoped = (classes, selectors) => selectors.map((selector) => `html.${classes} ${selector}`).join(`,
+`), CSS2, pinned = (s) => !!s.taskbarMode && !!s.moveControlsToOuterEdge, _session = null, _fadeTimer = null;
+var init_mode_reveal = __esm(() => {
+  init_log();
+  SURFACES = [
+    '[class*="_wrapper_"]:has([data-spindle-mount="sidebar"])',
+    ".sidebar-ux-main-mirror-wrapper",
+    ".sidebar-ux-secondary-wrapper",
+    '.sidebar-ux-tab-list-pin-host[data-pin-owner="secondary"]'
+  ];
+  CSS2 = `
+  ${scoped(PENDING, SURFACES)},
+  ${scoped(`${PENDING}.${STRIP_CHANGE}`, [MAIN_STRIP])},
+  html.${PENDING} [class*="_panelContent_"],
+  html.${PENDING} [data-canvas-main-panel-content] {
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+  ${scoped(REVEAL, SURFACES)},
+  ${scoped(`${REVEAL}.${STRIP_CHANGE}`, [MAIN_STRIP])} {
+    animation: canvas-mode-reveal ${FADE_MS}ms ease-out both !important;
+  }
+  @keyframes canvas-mode-reveal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    ${scoped(REVEAL, SURFACES)},
+    ${scoped(`${REVEAL}.${STRIP_CHANGE}`, [MAIN_STRIP])} {
+      animation: none !important;
+    }
+  }
+`;
+});
+
 // src/chat/reflow.ts
 function setChatMargin(side, px) {
   const chat = getChatColumn();
@@ -17060,6 +17234,8 @@ function scheduleReflow() {
   });
 }
 function updateChatReflow() {
+  if (deferModeRevealReflow(updateChatReflow))
+    return;
   if (isMobileViewport()) {
     clearChatMargins();
     clearWelcomeReflow();
@@ -17154,6 +17330,7 @@ var init_reflow = __esm(() => {
   init_store();
   init_secondary();
   init_tag_buttons();
+  init_mode_reveal();
   init_dock_offset();
   init_wait_for();
   init_mobile_exclusion();
@@ -20300,7 +20477,7 @@ function isSettingsHydrated() {
 }
 function hydrateSettings(raw) {
   const merged = mergeCanvasSettings(raw ?? null);
-  if (_mobileViewportActive && merged.drawerLocation === "sides") {
+  if (_mobileViewportActive && isTaskbarModeEnabled(merged) && merged.drawerLocation === "sides") {
     merged.drawerLocation = merged.lastHorizontalDrawerLocation;
   }
   _settings = normalizeCanvasSettings(merged);
@@ -20308,7 +20485,7 @@ function hydrateSettings(raw) {
 }
 function setMobileViewportActive(active) {
   _mobileViewportActive = active;
-  if (!active || !_hydrated || _settings.drawerLocation !== "sides")
+  if (!active || !_hydrated || !isTaskbarModeEnabled() || _settings.drawerLocation !== "sides")
     return;
   setSettings({ drawerLocation: _settings.lastHorizontalDrawerLocation });
 }
@@ -20322,9 +20499,6 @@ function setSettings(patch) {
   }
   if (patch.drawerLocation === "top" || patch.drawerLocation === "bottom") {
     next.lastHorizontalDrawerLocation = patch.drawerLocation;
-  }
-  if (_mobileViewportActive && next.drawerLocation === "sides") {
-    next.drawerLocation = next.lastHorizontalDrawerLocation;
   }
   const chromeTouched = patch.taskbarMode !== undefined || patch.moveControlsToOuterEdge !== undefined;
   if (next.drawerLocation === "sides" && chromeTouched) {
@@ -20356,16 +20530,25 @@ function setSettings(patch) {
       coreTabsHidden: DEFAULT_CANVAS_SETTINGS.coreTabsHidden
     };
     const chromePrefs = next.drawerLocation === "sides" ? next.sidesChromePrefs ?? prefs : prefs;
-    next.taskbarMode = chromePrefs.taskbarMode;
-    next.moveControlsToOuterEdge = chromePrefs.moveControlsToOuterEdge;
+    next.taskbarMode = patch.taskbarMode ?? chromePrefs.taskbarMode;
+    next.moveControlsToOuterEdge = patch.moveControlsToOuterEdge ?? chromePrefs.moveControlsToOuterEdge;
     next.coreTabsHidden = prefs.coreTabsHidden ?? DEFAULT_CANVAS_SETTINGS.coreTabsHidden;
     next.osChromePrefs = { ...prefs };
   }
-  _settings = normalizeCanvasSettings(next);
+  let normalized = normalizeCanvasSettings(next);
+  if (_mobileViewportActive && isTaskbarModeEnabled(normalized) && normalized.drawerLocation === "sides") {
+    normalized = normalizeCanvasSettings({
+      ...normalized,
+      drawerLocation: normalized.lastHorizontalDrawerLocation
+    });
+  }
+  beginModeReveal(prev, normalized);
+  _settings = normalized;
   setDebug(_settings.debugMode);
   try {
     applySettings(prev, _settings);
   } finally {
+    finishModeReveal();
     refreshSettingsPanel();
     persistSettings();
   }
@@ -20476,6 +20659,7 @@ var init_state = __esm(() => {
   init_snapshot();
   init_layout_load();
   init_settings_repo();
+  init_mode_reveal();
   _settings = mergeCanvasSettings(null);
 });
 
@@ -20893,7 +21077,7 @@ function renderGhostOverlay(ta, suffix, caretPos) {
   el.replaceChildren(pre, ghost);
 }
 function injectGhostStyles() {
-  injectStyles(STYLE_ID4, `
+  injectStyles(STYLE_ID5, `
     #${GHOST_ID} {
       position: fixed;
       z-index: 10004; /* below suggest (10005), above toast */
@@ -20910,7 +21094,7 @@ function injectGhostStyles() {
     }
   `);
 }
-var GHOST_ID = "canvas-slash-ghost", STYLE_ID4 = "canvas-slash-ghost-styles", _ctx3 = null;
+var GHOST_ID = "canvas-slash-ghost", STYLE_ID5 = "canvas-slash-ghost-styles", _ctx3 = null;
 var init_ghost_text = () => {};
 
 // src/slash/suggest.ts
@@ -21095,7 +21279,7 @@ function applyTextareaAriaBaseline(textarea) {
   }
 }
 function injectSuggestStyles() {
-  injectStyles(STYLE_ID5, `
+  injectStyles(STYLE_ID6, `
     #${SUGGEST_ID} {
       position: fixed;
       z-index: 10005; /* above Lumiverse modals (10001-10003) and toast (10004) */
@@ -21192,7 +21376,7 @@ function escapeHtml2(s) {
 function escapeAttr(s) {
   return escapeHtml2(s);
 }
-var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID5 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
+var SUGGEST_ID = "canvas-slash-suggest", STYLE_ID6 = "canvas-slash-suggest-styles", _currentController = null, outsideDismissListener = null, currentAnchor = null, currentEl = null;
 var init_suggest = __esm(() => {
   init_ghost_text();
   init_intent();
@@ -22268,7 +22452,7 @@ function unmountToastSurface() {
   toasts = [];
 }
 function injectToastStyles() {
-  injectStyles(STYLE_ID6, `
+  injectStyles(STYLE_ID7, `
     .canvas-slash-toast-surface {
       position: fixed;
       bottom: 16px;
@@ -22302,7 +22486,7 @@ function injectToastStyles() {
     .canvas-slash-toast--info   { border-left-color: var(--lumiverse-info, #42a5f5); }
   `);
 }
-var STYLE_ID6 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
+var STYLE_ID7 = "canvas-slash-toast-styles", nextId = 0, listeners, toasts, _toastTimers, mounted = false, toastHostEl = null, toastEventHandler = null;
 var init_toast = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -22812,6 +22996,7 @@ var init_registry = __esm(() => {
   init_tab_list_dnd();
   init_log();
   init_os_mode();
+  init_mode_reveal();
   init_panel_chrome();
   init_start_menu();
   init_chrome_locations();
@@ -23054,6 +23239,9 @@ var init_registry = __esm(() => {
     apply(prev, next) {
       if (prev.moveControlsToOuterEdge === next.moveControlsToOuterEdge)
         return;
+      if (prev.taskbarMode === next.taskbarMode && prev.osMode === next.osMode && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+        trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn("[taskbar] mobile drawer sync failed:", err)));
+      }
       if (prev.drawerLocation !== next.drawerLocation)
         return;
       applyTabListPosition(next.moveControlsToOuterEdge);
@@ -23080,6 +23268,9 @@ var init_registry = __esm(() => {
       };
     },
     apply(prev, next) {
+      if (prev.osMode === next.osMode && isTaskbarModeEnabled(prev) !== isTaskbarModeEnabled(next)) {
+        trackModeRevealWork(syncOsMobileDrawerMode().catch((err) => dwarn("[taskbar] mobile drawer sync failed:", err)));
+      }
       if (prev.drawerLocation !== next.drawerLocation)
         return;
       const chrome = isTaskbarModeEnabled(next);
@@ -24519,10 +24710,10 @@ function buildSettingsPanelDOM() {
     mainSideRow.setDisabled(sideLocked);
     mainSideRow.setHint(override !== null ? MAIN_SIDE_SWAP_HINT : MAIN_SIDE_HINT);
     drawerMode.refresh(s.secondSidebarEnabled ? "dual" : "single");
-    const osMobile = !!s.osMode && _isMobileViewportForPanel();
-    drawerMode.setDisabled(osMobile);
-    drawerModeRow.setDisabled(osMobile);
-    drawerModeRow.setHint(osMobile ? DRAWER_MODE_OS_MOBILE_HINT : DRAWER_MODE_HINT);
+    const mobileTaskbar = (!!s.osMode || isTaskbarModeEnabled(s)) && _isMobileViewportForPanel();
+    drawerMode.setDisabled(mobileTaskbar);
+    drawerModeRow.setDisabled(mobileTaskbar);
+    drawerModeRow.setHint(mobileTaskbar ? DRAWER_MODE_MOBILE_TASKBAR_HINT : DRAWER_MODE_HINT);
     {
       const d = !s.secondSidebarEnabled;
       compact.btn.disabled = d;
@@ -24634,7 +24825,7 @@ function applySettings(prev, next) {
     }
   }
 }
-var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically. On narrow (mobile) screens Sides is unavailable and the last Top/Bottom choice is used instead.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_OS_MOBILE_HINT = "On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", UNHIDE_VANILLA_TABS_HINT = "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
+var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip next to each drawer. Top or Bottom moves them into a single full-width strip and turns Taskbar mode on. On mobile, OS and Taskbar use the last Top/Bottom choice. Vanilla keeps its normal drawer handles and in-drawer tabs.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_MOBILE_TASKBAR_HINT = "On phone-width screens, OS and Taskbar use only the main drawer. Choose Vanilla or a wider screen to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", UNHIDE_VANILLA_TABS_HINT = "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
@@ -24932,6 +25123,7 @@ init_tag_buttons();
 init_buttons();
 init_state();
 init_registry();
+init_mode_reveal();
 init_cleanup();
 init_main_persist();
 init_mobile_exclusion();
@@ -26359,6 +26551,7 @@ function setup(ctx) {
     }
   });
   registerCleanup(unsuppressMainDrawer);
+  registerCleanup(cancelModeReveal);
   registerCleanup(resetCanvasHiddenTabIds);
   registerCleanup(cancelScheduledHiddenTabsSync);
   const flushOnUnload = () => {
